@@ -296,22 +296,29 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
       // live on every long-lived surface. A silent skip would break the
       // documented hot-reload contract. HMR injects the timer service, which a
       // bare custom profile may not mount either.
-      if (ctx.get('hmr') === undefined) {
-        if (ctx.get('timer') === undefined) {
-          await ctx.plugin(Timer)
+      if (ctx.get('hmr') === undefined && ctx.loader.internal === undefined) {
+        // Config-file watching is optional at this boundary. Some supported
+        // Node builds cannot expose the private ESM loader HMR needs; keep the
+        // already-settled app live and make the restart requirement visible.
+        ctx.logger.warn('profile patch hot reload is unavailable; restart dsh after editing profile patches')
+      } else {
+        if (ctx.get('hmr') === undefined) {
+          if (ctx.get('timer') === undefined) {
+            await ctx.plugin(Timer)
+          }
+          await ctx.plugin(Hmr, { root: [], ignored: [], debounce: 0 })
         }
-        await ctx.plugin(Hmr, { root: [], ignored: [], debounce: 0 })
+        await watchUserPatches(ctx, {
+          binName: NAME,
+          filename: composed.profile.patchPath,
+          compose: composeLive,
+        })
+        await watchUserPatches(ctx, {
+          binName: NAME,
+          filename: homePatchPath(),
+          compose: composeLive,
+        })
       }
-      await watchUserPatches(ctx, {
-        binName: NAME,
-        filename: composed.profile.patchPath,
-        compose: composeLive,
-      })
-      await watchUserPatches(ctx, {
-        binName: NAME,
-        filename: homePatchPath(),
-        compose: composeLive,
-      })
     } catch (error) {
       suppressShutdownError(ctx, signalShutdown.signal, error)
     }
