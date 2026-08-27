@@ -87,6 +87,29 @@ afterEach(() => {
 })
 
 describe('SlarkDeviceClient', () => {
+  it('permits private-network HTTP only behind the explicit cloud transport switch', async () => {
+    const rejected = new Context()
+    let rejection: unknown
+    try {
+      await rejected.plugin(SlarkDeviceClient, {
+        gatewayUrl: 'http://slark-server-staging:4179',
+        serviceToken: 'service-token-1234',
+      })
+    } catch (error) {
+      rejection = error
+    }
+    expect(String(rejection)).toContain('gatewayUrl must be an exact HTTP(S) origin')
+    await rejected.fiber.dispose()
+
+    const cloud = new Context()
+    await cloud.plugin(SlarkDeviceClient, {
+      gatewayUrl: 'http://slark-server-staging:4179',
+      allowInsecureHttp: true,
+      serviceToken: 'service-token-1234',
+    })
+    await cloud.fiber.dispose()
+  })
+
   it('retries an ambiguous create with the same identity and polls the original task', async () => {
     const result = {
       protocolVersion: 1,

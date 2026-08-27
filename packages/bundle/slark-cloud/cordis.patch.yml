@@ -56,6 +56,9 @@
       disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
       config:
         gatewayUrl: !!js process.env.SLARK_DSH_GATEWAY_URL
+        # Cell and Slark Server share the Docker-internal dsh-control network.
+        # Standalone profiles retain the client's HTTPS-only default.
+        allowInsecureHttp: true
 
     - id: slark-identity
       name: '@deepseek-ai/dsh-slark-identity'

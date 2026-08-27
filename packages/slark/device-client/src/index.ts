@@ -67,6 +67,8 @@ export interface SlarkDeviceTaskResult {
 export interface Config {
   /** Exact internal Slark Server origin, without a path, query, or fragment. */
   gatewayUrl: string
+  /** Permit plain HTTP only when the caller confines this client to a private control network. */
+  allowInsecureHttp?: boolean
   /** Service bearer; omission reads `SLARK_DSH_SERVICE_TOKEN`. */
   serviceToken?: string
   /** Timeout for one HTTP exchange. */
@@ -328,6 +330,7 @@ function parseStatus(value: unknown, expectedTaskId: string): TaskStatus {
 export class SlarkDeviceClient extends Service {
   static Config: z<Config> = z.object({
     gatewayUrl: z.string().required(),
+    allowInsecureHttp: z.boolean().default(false),
     serviceToken: z.string(),
     requestTimeoutMs: z.number().default(10_000),
     longPollMs: z.number().default(20_000),
@@ -535,7 +538,11 @@ export class SlarkDeviceClient extends Service {
     }
     if (
       (url.protocol !== 'http:' && url.protocol !== 'https:')
-      || (url.protocol === 'http:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1' && url.hostname !== '[::1]')
+      || (url.protocol === 'http:'
+        && !this.config.allowInsecureHttp
+        && url.hostname !== 'localhost'
+        && url.hostname !== '127.0.0.1'
+        && url.hostname !== '[::1]')
       || url.username !== ''
       || url.password !== ''
       || url.pathname !== '/'
