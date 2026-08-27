@@ -624,6 +624,17 @@ describe('boot', () => {
     } finally {
       await ctx.fiber.dispose()
     }
+    const publicApiFallback = await boot(NAME, hostOwnedPath, undefined, (hostCtx) => {
+      hostCtx.loader.internal = undefined
+    }, harnessBaseUrl)
+    try {
+      expect(publicApiFallback.get('harnessPluginLoaded')).toBe(true)
+      expect(publicApiFallback.get('shadowPluginLoaded')).toBeUndefined()
+      expect(publicApiFallback.get('relativePluginLoaded')).toBe(true)
+      expect(publicApiFallback.get('absolutePluginLoaded')).toBe(true)
+    } finally {
+      await publicApiFallback.fiber.dispose()
+    }
   })
 
   it('runs host preparation before the Loader tree mounts', async () => {

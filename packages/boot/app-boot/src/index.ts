@@ -8,6 +8,7 @@
 
 import { pathToFileURL } from 'node:url'
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { parseEnv } from 'node:util'
 import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import * as yaml from 'js-yaml'
@@ -489,6 +490,7 @@ export async function mountRootInclude(
   patches: readonly PatchOptions[] = [],
   bareModuleBaseUrl?: string,
 ): Promise<Entry | undefined> {
+  const hostRequire = bareModuleBaseUrl === undefined ? undefined : createRequire(bareModuleBaseUrl)
   ctx.loader.builtins.include = bareModuleBaseUrl === undefined
     ? Include
     : class HostResolvedRootInclude extends Include {
@@ -498,7 +500,19 @@ export async function mountRootInclude(
         const internal = this.ctx.loader.internal
         /* v8 ignore next -- Node supplies the internal loader; this preserves the
            original diagnostic for hypothetical embedders without it. */
-        if (internal === undefined) return super.import(specifier, getOuterStack)
+        if (internal === undefined) {
+          // Public-API fallback for Node builds where the optional native
+          // bridge cannot expose the internal ESM loader. Resolve from the
+          // installed host first so the eventual import never falls back to
+          // Loader's own module ancestry.
+          /* v8 ignore next -- the host-backed subclass is only installed when
+             createRequire above produced this resolver. */
+          if (hostRequire === undefined) return super.import(specifier, getOuterStack)
+          const resolved = specifier.startsWith('file:')
+            ? specifier
+            : pathToFileURL(hostRequire.resolve(specifier)).href
+          return import(resolved)
+        }
         return internal.import(specifier, bareModuleBaseUrl, {})
       }
     }
