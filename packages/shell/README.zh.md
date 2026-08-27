@@ -8,6 +8,7 @@
 |---|---|---|
 | [`shell/`](shell/README.zh.md) | 定义 Service Provider 与 Consumer 共享的执行器约定。 | `ctx.shell` |
 | [`bash-local/`](bash-local/README.zh.md) | 通过本地 [`subprocess`](../subprocess/README.zh.md) 服务执行命令。 | （注册 `ctx.shell`） |
+| [`shell-slark-remote/`](shell-slark-remote/README.zh.md) | 通过已授权的 Slark Device Agent 执行命令，并提供可恢复的后台代理句柄。 | （注册 `ctx.shell`） |
 | [`bash-sandbox/`](bash-sandbox/README.zh.md) | 在本地执行前应用已配置的 [`sandbox`](../sandbox/README.zh.md) 后端。 | （注册 `ctx.shell`） |
 | [`pwsh-local/`](pwsh-local/README.zh.md) | 采用 Windows 特有的进程行为执行 PowerShell 命令。 | （注册 `ctx.shell`） |
 | [`shell-env/`](shell-env/README.zh.md) | 提供 shell 工具共享的托管 `DSH_*` 环境。 | `ctx.shellEnv` |

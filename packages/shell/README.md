@@ -8,6 +8,7 @@ The capability family spans the canonical executor seam, its implementations, th
 |---|---|---|
 | [`shell/`](shell/README.md) | Defines the executor contract shared by Service Providers and Consumers. | `ctx.shell` |
 | [`bash-local/`](bash-local/README.md) | Executes commands through the local [`subprocess`](../subprocess/README.md) service. | (registers `ctx.shell`) |
+| [`shell-slark-remote/`](shell-slark-remote/README.md) | Executes commands through a granted Slark Device Agent and exposes resumable background proxy handles. | (registers `ctx.shell`) |
 | [`bash-sandbox/`](bash-sandbox/README.md) | Applies the configured [`sandbox`](../sandbox/README.md) backend before local execution. | (registers `ctx.shell`) |
 | [`pwsh-local/`](pwsh-local/README.md) | Executes PowerShell commands with Windows-specific process behavior. | (registers `ctx.shell`) |
 | [`shell-env/`](shell-env/README.md) | Provides the managed `DSH_*` environment shared by shell tools. | `ctx.shellEnv` |

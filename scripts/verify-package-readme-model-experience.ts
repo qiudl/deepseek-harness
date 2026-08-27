@@ -47,6 +47,7 @@ const SENTENCE_MODEL_EXPERIENCE: Readonly<Record<string, SentenceContract>> = {
   'packages/shell/shell': { kind: 'indirect', reason: 'The service interface delegates all model rendering to dsh-tool-bash.' },
   'packages/shell/shell-env': { kind: 'indirect', reason: 'The env service exposes managed DSH_* facts through the shell tools (dsh-tool-bash/dsh-tool-pwsh); it registers no prompt or schema of its own.' },
   'packages/shell/bash-local': { kind: 'indirect', reason: 'The executor backend delegates model rendering to dsh-tool-bash.' },
+  'packages/shell/shell-slark-remote': { kind: 'indirect', reason: 'The remote executor backend delegates model rendering to dsh-tool-bash.' },
   'packages/shell/pwsh-local': { kind: 'indirect', reason: 'The executor backend delegates model rendering to dsh-tool-pwsh.' },
   'packages/code-runtime/code-runtime': { kind: 'indirect', reason: 'The service interface delegates model rendering to Code Mode in dsh-tools.' },
   'packages/core/agent-tool-presentation': { kind: 'indirect', reason: 'The row only selects between the two projections dsh-tools owns; it registers no prompt, schema, or result of its own.' },

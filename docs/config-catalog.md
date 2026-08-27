@@ -2011,6 +2011,32 @@ export interface Config {
 
 Source: [`packages/shell/shell-env/src/index.ts:29`](../packages/shell/shell-env/src/index.ts)
 
+<a id="deepseek-aidsh-shell-slark-remote"></a>
+
+## `@deepseek-ai/dsh-shell-slark-remote`
+
+Requires: `slarkDevice`
+
+```ts config-catalog
+/** Remote Shell configuration. */
+export interface Config {
+  /** Opaque Slark workspace handle projected as the remote Shell root. */
+  workspaceHandle: string
+  /** Default virtual workdir; defaults to `/workspace/<workspaceHandle>`. */
+  cwd?: string
+  /** Default foreground timeout in milliseconds. */
+  timeoutMs?: number
+  /** Upper bound for per-call foreground timeouts. */
+  maxTimeoutMs?: number
+  /** Runtime-cell buffer limit for unread background output. */
+  maxOutputBytes?: number
+  /** Delay between background process control tasks. */
+  pollIntervalMs?: number
+}
+```
+
+Source: [`packages/shell/shell-slark-remote/src/index.ts:44`](../packages/shell/shell-slark-remote/src/index.ts)
+
 <a id="deepseek-aidsh-skill"></a>
 
 ## `@deepseek-ai/dsh-skill`

@@ -394,7 +394,7 @@ const SERVICE_ROLES: ServiceRole[] = [
     pkg: 'shell',
     title: 'Bash executor seam',
     mode: 'seam',
-    implementations: ['bash-local', 'bash-sandbox', 'pwsh-local'],
+    implementations: ['bash-local', 'bash-sandbox', 'pwsh-local', 'shell-slark-remote'],
     consumers: ['tool-bash', 'tool-pwsh', 'hooks-claude-code', 'hooks-codex'],
     note: 'The model-facing shell tools and hook bridges consume this seam; sandboxed, remote, or PowerShell executors replace bash-local without touching them.',
   },
