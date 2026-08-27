@@ -47,6 +47,10 @@
     includeUserRoot: false
 
 - insert:
+    - id: slark-cloud-ingress
+      name: '@deepseek-ai/dsh-slark-cloud'
+      disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
+
     - id: slark-device
       name: '@deepseek-ai/dsh-slark-device-client'
       disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'

@@ -113,6 +113,11 @@ describe('real Loader composition', () => {
     expect(await request(port, '/api')).toMatchObject({ status: 200, body: 'API' })
     expect(await request(port, '/api/anything', { method: 'POST' })).toMatchObject({ status: 200, body: 'API' })
 
+    const releaseGuard = server.registerRequestGuard(req => req.headers['x-test-admit'] === 'yes')
+    expect(await request(port, '/probe')).toMatchObject({ status: 401, body: 'unauthorized' })
+    expect(await request(port, '/probe', { headers: { 'x-test-admit': 'yes' } })).toMatchObject({ status: 200, body: 'EXACT' })
+    releaseGuard()
+
     // Fallback seat: 404 while unclaimed; the owner answers everything no
     // named route matches; index taps are the owner's to apply; the seat
     // admits exactly one owner and the disposer releases it.

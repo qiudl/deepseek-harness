@@ -39,6 +39,14 @@ interface WebOptions {
   trustedHost?: string[]
 }
 
+/** Whether a guarded Slark Runtime Cell may bind its private container network. */
+export function allowsSlarkCellBind(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.DSH_CELL_INGRESS_KEY
+  if (env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1' || raw === undefined) return false
+  const decoded = Buffer.from(raw, 'base64url')
+  return decoded.length === 32 && decoded.toString('base64url') === raw
+}
+
 /**
  * This app's command: its flags, its description, and its help text.
  * @returns a fresh program, so one process can parse more than once (tests).
@@ -71,7 +79,7 @@ export function apply(ctx: Context): void {
   const program = webCommand()
   program.action(() => {
     const options = program.opts<WebOptions>()
-    if (options.host === '0.0.0.0') {
+    if (options.host === '0.0.0.0' && !allowsSlarkCellBind(process.env)) {
       program.error('error: --host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead')
     }
     if (options.port !== undefined && !/^\d+$/.test(options.port)) {

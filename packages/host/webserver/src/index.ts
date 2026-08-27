@@ -55,6 +55,9 @@ export interface WebUpgradeRoute {
   handler: (req: IncomingMessage, socket: Duplex, head: Buffer) => void | Promise<void>
 }
 
+/** Admission check applied before every HTTP route, fallback, or upgrade. */
+export type WebRequestGuard = (req: IncomingMessage) => boolean | Promise<boolean>
+
 /** Gateway config: the listen address. */
 export interface Config {
   /** Listen host; the two supported values are loopback and all-interfaces. */
@@ -79,6 +82,7 @@ export class WebServer extends Service {
   private readonly exact = new Map<string, WebRoute>()
   private readonly prefixes = new Map<string, WebRoute>()
   private readonly upgrades = new Map<string, WebUpgradeRoute>()
+  private readonly requestGuards = new Set<WebRequestGuard>()
   private readonly upgradedSockets = new Set<Duplex>()
   private readonly indexTaps: ((html: string) => string)[] = []
   private fallback: WebRoute['handler'] | undefined
@@ -128,6 +132,19 @@ export class WebServer extends Service {
     return () => { this.upgrades.delete(route.path) }
   }
 
+  /** Register a transport-level admission guard shared by HTTP and upgrades. */
+  registerRequestGuard(guard: WebRequestGuard): () => void {
+    this.requestGuards.add(guard)
+    return () => { this.requestGuards.delete(guard) }
+  }
+
+  private async requestAllowed(req: IncomingMessage): Promise<boolean> {
+    for (const guard of this.requestGuards) {
+      if (!await guard(req)) return false
+    }
+    return true
+  }
+
   /**
    * Claim the fallback seat: the handler answering every request no named
    * route matches (the SPA dist server in the shipped Web composition). One
@@ -162,6 +179,11 @@ export class WebServer extends Service {
   /** Listen; resolves once the socket is bound (rejection = FAILED fiber). */
   async [Service.init](): Promise<void> {
     const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      if (!await this.requestAllowed(req)) {
+        res.writeHead(401)
+        res.end('unauthorized')
+        return
+      }
       /* v8 ignore next -- `?? '/'` arm: node:http always sets url on server
       requests; the field is only optional on the client-side IncomingMessage type */
       const rawPath = new URL(req.url ?? '/', 'http://x').pathname
@@ -203,29 +225,38 @@ export class WebServer extends Service {
         socket.off('error', onError)
         this.upgradedSockets.delete(socket)
       })
-      let route: WebUpgradeRoute | undefined
-      try {
-        /* v8 ignore next -- node:http always sets url on server requests. */
-        route = this.upgrades.get(new URL(req.url ?? '/', 'http://x').pathname)
-      } catch (error) {
-        this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
-        socket.destroy()
-        return
-      }
-      if (route === undefined) {
-        socket.destroy()
-        return
-      }
-      this.upgradedSockets.add(socket)
-      try {
-        Promise.resolve(route.handler(req, socket, head)).catch((error: unknown) => {
+      void this.requestAllowed(req).then((allowed) => {
+        if (!allowed) {
+          socket.destroy()
+          return
+        }
+        let route: WebUpgradeRoute | undefined
+        try {
+          /* v8 ignore next -- node:http always sets url on server requests. */
+          route = this.upgrades.get(new URL(req.url ?? '/', 'http://x').pathname)
+        } catch (error) {
           this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
           socket.destroy()
-        })
-      } catch (error) {
+          return
+        }
+        if (route === undefined) {
+          socket.destroy()
+          return
+        }
+        this.upgradedSockets.add(socket)
+        try {
+          Promise.resolve(route.handler(req, socket, head)).catch((error: unknown) => {
+            this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
+            socket.destroy()
+          })
+        } catch (error) {
+          this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
+          socket.destroy()
+        }
+      }).catch((error: unknown) => {
         this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
         socket.destroy()
-      }
+      })
     })
 
     await new Promise<void>((resolve, reject) => {

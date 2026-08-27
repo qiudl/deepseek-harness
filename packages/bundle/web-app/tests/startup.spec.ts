@@ -12,7 +12,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { internals, provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { afterEach, describe, expect, it } from 'vitest'
-import { apply, WEB_STARTUP_SERVICE, type WebStartupValues } from '../src/startup.ts'
+import { allowsSlarkCellBind, apply, WEB_STARTUP_SERVICE, type WebStartupValues } from '../src/startup.ts'
 
 /** What one fixture boot observed. */
 interface Observed {
@@ -87,6 +87,13 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
 }
 
 describe('web command-line provider', () => {
+  it('allows all-interface binding only for a guarded Slark Runtime Cell', () => {
+    const key = Buffer.alloc(32, 9).toString('base64url')
+    expect(allowsSlarkCellBind({ DSH_SLARK_REMOTE_PROVIDER_V1: '1', DSH_CELL_INGRESS_KEY: key })).toBe(true)
+    expect(allowsSlarkCellBind({ DSH_SLARK_REMOTE_PROVIDER_V1: '1', DSH_CELL_INGRESS_KEY: 'bad' })).toBe(false)
+    expect(allowsSlarkCellBind({ DSH_CELL_INGRESS_KEY: key })).toBe(false)
+  })
+
   it('publishes each flag and releases direct service expressions', async () => {
     const { values, observed } = await bootProvider([
       '--host', '127.0.0.1',
