@@ -60,7 +60,7 @@ function stubAgent(session: Session): Agent {
 /** Compose the API over real Session, Agent, Storage, Domain, and Workspace services. */
 async function harness(
   root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-apiproxy-workspace-'))),
-  picker: DirectoryPickerCapability = { kind: 'native', pick: async () => null },
+  picker: DirectoryPickerCapability | null = { kind: 'native', pick: async () => null },
   extras: {
     openPath?: (path: string, signal: AbortSignal) => Promise<void>
     canOpenPath?: () => boolean
@@ -101,7 +101,7 @@ async function harness(
   ctx.agents.setFactory(factory)
   // Structural picker fake: the gateway only reads capability(); a stable
   // object per harness mirrors the seam's stability contract.
-  ctx.provide('directoryPicker', { capability: () => picker } as never)
+  if (picker !== null) ctx.provide('directoryPicker', { capability: () => picker } as never)
   const api = createApiProxy(ctx, {
     defaultModelSelection: () => ({ provider: 'test', model: 'test-model' }),
     cwd: root,
@@ -119,6 +119,22 @@ function stageDir(root: string, name: string): string {
 }
 
 describe('host.pickDirectory', () => {
+  it('keeps the gateway active and reports unavailable when no local picker is composed', async () => {
+    const { api } = await harness(undefined, null)
+    expect((await api.host.pickDirectory(request({}), new AbortController().signal)).result).toMatchObject({
+      ok: false,
+      error: { code: 'directory-picker-unavailable', details: { capability: 'none' } },
+    })
+    expect((await api.host.listDirectory(request({}), new AbortController().signal)).result).toMatchObject({
+      ok: false,
+      error: { code: 'directory-picker-unavailable', details: { capability: 'none' } },
+    })
+    expect((await api.host.createDirectory(request({ path: '/x', name: 'y' }))).result).toMatchObject({
+      ok: false,
+      error: { code: 'directory-picker-unavailable', details: { capability: 'none' } },
+    })
+  })
+
   it('returns a selected path or explicit cancellation from the native capability', async () => {
     const selected = await harness(undefined, { kind: 'native', pick: async () => '/tmp/project' })
     expect((await selected.api.host.pickDirectory(request({}), new AbortController().signal)).result)

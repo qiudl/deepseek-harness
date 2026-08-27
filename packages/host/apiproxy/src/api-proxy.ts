@@ -2840,7 +2840,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async pickDirectory(request, signal) {
-        const capability = ctx.directoryPicker.capability()
+        const capability = ctx.get('directoryPicker')?.capability()
+        if (capability === undefined) {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: 'host.pickDirectory needs a composed directory picker',
+            details: { capability: 'none' },
+          })
+        }
         if (capability.kind !== 'native') {
           return err(request, {
             code: 'directory-picker-unavailable',
@@ -2868,7 +2875,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async listDirectory(request, signal) {
-        const capability = ctx.directoryPicker.capability()
+        const capability = ctx.get('directoryPicker')?.capability()
+        if (capability === undefined) {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: 'host.listDirectory needs a composed directory picker',
+            details: { capability: 'none' },
+          })
+        }
         if (capability.kind !== 'browse') {
           return err(request, {
             code: 'directory-picker-unavailable',
@@ -2891,7 +2905,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async createDirectory(request) {
-        const capability = ctx.directoryPicker.capability()
+        const capability = ctx.get('directoryPicker')?.capability()
+        if (capability === undefined) {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: 'host.createDirectory needs a composed directory picker',
+            details: { capability: 'none' },
+          })
+        }
         if (capability.kind !== 'browse') {
           return err(request, {
             code: 'directory-picker-unavailable',
