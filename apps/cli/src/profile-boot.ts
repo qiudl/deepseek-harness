@@ -33,6 +33,17 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 /** Shipped agent-preset root: beside this app's own config, in both source and built layouts. */
 const SHIPPED_PRESET_ROOT = fileURLToPath(new URL('../config/agent-presets/', import.meta.url))
+/** Cloud-only preset root; never expose it to a standalone profile backed by local providers. */
+const SLARK_CLOUD_PRESET_ROOT = fileURLToPath(new URL('../config/slark-cloud-agent-presets/', import.meta.url))
+
+/**
+ * Select the shipped preset roster for one effective profile.
+ * @param hasSlarkDevice whether the composed row index carries the cloud bundle's Device row.
+ * @returns the standalone or cloud-only system preset root.
+ */
+export function shippedPresetRoot(hasSlarkDevice: boolean): string {
+  return hasSlarkDevice ? SLARK_CLOUD_PRESET_ROOT : SHIPPED_PRESET_ROOT
+}
 
 import { DSH_LAUNCH_ENVIRONMENT_KEY, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
@@ -157,11 +168,15 @@ function composeProfile(
   // The writable root the roster appends is `dsh-agent-presets`' own, so a
   // launcher that never reaches this patch still finds a person's presets.
   if (rows.has('agent-presets')) {
+    // The provider row identifies the cloud bundle even when its shared kill
+    // switch disables every remote provider. A standalone profile keeps the
+    // ordinary shipped roster, where every preset truthfully uses local I/O.
+    const presetRoot = shippedPresetRoot(rows.has('slark-device'))
     composedOverlays.push({
       id: 'agent-presets',
       config: {
         ...(rows.get('agent-presets')?.config ?? {}) as Record<string, unknown>,
-        roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
+        roots: [{ path: presetRoot, trust: 'system' }],
       },
     })
   }

@@ -1,0 +1,73 @@
+# Slark cloud Runtime Cells apply this after dsh-base and dsh-web-app. The
+# feature switch removes remote execution without restoring any cell-local
+# execution provider.
+
+- id: subprocess
+  disabled: true
+
+- id: sandbox
+  disabled: true
+
+- id: bash-sandbox
+  disabled: true
+
+- id: pwsh-sandbox
+  disabled: true
+
+- id: fs-sandbox
+  disabled: true
+
+- id: directory-picker
+  disabled: true
+
+- id: plugin-inventory
+  disabled: true
+
+- id: cordis-host-runner
+  disabled: true
+
+- id: cordis-client-runner
+  disabled: true
+
+- id: ui-settings-plugin-inventory
+  disabled: true
+
+- id: ui-cordis
+  disabled: true
+
+- id: ui-agent-preset
+  disabled: true
+
+- id: ui-settings-plugins
+  disabled: true
+
+- id: agent-presets
+  config:
+    default: slark-cloud
+    includeUserRoot: false
+
+- insert:
+    - id: slark-device
+      name: '@deepseek-ai/dsh-slark-device-client'
+      disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
+      config:
+        gatewayUrl: !!js process.env.SLARK_DSH_GATEWAY_URL
+
+    - id: slark-identity
+      name: '@deepseek-ai/dsh-slark-identity'
+      disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
+      config:
+        authorityFile: !!js process.env.SLARK_DSH_AUTHORITY_FILE
+        expectedWorkspaceHandle: !!js process.env.SLARK_DSH_WORKSPACE_HANDLE
+
+    - id: slark-fs
+      name: '@deepseek-ai/dsh-fs-slark-remote'
+      disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
+      config:
+        workspaceHandle: !!js process.env.SLARK_DSH_WORKSPACE_HANDLE
+
+    - id: slark-shell
+      name: '@deepseek-ai/dsh-shell-slark-remote'
+      disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
+      config:
+        workspaceHandle: !!js process.env.SLARK_DSH_WORKSPACE_HANDLE

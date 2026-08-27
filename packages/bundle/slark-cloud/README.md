@@ -1,0 +1,49 @@
+# `@deepseek-ai/dsh-slark-cloud`
+
+English | [中文](README.zh.md)
+
+Runtime Cell bundle applied after [`dsh-base`](../base/README.md) and [`dsh-web-app`](../web-app/README.md). It replaces the cell-local filesystem and Shell providers with Slark Device providers, removes the local subprocess and sandbox providers, disables directory picking and Cordis/plugin/preset authoring surfaces, and selects the shipped `slark-cloud` Agent preset.
+
+```json
+{
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@deepseek-ai/dsh-slark-cloud"
+      ]
+    }
+  }
+}
+```
+
+## Environment contract
+
+| Variable | Meaning |
+|---|---|
+| `DSH_SLARK_REMOTE_PROVIDER_V1=1` | Enables the Device client, identity adapter, remote filesystem, and remote Shell together |
+| `SLARK_DSH_GATEWAY_URL` | Exact internal Slark Gateway HTTP(S) origin |
+| `SLARK_DSH_SERVICE_TOKEN` | Service bearer used only in Gateway request headers |
+| `SLARK_DSH_AUTHORITY_FILE` | Absolute path to the private Edge authority document |
+| `SLARK_DSH_WORKSPACE_HANDLE` | Opaque handle shared by identity, filesystem, and Shell providers |
+
+Any missing or invalid enabled value fails during activation. When `DSH_SLARK_REMOTE_PROVIDER_V1` is absent or not exactly `1`, every remote row stays disabled while every local execution row remains hard-disabled. Existing sessions remain readable through the Web application, but filesystem and Shell tools cannot mount; there is no local fallback.
+
+The cloud Agent preset retains DSH goals, planning, compaction, skills, subagents, workflows, jobs, Web search, and remote `read`/`write`/`edit`/`bash`. It omits subprocess-backed `glob`/`grep`, persistent terminals, LSP, hooks, and Cordis authoring. User-authored preset discovery and the preset switcher are disabled in this deployment. The CLI keeps this preset in a cloud-only shipped root selected by the presence of the Slark Device provider row, so standalone DSH neither lists it nor changes its local-provider behavior.
+
+`pnpm run verify-slark-cloud-preset` composes the real base, Web, and cloud layers and rejects an active local provider, authoring surface, user preset root, provider-switch mismatch, or forbidden cloud-preset row. The check runs in CI and hygiene aggregates.
+
+## Model Experience
+
+The `slark-cloud` persona tells the model that file and Shell operations target the selected Slark Desktop device and that device or Grant failures are final. Existing tool schemas are reused; omitted local-only tools are absent from the catalog.
+
+#### KV Cache effect
+
+One stable deployment persona replaces the standard persona. Device identity and authority changes do not enter the prompt prefix.
+
+## Known Limitations and Deferred Work
+
+- Remote file search has no provider yet. Agents can use the remote Shell for bounded search commands, but `glob` and `grep` remain absent.
+- The first release fixes one Workspace Grant per Runtime Cell composition. Workspace switching requires cell recomposition.
+- This bundle provides configuration and static proof; Edge/Cell process isolation, resource limits, health checks, and draining belong to the Slark deployment task.

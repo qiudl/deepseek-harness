@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-27-slark-cloud-remote-only-runtime-cell.md
+2026-08-27-slark-cloud-remote-only-runtime-cell.md: 4f5b9782884cd6b7bdfc4c18e01f86c6ebf2d892
+2026-08-27-slark-cloud-remote-only-runtime-cell.zh.md: 3e1648da67d1a8599a48aea933644a1294a102c1

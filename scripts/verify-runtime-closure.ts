@@ -30,7 +30,10 @@ interface RuntimePlatform {
 
 type RuntimePlatformManifest = Record<string, RuntimePlatform>
 
-const AGENT_PRESET_GLOB = 'apps/cli/config/agent-presets/*/agent.cordis.yml'
+const AGENT_PRESET_GLOBS = [
+  'apps/cli/config/agent-presets/*/agent.cordis.yml',
+  'apps/cli/config/slark-cloud-agent-presets/*/agent.cordis.yml',
+] as const
 
 export interface RuntimeClosureResult {
   failures: string[]
@@ -53,7 +56,7 @@ export async function verifyRuntimeClosure(
   const workspace = await loadWorkspacePackages(root)
   const runtimeDependencies = runtimeManifest.dependencies ?? {}
   const platforms = await loadJson<RuntimePlatformManifest>(resolve(root, 'python/sdk-runtime/platforms.json'))
-  const presetPaths = globSync(AGENT_PRESET_GLOB, { cwd: root }).sort()
+  const presetPaths = AGENT_PRESET_GLOBS.flatMap(pattern => globSync(pattern, { cwd: root })).sort()
   const targets = Object.keys(platforms).sort()
   const parents = new Map<string, string | undefined>()
   const queue: string[] = []
@@ -65,7 +68,7 @@ export async function verifyRuntimeClosure(
   }
 
   const failures: string[] = []
-  if (presetPaths.length === 0) failures.push(`no agent presets matched ${AGENT_PRESET_GLOB}`)
+  if (presetPaths.length === 0) failures.push(`no agent presets matched ${AGENT_PRESET_GLOBS.join(' or ')}`)
   if (targets.length === 0) failures.push('python/sdk-runtime/platforms.json defines no runtime targets')
   failures.push(...await missingPresetPlugins(root, runtimeDependencies, presetPaths, targets))
   for (let index = 0; index < queue.length; index += 1) {

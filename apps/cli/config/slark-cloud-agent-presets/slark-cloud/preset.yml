@@ -1,0 +1,3 @@
+name: Slark 个人工作台
+description: 通过已认证的 Slark Desktop 设备代理访问个人目录和 Shell；云端不执行本机命令。
+order: 0

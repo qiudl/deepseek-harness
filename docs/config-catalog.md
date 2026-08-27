@@ -2119,6 +2119,26 @@ export interface Config {
 
 Source: [`packages/slark/device-client/src/index.ts:67`](../packages/slark/device-client/src/index.ts)
 
+<a id="deepseek-aidsh-slark-identity"></a>
+
+## `@deepseek-ai/dsh-slark-identity`
+
+Requires: `slarkDevice`
+
+```ts config-catalog
+/** Runtime Cell identity configuration. */
+export interface Config {
+  /** Absolute path to the Edge-owned, read-only authority JSON file. */
+  authorityFile: string
+  /** Workspace handle fixed into the Runtime Cell provider composition. */
+  expectedWorkspaceHandle: string
+  /** Maximum bytes accepted from the authority file. */
+  maxAuthorityBytes?: number
+}
+```
+
+Source: [`packages/host/slark-identity/src/index.ts:43`](../packages/host/slark-identity/src/index.ts)
+
 <a id="deepseek-aidsh-spill-local"></a>
 
 ## `@deepseek-ai/dsh-spill-local`
@@ -3358,6 +3378,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-session-projection` ([`packages/session/session-projection/src/index.ts`](../packages/session/session-projection/src/index.ts))
 - `@deepseek-ai/dsh-session-stats` — requires `sessionProjections` ([`packages/session/session-stats/src/index.ts`](../packages/session/session-stats/src/index.ts))
 - `@deepseek-ai/dsh-skill-badge` — requires `skills` ([`packages/skill/skill-badge/src/index.ts`](../packages/skill/skill-badge/src/index.ts))
+- `@deepseek-ai/dsh-slark-cloud` ([`packages/bundle/slark-cloud/src/index.ts`](../packages/bundle/slark-cloud/src/index.ts))
 - `@deepseek-ai/dsh-storage` ([`packages/storage/storage/src/index.ts`](../packages/storage/storage/src/index.ts))
 - `@deepseek-ai/dsh-subagent` ([`packages/subagent/subagent/src/index.ts`](../packages/subagent/subagent/src/index.ts))
 - `@deepseek-ai/dsh-subprocess-local` ([`packages/subprocess/subprocess-local/src/index.ts`](../packages/subprocess/subprocess-local/src/index.ts))

@@ -147,7 +147,11 @@ function validatePresetPlaneSeparation(): string[] {
   }
   // The overlay's own inserts are host-plane too; its disables take them back out.
   const active = new Set([...hostRows, ...rowIds(overlayFile)].filter(id => !disabled.has(id)))
-  for (const file of globSync('apps/cli/config/agent-presets/*/agent.cordis.yml', { cwd: root })) {
+  const presetFiles = globSync([
+    'apps/cli/config/agent-presets/*/agent.cordis.yml',
+    'apps/cli/config/slark-cloud-agent-presets/*/agent.cordis.yml',
+  ], { cwd: root })
+  for (const file of presetFiles) {
     for (const id of rowIds(file)) {
       if (!active.has(id)) continue
       problems.push(

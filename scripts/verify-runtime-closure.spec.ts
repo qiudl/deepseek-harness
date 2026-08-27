@@ -126,7 +126,7 @@ describe('verifyRuntimeClosure', () => {
 
     expect(result.presetCount).toBe(0)
     expect(result.failures).toEqual([
-      'no agent presets matched apps/cli/config/agent-presets/*/agent.cordis.yml',
+      'no agent presets matched apps/cli/config/agent-presets/*/agent.cordis.yml or apps/cli/config/slark-cloud-agent-presets/*/agent.cordis.yml',
     ])
   })
 

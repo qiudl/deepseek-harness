@@ -103,6 +103,7 @@
     "verify-client-packages": "tsx scripts/verify-client-packages.ts",
     "verify-vendored-links": "tsx scripts/verify-vendored-links.ts",
     "verify-cordis-config": "tsx scripts/verify-cordis-config.ts",
+    "verify-slark-cloud-preset": "tsx scripts/verify-slark-cloud-preset.ts",
     "rescope-vendor": "tsx scripts/rescope-vendor.ts",
     "rescope-vendor:check": "tsx scripts/rescope-vendor.ts --check",
     "verify-client-domain-graph": "tsx scripts/verify-client-domain-graph.ts",

@@ -228,6 +228,9 @@ importers:
       '@deepseek-ai/dsh-skill-filesystem':
         specifier: workspace:^
         version: link:../../packages/skill/skill-filesystem
+      '@deepseek-ai/dsh-slark-cloud':
+        specifier: workspace:^
+        version: link:../../packages/bundle/slark-cloud
       '@deepseek-ai/dsh-terminal':
         specifier: workspace:^
         version: link:../../packages/terminal/terminal
@@ -1272,6 +1275,28 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: workspace:^
         version: link:../../core/session
+
+  packages/bundle/slark-cloud:
+    dependencies:
+      '@deepseek-ai/dsh-fs-slark-remote':
+        specifier: workspace:^
+        version: link:../../fs/fs-slark-remote
+      '@deepseek-ai/dsh-shell-slark-remote':
+        specifier: workspace:^
+        version: link:../../shell/shell-slark-remote
+      '@deepseek-ai/dsh-slark-device-client':
+        specifier: workspace:^
+        version: link:../../slark/device-client
+      '@deepseek-ai/dsh-slark-identity':
+        specifier: workspace:^
+        version: link:../../host/slark-identity
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
 
   packages/bundle/web-app:
     dependencies:
@@ -5221,6 +5246,28 @@ importers:
       '@deepseek-ai/dsh-typert-protocol':
         specifier: workspace:^
         version: link:../../typert/protocol
+
+  packages/host/slark-identity:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:^
+        version: link:../../core/agent
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-slark-device-client':
+        specifier: workspace:^
+        version: link:../../slark/device-client
+      '@deepseek-ai/dsh-tools':
+        specifier: workspace:^
+        version: link:../../core/tools
 
   packages/host/webserver:
     dependencies:
