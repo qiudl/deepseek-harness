@@ -564,8 +564,10 @@ describe('boot', () => {
     const harness = tmp()
     const absolutePlugin = join(dir, 'absolute.mjs')
     const shadow = join(dir, 'node_modules', '@deepseek-ai', 'dsh-system-prompt')
+    const configOnly = join(dir, 'node_modules', 'config-only-plugin')
     const harnessPlugin = join(harness, 'node_modules', '@deepseek-ai', 'dsh-system-prompt')
     mkdirSync(shadow, { recursive: true })
+    mkdirSync(configOnly, { recursive: true })
     mkdirSync(harnessPlugin, { recursive: true })
     writeFileSync(join(shadow, 'package.json'), JSON.stringify({
       name: '@deepseek-ai/dsh-system-prompt',
@@ -589,6 +591,17 @@ describe('boot', () => {
       '}',
       '',
     ].join('\n'))
+    writeFileSync(join(configOnly, 'package.json'), JSON.stringify({
+      name: 'config-only-plugin',
+      type: 'module',
+      exports: './index.mjs',
+    }))
+    writeFileSync(join(configOnly, 'index.mjs'), [
+      'export function apply(ctx) {',
+      '  ctx.provide("configOnlyPluginLoaded", true)',
+      '}',
+      '',
+    ].join('\n'))
     writeFileSync(join(dir, 'relative.mjs'), 'export function apply(ctx) { ctx.provide("relativePluginLoaded", true) }\n')
     writeFileSync(absolutePlugin, 'export function apply(ctx) { ctx.provide("absolutePluginLoaded", true) }\n')
     const entries = [
@@ -596,6 +609,8 @@ describe('boot', () => {
       "  name: '@deepseek-ai/dsh-system-prompt'",
       '- id: relative',
       "  name: './relative.mjs'",
+      '- id: config-only',
+      '  name: config-only-plugin',
     ]
     const configOwnedPath = join(dir, 'config-owned.cordis.yml')
     writeFileSync(configOwnedPath, [...entries, ''].join('\n'))
@@ -611,6 +626,7 @@ describe('boot', () => {
       expect(configOwned.get('shadowPluginLoaded')).toBe(true)
       expect(configOwned.get('systemPrompt')).toBeUndefined()
       expect(configOwned.get('relativePluginLoaded')).toBe(true)
+      expect(configOwned.get('configOnlyPluginLoaded')).toBe(true)
     } finally {
       await configOwned.fiber.dispose()
     }
@@ -621,6 +637,7 @@ describe('boot', () => {
       expect(ctx.get('shadowPluginLoaded')).toBeUndefined()
       expect(ctx.get('relativePluginLoaded')).toBe(true)
       expect(ctx.get('absolutePluginLoaded')).toBe(true)
+      expect(ctx.get('configOnlyPluginLoaded')).toBe(true)
     } finally {
       await ctx.fiber.dispose()
     }
@@ -632,6 +649,7 @@ describe('boot', () => {
       expect(publicApiFallback.get('shadowPluginLoaded')).toBeUndefined()
       expect(publicApiFallback.get('relativePluginLoaded')).toBe(true)
       expect(publicApiFallback.get('absolutePluginLoaded')).toBe(true)
+      expect(publicApiFallback.get('configOnlyPluginLoaded')).toBe(true)
     } finally {
       await publicApiFallback.fiber.dispose()
     }

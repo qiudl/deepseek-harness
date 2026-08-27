@@ -491,12 +491,27 @@ export async function mountRootInclude(
   bareModuleBaseUrl?: string,
 ): Promise<Entry | undefined> {
   const hostRequire = bareModuleBaseUrl === undefined ? undefined : createRequire(bareModuleBaseUrl)
+  const configRequire = bareModuleBaseUrl === undefined ? undefined : createRequire(pathToFileURL(absoluteConfigPath))
   ctx.loader.builtins.include = bareModuleBaseUrl === undefined
     ? Include
     : class HostResolvedRootInclude extends Include {
       override import(name: string, getOuterStack?: () => string[]): unknown {
-        const specifier = isAbsolute(name) ? pathToFileURL(name).href : name
+        let specifier = isAbsolute(name) ? pathToFileURL(name).href : name
         if (name.startsWith('.') || name.startsWith('cordis:')) return super.import(specifier, getOuterStack)
+        if (!specifier.startsWith('file:')) {
+          /* v8 ignore next -- this subclass is only installed with both resolvers. */
+          if (hostRequire === undefined || configRequire === undefined) return super.import(specifier, getOuterStack)
+          try {
+            specifier = pathToFileURL(hostRequire.resolve(specifier)).href
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error
+            // The maintained `$DSH_HOME/profiles/node_modules` fallback is in
+            // the config's parent walk. It contains the installation's full
+            // bundle dependency closure, while the app anchor intentionally
+            // contains only the CLI's direct dependencies.
+            specifier = pathToFileURL(configRequire.resolve(specifier)).href
+          }
+        }
         const internal = this.ctx.loader.internal
         /* v8 ignore next -- Node supplies the internal loader; this preserves the
            original diagnostic for hypothetical embedders without it. */
@@ -505,13 +520,7 @@ export async function mountRootInclude(
           // bridge cannot expose the internal ESM loader. Resolve from the
           // installed host first so the eventual import never falls back to
           // Loader's own module ancestry.
-          /* v8 ignore next -- the host-backed subclass is only installed when
-             createRequire above produced this resolver. */
-          if (hostRequire === undefined) return super.import(specifier, getOuterStack)
-          const resolved = specifier.startsWith('file:')
-            ? specifier
-            : pathToFileURL(hostRequire.resolve(specifier)).href
-          return import(resolved)
+          return import(specifier)
         }
         return internal.import(specifier, bareModuleBaseUrl, {})
       }
