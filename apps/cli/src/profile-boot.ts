@@ -15,8 +15,10 @@ import { writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
+import Hmr from '@deepseek-ai/cordis-plugin-hmr'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
+import Timer from '@deepseek-ai/cordis-plugin-timer'
 import {
   boot,
   composeEntries,
@@ -296,9 +298,9 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
       // bare custom profile may not mount either.
       if (ctx.get('hmr') === undefined) {
         if (ctx.get('timer') === undefined) {
-          await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-timer' })
+          await ctx.plugin(Timer)
         }
-        await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-hmr', config: { root: [] } })
+        await ctx.plugin(Hmr, { root: [], ignored: [], debounce: 0 })
       }
       await watchUserPatches(ctx, {
         binName: NAME,
