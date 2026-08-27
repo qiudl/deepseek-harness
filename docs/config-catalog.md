@@ -694,6 +694,26 @@ Depends on: [`LocalConfig`](#deepseek-aidsh-fs-local)
 
 Source: [`packages/fs/fs-sandbox/src/index.ts:49`](../packages/fs/fs-sandbox/src/index.ts)
 
+<a id="deepseek-aidsh-fs-slark-remote"></a>
+
+## `@deepseek-ai/dsh-fs-slark-remote`
+
+Requires: `slarkDevice`
+
+```ts config-catalog
+/** Remote filesystem configuration. */
+export interface Config {
+  /** Opaque Slark workspace handle projected as `/workspace/<handle>`. */
+  workspaceHandle: string
+  /** Maximum bytes requested in one Device read task. */
+  readPageBytes?: number
+  /** Maximum direct children accepted from one list operation. */
+  maxListEntries?: number
+}
+```
+
+Source: [`packages/fs/fs-slark-remote/src/index.ts:48`](../packages/fs/fs-slark-remote/src/index.ts)
+
 <a id="deepseek-aidsh-goal"></a>
 
 ## `@deepseek-ai/dsh-goal`
@@ -2042,6 +2062,36 @@ export interface Config {
 ```
 
 Source: [`packages/skill/skill-filesystem/src/index.ts:49`](../packages/skill/skill-filesystem/src/index.ts)
+
+<a id="deepseek-aidsh-slark-device-client"></a>
+
+## `@deepseek-ai/dsh-slark-device-client`
+
+```ts config-catalog
+/** Configuration for the internal Gateway transport. */
+export interface Config {
+  /** Exact internal Slark Server origin, without a path, query, or fragment. */
+  gatewayUrl: string
+  /** Service bearer; omission reads `SLARK_DSH_SERVICE_TOKEN`. */
+  serviceToken?: string
+  /** Timeout for one HTTP exchange. */
+  requestTimeoutMs?: number
+  /** Server-side long-poll duration for task status. */
+  longPollMs?: number
+  /** Lifetime assigned to each logical Device Task. */
+  taskTtlMs?: number
+  /** Maximum output bytes requested in one status page. */
+  maxPageBytes?: number
+  /** Maximum complete task result retained by this client. */
+  maxResultBytes?: number
+  /** Number of same-idempotency-key create attempts after ambiguous transport failures. */
+  createAttempts?: number
+  /** Delay before retrying an ambiguous status exchange for the same task. */
+  retryDelayMs?: number
+}
+```
+
+Source: [`packages/slark/device-client/src/index.ts:67`](../packages/slark/device-client/src/index.ts)
 
 <a id="deepseek-aidsh-spill-local"></a>
 

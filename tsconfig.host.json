@@ -227,6 +227,8 @@
     { "path": "./packages/shell/tool-bash" },
     { "path": "./packages/fs/fs" },
     { "path": "./packages/fs/fs-local" },
+    { "path": "./packages/slark/device-client" },
+    { "path": "./packages/fs/fs-slark-remote" },
     { "path": "./packages/e2b/fs-e2b" },
     { "path": "./packages/fs/fs-observation-policy" },
     { "path": "./packages/fs/fs-sandbox" },

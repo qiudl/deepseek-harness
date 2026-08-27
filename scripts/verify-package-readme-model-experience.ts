@@ -102,6 +102,8 @@ const SENTENCE_MODEL_EXPERIENCE: Readonly<Record<string, SentenceContract>> = {
   'packages/fs/fs': { kind: 'indirect', reason: 'The service interface delegates model rendering to dsh-tool-fs.' },
   'packages/e2b/fs-e2b': { kind: 'indirect', reason: 'The provider backend delegates model rendering to dsh-tool-fs.' },
   'packages/fs/fs-local': { kind: 'indirect', reason: 'The provider backend delegates model rendering to dsh-tool-fs.' },
+  'packages/fs/fs-slark-remote': { kind: 'indirect', reason: 'The provider backend delegates model rendering to dsh-tool-fs.' },
+  'packages/slark/device-client': { kind: 'indirect', reason: 'Capability providers own every model-visible schema and result rendered over the transport.' },
   'packages/hooks/hook-protocol': { kind: 'indirect', reason: 'Only the hook bridge plugins render decoded hook output to a model.' },
   'packages/host/apiproxy': { kind: 'none', reason: 'The wire contract and fetch carriers move already-composed messages and register nothing model-facing.' },
   'packages/host/directory-picker': { kind: 'none', reason: 'The GUI-host picking seam registers nothing model-facing.' },

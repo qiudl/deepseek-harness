@@ -429,6 +429,31 @@ Types: [SandboxExecutionPolicy](sandbox.zh.md)
 
 Source: [`packages/fs/fs/src/index.ts`](../../packages/fs/fs/src/index.ts)
 
+<a id="ctxslarkdevice--slarkdeviceclient"></a>
+
+### `ctx.slarkDevice` — `SlarkDeviceClient`
+
+Internal Gateway transport and durable-task polling owner.
+
+```ts cordis-catalog
+/**
+ * Register the sole operation-scoped authority provider.
+ * @param source - Provider returning a fresh short-lived subject and current Grant fences.
+ * @returns Disposer that removes exactly this provider.
+ */
+bindAuthority(source: () => Promise<SlarkDeviceAuthority>): () => void | Promise<void>
+
+/**
+ * Create one logical Device Task and poll that same task to a digest-verified terminal result.
+ * @param request - Capability operation and opaque workspace fence.
+ * @param signal - Cancels a known task before returning `request_aborted`.
+ * @returns Terminal task metadata and complete result bytes.
+ */
+async executeTask(request: SlarkDeviceTaskRequest, signal?: AbortSignal): Promise<SlarkDeviceTaskResult>
+```
+
+Source: [`packages/slark/device-client/src/index.ts`](../../packages/slark/device-client/src/index.ts)
+
 <a id="fs-events"></a>
 
 ### `fs/*` events

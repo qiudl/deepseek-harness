@@ -1711,6 +1711,25 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'slarkDevice',
+    summary: 'Internal Gateway transport and durable-task polling owner.',
+    description: 'Internal Gateway transport and durable-task polling owner.',
+    methods: [
+      {
+        signature: 'bindAuthority(source: () => Promise<SlarkDeviceAuthority>): () => void | Promise<void>',
+        description: 'Register the sole operation-scoped authority provider.',
+        parameters: [{ name: 'source', description: 'Provider returning a fresh short-lived subject and current Grant fences.' }],
+        returns: 'Disposer that removes exactly this provider.',
+      },
+      {
+        signature: 'async executeTask(request: SlarkDeviceTaskRequest, signal?: AbortSignal): Promise<SlarkDeviceTaskResult>',
+        description: 'Create one logical Device Task and poll that same task to a digest-verified terminal result.',
+        parameters: [{ name: 'request', description: 'Capability operation and opaque workspace fence.' }, { name: 'signal', description: 'Cancels a known task before returning `request_aborted`.' }],
+        returns: 'Terminal task metadata and complete result bytes.',
+      },
+    ],
+  },
+  {
     key: 'spillStore',
     summary: 'Abstract spill storage service.',
     description: 'Abstract spill storage service. Subclass, implement saveText, and load the subclass as a plugin — it registers as `ctx.spillStore` (one implementation per context; loading a second throws, cordis\' standard duplicate-service behavior).\n\nSemantics every implementation must honor:\n\n- saveText persists the FULL `content` verbatim and returns an opaque locator, exact byte length, and model-facing retrieval guidance.\n- Storage is scoped by the request\'s SaveTextSpill.owner session; the backend chooses a private (not world-readable) location and a collision-free name derived from — never equal to — the caller\'s `suggestedName`.\n- `saveText` REJECTS on a real storage failure (permissions, ENOSPC, backend unavailable); the caller decides how to degrade (the spill policy treats a rejection as best-effort and keeps the inline result).',
@@ -4420,6 +4439,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SkillViewOptions',
     declaration: 'export interface SkillViewOptions extends SkillLookupOptions {\n    readonly scope?: ScopeKey | undefined;\n}',
+  },
+  {
+    name: 'SlarkDeviceAuthority',
+    declaration: 'export interface SlarkDeviceAuthority {\n    subjectToken: string;\n    sessionId: string;\n    computerId: string;\n    workspaceHandle: string;\n    grantId: string;\n    grantEpoch: number;\n}',
+  },
+  {
+    name: 'SlarkDeviceTaskRequest',
+    declaration: 'export interface SlarkDeviceTaskRequest {\n    expectedWorkspaceHandle: string;\n    capability: \'fs_read\' | \'fs_write\' | \'shell_exec\' | \'process_poll\' | \'process_cancel\' | \'artifact_publish\';\n    operation: \'resolve\' | \'stat\' | \'lstat\' | \'read\' | \'list\' | \'write\' | \'edit\' | \'run\' | \'start\' | \'poll\' | \'kill\';\n    payload: Readonly<Record<string, unknown>>;\n    sideEffectKey?: string;\n}',
+  },
+  {
+    name: 'SlarkDeviceTaskResult',
+    declaration: 'export interface SlarkDeviceTaskResult {\n    taskId: string;\n    state: string;\n    stateVersion: number;\n    authorityVersion: number;\n    terminalCode: string | null;\n    result: Uint8Array;\n}',
   },
   {
     name: 'SpawnTeammateRequest',

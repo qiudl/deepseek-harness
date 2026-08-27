@@ -94,6 +94,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   sessions: 'session.md',
   settings: 'settings.md',
   sessionTitle: 'session-title.md',
+  slarkDevice: 'filesystem.md',
   skills: 'skills.md',
   spillStore: 'spill.md',
   storage: 'storage.md',
@@ -625,6 +626,9 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   WorkflowAgentEndInfo: 'event-local snapshot is owned by packages/workflow/workflow/src/index.ts',
   WorkflowAgentInfo: 'event-local snapshot is owned by packages/workflow/workflow/src/index.ts',
   WorkflowResultInfo: 'event-local snapshot is owned by packages/workflow/workflow/src/index.ts',
+  SlarkDeviceAuthority: 'transport authority contract is owned by packages/slark/device-client/README.md',
+  SlarkDeviceTaskRequest: 'transport request contract is owned by packages/slark/device-client/README.md',
+  SlarkDeviceTaskResult: 'transport result contract is owned by packages/slark/device-client/README.md',
 }
 
 /** Repository data policy consumed by the Cordis catalog projector. */
