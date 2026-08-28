@@ -123,6 +123,21 @@ export function auditSlarkCloudComposition(): string[] {
   errors.push(...warnings.map(warning => `composition warning: ${warning}`))
   const byId = new Map(rows.map(row => [row.id, row]))
 
+  const credentials = expectRow(byId, 'credentials', '@deepseek-ai/dsh-credentials-local', errors)
+  const credentialConfig = typeof credentials?.config === 'object' && credentials.config !== null
+    ? credentials.config as Record<string, unknown>
+    : undefined
+  if (credentialConfig === undefined) {
+    errors.push('row credentials must provide encrypted cloud storage config')
+  } else {
+    if (expression(credentialConfig.path) !== "process.env.DSH_HOME && process.env.DSH_HOME + '/.credentials.enc' || '/__missing_dsh_home__/.credentials.enc'") {
+      errors.push('row credentials must isolate its encrypted document under the Cell DSH_HOME')
+    }
+    if (expression(credentialConfig.encryptionKeyFile) !== "process.env.DSH_CREDENTIALS_KEY_FILE || '/__missing_dsh_credentials_key__'") {
+      errors.push('row credentials must read its encryption key only from the deployment credential path')
+    }
+  }
+
   const remoteRows = [
     expectRow(byId, 'slark-device', '@deepseek-ai/dsh-slark-device-client', errors),
     expectRow(byId, 'slark-identity', '@deepseek-ai/dsh-slark-identity', errors),

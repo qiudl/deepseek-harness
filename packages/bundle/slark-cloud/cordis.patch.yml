@@ -17,6 +17,15 @@
 - id: fs-sandbox
   disabled: true
 
+# A cloud Cell persists provider keys under its per-user DSH_HOME, but the
+# document is ciphertext. The key path points at a systemd credential outside
+# that home; either missing deployment input resolves to a guaranteed-missing
+# absolute path, so the credential provider fails closed during activation.
+- id: credentials
+  config:
+    path: !!js process.env.DSH_HOME && process.env.DSH_HOME + '/.credentials.enc' || '/__missing_dsh_home__/.credentials.enc'
+    encryptionKeyFile: !!js process.env.DSH_CREDENTIALS_KEY_FILE || '/__missing_dsh_credentials_key__'
+
 - id: directory-picker
   disabled: true
 

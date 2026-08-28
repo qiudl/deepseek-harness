@@ -572,10 +572,12 @@ export interface Config {
   watch?: boolean
   /** Watcher write-settle window in milliseconds; defaults to 100. */
   debounceMs?: number
+  /** Absolute path to a canonical 32-byte base64url key that enables AES-256-GCM at-rest encryption. */
+  encryptionKeyFile?: string
 }
 ```
 
-来源：[`packages/credentials/credentials-local/src/index.ts:64`](../packages/credentials/credentials-local/src/index.ts)
+来源：[`packages/credentials/credentials-local/src/index.ts:71`](../packages/credentials/credentials-local/src/index.ts)
 
 <a id="deepseek-aidsh-e2b"></a>
 
@@ -2155,7 +2157,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/host/slark-identity/src/index.ts:61`](../packages/host/slark-identity/src/index.ts)
+来源：[`packages/host/slark-identity/src/index.ts:60`](../packages/host/slark-identity/src/index.ts)
 
 <a id="deepseek-aidsh-spill-local"></a>
 

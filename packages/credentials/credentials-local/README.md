@@ -7,7 +7,7 @@ File-backed [credentials](../credentials/README.md) provider: four layers, one h
 | Layer | Source id | Writable | Wins |
 |---|---|---|---|
 | Inherited process environment | `env` | no | always |
-| `$DSH_HOME/.credentials.yaml` document | `file` | yes (`set`/`unset`) | over both `.env` layers |
+| Managed credentials document | `file` | yes (`set`/`unset`) | over both `.env` layers |
 | `<invocation cwd>/.env` | `project-env` | not here | over the user `.env` |
 | `$DSH_HOME/.env` | `user-env` | not here | otherwise |
 
@@ -25,6 +25,9 @@ Under the product CLI, resolution reads the launcher's frozen [environment snaps
 | `dshHome` | `$DSH_HOME` or `~/.dsh` | Harness home used when `path` is omitted. |
 | `watch` | `true` | Hot-publish external edits. |
 | `debounceMs` | `100` | Watcher write-settle window. |
+| `encryptionKeyFile` | unset | Absolute path to a private file containing one canonical 32-byte base64url key. When set, encrypt the managed document with AES-256-GCM. |
+
+`encryptionKeyFile` is a deployment boundary, not a user preference. The provider reads the key once at boot, requires a regular owner-only file on POSIX, and never places the key in configuration output or the process environment. The configured `path` should use a distinct name such as `.credentials.enc`; this leaves the plaintext default backward-compatible and makes a rollback fail as “credential unavailable” instead of asking an older build to parse ciphertext.
 
 ## The document
 
@@ -63,6 +66,8 @@ Writes patch the parsed document rather than rebuilding it, so comments and the 
 
 Any string value round-trips, multi-line values included, so no entry is unwritable for want of a quoting style. An empty stored value is absent, per the seam rule — which is why an empty string in the document is rejected outright: `unset` removes a key, it does not blank it.
 
+With `encryptionKeyFile`, the YAML above exists only in memory. Disk stores a canonical `dsh-credentials-encrypted-v1:` envelope with a fresh 96-bit nonce and AES-256-GCM authentication on every write. A malformed envelope, tampering, or the wrong key fails closed without quoting plaintext. The encryption key and encrypted document must be backed up separately but restored as one pair. Replacing the key in place is not rotation: re-encrypt the document deliberately or have the user re-enter credentials before retiring the old key.
+
 ## Permissions
 
 The provider creates the directory `0700` and creates or atomically replaces the document `0600`. It holds what it *reads* to that same bound: on POSIX a document carrying any group or other permission bit fails before its contents are parsed — at boot and on every reload — and the error names the `chmod 600` repair. Windows has no mode to inspect, so the check is skipped there rather than faked.
@@ -73,7 +78,7 @@ External edits publish `credentials/reference-updated` per changed reference aft
 
 ## Security boundary
 
-The document is `0600` under a `0700` directory, which stops other OS users — **not** the model. Tool processes (bash, the filesystem tools) run as the same user, and the shipped `workspace-write` file policy confines mutations rather than reads, so they can read this file exactly like any other file the user owns; no sandbox mode singles it out. What the harness does hold to is narrower: it never hands the model a resolved path to the document, and never loads it into the process environment — unlike `$DSH_HOME/.env`, which is the user's ordinary environment layer (see [app-boot's Harness-home layers](../../boot/app-boot/README.md#profiles)) — so reaching the value takes a deliberate read of a path the agent was not given.
+Without encryption, the document is `0600` under a `0700` directory, which stops other OS users — **not** the model. Tool processes (bash, the filesystem tools) run as the same user, and the shipped `workspace-write` file policy confines mutations rather than reads, so they can read this file exactly like any other file the user owns; no sandbox mode singles it out. With encryption, the document alone is no longer useful, but a same-UID process that can read the configured key file can still decrypt it. What the harness does hold to is narrower: it never hands the model either resolved path and never loads the key or document into the process environment — unlike `$DSH_HOME/.env`, which is the user's ordinary environment layer (see [app-boot's Harness-home layers](../../boot/app-boot/README.md#profiles)). A cloud deployment that relies on this separation must also withhold local shell and filesystem tools from the agent.
 
 That is discretion, not a boundary. A deployment that must keep provider keys away from its own agent cannot get there with file permissions; an OS-keychain provider — a store the model's processes cannot read at all — is the deferred answer and belongs beside this provider as a sibling package.
 
@@ -88,6 +93,7 @@ No direct invalidation; credentials never enter a request prefix.
 ## Known Limitations and Deferred Work
 
 - **Same-reference concurrent writes are last-write-wins** — the writer lock and the read-modify-write keep concurrent writers from dropping each other's entries, but two writers editing one reference still resolve to the later write; there is no revision check.
-- **A same-UID process can read the document** — see [Security boundary](#security-boundary): the file-effect sandbox modes do not deny reads, and an OS-keychain provider is deferred.
+- **A same-UID process can recover the credential when it can read the document and key** — see [Security boundary](#security-boundary): authenticated encryption protects persisted state and backups, not against code already running with access to both files; an OS-keychain provider is deferred.
+- **Key rotation is an explicit operation** — replacing the key file alone makes the existing document unreadable. Keep the old key until the document has been deliberately re-encrypted or users have re-entered credentials.
 - **Environment changes are invisible** — the snapshot is frozen at launch, so a variable exported after startup reaches neither resolution nor `describe`; changing an environment-sourced credential takes a restart.
 - **Atomic, not crash-durable** — inherited from `dsh-atomic-write`; the store re-reads on boot.
