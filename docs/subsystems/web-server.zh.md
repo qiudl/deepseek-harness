@@ -78,6 +78,13 @@ register(route: WebRoute): () => void
 registerUpgrade(route: WebUpgradeRoute): () => void
 
 /**
+ * Register a transport-level admission guard shared by HTTP and upgrades.
+ * @param guard - predicate that admits one incoming request.
+ * @returns the disposer removing the guard.
+ */
+registerRequestGuard(guard: WebRequestGuard): () => void
+
+/**
  * Claim the fallback seat: the handler answering every request no named
  * route matches (the SPA dist server in the shipped Web composition). One
  * owner only — a second registration throws, because two fallbacks cannot

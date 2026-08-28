@@ -240,6 +240,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Owns WorkspaceId-branded records over the domain facility; stable sessionIds accounts drive Host RPC and GUI projections.',
   },
   {
+    key: 'slarkIdentity',
+    pkg: 'slark-identity',
+    title: 'Slark runtime authority scope',
+    mode: 'core',
+    note: 'Validates the current Edge-issued authority and carries the active DSH session across agent and tool work before remote Device operations resolve their fences.',
+  },
+  {
     key: 'sessionQuery',
     pkg: 'session-query',
     title: 'Session reads, traces, filters, and search',

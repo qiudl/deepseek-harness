@@ -18,7 +18,7 @@ The document uses exact fields: `protocol_version=1`, `kind=slark-dsh-runtime-au
 
 ## Model Experience
 
-This package adds no tool, prompt section, or model-visible identity value. Remote filesystem and Shell failures expose stable provider errors without subject tokens or Slark account fields.
+None, as the adapter keeps Slark identity out of model requests and session logs while provider failures expose only stable errors.
 
 #### KV Cache effect
 

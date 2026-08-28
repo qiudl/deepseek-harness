@@ -33,7 +33,18 @@ function isLoopback(req: IncomingMessage): boolean {
   return address === '::1' || address.startsWith('127.') || address.startsWith('::ffff:127.')
 }
 
-/** Canonical message signed by the Edge for one Cell request. */
+/**
+ * Canonical message signed by the Edge for one Cell request.
+ * @param timestamp - decimal issuance time in Unix seconds.
+ * @param nonce - request-unique base64url nonce.
+ * @param method - incoming HTTP method.
+ * @param url - incoming path and query.
+ * @param environment - Slark environment identifier.
+ * @param assignment - Runtime Cell assignment identifier.
+ * @param generation - assignment generation fence.
+ * @param subject - Slark subject identifier.
+ * @returns the newline-delimited value covered by the ingress HMAC.
+ */
 export function cellIngressMessage(
   timestamp: string,
   nonce: string,
@@ -47,7 +58,13 @@ export function cellIngressMessage(
   return ['v1', timestamp, nonce, method.toUpperCase(), url, environment, assignment, generation, subject].join('\n')
 }
 
-/** Validate a short-lived Edge-to-Cell request token. */
+/**
+ * Validate a short-lived Edge-to-Cell request token.
+ * @param req - incoming Cell request carrying Edge authority headers.
+ * @param key - shared 32-byte ingress HMAC key.
+ * @param now - clock used for the token freshness check.
+ * @returns true only when claims, freshness, and signature all match the request.
+ */
 export function verifyCellIngressRequest(
   req: IncomingMessage,
   key: Buffer,

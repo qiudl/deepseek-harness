@@ -4,8 +4,11 @@ English | [中文](README.zh.md)
 
 Slark Device Agent implementation of the canonical [`ctx.shell`](../shell/README.md) contract. A cloud Harness cell submits path-free Shell tasks to the user's granted local workspace; it never executes a local fallback inside the cell.
 
-```ts ignore-check
+```ts
+import type { Context } from '@deepseek-ai/cordis'
 import SlarkRemoteShellExecutor from '@deepseek-ai/dsh-shell-slark-remote'
+
+declare const ctx: Context
 
 await ctx.plugin(SlarkRemoteShellExecutor, { workspaceHandle: 'opaque-workspace-handle' })
 ```

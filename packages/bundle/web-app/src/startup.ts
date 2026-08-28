@@ -39,7 +39,11 @@ interface WebOptions {
   trustedHost?: string[]
 }
 
-/** Whether a guarded Slark Runtime Cell may bind its private container network. */
+/**
+ * Whether a guarded Slark Runtime Cell may bind its private container network.
+ * @param env - process environment containing the rollout switch and ingress key.
+ * @returns true only when the feature is enabled with a canonical 32-byte key.
+ */
 export function allowsSlarkCellBind(env: NodeJS.ProcessEnv): boolean {
   const raw = env.DSH_CELL_INGRESS_KEY
   if (env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1' || raw === undefined) return false

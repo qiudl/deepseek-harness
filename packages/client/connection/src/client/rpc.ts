@@ -7,6 +7,7 @@ import {
 } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { ClientConnectionRpc } from '../rpc.ts'
 import { randomUuid } from './random-uuid.ts'
+import { withSlarkCsrfHeader } from './slark-csrf.ts'
 
 const INTERNAL_BASE = 'http://dsh.internal'
 const CHANNEL_PATTERN = /^\/[A-Za-z0-9._~-]+$/
@@ -21,7 +22,7 @@ export type RpcFetch = (input: URL, init: RequestInit) => Promise<Response>
  * @returns caller that owns request correlation and response-envelope validation.
  */
 export function createWebConnectionRpc(doFetch?: RpcFetch): ClientConnectionRpc {
-  const send: RpcFetch = doFetch ?? ((input, init) => globalThis.fetch(input, init))
+  const send: RpcFetch = doFetch ?? ((input, init) => globalThis.fetch(input, withSlarkCsrfHeader(init)))
   return {
     async call(channel, endpoint, payload, signal) {
       assertTarget(channel, endpoint)

@@ -1730,6 +1730,25 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'slarkIdentity',
+    summary: 'Edge-injected identity and operation-scoped session carrier.',
+    description: 'Edge-injected identity and operation-scoped session carrier.',
+    methods: [
+      {
+        signature: 'runForSession<T>(sessionId: string, operation: () => T): T',
+        description: 'Run trusted provider work under one DSH session identity.',
+        parameters: [{ name: 'sessionId', description: 'DSH Session id written into Device Task authority.' }, { name: 'operation', description: 'Work whose asynchronous descendants inherit this session.' }],
+        returns: 'the operation result without altering its sync or async type.',
+      },
+      {
+        signature: 'async authorityForSession(sessionId: string): Promise<SlarkDeviceAuthority>',
+        description: 'Read and validate the current Edge authority for one explicit DSH session.',
+        parameters: [{ name: 'sessionId', description: 'DSH Session id paired with the Edge-issued subject.' }],
+        returns: 'a fresh Device authority snapshot.',
+      },
+    ],
+  },
+  {
     key: 'spillStore',
     summary: 'Abstract spill storage service.',
     description: 'Abstract spill storage service. Subclass, implement saveText, and load the subclass as a plugin — it registers as `ctx.spillStore` (one implementation per context; loading a second throws, cordis\' standard duplicate-service behavior).\n\nSemantics every implementation must honor:\n\n- saveText persists the FULL `content` verbatim and returns an opaque locator, exact byte length, and model-facing retrieval guidance.\n- Storage is scoped by the request\'s SaveTextSpill.owner session; the backend chooses a private (not world-readable) location and a collision-free name derived from — never equal to — the caller\'s `suggestedName`.\n- `saveText` REJECTS on a real storage failure (permissions, ENOSPC, backend unavailable); the caller decides how to degrade (the spill policy treats a rejection as best-effort and keeps the inline result).',
@@ -2285,6 +2304,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Register an exact-path HTTP upgrade route. Duplicate paths throw because one socket can have only one protocol owner.',
         parameters: [{ name: 'route', description: 'pathname and handler owning negotiation plus socket use.' }],
         returns: 'the disposer removing the route.',
+      },
+      {
+        signature: 'registerRequestGuard(guard: WebRequestGuard): () => void',
+        description: 'Register a transport-level admission guard shared by HTTP and upgrades.',
+        parameters: [{ name: 'guard', description: 'predicate that admits one incoming request.' }],
+        returns: 'the disposer removing the guard.',
       },
       {
         signature: 'registerFallback(handler: WebRoute[\'handler\']): () => void',
@@ -4995,6 +5020,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WebFetchResultView',
     declaration: 'export interface WebFetchResultView {\n    card: \'web\';\n    kind: \'fetch\';\n    title?: string;\n    url: string;\n    statusCode: number;\n    truncated: boolean;\n}',
+  },
+  {
+    name: 'WebRequestGuard',
+    declaration: 'export type WebRequestGuard = (req: IncomingMessage) => boolean | Promise<boolean>;',
   },
   {
     name: 'WebResultView',

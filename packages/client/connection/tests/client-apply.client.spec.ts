@@ -8,6 +8,7 @@ import { apply, type ConnectionHandle } from '../src/client/index.ts'
 import type { RpcMessage } from '../src/client/api.ts'
 import { RpcId } from '../src/client/api.ts'
 import { FixtureApiClient } from '../src/client/fixture.ts'
+import { withSlarkCsrfHeader } from '../src/client/slark-csrf.ts'
 import { WebApiClient } from '../src/client/web-api-client.ts'
 
 type Win = { location?: { hostname: string; search: string; origin?: string } }
@@ -192,6 +193,55 @@ describe('connection client apply', () => {
     }
     expect(seen.some(u => u.includes('/api/host.describe'))).toBe(true)
     expect(seen.some(u => u.includes('/api/respond'))).toBe(true)
+  })
+
+  it('mirrors the Slark host-only CSRF cookie on every default HTTP POST carrier', async () => {
+    ;(globalThis as Win).location = {
+      hostname: 'dsh.example', search: '', origin: 'https://dsh.example',
+    }
+    vi.stubGlobal('document', { cookie: 'theme=dark; __Host-dsh_csrf=csrf-token; density=compact' })
+    const handle = await mount()
+    const original = globalThis.fetch
+    const seen: Array<{ url: string; headers: Headers }> = []
+    globalThis.fetch = async (input: URL | RequestInfo, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      seen.push({ url, headers: new Headers(init?.headers) })
+      return Response.json({})
+    }
+    try {
+      await handle.api.host.describe({}).catch(() => undefined)
+      await handle.api.respond({
+        type: 'client-response',
+        rpcId: RpcId('csrf-response'),
+        result: { ok: true, value: {} },
+      }).catch(() => undefined)
+      await handle.rpc.call('/api', 'goals/create', {}).catch(() => undefined)
+    } finally {
+      globalThis.fetch = original
+      vi.unstubAllGlobals()
+    }
+    expect(seen.map(({ url }) => new URL(url).pathname)).toEqual([
+      '/api/host.describe',
+      '/api/respond',
+      '/api/goals/create',
+    ])
+    expect(seen.every(({ headers }) => headers.get('x-slark-dsh-csrf') === 'csrf-token')).toBe(true)
+  })
+
+  it('keeps non-Slark and non-POST requests unchanged and overwrites a supplied CSRF header', () => {
+    const post: RequestInit = { method: 'POST', headers: { 'x-slark-dsh-csrf': 'caller-value' } }
+    expect(withSlarkCsrfHeader(post)).toBe(post)
+    vi.stubGlobal('document', { cookie: '__Host-dsh_csrf=cookie-value' })
+    try {
+      const get: RequestInit = { method: 'GET' }
+      expect(withSlarkCsrfHeader(get)).toBe(get)
+      const secured = withSlarkCsrfHeader(post)
+      expect(secured).not.toBe(post)
+      expect(new Headers(secured?.headers).get('x-slark-dsh-csrf')).toBe('cookie-value')
+      expect(new Headers(post.headers).get('x-slark-dsh-csrf')).toBe('caller-value')
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('opens one WebSocket per downlink, parses frames, and aborts both without using fetch', async () => {

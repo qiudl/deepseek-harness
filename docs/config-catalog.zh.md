@@ -817,7 +817,7 @@ export interface Config {
 
 ## `@deepseek-ai/dsh-host-apiproxy`
 
-需要：`agentDefaultModel` · `agents` · `attachments` · `directoryPicker` · `llm` · `sessions` · `subagents` · `sessionQuery` · `tools` · `userQuestions` · `workspaceRegistry`
+需要：`agentDefaultModel` · `agents` · `attachments` · `llm` · `sessions` · `subagents` · `sessionQuery` · `tools` · `userQuestions` · `workspaceRegistry`
 
 ```ts config-catalog
 /** Gateway plugin configuration. */
@@ -891,7 +891,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/host/webserver/src/index.ts:59`](../packages/host/webserver/src/index.ts)
+来源：[`packages/host/webserver/src/index.ts:62`](../packages/host/webserver/src/index.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 
@@ -2100,6 +2100,8 @@ export interface Config {
 export interface Config {
   /** Exact internal Slark Server origin, without a path, query, or fragment. */
   gatewayUrl: string
+  /** Permit plain HTTP only when the caller confines this client to a private control network. */
+  allowInsecureHttp?: boolean
   /** Service bearer; omission reads `SLARK_DSH_SERVICE_TOKEN`. */
   serviceToken?: string
   /** Timeout for one HTTP exchange. */
@@ -3380,7 +3382,7 @@ export interface Config {
 - `@deepseek-ai/dsh-session-projection`（[`packages/session/session-projection/src/index.ts`](../packages/session/session-projection/src/index.ts)）
 - `@deepseek-ai/dsh-session-stats` — 需要 `sessionProjections`（[`packages/session/session-stats/src/index.ts`](../packages/session/session-stats/src/index.ts)）
 - `@deepseek-ai/dsh-skill-badge` — 需要 `skills`（[`packages/skill/skill-badge/src/index.ts`](../packages/skill/skill-badge/src/index.ts)）
-- `@deepseek-ai/dsh-slark-cloud`（[`packages/bundle/slark-cloud/src/index.ts`](../packages/bundle/slark-cloud/src/index.ts)）
+- `@deepseek-ai/dsh-slark-cloud` — 需要 `webServer`（[`packages/bundle/slark-cloud/src/index.ts`](../packages/bundle/slark-cloud/src/index.ts)）
 - `@deepseek-ai/dsh-storage`（[`packages/storage/storage/src/index.ts`](../packages/storage/storage/src/index.ts)）
 - `@deepseek-ai/dsh-subagent`（[`packages/subagent/subagent/src/index.ts`](../packages/subagent/subagent/src/index.ts)）
 - `@deepseek-ai/dsh-subprocess-local`（[`packages/subprocess/subprocess-local/src/index.ts`](../packages/subprocess/subprocess-local/src/index.ts)）

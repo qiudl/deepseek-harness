@@ -18,6 +18,8 @@ The `slark-cloud` bundle is a host-plane provider substitution applied after the
 
 The Slark Edge atomically replaces a private authority file. `dsh-slark-identity` opens and validates that file for every provider operation, checks the workspace handle fixed into the cell composition, and binds the resulting authority to the DSH Session through `AsyncLocalStorage`. Trusted tool execution and agent pre-step events establish the scope; direct trusted consumers must establish it explicitly. No authority fact enters the agent plane.
 
+The default served-Web HTTP carriers implement the Edge's double-submit CSRF check. Before every POST they read the `__Host-dsh_csrf` cookie and overwrite `x-slark-dsh-csrf` with that value. Missing cookies produce no header and fail closed at the Edge; custom transports own their authentication, and WebSocket downlinks carry no CSRF token.
+
 The cloud Agent preset contains only provider-neutral agent capabilities and tools backed by the remote filesystem or Shell seams. Subprocess-backed search, persistent terminals, LSP, hooks, directory picking, and Cordis or plugin authoring are absent. The profile disables user preset discovery and preset switching.
 
 The CLI carries the cloud preset in a separate shipped root. It selects that root only when the composed profile contains the Slark Device provider row, including while the shared switch disables that row. Standalone profiles continue to discover only the ordinary shipped root, so they retain their local providers without exposing a misleading cloud preset.
@@ -38,10 +40,12 @@ One Runtime Cell composition fixes one workspace handle in this release. Selecti
 
 **Rely on the Desktop keyboard shortcut for the return trip.** Rejected because a hidden escape path does not make two visible workbenches feel like one product. The shortcut remains a recovery path, while the sidebar action is the discoverable route.
 
+**Let the Edge trust the session cookie alone or copy it into a header.** Rejected because either form collapses double-submit CSRF into ordinary cookie authentication, allowing a cross-site POST to satisfy the same check. The browser must prove script access to the host-only CSRF cookie through a separate request header.
+
 ## Consequences
 
 A Slark cloud session either reaches the selected Device under its current Workspace Grant or fails explicitly; it never executes against the Runtime Cell filesystem or Shell. Disabling the rollout switch is safe but intentionally removes file and Shell capability from new agent compositions.
 
-Identity-file publication, Device connectivity, and Grant lifecycle become required deployment health signals. Workspace switching costs cell recomposition in the first release. Remote search has no dedicated provider yet, so agents use bounded remote Shell commands when search is necessary.
+Identity-file publication, Device connectivity, Grant lifecycle, and Edge CSRF cookie issuance become required deployment health signals. Workspace switching costs cell recomposition in the first release. Remote search has no dedicated provider yet, so agents use bounded remote Shell commands when search is necessary.
 
 Standalone DSH behavior does not change: its existing presets and local providers remain available, the Slark cloud preset is not discoverable there, and its sidebar has no Slark return action.

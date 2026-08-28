@@ -18,7 +18,7 @@
 
 ## 模型体验
 
-本包不增加工具、提示词段落或模型可见身份值。远程文件系统和 Shell 失败只公开稳定 Provider 错误，不包含 subject token 或 Slark 账号字段。
+无，因为适配器不会让 Slark 身份进入模型请求或 session log，而 Provider 失败只公开稳定错误。
 
 #### KV Cache 影响
 

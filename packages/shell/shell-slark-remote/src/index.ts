@@ -207,7 +207,11 @@ export class SlarkRemoteShellExecutor extends ShellExecutor {
     return this.createProcess({ spec })
   }
 
-  /** Rebuild a live proxy from durable Server coordinates without starting the command twice. */
+  /**
+   * Rebuild a live proxy from durable Server coordinates without starting the command twice.
+   * @param handle - validated Device Task and remote-process coordinates.
+   * @returns a controllable proxy for the existing process.
+   */
   resumeProcess(handle: SlarkRemoteShellProxyHandle): SlarkRemoteShellProcess {
     this.validateHandle(handle)
     return this.createProcess({ handle: { ...handle } })

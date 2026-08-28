@@ -815,7 +815,7 @@ Source: [`packages/hooks/hooks-codex/src/index.ts:44`](../packages/hooks/hooks-c
 
 ## `@deepseek-ai/dsh-host-apiproxy`
 
-Requires: `agentDefaultModel` · `agents` · `attachments` · `directoryPicker` · `llm` · `sessions` · `subagents` · `sessionQuery` · `tools` · `userQuestions` · `workspaceRegistry`
+Requires: `agentDefaultModel` · `agents` · `attachments` · `llm` · `sessions` · `subagents` · `sessionQuery` · `tools` · `userQuestions` · `workspaceRegistry`
 
 ```ts config-catalog
 /** Gateway plugin configuration. */
@@ -889,7 +889,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/host/webserver/src/index.ts:59`](../packages/host/webserver/src/index.ts)
+Source: [`packages/host/webserver/src/index.ts:62`](../packages/host/webserver/src/index.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 
@@ -2098,6 +2098,8 @@ Source: [`packages/skill/skill-filesystem/src/index.ts:49`](../packages/skill/sk
 export interface Config {
   /** Exact internal Slark Server origin, without a path, query, or fragment. */
   gatewayUrl: string
+  /** Permit plain HTTP only when the caller confines this client to a private control network. */
+  allowInsecureHttp?: boolean
   /** Service bearer; omission reads `SLARK_DSH_SERVICE_TOKEN`. */
   serviceToken?: string
   /** Timeout for one HTTP exchange. */
@@ -3378,7 +3380,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-session-projection` ([`packages/session/session-projection/src/index.ts`](../packages/session/session-projection/src/index.ts))
 - `@deepseek-ai/dsh-session-stats` — requires `sessionProjections` ([`packages/session/session-stats/src/index.ts`](../packages/session/session-stats/src/index.ts))
 - `@deepseek-ai/dsh-skill-badge` — requires `skills` ([`packages/skill/skill-badge/src/index.ts`](../packages/skill/skill-badge/src/index.ts))
-- `@deepseek-ai/dsh-slark-cloud` ([`packages/bundle/slark-cloud/src/index.ts`](../packages/bundle/slark-cloud/src/index.ts))
+- `@deepseek-ai/dsh-slark-cloud` — requires `webServer` ([`packages/bundle/slark-cloud/src/index.ts`](../packages/bundle/slark-cloud/src/index.ts))
 - `@deepseek-ai/dsh-storage` ([`packages/storage/storage/src/index.ts`](../packages/storage/storage/src/index.ts))
 - `@deepseek-ai/dsh-subagent` ([`packages/subagent/subagent/src/index.ts`](../packages/subagent/subagent/src/index.ts))
 - `@deepseek-ai/dsh-subprocess-local` ([`packages/subprocess/subprocess-local/src/index.ts`](../packages/subprocess/subprocess-local/src/index.ts))

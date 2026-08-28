@@ -454,6 +454,31 @@ async executeTask(request: SlarkDeviceTaskRequest, signal?: AbortSignal): Promis
 
 Source: [`packages/slark/device-client/src/index.ts`](../../packages/slark/device-client/src/index.ts)
 
+<a id="ctxslarkidentity--slarkidentity"></a>
+
+### `ctx.slarkIdentity` — `SlarkIdentity`
+
+Edge-injected identity and operation-scoped session carrier.
+
+```ts cordis-catalog
+/**
+ * Run trusted provider work under one DSH session identity.
+ * @param sessionId - DSH Session id written into Device Task authority.
+ * @param operation - Work whose asynchronous descendants inherit this session.
+ * @returns the operation result without altering its sync or async type.
+ */
+runForSession<T>(sessionId: string, operation: () => T): T
+
+/**
+ * Read and validate the current Edge authority for one explicit DSH session.
+ * @param sessionId - DSH Session id paired with the Edge-issued subject.
+ * @returns a fresh Device authority snapshot.
+ */
+async authorityForSession(sessionId: string): Promise<SlarkDeviceAuthority>
+```
+
+Source: [`packages/host/slark-identity/src/index.ts`](../../packages/host/slark-identity/src/index.ts)
+
 <a id="fs-events"></a>
 
 ### `fs/*` events

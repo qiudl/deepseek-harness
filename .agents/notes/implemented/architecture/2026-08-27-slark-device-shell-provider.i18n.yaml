@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-27-slark-device-shell-provider.md
-2026-08-27-slark-device-shell-provider.md: c543ac659a33166be5d2325b5ed1bc87406c536b
-2026-08-27-slark-device-shell-provider.zh.md: fc659a64b5507649daa65bc917f47b283a393a2b
+2026-08-27-slark-device-shell-provider.md: 77241881543b3079c331101162fcb34eefb8621c
+2026-08-27-slark-device-shell-provider.zh.md: 404f9b4bda8d169c3e72f91064962f1a50a8ccb4

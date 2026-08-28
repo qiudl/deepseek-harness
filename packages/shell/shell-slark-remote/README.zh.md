@@ -4,8 +4,11 @@
 
 标准 [`ctx.shell`](../shell/README.zh.md) 契约的 Slark Device Agent 实现。云端 Harness Cell 把不含本机路径的 Shell 任务提交到用户已授权的本机工作区；Cell 内绝不回退到本地执行。
 
-```ts ignore-check
+```ts
+import type { Context } from '@deepseek-ai/cordis'
 import SlarkRemoteShellExecutor from '@deepseek-ai/dsh-shell-slark-remote'
+
+declare const ctx: Context
 
 await ctx.plugin(SlarkRemoteShellExecutor, { workspaceHandle: 'opaque-workspace-handle' })
 ```

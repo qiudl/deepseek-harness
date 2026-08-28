@@ -18,6 +18,8 @@ Agent preset 也是执行约定的一部分。若独立版 DSH 显示云端专�
 
 Slark Edge 原子替换一份私有 authority 文件。`dsh-slark-identity` 在每次 Provider 操作时打开并校验该文件，检查 Cell 组合中固定的 workspace handle，并通过 `AsyncLocalStorage` 把 authority 绑定到 DSH Session。受信工具执行与 agent pre-step 事件建立作用域；受信直接调用方必须显式建立作用域。任何 authority 事实都不进入 agent 平面。
 
+默认 served Web HTTP 载体执行 Edge 的双重提交 CSRF 检查。每次 POST 前，载体读取 `__Host-dsh_csrf` cookie，并用其值覆盖 `x-slark-dsh-csrf`。cookie 缺失时不会生成该 header，Edge 会以关闭方式拒绝请求；自定义 transport 自行负责认证，WebSocket 下行不携带 CSRF token。
+
 云端 Agent preset 只包含与 Provider 无关的 agent 能力，以及由远程文件系统或 Shell seam 支撑的工具。依赖 subprocess 的搜索、持久 terminal、LSP、hook、目录选择以及 Cordis／插件创作均不在其中。profile 同时禁用用户 preset 发现与 preset 切换。
 
 CLI 把云端 preset 放在独立的随附根目录。只有组合后的 profile 含 Slark Device Provider 配置行时才选择该根目录，即使共享开关正禁用该配置行也是如此。独立版 profile 继续只发现普通随附根目录，因此既保留本地 Provider，也不会暴露含义错误的云端 preset。
@@ -38,10 +40,12 @@ Slark 云端客户端构建设置 `DSH_CLIENT_SLARK_WORKBENCH=1`。部署品牌�
 
 **只依赖 Desktop 键盘快捷键返回。** 不采用，因为隐藏的逃生路径无法让两个可见工作台形成统一产品体验。快捷键保留为恢复路径，侧边栏操作承担可发现的返回入口。
 
+**让 Edge 只信任 session cookie，或由 Edge 把 cookie 复制成 header。** 不采用，因为两种做法都会把双重提交 CSRF 退化为普通 cookie 认证，使跨站 POST 也能通过同一检查。浏览器必须通过独立请求 header 证明脚本可读取 host-only CSRF cookie。
+
 ## 后果
 
 Slark 云端 session 要么在当前 Workspace Grant 下访问选定 Device，要么明确失败；绝不会针对 Runtime Cell 的文件系统或 Shell 执行。关闭灰度开关是安全的，但会有意移除新 agent 组合的文件与 Shell 能力。
 
-authority 文件发布、Device 连通性与 Grant 生命周期成为部署健康信号。首发版本切换 workspace 需要重新组合 Cell。远程搜索暂时没有专用 Provider，因此需要搜索时由 agent 使用有界远程 Shell 命令。
+authority 文件发布、Device 连通性、Grant 生命周期与 Edge CSRF cookie 签发成为部署健康信号。首发版本切换 workspace 需要重新组合 Cell。远程搜索暂时没有专用 Provider，因此需要搜索时由 agent 使用有界远程 Shell 命令。
 
 独立版 DSH 行为不变：现有 preset 与本地 Provider 继续可用，其中无法发现 Slark 云端 preset，侧边栏也没有 Slark 返回操作。

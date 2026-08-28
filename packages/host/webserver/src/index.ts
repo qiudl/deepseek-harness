@@ -132,7 +132,11 @@ export class WebServer extends Service {
     return () => { this.upgrades.delete(route.path) }
   }
 
-  /** Register a transport-level admission guard shared by HTTP and upgrades. */
+  /**
+   * Register a transport-level admission guard shared by HTTP and upgrades.
+   * @param guard - predicate that admits one incoming request.
+   * @returns the disposer removing the guard.
+   */
   registerRequestGuard(guard: WebRequestGuard): () => void {
     this.requestGuards.add(guard)
     return () => { this.requestGuards.delete(guard) }

@@ -30,17 +30,27 @@
 
 启用后缺少或无效的任何值都会在激活阶段明确失败。`DSH_SLARK_REMOTE_PROVIDER_V1` 缺失或不严格等于 `1` 时，全部远程配置行保持禁用，全部本地执行配置行仍被硬禁用。已有 session 可继续通过 Web 应用读取，但文件系统和 Shell 工具无法挂载；不存在本地回退。
 
+Slark Edge 必须在 `HttpOnly` session cookie 之外签发可读取的 `__Host-dsh_csrf` cookie。served Web client 会在每次 API POST 中把该 token 镜像到 `x-slark-dsh-csrf`；缺失或不匹配的 token 会被 Edge 拒绝，而独立版 DSH 因不存在该 cookie，请求保持不变。
+
 云端 Agent preset 保留 DSH 的 goal、planning、compaction、skill、subagent、workflow、job、Web search，以及远程 `read`／`write`／`edit`／`bash`。它不包含依赖 subprocess 的 `glob`／`grep`、持久 terminal、LSP、hook 和 Cordis 创作。该部署同时禁用用户自定义 preset 发现与 preset 切换器。CLI 把本 preset 放入由 Slark Device Provider 配置行决定是否选择的云端专用随附根目录，因此独立版 DSH 不会列出它，也不会改变本地 Provider 行为。
 
 `pnpm run verify-slark-cloud-preset` 会组合真实的 base、Web 和 cloud 层；只要存在启用的本地 Provider、创作界面、用户 preset root、Provider 开关不一致或 cloud preset 禁止项，就会失败。该检查进入 CI 与 hygiene 聚合。
 
 ## 模型体验
 
-`slark-cloud` persona 明确告诉模型：文件和 Shell 操作以选定 Slark Desktop 设备为目标，设备或 Grant 失败即为最终结果。现有工具 schema 保持复用；仅本地可用的工具不会出现在目录中。
+### Slark 云端 persona
+
+#### 模型看到的内容
+
+`slark-cloud` persona 明确说明：文件和 Shell 操作以选定 Slark Desktop 设备为目标，Device 或 Grant 失败即为最终结果。现有工具 schema 保持复用；仅本地可用的工具不会出现在目录中。
+
+#### Token 影响
+
+组合包启用时，一个固定的部署 persona 会替换标准 persona。Device 身份与 authority 值不增加 token。
 
 #### KV Cache 影响
 
-以一个稳定部署 persona 替换标准 persona。设备身份和 authority 变化不会进入提示词前缀。
+组合包结构与 persona 文本不变时，前缀保持稳定。Device 身份与 authority 变化不会进入提示词前缀。
 
 ## 已知限制与延期工作
 

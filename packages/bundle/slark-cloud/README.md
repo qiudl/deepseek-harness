@@ -30,17 +30,27 @@ Runtime Cell bundle applied after [`dsh-base`](../base/README.md) and [`dsh-web-
 
 Any missing or invalid enabled value fails during activation. When `DSH_SLARK_REMOTE_PROVIDER_V1` is absent or not exactly `1`, every remote row stays disabled while every local execution row remains hard-disabled. Existing sessions remain readable through the Web application, but filesystem and Shell tools cannot mount; there is no local fallback.
 
+The Slark Edge must issue the readable `__Host-dsh_csrf` cookie beside the `HttpOnly` session cookie. The served Web client mirrors that token into `x-slark-dsh-csrf` on every API POST; a missing or mismatched token is rejected by the Edge, and standalone DSH requests remain unchanged because they have no such cookie.
+
 The cloud Agent preset retains DSH goals, planning, compaction, skills, subagents, workflows, jobs, Web search, and remote `read`/`write`/`edit`/`bash`. It omits subprocess-backed `glob`/`grep`, persistent terminals, LSP, hooks, and Cordis authoring. User-authored preset discovery and the preset switcher are disabled in this deployment. The CLI keeps this preset in a cloud-only shipped root selected by the presence of the Slark Device provider row, so standalone DSH neither lists it nor changes its local-provider behavior.
 
 `pnpm run verify-slark-cloud-preset` composes the real base, Web, and cloud layers and rejects an active local provider, authoring surface, user preset root, provider-switch mismatch, or forbidden cloud-preset row. The check runs in CI and hygiene aggregates.
 
 ## Model Experience
 
-The `slark-cloud` persona tells the model that file and Shell operations target the selected Slark Desktop device and that device or Grant failures are final. Existing tool schemas are reused; omitted local-only tools are absent from the catalog.
+### Slark cloud persona
+
+#### What the model sees
+
+The `slark-cloud` persona states that file and Shell operations target the selected Slark Desktop device and that Device or Grant failures are final. Existing tool schemas are reused; omitted local-only tools are absent from the catalog.
+
+#### Token effect
+
+One fixed deployment persona replaces the standard persona while the bundle is active. Device identity and authority values add no tokens.
 
 #### KV Cache effect
 
-One stable deployment persona replaces the standard persona. Device identity and authority changes do not enter the prompt prefix.
+Prefix-stable while the bundle composition and persona text are unchanged. Device identity and authority changes do not enter the prompt prefix.
 
 ## Known Limitations and Deferred Work
 
