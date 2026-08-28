@@ -38,6 +38,7 @@ describe('slark-cloud composition gate', () => {
           "tool-web=@deepseek-ai/dsh-tool-web",
         ],
         "providerRows": [
+          "slark-cloud-ingress=@deepseek-ai/dsh-slark-cloud",
           "slark-device=@deepseek-ai/dsh-slark-device-client",
           "slark-identity=@deepseek-ai/dsh-slark-identity",
           "slark-fs=@deepseek-ai/dsh-fs-slark-remote",

@@ -11,6 +11,7 @@
     { "path": "../../core/agent" },
     { "path": "../../core/tools" },
     { "path": "../../slark/device-client" },
+    { "path": "../../workspace/workspace" },
     { "path": "../../runtime-diagnostics/invariants" }
   ]
 }

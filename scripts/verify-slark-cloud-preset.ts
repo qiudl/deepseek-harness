@@ -135,6 +135,32 @@ export function auditSlarkCloudComposition(): string[] {
     }
   }
 
+  const identityConfig = typeof remoteRows[1]?.config === 'object' && remoteRows[1].config !== null
+    ? remoteRows[1].config as Record<string, unknown>
+    : undefined
+  const expectedIdentityConfig = {
+    authorityDirectory: 'process.env.SLARK_DSH_AUTHORITY_DIRECTORY',
+    workspaceRoot: 'process.env.SLARK_DSH_WORKSPACE_ROOT',
+    expectedWorkspaceHandle: 'process.env.SLARK_DSH_WORKSPACE_HANDLE',
+    environmentId: 'process.env.SLARK_DSH_ENVIRONMENT_ID',
+    cellId: 'process.env.SLARK_DSH_CELL_ID',
+    refreshUrl: 'process.env.SLARK_DSH_EDGE_REFRESH_URL',
+  }
+  if (identityConfig === undefined) {
+    errors.push('row slark-identity must provide its Runtime Cell identity config')
+  } else {
+    const actualKeys = Object.keys(identityConfig).sort()
+    const expectedKeys = Object.keys(expectedIdentityConfig).sort()
+    if (actualKeys.join('\n') !== expectedKeys.join('\n')) {
+      errors.push('row slark-identity must expose only the approved non-secret config keys')
+    }
+    for (const [key, source] of Object.entries(expectedIdentityConfig)) {
+      if (expression(identityConfig[key]) !== source) {
+        errors.push(`row slark-identity config ${key} must use ${source}`)
+      }
+    }
+  }
+
   for (const row of rows) {
     if (typeof row.name !== 'string') continue
     if ((FORBIDDEN_LOCAL_PACKAGES.has(row.name) || FORBIDDEN_AUTHORING_PACKAGES.has(row.name)) && row.disabled !== true) {

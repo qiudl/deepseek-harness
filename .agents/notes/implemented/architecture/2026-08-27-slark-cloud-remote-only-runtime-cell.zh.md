@@ -16,7 +16,9 @@ Agent preset 也是执行约定的一部分。若独立版 DSH 显示云端专�
 
 `slark-cloud` bundle 是叠加在 base 与 Web 层之后的宿主平面 Provider 替换层。它硬禁用所有 Cell 本地执行 Provider，并在同一个精确 feature switch 后挂载 Device client、身份适配器、远程文件系统与远程 Shell。关闭开关会同时禁用四条远程配置行，不恢复任何本地能力，因此不可用的灰度会以关闭能力的方式失败。
 
-Slark Edge 原子替换一份私有 authority 文件。`dsh-slark-identity` 在每次 Provider 操作时打开并校验该文件，检查 Cell 组合中固定的 workspace handle，并通过 `AsyncLocalStorage` 把 authority 绑定到 DSH Session。受信工具执行与 agent pre-step 事件建立作用域；受信直接调用方必须显式建立作用域。任何 authority 事实都不进入 agent 平面。
+Slark Edge 通过每个 Cell 各自独立且仅监听 loopback 的 Writer 身份，发布私有 assignment 状态以及每个 DSH Session 一份的短期 authority 文件。`dsh-slark-identity` 在每次 Provider 操作时打开并校验 session 专属文件，通过受请求正文约束的 HMAC 请求刷新缺失或即将过期的 authority，检查 DSH 子进程中固定的 workspace handle，并通过 `AsyncLocalStorage` 绑定所得 authority。同一 session 的并发刷新共享一个请求；刷新响应与模型可见状态都不包含 subject token。
+
+assignment 状态携带 generation 与 publication-version 围栏及所选 Workspace Grant。身份适配器以 Slark 别名注册该 workspace 的只读投影。已发布 assignment revision 变化时，supervisor 会替换 DSH 子进程；Edge 会等待替换完成再结束 bootstrap。每个 Writer 使用不同的 OS 身份与每 Cell 控制密钥，而 DSH 进程只能读取自身 authority 与投影目录。
 
 默认 served Web HTTP 载体执行 Edge 的双重提交 CSRF 检查。每次 POST 前，载体读取 `__Host-dsh_csrf` cookie，并用其值覆盖 `x-slark-dsh-csrf`。cookie 缺失时不会生成该 header，Edge 会以关闭方式拒绝请求；自定义 transport 自行负责认证，WebSocket 下行不携带 CSRF token。
 
@@ -26,7 +28,7 @@ CLI 把云端 preset 放在独立的随附根目录。只有组合后的 profile
 
 Slark 云端客户端构建设置 `DSH_CLIENT_SLARK_WORKBENCH=1`。部署品牌浏览器插件据此占用 `sidebar.footer.action`，显示一个“企业工作台”链接。其精确的 `slark-workbench://switch/slark` 顶层导航由 Slark Desktop 的隔离 DSH view 接收，并在该白名单之外被拒绝；独立浏览器构建不会渲染该操作。
 
-首发版本中，一次 Runtime Cell 组合固定一个 workspace handle。选择其他 Workspace Grant 时创建或重新组合 Cell，不在活跃 Provider 边界内直接修改。
+一个 DSH 子进程固定一个 workspace handle。选择其他 Workspace Grant 时会原子推进 assignment 状态并替换该子进程，不在活跃 Provider 边界内直接修改。
 
 ## 考虑过的替代方案
 
@@ -34,7 +36,9 @@ Slark 云端客户端构建设置 `DSH_CLIENT_SLARK_WORKBENCH=1`。部署品牌�
 
 **设备离线时保留本地 Provider 作为回退。** 不采用，因为在错误执行环境中成功执行比明确不可用更危险。本地 Provider 在独立版 DSH 中仍然正确，只在 Slark 云部署中刻意缺席。
 
-**通过环境变量传入一个 subject token，或在进程范围缓存。** 不采用，因为轮换、并发 session 与重新 assignment 会使缓存 authority 过期或跨越租户边界。Edge 持有的文件可替换且不会把 token 放进命令参数；逐操作校验让撤销与 generation 围栏保持最新。
+**通过环境变量传入一个 subject token，或在进程范围缓存。** 不采用，因为轮换、并发 session 与重新 assignment 会使缓存 authority 过期或跨越租户边界。每 session 文件既支持并发身份，也不会把 token 放进命令参数；逐操作校验让撤销与 generation 围栏保持最新。
+
+**让 Edge 以 Cell 用户身份写入 Cell 目录。** 不采用，因为被攻破的 Cell 随后可以冒充发布方，或修改其他 session 的 authority。独立 Writer 用户拥有发布权限，Cell 组只获得读取权限。
 
 **只在 Web UI 隐藏本地工具与 preset 控件。** 不采用，因为模型工具、API 调用、已保存设置及非浏览器入口仍可访问宿主组合。边界由 Provider 配置行和发现根目录执行，而不是由展示层执行。
 
@@ -46,6 +50,8 @@ Slark 云端客户端构建设置 `DSH_CLIENT_SLARK_WORKBENCH=1`。部署品牌�
 
 Slark 云端 session 要么在当前 Workspace Grant 下访问选定 Device，要么明确失败；绝不会针对 Runtime Cell 的文件系统或 Shell 执行。关闭灰度开关是安全的，但会有意移除新 agent 组合的文件与 Shell 能力。
 
-authority 文件发布、Device 连通性、Grant 生命周期与 Edge CSRF cookie 签发成为部署健康信号。首发版本切换 workspace 需要重新组合 Cell。远程搜索暂时没有专用 Provider，因此需要搜索时由 agent 使用有界远程 Shell 命令。
+authority 发布、Writer 健康、Device 连通性、Grant 生命周期、supervisor 重载与 Edge CSRF cookie 签发成为部署健康信号。切换 workspace 会重启 DSH 子进程，并在其就绪前短暂阻塞 bootstrap。远程搜索暂时没有专用 Provider，因此需要搜索时由 agent 使用有界远程 Shell 命令。
+
+撤销会冻结 Runtime Cell 并推进 generation；分配器只选择 `ready` Cell。被冻结的 Cell 绝不会带着现有 home 被重新分配。未来任何 Cell 回收机制都必须先清除租户状态，才能恢复 `ready` 状态。
 
 独立版 DSH 行为不变：现有 preset 与本地 Provider 继续可用，其中无法发现 Slark 云端 preset，侧边栏也没有 Slark 返回操作。

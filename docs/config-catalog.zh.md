@@ -700,7 +700,7 @@ export type Config = LocalConfig
 
 ## `@deepseek-ai/dsh-fs-slark-remote`
 
-需要：`slarkDevice`
+需要：`slarkDevice` · `workspaceRegistry`
 
 ```ts config-catalog
 /** Remote filesystem configuration. */
@@ -2132,16 +2132,30 @@ export interface Config {
 ```ts config-catalog
 /** Runtime Cell identity configuration. */
 export interface Config {
-  /** Absolute path to the Edge-owned, read-only authority JSON file. */
-  authorityFile: string
-  /** Workspace handle fixed into the Runtime Cell provider composition. */
+  /** Absolute directory containing one Edge-owned authority file per DSH Session. */
+  authorityDirectory: string
+  /** Absolute root containing read-only local projections for Slark workspaces. */
+  workspaceRoot: string
+  /** Workspace handle fixed into this Runtime Cell process composition. */
   expectedWorkspaceHandle: string
-  /** Maximum bytes accepted from the authority file. */
+  /** Slark environment authenticated by the Cell refresh request. */
+  environmentId: string
+  /** Runtime Cell id authenticated by its unique refresh key. */
+  cellId: string
+  /** Exact loopback Edge authority refresh URL. */
+  refreshUrl: string
+  /** Cell refresh key; omission reads `SLARK_DSH_CELL_REFRESH_KEY`. */
+  refreshKey?: string
+  /** Refresh authorities this many milliseconds before expiry. */
+  refreshBeforeExpiryMs?: number
+  /** Timeout for one Edge refresh request. */
+  refreshTimeoutMs?: number
+  /** Maximum bytes accepted from one authority file. */
   maxAuthorityBytes?: number
 }
 ```
 
-来源：[`packages/host/slark-identity/src/index.ts:43`](../packages/host/slark-identity/src/index.ts)
+来源：[`packages/host/slark-identity/src/index.ts:61`](../packages/host/slark-identity/src/index.ts)
 
 <a id="deepseek-aidsh-spill-local"></a>
 

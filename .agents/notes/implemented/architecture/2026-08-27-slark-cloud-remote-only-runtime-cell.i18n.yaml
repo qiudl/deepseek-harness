@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-27-slark-cloud-remote-only-runtime-cell.md
-2026-08-27-slark-cloud-remote-only-runtime-cell.md: f87773b6b953d5910c8f6d8a38581589a55e8d15
-2026-08-27-slark-cloud-remote-only-runtime-cell.zh.md: ec5918f55ce13db3439decc9dbab587bcb51a069
+2026-08-27-slark-cloud-remote-only-runtime-cell.md: 9ad6e03cda2b73de53263a84d15d73f7f9a28285
+2026-08-27-slark-cloud-remote-only-runtime-cell.zh.md: 97bdf3a9ff0cc2be5b93acf2dd16d04d2b63842b

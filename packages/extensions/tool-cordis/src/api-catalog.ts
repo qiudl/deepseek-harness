@@ -1731,20 +1731,20 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'slarkIdentity',
-    summary: 'Edge-injected identity and operation-scoped session carrier.',
-    description: 'Edge-injected identity and operation-scoped session carrier.',
+    summary: 'Edge-injected identity, workspace registration, and operation-scoped session carrier.',
+    description: 'Edge-injected identity, workspace registration, and operation-scoped session carrier.',
     methods: [
       {
         signature: 'runForSession<T>(sessionId: string, operation: () => T): T',
         description: 'Run trusted provider work under one DSH session identity.',
         parameters: [{ name: 'sessionId', description: 'DSH Session id written into Device Task authority.' }, { name: 'operation', description: 'Work whose asynchronous descendants inherit this session.' }],
-        returns: 'the operation result without altering its sync or async type.',
+        returns: 'The operation result without altering its sync or async type.',
       },
       {
         signature: 'async authorityForSession(sessionId: string): Promise<SlarkDeviceAuthority>',
-        description: 'Read and validate the current Edge authority for one explicit DSH session.',
+        description: 'Read or refresh the Edge authority for one explicit DSH Session.',
         parameters: [{ name: 'sessionId', description: 'DSH Session id paired with the Edge-issued subject.' }],
-        returns: 'a fresh Device authority snapshot.',
+        returns: 'A fresh Device authority snapshot.',
       },
     ],
   },

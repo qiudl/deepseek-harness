@@ -458,21 +458,21 @@ Source: [`packages/slark/device-client/src/index.ts`](../../packages/slark/devic
 
 ### `ctx.slarkIdentity` — `SlarkIdentity`
 
-Edge-injected identity and operation-scoped session carrier.
+Edge-injected identity, workspace registration, and operation-scoped session carrier.
 
 ```ts cordis-catalog
 /**
  * Run trusted provider work under one DSH session identity.
  * @param sessionId - DSH Session id written into Device Task authority.
  * @param operation - Work whose asynchronous descendants inherit this session.
- * @returns the operation result without altering its sync or async type.
+ * @returns The operation result without altering its sync or async type.
  */
 runForSession<T>(sessionId: string, operation: () => T): T
 
 /**
- * Read and validate the current Edge authority for one explicit DSH session.
+ * Read or refresh the Edge authority for one explicit DSH Session.
  * @param sessionId - DSH Session id paired with the Edge-issued subject.
- * @returns a fresh Device authority snapshot.
+ * @returns A fresh Device authority snapshot.
  */
 async authorityForSession(sessionId: string): Promise<SlarkDeviceAuthority>
 ```
