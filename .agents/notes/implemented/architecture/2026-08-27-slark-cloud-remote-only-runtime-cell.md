@@ -22,6 +22,8 @@ The cloud Agent preset contains only provider-neutral agent capabilities and too
 
 The CLI carries the cloud preset in a separate shipped root. It selects that root only when the composed profile contains the Slark Device provider row, including while the shared switch disables that row. Standalone profiles continue to discover only the ordinary shipped root, so they retain their local providers without exposing a misleading cloud preset.
 
+The Slark cloud client build sets `DSH_CLIENT_SLARK_WORKBENCH=1`. The deployment-brand browser plugin then occupies `sidebar.footer.action` with one visible Enterprise workbench link. Its exact `slark-workbench://switch/slark` top-level navigation is accepted by Slark Desktop's isolated DSH view and rejected outside that allowlist; standalone browser builds do not render the action.
+
 One Runtime Cell composition fixes one workspace handle in this release. Selecting another Workspace Grant creates or recomposes a cell instead of mutating a live provider boundary.
 
 ## Alternatives considered
@@ -34,10 +36,12 @@ One Runtime Cell composition fixes one workspace handle in this release. Selecti
 
 **Hide local tools and preset controls only in the Web UI.** Rejected because model tools, API calls, stored settings, and non-browser entry points still address the host composition. The provider rows and discovery roots, not presentation, enforce the boundary.
 
+**Rely on the Desktop keyboard shortcut for the return trip.** Rejected because a hidden escape path does not make two visible workbenches feel like one product. The shortcut remains a recovery path, while the sidebar action is the discoverable route.
+
 ## Consequences
 
 A Slark cloud session either reaches the selected Device under its current Workspace Grant or fails explicitly; it never executes against the Runtime Cell filesystem or Shell. Disabling the rollout switch is safe but intentionally removes file and Shell capability from new agent compositions.
 
 Identity-file publication, Device connectivity, and Grant lifecycle become required deployment health signals. Workspace switching costs cell recomposition in the first release. Remote search has no dedicated provider yet, so agents use bounded remote Shell commands when search is necessary.
 
-Standalone DSH behavior does not change: its existing presets and local providers remain available, and the Slark cloud preset is not discoverable there.
+Standalone DSH behavior does not change: its existing presets and local providers remain available, the Slark cloud preset is not discoverable there, and its sidebar has no Slark return action.

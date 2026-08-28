@@ -1,0 +1,56 @@
+.root {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  margin: 4px -2px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 22px;
+  text-decoration: none;
+  overflow: hidden;
+}
+
+.root:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.wide {
+  width: calc(100% + 4px);
+  padding: 0 10px 0 8px;
+}
+
+.rail {
+  width: 36px;
+  height: 36px;
+  margin: 4px 0 0;
+  justify-content: center;
+  gap: 0;
+  border-radius: 50%;
+}
+
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  box-sizing: border-box;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  font-family: var(--ds-font-family-code);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

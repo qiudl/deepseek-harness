@@ -22,6 +22,8 @@ Slark Edge 原子替换一份私有 authority 文件。`dsh-slark-identity` 在�
 
 CLI 把云端 preset 放在独立的随附根目录。只有组合后的 profile 含 Slark Device Provider 配置行时才选择该根目录，即使共享开关正禁用该配置行也是如此。独立版 profile 继续只发现普通随附根目录，因此既保留本地 Provider，也不会暴露含义错误的云端 preset。
 
+Slark 云端客户端构建设置 `DSH_CLIENT_SLARK_WORKBENCH=1`。部署品牌浏览器插件据此占用 `sidebar.footer.action`，显示一个“企业工作台”链接。其精确的 `slark-workbench://switch/slark` 顶层导航由 Slark Desktop 的隔离 DSH view 接收，并在该白名单之外被拒绝；独立浏览器构建不会渲染该操作。
+
 首发版本中，一次 Runtime Cell 组合固定一个 workspace handle。选择其他 Workspace Grant 时创建或重新组合 Cell，不在活跃 Provider 边界内直接修改。
 
 ## 考虑过的替代方案
@@ -34,10 +36,12 @@ CLI 把云端 preset 放在独立的随附根目录。只有组合后的 profile
 
 **只在 Web UI 隐藏本地工具与 preset 控件。** 不采用，因为模型工具、API 调用、已保存设置及非浏览器入口仍可访问宿主组合。边界由 Provider 配置行和发现根目录执行，而不是由展示层执行。
 
+**只依赖 Desktop 键盘快捷键返回。** 不采用，因为隐藏的逃生路径无法让两个可见工作台形成统一产品体验。快捷键保留为恢复路径，侧边栏操作承担可发现的返回入口。
+
 ## 后果
 
 Slark 云端 session 要么在当前 Workspace Grant 下访问选定 Device，要么明确失败；绝不会针对 Runtime Cell 的文件系统或 Shell 执行。关闭灰度开关是安全的，但会有意移除新 agent 组合的文件与 Shell 能力。
 
 authority 文件发布、Device 连通性与 Grant 生命周期成为部署健康信号。首发版本切换 workspace 需要重新组合 Cell。远程搜索暂时没有专用 Provider，因此需要搜索时由 agent 使用有界远程 Shell 命令。
 
-独立版 DSH 行为不变：现有 preset 与本地 Provider 继续可用，并且其中无法发现 Slark 云端 preset。
+独立版 DSH 行为不变：现有 preset 与本地 Provider 继续可用，其中无法发现 Slark 云端 preset，侧边栏也没有 Slark 返回操作。
