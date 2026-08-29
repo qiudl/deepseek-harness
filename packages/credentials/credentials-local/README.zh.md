@@ -27,7 +27,7 @@
 | `debounceMs` | `100` | watcher 写入稳定窗口。 |
 | `encryptionKeyFile` | 未设置 | 指向私有文件的绝对路径；文件内是一个规范的 32 字节 base64url 密钥。设置后用 AES-256-GCM 加密受管文档。 |
 
-`encryptionKeyFile` 是部署边界，不是用户偏好。提供方仅在启动时读取一次密钥；POSIX 上要求它是仅属主可访问的普通文件；密钥不会进入配置输出或进程环境。配置的 `path` 应使用 `.credentials.enc` 等独立名称：这样既保持明文默认行为向后兼容，也让回滚表现为「凭据暂不可用」，而不是让旧版本尝试把密文解析成 YAML。
+`encryptionKeyFile` 是部署边界，不是用户偏好。提供方仅在启动时读取一次密钥；POSIX 上要求它是仅属主可访问的普通文件；密钥不会进入配置输出或进程环境。唯一的窄例外是：文件必须直接位于 systemd 声明的 `$CREDENTIALS_DIRECTORY` 内，且权限精确为其只读副本模式 `0440`；systemd 只向该 unit 用户和 root 暴露这个私有副本。其他位置的 `0440` 文件，或带有任何其他 group/other 权限位的 systemd credential，都会被拒绝。配置的 `path` 应使用 `.credentials.enc` 等独立名称：这样既保持明文默认行为向后兼容，也让回滚表现为「凭据暂不可用」，而不是让旧版本尝试把密文解析成 YAML。
 
 ## 文档本身
 

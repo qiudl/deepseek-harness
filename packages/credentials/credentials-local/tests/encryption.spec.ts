@@ -81,7 +81,19 @@ describe('encrypted credential documents', () => {
     const dir = await tempDir()
     const valid = await keyFile(dir)
     await chmod(valid.path, 0o644)
-    await expect(readDocumentEncryptionKey(valid.path)).rejects.toThrow(/must be owner-only/)
+    await expect(readDocumentEncryptionKey(valid.path)).rejects.toThrow(/must be owner-only or a read-only systemd credential/)
+  })
+
+  it.skipIf(process.platform === 'win32')('accepts only the exact systemd credential copy mode and directory', async () => {
+    const credentialsDirectory = await tempDir()
+    const valid = await keyFile(credentialsDirectory)
+    await chmod(valid.path, 0o440)
+    await expect(readDocumentEncryptionKey(valid.path, credentialsDirectory)).resolves.toEqual(valid.key)
+
+    const adjacentDirectory = await tempDir()
+    await expect(readDocumentEncryptionKey(valid.path, adjacentDirectory)).rejects.toThrow(/must be owner-only/)
+    await chmod(valid.path, 0o444)
+    await expect(readDocumentEncryptionKey(valid.path, credentialsDirectory)).rejects.toThrow(/must be owner-only/)
   })
 
   it('stores a Models-page write as ciphertext and serves it after restart', async () => {

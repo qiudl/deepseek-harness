@@ -8,6 +8,7 @@
 import { constants, type Stats } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { dirname, isAbsolute, normalize } from 'node:path'
 
 const PREFIX = 'dsh-credentials-encrypted-v1:'
 const AAD = Buffer.from('dsh-credentials-local:v1', 'utf8')
@@ -16,19 +17,25 @@ const NONCE_BYTES = 12
 const TAG_BYTES = 16
 const MAX_KEY_FILE_BYTES = 128
 const GROUP_OTHER_BITS = 0o077
+const PERMISSION_BITS = 0o777
+const SYSTEMD_CREDENTIAL_MODE = 0o440
 
 /**
  * Read and validate one canonical base64url AES-256 key without logging it.
  * @param filename - absolute deployment-owned key-file path.
+ * @param credentialsDirectory - systemd's private credential directory, when present.
  * @returns a newly allocated 32-byte key buffer.
  */
-export async function readDocumentEncryptionKey(filename: string): Promise<Buffer> {
+export async function readDocumentEncryptionKey(
+  filename: string,
+  credentialsDirectory = process.env.CREDENTIALS_DIRECTORY,
+): Promise<Buffer> {
   /* v8 ignore next -- Node defines O_NOFOLLOW on supported POSIX targets; the fallback is for platform parity. */
   const noFollow = constants.O_NOFOLLOW ?? 0
   const handle = await open(filename, constants.O_RDONLY | noFollow)
   try {
     const info = await handle.stat()
-    assertPrivateKeyFile(info, filename)
+    assertPrivateKeyFile(info, filename, credentialsDirectory)
     const raw = await handle.readFile('utf8')
     const encoded = raw.endsWith('\n') ? raw.slice(0, -1) : raw
     const key = Buffer.from(encoded, 'base64url')
@@ -40,12 +47,24 @@ export async function readDocumentEncryptionKey(filename: string): Promise<Buffe
   }
 }
 
-function assertPrivateKeyFile(info: Stats, filename: string): void {
+function assertPrivateKeyFile(info: Stats, filename: string, credentialsDirectory?: string): void {
   if (!info.isFile() || info.size < 1 || info.size > MAX_KEY_FILE_BYTES) invalidKey(filename)
   /* v8 ignore next -- POSIX coverage cannot take the Windows peer. */
-  if (process.platform !== 'win32' && (info.mode & GROUP_OTHER_BITS) !== 0) {
-    throw new Error(`credentials-local: encryption key file ${filename} must be owner-only`)
+  if (
+    process.platform !== 'win32'
+    && (info.mode & GROUP_OTHER_BITS) !== 0
+    && !isReadOnlySystemdCredential(info, filename, credentialsDirectory)
+  ) {
+    throw new Error(
+      `credentials-local: encryption key file ${filename} must be owner-only or a read-only systemd credential`,
+    )
   }
+}
+
+function isReadOnlySystemdCredential(info: Stats, filename: string, credentialsDirectory?: string): boolean {
+  if (!credentialsDirectory || !isAbsolute(filename) || !isAbsolute(credentialsDirectory)) return false
+  return (info.mode & PERMISSION_BITS) === SYSTEMD_CREDENTIAL_MODE
+    && dirname(normalize(filename)) === normalize(credentialsDirectory)
 }
 
 function invalidKey(filename: string): never {

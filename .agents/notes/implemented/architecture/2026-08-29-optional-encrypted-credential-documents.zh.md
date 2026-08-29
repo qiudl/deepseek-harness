@@ -14,7 +14,7 @@
 
 `credentials-local` 接受可选的绝对路径 `encryptionKeyFile`。设置后，配置的文档路径保存规范的 `dsh-credentials-encrypted-v1:` 信封，而不是 YAML。每次写入都采用 AES-256-GCM、新的 96 位 nonce、128 位认证标签，以及固定的格式版本关联数据。加载、重载和读-改-写都会先认证解密再解析；格式错误、内容篡改或密钥不匹配会关闭式失败，诊断中不会出现凭据值。
 
-密钥文件包含一个规范的 32 字节 base64url 密钥。POSIX 上它必须是仅属主可访问的普通文件，并且只在插件激活时读取一次。密钥不会复制到插件输出或进程环境；插件销毁时会清零内存缓冲区。密钥交付与备份由部署负责。部署应使用 `.credentials.enc` 等独立密文文件名，分别备份密钥与密文，并在恢复时成对恢复。
+密钥文件包含一个规范的 32 字节 base64url 密钥。POSIX 上它必须是仅属主可访问的普通文件，并且只在插件激活时读取一次。直接位于 systemd 声明的 `$CREDENTIALS_DIRECTORY` 内的文件也可使用，但权限必须精确为 systemd 的只读副本模式 `0440`；systemd credential 契约只向该 unit 用户和 root 暴露这个私有副本。密钥不会复制到插件输出或进程环境；插件销毁时会清零内存缓冲区。密钥交付与备份由部署负责。部署应使用 `.credentials.enc` 等独立密文文件名，分别备份密钥与密文，并在恢复时成对恢复。
 
 Slark 云端 bundle 选择该模式。每个 Runtime Cell 通过 systemd credential 获得独立的部署密钥，隔离的 DSH home 中只写入密文。仅远程 bundle 继续不包含本地 Shell、子进程与文件系统 provider：静态加密无法阻止能够主动读取密文与密钥的同 UID 进程。
 

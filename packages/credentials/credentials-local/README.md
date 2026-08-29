@@ -27,7 +27,7 @@ Under the product CLI, resolution reads the launcher's frozen [environment snaps
 | `debounceMs` | `100` | Watcher write-settle window. |
 | `encryptionKeyFile` | unset | Absolute path to a private file containing one canonical 32-byte base64url key. When set, encrypt the managed document with AES-256-GCM. |
 
-`encryptionKeyFile` is a deployment boundary, not a user preference. The provider reads the key once at boot, requires a regular owner-only file on POSIX, and never places the key in configuration output or the process environment. The configured `path` should use a distinct name such as `.credentials.enc`; this leaves the plaintext default backward-compatible and makes a rollback fail as “credential unavailable” instead of asking an older build to parse ciphertext.
+`encryptionKeyFile` is a deployment boundary, not a user preference. The provider reads the key once at boot, requires a regular owner-only file on POSIX, and never places the key in configuration output or the process environment. The one narrow exception is a file directly inside systemd's declared `$CREDENTIALS_DIRECTORY` with its exact read-only `0440` copy mode; systemd exposes that private copy only to the unit user and root. A `0440` file anywhere else, or a systemd credential with any other group/other bit, is rejected. The configured `path` should use a distinct name such as `.credentials.enc`; this leaves the plaintext default backward-compatible and makes a rollback fail as “credential unavailable” instead of asking an older build to parse ciphertext.
 
 ## The document
 
