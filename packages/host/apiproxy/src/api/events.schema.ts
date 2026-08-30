@@ -43,7 +43,26 @@ const messageSchema = z.object({
 export const muxFrameSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session/event'), sessionId: sessionIdSchema, event: sessionEventSchema, view: toolEventViewSchema.optional() }),
   z.object({ type: z.literal('session/subscribed'), sessionId: sessionIdSchema, lastSeq: z.number().int() }),
-  z.object({ type: z.literal('approval/requested'), sessionId: sessionIdSchema, approvalId: approvalRequestIdSchema, toolName: z.string(), callId: z.string().optional(), reason: z.string().optional() }),
+  z.object({
+    type: z.literal('approval/requested'),
+    sessionId: sessionIdSchema,
+    approvalId: approvalRequestIdSchema,
+    toolName: z.string().min(1).max(256),
+    callId: z.string().min(1).max(256).optional(),
+    reason: z.string().max(2_000).optional(),
+    protocolVersion: z.literal(2).optional(),
+    workingDirectory: z.string().min(1).max(4_096).optional(),
+    action: z.string().min(1).max(4_096).optional(),
+    impact: z.string().min(1).max(2_000).optional(),
+    operationDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u).optional(),
+    expiresAt: z.number().int().positive().optional(),
+  }).superRefine((frame, issue) => {
+    const v2 = ['workingDirectory', 'action', 'impact', 'operationDigest', 'expiresAt'] as const
+    const count = v2.filter(key => frame[key] !== undefined).length
+    if ((frame.protocolVersion === 2 && count !== v2.length) || (frame.protocolVersion === undefined && count !== 0)) {
+      issue.addIssue({ code: 'custom', message: 'mobile approval v2 fields must be complete' })
+    }
+  }),
   z.object({ type: z.literal('approval/resolved'), sessionId: sessionIdSchema, approvalId: approvalRequestIdSchema, outcome: z.union([z.literal('allowed-once'), z.literal('rejected'), z.literal('cancelled'), z.literal('unavailable')]) }),
   // Non-empty by wire contract: the user-questions service rejects empty
   // batches at ask() (EMPTY_QUESTIONS), so an empty frame is host breakage

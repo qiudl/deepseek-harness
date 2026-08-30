@@ -31,6 +31,7 @@ const ACP_CONTEXT_APPLIED = 'slark.dsh-local.acp.context.applied.v2'
 const ACCEPTED = 'slark.dsh-local.accepted.v1'
 const REJECTED = 'slark.dsh-local.rejected.v1'
 const ENTERPRISE_CAPABILITY = 'enterprise_collaboration_v2'
+const MOBILE_APPROVAL_CAPABILITY = 'slark_mobile_approval_v2'
 const FRAME_LIMIT_BYTES = 16 * 1024
 const HANDSHAKE_TIMEOUT_MS = 3_000
 const RECONNECT_DELAY_MS = 500
@@ -368,7 +369,7 @@ export class SlarkLocalCollaboration {
       dsh_version: this.config.dshVersion,
       process_nonce: randomBytes(32).toString('base64url'),
       acp_protocol_version: 1,
-      capabilities: [ENTERPRISE_CAPABILITY],
+      capabilities: [ENTERPRISE_CAPABILITY, MOBILE_APPROVAL_CAPABILITY],
     }
     try {
       send(socket, { type: REGISTER, request_id: requestId, pid: process.pid, descriptor })

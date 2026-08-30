@@ -3,10 +3,10 @@
  * narrow RpcRequest<P> and echoes request.rpcId on the RpcResponse<T>.
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { mkdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname } from 'node:path'
+import { dirname, isAbsolute, resolve as resolvePath } from 'node:path'
 import { z as zod } from 'zod'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
@@ -624,7 +624,17 @@ interface PendingApproval {
   toolName: string
   callId?: CallId
   reason?: string
+  snapshot?: MobileApprovalSnapshot
   resolve(outcome: ApprovalOutcome): void
+}
+
+interface MobileApprovalSnapshot {
+  protocolVersion: 2
+  workingDirectory: string
+  action: string
+  impact: string
+  operationDigest: string
+  expiresAt: number
 }
 
 /** Project a pending entry into its answerable mux frame (initial push and mux-open replay share it). */
@@ -638,8 +648,45 @@ function requestedFrame(pending: PendingApproval): RpcRequest<MuxFrame> {
       toolName: pending.toolName,
       ...pending.callId === undefined ? {} : { callId: pending.callId },
       ...pending.reason === undefined ? {} : { reason: pending.reason },
+      ...pending.snapshot === undefined ? {} : pending.snapshot,
     },
   }
+}
+
+const MOBILE_APPROVAL_TTL_MS = 5 * 60 * 1_000
+const MOBILE_APPROVAL_SECRET = randomBytes(32)
+
+/** Build a bounded, presenter-derived snapshot. Unknown/unpresentable calls stay legacy reject-only. */
+function mobileApprovalSnapshot(ctx: Context, req: { agent: Agent; callId?: CallId }): MobileApprovalSnapshot | undefined {
+  if (req.callId === undefined) return undefined
+  const call = [...req.agent.session.events].reverse().find(event =>
+    event.type === 'tool/call' && event.data.callId === req.callId)
+  if (call?.type !== 'tool/call') return undefined
+  const rendered = viewFor(ctx, call, () => undefined, req.agent)
+  if (rendered?.for !== 'call') return undefined
+  const view = rendered.view
+  // Generic cards may deliberately summarize or omit raw arguments. They are
+  // safe for display, but not complete enough to authorize a side effect.
+  if (view.card === 'generic') return undefined
+  const sessionCwd = req.agent.session.header.cwd
+  const presentedCwd = view.card === 'terminal' ? view.cwd : undefined
+  const workingDirectory = presentedCwd === undefined
+    ? sessionCwd
+    : isAbsolute(presentedCwd)
+      ? presentedCwd
+      : sessionCwd === undefined ? undefined : resolvePath(sessionCwd, presentedCwd)
+  if (workingDirectory === undefined || workingDirectory.length === 0 || workingDirectory.length > 4_096) return undefined
+  const action = view.card === 'diff'
+    ? `${view.title.trim()}\n${view.diffs.map(diff => diff.path).join('\n')}`.trim()
+    : view.title.trim()
+  if (action.length === 0 || action.length > 4_096) return undefined
+  const impact = view.card === 'terminal'
+    ? 'Execute a command in the selected working directory'
+    : `Modify ${view.diffs.length} file${view.diffs.length === 1 ? '' : 's'}`
+  const expiresAt = Date.now() + MOBILE_APPROVAL_TTL_MS
+  const canonical = JSON.stringify([req.agent.session.id, req.callId, workingDirectory, action, impact, expiresAt])
+  const operationDigest = createHmac('sha256', MOBILE_APPROVAL_SECRET).update(canonical).digest('base64url')
+  return { protocolVersion: 2, workingDirectory, action, impact, operationDigest, expiresAt }
 }
 
 /** One host-owned question wait, addressed by the stable server-request id. */
@@ -1419,6 +1466,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           toolName: req.toolName,
           ...req.callId === undefined ? {} : { callId: req.callId },
           ...req.reason === undefined ? {} : { reason: req.reason },
+          ...(() => {
+            const snapshot = mobileApprovalSnapshot(ctx, req)
+            return snapshot === undefined ? {} : { snapshot }
+          })(),
           resolve: settle,
         }
         pendingApprovals.set(pending.rpcId, pending)
@@ -3622,6 +3673,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         // The payload's audit correlation must match the entry the rpcId routed
         // to — a mismatched answer is malformed, not merely late.
         if (!parsed.success || parsed.data.approvalId !== approval.approvalId || parsed.data.sessionId !== approval.sessionId) {
+          return Promise.resolve({ accepted: false, reason: 'bad-response' })
+        }
+        if (parsed.data.outcome === 'allowed-once' && approval.snapshot !== undefined
+          && (Date.now() > approval.snapshot.expiresAt || parsed.data.operationDigest !== approval.snapshot.operationDigest)) {
           return Promise.resolve({ accepted: false, reason: 'bad-response' })
         }
         approval.resolve(parsed.data.outcome)
