@@ -1,7 +1,7 @@
 INSERT INTO sessions
   (session_key, version, created_at, cwd, parent_session, seed_length, origin,
-   delegation_depth, agent_preset, incarnation, revision)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+   delegation_depth, agent_preset, scope_provider, scope_ref, scope_version, incarnation, revision)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 ON CONFLICT(session_key) DO UPDATE SET
   version = excluded.version,
   created_at = excluded.created_at,
@@ -10,5 +10,8 @@ ON CONFLICT(session_key) DO UPDATE SET
   seed_length = excluded.seed_length,
   origin = excluded.origin,
   delegation_depth = excluded.delegation_depth,
-  agent_preset = excluded.agent_preset
+  agent_preset = excluded.agent_preset,
+  scope_provider = excluded.scope_provider,
+  scope_ref = excluded.scope_ref,
+  scope_version = excluded.scope_version
 RETURNING id;

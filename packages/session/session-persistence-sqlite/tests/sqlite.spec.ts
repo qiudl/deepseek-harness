@@ -10,7 +10,9 @@ import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import SessionStore, {
+  SessionId, SessionScopeProviderId, SessionScopeReference, type SessionEvent,
+} from '@deepseek-ai/dsh-session'
 import SessionPersistenceSqlite, {
   DEFAULT_BUSY_TIMEOUT_MS,
   SCHEMA_VERSION,
@@ -380,7 +382,7 @@ describe('SessionPersistenceSqlite physical packing', () => {
       .rejects.toThrow(/schema version 17.*incompatible/)
   })
 
-  it('keeps the page size of an established schema 19 database', async () => {
+  it('keeps the page size of an established current-schema database', async () => {
     const path = await freshDbPath('dsh-sqlite-page-size-')
     const seed = await openDatabase(DatabaseSync, path, 'delete', DEFAULT_BUSY_TIMEOUT_MS)
     seed.close()
@@ -569,7 +571,7 @@ describe('SessionPersistenceSqlite schema ownership', () => {
 
     const foreignPath = await freshDbPath('dsh-sqlite-foreign-')
     const foreign = new DatabaseSync(foreignPath)
-    foreign.exec(testSql('set-user-version-19'))
+    foreign.exec(testSql('set-user-version-20'))
     foreign.exec(testSql('set-application-id-12345'))
     foreign.close()
     await expect(openDatabase(DatabaseSync, foreignPath, 'wal', DEFAULT_BUSY_TIMEOUT_MS)).rejects.toThrow(/has application id 12345/)
@@ -624,6 +626,9 @@ describe('SessionPersistenceSqlite schema ownership', () => {
       revision: 1,
       delegation_depth: 2,
       agent_preset: 'minimal',
+      scope_provider: 'example.scope',
+      scope_ref: 'opaque:subject:1',
+      scope_version: 1,
     }
     expect(rowToMeta(decodeSessionRow(base))).toMatchObject({
       cwd: '/project',
@@ -632,6 +637,7 @@ describe('SessionPersistenceSqlite schema ownership', () => {
       origin: 'subagent',
       delegationDepth: 2,
       agentPreset: 'minimal',
+      scope: { provider: 'example.scope', ref: 'opaque:subject:1', schemaVersion: 1 },
     })
     expect(() => decodeSessionRow({ ...base, created_at: -1 })).toThrow(/created_at/)
     expect(() => decodeSessionRow({ ...base, origin: 'external' })).toThrow(/origin/)
@@ -651,6 +657,9 @@ describe('SessionPersistenceSqlite schema ownership', () => {
       revision: 1,
       delegation_depth: null,
       agent_preset: null,
+      scope_provider: null,
+      scope_ref: null,
+      scope_version: null,
     }
     for (const [value, message] of [
       [null, /object/],
@@ -662,6 +671,8 @@ describe('SessionPersistenceSqlite schema ownership', () => {
       [{ ...base, incarnation: 'invalid' }, /incarnation.*UUID/],
       [{ ...base, seed_length: '1' }, /seed_length.*safe integer or null/],
       [{ ...base, agent_preset: 1 }, /agent_preset.*string or null/],
+      [{ ...base, scope_provider: 'example.scope' }, /scope fields must be all null or all present/],
+      [{ ...base, scope_provider: '', scope_ref: 'opaque', scope_version: 1 }, /non-empty ids/],
     ] as const) {
       expect(() => decodeSessionRow(value)).toThrow(message)
     }
@@ -703,6 +714,26 @@ describe('SessionPersistenceSqlite schema ownership', () => {
 })
 
 describe('SessionPersistenceSqlite edge behavior', () => {
+  it('round-trips a provider-neutral durable session scope', async () => {
+    const path = await freshDbPath('dsh-sqlite-scope-')
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionPersistenceSqlite, { path })
+    const session = ctx.sessions.create(SessionId('scoped'), { meta: { scope: {
+      provider: SessionScopeProviderId('example.scope'),
+      ref: SessionScopeReference('opaque:subject:1'),
+      schemaVersion: 1,
+    } } })
+
+    await ctx.sessionPersistence.ensureMaterialized(session)
+
+    await expect(ctx.sessionPersistence.load(session.id)).resolves.toEqual({
+      meta: session.header,
+      events: [],
+    })
+    await ctx.fiber.dispose()
+  })
+
   it('materializes an explicitly durable empty live session', async () => {
     const path = await freshDbPath('dsh-sqlite-empty-')
     const ctx = new Context()

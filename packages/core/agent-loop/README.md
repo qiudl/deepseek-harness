@@ -103,7 +103,7 @@ After `agent/request`, `ctx.llm.prepareCall()` validates adapter-owned fields an
 
 ### Creation and teardown
 
-Creation is one rollback-covered transaction: construct a private session, concrete agent, and scoped context; await optional setup; enter both registries; announce `session/created` then `agent/created`; emit `agent/session-start`; only then start the driver. A setup throw, commit failure, or owner disposal rolls the transaction back without publishing either id. Teardown runs stop-and-drain, unwind the scope, detach the agent, then detach the session, and every detach is bound to the exact entered object so a stale disposer cannot remove a later same-id replacement.
+Creation is one rollback-covered transaction: construct a private session, concrete agent, and scoped context; admit any durable `SessionScopeRef` through its registered plugin provider; await optional setup; enter both registries; announce `session/created` then `agent/created`; emit `agent/session-start`; only then start the driver. A scope rejection, provider unload, setup throw, commit failure, or owner disposal rolls the transaction back without publishing either id. Teardown runs stop-and-drain, unwind the scope, detach the agent, then detach the session, and every detach is bound to the exact entered object so a stale disposer cannot remove a later same-id replacement.
 
 ### Turn and step flow
 

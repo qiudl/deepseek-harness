@@ -1,7 +1,9 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { Context, Service, symbols } from '@deepseek-ai/cordis'
 import { createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId, type UserMessage } from '@deepseek-ai/dsh-session'
+import {
+  Session, SessionId, SessionScopeProviderId, SessionScopeReference, type UserMessage,
+} from '@deepseek-ai/dsh-session'
 import AgentRegistry, {
   agentEvents,
   Inbox,
@@ -37,6 +39,45 @@ function stubAgent(rawId: string, overrides: Partial<Agent> = {}): Agent {
   }
   return Object.assign(agent, overrides)
 }
+
+describe('session scope providers', () => {
+  const scope = {
+    provider: SessionScopeProviderId('example.scope'),
+    ref: SessionScopeReference('opaque:subject:1'),
+    schemaVersion: 1,
+  }
+
+  it('registers one exact provider and admits its opaque reference', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const admitted: unknown[] = []
+    const dispose = ctx.agents.registerScopeProvider(scope.provider, {
+      admit: value => void admitted.push(value),
+    })
+
+    await ctx.agents.admitSessionScope(scope, ctx, new AbortController().signal)
+
+    expect(admitted).toEqual([scope])
+    expect(() => ctx.agents.registerScopeProvider(scope.provider, { admit() {} }))
+      .toThrow(/already registered/)
+    dispose()
+    await expect(ctx.agents.admitSessionScope(scope, ctx, new AbortController().signal))
+      .rejects.toThrow(/is not registered/)
+  })
+
+  it('fails admission when the provider unloads while its check is pending', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const gate = Promise.withResolvers<undefined>()
+    const dispose = ctx.agents.registerScopeProvider(scope.provider, { admit: () => gate.promise })
+
+    const admission = ctx.agents.admitSessionScope(scope, ctx, new AbortController().signal)
+    dispose()
+    gate.resolve(undefined)
+
+    await expect(admission).rejects.toThrow(/was disposed during admission/)
+  })
+})
 
 describe('Inbox', () => {
   it('rejects an invalid durable splice during reconstruction', () => {

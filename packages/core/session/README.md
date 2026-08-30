@@ -53,6 +53,10 @@ Surface events (`user/message`, `assistant/message`, `tool/result`) must declare
 
 `ctx.sessions.fork(source, boundary?, childSessionId?)` selects source events through an inclusive `boundary` seq (default: the current last event), requires the prefix to end outside an open turn, and creates a live child session with lineage metadata. A tool-time delegation that must branch mid-turn clips to a completed prefix instead.
 
+### Carry a plugin-owned scope
+
+`meta.scope` stores `{ provider, ref, schemaVersion }` as immutable, provider-neutral session metadata. Core validates and preserves the opaque reference but never interprets it. Persistence backends restore it exactly and `fork()` inherits it; execution admission belongs to the matching plugin registered through `ctx.agents`, so a missing or unloaded provider fails closed before an agent is published.
+
 ### Flush durable state
 
 `ctx.sessions.flush(session)` dispatches the awaited durability checkpoint: every persistence listener flushes and the call settles after all of them. A producer that needs an immediate durability barrier awaits it instead of assuming the write-behind drained.

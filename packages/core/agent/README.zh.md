@@ -62,6 +62,8 @@ await handle.agent.whenIdle()
 
 `Agent.ctx` 是该 agent 的作用域上下文：通过它进行的注册（工具、提示词段、变量、事件监听器、限制）只对该 agent 生效，并在 dispose（资源释放）时全部撤销。同一机制也是 agent preset 用来让一个会话获得不同能力集、同时不影响其邻居的方式。
 
+对于持久化的插件自有身份，通过 `ctx.agents.registerScopeProvider(providerId, provider)` 精确注册一个 Provider。携带该 Provider `SessionScopeRef` 的新建或恢复会话会在 setup 和发布之前完成准入；Provider 会收到未发布的 `agentCtx`，其作用域工具、提示词贡献和限制因而加入同一受回滚保护的事务。未知 Provider、引用被拒绝、取消，以及准入期间 Provider 卸载，都会使候选 Session 与 agent 保持未发布状态。
+
 ### 拦截或观察进行中的工作
 
 `agent/*` 事件让插件无需依赖循环包即可作用于实时工作。`agent/pre-step` 可以拒绝拟进入的步骤或替换进入它的消息；`agent/request-error` 让监听器重试失败的模型请求；`agent/turn-stopping` 在本可完成的轮次关闭前运行，并可通过 steer 使其保持打开。`agent/status`、`agent/created` 与 `agent/disposed` 驱动 UI 与协调状态，逐消息的 `agent/inbox/*` 通知则让收件箱投影保持同步。确切签名、分发 mode 与 payload 约定见 [core 子系统页](../../../docs/subsystems/core.zh.md#cordis-surface) 的生成区块。

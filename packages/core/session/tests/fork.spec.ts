@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, ToolCallId , createMessage } from '@deepseek-ai/dsh-llm'
-import SessionStore, { Session, SessionForkError, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, {
+  Session, SessionForkError, SessionId, SessionScopeProviderId, SessionScopeReference,
+} from '@deepseek-ai/dsh-session'
 import type { SessionEvent, TurnEndReason } from '@deepseek-ai/dsh-session'
 
 declare module '@deepseek-ai/dsh-session/types' {
@@ -61,6 +63,21 @@ function inherited(session: Session): readonly SessionEvent[] {
 }
 
 describe('SessionStore.fork', () => {
+  it('inherits the source scope without retaining a mutable alias', async () => {
+    const { ctx, sessions } = await setup()
+    const source = ctx.sessions.create(SessionId('scoped-parent'), { meta: { scope: {
+      provider: SessionScopeProviderId('example.scope'),
+      ref: SessionScopeReference('opaque:subject:1'),
+      schemaVersion: 1,
+    } } })
+
+    const child = sessions.fork(source, undefined, SessionId('scoped-child'))
+
+    expect(child.header.scope).toEqual(source.header.scope)
+    expect(child.header.scope).not.toBe(source.header.scope)
+    expect(Object.isFrozen(child.header.scope)).toBe(true)
+  })
+
   it('forks an empty live session as an empty child with lineage metadata', async () => {
     const { ctx, sessions } = await setup()
     const source = ctx.sessions.create(SessionId('empty-parent'), { meta: { cwd: '/workspace' } })
