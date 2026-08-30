@@ -143,6 +143,19 @@
         surfaceContext: true
         trustedHosts: !!js ctx.webStartup.trustedHosts
 
+    # Optional same-host Slark bridge. A normal `dsh web` launch has no Slark
+    # installation identity and omits this row; the Desktop launcher supplies
+    # all three owner-only transport values together.
+    - id: slark-local-collaboration
+      name: '@deepseek-ai/dsh-slark-local-collaboration'
+      disabled: !!js process.env.SLARK_DSH_LOCAL_INSTALLATION_ID == null
+      config:
+        enabled: true
+        socketPath: !!js process.env.SLARK_DSH_LOCAL_SOCKET
+        localAccessKeyPath: !!js process.env.SLARK_DSH_LOCAL_ACCESS_KEY_PATH
+        installationId: !!js process.env.SLARK_DSH_LOCAL_INSTALLATION_ID
+        dshVersion: '0.1.1-rc.2'
+
     # The client-plugin reload chain, always mounted: it is idle until a
     # rebuild watcher (pnpm run dev:web) actually rewrites client bundles. It
     # is a row rather than a child of web-runtime because its node half is a

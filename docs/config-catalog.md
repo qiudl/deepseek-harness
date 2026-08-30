@@ -2157,6 +2157,30 @@ export interface Config {
 
 Source: [`packages/host/slark-identity/src/index.ts:60`](../packages/host/slark-identity/src/index.ts)
 
+<a id="deepseek-aidsh-slark-local-collaboration"></a>
+
+## `@deepseek-ai/dsh-slark-local-collaboration`
+
+Requires: `webServer` · `systemPrompt` · `shellEnv`
+
+```ts config-catalog
+/** Deployment values for the opt-in local Slark connection. */
+export interface Config {
+  /** Whether this Web process registers with the local Slark daemon. */
+  enabled: boolean
+  /** Absolute path of the Slark daemon's Unix socket. */
+  socketPath?: string
+  /** Owner-only file containing the shared local access key. */
+  localAccessKeyPath?: string
+  /** Installation identity configured on both the Slark daemon and this DSH process. */
+  installationId?: string
+  /** Semver reported to Slark discovery. */
+  dshVersion: string
+}
+```
+
+Source: [`packages/slark/local-collaboration/src/index.ts:42`](../packages/slark/local-collaboration/src/index.ts)
+
 <a id="deepseek-aidsh-spill-local"></a>
 
 ## `@deepseek-ai/dsh-spill-local`

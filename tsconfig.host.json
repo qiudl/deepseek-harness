@@ -229,6 +229,7 @@
     { "path": "./packages/fs/fs" },
     { "path": "./packages/fs/fs-local" },
     { "path": "./packages/slark/device-client" },
+    { "path": "./packages/slark/local-collaboration" },
     { "path": "./packages/host/slark-identity" },
     { "path": "./packages/fs/fs-slark-remote" },
     { "path": "./packages/e2b/fs-e2b" },
