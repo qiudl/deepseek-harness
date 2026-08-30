@@ -14,6 +14,8 @@
 
 connector 每次连接生成新的 process nonce，用 HMAC-SHA-256 证明持有本机 access key，完成 ACP 初始化，并且只接受字段精确匹配的版本化 frame。Slark 侧还会验证进程身份和 installation ID。连接丢失或 frame 非法时，插件先清除已接受的企业上下文，再重连。
 
+当运行时能够生成完整的结构化审批快照时，已认证 descriptor 会声明 `slark_mobile_approval_v2`。Slark 只有在探测到当前这条注册确实声明该能力后才开放移动控制；旧进程或已被替换的进程都会 fail closed。
+
 每个已接受上下文更新三个 shell 变量：`DSH_SLARK_ENTERPRISE_ID`、`DSH_SLARK_PERSONAL_PROJECT_ID` 和 `DSH_SLARK_ENVIRONMENT_ID`。这些值只选择企业协作上下文。本机 DSH 继续使用用户电脑上的模型凭证、文件系统和算力；本包不接收也不分配企业模型 Token。
 
 ## 模型体验

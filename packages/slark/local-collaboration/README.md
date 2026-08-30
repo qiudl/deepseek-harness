@@ -14,6 +14,8 @@ The shipped Web bundle enables this plugin only when `SLARK_DSH_LOCAL_INSTALLATI
 
 The connector sends a fresh process nonce on every connection, proves possession of the local access key with HMAC-SHA-256, completes ACP initialization, and accepts only exact versioned frames. Slark also verifies the process identity and installation ID on its side. A lost or malformed connection clears the accepted enterprise context before reconnecting.
 
+The authenticated descriptor advertises `slark_mobile_approval_v2` when this runtime can produce the complete structured approval snapshot. Slark probes that exact current registration before exposing mobile control; an older or replaced process therefore fails closed.
+
 Each accepted context updates three shell variables: `DSH_SLARK_ENTERPRISE_ID`, `DSH_SLARK_PERSONAL_PROJECT_ID`, and `DSH_SLARK_ENVIRONMENT_ID`. These values select the enterprise collaboration context only. Local DSH continues to use the model credentials, filesystem, and compute resources of the user's computer; this package neither receives nor allocates enterprise model tokens.
 
 ## Model Experience

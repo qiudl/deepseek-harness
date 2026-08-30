@@ -14,6 +14,8 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
+import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { CallId } from '@deepseek-ai/dsh-llm'
 import type { ApprovalRequestId } from '@deepseek-ai/dsh-user-approval'
 import type { ApiProxy, MuxFrame, RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
@@ -27,13 +29,19 @@ async function harness(): Promise<{ ctx: Context; api: ApiProxy }> {
   await ctx.plugin(UserQuestionService)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(ApprovalService)
+  await ctx.plugin(ToolRuntime)
+  ctx.tools.register(defineContentToolFixture({
+    name: 'bash', description: 'shell', parameters: {},
+    execute: async () => [{ type: 'text', text: 'ok' }],
+    presentCall: args => ({ card: 'terminal', title: String((args as { command?: string }).command ?? ''), cwd: 'subdir' }),
+  }))
   const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
   return { ctx, api }
 }
 
 /** A minimal agent stand-in inside an open turn (the service only reaches `.session`). */
 function agentOf(ctx: Context): Agent {
-  const session = ctx.sessions.create()
+  const session = ctx.sessions.create(undefined, { meta: { cwd: '/workspace' } })
   session.append('turn/start', { turn: 1 })
   return { session } as unknown as Agent
 }
@@ -80,11 +88,39 @@ async function waitForCount(mux: { frames: MuxFrame[] }, type: MuxFrame['type'],
   expect(mux.frames.filter(frame => frame.type === type).length).toBeGreaterThanOrEqual(count)
 }
 
-function answer(rpcId: RpcId, sessionId: unknown, approvalId: ApprovalRequestId, outcome: 'allowed-once' | 'rejected'): Parameters<ApiProxy['respond']>[0] {
-  return { type: 'client-response', rpcId, result: { ok: true, value: { sessionId, approvalId, outcome } } }
+function answer(rpcId: RpcId, sessionId: unknown, approvalId: ApprovalRequestId, outcome: 'allowed-once' | 'rejected', operationDigest?: string): Parameters<ApiProxy['respond']>[0] {
+  return { type: 'client-response', rpcId, result: { ok: true, value: { sessionId, approvalId, outcome, ...operationDigest === undefined ? {} : { operationDigest } } } }
 }
 
 describe('approval pending registry', () => {
+  it('publishes a complete v2 snapshot and binds allow to its digest', async () => {
+    const { ctx, api } = await harness()
+    const abort = new AbortController()
+    const mux = openMux(api, abort)
+    const agent = agentOf(ctx)
+    const callId = CallId('mobile-call')
+    agent.session.append('tool/call', {
+      turn: 1, step: 1, callId, name: 'bash', arguments: '{"command":"git status"}',
+    })
+    const asked = ctx.approval.request({ agent, toolName: 'bash', callId })
+    const requested = requestedOf(await mux.waitFor('approval/requested'))
+    expect(requested).toMatchObject({
+      protocolVersion: 2,
+      workingDirectory: '/workspace/subdir',
+      action: 'git status',
+      impact: 'Execute a command in the selected working directory',
+    })
+    expect(requested.operationDigest).toMatch(/^[A-Za-z0-9_-]{43}$/u)
+    expect(requested.expiresAt).toBeGreaterThan(Date.now())
+    const envelope = mux.envelopes.find(e => e.payload.type === 'approval/requested') as RpcRequest<MuxFrame>
+    expect(await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'allowed-once', 'A'.repeat(43))))
+      .toEqual({ accepted: false, reason: 'bad-response' })
+    expect(await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'allowed-once', requested.operationDigest)))
+      .toEqual({ accepted: true })
+    await expect(asked).resolves.toBe('allowed-once')
+    abort.abort()
+  })
+
   it('round-trips ask → requested frame → respond → outcome + resolved broadcast', async () => {
     const { ctx, api } = await harness()
     const abort = new AbortController()
