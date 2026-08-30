@@ -53,6 +53,10 @@ session.deriveMessages()         // the derived model history
 
 `ctx.sessions.fork(source, boundary?, childSessionId?)` 选取截至 `boundary` 事件序号（含该事件）的源事件（默认：当前最后一个事件），要求所选前缀结束时没有开放轮次，再创建带谱系元数据的实时子会话。必须在轮次中途分支的工具时委派会裁剪到已完成前缀。
 
+### 携带插件拥有的 scope
+
+`meta.scope` 将 `{ provider, ref, schemaVersion }` 保存为不可变、provider-neutral 的会话元数据。核心只校验并保留这个不透明引用，绝不解释它。持久化后端精确保真，`fork()` 自动继承；执行准入由通过 `ctx.agents` 注册的匹配插件负责，因此 Provider 缺失或卸载时会在 agent 发布前失败关闭。
+
 ### 刷新持久状态
 
 `ctx.sessions.flush(session)` 分发需等待完成的持久性检查点：每个持久化监听器都会刷新，调用在所有监听器结算后完成。需要立即持久性屏障的生产方应等待它，而不是假定写后刷新已完成。

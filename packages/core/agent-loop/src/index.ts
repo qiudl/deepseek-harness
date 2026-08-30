@@ -636,6 +636,15 @@ export class AgentLoop extends Service implements AgentFactory {
     const session = ownedPreparation.session
     const prepared = this.prepare(ownerCtx, id, agentOptions, session, signal)
     try {
+      await raceAbortCall(
+        () => this.runtime.ctx.agents.admitSessionScope(
+          session.header.scope,
+          prepared.agent.ctx,
+          prepared.signal,
+        ),
+        prepared.signal,
+        id,
+      )
       const setupCommit = await raceAbort(setup?.(prepared.agent.ctx), prepared.signal, id)
       setupCommit?.commit()
       return prepared.publish(source)

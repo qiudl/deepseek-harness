@@ -7,11 +7,43 @@ import SessionStore, {
   Session,
   SessionEvent,
   SessionId,
+  SessionScopeProviderId,
+  SessionScopeReference,
   snapshotSessionEvent,
 } from '@deepseek-ai/dsh-session'
 import type { CreateSessionOptions, SessionEventType, SessionHeader, SessionSurface } from '@deepseek-ai/dsh-session'
 
 describe('Session', () => {
+  it('snapshots and freezes provider-neutral scope metadata', async () => {
+    const scope = {
+      provider: SessionScopeProviderId('example.scope'),
+      ref: SessionScopeReference('opaque:subject:1'),
+      schemaVersion: 1,
+    }
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+
+    const session = ctx.sessions.create(SessionId('scoped'), { meta: { scope } })
+
+    expect(session.header.scope).toEqual(scope)
+    expect(session.header.scope).not.toBe(scope)
+    expect(Object.isFrozen(session.header.scope)).toBe(true)
+    expect(() => { (scope as { ref: string }).ref = 'changed' }).not.toThrow()
+    expect(session.header.scope?.ref).toBe('opaque:subject:1')
+  })
+
+  it.each([
+    [{ provider: '', ref: 'opaque', schemaVersion: 1 }, /provider must be a non-empty string/],
+    [{ provider: 'example.scope', ref: '', schemaVersion: 1 }, /ref must be a non-empty string/],
+    [{ provider: 'example.scope', ref: 'opaque', schemaVersion: 0 }, /schemaVersion must be a positive safe integer/],
+  ])('rejects an invalid session scope at the header boundary', async (scope, message) => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    expect(() => ctx.sessions.create(SessionId(`invalid-scope-${String(scope.schemaVersion)}`), {
+      meta: { scope: scope as never },
+    })).toThrow(message)
+  })
+
   it('exposes one stable readonly surface view', () => {
     const session = Session.create(SessionId('surface-view'))
     const surface = session.surface

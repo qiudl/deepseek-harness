@@ -11,7 +11,9 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { isPromise } from 'node:util/types'
 import { scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { Scoped } from '@deepseek-ai/dsh-scope'
-import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import type {
+  SessionEvent, SessionId, SessionScopeProviderId, SessionScopeRef,
+} from '@deepseek-ai/dsh-session'
 import type { Agent } from './types.ts'
 import type { AgentOptions } from './runtime-types.ts'
 
@@ -60,6 +62,12 @@ export type AgentSetup = (
   agentCtx: Context,
 ) => AgentSetupCommit | Promise<AgentSetupCommit | void> | void
 
+/** Plugin-owned admission logic for one durable session-scope namespace. */
+export interface SessionScopeProvider {
+  /** Admit and compose an unpublished agent under an opaque durable reference. */
+  admit(scope: SessionScopeRef, agentCtx: Context, signal: AbortSignal): Promise<void> | void
+}
+
 /**
  * Options for programmatically creating an agent through the registry factory
  * ({@link AgentRegistry.create}). The caller supplies the single live
@@ -88,6 +96,7 @@ export interface CreateAgentOptions {
     readonly origin?: 'subagent'
     readonly delegationDepth?: number
     readonly agentPreset?: string
+    readonly scope?: SessionScopeRef
   }
   /**
    * Initial replay/fork history. A fork supplies a balanced completed-turn
@@ -246,6 +255,7 @@ interface FactorySlot {
 export class AgentRegistry extends Service {
   private store = new Map<SessionId, AgentEntry>()
   private factory: FactorySlot | undefined
+  private readonly scopeProviders = new Map<SessionScopeProviderId, SessionScopeProvider>()
   private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
   private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
   private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
@@ -376,6 +386,39 @@ export class AgentRegistry extends Service {
     // registration under that effect.
     // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup; direct return preserves disposer identity
     return dispose
+  }
+
+  /** Register one plugin-owned durable session-scope namespace. */
+  registerScopeProvider(id: SessionScopeProviderId, provider: SessionScopeProvider): () => void {
+    const dispose = this.ctx.effect(() => {
+      if (this.scopeProviders.has(id)) throw new Error(`session scope provider "${id}" is already registered`)
+      this.scopeProviders.set(id, provider)
+      return () => {
+        if (this.scopeProviders.get(id) === provider) this.scopeProviders.delete(id)
+      }
+    }, `agents.registerScopeProvider(${id})`)
+    // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup; direct return preserves disposer identity
+    return dispose
+  }
+
+  /**
+   * Fail-closed execution admission for a persisted scope. The exact provider
+   * must remain registered for the whole await.
+   */
+  async admitSessionScope(
+    scope: SessionScopeRef | undefined,
+    agentCtx: Context,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (scope === undefined) return
+    const provider = this.scopeProviders.get(scope.provider)
+    if (provider === undefined) {
+      throw new Error(`session scope provider "${scope.provider}" is not registered`)
+    }
+    await provider.admit(scope, agentCtx, signal)
+    if (this.scopeProviders.get(scope.provider) !== provider) {
+      throw new Error(`session scope provider "${scope.provider}" was disposed during admission`)
+    }
   }
 
   /** Return the active creation factory. */

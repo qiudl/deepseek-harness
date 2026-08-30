@@ -132,6 +132,23 @@ function validateSessionHeader(id: SessionId, input: unknown): SessionHeader {
   if (record.agentPreset !== undefined && typeof record.agentPreset !== 'string') {
     throw new Error('session header agentPreset must be a string')
   }
+  if (record.scope !== undefined) {
+    if (record.scope === null || typeof record.scope !== 'object' || Array.isArray(record.scope)) {
+      throw new Error('session header scope must be a plain JSON record')
+    }
+    const scope = record.scope as Record<string, unknown>
+    if (typeof scope.provider !== 'string' || scope.provider.length === 0) {
+      throw new Error('session header scope provider must be a non-empty string')
+    }
+    if (typeof scope.ref !== 'string' || scope.ref.length === 0) {
+      throw new Error('session header scope ref must be a non-empty string')
+    }
+    if (typeof scope.schemaVersion !== 'number'
+      || !Number.isSafeInteger(scope.schemaVersion)
+      || scope.schemaVersion < 1) {
+      throw new Error('session header scope schemaVersion must be a positive safe integer')
+    }
+  }
   return deepFreeze(record as unknown as SessionHeader)
 }
 
@@ -882,6 +899,7 @@ export class SessionStore extends Service {
       ...meta?.origin === undefined ? {} : { origin: meta.origin },
       ...meta?.delegationDepth === undefined ? {} : { delegationDepth: meta.delegationDepth },
       ...meta?.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset },
+      ...meta?.scope === undefined ? {} : { scope: meta.scope },
     }
     return Session.create(sessionId, seed, header)
   }
@@ -1088,6 +1106,7 @@ export class SessionStore extends Service {
         ...liveSource.header.cwd !== undefined ? { cwd: liveSource.header.cwd } : {},
         parentSession: liveSource.id,
         seedLength: seed.length,
+        ...liveSource.header.scope === undefined ? {} : { scope: liveSource.header.scope },
       },
     })
   }

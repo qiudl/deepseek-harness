@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import {
   decodeSeqRanges, decodeStorageRecord, encodeSeqRanges, packChunkRuns, SESSION_FORMAT_VERSION,
 } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionHeader, SessionId, StorageRecord } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionHeader, SessionId, SessionScopeRef, StorageRecord } from '@deepseek-ai/dsh-session'
 import { SessionFormatUnsupportedError, sessionFormatVersionRefusal } from '@deepseek-ai/dsh-session-persistence'
 
 /** Physical encoding selected for JSONL session artifacts. */
@@ -43,6 +43,7 @@ export interface HeaderLine {
   origin?: 'subagent'
   delegationDepth: number
   agentPreset?: string
+  scope?: SessionScopeRef
 }
 
 /**
@@ -62,6 +63,7 @@ export function toHeaderLine(header: SessionHeader): HeaderLine {
     ...header.origin !== undefined ? { origin: header.origin } : {},
     delegationDepth: header.delegationDepth ?? 0,
     ...header.agentPreset !== undefined ? { agentPreset: header.agentPreset } : {},
+    ...header.scope !== undefined ? { scope: header.scope } : {},
   }
 }
 
@@ -84,6 +86,7 @@ export function fromHeaderLine(line: HeaderLine): SessionHeader {
     ...line.origin !== undefined ? { origin: line.origin } : {},
     delegationDepth: line.delegationDepth,
     ...line.agentPreset !== undefined ? { agentPreset: line.agentPreset } : {},
+    ...line.scope !== undefined ? { scope: line.scope } : {},
   }
 }
 
@@ -106,7 +109,21 @@ function isHeaderLine(value: unknown): value is HeaderLine {
       || (value as { origin?: unknown }).origin === 'subagent')
     && ((value as { agentPreset?: unknown }).agentPreset === undefined
       || typeof (value as { agentPreset?: unknown }).agentPreset === 'string')
+    && ((value as { scope?: unknown }).scope === undefined
+      || isSessionScopeRef((value as { scope?: unknown }).scope))
   )
+}
+
+function isSessionScopeRef(value: unknown): value is SessionScopeRef {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const scope = value as Record<string, unknown>
+  return typeof scope.provider === 'string'
+    && scope.provider.length > 0
+    && typeof scope.ref === 'string'
+    && scope.ref.length > 0
+    && typeof scope.schemaVersion === 'number'
+    && Number.isSafeInteger(scope.schemaVersion)
+    && scope.schemaVersion >= 1
 }
 
 /**

@@ -14,8 +14,15 @@ CREATE TABLE sessions (
   origin           TEXT,
   delegation_depth INTEGER,
   agent_preset     TEXT,
+  scope_provider   TEXT,
+  scope_ref        TEXT,
+  scope_version    INTEGER,
   incarnation      TEXT NOT NULL,
-  revision         INTEGER NOT NULL
+  revision         INTEGER NOT NULL,
+  CHECK (
+    (scope_provider IS NULL AND scope_ref IS NULL AND scope_version IS NULL)
+    OR (scope_provider <> '' AND scope_ref <> '' AND scope_version >= 1)
+  )
 ) STRICT;
 
 CREATE TABLE events (

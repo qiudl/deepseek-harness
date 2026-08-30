@@ -30,6 +30,33 @@ export function SessionId(id: string): SessionId {
   return id as SessionId
 }
 
+/** Identifies the plugin-owned namespace that can interpret a session scope reference. */
+export type SessionScopeProviderId = Branded<'SessionScopeProviderId'>
+
+/** Brand a string as a {@link SessionScopeProviderId}. */
+export function SessionScopeProviderId(id: string): SessionScopeProviderId {
+  return id as SessionScopeProviderId
+}
+
+/** An opaque, provider-owned reference within one session scope namespace. */
+export type SessionScopeReference = Branded<'SessionScopeReference'>
+
+/** Brand a string as a {@link SessionScopeReference}. */
+export function SessionScopeReference(ref: string): SessionScopeReference {
+  return ref as SessionScopeReference
+}
+
+/**
+ * Durable, provider-neutral routing metadata for one session. Core preserves
+ * this value but never interprets `ref`; the named plugin provider owns its
+ * authorization and lifecycle semantics.
+ */
+export interface SessionScopeRef {
+  readonly provider: SessionScopeProviderId
+  readonly ref: SessionScopeReference
+  readonly schemaVersion: number
+}
+
 /**
  * The on-disk session format version, stamped into every newly-written {@link SessionHeader}
  * and enforced by every persistence backend on load. The single source of truth for the
@@ -96,6 +123,8 @@ export interface SessionHeader {
    * would replay history the model can no longer act on.
    */
   readonly agentPreset?: string
+  /** Optional plugin-owned scope identity that must survive resume and fork. */
+  readonly scope?: SessionScopeRef
 }
 
 /**
@@ -118,6 +147,7 @@ export interface CreateSessionOptions {
     readonly origin?: 'subagent'
     readonly delegationDepth?: number
     readonly agentPreset?: string
+    readonly scope?: SessionScopeRef
   }
 }
 

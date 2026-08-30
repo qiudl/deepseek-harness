@@ -4,7 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { appendFile, mkdtemp, mkdir, rm, readFile, writeFile, readdir, stat, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, SessionScopeProviderId, SessionScopeReference } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import {
@@ -294,6 +294,20 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
 
     expect(await readFile(rawLogPath(root, '/work', id), 'utf8')).toBe(`${JSON.stringify(toHeaderLine(session.header))}\n`)
     await expect(ctx.sessionPersistence.load(id)).resolves.toEqual({ meta: session.header, events: [] })
+  })
+
+  it('round-trips an opaque session scope in the durable header', async () => {
+    const id = SessionId('durable-scoped')
+    const session = ctx.sessions.create(id, { meta: { cwd: '/work', scope: {
+      provider: SessionScopeProviderId('example.scope'),
+      ref: SessionScopeReference('opaque:subject:1'),
+      schemaVersion: 1,
+    } } })
+
+    await ctx.sessionPersistence.ensureMaterialized(session)
+    const loaded = await ctx.sessionPersistence.load(id)
+
+    expect(loaded?.meta.scope).toEqual(session.header.scope)
   })
 
   it('delegates direct preparation through the JSONL provider', async () => {

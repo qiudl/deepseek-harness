@@ -62,6 +62,8 @@ await handle.agent.whenIdle()
 
 `Agent.ctx` is the agent's scoped context: registrations made through it (tools, prompt sections, variables, event listeners, restrictions) apply to that agent alone and unwind on disposal. The same mechanism is what agent presets use to give one session a different capability set without affecting its neighbors.
 
+For durable plugin-owned identity, register exactly one provider with `ctx.agents.registerScopeProvider(providerId, provider)`. Fresh and resumed sessions carrying that provider's `SessionScopeRef` are admitted before setup and publication; the provider receives the unpublished `agentCtx` so its scoped tools, prompt contributions, and restrictions join the same rollback-covered transaction. Unknown providers, rejected references, cancellation, and provider unload during admission all leave the candidate Session and Agent unpublished.
+
 ### Intercept or observe work in flight
 
 The `agent/*` events let plugins act on live work without depending on the loop package. `agent/pre-step` can reject a proposed step or replace the messages entering it; `agent/request-error` lets a listener retry a failed model request; `agent/turn-stopping` runs before an otherwise completed turn closes and can steer to keep it open. `agent/status`, `agent/created`, and `agent/disposed` drive UI and coordination state, and the per-message `agent/inbox/*` notifications keep inbox projections in sync. Exact signatures, dispatch modes, and payload contracts live in the generated region of the [core subsystem page](../../../docs/subsystems/core.md#cordis-surface).

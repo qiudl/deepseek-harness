@@ -173,7 +173,7 @@ Physical packing does not mutate request prefixes. Provider cache reuse depends 
 
 These limits define when the provider is a poor fit or needs special operational care. They are current package constraints, not a general SQLite comparison or a task backlog.
 
-- **Pre-release design with no migration** — schema 19 is an interim SQLite-only design; neither schema stability nor migration support is guaranteed.
+- **Pre-release design with no migration** — physical schema 20 adds provider-neutral Session Scope columns while retaining the schema-19 packed event codec; neither schema stability nor migration support is guaranteed.
 - **Packing depends on batch boundaries** — a compatible run split by the write-behind window or an explicit flush stays split across physical rows; this avoids rewriting prior rows at the cost of a timing-dependent packing ratio.
 - **Synchronous SQLite and compression** — Node's SQLite driver and Zstandard calls block the JavaScript thread.
 - **Busy waits block the event loop** — SQLite waits inside synchronous calls; a competing writer can stall the thread for up to the configured `busyTimeoutMs`.

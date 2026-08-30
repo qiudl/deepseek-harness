@@ -10,12 +10,14 @@ import type { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   SessionId,
+  SessionScopeProviderId,
+  SessionScopeReference,
   type SessionHeader,
 } from '@deepseek-ai/dsh-session'
 import { sql } from './sql.ts'
 
 /** Current physical-record schema with packed and compressed event rows. */
-export const SCHEMA_VERSION = 19
+export const SCHEMA_VERSION = 20
 /** Application id reserved for DeepSeek Harness SQLite session databases. */
 export const SESSION_PERSISTENCE_SQLITE_APPLICATION_ID = 0x44534850
 
@@ -32,6 +34,9 @@ export interface SessionRow {
   readonly revision: number
   readonly delegation_depth: number | null
   readonly agent_preset: string | null
+  readonly scope_provider: string | null
+  readonly scope_ref: string | null
+  readonly scope_version: number | null
 }
 
 /** One physical event row; packed rows may represent multiple logical events. */
@@ -207,7 +212,7 @@ function initializeDatabase(db: DatabaseSync): void {
   db.exec(sql('schema'))
   db.prepare(sql('insert-persistence-state')).run(randomUUID())
   db.exec(sql('set-application-id'))
-  db.exec(sql('set-user-version-19'))
+  db.exec(sql('set-user-version-20'))
 }
 
 let canonicalSchema: readonly SchemaObjectRow[] | undefined
@@ -292,6 +297,16 @@ export function decodeSessionRow(value: unknown): SessionRow {
   if (origin !== null && origin !== 'subagent') throw new Error('stored session origin must be subagent or null')
   const incarnation = nonemptyStringField(row, 'incarnation')
   if (!UUID.test(incarnation)) throw new Error('stored session incarnation must be a UUID')
+  const scopeProvider = nullableStringField(row, 'scope_provider')
+  const scopeRef = nullableStringField(row, 'scope_ref')
+  const scopeVersion = nullableNonnegativeSafeIntegerField(row, 'scope_version')
+  const scopePresence = [scopeProvider, scopeRef, scopeVersion].filter(value => value !== null).length
+  if (scopePresence !== 0 && scopePresence !== 3) {
+    throw new Error('stored session scope fields must be all null or all present')
+  }
+  if (scopeProvider === '' || scopeRef === '' || scopeVersion === 0) {
+    throw new Error('stored session scope fields must contain non-empty ids and a positive version')
+  }
   return {
     id,
     version,
@@ -302,6 +317,9 @@ export function decodeSessionRow(value: unknown): SessionRow {
     origin,
     delegation_depth: nullableNonnegativeSafeIntegerField(row, 'delegation_depth'),
     agent_preset: nullableStringField(row, 'agent_preset'),
+    scope_provider: scopeProvider,
+    scope_ref: scopeRef,
+    scope_version: scopeVersion,
     incarnation,
     revision: nonnegativeSafeIntegerField(row, 'revision'),
   }
@@ -356,6 +374,11 @@ export function rowToMeta(row: SessionRow): SessionHeader {
     ...row.origin === null ? {} : { origin: row.origin },
     ...row.delegation_depth === null ? {} : { delegationDepth: row.delegation_depth },
     ...row.agent_preset === null ? {} : { agentPreset: row.agent_preset },
+    ...row.scope_provider === null ? {} : { scope: {
+      provider: SessionScopeProviderId(row.scope_provider),
+      ref: SessionScopeReference(row.scope_ref as string),
+      schemaVersion: row.scope_version as number,
+    } },
   }
 }
 

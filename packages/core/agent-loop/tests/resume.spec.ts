@@ -5,7 +5,10 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
-import SessionStore, { SESSION_FORMAT_VERSION, Session, SessionId, SessionPreparation } from '@deepseek-ai/dsh-session'
+import SessionStore, {
+  SESSION_FORMAT_VERSION, Session, SessionId, SessionPreparation,
+  SessionScopeProviderId, SessionScopeReference,
+} from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -187,6 +190,25 @@ describe('the session-persistence Agent Note: AgentLoop factory create/resume', 
     const { agent } = await ctx.agents.create({ sessionId: SessionId('custom-session'), meta: { cwd: '/w' } })
     expect(agent.session.id).toBe('custom-session')
     expect(agent.session.header.cwd).toBe('/w')
+    await ctx.fiber.dispose()
+  })
+
+  it('admits a durable scope before publishing a new agent', async () => {
+    const { ctx } = await persistentHarness(new MockAdapter([textResponse('hi')]))
+    const provider = SessionScopeProviderId('example.scope')
+    const scope = { provider, ref: SessionScopeReference('opaque:subject:1'), schemaVersion: 1 }
+
+    await expect(ctx.agents.create({ sessionId: SessionId('missing-scope-provider'), meta: { scope } }))
+      .rejects.toThrow(/is not registered/)
+    expect(ctx.sessions.get(SessionId('missing-scope-provider'))).toBeUndefined()
+    expect(ctx.agents.get(SessionId('missing-scope-provider'))).toBeUndefined()
+
+    const admitted: unknown[] = []
+    ctx.agents.registerScopeProvider(provider, { admit: value => void admitted.push(value) })
+    const handle = await ctx.agents.create({ sessionId: SessionId('admitted-scope'), meta: { scope } })
+
+    expect(admitted).toEqual([scope])
+    expect(handle.agent.session.header.scope).toEqual(scope)
     await ctx.fiber.dispose()
   })
 

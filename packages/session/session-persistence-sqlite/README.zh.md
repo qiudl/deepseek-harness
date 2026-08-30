@@ -173,7 +173,7 @@ await ctx.sessionPersistence.append(id, events)
 
 这些限制说明本提供方何时不合适，或何时需要特别的运维注意。它们是当前包约束，不是通用 SQLite 对比或任务积压。
 
-- **预发布设计，无迁移**——schema 19 是临时的 SQLite 专用设计；不保证 schema 稳定性或迁移支持。
+- **预发布设计，无迁移**——物理 schema 20 增加 provider-neutral Session Scope 列，同时保留 schema-19 打包事件 codec；不保证 schema 稳定性或迁移支持。
 - **打包依赖批次边界**——被写后窗口或显式 flush 拆开的兼容连续段仍分属不同物理行；这避免了重写先前行，代价是打包比例依赖时序。
 - **同步 SQLite 与压缩**——Node 的 SQLite 驱动与 Zstandard 调用会阻塞 JavaScript 线程。
 - **忙等待阻塞事件循环**——SQLite 在同步调用内部等待；竞争写入方最长可让线程停顿配置的 `busyTimeoutMs`。

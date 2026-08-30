@@ -103,7 +103,7 @@ const handle = await ctx.agents.create({
 
 ### 创建与拆除
 
-创建是同一个受回滚保护的事务：构造私有会话、具象 agent 与带作用域上下文；等待可选 setup；进入两个注册表；依次宣告 `session/created` 与 `agent/created`；发出 `agent/session-start`；此后才启动驱动器。Setup 抛出、commit 失败或所有者 dispose 都会回滚事务而不发布任一 id。Teardown 顺序是停止并排空、撤销作用域、detach agent、再 detach 会话，且每次 detach 都绑定到确切进入的对象，因此陈旧 disposer 无法移除之后出现的同 id 替代项。
+创建是同一个受回滚保护的事务：构造私有会话、具象 agent 与带作用域上下文；通过已注册的插件 Provider 准入任何持久化 `SessionScopeRef`；等待可选 setup；进入两个注册表；依次宣告 `session/created` 与 `agent/created`；发出 `agent/session-start`；此后才启动驱动器。Scope 拒绝、Provider 卸载、setup 抛出、commit 失败或所有者 dispose 都会回滚事务而不发布任一 id。Teardown 顺序是停止并排空、撤销作用域、detach agent、再 detach 会话，且每次 detach 都绑定到确切进入的对象，因此陈旧 disposer 无法移除之后出现的同 id 替代项。
 
 ### 轮次与步骤流程
 
