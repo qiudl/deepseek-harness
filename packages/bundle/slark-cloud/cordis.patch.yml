@@ -48,7 +48,7 @@
   disabled: true
 
 - id: ui-settings-plugins
-  disabled: true
+  disabled: false
 
 - id: agent-presets
   config:
@@ -85,6 +85,22 @@
       disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
       config:
         workspaceHandle: !!js process.env.SLARK_DSH_WORKSPACE_HANDLE
+
+    # M1 plugin discovery remains dynamically composable: each face is an
+    # ordinary Cordis entry rather than behavior embedded in the Web shell.
+    - id: plugin-catalog
+      name: '@deepseek-ai/dsh-plugin-catalog-file'
+      config:
+        manifestPath: !!js process.env.DSH_PLUGIN_CATALOG_MANIFEST || '/var/lib/dsh/plugin-catalog/manifest.json'
+
+    - id: plugin-catalog-gateway
+      name: '@deepseek-ai/dsh-host-plugin-catalog-gateway'
+
+    - id: tool-plugin-catalog
+      name: '@deepseek-ai/dsh-tool-plugin-catalog'
+
+    - id: ui-settings-plugin-market
+      name: '@deepseek-ai/dsh-client-ui-settings-plugin-market'
 
     - id: slark-shell
       name: '@deepseek-ai/dsh-shell-slark-remote'

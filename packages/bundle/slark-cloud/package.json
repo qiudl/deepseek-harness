@@ -22,10 +22,14 @@
   "license": "MIT",
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "dependencies": {
+    "@deepseek-ai/dsh-client-ui-settings-plugin-market": "workspace:^",
     "@deepseek-ai/dsh-fs-slark-remote": "workspace:^",
+    "@deepseek-ai/dsh-host-plugin-catalog-gateway": "workspace:^",
+    "@deepseek-ai/dsh-plugin-catalog-file": "workspace:^",
     "@deepseek-ai/dsh-shell-slark-remote": "workspace:^",
     "@deepseek-ai/dsh-slark-device-client": "workspace:^",
-    "@deepseek-ai/dsh-slark-identity": "workspace:^"
+    "@deepseek-ai/dsh-slark-identity": "workspace:^",
+    "@deepseek-ai/dsh-tool-plugin-catalog": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
@@ -34,7 +38,13 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/cordis-plugin-include": "workspace:^",
+    "@deepseek-ai/cordis-plugin-loader": "workspace:^",
     "@deepseek-ai/dsh-host-webserver": "workspace:^",
-    "@deepseek-ai/dsh-invariants": "workspace:^"
+    "@deepseek-ai/dsh-invariants": "workspace:^",
+    "@deepseek-ai/dsh-plugin-catalog": "workspace:^",
+    "@deepseek-ai/dsh-system-prompt": "workspace:^",
+    "@deepseek-ai/dsh-tools": "workspace:^",
+    "@deepseek-ai/dsh-typert-protocol": "workspace:^"
   }
 }
