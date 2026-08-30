@@ -665,6 +665,9 @@ function mobileApprovalSnapshot(ctx: Context, req: { agent: Agent; callId?: Call
   const rendered = viewFor(ctx, call, () => undefined, req.agent)
   if (rendered?.for !== 'call') return undefined
   const view = rendered.view
+  // Generic cards may deliberately summarize or omit raw arguments. They are
+  // safe for display, but not complete enough to authorize a side effect.
+  if (view.card === 'generic') return undefined
   const sessionCwd = req.agent.session.header.cwd
   const presentedCwd = view.card === 'terminal' ? view.cwd : undefined
   const workingDirectory = presentedCwd === undefined
@@ -673,19 +676,13 @@ function mobileApprovalSnapshot(ctx: Context, req: { agent: Agent; callId?: Call
       ? presentedCwd
       : sessionCwd === undefined ? undefined : resolvePath(sessionCwd, presentedCwd)
   if (workingDirectory === undefined || workingDirectory.length === 0 || workingDirectory.length > 4_096) return undefined
-  const action = view.title.trim()
+  const action = view.card === 'diff'
+    ? `${view.title.trim()}\n${view.diffs.map(diff => diff.path).join('\n')}`.trim()
+    : view.title.trim()
   if (action.length === 0 || action.length > 4_096) return undefined
   const impact = view.card === 'terminal'
     ? 'Execute a command in the selected working directory'
-    : view.card === 'diff'
-      ? `Modify ${view.diffs.length} file${view.diffs.length === 1 ? '' : 's'}`
-      : view.kind === 'delete'
-        ? 'Delete local data'
-        : view.kind === 'edit' || view.kind === 'move'
-          ? 'Modify local data'
-          : view.kind === 'execute'
-            ? 'Execute an operation'
-            : 'Run the requested tool operation'
+    : `Modify ${view.diffs.length} file${view.diffs.length === 1 ? '' : 's'}`
   const expiresAt = Date.now() + MOBILE_APPROVAL_TTL_MS
   const canonical = JSON.stringify([req.agent.session.id, req.callId, workingDirectory, action, impact, expiresAt])
   const operationDigest = createHmac('sha256', MOBILE_APPROVAL_SECRET).update(canonical).digest('base64url')

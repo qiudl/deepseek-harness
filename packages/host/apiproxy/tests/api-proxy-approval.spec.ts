@@ -35,6 +35,11 @@ async function harness(): Promise<{ ctx: Context; api: ApiProxy }> {
     execute: async () => [{ type: 'text', text: 'ok' }],
     presentCall: args => ({ card: 'terminal', title: String((args as { command?: string }).command ?? ''), cwd: 'subdir' }),
   }))
+  ctx.tools.register(defineContentToolFixture({
+    name: 'opaque', description: 'opaque operation', parameters: {},
+    execute: async () => [{ type: 'text', text: 'ok' }],
+    presentCall: () => ({ card: 'generic', title: 'Run operation' }),
+  }))
   const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
   return { ctx, api }
 }
@@ -118,6 +123,22 @@ describe('approval pending registry', () => {
     expect(await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'allowed-once', requested.operationDigest)))
       .toEqual({ accepted: true })
     await expect(asked).resolves.toBe('allowed-once')
+    abort.abort()
+  })
+
+  it('keeps incomplete generic presenter calls legacy and reject-only', async () => {
+    const { ctx, api } = await harness()
+    const abort = new AbortController(); const mux = openMux(api, abort); const agent = agentOf(ctx)
+    const callId = CallId('opaque-call')
+    agent.session.append('tool/call', { turn: 1, step: 1, callId, name: 'opaque', arguments: '{"secret":"not projected"}' })
+    const asked = ctx.approval.request({ agent, toolName: 'opaque', callId })
+    const requested = requestedOf(await mux.waitFor('approval/requested'))
+    expect(requested.protocolVersion).toBeUndefined()
+    expect(requested.operationDigest).toBeUndefined()
+    const envelope = mux.envelopes.find(e => e.payload.type === 'approval/requested') as RpcRequest<MuxFrame>
+    expect(await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'rejected')))
+      .toEqual({ accepted: true })
+    await expect(asked).resolves.toBe('rejected')
     abort.abort()
   })
 
