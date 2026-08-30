@@ -1,4 +1,3 @@
-import React from 'react'
 import { createRoot } from 'react-dom/client'
 import type { PluginCatalogEntry, PluginCatalogPage, PluginCatalogQuery } from '@deepseek-ai/dsh-api-remotes/client'
 import { PluginMarket, type PluginMarketProps } from '../../../src/client/PluginMarket.tsx'
