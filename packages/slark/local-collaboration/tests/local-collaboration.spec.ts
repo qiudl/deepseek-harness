@@ -93,7 +93,7 @@ describe('SlarkLocalCollaboration', () => {
       },
       async acknowledge(receivedSampleId: string, sourceSeq: number) {
         expect({ receivedSampleId, sourceSeq }).toEqual({ receivedSampleId: sampleId, sourceSeq: 7 })
-        usageAckPromise.resolve()
+        usageAckPromise.resolve(undefined)
       },
       notify() {},
       async wait(signal: AbortSignal) {
