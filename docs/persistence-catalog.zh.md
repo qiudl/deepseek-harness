@@ -669,6 +669,40 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 来源：[`packages/session/session-title-llm/src/index.ts:43`](../packages/session/session-title-llm/src/index.ts)
 
+### `slark/*`
+
+<a id="slarkinvocation-start--log-only"></a>
+
+#### `slark/invocation-start` — log-only
+
+```ts persistence-catalog
+/**
+ * Records one authenticated Slark-context model dispatch after its
+ * zero-content identity and route prefix has passed a durability barrier.
+ */
+'slark/invocation-start': {
+  turn: number
+  step: number
+  attempt: number
+  provider: string
+  model: string
+  context: SlarkInvocationContext
+}
+```
+
+来源：[`packages/slark/local-collaboration/src/usage.ts:48`](../packages/slark/local-collaboration/src/usage.ts)
+
+<a id="slarkusage-ack--log-only"></a>
+
+#### `slark/usage-ack` — log-only
+
+```ts persistence-catalog
+/** Records the daemon-durable sample revision that no longer needs replay. */
+'slark/usage-ack': { sampleId: string; sourceSeq: number }
+```
+
+来源：[`packages/slark/local-collaboration/src/usage.ts:57`](../packages/slark/local-collaboration/src/usage.ts)
+
 ### `step/*`
 
 <a id="stepend--log-only"></a>
