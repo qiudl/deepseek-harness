@@ -18,4 +18,5 @@ export const approvalResponsePayloadSchema = z.object({
   sessionId: sessionIdSchema,
   approvalId: approvalRequestIdSchema,
   outcome: z.union([z.literal('allowed-once'), z.literal('rejected')]),
+  operationDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u).optional(),
 }) satisfies z.ZodType<Wire<ApprovalResponsePayload>>

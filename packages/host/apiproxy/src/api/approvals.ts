@@ -18,4 +18,6 @@ export interface ApprovalResponsePayload {
   sessionId: SessionId
   approvalId: ApprovalRequestId
   outcome: 'allowed-once' | 'rejected'
+  /** Required for allowing a structured v2 request; binds the displayed operation snapshot. */
+  operationDigest?: string
 }

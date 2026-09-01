@@ -12,14 +12,19 @@ import { open } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-session-persistence'
+import { SlarkUsageReporter } from './usage.ts'
+export { projectSlarkUsage, SlarkUsageReporter, type SlarkUsageEnvelope } from './usage.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'slark-local-collaboration'
 /** Services receiving and exposing authenticated collaboration context. */
-export const inject = ['webServer', 'systemPrompt', 'shellEnv']
+export const inject = ['webServer', 'systemPrompt', 'shellEnv', 'llm', 'sessions', 'sessionPersistence']
 
 const REGISTER = 'slark.dsh-local.register.v1'
 const CHALLENGE = 'slark.dsh-local.challenge.v1'
@@ -31,6 +36,10 @@ const ACP_CONTEXT_APPLIED = 'slark.dsh-local.acp.context.applied.v2'
 const ACCEPTED = 'slark.dsh-local.accepted.v1'
 const REJECTED = 'slark.dsh-local.rejected.v1'
 const ENTERPRISE_CAPABILITY = 'enterprise_collaboration_v2'
+const MOBILE_APPROVAL_CAPABILITY = 'slark_mobile_approval_v2'
+const TOKEN_COST_CAPABILITY = 'token_cost_observability_v1'
+const USAGE = 'slark.dsh-local.usage.v1'
+const USAGE_ACCEPTED = 'slark.dsh-local.usage-accepted.v1'
 const FRAME_LIMIT_BYTES = 16 * 1024
 const HANDSHAKE_TIMEOUT_MS = 3_000
 const RECONNECT_DELAY_MS = 500
@@ -319,6 +328,7 @@ export class SlarkLocalCollaboration {
     private readonly endpointOrigin: string,
     private readonly onContext: (context: SlarkCollaborationContext | undefined) => void,
     private readonly warn: (error: Error) => void,
+    private readonly usageReporter?: SlarkUsageReporter,
   ) {}
 
   /**
@@ -368,7 +378,7 @@ export class SlarkLocalCollaboration {
       dsh_version: this.config.dshVersion,
       process_nonce: randomBytes(32).toString('base64url'),
       acp_protocol_version: 1,
-      capabilities: [ENTERPRISE_CAPABILITY],
+      capabilities: [ENTERPRISE_CAPABILITY, MOBILE_APPROVAL_CAPABILITY, TOKEN_COST_CAPABILITY],
     }
     try {
       send(socket, { type: REGISTER, request_id: requestId, pid: process.pid, descriptor })
@@ -407,8 +417,22 @@ export class SlarkLocalCollaboration {
         registrationId: acceptedFrame.registration_id as string,
         processNonce: descriptor.process_nonce,
       }
+      const usageAbort = new AbortController()
+      let usagePump: Promise<void> | undefined
       for (;;) {
         const frame = await frames.next()
+        if (frame.type === USAGE_ACCEPTED) {
+          if (!exactKeys(frame, ['type', 'registration_id', 'process_nonce', 'sample_id', 'source_seq'])
+            || frame.registration_id !== accepted.registrationId
+            || frame.process_nonce !== accepted.processNonce
+            || !/^[0-9a-f]{64}$/u.test(String(frame.sample_id))
+            || !Number.isSafeInteger(frame.source_seq)
+            || (frame.source_seq as number) < 0
+            || this.usageReporter === undefined) throw frameError(frame)
+          await this.usageReporter.acknowledge(frame.sample_id as string, frame.source_seq as number)
+          this.usageReporter.notify()
+          continue
+        }
         const next = parseContext(frame, accepted)
         if (next === null) throw frameError(frame)
         this.context = next
@@ -419,6 +443,12 @@ export class SlarkLocalCollaboration {
           registration_id: accepted.registrationId,
           process_nonce: accepted.processNonce,
         })
+        if (usagePump === undefined && this.usageReporter !== undefined) {
+          usagePump = this.pumpUsage(socket, accepted, this.usageReporter, usageAbort.signal)
+          void usagePump.catch((error: unknown) => {
+            if (!usageAbort.signal.aborted) socket.destroy(error instanceof Error ? error : new Error(String(error)))
+          })
+        }
       }
     } finally {
       if (this.context !== undefined) {
@@ -427,6 +457,26 @@ export class SlarkLocalCollaboration {
       }
       if (this.socket === socket) this.socket = undefined
       socket.destroy()
+    }
+  }
+
+  private async pumpUsage(
+    socket: Socket,
+    accepted: AcceptedConnection,
+    reporter: SlarkUsageReporter,
+    signal: AbortSignal,
+  ): Promise<void> {
+    while (!signal.aborted && !socket.destroyed) {
+      const pending = await reporter.pending(signal)
+      for (const sample of pending) {
+        send(socket, {
+          type: USAGE,
+          registration_id: accepted.registrationId,
+          process_nonce: accepted.processNonce,
+          ...sample,
+        })
+      }
+      await reporter.wait(signal)
     }
   }
 }
@@ -457,6 +507,52 @@ function requiredConfig(config: Config): Required<Omit<Config, 'enabled'>> {
   }
 }
 
+function openStep(session: Session): { turn: number; step: number } | undefined {
+  for (let index = session.events.length - 1; index >= 0; index--) {
+    const event = session.events[index]
+    if (event?.type === 'step/end' || event?.type === 'turn/end') return undefined
+    if (event?.type === 'step/start') return event.data
+  }
+  return undefined
+}
+
+function nextAttempt(session: Session, turn: number, step: number): number {
+  return session.events.filter(event => event.type === 'slark/invocation-start'
+    && event.data.turn === turn && event.data.step === step).length + 1
+}
+
+function observedStream(
+  ctx: Context,
+  session: Session,
+  options: GenerateOptions,
+  context: SlarkCollaborationContext,
+  next: () => AsyncIterable<StreamChunk>,
+): AsyncIterable<StreamChunk> {
+  return (async function* (): AsyncIterable<StreamChunk> {
+    const step = openStep(session)
+    if (step === undefined) {
+      yield* next()
+      return
+    }
+    session.append('slark/invocation-start', {
+      ...step,
+      attempt: nextAttempt(session, step.turn, step.step),
+      provider: options.provider,
+      model: options.model,
+      context: {
+        environmentId: context.environmentId,
+        personalProjectId: context.personalProjectId,
+        bindingId: context.bindingId,
+        bindingAuthVersion: context.bindingAuthVersion,
+      },
+    })
+    // This second product-owned checkpoint is intentional: only its success
+    // turns a prepared step into durable evidence that may enter coverage.
+    await ctx.sessions.flush(session)
+    yield* next()
+  })()
+}
+
 /** Register the optional Slark connector and its live model/shell projections. */
 export function apply(ctx: Context, config: Config): void {
   if (!config.enabled) return
@@ -464,6 +560,11 @@ export function apply(ctx: Context, config: Config): void {
     throw new Error('slark-local-collaboration: enabled Web runtime must bind to 127.0.0.1')
   }
   let current: SlarkCollaborationContext | undefined
+  ctx.on('llm/stream', (options, next): AsyncIterable<StreamChunk> => {
+    if (current === undefined || options.sessionId === undefined || options.purpose !== undefined) return next()
+    const session = ctx.sessions.get(options.sessionId)
+    return session === undefined ? next() : observedStream(ctx, session, options, current, next)
+  })
   ctx.systemPrompt.context({
     name: 'slark:enterprise-collaboration',
     order: -80,
@@ -493,6 +594,9 @@ export function apply(ctx: Context, config: Config): void {
     (error) => {
       ctx.logger.warn(error)
     },
+    new SlarkUsageReporter(ctx, (error) => {
+      ctx.logger.warn(error)
+    }),
   )
   ctx.effect(() => {
     collaboration.start()

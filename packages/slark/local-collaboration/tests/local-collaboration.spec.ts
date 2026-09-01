@@ -7,6 +7,7 @@ import {
   createRegistrationMac,
   SlarkLocalCollaboration,
   type SlarkCollaborationContext,
+  type SlarkUsageReporter,
 } from '../src/index.ts'
 
 const REGISTRATION_ID = '22222222-2222-4222-8222-222222222222'
@@ -74,6 +75,35 @@ describe('SlarkLocalCollaboration', () => {
     const contextPromise = Promise.withResolvers<SlarkCollaborationContext>()
     const clearedPromise = Promise.withResolvers<undefined>()
     const ackPromise = Promise.withResolvers<Record<string, unknown>>()
+    const usageFramePromise = Promise.withResolvers<Record<string, unknown>>()
+    const usageAckPromise = Promise.withResolvers<undefined>()
+    const sampleId = 'd'.repeat(64)
+    let pendingSent = false
+    const usageReporter = {
+      async pending() {
+        if (pendingSent) return []
+        pendingSent = true
+        return [{
+          sample_id: sampleId, source_seq: 7, session_digest: 'e'.repeat(64), turn: 1, step: 1, attempt: 1,
+          provider: 'deepseek', model: 'deepseek-chat', uncached_input_tokens: 10, cache_read_tokens: 20,
+          cache_write_tokens: 0, output_tokens: 3, usage_state: 'complete', call_terminal: 'completed',
+          turn_terminal: 'completed', occurred_at: 1_700_000_000_000, environment_id: 'staging',
+          personal_project_id: 'project-1', binding_id: 'binding-1', binding_auth_version: 4,
+        }]
+      },
+      async acknowledge(receivedSampleId: string, sourceSeq: number) {
+        expect({ receivedSampleId, sourceSeq }).toEqual({ receivedSampleId: sampleId, sourceSeq: 7 })
+        usageAckPromise.resolve(undefined)
+      },
+      notify() {},
+      async wait(signal: AbortSignal) {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => {
+            resolve()
+          }, { once: true })
+        })
+      },
+    } as unknown as SlarkUsageReporter
 
     const server = createServer((socket) => {
       void (async () => {
@@ -133,6 +163,16 @@ describe('SlarkLocalCollaboration', () => {
           },
         })
         ackPromise.resolve(await nextFrame(iterator))
+        const usageFrame = await nextFrame(iterator)
+        usageFramePromise.resolve(usageFrame)
+        send(socket, {
+          type: 'slark.dsh-local.usage-accepted.v1',
+          registration_id: REGISTRATION_ID,
+          process_nonce: descriptor.process_nonce,
+          sample_id: sampleId,
+          source_seq: 7,
+        })
+        await usageAckPromise.promise
         socket.end()
       })()
     })
@@ -156,7 +196,7 @@ describe('SlarkLocalCollaboration', () => {
       else contextPromise.resolve(context)
     }, (error) => {
       contextPromise.reject(error)
-    })
+    }, usageReporter)
     cleanups.push(() => {
       collaboration.close()
     })
@@ -171,6 +211,11 @@ describe('SlarkLocalCollaboration', () => {
       registration_id: REGISTRATION_ID,
     })
     expect(acknowledgement.process_nonce).toMatch(/^[A-Za-z0-9_-]{43}$/u)
+    await expect(usageFramePromise.promise).resolves.toMatchObject({
+      type: 'slark.dsh-local.usage.v1', sample_id: sampleId, source_seq: 7,
+      registration_id: REGISTRATION_ID, attempt: 1, environment_id: 'staging',
+    })
+    await usageAckPromise.promise
     context.capabilities.push('mutated')
     expect(collaboration.current()?.capabilities).toEqual(['project_navigation'])
     expect((await readFile(keyPath, 'utf8')).trim()).toBe(localAccessKey)

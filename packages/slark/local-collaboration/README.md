@@ -14,6 +14,10 @@ The shipped Web bundle enables this plugin only when `SLARK_DSH_LOCAL_INSTALLATI
 
 The connector sends a fresh process nonce on every connection, proves possession of the local access key with HMAC-SHA-256, completes ACP initialization, and accepts only exact versioned frames. Slark also verifies the process identity and installation ID on its side. A lost or malformed connection clears the accepted enterprise context before reconnecting.
 
+The authenticated descriptor advertises `slark_mobile_approval_v2` when this runtime can produce the complete structured approval snapshot. Slark probes that exact current registration before exposing mobile control; an older or replaced process therefore fails closed.
+
+It also advertises `token_cost_observability_v1`. For an authenticated context, the plugin records a zero-content invocation marker behind a durability barrier, folds provider-reported usage per dispatch attempt (including retries), and sends only route, token buckets, terminal state, timestamps, digested session identity, and the immutable Slark binding snapshot. The daemon acknowledges only after durable acceptance; DSH writes that ACK into the canonical session log. Startup and reconnect scan persisted cold sessions in bounded pages, so a crash can cause safe duplicate delivery but cannot silently advance the replay watermark. Prompt text, assistant text, tool data, file data, credentials, and provider errors never enter the usage frame.
+
 Each accepted context updates three shell variables: `DSH_SLARK_ENTERPRISE_ID`, `DSH_SLARK_PERSONAL_PROJECT_ID`, and `DSH_SLARK_ENVIRONMENT_ID`. These values select the enterprise collaboration context only. Local DSH continues to use the model credentials, filesystem, and compute resources of the user's computer; this package neither receives nor allocates enterprise model tokens.
 
 ## Model Experience
@@ -42,3 +46,4 @@ The context is stable while the selected enterprise remains unchanged. A context
 
 - The package integrates the Web profile only; a future native DSH application shell must compose the same protocol owner explicitly.
 - The production launcher must identify a dedicated trusted DSH executable. Trusting a general-purpose Node executable is acceptable only for local development because process identity is part of Slark's admission check.
+- Token-cost observability reports evidence; it does not change prompts, summarize context, or cache semantic answers. Any later cache-prefix change requires production evidence and a separate decision.

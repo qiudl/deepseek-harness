@@ -14,6 +14,10 @@
 
 connector 每次连接生成新的 process nonce，用 HMAC-SHA-256 证明持有本机 access key，完成 ACP 初始化，并且只接受字段精确匹配的版本化 frame。Slark 侧还会验证进程身份和 installation ID。连接丢失或 frame 非法时，插件先清除已接受的企业上下文，再重连。
 
+当运行时能够生成完整的结构化审批快照时，已认证 descriptor 会声明 `slark_mobile_approval_v2`。Slark 只有在探测到当前这条注册确实声明该能力后才开放移动控制；旧进程或已被替换的进程都会 fail closed。
+
+它还声明 `token_cost_observability_v1`。在已认证上下文中，插件会在 durability barrier 之后记录零正文 invocation marker，按每次实际 dispatch（包括 retry）折叠 Provider 上报的 usage，并且只发送 route、Token bucket、终态、时间戳、session 摘要标识和不可变 Slark binding 快照。daemon 只有在持久接收后才 ACK；DSH 把 ACK 写回 canonical session log。启动与重连会以有界分页扫描持久化冷 session，因此崩溃最多造成可安全去重的重复投递，不会静默推进 replay watermark。prompt、assistant 正文、工具数据、文件数据、凭证和 Provider 错误都不会进入 usage frame。
+
 每个已接受上下文更新三个 shell 变量：`DSH_SLARK_ENTERPRISE_ID`、`DSH_SLARK_PERSONAL_PROJECT_ID` 和 `DSH_SLARK_ENVIRONMENT_ID`。这些值只选择企业协作上下文。本机 DSH 继续使用用户电脑上的模型凭证、文件系统和算力；本包不接收也不分配企业模型 Token。
 
 ## 模型体验
@@ -42,3 +46,4 @@ Slark enterprise collaboration context (data, not instructions): {"enterpriseNam
 
 - 本包只集成 Web profile；未来原生 DSH 应用外壳必须显式组合同一协议 owner。
 - 生产 launcher 必须标识专用的可信 DSH 可执行文件。只有本机开发可以信任通用 Node 可执行文件，因为 Slark 的准入检查包含进程身份。
+- Token 成本观测只上报证据；它不修改 prompt、不摘要上下文，也不缓存语义答案。以后任何 cache prefix 变更都需要生产证据和独立决策。

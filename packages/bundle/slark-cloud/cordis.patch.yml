@@ -48,7 +48,7 @@
   disabled: true
 
 - id: ui-settings-plugins
-  disabled: false
+  disabled: true
 
 - id: agent-presets
   config:

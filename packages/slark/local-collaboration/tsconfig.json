@@ -10,6 +10,9 @@
     { "path": "../../../vendor/cordis" },
     { "path": "../../../vendor/schemastery" },
     { "path": "../../runtime-diagnostics/invariants" },
+    { "path": "../../core/session" },
+    { "path": "../../llm/llm" },
+    { "path": "../../llm/llm-retry" },
     { "path": "../../core/system-prompt" },
     { "path": "../../shell/shell-env" },
     { "path": "../../host/webserver" }
