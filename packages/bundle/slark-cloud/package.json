@@ -28,6 +28,7 @@
     "@deepseek-ai/dsh-plugin-catalog-file": "workspace:^",
     "@deepseek-ai/dsh-shell-slark-remote": "workspace:^",
     "@deepseek-ai/dsh-slark-device-client": "workspace:^",
+    "@deepseek-ai/dsh-slark-collaboration-network": "workspace:^",
     "@deepseek-ai/dsh-slark-identity": "workspace:^",
     "@deepseek-ai/dsh-tool-plugin-catalog": "workspace:^"
   },

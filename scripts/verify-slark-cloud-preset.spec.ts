@@ -42,6 +42,7 @@ describe('slark-cloud composition gate', () => {
           "slark-cloud-ingress=@deepseek-ai/dsh-slark-cloud",
           "slark-device=@deepseek-ai/dsh-slark-device-client",
           "slark-identity=@deepseek-ai/dsh-slark-identity",
+          "slark-collaboration-network=@deepseek-ai/dsh-slark-collaboration-network",
           "slark-fs=@deepseek-ai/dsh-fs-slark-remote",
           "slark-shell=@deepseek-ai/dsh-shell-slark-remote",
         ],

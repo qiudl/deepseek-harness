@@ -80,6 +80,18 @@
         cellId: !!js process.env.SLARK_DSH_CELL_ID
         refreshUrl: !!js process.env.SLARK_DSH_EDGE_REFRESH_URL
 
+    - id: slark-collaboration-network
+      name: '@deepseek-ai/dsh-slark-collaboration-network'
+      disabled: !!js process.env.DSH_SLARK_COLLABORATION_V2 !== '1'
+      config:
+        enabled: true
+        gatewayUrl: !!js process.env.SLARK_DSH_GATEWAY_URL
+        allowInsecureHttp: true
+        workspaceRoot: !!js process.env.SLARK_DSH_WORKSPACE_ROOT
+        workspaceHandle: !!js process.env.SLARK_DSH_WORKSPACE_HANDLE
+        workerId: !!js process.env.SLARK_DSH_WORKER_ID
+        formalAgents: !!js JSON.parse(process.env.SLARK_DSH_FORMAL_AGENTS || '[]')
+
     - id: slark-fs
       name: '@deepseek-ai/dsh-fs-slark-remote'
       disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
