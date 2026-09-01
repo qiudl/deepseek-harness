@@ -229,6 +229,7 @@
     { "path": "./packages/fs/fs" },
     { "path": "./packages/fs/fs-local" },
     { "path": "./packages/slark/device-client" },
+    { "path": "./packages/slark/collaboration-network" },
     { "path": "./packages/slark/plugin-catalog" },
     { "path": "./packages/slark/plugin-catalog-file" },
     { "path": "./packages/slark/tool-plugin-catalog" },

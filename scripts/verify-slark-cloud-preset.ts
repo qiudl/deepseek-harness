@@ -150,6 +150,23 @@ export function auditSlarkCloudComposition(): string[] {
     }
   }
 
+  const collaboration = expectRow(byId, 'slark-collaboration-network',
+    '@deepseek-ai/dsh-slark-collaboration-network', errors)
+  if (collaboration !== undefined
+    && expression(collaboration.disabled) !== "process.env.DSH_SLARK_COLLABORATION_V2 !== '1'") {
+    errors.push('row slark-collaboration-network must use its dedicated fail-closed rollout switch')
+  }
+  const collaborationConfig = typeof collaboration?.config === 'object' && collaboration.config !== null
+    ? collaboration.config as Record<string, unknown>
+    : undefined
+  const collaborationKeys = ['allowInsecureHttp', 'enabled', 'formalAgents', 'gatewayUrl',
+    'workerId', 'workspaceHandle', 'workspaceRoot']
+  if (collaborationConfig === undefined
+    || Object.keys(collaborationConfig).sort().join('\n') !== collaborationKeys.sort().join('\n')
+    || 'serviceToken' in collaborationConfig) {
+    errors.push('row slark-collaboration-network must expose only approved non-secret config keys')
+  }
+
   const identityConfig = typeof remoteRows[1]?.config === 'object' && remoteRows[1].config !== null
     ? remoteRows[1].config as Record<string, unknown>
     : undefined
