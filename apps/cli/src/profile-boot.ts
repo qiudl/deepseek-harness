@@ -35,6 +35,18 @@ import { provideCmdline, type AppReady } from '@deepseek-ai/dsh-cmdline'
 import { createProcessShutdown, type ProcessShutdown } from './process-shutdown.ts'
 
 const NAME = 'dsh'
+const INSTALLATION_OWNED_PROFILES = new Set(['desktop-host'])
+
+/** Reject every user-controlled overlay and app argument on authority profiles. */
+export function assertProfileInvocationPolicy(
+  profile: string,
+  patchFiles: readonly string[],
+  args: readonly string[],
+): void {
+  if (INSTALLATION_OWNED_PROFILES.has(profile) && (patchFiles.length !== 0 || args.length !== 0)) {
+    throw new Error(`dsh: ${profile} profile does not accept user overlays or arguments`)
+  }
+}
 
 /** Launcher-owned readiness signal committed only after boot and host setup succeed. */
 function createAppReady(): { service: AppReady; commit(): void } {
@@ -157,9 +169,13 @@ async function composeProfile(
   name: string,
   patchFiles: readonly string[],
 ): Promise<ComposedProfile> {
-  const profile = prepareProfile(name)
+  const installationOwned = INSTALLATION_OWNED_PROFILES.has(name)
+  if (installationOwned && patchFiles.length !== 0) {
+    throw new Error(`dsh: ${name} profile does not accept user overlays`)
+  }
+  const profile = prepareProfile(name, !installationOwned)
   await healProfilesModuleFallback({ installAnchor: INSTALL_ANCHOR, profile })
-  const homePatches = loadOptionalPatches(NAME, homePatchPath()) ?? []
+  const homePatches = installationOwned ? [] : loadOptionalPatches(NAME, homePatchPath()) ?? []
   const overlays = patchFiles.flatMap(file => loadOverlayPatches(NAME, resolve(file)))
   const bundlePatches = profile.layers.flatMap(layer => layer.patches)
   const rows = new Map<string, EntryOptions>()
@@ -207,6 +223,7 @@ function suppressShutdownError(ctx: Context, signal: AbortSignal, error: unknown
  * @returns the settled root context and the shutdown controller.
  */
 export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Context; shutdown: ProcessShutdown }> {
+  assertProfileInvocationPolicy(options.profile, options.patchFiles, options.args)
   const composed = await composeProfile(options.profile, options.patchFiles)
   const app: { current?: Context } = {}
   const appReady = createAppReady()

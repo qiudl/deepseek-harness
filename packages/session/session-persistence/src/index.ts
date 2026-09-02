@@ -13,7 +13,11 @@ import type { SessionPersistenceRevision } from './revision.ts'
 // Re-export the metadata vocabulary so Consumers import it from the Service Definition.
 export type { SessionHeader } from '@deepseek-ai/dsh-session'
 export { SessionPersistenceRevision } from './revision.ts'
-export { SessionPersistenceNotFoundError } from './errors.ts'
+export {
+  SessionFormatUnsupportedError,
+  SessionPersistenceNotFoundError,
+  sessionFormatVersionRefusal,
+} from './errors.ts'
 
 /** Lightweight immutable source identity returned without loading a full log. */
 export interface SessionPersistenceSnapshot {
@@ -67,9 +71,7 @@ export {
   DEFAULT_WRITE_BATCH_MAX_DELAY_MS,
   MAX_WRITE_BATCH_DELAY_MS,
   PersistenceCoordinator,
-  SessionFormatUnsupportedError,
   SessionPersistenceCorruptionError,
-  sessionFormatVersionRefusal,
 } from './coordinator.ts'
 export type {
   PersistenceBackend,

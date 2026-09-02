@@ -21,6 +21,9 @@
       "path": "../../core/session"
     },
     {
+      "path": "../../host/control-protocol"
+    },
+    {
       "path": "../session-persistence"
     },
     {

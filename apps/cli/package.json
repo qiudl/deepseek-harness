@@ -45,6 +45,7 @@
     "@deepseek-ai/dsh-launch-environment": "workspace:^",
     "@deepseek-ai/dsh-fs-local": "workspace:^",
     "@deepseek-ai/dsh-headless": "workspace:^",
+    "@deepseek-ai/dsh-desktop-host": "workspace:^",
     "@deepseek-ai/dsh-mcp-client": "workspace:^",
     "@deepseek-ai/dsh-home-paths": "workspace:^",
     "@deepseek-ai/dsh-hooks-claude-code": "workspace:^",

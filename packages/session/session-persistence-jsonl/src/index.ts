@@ -35,6 +35,30 @@ import {
 import { ensureDurableDirectoryWin32, publishNewFileWin32 } from './win32.ts'
 
 export type { JsonlCompression } from './format.ts'
+export {
+  JsonlMigrationExportService,
+  type MigrationExportChunk,
+  type MigrationExportReceipt,
+  type MigrationExportInventoryProof,
+  type MigrationExportSource,
+  type MigrationSemanticRecord,
+  type MigrationOwnerTransferBundle,
+  type MigrationOwnerStateBundle,
+  type MigrationOwnerStateKind,
+  migrationSemanticRecords,
+  migrationOwnerStateRecords,
+  migrationSourceInventoryDigest,
+} from './migration-export.ts'
+export { FileJsonlMigrationExportSource, SchemaAwareMigrationOwnerStateSource } from './migration-export-source.ts'
+export {
+  FileOwnerMigrationTransferStore,
+  FileOwnerMigrationImportJournal,
+  FileOwnerJsonlMigrationGenerationTarget,
+  MigrationImportCrashFault,
+  OwnerMigrationImportService,
+  type MigrationImportStage,
+  type MigrationImportTarget,
+} from './migration-import.ts'
 
 const DEFAULT_PACK_CHUNKS = true
 const DEFAULT_COMPRESSION: JsonlCompression = 'zstd'
