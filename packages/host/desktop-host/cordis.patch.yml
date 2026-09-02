@@ -1,0 +1,24 @@
+# Single-machine owner authority. The macOS embedding provisions all identity
+# and signing values; missing values fail during startup.
+
+- insert:
+    - id: desktop-host-startup
+      name: '@deepseek-ai/dsh-desktop-host/startup'
+      config:
+        root: !!js process.env.DSH_HOST_ROOT
+        registrationRoot: !!js process.env.DSH_HOST_REGISTRATION_ROOT
+        nodeExecutablePath: !!js process.env.DSH_HOST_NODE_EXECUTABLE ?? process.execPath
+        dshEntrypointPath: !!js process.env.DSH_HOST_DSH_ENTRYPOINT ?? process.argv[1]
+        deviceIndexKeyPath: !!js process.env.DSH_HOST_DEVICE_INDEX_KEY_PATH
+        installationPrivateKeyPath: !!js process.env.DSH_HOST_INSTALLATION_PRIVATE_KEY_PATH
+        installationPublicKey: !!js process.env.DSH_HOST_INSTALLATION_PUBLIC_KEY
+        installationId: !!js process.env.DSH_HOST_INSTALLATION_ID
+        endpointRegistrationId: !!js process.env.DSH_HOST_ENDPOINT_REGISTRATION_ID
+        hostInstanceId: !!js process.env.DSH_HOST_INSTANCE_ID
+        processNonce: !!js process.env.DSH_HOST_PROCESS_NONCE
+        executableSignatureDigest: !!js process.env.DSH_HOST_EXECUTABLE_DIGEST
+        desktopTeamIdentifiers: !!js JSON.parse(process.env.DSH_HOST_DESKTOP_TEAM_IDENTIFIERS ?? '[]')
+        desktopExecutableDigests: !!js JSON.parse(process.env.DSH_HOST_DESKTOP_EXECUTABLE_DIGESTS ?? '[]')
+        runtimeGeneration: !!js Number(process.env.DSH_HOST_RUNTIME_GENERATION)
+        schemaGeneration: !!js Number(process.env.DSH_HOST_SCHEMA_GENERATION)
+        legacySourceQuiescent: !!js process.env.DSH_HOST_LEGACY_SOURCE_QUIESCENT === '1'

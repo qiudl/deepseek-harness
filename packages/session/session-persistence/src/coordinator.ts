@@ -18,7 +18,11 @@ import {
 import type { Session, SessionEvent, SessionId, SessionHeader } from '@deepseek-ai/dsh-session'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import type { BorrowedSessionSource, SessionInspection, SessionLocation } from './index.ts'
-import { SessionPersistenceNotFoundError } from './errors.ts'
+import {
+  SessionFormatUnsupportedError,
+  SessionPersistenceNotFoundError,
+  sessionFormatVersionRefusal,
+} from './errors.ts'
 import type { SessionPersistenceRevision } from './revision.ts'
 import { observeQueuedAbort, SessionPreparations } from './preparations.ts'
 import type { SessionPreparationReservation } from './preparations.ts'
@@ -52,34 +56,6 @@ export class SessionPersistenceCorruptionError extends Error {
  * — nothing is damaged; the raw log remains readable at {@link location} when
  * the backend keeps one artifact per session.
  */
-export class SessionFormatUnsupportedError extends Error {
-  /**
-   * @param message - stable reason the log cannot be interpreted, already
-   *   including the raw-log path when one exists.
-   * @param location - the backend's artifact location, when one exists.
-   */
-  constructor(message: string, readonly location?: SessionLocation) {
-    super(message)
-    this.name = 'SessionFormatUnsupportedError'
-  }
-}
-
-/**
- * Direction-aware refusal text for a stored session whose format version this
- * build does not read. Shared by the coordinator's load-time check and by
- * backends that must refuse BEFORE decoding version-dependent structure (a
- * future format may not satisfy this build's structural checks at all, and the
- * user must see "upgrade the harness", never "corrupt").
- * @param id - the stored session id, for message context.
- * @param version - the stored format version.
- * @returns the stable refusal text, without a raw-log path suffix.
- */
-export function sessionFormatVersionRefusal(id: string, version: number): string {
-  return version > SESSION_FORMAT_VERSION
-    ? `session "${id}" uses log format v${version}, but this harness reads only v${SESSION_FORMAT_VERSION}: the log was written by a newer harness — upgrade the harness to open it`
-    : `session "${id}" uses log format v${version}, older than the supported v${SESSION_FORMAT_VERSION}, and this build ships no upgrade path for it`
-}
-
 /** Coordinator policy supplied by a concrete persistence backend. */
 export interface PersistenceCoordinatorOptions {
   /** Maximum completed unpublished preparations retained for reuse. */
