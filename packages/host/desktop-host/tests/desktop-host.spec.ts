@@ -29,6 +29,16 @@ const productionEnvironmentId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3182'
 const unlockMaterial = Buffer.alloc(32, 9).toString('base64url')
 const slarkIssuer = 'https://accounts.dsh.colorbuyai.com'
 
+function accountToken(issuer: string, subject: string): string {
+  return Buffer.from(JSON.stringify({ issuer, subject }), 'utf8').toString('base64url')
+}
+
+function verifyTestAccountToken(token: string): { issuer: string; subject: string } {
+  const value = JSON.parse(Buffer.from(token, 'base64url').toString('utf8')) as Record<string, unknown>
+  if (typeof value.issuer !== 'string' || typeof value.subject !== 'string') throw new Error('invalid token')
+  return { issuer: value.issuer, subject: value.subject }
+}
+
 describe('person profile registry', () => {
   it('persists only a device-keyed person index and Keychain handle', async () => {
     const root = dir()
@@ -148,6 +158,7 @@ describe('authenticated Unix transport', () => {
     })
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken,
       ensureProfileWorker: async () => undefined,
       activateProfileView: async () => ({ origin: 'http://127.0.0.1:4123', generation: 7, bootstrapCookie }),
     })
@@ -173,6 +184,7 @@ describe('authenticated Unix transport', () => {
     })
     await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
       accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
     })
     expect(await client.getProfileStatus({
@@ -193,6 +205,25 @@ describe('authenticated Unix transport', () => {
       client.closeViewLease(closeInput),
       client.closeViewLease(closeInput),
     ])
+    client.close()
+    await server.close()
+  })
+
+  it('reports an upgrade requirement locally before sending token-bearing ensure to an older Host', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const inspection = client.inspection as { capabilities: typeof client.inspection.capabilities }
+    inspection.capabilities = inspection.capabilities.filter(value => value !== 'profile.ensure_account_token')
+    await expect(client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'older-host-user', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'older-host-user'),
+      accountBindingHandle: 'binding:older-host', authorityBindingVersion: 1,
+      keyHandle: 'keychain:older-host', unlockMaterial,
+    })).rejects.toMatchObject({ code: 'upgrade_required' })
     client.close()
     await server.close()
   })
@@ -223,6 +254,7 @@ describe('authenticated Unix transport', () => {
     })
     await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
       accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
     })
     const opened = await client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1 })
@@ -252,6 +284,7 @@ describe('authenticated Unix transport', () => {
     })
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken,
       ensureProfileWorker: async (profile) => {
         unlocked.add(profile.keyHandle)
         if (!running.has(profile.profileId)) { running.add(profile.profileId); started.push(profile.profileId) }
@@ -272,24 +305,28 @@ describe('authenticated Unix transport', () => {
     })
     const first = await client.ensureAccountProfile({
       issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a', keyHandle: 'keychain:a',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
       authorityEnvironmentId: stagingEnvironmentId,
       authorityBindingVersion: 1,
       unlockMaterial,
     })
     const repeated = await client.ensureAccountProfile({
       issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a', keyHandle: 'keychain:a',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
       authorityEnvironmentId: stagingEnvironmentId,
       authorityBindingVersion: 1,
       unlockMaterial,
     })
     const production = await client.ensureAccountProfile({
       issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a:prod', keyHandle: 'keychain:a',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
       authorityEnvironmentId: productionEnvironmentId,
       authorityBindingVersion: 1,
       unlockMaterial,
     })
     const other = await client.ensureAccountProfile({
       issuer: 'https://account.deepseek.com', subject: 'person-b', accountBindingHandle: 'binding:b', keyHandle: 'keychain:b',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-b'),
       authorityEnvironmentId: stagingEnvironmentId,
       authorityBindingVersion: 1,
       unlockMaterial,
@@ -327,10 +364,12 @@ describe('authenticated Unix transport', () => {
     const production = await connect()
     await staging.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
       accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
     })
     await production.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: productionEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
       accountBindingHandle: 'binding:production', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
     })
     staging.close()
@@ -364,6 +403,7 @@ describe('authenticated Unix transport', () => {
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now })
     const profile = await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
       accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
     })
     const receipt = await client.beginMigrationExport({
@@ -379,6 +419,7 @@ describe('authenticated Unix transport', () => {
     expect(chunk).toMatchObject({ final: true, records: [{ collection: 'sessions', sequence: 0 }] })
     const other = await client.ensureAccountProfile({
       issuer: 'https://accounts.other.example', subject: 'user-two', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken('https://accounts.other.example', 'user-two'),
       accountBindingHandle: 'binding:other', authorityBindingVersion: 1, keyHandle: 'keychain:u2', unlockMaterial,
     })
     await expect(client.readMigrationExport({
@@ -410,6 +451,7 @@ describe('authenticated Unix transport', () => {
     })
     const profile = await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'legacy-user', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'legacy-user'),
       accountBindingHandle: 'binding:legacy', authorityBindingVersion: 1, keyHandle: 'keychain:legacy', unlockMaterial,
     })
     const proof = await client.getExistingMigrationSourceInventory({ targetProfileSelector: profile.profileSelector })
@@ -456,6 +498,7 @@ describe('authenticated Unix transport', () => {
     })
     const profile = await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
       accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
     })
     const staged = await client.stageMigrationImport({
@@ -629,15 +672,65 @@ describe('worker and Desktop-only bundle', () => {
   })
 
   it('keeps personal view leases Main-only and exposes no HTTP carrier', async () => {
+    const accountSubject = 'sensitive-account-subject-for-leak-check'
     const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 3), clock, keyHandleUnlocked: () => true })
-    await registry.registerAccount({ issuer: 'https://account.deepseek.com', subject: 'u1', keyHandle: 'keychain:u1', authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u1', authorityBindingVersion: 1, unlockMaterial })
-    const host = new DesktopHost({ registry, clock, runtimeGeneration: 5, ensureProfileWorker: async () => undefined })
-    await host.ensureAccountProfile({ issuer: 'https://account.deepseek.com', subject: 'u1', keyHandle: 'keychain:u1', authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u1', authorityBindingVersion: 1, unlockMaterial, ownerId: 'connection-1' })
-    const opened = await host.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u1', authorityBindingVersion: 1, ownerId: 'connection-1' })
+    await registry.registerAccount({
+      issuer: 'https://account.deepseek.com', subject: accountSubject, keyHandle: 'keychain:u1',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u1',
+      authorityBindingVersion: 1, unlockMaterial,
+    })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken, ensureProfileWorker: async () => undefined,
+    })
+    await host.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: accountSubject,
+      accountAccessToken: accountToken('https://account.deepseek.com', accountSubject), keyHandle: 'keychain:u1',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u1',
+      authorityBindingVersion: 1, unlockMaterial, ownerId: 'connection-1',
+    })
+    const opened = await host.openProfile({
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u1',
+      authorityBindingVersion: 1, ownerId: 'connection-1',
+    })
     expect(opened).toMatchObject({ runtimeGeneration: 5, leaseGeneration: 1 })
     expect(opened).not.toHaveProperty('url')
     expect(opened).not.toHaveProperty('token')
-    expect(JSON.stringify(opened)).not.toContain('u1')
+    expect(JSON.stringify(opened)).not.toContain(accountSubject)
+  })
+
+  it('rejects invalid or mismatched Account authority before Profile registry mutation', async () => {
+    const registry = new ProfileRegistry({
+      root: dir(), deviceIndexKey: Buffer.alloc(32, 3), clock, keyHandleUnlocked: () => true,
+    })
+    let workerStarts = 0
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: (value) => {
+        if (value === 'invalid') throw new Error('invalid token')
+        return verifyTestAccountToken(value)
+      },
+      ensureProfileWorker: async () => { workerStarts += 1 },
+    })
+    const input = {
+      issuer: slarkIssuer,
+      subject: 'person',
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:person',
+      authorityBindingVersion: 1,
+      keyHandle: 'keychain:person',
+      unlockMaterial,
+      ownerId: 'connection-person',
+    }
+    await expect(host.ensureAccountProfile({ ...input, accountAccessToken: 'invalid' }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(host.ensureAccountProfile({
+      ...input,
+      accountAccessToken: accountToken(slarkIssuer, 'different-person'),
+    })).rejects.toMatchObject({ code: 'profile_mismatch' })
+    await expect(registry.resolveAccount({ issuer: slarkIssuer, subject: 'person' })).resolves.toBeNull()
+    expect(registry.resolveBinding(stagingEnvironmentId, 'binding:person', 1)).toBeNull()
+    expect(workerStarts).toBe(0)
   })
 
   it('preserves locked instead of collapsing it into unbound', async () => {
@@ -655,10 +748,12 @@ describe('worker and Desktop-only bundle', () => {
     })
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken,
       ensureProfileWorker: async () => { throw new Error('worker failed') },
     })
     await expect(host.ensureAccountProfile({
       issuer: 'https://account.deepseek.com', subject: 'person', accountBindingHandle: 'binding:rollback', keyHandle: 'keychain:rollback',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person'),
       authorityEnvironmentId: stagingEnvironmentId,
       authorityBindingVersion: 1,
       unlockMaterial,

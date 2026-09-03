@@ -93,6 +93,16 @@ describe('Host control frame boundary', () => {
 describe('Main-only Profile operations', () => {
   const auth = '"client_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3111","host_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3120","process_nonce":"_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q","jti":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3130","issued_at":1000,"expires_at":2000'
 
+  it('round-trips both legacy and Account-token Profile ensure payloads for safe rolling upgrades', () => {
+    const prefix = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.ensure","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"binding:opaque","authority_binding_version":1,`
+    const suffix = '"account_issuer":"https://accounts.dsh.colorbuyai.com","account_subject":"person","profile_key_handle":"keychain:person","profile_unlock_material":"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk"}}\n'
+    const legacy = `${prefix}${suffix}`
+    const tokenBearing = `${prefix}"account_access_token":"header.payload.signature",${suffix}`
+    for (const source of [legacy, tokenBearing]) {
+      expect(encodeHostControlFrame(decodeHostControlFrame(source))).toBe(source)
+    }
+  })
+
   it('round-trips Profile status, open, activation, and lease close without secret fields', () => {
     const status = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.status","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"keychain-binding:opaque","authority_binding_version":1}}\n`
     const open = '{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"profile.open","result":{"profile_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3150","view_lease_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3151","view_activation_handle":"ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8","lease_generation":2,"expires_at":2000,"runtime_generation":5}}\n'

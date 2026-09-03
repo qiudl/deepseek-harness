@@ -360,11 +360,18 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       : { version: 1, type: 'request', request_id: requestId, method: 'profile.open', params: { ...common, authority_environment_id, account_binding_handle, authority_binding_version } }
   }
   if (frame.method === 'profile.ensure') {
-    exactKeys(params, [
+    const legacyKeys = [
       ...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'profile_key_handle',
       'profile_unlock_material',
-    ])
+    ]
+    const tokenKeys = [
+      ...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_access_token', 'account_issuer', 'account_subject', 'profile_key_handle',
+      'profile_unlock_material',
+    ]
+    const hasAccountAccessToken = Object.hasOwn(params, 'account_access_token')
+    exactKeys(params, hasAccountAccessToken ? tokenKeys : legacyKeys)
     return {
       version: 1, type: 'request', request_id: requestId, method: 'profile.ensure',
       params: {
@@ -372,6 +379,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
         account_binding_handle: opaqueHandle(params.account_binding_handle),
         authority_binding_version: generation(params.authority_binding_version),
+        ...(hasAccountAccessToken ? { account_access_token: boundedText(params.account_access_token, 8_192) } : {}),
         account_issuer: accountIssuer(params.account_issuer), account_subject: boundedText(params.account_subject, 512),
         profile_key_handle: boundedText(params.profile_key_handle, 512),
         profile_unlock_material: unlockMaterial(params.profile_unlock_material),
