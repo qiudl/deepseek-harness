@@ -213,6 +213,7 @@ const capabilities = [
   'host.inspect',
   'profile.lease_close',
   'profile.ensure',
+  'profile.ensure_account_token',
   'profile.open',
   'profile.restore',
   'profile.status',
@@ -311,6 +312,7 @@ function authorityCodeFromFrame(code: HostControlErrorCode): HostAuthorityErrorC
     case 'idempotency_conflict':
     case 'conflict':
     case 'busy':
+    case 'upgrade_required':
       return code
     default:
       return 'unavailable'
@@ -722,7 +724,9 @@ export class UnixHostServer {
             } })
           } catch (error) { channel.send(safeError(migrationImportCode(error), frame)) }
         } else if (frame.method === 'profile.ensure') {
+          if (!frame.params.account_access_token) throw new HostAuthorityError('upgrade_required')
           const profile = await this.options.host.ensureAccountProfile({
+            accountAccessToken: frame.params.account_access_token,
             issuer: frame.params.account_issuer, subject: frame.params.account_subject,
             authorityEnvironmentId: frame.params.authority_environment_id,
             accountBindingHandle: frame.params.account_binding_handle,
@@ -959,7 +963,7 @@ export class UnixHostClient {
 
   /**
    * Ensure one account Profile using Main-only identity and secure-store handles.
-   * @param input - account identity, binding, Keychain handle, and optional cancellation.
+   * @param input - Account token and identity, binding, Keychain handle, and optional cancellation.
    * @returns ready opaque Profile id.
    */
   async ensureAccountProfile(input: {
@@ -968,16 +972,21 @@ export class UnixHostClient {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
     readonly authorityBindingVersion: number
+    readonly accountAccessToken: string
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly signal?: AbortSignal
   }): Promise<{ readonly profileId: string; readonly profileSelector: string }> {
+    if (!this.inspection.capabilities.includes('profile.ensure_account_token' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
     const request: ProfileEnsureRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
       params: {
         ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
         account_binding_handle: input.accountBindingHandle as never,
         authority_binding_version: input.authorityBindingVersion,
+        account_access_token: input.accountAccessToken,
         account_issuer: input.issuer, account_subject: input.subject, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
       },

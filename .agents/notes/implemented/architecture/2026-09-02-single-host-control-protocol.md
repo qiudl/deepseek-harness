@@ -20,6 +20,8 @@ The challenge signature is not defined as “sign the response JSON.” `encodeH
 
 Later operation tasks extend the decoded payload union. They do not weaken the frame boundary or put transport, authorization, migration, or Host process state into this package.
 
+`profile.ensure` carries a short-lived ES256 access token issued by the canonical DSH Account authority for the `dsh-host` audience. The `profile.ensure_account_token` capability marks this payload revision. A new client refuses to send the revised payload to a Host without the capability, while a new Host still decodes the legacy payload and returns `upgrade_required` before registry access. The Host verifies the exact JWT shape and signature against an owner-private public keyring whose SHA-256 digest is pinned by the embedding release, then requires the verified issuer and subject to equal the Desktop-supplied account fields before it reads or mutates the Profile registry. The token is neither persisted nor logged.
+
 ## Defect-analysis iterations
 
 Round 1 found four defects: outbound values were not runtime-validated, base64url trailing bits were not canonicalized, the Desktop client id reused the Host identity brand, and version negotiation accepted only `[1]`. All four are covered by focused tests.
@@ -28,18 +30,26 @@ Round 2 found three protocol gaps: the signed preimage was undefined, a capabili
 
 Round 3 found no new package-owned defect. Transport buffering, peer credential checks, cryptographic verification, replay state, and operation payloads remain explicit consumer responsibilities and are named in the package limitations rather than partially implemented here.
 
+Round 4 found four Account-authority defects: token expiry could precede issuance, a required field silently changed the version-1 wire payload, a caller could construct a keyring without the exact parser, and the negative registry-mutation path was not directly observed. Ordered time bounds, the signed capability marker plus legacy `upgrade_required` response, parser-enforced verifier construction, and focused zero-mutation coverage close them.
+
+Round 5 found two reliability defects: direct parser callers had no keyring byte bound, and the startup subpath lacked a source alias even though the bundle patch loads it. The parser owns the same 16 KiB limit as startup, and `tsconfig.base.json` maps the startup export to source. Round 6 found no new defect in token validation, key pinning, rolling compatibility, authorization order, error mapping, or credential retention.
+
 ## Alternatives considered
 
 **Reuse the SDK JSON-RPC carrier.** It is an agent-runtime stdio protocol that skips malformed lines and does not own installation identity, so it cannot enforce connection-fatal local supervisor authentication.
 
 **Trust the socket path or the returned public key.** Either can be substituted by an untrusted local process. The broker instead requires registry-owned installation trust plus native evidence for the connected executable.
 
+**Let each Slark environment assert Account identity.** A staging or production assertion would make the environment an Account authority and could create different machine Profiles for one person. Both environments instead present the same canonical DSH Account credential to the one Host.
+
 ## Consequences
 
 The protocol deliberately rejects semantically equivalent JSON. This reduces parser differential and cross-language ambiguity, but every implementation must follow the committed golden vectors. A peer advertising a future version can still negotiate down by sending (for example) `[2,1]`; version-1 framing remains the compatibility bootstrap.
+
+Profile creation depends on a live DSH Account session long enough to obtain a valid Host-audience token. This prevents offline environment assertions from creating Profiles, at the cost of requiring Desktop to refresh an expired Account session before retrying `profile.ensure`.
 
 A decoder receives a complete string, so it can reject an oversized frame but cannot prevent the transport from first buffering it. The Unix-domain-socket carrier must enforce the byte cap incrementally and close on the first error. Invalid input without a trustworthy request id receives no error frame; the connection closes.
 
 ## Testing
 
-The focused suite starts from committed request, result, error, and signing-payload vectors and round-trips them byte-for-byte. Negative coverage pins extra and missing fields, whitespace, multiple frames, size overflow, forged outbound data, non-canonical base64url, missing baseline capability, reused identities, and future-client downgrade negotiation.
+The focused suite starts from committed request, result, error, and signing-payload vectors and round-trips them byte-for-byte. Negative coverage pins extra and missing fields, whitespace, multiple frames, size overflow, forged outbound data, non-canonical base64url, missing baseline capability, reused identities, future-client downgrade negotiation, malformed or expired Account tokens, and verified Account mismatch before registry mutation.

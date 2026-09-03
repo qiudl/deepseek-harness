@@ -23,6 +23,7 @@ export type HostAuthorityErrorCode =
   | 'replayed'
   | 'idempotency_conflict'
   | 'busy'
+  | 'upgrade_required'
   | 'unavailable'
 
 /** Typed failure that Desktop maps onto the Host control protocol vocabulary. */

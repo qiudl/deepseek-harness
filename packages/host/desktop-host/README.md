@@ -23,7 +23,7 @@ This package owns the machine-local DSH Host authority used by Desktop Main. It 
 
 ## Desktop adapter
 
-`UnixHostClient` exposes Profile ensure/restore/status/open/view-activation/close operations and owner-only migration operations. Every operation accepts an `AbortSignal`. Aborting destroys the authenticated connection, and the Host revokes every view lease and Profile unlock reference owned by that connection. Another staging or production connection that independently proved the same Profile remains authorized.
+`UnixHostClient` exposes Profile ensure/restore/status/open/view-activation/close operations and owner-only migration operations. The `profile.ensure_account_token` capability marks a Host that accepts the token-bearing `profile.ensure` payload; either peer reports `upgrade_required` before mutation when that capability is absent. `profile.ensure` requires a short-lived canonical DSH Account token with the `dsh-host` audience; the Host verifies it offline and requires its issuer and subject to match the requested account before any Profile registry mutation. Every operation accepts an `AbortSignal`. Aborting destroys the authenticated connection, and the Host revokes every view lease and Profile unlock reference owned by that connection. Another staging or production connection that independently proved the same Profile remains authorized.
 
 The connection starts with `host.inspect`: Desktop supplies a fresh challenge and verifies the installation Ed25519 signature, trusted installation id and key, peer UID, executable signature digest, Host process nonce, and runtime generation. Later frames repeat the client, Host, and process identities and carry a 30-second-bounded single-use JTI.
 
@@ -33,7 +33,7 @@ The Profile registry stores a device-keyed HMAC of canonical DSH Account issuer 
 
 `profile.ensure` returns a Host-signed opaque selector bound to the installation, Profile, binding generation, runtime generation, and schema generation. `profile.restore` accepts that selector, the exact Keychain handle, and fresh Main-vault material. Copying a selector to another installation, replaying it after a binding rotation, guessing a handle/material, or disconnecting the proving connection fails closed.
 
-The macOS startup composition validates owner-only non-symlink roots, starts exactly one Host, checks the Node executable and fixed DSH entrypoint independently, performs native peer PID/executable/code-signature attestation, and publishes the exact secret-free `~/.dsh/host/registration.v1.json` discovery record. Profile workers inherit no ambient environment. The Host verifies the child owns its reported loopback listener, exchanges its one-use launch token for a signed cookie, confirms unauthenticated `/` is 401 and authenticated `/` is 200, then discards the token.
+The macOS startup composition validates owner-only non-symlink roots, starts exactly one Host, checks the Node executable and fixed DSH entrypoint independently, verifies the Account public keyring against the embedding release's SHA-256 pin, performs native peer PID/executable/code-signature attestation, and publishes the exact secret-free `~/.dsh/host/registration.v1.json` discovery record. Profile workers inherit no ambient environment. The Host verifies the child owns its reported loopback listener, exchanges its one-use launch token for a signed cookie, confirms unauthenticated `/` is 401 and authenticated `/` is 200, then discards the token.
 
 Command writes serialize by Profile and Session, while different Sessions can proceed concurrently. The fsync-backed journal records `started` before execution and a committed outcome afterward; a crash between them recovers as `unknown`, never success. Approval decisions compare payload hash, decision version, window generation, and expiry. Environment context attaches to a Session lease and never becomes Profile-global state.
 
@@ -48,6 +48,7 @@ No direct invalidation; Host control facts do not enter model context.
 ## Known Limitations and Deferred Work
 
 - **Unlock material remains embedding-owned** — Slark Main must keep the random 32-byte Profile material in macOS Keychain/safeStorage and provide it only across the authenticated Main-to-Host path. It must never enter Renderer, argv, environment, logs, or the registration file.
+- **Account access remains session-bound** — Slark Main must obtain the `dsh-host` token from DSH Account and provide it only across the authenticated Main-to-Host path. The Host does not persist or log this credential; an expired token requires Slark Main to refresh the Account session before `profile.ensure` can succeed.
 - **Legacy migration is fail-closed until complete** — the Host advertises export only when the active Profile's complete owner-only bundle (sessions, settings, credentials, workspace and Profile configuration) can be staged. A digest-only or session-only transfer is not advertised as a safe migration.
 
 ### Dev Note

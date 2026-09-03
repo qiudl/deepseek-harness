@@ -1,9 +1,21 @@
-import { generateKeyPairSync } from 'node:crypto'
+import { createHash, generateKeyPairSync } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { startDesktopHostApplication, type Config } from '../src/startup.ts'
+
+function accountKeyring(root: string): { path: string; sha256: string } {
+  const keys = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+  const raw = `${JSON.stringify({
+    version: 2,
+    issuer: 'https://accounts.dsh.colorbuyai.com',
+    keys: [{ kid: 'test-key', publicJwk: keys.publicKey.export({ format: 'jwk' }) }],
+  })}\n`
+  const path = join(root, 'account-keyring.json')
+  writeFileSync(path, raw, { mode: 0o600 })
+  return { path, sha256: createHash('sha256').update(raw).digest('hex') }
+}
 
 describe.runIf(process.platform === 'darwin')('desktop Host application composition', () => {
   it('starts the supported owner app, refuses a second instance, and reaches quiescence', async () => {
@@ -16,10 +28,12 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
     const keys = generateKeyPairSync('ed25519')
     writeFileSync(deviceKey, Buffer.alloc(32, 7), { mode: 0o600 })
     writeFileSync(privateKey, keys.privateKey.export({ format: 'pem', type: 'pkcs8' }), { mode: 0o600 })
+    const accountKeys = accountKeyring(root)
     const publicKey = (keys.publicKey.export({ format: 'der', type: 'spki' }) as Buffer).subarray(-32).toString('base64url')
     const config: Config = {
       root, registrationRoot: join(legacyDshRoot, 'host'), nodeExecutablePath: privateKey,
       dshEntrypointPath: privateKey, deviceIndexKeyPath: deviceKey,
+      accountKeyringPath: accountKeys.path, accountKeyringSha256: accountKeys.sha256,
       installationPrivateKeyPath: privateKey, installationPublicKey: publicKey,
       installationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3121',
       endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3122',
@@ -70,10 +84,12 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
     const keys = generateKeyPairSync('ed25519')
     writeFileSync(deviceKey, Buffer.alloc(32, 7), { mode: 0o600 })
     writeFileSync(privateKey, keys.privateKey.export({ format: 'pem', type: 'pkcs8' }), { mode: 0o600 })
+    const accountKeys = accountKeyring(parent)
     const publicKey = (keys.publicKey.export({ format: 'der', type: 'spki' }) as Buffer).subarray(-32).toString('base64url')
     const config: Config = {
       root, registrationRoot: join(parent, 'registration'), nodeExecutablePath: privateKey,
       dshEntrypointPath: privateKey, deviceIndexKeyPath: deviceKey,
+      accountKeyringPath: accountKeys.path, accountKeyringSha256: accountKeys.sha256,
       installationPrivateKeyPath: privateKey, installationPublicKey: publicKey,
       installationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3121',
       endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3122',

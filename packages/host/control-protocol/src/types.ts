@@ -142,6 +142,7 @@ export interface ProfileEnsureRequest {
     readonly account_binding_handle: HostAccountBindingHandle
     readonly authority_environment_id: HostAuthorityEnvironmentId
     readonly authority_binding_version: number
+    readonly account_access_token?: string
     readonly account_issuer: string
     readonly account_subject: string
     readonly profile_key_handle: string

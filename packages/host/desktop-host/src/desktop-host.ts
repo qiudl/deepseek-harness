@@ -15,6 +15,7 @@ interface DesktopHostOptions {
   readonly registry: ProfileRegistry
   readonly clock: HostClock
   readonly runtimeGeneration: number
+  readonly verifyAccountAccessToken?: (token: string) => { readonly issuer: string; readonly subject: string }
   readonly viewLeaseTtlMs?: number
   readonly activateProfileView?: (profileId: PersonProfileId) => Promise<{
     readonly origin: string
@@ -79,7 +80,7 @@ export class DesktopHost {
 
   /**
    * Idempotently register one account Profile and start its isolated worker.
-   * @param input - Main-owned account identity plus opaque binding and Keychain handles.
+   * @param input - Main-owned Account token and identity plus opaque binding and Keychain handles.
    * @returns ready Profile id after both registry persistence and worker readiness.
    */
   async ensureAccountProfile(input: {
@@ -88,10 +89,18 @@ export class DesktopHost {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
     readonly authorityBindingVersion: number
+    readonly accountAccessToken: string
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly ownerId: string
   }): Promise<{ readonly profileId: PersonProfileId; readonly bindingGeneration: number }> {
+    const verifyAccountAccessToken = this.options.verifyAccountAccessToken
+    if (!verifyAccountAccessToken) throw new HostAuthorityError('unavailable')
+    let account: { readonly issuer: string; readonly subject: string }
+    try { account = verifyAccountAccessToken(input.accountAccessToken) } catch { throw new HostAuthorityError('unauthorized') }
+    if (account.issuer !== input.issuer || account.subject !== input.subject) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
     const existing = await this.options.registry.resolveAccount(input)
     const profile = await this.options.registry.registerAccount({
       issuer: input.issuer, subject: input.subject, accountBindingHandle: input.accountBindingHandle,

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync,
 } from 'node:fs'
@@ -20,6 +20,7 @@ import {
   FileJsonlMigrationExportSource,
 } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export-source.ts'
 import { DesktopHost } from './desktop-host.ts'
+import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'
 import { DshWebProfileWorkerFactory } from './dsh-web-profile-worker.ts'
 import { createLegacyMigrationExportService } from './legacy-migration-source.ts'
@@ -67,6 +68,8 @@ export interface Config {
   readonly nodeExecutablePath: string
   readonly dshEntrypointPath: string
   readonly deviceIndexKeyPath: string
+  readonly accountKeyringPath: string
+  readonly accountKeyringSha256: string
   readonly installationPrivateKeyPath: string
   readonly installationPublicKey: string
   readonly installationId: string
@@ -88,6 +91,8 @@ export const Config: z<Config> = z.object({
   nodeExecutablePath: z.string().required(),
   dshEntrypointPath: z.string().required(),
   deviceIndexKeyPath: z.string().required(),
+  accountKeyringPath: z.string().required(),
+  accountKeyringSha256: z.string().required(),
   installationPrivateKeyPath: z.string().required(),
   installationPublicKey: z.string().required(),
   installationId: z.string().required(),
@@ -121,6 +126,16 @@ function ownerFile(path: string, expectedBytes?: number): Buffer {
       || (expectedBytes !== undefined && stat.size !== expectedBytes)) throw new HostAuthorityError('unavailable')
     return readFileSync(fd)
   } finally { closeSync(fd) }
+}
+
+function pinnedOwnerFile(path: string, expectedSha256: string): Buffer {
+  if (!/^[a-f0-9]{64}$/u.test(expectedSha256)) throw new HostAuthorityError('invalid_input')
+  const contents = ownerFile(path)
+  if (contents.length < 1 || contents.length > 16 * 1024
+    || createHash('sha256').update(contents).digest('hex') !== expectedSha256) {
+    throw new HostAuthorityError('unavailable')
+  }
+  return contents
 }
 
 function executableArtifact(path: string, uid: number): void {
@@ -222,6 +237,10 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
     const registry = new ProfileRegistry({
       root: join(root, 'registry'), deviceIndexKey: ownerFile(config.deviceIndexKeyPath, 32), clock,
     })
+    const accountAccessVerifier = new DshAccountAccessTokenVerifier(
+      pinnedOwnerFile(config.accountKeyringPath, config.accountKeyringSha256).toString('utf8'),
+      { now: () => clock.now() },
+    )
     const migrationRoot = join(root, 'migration')
     ownerDirectory(migrationRoot, uid)
     const transferStore = new FileOwnerMigrationTransferStore(join(migrationRoot, 'transfers'), uid)
@@ -285,6 +304,7 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
     }
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
+      verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
       activateProfileView: profileId => workers.activate(profileId),
       ensureProfileWorker: ensureWorker,
     })
