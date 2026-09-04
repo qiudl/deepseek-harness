@@ -322,6 +322,7 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
         installationPrivateKey: ownerFile(config.installationPrivateKeyPath),
         processNonce: config.processNonce, executableSignatureDigest: config.executableSignatureDigest,
         runtimeGeneration: config.runtimeGeneration, schemaGeneration: config.schemaGeneration,
+        hostGeneration: ownership.hostGeneration,
       },
       host,
       profilePersistenceGeneration: async profileId => (await targetFor(profileId).activePersistenceConfig()).generation,

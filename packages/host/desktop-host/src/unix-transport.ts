@@ -16,6 +16,8 @@ import type {
   HostInspectRequest,
   HostInspectResult,
   HostAuthorizedParams,
+  HostSessionAttachRequest,
+  HostSessionDetachRequest,
   HostInstanceId,
   InstallationId,
   ProfileLeaseCloseRequest,
@@ -60,6 +62,7 @@ interface HostIdentity {
   readonly executableSignatureDigest: string
   readonly runtimeGeneration: number
   readonly schemaGeneration: number
+  readonly hostGeneration: number
 }
 
 /** Server configuration for the owner-only Unix socket. */
@@ -206,6 +209,7 @@ export type UnixHostDiscovery =
 interface HandshakeState {
   readonly clientInstanceId: HostControlClientInstanceId
   readonly hostInstanceId: HostInstanceId
+  readonly hostGeneration: number
   readonly processNonce: HostControlNonce
 }
 
@@ -218,6 +222,8 @@ const capabilities = [
   'profile.restore',
   'profile.status',
   'profile.view_activate',
+  'session.attach',
+  'session.detach',
 ] as const satisfies readonly string[]
 
 function nonce(): HostControlNonce { return randomBytes(32).toString('base64url') as HostControlNonce }
@@ -424,6 +430,7 @@ export class HostRequestAuthorizer {
     const current = this.now()
     for (const [jti, expiry] of this.consumed) if (expiry <= current) this.consumed.delete(jti)
     if (params.client_instance_id !== this.state.clientInstanceId || params.host_instance_id !== this.state.hostInstanceId
+      || params.host_generation !== this.state.hostGeneration
       || params.process_nonce !== this.state.processNonce) throw new HostAuthorityError('stale')
     if (params.issued_at >= params.expires_at || params.issued_at > current + 5_000 || params.issued_at < current - 30_000
       || params.expires_at <= current || params.expires_at - params.issued_at > 30_000) {
@@ -439,11 +446,78 @@ export class UnixHostServer {
   private server: Server | undefined
   private socketIdentity?: { dev: number; ino: number }
   private readonly connections = new Set<Socket>()
+  private readonly sessions = new Map<string, {
+    readonly environmentId: string
+    readonly sessionGeneration: number
+    readonly permissionEpoch: number
+  }>()
+  private readonly detachedSessions = new Map<string, {
+    readonly environmentId: string
+    readonly sessionGeneration: number
+    readonly activeSessions: number
+  }>()
+  private readonly environmentPermissionEpochs = new Map<string, number>()
   constructor(private readonly options: UnixHostServerOptions) {}
+
+  private attachSession(ownerId: string, request: HostSessionAttachRequest): number {
+    this.options.ownership.assertOwner()
+    const input = request.params
+    if (input.client_protocol !== 1) throw new HostAuthorityError('upgrade_required')
+    if (input.profile_format_generation !== this.options.identity.schemaGeneration) throw new HostAuthorityError('stale')
+    const current = this.sessions.get(ownerId)
+    const detached = this.detachedSessions.get(ownerId)
+    const environmentPermissionEpoch = this.environmentPermissionEpochs.get(input.authority_environment_id)
+    if (environmentPermissionEpoch !== undefined && input.permission_epoch < environmentPermissionEpoch) {
+      throw new HostAuthorityError('stale')
+    }
+    if (!current && detached && (detached.environmentId !== input.authority_environment_id
+      || input.session_generation <= detached.sessionGeneration)) throw new HostAuthorityError('stale')
+    if (current) {
+      if (current.environmentId !== input.authority_environment_id
+        || input.session_generation < current.sessionGeneration
+        || input.permission_epoch < current.permissionEpoch) throw new HostAuthorityError('stale')
+      if (input.session_generation === current.sessionGeneration
+        && input.permission_epoch !== current.permissionEpoch) throw new HostAuthorityError('conflict')
+    }
+    this.sessions.set(ownerId, {
+      environmentId: input.authority_environment_id,
+      sessionGeneration: input.session_generation,
+      permissionEpoch: input.permission_epoch,
+    })
+    if (environmentPermissionEpoch === undefined || input.permission_epoch > environmentPermissionEpoch) {
+      this.environmentPermissionEpochs.set(input.authority_environment_id, input.permission_epoch)
+    }
+    this.detachedSessions.delete(ownerId)
+    return this.sessions.size
+  }
+
+  private detachSession(ownerId: string, request: HostSessionDetachRequest): number {
+    this.options.ownership.assertOwner()
+    const current = this.sessions.get(ownerId)
+    if (!current) {
+      const detached = this.detachedSessions.get(ownerId)
+      if (detached?.environmentId === request.params.authority_environment_id
+        && detached.sessionGeneration === request.params.session_generation) return detached.activeSessions
+      throw new HostAuthorityError('stale')
+    }
+    if (current.environmentId !== request.params.authority_environment_id
+      || current.sessionGeneration !== request.params.session_generation) throw new HostAuthorityError('stale')
+    this.sessions.delete(ownerId)
+    const activeSessions = this.sessions.size
+    this.detachedSessions.set(ownerId, {
+      environmentId: current.environmentId,
+      sessionGeneration: current.sessionGeneration,
+      activeSessions,
+    })
+    return activeSessions
+  }
 
   /** Bind the UDS path after refusing link/regular-file substitution. */
   async start(): Promise<void> {
     if (this.server) throw new HostAuthorityError('conflict')
+    if (this.options.identity.hostGeneration !== this.options.ownership.hostGeneration) {
+      throw new HostAuthorityError('stale')
+    }
     this.options.ownership.assertOwner()
     try {
       const stat = lstatSync(this.options.socketPath)
@@ -498,6 +572,8 @@ export class UnixHostServer {
     socket.once('close', () => {
       lifetime.abort()
       this.connections.delete(socket)
+      this.sessions.delete(ownerId)
+      this.detachedSessions.delete(ownerId)
       this.options.host.revokeOwner(ownerId)
     })
     socket.pause()
@@ -568,6 +644,7 @@ export class UnixHostServer {
         authorizer = new HostRequestAuthorizer({
           clientInstanceId: frame.params.client_instance_id,
           hostInstanceId: response.result.host_instance_id,
+          hostGeneration: response.result.host_generation,
           processNonce: response.result.process_nonce,
         }, this.options.now ?? Date.now)
         channel.send(response)
@@ -577,7 +654,31 @@ export class UnixHostServer {
       if (!authorizer) { socket.destroy(); return }
       try {
         authorizer.authorize(frame.params)
-        if (frame.method === 'migration.existing_source.inventory') {
+        if (frame.method !== 'session.attach' && frame.method !== 'session.detach'
+          && !this.sessions.has(ownerId)) throw new HostAuthorityError('upgrade_required')
+        const attachedSession = this.sessions.get(ownerId)
+        if (frame.method !== 'session.attach' && frame.method !== 'session.detach'
+          && attachedSession && attachedSession.permissionEpoch
+          !== this.environmentPermissionEpochs.get(attachedSession.environmentId)) {
+          throw new HostAuthorityError('stale')
+        }
+        if ('authority_environment_id' in frame.params && attachedSession
+          && frame.params.authority_environment_id !== attachedSession.environmentId) {
+          throw new HostAuthorityError('unauthorized')
+        }
+        if (frame.method === 'session.attach') {
+          const activeSessions = this.attachSession(ownerId, frame)
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: 'session.attach',
+            result: { attached: true, host_generation: this.options.identity.hostGeneration, active_sessions: activeSessions },
+          })
+        } else if (frame.method === 'session.detach') {
+          const activeSessions = this.detachSession(ownerId, frame)
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: 'session.detach',
+            result: { detached: true, host_generation: this.options.identity.hostGeneration, active_sessions: activeSessions },
+          })
+        } else if (frame.method === 'migration.existing_source.inventory') {
           try {
             const decoded = verifyProfileSelector(this.options.identity, frame.params.target_profile_selector)
             const profileId = this.options.host.authorizeMigrationProfileSelector({
@@ -842,6 +943,7 @@ export class UnixHostServer {
         installation_public_key: identity.installationPublicKey as HostControlPublicKey,
         runtime_generation: identity.runtimeGeneration,
         schema_generation: identity.schemaGeneration,
+        host_generation: identity.hostGeneration,
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
@@ -927,8 +1029,59 @@ export class UnixHostClient {
     return new UnixHostClient(channel, {
       clientInstanceId,
       hostInstanceId: frame.result.host_instance_id,
+      hostGeneration: frame.result.host_generation,
       processNonce: frame.result.process_nonce,
     }, options.now ?? Date.now, frame.result)
+  }
+
+  /** Attach this authenticated connection as one environment Session. */
+  async attachEnvironmentSession(input: {
+    readonly authorityEnvironmentId: string
+    readonly sessionGeneration: number
+    readonly permissionEpoch: number
+    readonly clientProtocol: number
+    readonly profileFormatGeneration: number
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly hostGeneration: number; readonly activeSessions: number }> {
+    if (!this.inspection.capabilities.includes('session.attach' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: HostSessionAttachRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'session.attach',
+      params: {
+        ...this.auth(),
+        authority_environment_id: input.authorityEnvironmentId as never,
+        session_generation: input.sessionGeneration,
+        permission_epoch: input.permissionEpoch,
+        client_protocol: input.clientProtocol,
+        profile_format_generation: input.profileFormatGeneration,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { hostGeneration: frame.result.host_generation, activeSessions: frame.result.active_sessions }
+  }
+
+  /** Detach this connection's exact Session and report remaining active Sessions. */
+  async detachEnvironmentSession(input: {
+    readonly authorityEnvironmentId: string
+    readonly sessionGeneration: number
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly hostGeneration: number; readonly activeSessions: number }> {
+    if (!this.inspection.capabilities.includes('session.detach' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: HostSessionDetachRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'session.detach',
+      params: {
+        ...this.auth(),
+        authority_environment_id: input.authorityEnvironmentId as never,
+        session_generation: input.sessionGeneration,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { hostGeneration: frame.result.host_generation, activeSessions: frame.result.active_sessions }
   }
 
   /**
@@ -1402,12 +1555,13 @@ export class UnixHostClient {
 
   private auth(): Pick<
     ProfileStatusRequest['params'],
-    'client_instance_id' | 'host_instance_id' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'
+    'client_instance_id' | 'host_instance_id' | 'host_generation' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'
   > {
     const issuedAt = this.now()
     return {
       client_instance_id: this.state.clientInstanceId,
       host_instance_id: this.state.hostInstanceId,
+      host_generation: this.state.hostGeneration,
       process_nonce: this.state.processNonce,
       jti: randomUUID() as HostControlJti,
       issued_at: issuedAt,
@@ -1417,6 +1571,7 @@ export class UnixHostClient {
 
   private async call(
     request: ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
+      | HostSessionAttachRequest | HostSessionDetachRequest
       | ProfileOpenRequest | ProfileViewActivateRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest

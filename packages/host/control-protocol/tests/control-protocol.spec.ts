@@ -91,7 +91,7 @@ describe('Host control frame boundary', () => {
 })
 
 describe('Main-only Profile operations', () => {
-  const auth = '"client_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3111","host_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3120","process_nonce":"_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q","jti":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3130","issued_at":1000,"expires_at":2000'
+  const auth = '"client_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3111","host_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3120","host_generation":9,"process_nonce":"_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q","jti":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3130","issued_at":1000,"expires_at":2000'
 
   it('round-trips both legacy and Account-token Profile ensure payloads for safe rolling upgrades', () => {
     const prefix = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.ensure","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"binding:opaque","authority_binding_version":1,`
@@ -115,6 +115,16 @@ describe('Main-only Profile operations', () => {
     }
   })
 
+  it('round-trips exact environment Session attach and detach generations', () => {
+    const attach = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"session.attach","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","session_generation":7,"permission_epoch":9,"client_protocol":1,"profile_format_generation":3}}\n`
+    const attached = '{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"session.attach","result":{"attached":true,"host_generation":9,"active_sessions":2}}\n'
+    const detach = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"session.detach","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","session_generation":7}}\n`
+    const detached = '{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"session.detach","result":{"detached":true,"host_generation":9,"active_sessions":1}}\n'
+    for (const source of [attach, attached, detach, detached]) {
+      expect(encodeHostControlFrame(decodeHostControlFrame(source))).toBe(source)
+    }
+  })
+
   it('rejects reordered auth fields and lease results carrying a URL', () => {
     const reordered = '{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.status","params":{"host_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3120","client_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3111","process_nonce":"_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q","jti":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3130","issued_at":1000,"expires_at":2000,"account_binding_handle":"binding"}}\n'
     const leaked = '{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"profile.open","result":{"profile_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3150","view_lease_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3151","lease_generation":2,"expires_at":2000,"runtime_generation":5,"url":"http://127.0.0.1"}}\n'
@@ -135,7 +145,7 @@ describe('cross-repository migration digest vector', () => {
 })
 
 describe('owner-only migration import lifecycle', () => {
-  const auth = '"client_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3111","host_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3120","process_nonce":"_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q","jti":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3130","issued_at":1000,"expires_at":2000'
+  const auth = '"client_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3111","host_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3120","host_generation":9,"process_nonce":"_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q","jti":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3130","issued_at":1000,"expires_at":2000'
 
   it('requires the signed source Profile selector on export begin and read', () => {
     const selector = `${'A'.repeat(32)}.${'A'.repeat(86)}`

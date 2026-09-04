@@ -140,6 +140,7 @@ describe('authenticated Unix transport', () => {
     executableSignatureDigest: executableDigest,
     runtimeGeneration: 5,
     schemaGeneration: 1,
+    hostGeneration: 1,
   }
 
   async function fixture(
@@ -175,6 +176,24 @@ describe('authenticated Unix transport', () => {
     return { server, host, socketPath }
   }
 
+  async function attach(client: UnixHostClient, environmentId = stagingEnvironmentId): Promise<void> {
+    await client.attachEnvironmentSession({
+      authorityEnvironmentId: environmentId,
+      sessionGeneration: 1,
+      permissionEpoch: 1,
+      clientProtocol: 1,
+      profileFormatGeneration: identity.schemaGeneration,
+    })
+  }
+
+  function connectClient(socketPath: string): Promise<UnixHostClient> {
+    return UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+  }
+
   it('verifies UID, installation key, executable digest, and serves the exact Desktop adapter', async () => {
     const { server, socketPath } = await fixture()
     const client = await UnixHostClient.connect({
@@ -182,6 +201,7 @@ describe('authenticated Unix transport', () => {
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     })
+    await attach(client)
     await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
       accountAccessToken: accountToken(slarkIssuer, 'u1'),
@@ -252,6 +272,7 @@ describe('authenticated Unix transport', () => {
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     })
+    await attach(client)
     await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
       accountAccessToken: accountToken(slarkIssuer, 'u1'),
@@ -303,6 +324,7 @@ describe('authenticated Unix transport', () => {
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     })
+    await attach(client)
     const first = await client.ensureAccountProfile({
       issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a', keyHandle: 'keychain:a',
       accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
@@ -317,7 +339,13 @@ describe('authenticated Unix transport', () => {
       authorityBindingVersion: 1,
       unlockMaterial,
     })
-    const production = await client.ensureAccountProfile({
+    const productionClient = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    await attach(productionClient, productionEnvironmentId)
+    const production = await productionClient.ensureAccountProfile({
       issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a:prod', keyHandle: 'keychain:a',
       accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
       authorityEnvironmentId: productionEnvironmentId,
@@ -338,30 +366,34 @@ describe('authenticated Unix transport', () => {
     expect(started).toEqual([first.profileId, other.profileId])
     await expect(client.restoreProfile({ profileSelector: first.profileSelector, keyHandle: 'keychain:a', unlockMaterial }))
       .rejects.toMatchObject({ code: 'stale' })
-    await expect(client.restoreProfile({ profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial }))
+    await expect(productionClient.restoreProfile({ profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial }))
       .resolves.toMatchObject({ profileId: first.profileId })
-    await expect(client.restoreProfile({ profileSelector: production.profileSelector, keyHandle: 'keychain:attacker', unlockMaterial }))
+    await expect(productionClient.restoreProfile({ profileSelector: production.profileSelector, keyHandle: 'keychain:attacker', unlockMaterial }))
       .rejects.toMatchObject({ code: 'unauthorized' })
-    await expect(client.restoreProfile({
+    await expect(productionClient.restoreProfile({
       profileSelector: production.profileSelector,
       keyHandle: 'keychain:a', unlockMaterial: Buffer.alloc(32, 8).toString('base64url'),
     })).rejects.toMatchObject({ code: 'unauthorized' })
     await expect(client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1 }))
       .resolves.toMatchObject({ profileId: first.profileId })
-    await expect(client.openProfile({ authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1 }))
+    await expect(productionClient.openProfile({ authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1 }))
       .resolves.toMatchObject({ profileId: first.profileId })
-    client.close(); await server.close()
+    client.close(); productionClient.close(); await server.close()
   })
 
   it('revokes only the disconnected connection unlock while another environment remains unlocked', async () => {
     const { server, socketPath } = await fixture()
-    const connect = () => UnixHostClient.connect({
-      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
-      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
-      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
-    })
-    const staging = await connect()
-    const production = await connect()
+    const connect = async (environmentId: string) => {
+      const client = await UnixHostClient.connect({
+        socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+        trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+        attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+      })
+      await attach(client, environmentId)
+      return client
+    }
+    const staging = await connect(stagingEnvironmentId)
+    const production = await connect(productionEnvironmentId)
     await staging.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
       accountAccessToken: accountToken(slarkIssuer, 'u1'),
@@ -374,7 +406,7 @@ describe('authenticated Unix transport', () => {
     })
     staging.close()
     await new Promise<void>(resolve => setImmediate(resolve))
-    const replacement = await connect()
+    const replacement = await connect(stagingEnvironmentId)
     await expect(replacement.getProfileStatus({
       authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
     })).resolves.toEqual({ state: 'locked' })
@@ -383,6 +415,75 @@ describe('authenticated Unix transport', () => {
       accountBindingHandle: 'binding:production', authorityBindingVersion: 1,
     })).resolves.toMatchObject({ state: 'ready' })
     replacement.close(); production.close(); await server.close()
+  })
+
+  it('keeps production and staging Sessions on one Host and detaches by exact generation', async () => {
+    const { server, socketPath } = await fixture()
+    const staging = await connectClient(socketPath)
+    const production = await connectClient(socketPath)
+    const stagingSession = {
+      authorityEnvironmentId: stagingEnvironmentId,
+      sessionGeneration: 7,
+      permissionEpoch: 7,
+      clientProtocol: 1,
+      profileFormatGeneration: identity.schemaGeneration,
+    }
+    expect(await staging.attachEnvironmentSession(stagingSession)).toEqual({ hostGeneration: 1, activeSessions: 1 })
+    expect(await staging.attachEnvironmentSession(stagingSession)).toEqual({ hostGeneration: 1, activeSessions: 1 })
+    expect(await production.attachEnvironmentSession({
+      ...stagingSession, authorityEnvironmentId: productionEnvironmentId,
+    })).toEqual({ hostGeneration: 1, activeSessions: 2 })
+    await expect(staging.attachEnvironmentSession({ ...stagingSession, permissionEpoch: 8 }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    await expect(staging.detachEnvironmentSession({
+      authorityEnvironmentId: stagingEnvironmentId, sessionGeneration: 6,
+    })).rejects.toMatchObject({ code: 'stale' })
+    const detached = await staging.detachEnvironmentSession({
+      authorityEnvironmentId: stagingEnvironmentId, sessionGeneration: 7,
+    })
+    expect(detached).toEqual({ hostGeneration: 1, activeSessions: 1 })
+    expect(await staging.detachEnvironmentSession({
+      authorityEnvironmentId: stagingEnvironmentId, sessionGeneration: 7,
+    })).toEqual(detached)
+    await expect(staging.attachEnvironmentSession(stagingSession)).rejects.toMatchObject({ code: 'stale' })
+    expect(await staging.attachEnvironmentSession({ ...stagingSession, sessionGeneration: 8, permissionEpoch: 8 }))
+      .toEqual({ hostGeneration: 1, activeSessions: 2 })
+    expect(await staging.detachEnvironmentSession({
+      authorityEnvironmentId: stagingEnvironmentId, sessionGeneration: 8,
+    })).toEqual({ hostGeneration: 1, activeSessions: 1 })
+    staging.close()
+    expect(await production.detachEnvironmentSession({
+      authorityEnvironmentId: productionEnvironmentId, sessionGeneration: 7,
+    })).toEqual({ hostGeneration: 1, activeSessions: 0 })
+    production.close(); await server.close()
+  })
+
+  it('fences an older connection when the environment permission epoch advances', async () => {
+    const { server, socketPath } = await fixture()
+    const oldClient = await connectClient(socketPath)
+    const newClient = await connectClient(socketPath)
+    const session = {
+      authorityEnvironmentId: stagingEnvironmentId,
+      sessionGeneration: 1,
+      permissionEpoch: 7,
+      clientProtocol: 1,
+      profileFormatGeneration: identity.schemaGeneration,
+    }
+    await oldClient.attachEnvironmentSession(session)
+    await newClient.attachEnvironmentSession({ ...session, permissionEpoch: 8 })
+    await expect(oldClient.getProfileStatus({
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:opaque',
+      authorityBindingVersion: 1,
+    })).rejects.toMatchObject({ code: 'stale' })
+    await expect(oldClient.attachEnvironmentSession({ ...session, sessionGeneration: 2 }))
+      .rejects.toMatchObject({ code: 'stale' })
+    await expect(newClient.getProfileStatus({
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:opaque',
+      authorityBindingVersion: 1,
+    })).resolves.toMatchObject({ state: 'locked' })
+    oldClient.close(); newClient.close(); await server.close()
   })
 
   it('carries owner-bound semantic migration receipts and chunks', async () => {
@@ -401,6 +502,7 @@ describe('authenticated Unix transport', () => {
     const client = await UnixHostClient.connect({ socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now })
+    await attach(client)
     const profile = await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
       accountAccessToken: accountToken(slarkIssuer, 'u1'),
@@ -449,6 +551,7 @@ describe('authenticated Unix transport', () => {
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: () => now,
     })
+    await attach(client)
     const profile = await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'legacy-user', authorityEnvironmentId: stagingEnvironmentId,
       accountAccessToken: accountToken(slarkIssuer, 'legacy-user'),
@@ -496,6 +599,7 @@ describe('authenticated Unix transport', () => {
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     })
+    await attach(client)
     const profile = await client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
       accountAccessToken: accountToken(slarkIssuer, 'u1'),
@@ -543,11 +647,13 @@ describe('authenticated Unix transport', () => {
     const state = {
       clientInstanceId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3111' as never,
       hostInstanceId: identity.hostInstanceId as never,
+      hostGeneration: identity.hostGeneration,
       processNonce: identity.processNonce as never,
     }
     const authority = new HostRequestAuthorizer(state, clock.now)
     const params = {
       client_instance_id: state.clientInstanceId, host_instance_id: state.hostInstanceId,
+      host_generation: state.hostGeneration,
       process_nonce: state.processNonce, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190' as never,
       issued_at: 1_000, expires_at: 2_000,
     }
@@ -568,6 +674,7 @@ describe('single Host ownership', () => {
   it('admits one owner and refuses a live competing owner', async () => {
     const root = dir()
     const first = await acquireSingleHostLock({ root, pid: 111, uid: 501, processNonce: 'nonce-a-0123456789', isProcessAlive: pid => pid === 111 })
+    expect(first.hostGeneration).toBe(1)
     await expect(acquireSingleHostLock({ root, pid: 222, uid: 501, processNonce: 'nonce-b-0123456789', isProcessAlive: pid => pid === 111 }))
       .rejects.toMatchObject({ code: 'conflict' })
     await first.release()
@@ -575,8 +682,10 @@ describe('single Host ownership', () => {
 
   it('recovers a stale regular lock but refuses a symlink-shaped lock', async () => {
     const root = dir()
-    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 111, uid: 501, processNonce: 'old', ownerId: 'stale-owner' }), { mode: 0o600 })
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 111, uid: 501, processNonce: 'old', ownerId: 'stale-owner', hostGeneration: 1 }), { mode: 0o600 })
+    writeFileSync(join(root, 'host-generation'), '1\n', { mode: 0o600 })
     const owner = await acquireSingleHostLock({ root, pid: 222, uid: 501, processNonce: 'new-0123456789abcdef', isProcessAlive: () => false })
+    expect(owner.hostGeneration).toBe(2)
     await owner.release()
     symlinkSync(join(root, 'missing-target'), join(root, 'host.lock'))
     await expect(acquireSingleHostLock({ root, pid: 333, uid: 501, processNonce: 'newer-0123456789abcdef', isProcessAlive: () => false }))
@@ -589,7 +698,7 @@ describe('single Host ownership', () => {
       .rejects.toMatchObject({ code: 'invalid_input' })
     const owner = await acquireSingleHostLock({ root, pid: 123, uid: 501, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
     unlinkSync(join(root, 'host.lock'))
-    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid: 501, processNonce: 'attacker-0123456789', ownerId: 'attacker' }), { mode: 0o600 })
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid: 501, processNonce: 'attacker-0123456789', ownerId: 'attacker', hostGeneration: 2 }), { mode: 0o600 })
     await expect(owner.release()).rejects.toBeInstanceOf(HostAuthorityError)
   })
 })

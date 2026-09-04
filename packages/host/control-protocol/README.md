@@ -34,7 +34,9 @@ The transport is not JSON-RPC. A malformed line is a connection-fatal protocol v
 
 `encodeHostInspectSignaturePayload(request, response)` returns the exact UTF-8 bytes signed with the installation Ed25519 key. The domain-separated statement binds the request id, Desktop client id, challenge, selected version, Host and installation ids, installation public key, generations, process nonce, capabilities, and executable digest.
 
-The public key in an answer is not trust by itself. The Desktop broker must match it to its authenticated installation record and independently compare the peer executable's code-signing digest before accepting the signature. A migration flow may establish that record only through its explicit consent and verification policy; ordinary connection must never silently trust a new key.
+The signed response includes the durable, positive Host generation allocated for the current process. Every authorized request repeats that generation, so a request authenticated against an earlier Host process cannot cross a restart boundary. The public key in an answer is not trust by itself. The Desktop broker must match it to its authenticated installation record and independently compare the peer executable's code-signing digest before accepting the signature. A migration flow may establish that record only through its explicit consent and verification policy; ordinary connection must never silently trust a new key.
+
+`session.attach` binds one authenticated connection to one authority environment, a monotonically increasing Session generation, a non-decreasing permission epoch, client protocol version 1, and the Host's exact Profile format generation. An exact repeat is idempotent; conflicting or stale values fail closed. Advancing an environment's permission epoch fences its older connected Sessions before their next operation. `session.detach` requires the exact active generation and returns the installation-wide active Session count. Once detached, the same generation cannot attach again. Other operations require an attached Session, and any environment carried by an operation must equal the connection's attached environment.
 
 ## API
 
@@ -65,6 +67,6 @@ No direct invalidation; the protocol never contributes model context.
 
 ## Known Limitations and Deferred Work
 
-- **Operation set is bounded** — version 1 decodes `host.inspect`, Profile open/status/lease-close, migration export begin/read, and common errors. Environment, session, approval, and upgrade operations require explicit protocol additions.
+- **Operation set is bounded** — version 1 decodes `host.inspect`, Session attach/detach, Profile open/status/lease-close, migration export begin/read, and common errors. Environment approvals and upgrade operations require explicit protocol additions.
 - **Transport enforcement is external** — the Unix-domain-socket carrier must stop reading at the byte cap and close on the first codec failure.
 - **Cryptographic policy is external** — key persistence, code-signature inspection, challenge signing and verification, replay storage, and key rotation belong to the Host identity and Desktop broker packages.

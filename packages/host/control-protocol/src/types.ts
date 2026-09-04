@@ -91,6 +91,7 @@ export interface HostInspectResult {
     readonly installation_public_key: HostControlPublicKey
     readonly runtime_generation: number
     readonly schema_generation: number
+    readonly host_generation: number
     readonly process_nonce: HostControlNonce
     readonly capabilities: readonly HostControlCapability[]
     readonly challenge_signature: HostControlSignature
@@ -102,10 +103,64 @@ export interface HostInspectResult {
 export interface HostAuthorizedParams {
   readonly client_instance_id: HostControlClientInstanceId
   readonly host_instance_id: HostInstanceId
+  readonly host_generation: number
   readonly process_nonce: HostControlNonce
   readonly jti: HostControlJti
   readonly issued_at: number
   readonly expires_at: number
+}
+
+/** Attach one environment-scoped Desktop session to the installation Host. */
+export interface HostSessionAttachRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'session.attach'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly session_generation: number
+    readonly permission_epoch: number
+    readonly client_protocol: number
+    readonly profile_format_generation: number
+  }
+}
+
+/** Current Host fence and activity count after an idempotent attach. */
+export interface HostSessionAttachResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'session.attach'
+  readonly result: {
+    readonly attached: true
+    readonly host_generation: number
+    readonly active_sessions: number
+  }
+}
+
+/** Detach only the calling connection's exact environment session generation. */
+export interface HostSessionDetachRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'session.detach'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly session_generation: number
+  }
+}
+
+/** Remaining active sessions after an idempotent detach. */
+export interface HostSessionDetachResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'session.detach'
+  readonly result: {
+    readonly detached: true
+    readonly host_generation: number
+    readonly active_sessions: number
+  }
 }
 
 /** Query the Profile selected by a Desktop Main secure-store binding. */
@@ -553,6 +608,10 @@ export interface HostControlErrorFrame {
 export type HostControlFrame =
   | HostInspectRequest
   | HostInspectResult
+  | HostSessionAttachRequest
+  | HostSessionAttachResult
+  | HostSessionDetachRequest
+  | HostSessionDetachResult
   | ProfileStatusRequest
   | ProfileStatusResult
   | ProfileEnsureRequest

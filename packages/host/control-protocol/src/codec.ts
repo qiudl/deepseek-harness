@@ -15,6 +15,10 @@ import type {
   HostControlSignature,
   HostInspectRequest,
   HostInspectResult,
+  HostSessionAttachRequest,
+  HostSessionAttachResult,
+  HostSessionDetachRequest,
+  HostSessionDetachResult,
   HostInstanceId,
   InstallationId,
   HostProfileId,
@@ -282,6 +286,7 @@ function decodeInspectResult(frame: Record<string, unknown>): HostInspectResult 
     'installation_public_key',
     'runtime_generation',
     'schema_generation',
+    'host_generation',
     'process_nonce',
     'capabilities',
     'challenge_signature',
@@ -303,6 +308,7 @@ function decodeInspectResult(frame: Record<string, unknown>): HostInspectResult 
       installation_public_key: publicKey(result.installation_public_key),
       runtime_generation: generation(result.runtime_generation),
       schema_generation: generation(result.schema_generation),
+      host_generation: generation(result.host_generation),
       process_nonce: nonce(result.process_nonce),
       capabilities: capabilities(result.capabilities),
       challenge_signature: signature(result.challenge_signature),
@@ -314,6 +320,7 @@ function decodeInspectResult(frame: Record<string, unknown>): HostInspectResult 
 const AUTHORIZED_KEYS = [
   'client_instance_id',
   'host_instance_id',
+  'host_generation',
   'process_nonce',
   'jti',
   'issued_at',
@@ -323,6 +330,7 @@ const AUTHORIZED_KEYS = [
 function authorized(params: Record<string, unknown>): {
   client_instance_id: HostControlClientInstanceId
   host_instance_id: HostInstanceId
+  host_generation: number
   process_nonce: HostControlNonce
   jti: HostControlJti
   issued_at: number
@@ -334,11 +342,65 @@ function authorized(params: Record<string, unknown>): {
   return {
     client_instance_id: uuid(params.client_instance_id) as HostControlClientInstanceId,
     host_instance_id: uuid(params.host_instance_id) as HostInstanceId,
+    host_generation: generation(params.host_generation),
     process_nonce: nonce(params.process_nonce),
     jti: uuid(params.jti) as HostControlJti,
     issued_at: issuedAt,
     expires_at: expiresAt,
   }
+}
+
+function decodeSessionRequest(frame: Record<string, unknown>): HostSessionAttachRequest | HostSessionDetachRequest {
+  exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
+  const params = record(frame.params)
+  const request_id = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'session.attach') {
+    exactKeys(params, [
+      ...AUTHORIZED_KEYS, 'authority_environment_id', 'session_generation', 'permission_epoch',
+      'client_protocol', 'profile_format_generation',
+    ])
+    return {
+      version: 1, type: 'request', request_id, method: 'session.attach',
+      params: {
+        ...authorized(params),
+        authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+        session_generation: generation(params.session_generation),
+        permission_epoch: generation(params.permission_epoch),
+        client_protocol: generation(params.client_protocol),
+        profile_format_generation: generation(params.profile_format_generation),
+      },
+    }
+  }
+  if (frame.method === 'session.detach') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'session_generation'])
+    return {
+      version: 1, type: 'request', request_id, method: 'session.detach',
+      params: {
+        ...authorized(params),
+        authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+        session_generation: generation(params.session_generation),
+      },
+    }
+  }
+  return reject('unknown_method')
+}
+
+function decodeSessionResult(frame: Record<string, unknown>): HostSessionAttachResult | HostSessionDetachResult {
+  exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
+  const result = record(frame.result)
+  const request_id = uuid(frame.request_id) as HostControlRequestId
+  exactKeys(result, [frame.method === 'session.attach' ? 'attached' : 'detached', 'host_generation', 'active_sessions'])
+  if (frame.method === 'session.attach' && result.attached === true) {
+    return { version: 1, type: 'result', request_id, method: 'session.attach', result: {
+      attached: true, host_generation: generation(result.host_generation), active_sessions: nonnegative(result.active_sessions),
+    } }
+  }
+  if (frame.method === 'session.detach' && result.detached === true) {
+    return { version: 1, type: 'result', request_id, method: 'session.detach', result: {
+      detached: true, host_generation: generation(result.host_generation), active_sessions: nonnegative(result.active_sessions),
+    } }
+  }
+  return reject('unknown_method')
 }
 
 function decodeProfileRequest(frame: Record<string, unknown>):
@@ -855,6 +917,11 @@ function decodeObject(value: unknown): HostControlFrame {
     if (frame.type === 'result') return decodeMigrationResult(frame)
     return reject()
   }
+  if (typeof frame.method === 'string' && frame.method.startsWith('session.')) {
+    if (frame.type === 'request') return decodeSessionRequest(frame)
+    if (frame.type === 'result') return decodeSessionResult(frame)
+    return reject()
+  }
   if (frame.type === 'request') return decodeProfileRequest(frame)
   if (frame.type === 'result') return decodeProfileResult(frame)
   return reject()
@@ -924,6 +991,7 @@ export function encodeHostInspectSignaturePayload(
     installation_public_key: checkedResponse.result.installation_public_key,
     runtime_generation: checkedResponse.result.runtime_generation,
     schema_generation: checkedResponse.result.schema_generation,
+    host_generation: checkedResponse.result.host_generation,
     process_nonce: checkedResponse.result.process_nonce,
     capabilities: checkedResponse.result.capabilities,
     executable_signature_digest: checkedResponse.result.executable_signature_digest,
