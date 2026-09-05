@@ -65,6 +65,7 @@ export interface SlarkCloudPresetSnapshot {
 export interface SlarkCloudRolloutSnapshot {
   activePresetRows: string[]
   activeProviderRows: string[]
+  activePermissionRows: string[]
   callerProfiles: unknown[]
   persona: unknown
 }
@@ -133,6 +134,7 @@ export function slarkCloudRolloutSnapshot(webValue: string | undefined): SlarkCl
   const providerRows = composed.filter(row => [
     'slark-device', 'slark-identity', 'slark-fs', 'slark-local-computer-ui', 'slark-shell',
   ].includes(row.id))
+  const permissionRows = composed.filter(row => ['permission', 'ui-permission'].includes(row.id))
   const presetPath = resolve(root, 'apps/cli/config/slark-cloud-agent-presets/slark-cloud/agent.cordis.yml')
   const preset = loadCordisYaml(readFileSync(presetPath, 'utf8'))
   const activePresetRows: string[] = []
@@ -146,6 +148,9 @@ export function slarkCloudRolloutSnapshot(webValue: string | undefined): SlarkCl
   return {
     activePresetRows,
     activeProviderRows: providerRows
+      .filter(row => !Boolean(resolveExpression(row.disabled, env)))
+      .map(row => row.id),
+    activePermissionRows: permissionRows
       .filter(row => !Boolean(resolveExpression(row.disabled, env)))
       .map(row => row.id),
     callerProfiles: [providerRows.find(row => row.id === 'slark-identity'),
@@ -221,6 +226,15 @@ export function auditSlarkCloudComposition(): string[] {
   const legacyShell = expectRow(byId, 'slark-shell', '@deepseek-ai/dsh-shell-slark-remote', errors)
   if (legacyShell !== undefined && expression(legacyShell.disabled) !== LEGACY_SHELL_DISABLED_SWITCH) {
     errors.push('row slark-shell must remain active only for the legacy remote-provider profile')
+  }
+  const permissionRows = [
+    expectRow(byId, 'permission', '@deepseek-ai/dsh-permission-presets', errors),
+    expectRow(byId, 'ui-permission', '@deepseek-ai/dsh-client-ui-permission-presets', errors),
+  ]
+  for (const row of permissionRows) {
+    if (row !== undefined && expression(row.disabled) !== LEGACY_SHELL_DISABLED_SWITCH) {
+      errors.push(`row ${row.id} must remain active only while remote Shell is active`)
+    }
   }
 
   const collaboration = expectRow(byId, 'slark-collaboration-network',

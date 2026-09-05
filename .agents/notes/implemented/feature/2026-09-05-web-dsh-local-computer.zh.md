@@ -16,7 +16,7 @@ Status: implemented
 
 浏览器把 `ui-slark-local-computer` 贡献到 `sidebar.footer.action`。它展示不敏感的电脑与 workspace 标签，并在用户确认后发送一次带发布版本的 CAS 请求。发生冲突时刷新状态并要求再次确认。连接服务把调用限制在同源 `/api/slark/` 路径，并为不安全方法镜像 host-only CSRF Cookie。挂载、窗口聚焦、弹窗和轮询触发的并发刷新带有页面内单调序号，旧响应不能覆盖较新的选择。是否重载页面只由 Edge 响应决定，以使 Runtime Cell 替换和浏览器状态收敛。
 
-新灰度开启时，Slark cloud preset 包含文件工具，但不包含 Shell、job、持久 terminal、`glob` 或 `grep`；灰度关闭时，既有 v1 Shell／job 能力面和匹配的 persona 保持不变。组合门禁同时证明两个分支，并拒绝任何会混合两套权限面的开关表达式。
+新灰度开启时，Slark cloud preset 包含文件工具，但不包含 Shell、job、持久 terminal、`glob`、`grep` 或依赖 Shell 的权限 preset 控件；灰度关闭时，既有 v1 Shell／job 与权限能力面和匹配的 persona 保持不变。组合门禁同时证明两个分支，并拒绝任何会混合两套权限面或在没有 Shell 时仍启用依赖 Shell 的服务的开关表达式。
 
 ## 考虑过的替代方案
 

@@ -61,6 +61,7 @@ describe('slark-cloud composition gate', () => {
       expect(snapshot.activeProviderRows).toEqual([
         'slark-device', 'slark-identity', 'slark-fs', 'slark-shell',
       ])
+      expect(snapshot.activePermissionRows).toEqual(['permission', 'ui-permission'])
       expect(snapshot.callerProfiles).toEqual([undefined, undefined])
       expect(snapshot.activePresetRows).toEqual(expect.arrayContaining(['tool-bash', 'tool-fs', 'tool-jobs']))
       expect(snapshot.persona).toContain('File and Shell operations')
@@ -72,6 +73,7 @@ describe('slark-cloud composition gate', () => {
     expect(snapshot.activeProviderRows).toEqual([
       'slark-device', 'slark-identity', 'slark-fs', 'slark-local-computer-ui',
     ])
+    expect(snapshot.activePermissionRows).toEqual([])
     expect(snapshot.callerProfiles).toEqual(['web_dsh_v1', 'web_dsh_v1'])
     expect(snapshot.activePresetRows).toContain('tool-fs')
     expect(snapshot.activePresetRows).not.toEqual(expect.arrayContaining(['tool-bash', 'tool-jobs']))

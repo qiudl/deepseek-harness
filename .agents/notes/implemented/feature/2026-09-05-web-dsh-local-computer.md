@@ -16,7 +16,7 @@ The independent `WEB_DSH_LOCAL_COMPUTER_V1` rollout switches the enabled Slark c
 
 The browser contributes `ui-slark-local-computer` to `sidebar.footer.action`. It displays non-sensitive computer and workspace labels and performs one explicit publication-version CAS request after user confirmation. A conflict refreshes state and requires another confirmation. The connection service confines calls to same-origin `/api/slark/` paths and mirrors the host-only CSRF cookie on unsafe methods. Concurrent mount, focus, modal, and polling refreshes carry a page-local monotonic sequence so a stale response cannot overwrite a newer selection. The Edge response alone decides whether the page reloads so Runtime Cell replacement and browser state converge.
 
-When the new rollout is enabled, the Slark cloud preset contains file tools but no Shell, jobs, persistent terminal, `glob`, or `grep`. When it is off, the existing v1 Shell/jobs surface and matching persona remain unchanged. The composition gate proves both branches and rejects a flag expression that could mix their authority surfaces.
+When the new rollout is enabled, the Slark cloud preset contains file tools but no Shell, jobs, persistent terminal, `glob`, `grep`, or Shell-backed permission preset controls. When it is off, the existing v1 Shell/jobs and permission surface and matching persona remain unchanged. The composition gate proves both branches and rejects a flag expression that could mix their authority surfaces or leave a Shell-dependent service active without Shell.
 
 ## Alternatives considered
 
