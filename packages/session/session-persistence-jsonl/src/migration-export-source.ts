@@ -3,11 +3,8 @@ import { constants } from 'node:fs'
 import { lstat, open, readFile, readdir, realpath } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session/types'
-import {
-  SessionPersistenceRevision,
-  type SessionInspection,
-  type SessionPersistenceSnapshot,
-} from '@deepseek-ai/dsh-session-persistence'
+import type { SessionInspection, SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
+import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence/revision'
 import { scanLog } from './format.ts'
 import { createZstdFrameDecoder, scanZstdFrames } from './zstd.ts'
 import {

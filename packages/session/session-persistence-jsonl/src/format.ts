@@ -21,7 +21,7 @@ import {
 import {
   SessionFormatUnsupportedError,
   sessionFormatVersionRefusal,
-} from '@deepseek-ai/dsh-session-persistence'
+} from '@deepseek-ai/dsh-session-persistence/errors'
 
 /** Physical encoding selected for JSONL session artifacts. */
 export type JsonlCompression = 'zstd' | 'none'
