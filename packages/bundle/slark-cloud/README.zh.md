@@ -38,7 +38,7 @@
 
 Slark Edge 必须在 `HttpOnly` session cookie 之外签发可读取的 `__Host-dsh_csrf` cookie。served Web client 会在不安全同源请求中把该 token 镜像到 `x-slark-dsh-csrf`；缺失或不匹配的 token 会被 Edge 拒绝，而独立版 DSH 因不存在该 cookie，请求保持不变。
 
-启用 Web 本地电脑灰度时，云端 Agent preset 保留 DSH 的 goal、planning、compaction、skill、subagent、workflow、Web search，以及远程 `read`／`write`／`edit`，并移除 Shell、job、依赖 subprocess 的 `glob`／`grep`、持久 terminal、LSP、hook 和 Cordis 创作。灰度关闭时继续保留已评审的旧版远程 Shell／job 能力面。两种模式都禁用用户自定义 preset 发现与 preset 切换器。
+启用 Web 本地电脑灰度时，云端 Agent preset 保留 DSH 的 goal、planning、compaction、skill、subagent、workflow、Web search，以及远程 `read`／`write`／`edit`，并移除 Shell、job、依赖 subprocess 的 `glob`／`grep`、持久 terminal、LSP、hook、Cordis 创作和依赖 Shell 的权限 preset 控件。灰度关闭时继续保留已评审的旧版远程 Shell／job 能力面与权限控件。两种模式都禁用用户自定义 preset 发现与 preset 切换器。
 
 身份适配器根据 `.publication-state` 注册所选只读 workspace 投影。该状态选择其他 workspace 时，部署 supervisor 会替换 DSH 子进程；每 session authority 刷新则无需重启子进程即可轮换短期 subject。
 

@@ -50,6 +50,14 @@
 - id: ui-settings-plugins
   disabled: true
 
+# The permission preset service requires Shell. Keep its host and browser
+# halves aligned with the only cloud profile that mounts remote Shell.
+- id: permission
+  disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1' || process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1'
+
+- id: ui-permission
+  disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1' || process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1'
+
 - id: agent-presets
   config:
     default: slark-cloud

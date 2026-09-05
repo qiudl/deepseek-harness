@@ -38,7 +38,7 @@ When `DSH_SLARK_REMOTE_PROVIDER_V1` is absent or not exactly `1`, every remote r
 
 The Slark Edge must issue the readable `__Host-dsh_csrf` cookie beside the `HttpOnly` session cookie. The served Web client mirrors that token into `x-slark-dsh-csrf` on unsafe same-origin requests, including target-selection `PUT`; a missing or mismatched token is rejected by the Edge, and standalone DSH requests remain unchanged because they have no such cookie.
 
-With the Web local-computer rollout enabled, the cloud Agent preset retains DSH goals, planning, compaction, skills, subagents, workflows, Web search, and remote `read`/`write`/`edit`, while omitting Shell, jobs, subprocess-backed `glob`/`grep`, persistent terminals, LSP, hooks, and Cordis authoring. With the rollout disabled it retains the reviewed legacy remote Shell/jobs surface. User-authored preset discovery and the preset switcher stay disabled in both modes.
+With the Web local-computer rollout enabled, the cloud Agent preset retains DSH goals, planning, compaction, skills, subagents, workflows, Web search, and remote `read`/`write`/`edit`, while omitting Shell, jobs, subprocess-backed `glob`/`grep`, persistent terminals, LSP, hooks, Cordis authoring, and the Shell-backed permission preset controls. With the rollout disabled it retains the reviewed legacy remote Shell/jobs and permission controls. User-authored preset discovery and the preset switcher stay disabled in both modes.
 
 The identity adapter registers the selected read-only workspace projection from `.publication-state`. A deployment supervisor replaces the DSH child when that state selects another workspace, while per-session authority refresh rotates short-lived subjects without restarting the child.
 

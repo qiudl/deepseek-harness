@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/bundle/slark-cloud/README.md
-README.md: e7676e6e62b2b5dc962941b23c8b8e20abefbf15
-README.zh.md: 37356d43134f4f0b0be77d474007640906de17b1
+README.md: c5e06e06599ad9c7490438eddad875bb3a5d98a5
+README.zh.md: e20dfd6aef243d80cb7abd441ef979d70d436ee8
