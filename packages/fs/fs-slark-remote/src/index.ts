@@ -33,8 +33,10 @@ import {
 } from '@deepseek-ai/dsh-slark-device-client'
 import z from '@deepseek-ai/schemastery'
 
-const PROTOCOL_KIND = 'dsh-fs-request-v1'
-const RESULT_KIND = 'dsh-fs-result-v1'
+const PROTOCOL_KIND_V1 = 'dsh-fs-request-v1'
+const PROTOCOL_KIND_V2 = 'dsh-fs-request-v2'
+const RESULT_KIND_V1 = 'dsh-fs-result-v1'
+const RESULT_KIND_V2 = 'dsh-fs-result-v2'
 const CONTROL = /[\u0000-\u001f\u007f]/u
 const RESERVED_SEGMENT_PREFIX = '.slark-dsh-write-'
 const ERROR_CODES = new Set<FsErrorCode>([
@@ -46,6 +48,8 @@ const ERROR_CODES = new Set<FsErrorCode>([
 
 /** Remote filesystem configuration. */
 export interface Config {
+  /** Select the Web DSH v2, versioned-filesystem-only profile. */
+  callerProfile?: 'web_dsh_v1'
   /** Opaque Slark workspace handle projected as `/workspace/<handle>`. */
   workspaceHandle: string
   /** Maximum bytes requested in one Device read task. */
@@ -54,7 +58,7 @@ export interface Config {
   maxListEntries?: number
 }
 
-type ResolvedConfig = Required<Config>
+type ResolvedConfig = Required<Omit<Config, 'callerProfile'>> & Pick<Config, 'callerProfile'>
 type Row = Record<string, unknown>
 type Operation = 'resolve' | 'stat' | 'lstat' | 'read' | 'list' | 'write' | 'edit'
 
@@ -127,6 +131,7 @@ function mapClientError(error: SlarkDeviceClientError): FsError {
 export class SlarkRemoteFileSystem extends FileSystem {
   static inject = ['slarkDevice']
   static Config: z<Config> = z.object({
+    callerProfile: z.const('web_dsh_v1'),
     workspaceHandle: z.string().required(),
     readPageBytes: z.number().default(262_144),
     maxListEntries: z.number().default(4_096),
@@ -283,6 +288,9 @@ export class SlarkRemoteFileSystem extends FileSystem {
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsWriteOutcome> {
     this.assertMutationPolicy(target, sandboxPolicy)
+    if (this.config.callerProfile === 'web_dsh_v1' && expected === undefined) {
+      throw new FsError(`cannot write "${target.displayPath}": file was not observed`, 'FS_NOT_OBSERVED')
+    }
     if (Buffer.byteLength(content, 'utf8') > 96 * 1024) {
       throw new FsError(`cannot write "${target.displayPath}": content is too large`, 'FS_TOO_LARGE')
     }
@@ -301,6 +309,9 @@ export class SlarkRemoteFileSystem extends FileSystem {
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsEditOutcome> {
     this.assertMutationPolicy(target, sandboxPolicy)
+    if (this.config.callerProfile === 'web_dsh_v1' && expected === undefined) {
+      throw new FsError(`cannot edit "${target.displayPath}": file was not observed`, 'FS_NOT_OBSERVED')
+    }
     if (edit.oldString.length === 0) {
       throw new FsError(`cannot edit "${target.displayPath}": search text is empty`, 'FS_EDIT_NOT_FOUND')
     }
@@ -316,7 +327,13 @@ export class SlarkRemoteFileSystem extends FileSystem {
   }
 
   private normalizePath(path: string, cwd?: string): string {
-    if (!isWellFormed(path) || path.length === 0 || CONTROL.test(path) || path.includes('\\')) {
+    if (
+      !isWellFormed(path)
+      || path.length === 0
+      || CONTROL.test(path)
+      || path.includes('\\')
+      || (this.config.callerProfile === 'web_dsh_v1' && path.normalize('NFC') !== path)
+    ) {
       throw new FsError('filesystem path is invalid', 'FS_SANDBOX_DENIED')
     }
     let absolute: string
@@ -345,7 +362,12 @@ export class SlarkRemoteFileSystem extends FileSystem {
   }
 
   private normalizeCwd(cwd: string): string {
-    if (!isWellFormed(cwd) || CONTROL.test(cwd) || cwd.includes('\\')) throw new FsError('filesystem cwd is invalid', 'FS_SANDBOX_DENIED')
+    if (
+      !isWellFormed(cwd)
+      || CONTROL.test(cwd)
+      || cwd.includes('\\')
+      || (this.config.callerProfile === 'web_dsh_v1' && cwd.normalize('NFC') !== cwd)
+    ) throw new FsError('filesystem cwd is invalid', 'FS_SANDBOX_DENIED')
     return cwd.startsWith('/') ? posix.normalize(cwd) : posix.resolve(this.root, cwd)
   }
 
@@ -452,10 +474,16 @@ export class SlarkRemoteFileSystem extends FileSystem {
     signal?: AbortSignal,
     sideEffectKey?: string,
   ): Promise<unknown> {
-    const payload = { protocolVersion: 1, kind: PROTOCOL_KIND, ...fields }
+    const web = this.config.callerProfile === 'web_dsh_v1'
+    const payload = {
+      protocolVersion: web ? 2 : 1,
+      kind: web ? PROTOCOL_KIND_V2 : PROTOCOL_KIND_V1,
+      ...fields,
+    }
     let task: SlarkDeviceTaskResult
     try {
       task = await this.ctx.slarkDevice.executeTask({
+        ...(web ? { callerProfile: 'web_dsh_v1' as const } : {}),
         expectedWorkspaceHandle: this.config.workspaceHandle,
         capability,
         operation,
@@ -478,7 +506,12 @@ export class SlarkRemoteFileSystem extends FileSystem {
     } else {
       exact(envelope, ['protocolVersion', 'kind', 'operation', 'ok', 'error'], 'remote filesystem result')
     }
-    if (envelope.protocolVersion !== 1 || envelope.kind !== RESULT_KIND || envelope.operation !== operation || typeof envelope.ok !== 'boolean') {
+    if (
+      envelope.protocolVersion !== (web ? 2 : 1)
+      || envelope.kind !== (web ? RESULT_KIND_V2 : RESULT_KIND_V1)
+      || envelope.operation !== operation
+      || typeof envelope.ok !== 'boolean'
+    ) {
       throw new FsError('remote filesystem result contract is malformed', 'FS_IO_ERROR')
     }
     if (envelope.ok) return envelope.result

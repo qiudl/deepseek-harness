@@ -63,7 +63,7 @@ function completed(value: unknown) {
   }
 }
 
-async function setup(fetchMock: ReturnType<typeof vi.fn>) {
+async function setup(fetchMock: ReturnType<typeof vi.fn>, taskAuthority: SlarkDeviceAuthority = authority) {
   vi.stubGlobal('fetch', fetchMock)
   const ctx = new Context()
   await ctx.plugin(SlarkDeviceClient, {
@@ -77,7 +77,7 @@ async function setup(fetchMock: ReturnType<typeof vi.fn>) {
     createAttempts: 2,
   })
   const client = ctx.slarkDevice
-  const disposeAuthority = client.bindAuthority(async () => authority)
+  const disposeAuthority = client.bindAuthority(async () => taskAuthority)
   return { ctx, client, disposeAuthority }
 }
 
@@ -253,6 +253,38 @@ describe('SlarkDeviceClient', () => {
       operation: 'stat',
       payload: { path: '.' },
     })).rejects.toMatchObject({ code: 'identity_unavailable' })
+    await ctx.fiber.dispose()
+  })
+
+  it('requires matching complete Web authority and denies non-filesystem capabilities before transport', async () => {
+    const fetchMock = vi.fn()
+    const webAuthority: SlarkDeviceAuthority = {
+      ...authority,
+      callerProfile: 'web_dsh_v1',
+      authorityVersion: 9,
+      assignmentId: '33333333-3333-4333-8333-333333333333',
+      assignmentGeneration: 4,
+      selectionPublicationVersion: 6,
+      consentProfileVersion: 1,
+      protectedRootPolicyVersion: 1,
+      safeFileBrokerProtocolVersion: 1,
+    }
+    const { ctx, client } = await setup(fetchMock, webAuthority)
+
+    await expect(client.executeTask({
+      expectedWorkspaceHandle: 'workspace-1',
+      capability: 'fs_read',
+      operation: 'stat',
+      payload: {},
+    })).rejects.toMatchObject({ code: 'caller_profile_mismatch' })
+    await expect(client.executeTask({
+      callerProfile: 'web_dsh_v1',
+      expectedWorkspaceHandle: 'workspace-1',
+      capability: 'shell_exec',
+      operation: 'run',
+      payload: {},
+    })).rejects.toMatchObject({ code: 'capability_denied' })
+    expect(fetchMock).not.toHaveBeenCalled()
     await ctx.fiber.dispose()
   })
 })

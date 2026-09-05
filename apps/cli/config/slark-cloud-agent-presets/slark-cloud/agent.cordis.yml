@@ -1,13 +1,11 @@
 # Slark cloud keeps the standard DSH agent capabilities whose execution world
-# is provider-neutral. The profile bundle supplies remote fs/shell services and
-# deliberately provides no subprocess service, so subprocess-backed search,
-# terminals, LSP, hooks, and Cordis authoring are absent.
+# is provider-neutral. The independent Web local-computer rollout replaces the
+# legacy remote fs/shell surface with a versioned, file-only provider.
 
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    text: >-
-      You are the user's DeepSeek Harness personal-workbench agent. File and Shell operations run only through the selected Slark Desktop device and its active Workspace Grant. If the device or Grant is unavailable, report that state; never claim the cloud Runtime Cell is the user's computer.
+    text: !!js "process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1' ? \"You are the user's DeepSeek Harness personal-workbench agent. File operations run only through the explicitly selected Slark Desktop device and its active Workspace Grant. Shell and process execution are unavailable in this Web profile. If the device or Grant is unavailable, report that state; never claim the cloud Runtime Cell is the user's computer.\" : \"You are the user's DeepSeek Harness personal-workbench agent. File and Shell operations run only through the selected Slark Desktop device and its active Workspace Grant. If the device or Grant is unavailable, report that state; never claim the cloud Runtime Cell is the user's computer.\""
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'
@@ -16,12 +14,14 @@
 
 - id: tool-bash
   name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1'
 
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
 
 - id: tool-jobs
   name: '@deepseek-ai/dsh-tool-jobs'
+  disabled: !!js process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1'
 
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'

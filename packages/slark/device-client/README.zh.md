@@ -17,7 +17,7 @@ ctx.slarkDevice.bindAuthority(async () => currentSlarkAuthority())
 
 ## 行为
 
-- 身份适配器为每次操作提供新的短期 subject token，以及会话、计算机、工作区、Grant 和 epoch 围栏。token 只进入 header 或请求体，不会进入 URL 或错误信息。
+- 身份适配器为每次操作提供新的短期 subject token，以及会话、计算机、工作区、Grant 和 epoch 围栏。`web_dsh_v1` 请求还要求匹配的 v2 authority、assignment、策略、broker 与选择发布围栏，并且只允许文件系统能力与操作通过。token 只进入 header 或请求体，不会进入 URL 或错误信息。
 - 创建任务时发生含糊的超时或传输失败，会复用相同请求体和幂等键重试。Gateway 一旦返回 task ID，后续传输重试只查询该任务；客户端不会创建替代逻辑任务。
 - 状态分页必须由连续的 stdout 分块组成。客户端在返回字节前会校验序号、字节偏移、每块 SHA-256、完整结果 SHA-256、输出缺口标志、任务寿命和已配置的保留上限。
 - 调用方取消后，客户端会尽力取消已知任务。如果取消请求未能完成，服务端任务过期时间和 Device 执行 lease 仍是有界停止保证。

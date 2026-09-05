@@ -7,7 +7,10 @@ Slark Device Agent implementation of the [`ctx.fs`](../fs/README.md) provider co
 ```ts ignore-check
 import SlarkRemoteFileSystem from '@deepseek-ai/dsh-fs-slark-remote'
 
-await ctx.plugin(SlarkRemoteFileSystem, { workspaceHandle: 'opaque-workspace-handle' })
+await ctx.plugin(SlarkRemoteFileSystem, {
+  callerProfile: 'web_dsh_v1',
+  workspaceHandle: 'opaque-workspace-handle',
+})
 ```
 
 ## Behavior
@@ -15,7 +18,7 @@ await ctx.plugin(SlarkRemoteFileSystem, { workspaceHandle: 'opaque-workspace-han
 - All model and process coordinates are normalized POSIX paths beneath the virtual workspace root. Absolute paths outside that root, `..` escapes, backslashes, control characters, oversized paths, and Device staging segments fail with `FS_SANDBOX_DENIED` before a task is created.
 - `resolve`, metadata, and listings validate exact remote result shapes. Returned targets preserve opaque Device identity, expose only virtual display paths, and never reveal the selected macOS or Windows directory.
 - Text and byte reads use bounded base64 pages. Every later page carries the first page's version, so a concurrent change fails with `FS_STALE_VERSION`; UTF-8 decoding spans page boundaries, while invalid UTF-8 and NUL-byte samples fail with `FS_NOT_TEXT`.
-- `writeText` and `editText` preserve the base `FileSystem` contract: guarded and unconditional mutations remain distinct. Each mutation receives a fresh side-effect fence, while ambiguous Gateway retries reuse the same logical Device Task.
+- Legacy callers preserve guarded and unconditional mutation semantics. The `web_dsh_v1` profile uses protocol v2, rejects non-NFC paths, and requires an observed version for every write or edit before creating a Device Task.
 - The provider reports `workspace-write` because the Device Workspace Grant confines every mutation. It never falls back to `fs-local` when the device, Grant, or network is unavailable.
 
 ## Model Experience
@@ -28,6 +31,6 @@ Only the virtual workspace path can appear in tool results; no new tool schema o
 
 ## Known Limitations and Deferred Work
 
-- Search tools remain subprocess-backed. A cloud composition must mount the matching remote shell provider before exposing `glob` or `grep`; this filesystem package does not add a search RPC.
+- Search tools remain subprocess-backed. The Web DSH profile exposes no Shell, `glob`, or `grep`; this filesystem package does not add a search RPC.
 - Full-file edits still obey the Device Agent's bounded payload and result limits. Large deliverables use artifacts.
 - Availability depends on an active Slark Desktop/daemon connection and Workspace Grant; an offline device is an explicit remote I/O failure.

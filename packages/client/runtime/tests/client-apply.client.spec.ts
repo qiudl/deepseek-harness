@@ -38,6 +38,7 @@ async function mount(): Promise<Bench> {
     rpc: {
       call: () => Promise.reject(new Error('unexpected generic RPC call')),
     },
+    fetchSlarkEdge: () => Promise.reject(new Error('unexpected Slark Edge call')),
     start: (sinks) => {
       bench.sinks = sinks
       return { stop: () => { bench.stopped += 1 } }

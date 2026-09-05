@@ -58,7 +58,7 @@
 - insert:
     - id: slark-cloud-ingress
       name: '@deepseek-ai/dsh-slark-cloud'
-      disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
+      disabled: !!js "process.env.WEB_DSH_LOCAL_COMPUTER_V1 !== undefined && process.env.WEB_DSH_LOCAL_COMPUTER_V1 !== '0' && process.env.WEB_DSH_LOCAL_COMPUTER_V1 !== '1' ? (() => { throw new Error('WEB_DSH_LOCAL_COMPUTER_V1 must be exactly 0 or 1') })() : process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'"
 
     - id: slark-device
       name: '@deepseek-ai/dsh-slark-device-client'
@@ -73,6 +73,7 @@
       name: '@deepseek-ai/dsh-slark-identity'
       disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
       config:
+        callerProfile: !!js "process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1' ? 'web_dsh_v1' : undefined"
         authorityDirectory: !!js process.env.SLARK_DSH_AUTHORITY_DIRECTORY
         workspaceRoot: !!js process.env.SLARK_DSH_WORKSPACE_ROOT
         expectedWorkspaceHandle: !!js process.env.SLARK_DSH_WORKSPACE_HANDLE
@@ -96,7 +97,12 @@
       name: '@deepseek-ai/dsh-fs-slark-remote'
       disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
       config:
+        callerProfile: !!js "process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1' ? 'web_dsh_v1' : undefined"
         workspaceHandle: !!js process.env.SLARK_DSH_WORKSPACE_HANDLE
+
+    - id: slark-local-computer-ui
+      name: '@deepseek-ai/dsh-client-ui-slark-local-computer'
+      disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1' || process.env.WEB_DSH_LOCAL_COMPUTER_V1 !== '1'
 
     # M1 plugin discovery remains dynamically composable: each face is an
     # ordinary Cordis entry rather than behavior embedded in the Web shell.
@@ -114,8 +120,10 @@
     - id: ui-settings-plugin-market
       name: '@deepseek-ai/dsh-client-ui-settings-plugin-market'
 
+    # Preserve the reviewed v1 Shell surface until the independent Web local-
+    # computer rollout is enabled. The v2 Web profile is deliberately file-only.
     - id: slark-shell
       name: '@deepseek-ai/dsh-shell-slark-remote'
-      disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'
+      disabled: !!js process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1' || process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1'
       config:
         workspaceHandle: !!js process.env.SLARK_DSH_WORKSPACE_HANDLE

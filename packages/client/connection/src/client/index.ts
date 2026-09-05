@@ -11,6 +11,7 @@ import { WebApiClient } from './web-api-client.ts'
 import { createWebConnectionRpc, type RpcFetch } from './rpc.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
+import { withSlarkCsrfHeader } from './slark-csrf.ts'
 
 // ---- Contract re-exports (browser-safe apiproxy channels + core types) ----
 export type {
@@ -91,6 +92,8 @@ export interface ConnectionHandle {
   readonly hostDescription: HostDescriptionSource
   /** Generic logical RPC channels over the same Connection transport. */
   readonly rpc: ClientConnectionRpc
+  /** Call an authenticated same-origin Slark Edge API without exposing CSRF handling to feature plugins. */
+  fetchSlarkEdge(path: string, init?: RequestInit): Promise<Response>
   /**
    * Start the connect/pump/reconnect loop with the consumer's frame sinks.
    * One consumer owns the streams (the runtime object layer); a second call
@@ -138,6 +141,26 @@ export function apply(ctx: Context): void {
       },
     },
     rpc,
+    fetchSlarkEdge(path, init) {
+      const base = new URL(pageLocation?.origin ?? 'http://localhost')
+      let target: URL
+      try {
+        target = new URL(path, base)
+      } catch {
+        throw new Error('connection: Slark Edge path must be same-origin under /api/slark/')
+      }
+      if (
+        !path.startsWith('/api/slark/')
+        || path.includes('\\')
+        || /%(?:2f|5c)/iu.test(path)
+        || target.origin !== base.origin
+        || !target.pathname.startsWith('/api/slark/')
+        || target.hash !== ''
+      ) {
+        throw new Error('connection: Slark Edge path must be same-origin under /api/slark/')
+      }
+      return fetch(`${target.pathname}${target.search}`, withSlarkCsrfHeader(init))
+    },
     start(sinks, config) {
       if (started) throw new Error('connection: the stream loop is already owned by another consumer')
       started = true

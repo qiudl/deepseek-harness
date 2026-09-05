@@ -72,6 +72,7 @@ async function setup(input: {
   authorityDirectory: string
   workspaceRoot: string
   expectedWorkspaceHandle?: string
+  callerProfile?: 'web_dsh_v1'
   existingWorkspaces?: Array<{ id: string; path: string; title: string; setTitle: ReturnType<typeof vi.fn> }>
 }) {
   let source: (() => Promise<SlarkDeviceAuthority>) | undefined
@@ -103,6 +104,7 @@ async function setup(input: {
   ctx.provide('slarkDevice', { bindAuthority })
   ctx.provide('workspaceRegistry', { list: () => workspaces, create, delete: remove })
   await ctx.plugin(SlarkIdentity, {
+    ...(input.callerProfile === undefined ? {} : { callerProfile: input.callerProfile }),
     authorityDirectory: input.authorityDirectory,
     workspaceRoot: input.workspaceRoot,
     expectedWorkspaceHandle: input.expectedWorkspaceHandle ?? 'workspace-1',
@@ -207,6 +209,41 @@ describe('SlarkIdentity', () => {
 
     expect(first.subjectToken).toBe('subject-token')
     expect(second).toMatchObject({ subjectToken: 'rotated-subject-token', grantEpoch: 8 })
+    await harness.ctx.fiber.dispose()
+  })
+
+  it('parses the Web v2 fence set and rejects a stale selection publication', async () => {
+    const state = await fixture()
+    await writeAuthority(state.authorityDirectory, 'session-web', {
+      protocol_version: 2,
+      kind: 'slark-dsh-runtime-authority-v2',
+      caller_profile: 'web_dsh_v1',
+      authority_version: 9,
+      consent_profile_version: 1,
+      protected_root_policy_version: 1,
+      safe_file_broker_protocol_version: 1,
+      selection_publication_version: 1,
+    })
+    const harness = await setup({ ...state, callerProfile: 'web_dsh_v1' })
+
+    await expect(harness.identity.authorityForSession('session-web')).resolves.toMatchObject({
+      callerProfile: 'web_dsh_v1',
+      authorityVersion: 9,
+      assignmentGeneration: 3,
+      selectionPublicationVersion: 1,
+    })
+    await writeAuthority(state.authorityDirectory, 'session-web', {
+      protocol_version: 2,
+      kind: 'slark-dsh-runtime-authority-v2',
+      caller_profile: 'web_dsh_v1',
+      authority_version: 10,
+      consent_profile_version: 1,
+      protected_root_policy_version: 1,
+      safe_file_broker_protocol_version: 1,
+      selection_publication_version: 2,
+    })
+    await expect(harness.identity.authorityForSession('session-web'))
+      .rejects.toMatchObject({ code: 'identity_invalid' })
     await harness.ctx.fiber.dispose()
   })
 

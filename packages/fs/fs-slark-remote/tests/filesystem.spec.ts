@@ -4,7 +4,7 @@ import type { SlarkDeviceTaskRequest, SlarkDeviceTaskResult } from '@deepseek-ai
 import { describe, expect, it, vi } from 'vitest'
 import SlarkRemoteFileSystem from '../src/index.ts'
 
-function success(operation: string, result: unknown): SlarkDeviceTaskResult {
+function success(operation: string, result: unknown, version: 1 | 2 = 1): SlarkDeviceTaskResult {
   return {
     taskId: '11111111-1111-4111-8111-111111111111',
     state: 'completed',
@@ -12,8 +12,8 @@ function success(operation: string, result: unknown): SlarkDeviceTaskResult {
     authorityVersion: 7,
     terminalCode: null,
     result: new TextEncoder().encode(JSON.stringify({
-      protocolVersion: 1,
-      kind: 'dsh-fs-result-v1',
+      protocolVersion: version,
+      kind: `dsh-fs-result-v${version}`,
       operation,
       ok: true,
       result,
@@ -21,7 +21,7 @@ function success(operation: string, result: unknown): SlarkDeviceTaskResult {
   }
 }
 
-async function setup(responses: SlarkDeviceTaskResult[]) {
+async function setup(responses: SlarkDeviceTaskResult[], callerProfile?: 'web_dsh_v1') {
   const executeTask = vi.fn(async (_request: SlarkDeviceTaskRequest) => {
     const response = responses.shift()
     if (response === undefined) throw new Error('missing fake response')
@@ -29,7 +29,10 @@ async function setup(responses: SlarkDeviceTaskResult[]) {
   })
   const ctx = new Context()
   ctx.provide('slarkDevice', { executeTask })
-  await ctx.plugin(SlarkRemoteFileSystem, { workspaceHandle: 'workspace-1' })
+  await ctx.plugin(SlarkRemoteFileSystem, {
+    workspaceHandle: 'workspace-1',
+    ...(callerProfile === undefined ? {} : { callerProfile }),
+  })
   return { ctx, fs: ctx.fs as SlarkRemoteFileSystem, executeTask }
 }
 
@@ -127,6 +130,30 @@ describe('SlarkRemoteFileSystem', () => {
       expect.objectContaining({ operation: 'edit', expectedVersion: 'v2' }),
       expect.objectContaining({ operation: 'edit', expectedVersion: null }),
     ])
+    await ctx.fiber.dispose()
+  })
+
+  it('uses the Web v2 protocol and rejects unobserved writes and non-NFC paths locally', async () => {
+    const { ctx, fs, executeTask } = await setup([
+      success('resolve', { target: { targetKey: 'dshfs:v2:file', displayPath: 'src/a.ts' } }, 2),
+      success('write', { operation: 'update', version: 'v3', before: 'old', after: 'new' }, 2),
+      success('edit', { version: 'v4', before: 'new', after: 'next' }, 2),
+    ], 'web_dsh_v1')
+    const target = await fs.resolve('src/a.ts')
+    await expect(fs.writeText(target, 'new')).rejects.toMatchObject({ code: 'FS_NOT_OBSERVED' })
+    await fs.writeText(target, 'new', { kind: 'replaceIfVersion', version: FsVersion('v2') })
+    await expect(fs.editText(target, { oldString: 'new', newString: 'next', replaceAll: false }))
+      .rejects.toMatchObject({ code: 'FS_NOT_OBSERVED' })
+    await fs.editText(target, { oldString: 'new', newString: 'next', replaceAll: false }, { version: FsVersion('v3') })
+    await expect(fs.resolve('e\u0301.txt')).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+
+    const calls = executeTask.mock.calls.map(call => call[0])
+    expect(calls.map(call => call.callerProfile)).toEqual([
+      'web_dsh_v1', 'web_dsh_v1', 'web_dsh_v1',
+    ])
+    expect(calls[0]?.payload).toMatchObject({ protocolVersion: 2, kind: 'dsh-fs-request-v2' })
+    expect(calls[1]?.payload).toMatchObject({ intent: { kind: 'replaceIfVersion', version: 'v2' } })
+    expect(calls[2]?.payload).toMatchObject({ expectedVersion: 'v3' })
     await ctx.fiber.dispose()
   })
 })
