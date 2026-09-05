@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { realpathSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { createMacOSPeerAttestor, HostAuthorityError } from '../src/index.ts'
+import { readMacOSPeerIdentity } from '../src/macos-peer-attestor.ts'
 
 const executable = (): string => {
   const path = join(mkdtempSync(join(tmpdir(), 'dsh-peer-')), 'slark-daemon')
@@ -13,6 +14,25 @@ const executable = (): string => {
 }
 
 describe('macOS Unix peer attestation', () => {
+  it('reads LOCAL_PEERPID only after getsockopt populates the output buffer', () => {
+    const calls: string[] = []
+    const peer = readMacOSPeerIdentity(9, {
+      getpeereid: (_fd, uid) => {
+        calls.push('getpeereid')
+        uid[0] = 501
+        return 0
+      },
+      getsockopt: (_fd, _level, _name, pid, size) => {
+        calls.push('getsockopt')
+        expect(size[0]).toBe(pid.byteLength)
+        pid[0] = 42
+        return 0
+      },
+    })
+    expect(calls).toEqual(['getpeereid', 'getsockopt'])
+    expect(peer).toEqual({ uid: 501, pid: 42 })
+  })
+
   it('binds the peer fd to PID, executable, Team ID, and executable digest', async () => {
     const path = executable()
     const uid = process.getuid?.() ?? 501

@@ -28,10 +28,35 @@ export interface MacOSPeerAttestorOptions {
 interface KoffiLibrary { func(signature: string): (...args: unknown[]) => unknown }
 interface KoffiModule { load(path: string): KoffiLibrary }
 
+interface PeerCredentialFunctions {
+  getpeereid(fd: number, uid: Uint32Array, gid: Uint32Array): unknown
+  getsockopt(fd: number, level: number, name: number, pid: Int32Array, size: Uint32Array): unknown
+}
+
 function socketFd(socket: Socket): number {
   const fd = (socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd
   if (!Number.isSafeInteger(fd) || (fd as number) < 0) throw new HostAuthorityError('unauthorized')
   return fd as number
+}
+
+/** @internal Query and validate the credentials populated by the macOS socket calls. */
+export function readMacOSPeerIdentity(
+  fd: number,
+  functions: PeerCredentialFunctions,
+): { readonly uid: number; readonly pid: number } {
+  const uid = new Uint32Array(1)
+  const gid = new Uint32Array(1)
+  if (functions.getpeereid(fd, uid, gid) !== 0) throw new HostAuthorityError('unauthorized')
+  const pid = new Int32Array(1)
+  const size = new Uint32Array([pid.byteLength])
+  if (functions.getsockopt(fd, 0, 0x002, pid, size) !== 0 || size[0] !== pid.byteLength) {
+    throw new HostAuthorityError('unauthorized')
+  }
+  const peerPid = pid[0]
+  const peerUid = uid[0]
+  if (peerPid === undefined || peerUid === undefined
+    || !Number.isSafeInteger(peerPid) || peerPid <= 0) throw new HostAuthorityError('unauthorized')
+  return { uid: peerUid, pid: peerPid }
 }
 
 async function nativeBindings(): Promise<MacOSPeerBindings> {
@@ -44,18 +69,7 @@ async function nativeBindings(): Promise<MacOSPeerBindings> {
   const procPidPath = proc.func('int proc_pidpath(int, _Out_ void *, uint32_t)')
   return {
     peerIdentity(fd) {
-      const uid = new Uint32Array(1)
-      const gid = new Uint32Array(1)
-      if (getpeereid(fd, uid, gid) !== 0) throw new HostAuthorityError('unauthorized')
-      const pid = new Int32Array(1)
-      const size = new Uint32Array([pid.byteLength])
-      const peerPid = pid[0]
-      const peerUid = uid[0]
-      if (getsockopt(fd, 0, 0x002, pid, size) !== 0 || size[0] !== pid.byteLength
-        || peerPid === undefined || peerUid === undefined || !Number.isSafeInteger(peerPid) || peerPid <= 0) {
-        throw new HostAuthorityError('unauthorized')
-      }
-      return { uid: peerUid, pid: peerPid }
+      return readMacOSPeerIdentity(fd, { getpeereid, getsockopt })
     },
     executablePath(pid) {
       const buffer = Buffer.alloc(4096)
