@@ -200,8 +200,13 @@ function publishRegistration(config: Config, socketPath: string, uid: number): v
     const record = existing as Record<string, unknown>
     const keys = Object.keys(registration).sort()
     if (JSON.stringify(Object.keys(record).sort()) !== JSON.stringify(keys)
-      || keys.some(key => record[key] !== registration[key as keyof typeof registration])) {
+      || keys.some(key => key !== 'executable_signature_digest'
+        && record[key] !== registration[key as keyof typeof registration])) {
       throw new HostAuthorityError('conflict')
+    }
+    if (typeof record.executable_signature_digest !== 'string'
+      || !/^[a-f0-9]{64}$/u.test(record.executable_signature_digest)) {
+      throw new HostAuthorityError('unavailable')
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error

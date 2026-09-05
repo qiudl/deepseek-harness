@@ -59,6 +59,17 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
     const registration = join(legacyDshRoot, 'host', 'registration.v1.json')
     const restarted = await startDesktopHostApplication(config)
     await restarted.close()
+    writeFileSync(registration, `${JSON.stringify({
+      schema_version: 1, endpoint_registration_id: config.endpointRegistrationId,
+      socket_path: join(root, 'host.sock'), installation_id: config.installationId,
+      installation_public_key: config.installationPublicKey,
+      executable_signature_digest: '3'.repeat(64),
+    })}\n`, { mode: 0o600 })
+    const upgraded = await startDesktopHostApplication(config)
+    expect(JSON.parse(readFileSync(registration, 'utf8'))).toMatchObject({
+      executable_signature_digest: config.executableSignatureDigest,
+    })
+    await upgraded.close()
     const externalInstallationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3199'
     writeFileSync(registration, `${JSON.stringify({
       schema_version: 1, endpoint_registration_id: config.endpointRegistrationId,
@@ -68,6 +79,15 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
     })}\n`, { mode: 0o600 })
     await expect(startDesktopHostApplication(config)).rejects.toMatchObject({ code: 'conflict' })
     expect(readFileSync(registration, 'utf8')).toContain(externalInstallationId)
+    for (const invalidDigest of [7, 'z'.repeat(64)]) {
+      writeFileSync(registration, `${JSON.stringify({
+        schema_version: 1, endpoint_registration_id: config.endpointRegistrationId,
+        socket_path: join(root, 'host.sock'), installation_id: config.installationId,
+        installation_public_key: config.installationPublicKey,
+        executable_signature_digest: invalidDigest,
+      })}\n`, { mode: 0o600 })
+      await expect(startDesktopHostApplication(config)).rejects.toMatchObject({ code: 'unavailable' })
+    }
     unlinkSync(registration)
     symlinkSync(deviceKey, registration)
     await expect(startDesktopHostApplication(config)).rejects.toMatchObject({ code: 'unavailable' })
