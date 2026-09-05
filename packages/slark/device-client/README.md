@@ -17,7 +17,7 @@ ctx.slarkDevice.bindAuthority(async () => currentSlarkAuthority())
 
 ## Behavior
 
-- The identity adapter supplies a fresh short-lived subject token plus session, computer, workspace, Grant, and epoch fences for every operation. Tokens stay in headers or request bodies and never enter URLs or errors.
+- The identity adapter supplies a fresh short-lived subject token plus session, computer, workspace, Grant, and epoch fences for every operation. A `web_dsh_v1` request additionally requires matching v2 authority, assignment, policy, broker, and selection-publication fences; only filesystem capabilities and operations pass. Tokens stay in headers or request bodies and never enter URLs or errors.
 - An ambiguous task-creation timeout or transport failure retries the same request body and idempotency key. Once the Gateway returns a task ID, all transport retries query that task; the client never creates a replacement logical task.
 - Status pages must be contiguous stdout chunks. The client validates sequence, byte offset, per-chunk SHA-256, complete-result SHA-256, output-gap flags, task lifetime, and configured retention bounds before returning bytes.
 - Caller cancellation sends a best-effort cancel for a known task. The server-side task expiry and Device execution lease remain the bounded stop guarantee when the cancel exchange cannot complete.

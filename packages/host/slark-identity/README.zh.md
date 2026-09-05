@@ -8,6 +8,7 @@
 
 | 字段 | 必填 | 含义 |
 |---|---:|---|
+| `callerProfile` | 否 | 设为 `web_dsh_v1` 时要求完整的 v2 Web authority 与发布围栏 |
 | `authorityDirectory` | 是 | 私有绝对目录，其中每个 DSH Session 对应一份由 Edge 原子替换的 `<sessionId>.json` authority 文档 |
 | `workspaceRoot` | 是 | 包含所选 workspace 只读本地投影的私有绝对根目录 |
 | `expectedWorkspaceHandle` | 是 | 固定写入 Runtime Cell 远程文件系统与 Shell Provider 组合的 workspace handle |
@@ -19,7 +20,7 @@
 | `refreshTimeoutMs` | 否 | 一次 Edge 刷新请求的超时；默认 5 秒，最大 30 秒 |
 | `maxAuthorityBytes` | 否 | authority 文档最大字节数；默认 64 KiB，硬上限 256 KiB |
 
-每份文档采用精确字段：`protocol_version=1`、`kind=slark-dsh-runtime-authority-v1`，以及环境、assignment、generation、owner、个人项目、subject token、computer、workspace handle 与别名、Grant、epoch 和过期事实。适配器以禁止跟随符号链接的方式打开 session 专属文件，只接受 `0600` 或由 Writer 持有的 `0640` 权限，每次使用都校验全部字段，并拒绝过期或与组合不一致的 authority。
+旧文档使用精确的 v1 字段集。`callerProfile=web_dsh_v1` 则要求 `slark-dsh-runtime-authority-v2`，其中包含调用方 profile、authority 版本、同意 profile、受保护根目录策略、安全文件 broker 协议与选择发布版本。适配器以禁止跟随符号链接的方式打开 session 专属文件，只接受 `0600` 或由 Writer 持有的 `0640` 权限，每次使用都校验全部字段，并把 Web assignment、generation、workspace 与发布版本和 `.publication-state` 对照。
 
 authority 缺失或即将过期时，每个 session 只发起一次受请求正文约束的 HMAC 刷新；并发调用方共享该请求，随后重新读取 Writer 持有的文件。Edge 响应只包含 workspace 元数据与过期时间，绝不返回 subject token。刷新失败、发布格式错误或刷新后文件仍缺失时，远程执行不可用。
 

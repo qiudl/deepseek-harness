@@ -22,6 +22,7 @@
   "license": "MIT",
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "dependencies": {
+    "@deepseek-ai/dsh-client-ui-slark-local-computer": "workspace:^",
     "@deepseek-ai/dsh-client-ui-settings-plugin-market": "workspace:^",
     "@deepseek-ai/dsh-fs-slark-remote": "workspace:^",
     "@deepseek-ai/dsh-host-plugin-catalog-gateway": "workspace:^",

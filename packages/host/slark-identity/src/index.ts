@@ -22,9 +22,10 @@ import z from '@deepseek-ai/schemastery'
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
-const AUTHORITY_KIND = 'slark-dsh-runtime-authority-v1'
+const AUTHORITY_KIND_V1 = 'slark-dsh-runtime-authority-v1'
+const AUTHORITY_KIND_V2 = 'slark-dsh-runtime-authority-v2'
 const REFRESH_PATH = '/api/internal/v1/dsh/authority/refresh'
-const AUTHORITY_FIELDS = [
+const AUTHORITY_FIELDS_V1 = [
   'protocol_version',
   'kind',
   'environment_id',
@@ -40,6 +41,15 @@ const AUTHORITY_FIELDS = [
   'grant_epoch',
   'expires_at',
 ] as const
+const AUTHORITY_FIELDS_V2 = [
+  ...AUTHORITY_FIELDS_V1,
+  'caller_profile',
+  'authority_version',
+  'consent_profile_version',
+  'protected_root_policy_version',
+  'safe_file_broker_protocol_version',
+  'selection_publication_version',
+] as const
 const STATE_FIELDS = [
   'assignment_id',
   'generation',
@@ -51,13 +61,46 @@ const STATE_FIELDS = [
 ] as const
 
 type Row = Record<string, unknown>
-type ParsedAuthority = { document: Row; expiresAt: number }
-type PublicationState =
+interface AuthorityDocumentV1 {
+  protocol_version: 1
+  kind: typeof AUTHORITY_KIND_V1
+  environment_id: string
+  assignment_id: string
+  generation: number
+  owner_user_id: string
+  personal_project_id: string
+  subject_token: string
+  computer_id: string
+  workspace_handle: string
+  workspace_alias: string
+  grant_id: string
+  grant_epoch: number
+  expires_at: string
+}
+interface AuthorityDocumentV2 extends Omit<AuthorityDocumentV1, 'protocol_version' | 'kind'> {
+  protocol_version: 2
+  kind: typeof AUTHORITY_KIND_V2
+  caller_profile: 'web_dsh_v1'
+  authority_version: number
+  consent_profile_version: 1
+  protected_root_policy_version: 1
+  safe_file_broker_protocol_version: 1
+  selection_publication_version: number
+}
+type ParsedAuthority = {
+  document: AuthorityDocumentV1 | AuthorityDocumentV2
+  expiresAt: number
+}
+type PublicationFence = { assignmentId: string; generation: number; publicationVersion: number }
+type PublicationState = PublicationFence & (
   | { workspaceHandle: null; workspaceAlias: null }
   | { workspaceHandle: string; workspaceAlias: string }
+)
 
 /** Runtime Cell identity configuration. */
 export interface Config {
+  /** Select the Web DSH v2 authority and filesystem-only caller profile. */
+  callerProfile?: 'web_dsh_v1'
   /** Absolute directory containing one Edge-owned authority file per DSH Session. */
   authorityDirectory: string
   /** Absolute root containing read-only local projections for Slark workspaces. */
@@ -80,7 +123,9 @@ export interface Config {
   maxAuthorityBytes?: number
 }
 
-type ResolvedConfig = Required<Omit<Config, 'refreshKey'>> & { refreshKey: string }
+type ResolvedConfig = Required<Omit<Config, 'refreshKey' | 'callerProfile'>>
+  & Pick<Config, 'callerProfile'>
+  & { refreshKey: string }
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -167,6 +212,7 @@ export function cellRefreshMessage(
 export class SlarkIdentity extends Service {
   static inject = ['slarkDevice', 'workspaceRegistry']
   static Config: z<Config> = z.object({
+    callerProfile: z.const('web_dsh_v1'),
     authorityDirectory: z.string().required(),
     workspaceRoot: z.string().required(),
     expectedWorkspaceHandle: z.string().required(),
@@ -273,13 +319,36 @@ export class SlarkIdentity extends Service {
     if (document.workspace_handle !== this.config.expectedWorkspaceHandle) {
       throw new SlarkDeviceClientError('workspace_changed', 'Slark Runtime Cell workspace authority changed')
     }
-    return {
-      subjectToken: document.subject_token as string,
+    const base = {
+      subjectToken: document.subject_token,
       sessionId,
-      computerId: document.computer_id as string,
+      computerId: document.computer_id,
       workspaceHandle: document.workspace_handle,
-      grantId: document.grant_id as string,
-      grantEpoch: document.grant_epoch as number,
+      grantId: document.grant_id,
+      grantEpoch: document.grant_epoch,
+    }
+    if (document.protocol_version === 1) return base
+    const state = await this.readPublicationState()
+    if (
+      state === null
+      || state.workspaceHandle === null
+      || state.assignmentId !== document.assignment_id
+      || state.generation !== document.generation
+      || state.publicationVersion !== document.selection_publication_version
+      || state.workspaceHandle !== document.workspace_handle
+    ) {
+      throw new SlarkDeviceClientError('identity_invalid', 'Slark Web authority publication fence is stale')
+    }
+    return {
+      ...base,
+      callerProfile: 'web_dsh_v1',
+      authorityVersion: document.authority_version,
+      assignmentId: document.assignment_id,
+      assignmentGeneration: document.generation,
+      selectionPublicationVersion: document.selection_publication_version,
+      consentProfileVersion: 1,
+      protectedRootPolicyVersion: 1,
+      safeFileBrokerProtocolVersion: 1,
     }
   }
 
@@ -362,14 +431,14 @@ export class SlarkIdentity extends Service {
 
   private parseAuthority(value: unknown): ParsedAuthority {
     const document = row(value, 'Slark Runtime Cell authority must be an object')
-    exactFields(document, AUTHORITY_FIELDS, 'Slark Runtime Cell authority fields are invalid')
+    const web = this.config.callerProfile === 'web_dsh_v1'
+    exactFields(document, web ? AUTHORITY_FIELDS_V2 : AUTHORITY_FIELDS_V1, 'Slark Runtime Cell authority fields are invalid')
     const expiresAt = canonicalTimestamp(document.expires_at)
     if (
-      document.protocol_version !== 1
-      || document.kind !== AUTHORITY_KIND
+      document.protocol_version !== (web ? 2 : 1)
+      || document.kind !== (web ? AUTHORITY_KIND_V2 : AUTHORITY_KIND_V1)
       || document.environment_id !== this.config.environmentId
-      || typeof document.assignment_id !== 'string'
-      || !UUID.test(document.assignment_id)
+      || !identifier(document.assignment_id)
       || !positiveInteger(document.generation)
       || !identifier(document.owner_user_id)
       || !identifier(document.personal_project_id)
@@ -385,10 +454,21 @@ export class SlarkIdentity extends Service {
       || !UUID.test(document.grant_id)
       || !positiveInteger(document.grant_epoch)
       || !Number.isSafeInteger(expiresAt)
+      || (web && (
+        document.caller_profile !== 'web_dsh_v1'
+        || !positiveInteger(document.authority_version)
+        || document.consent_profile_version !== 1
+        || document.protected_root_policy_version !== 1
+        || document.safe_file_broker_protocol_version !== 1
+        || !positiveInteger(document.selection_publication_version)
+      ))
     ) {
       throw new SlarkDeviceClientError('identity_invalid', 'Slark Runtime Cell authority is invalid')
     }
-    return { document, expiresAt }
+    return {
+      document: document as unknown as AuthorityDocumentV1 | AuthorityDocumentV2,
+      expiresAt,
+    }
   }
 
   private refreshAuthority(sessionId: string): Promise<void> {
@@ -498,8 +578,7 @@ export class SlarkIdentity extends Service {
         && UUID.test(value.grant_id)
         && positiveInteger(value.grant_epoch)
       if (
-        typeof value.assignment_id !== 'string'
-        || !UUID.test(value.assignment_id)
+        !identifier(value.assignment_id)
         || !positiveInteger(value.generation)
         || !positiveInteger(value.publication_version)
         || (!empty && !selected)
@@ -507,8 +586,17 @@ export class SlarkIdentity extends Service {
         throw new Error('dsh-slark-identity: publication state is invalid')
       }
       return empty
-        ? { workspaceHandle: null, workspaceAlias: null }
+        ? {
+          assignmentId: value.assignment_id,
+          generation: value.generation,
+          publicationVersion: value.publication_version,
+          workspaceHandle: null,
+          workspaceAlias: null,
+        }
         : {
+          assignmentId: value.assignment_id,
+          generation: value.generation,
+          publicationVersion: value.publication_version,
           workspaceHandle: value.workspace_handle as string,
           workspaceAlias: value.workspace_alias as string,
         }

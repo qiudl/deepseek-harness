@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { auditSlarkCloudComposition, slarkCloudPresetSnapshot } from './verify-slark-cloud-preset.ts'
+import {
+  auditSlarkCloudComposition,
+  slarkCloudPresetSnapshot,
+  slarkCloudRolloutSnapshot,
+} from './verify-slark-cloud-preset.ts'
 
 describe('slark-cloud composition gate', () => {
   it('accepts the shipped cloud composition', () => {
@@ -9,7 +13,7 @@ describe('slark-cloud composition gate', () => {
   it('snapshots the real keyless model surface and remote provider boundary', () => {
     expect(slarkCloudPresetSnapshot()).toMatchInlineSnapshot(`
       {
-        "persona": "You are the user's DeepSeek Harness personal-workbench agent. File and Shell operations run only through the selected Slark Desktop device and its active Workspace Grant. If the device or Grant is unavailable, report that state; never claim the cloud Runtime Cell is the user's computer.",
+        "persona": "process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1' ? \"You are the user's DeepSeek Harness personal-workbench agent. File operations run only through the explicitly selected Slark Desktop device and its active Workspace Grant. Shell and process execution are unavailable in this Web profile. If the device or Grant is unavailable, report that state; never claim the cloud Runtime Cell is the user's computer.\" : \"You are the user's DeepSeek Harness personal-workbench agent. File and Shell operations run only through the selected Slark Desktop device and its active Workspace Grant. If the device or Grant is unavailable, report that state; never claim the cloud Runtime Cell is the user's computer.\"",
         "presetRows": [
           "persona=@deepseek-ai/dsh-persona",
           "agent-instructions=@deepseek-ai/dsh-agent-instructions",
@@ -44,9 +48,39 @@ describe('slark-cloud composition gate', () => {
           "slark-identity=@deepseek-ai/dsh-slark-identity",
           "slark-collaboration-network=@deepseek-ai/dsh-slark-collaboration-network",
           "slark-fs=@deepseek-ai/dsh-fs-slark-remote",
+          "slark-local-computer-ui=@deepseek-ai/dsh-client-ui-slark-local-computer",
           "slark-shell=@deepseek-ai/dsh-shell-slark-remote",
         ],
       }
     `)
+  })
+
+  it('keeps legacy v1 intact while the independent Web rollout is off', () => {
+    for (const value of [undefined, '0']) {
+      const snapshot = slarkCloudRolloutSnapshot(value)
+      expect(snapshot.activeProviderRows).toEqual([
+        'slark-device', 'slark-identity', 'slark-fs', 'slark-shell',
+      ])
+      expect(snapshot.callerProfiles).toEqual([undefined, undefined])
+      expect(snapshot.activePresetRows).toEqual(expect.arrayContaining(['tool-bash', 'tool-fs', 'tool-jobs']))
+      expect(snapshot.persona).toContain('File and Shell operations')
+    }
+  })
+
+  it('switches the complete Web surface atomically to file-only v2', () => {
+    const snapshot = slarkCloudRolloutSnapshot('1')
+    expect(snapshot.activeProviderRows).toEqual([
+      'slark-device', 'slark-identity', 'slark-fs', 'slark-local-computer-ui',
+    ])
+    expect(snapshot.callerProfiles).toEqual(['web_dsh_v1', 'web_dsh_v1'])
+    expect(snapshot.activePresetRows).toContain('tool-fs')
+    expect(snapshot.activePresetRows).not.toEqual(expect.arrayContaining(['tool-bash', 'tool-jobs']))
+    expect(snapshot.persona).toContain('Shell and process execution are unavailable')
+  })
+
+  it('fails boot evaluation instead of treating an invalid Web flag as legacy Shell', () => {
+    expect(() => slarkCloudRolloutSnapshot('true')).toThrow(
+      'WEB_DSH_LOCAL_COMPUTER_V1 must be exactly 0 or 1',
+    )
   })
 })

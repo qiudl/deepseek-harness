@@ -3,12 +3,13 @@ const COOKIE_NAME = '__Host-dsh_csrf'
 const HEADER_NAME = 'x-slark-dsh-csrf'
 
 /**
- * Mirror the Slark Edge CSRF cookie onto a default browser POST request.
+ * Mirror the Slark Edge CSRF cookie onto a default unsafe browser request.
  * @param init - request options passed to the page's fetch implementation.
  * @returns the original options outside Slark sessions, otherwise options with the authoritative cookie value.
  */
 export function withSlarkCsrfHeader(init?: RequestInit): RequestInit | undefined {
-  if (init?.method?.toUpperCase() !== 'POST') return init
+  const method = init?.method?.toUpperCase()
+  if (method === undefined || method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return init
   const prefix = `${COOKIE_NAME}=`
   const token = (globalThis as { document?: { cookie: string } }).document?.cookie
     .split(';')
@@ -16,7 +17,7 @@ export function withSlarkCsrfHeader(init?: RequestInit): RequestInit | undefined
     .find(part => part.startsWith(prefix))
     ?.slice(prefix.length)
   if (!token) return init
-  const headers = new Headers(init.headers)
+  const headers = new Headers(init?.headers)
   headers.set(HEADER_NAME, token)
   return { ...init, headers }
 }

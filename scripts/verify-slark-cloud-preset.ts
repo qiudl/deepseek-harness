@@ -3,11 +3,19 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { composeEntries, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
-import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
+import { evaluate, type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { loadCordisYaml } from './cordis-yaml.ts'
 
 const root = resolve(import.meta.dirname, '..')
 const REMOTE_SWITCH = "process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'"
+const VALIDATED_REMOTE_SWITCH = "process.env.WEB_DSH_LOCAL_COMPUTER_V1 !== undefined && process.env.WEB_DSH_LOCAL_COMPUTER_V1 !== '0' && process.env.WEB_DSH_LOCAL_COMPUTER_V1 !== '1' ? (() => { throw new Error('WEB_DSH_LOCAL_COMPUTER_V1 must be exactly 0 or 1') })() : process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1'"
+const WEB_ENABLED_SWITCH = "process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1'"
+const WEB_DISABLED_SWITCH = "process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1' || process.env.WEB_DSH_LOCAL_COMPUTER_V1 !== '1'"
+const LEGACY_SHELL_DISABLED_SWITCH = "process.env.DSH_SLARK_REMOTE_PROVIDER_V1 !== '1' || process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1'"
+const WEB_CALLER_PROFILE = "process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1' ? 'web_dsh_v1' : undefined"
+const WEB_PERSONA = "You are the user's DeepSeek Harness personal-workbench agent. File operations run only through the explicitly selected Slark Desktop device and its active Workspace Grant. Shell and process execution are unavailable in this Web profile. If the device or Grant is unavailable, report that state; never claim the cloud Runtime Cell is the user's computer."
+const LEGACY_PERSONA = "You are the user's DeepSeek Harness personal-workbench agent. File and Shell operations run only through the selected Slark Desktop device and its active Workspace Grant. If the device or Grant is unavailable, report that state; never claim the cloud Runtime Cell is the user's computer."
+const PERSONA_SWITCH = `process.env.WEB_DSH_LOCAL_COMPUTER_V1 === '1' ? ${JSON.stringify(WEB_PERSONA)} : ${JSON.stringify(LEGACY_PERSONA)}`
 const LAYERS = [
   'packages/bundle/base/cordis.patch.yml',
   'packages/bundle/web-app/cordis.patch.yml',
@@ -45,7 +53,6 @@ const FORBIDDEN_PRESET_PACKAGES = new Set([
   '@deepseek-ai/dsh-hooks-codex',
   '@deepseek-ai/dsh-hooks-claude-code',
 ])
-
 type Row = EntryOptions & { name?: string; disabled?: unknown; config?: unknown }
 
 /** Keyless snapshot of the model-visible cloud preset and its provider boundary. */
@@ -55,10 +62,22 @@ export interface SlarkCloudPresetSnapshot {
   providerRows: string[]
 }
 
+export interface SlarkCloudRolloutSnapshot {
+  activePresetRows: string[]
+  activeProviderRows: string[]
+  callerProfiles: unknown[]
+  persona: unknown
+}
+
 function expression(value: unknown): string | undefined {
   if (typeof value !== 'object' || value === null || !('__jsExpr' in value)) return undefined
   const source = (value as { __jsExpr?: unknown }).__jsExpr
   return typeof source === 'string' ? source : undefined
+}
+
+function resolveExpression(value: unknown, env: Readonly<Record<string, string>>): unknown {
+  const source = expression(value)
+  return source === undefined ? value : evaluate({ process: { env } }, source)
 }
 
 function walkEntries(value: unknown, visit: (row: Record<string, unknown>) => void): void {
@@ -89,6 +108,7 @@ export function slarkCloudPresetSnapshot(): SlarkCloudPresetSnapshot {
     if (row.id !== 'persona' || typeof row.config !== 'object' || row.config === null) return
     const text = (row.config as Record<string, unknown>).text
     if (typeof text === 'string') persona = text
+    else persona = expression(text) ?? ''
   })
   return {
     persona,
@@ -96,6 +116,46 @@ export function slarkCloudPresetSnapshot(): SlarkCloudPresetSnapshot {
     providerRows: composed
       .filter(row => typeof row.id === 'string' && row.id.startsWith('slark-'))
       .map(row => `${row.id}=${row.name}`),
+  }
+}
+
+/** Evaluate the exact two production rollout branches without mutating process.env. */
+export function slarkCloudRolloutSnapshot(webValue: string | undefined): SlarkCloudRolloutSnapshot {
+  const env = {
+    DSH_SLARK_REMOTE_PROVIDER_V1: '1',
+    ...(webValue === undefined ? {} : { WEB_DSH_LOCAL_COMPUTER_V1: webValue }),
+  }
+  const composed = composeEntries(
+    LAYERS.map(file => loadOverlayPatches('verify-slark-cloud-preset', resolve(root, file))),
+  ) as Row[]
+  const ingress = composed.find(row => row.id === 'slark-cloud-ingress')
+  resolveExpression(ingress?.disabled, env)
+  const providerRows = composed.filter(row => [
+    'slark-device', 'slark-identity', 'slark-fs', 'slark-local-computer-ui', 'slark-shell',
+  ].includes(row.id))
+  const presetPath = resolve(root, 'apps/cli/config/slark-cloud-agent-presets/slark-cloud/agent.cordis.yml')
+  const preset = loadCordisYaml(readFileSync(presetPath, 'utf8'))
+  const activePresetRows: string[] = []
+  let persona: unknown
+  walkEntries(preset, (row) => {
+    if (!Boolean(resolveExpression(row.disabled, env))) activePresetRows.push(String(row.id))
+    if (row.id === 'persona' && typeof row.config === 'object' && row.config !== null) {
+      persona = resolveExpression((row.config as Record<string, unknown>).text, env)
+    }
+  })
+  return {
+    activePresetRows,
+    activeProviderRows: providerRows
+      .filter(row => !Boolean(resolveExpression(row.disabled, env)))
+      .map(row => row.id),
+    callerProfiles: [providerRows.find(row => row.id === 'slark-identity'),
+      providerRows.find(row => row.id === 'slark-fs')].map((row) => {
+      const config = typeof row?.config === 'object' && row.config !== null
+        ? row.config as Record<string, unknown>
+        : undefined
+      return resolveExpression(config?.callerProfile, env)
+    }),
+    persona,
   }
 }
 
@@ -123,6 +183,11 @@ export function auditSlarkCloudComposition(): string[] {
   errors.push(...warnings.map(warning => `composition warning: ${warning}`))
   const byId = new Map(rows.map(row => [row.id, row]))
 
+  const ingress = expectRow(byId, 'slark-cloud-ingress', '@deepseek-ai/dsh-slark-cloud', errors)
+  if (ingress !== undefined && expression(ingress.disabled) !== VALIDATED_REMOTE_SWITCH) {
+    errors.push('row slark-cloud-ingress must reject invalid Web rollout values before mounting providers')
+  }
+
   const credentials = expectRow(byId, 'credentials', '@deepseek-ai/dsh-credentials-local', errors)
   const credentialConfig = typeof credentials?.config === 'object' && credentials.config !== null
     ? credentials.config as Record<string, unknown>
@@ -142,12 +207,20 @@ export function auditSlarkCloudComposition(): string[] {
     expectRow(byId, 'slark-device', '@deepseek-ai/dsh-slark-device-client', errors),
     expectRow(byId, 'slark-identity', '@deepseek-ai/dsh-slark-identity', errors),
     expectRow(byId, 'slark-fs', '@deepseek-ai/dsh-fs-slark-remote', errors),
-    expectRow(byId, 'slark-shell', '@deepseek-ai/dsh-shell-slark-remote', errors),
   ]
   for (const row of remoteRows) {
     if (row !== undefined && expression(row.disabled) !== REMOTE_SWITCH) {
       errors.push(`row ${row.id} must share the fail-closed remote-provider switch`)
     }
+  }
+  const localComputerUi = expectRow(byId, 'slark-local-computer-ui',
+    '@deepseek-ai/dsh-client-ui-slark-local-computer', errors)
+  if (localComputerUi !== undefined && expression(localComputerUi.disabled) !== WEB_DISABLED_SWITCH) {
+    errors.push('row slark-local-computer-ui must require both remote-provider and Web local-computer switches')
+  }
+  const legacyShell = expectRow(byId, 'slark-shell', '@deepseek-ai/dsh-shell-slark-remote', errors)
+  if (legacyShell !== undefined && expression(legacyShell.disabled) !== LEGACY_SHELL_DISABLED_SWITCH) {
+    errors.push('row slark-shell must remain active only for the legacy remote-provider profile')
   }
 
   const collaboration = expectRow(byId, 'slark-collaboration-network',
@@ -171,6 +244,7 @@ export function auditSlarkCloudComposition(): string[] {
     ? remoteRows[1].config as Record<string, unknown>
     : undefined
   const expectedIdentityConfig = {
+    callerProfile: WEB_CALLER_PROFILE,
     authorityDirectory: 'process.env.SLARK_DSH_AUTHORITY_DIRECTORY',
     workspaceRoot: 'process.env.SLARK_DSH_WORKSPACE_ROOT',
     expectedWorkspaceHandle: 'process.env.SLARK_DSH_WORKSPACE_HANDLE',
@@ -193,9 +267,21 @@ export function auditSlarkCloudComposition(): string[] {
     }
   }
 
+  const fsConfig = typeof remoteRows[2]?.config === 'object' && remoteRows[2].config !== null
+    ? remoteRows[2].config as Record<string, unknown>
+    : undefined
+  if (
+    fsConfig === undefined
+    || Object.keys(fsConfig).sort().join('\n') !== ['callerProfile', 'workspaceHandle'].join('\n')
+    || expression(fsConfig.callerProfile) !== WEB_CALLER_PROFILE
+    || expression(fsConfig.workspaceHandle) !== 'process.env.SLARK_DSH_WORKSPACE_HANDLE'
+  ) errors.push('row slark-fs must select only the Web v2 caller profile and workspace handle')
+
   for (const row of rows) {
     if (typeof row.name !== 'string') continue
-    if ((FORBIDDEN_LOCAL_PACKAGES.has(row.name) || FORBIDDEN_AUTHORING_PACKAGES.has(row.name)) && row.disabled !== true) {
+    const forbidden = FORBIDDEN_LOCAL_PACKAGES.has(row.name)
+      || FORBIDDEN_AUTHORING_PACKAGES.has(row.name)
+    if (forbidden && row.disabled !== true) {
       errors.push(`row ${row.id} leaves forbidden package ${row.name} active`)
     }
   }
@@ -210,12 +296,34 @@ export function auditSlarkCloudComposition(): string[] {
   const presetPath = resolve(root, 'apps/cli/config/slark-cloud-agent-presets/slark-cloud/agent.cordis.yml')
   const preset = loadCordisYaml(readFileSync(presetPath, 'utf8'))
   if (!Array.isArray(preset)) errors.push('slark-cloud agent preset must be an entry array')
+  let personaSource: string | undefined
+  const conditionalPresetPackages = new Map([
+    ['@deepseek-ai/dsh-tool-bash', 'tool-bash'],
+    ['@deepseek-ai/dsh-tool-jobs', 'tool-jobs'],
+  ])
   walkEntries(preset, (row) => {
     const name = row.name as string
     if (FORBIDDEN_PRESET_PACKAGES.has(name) || FORBIDDEN_LOCAL_PACKAGES.has(name) || FORBIDDEN_AUTHORING_PACKAGES.has(name)) {
       errors.push(`slark-cloud agent preset contains forbidden package ${name}`)
     }
+    const conditionalId = conditionalPresetPackages.get(name)
+    if (conditionalId !== undefined) {
+      conditionalPresetPackages.delete(name)
+      if (row.id !== conditionalId || expression(row.disabled) !== WEB_ENABLED_SWITCH) {
+        errors.push(`${conditionalId} must be disabled exactly when the Web local-computer profile is enabled`)
+      }
+    }
+    if (row.id === 'persona') {
+      const config = typeof row.config === 'object' && row.config !== null
+        ? row.config as Record<string, unknown>
+        : undefined
+      personaSource = expression(config?.text)
+    }
   })
+  for (const id of conditionalPresetPackages.values()) errors.push(`slark-cloud agent preset is missing ${id}`)
+  if (personaSource !== PERSONA_SWITCH) {
+    errors.push('slark-cloud persona must describe the exact legacy/Web execution surface selected by the rollout')
+  }
 
   return errors
 }

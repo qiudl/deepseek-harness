@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-叠加在 [`dsh-base`](../base/README.zh.md) 与 [`dsh-web-app`](../web-app/README.zh.md) 之后的 Runtime Cell 组合包。它用 Slark Device Provider 替换 cell 本地文件系统与 Shell Provider，移除本地 subprocess 和 sandbox Provider，禁用目录选择以及 Cordis／插件／preset 创作界面，并选择随包发布的 `slark-cloud` Agent preset。
+叠加在 [`dsh-base`](../base/README.zh.md) 与 [`dsh-web-app`](../web-app/README.zh.md) 之后的 Runtime Cell 组合包。独立的 Web 本地电脑灰度会把旧版 Slark 文件系统／Shell 能力面切换为带版本防护、可显式选择目标的文件专用 Device Provider。本地 subprocess、sandbox Provider、目录选择与 Cordis／插件／preset 创作界面始终禁用。
 
 ```json
 {
@@ -22,22 +22,23 @@
 
 | 变量 | 含义 |
 |---|---|
-| `DSH_SLARK_REMOTE_PROVIDER_V1=1` | 同时启用 Device client、身份适配器、远程文件系统与远程 Shell |
+| `DSH_SLARK_REMOTE_PROVIDER_V1=1` | 启用既有 Slark Device client 与旧版 v1 文件系统／Shell profile |
+| `WEB_DSH_LOCAL_COMPUTER_V1=1` | 独立切换到 v2 Web 文件访问与目标选择；同时要求远程 Provider 开关开启 |
 | `SLARK_DSH_GATEWAY_URL` | 精确的 Slark Gateway 内部 HTTP(S) origin |
 | `SLARK_DSH_SERVICE_TOKEN` | 只用于 Gateway 请求 header 的 service bearer |
 | `SLARK_DSH_AUTHORITY_DIRECTORY` | 私有绝对目录，其中包含每 session 的 Edge authority 文档与 `.publication-state` |
 | `SLARK_DSH_WORKSPACE_ROOT` | 只读 workspace 投影的绝对根目录 |
-| `SLARK_DSH_WORKSPACE_HANDLE` | 固定写入当前 DSH 子进程，并由身份、文件系统和 Shell Provider 共用的不透明 handle |
+| `SLARK_DSH_WORKSPACE_HANDLE` | 固定写入当前 DSH 子进程，并由身份与文件系统 Provider 共用的不透明 handle |
 | `SLARK_DSH_ENVIRONMENT_ID` | 绑定到 Cell 刷新认证的 Slark 环境 |
 | `SLARK_DSH_CELL_ID` | 绑定到唯一刷新密钥的 Runtime Cell id |
 | `SLARK_DSH_CELL_REFRESH_KEY` | 通过进程环境而非 Cordis 配置注入的规范每 Cell HMAC 密钥 |
 | `SLARK_DSH_EDGE_REFRESH_URL` | 精确的 loopback Edge authority 刷新 URL |
 
-启用后缺少或无效的任何值都会在激活阶段明确失败。`DSH_SLARK_REMOTE_PROVIDER_V1` 缺失或不严格等于 `1` 时，全部远程配置行保持禁用，全部本地执行配置行仍被硬禁用。已有 session 可继续通过 Web 应用读取，但文件系统和 Shell 工具无法挂载；不存在本地回退。
+`DSH_SLARK_REMOTE_PROVIDER_V1` 缺失或不严格等于 `1` 时，全部远程配置行保持禁用，全部本地执行配置行仍被硬禁用。它为 `1` 而 `WEB_DSH_LOCAL_COMPUTER_V1` 缺失或为 `0` 时，保留已评审的旧版 v1 文件系统／Shell 能力面。只有两个开关都严格为 `1` 才启用 v2 身份、带版本防护的文件访问、目标选择和文件专用 persona；新开关的其他取值会使启动失败，任何模式都没有 cell 本地回退。
 
-Slark Edge 必须在 `HttpOnly` session cookie 之外签发可读取的 `__Host-dsh_csrf` cookie。served Web client 会在每次 API POST 中把该 token 镜像到 `x-slark-dsh-csrf`；缺失或不匹配的 token 会被 Edge 拒绝，而独立版 DSH 因不存在该 cookie，请求保持不变。
+Slark Edge 必须在 `HttpOnly` session cookie 之外签发可读取的 `__Host-dsh_csrf` cookie。served Web client 会在不安全同源请求中把该 token 镜像到 `x-slark-dsh-csrf`；缺失或不匹配的 token 会被 Edge 拒绝，而独立版 DSH 因不存在该 cookie，请求保持不变。
 
-云端 Agent preset 保留 DSH 的 goal、planning、compaction、skill、subagent、workflow、job、Web search，以及远程 `read`／`write`／`edit`／`bash`。它不包含依赖 subprocess 的 `glob`／`grep`、持久 terminal、LSP、hook 和 Cordis 创作。该部署同时禁用用户自定义 preset 发现与 preset 切换器。CLI 把本 preset 放入由 Slark Device Provider 配置行决定是否选择的云端专用随附根目录，因此独立版 DSH 不会列出它，也不会改变本地 Provider 行为。
+启用 Web 本地电脑灰度时，云端 Agent preset 保留 DSH 的 goal、planning、compaction、skill、subagent、workflow、Web search，以及远程 `read`／`write`／`edit`，并移除 Shell、job、依赖 subprocess 的 `glob`／`grep`、持久 terminal、LSP、hook 和 Cordis 创作。灰度关闭时继续保留已评审的旧版远程 Shell／job 能力面。两种模式都禁用用户自定义 preset 发现与 preset 切换器。
 
 身份适配器根据 `.publication-state` 注册所选只读 workspace 投影。该状态选择其他 workspace 时，部署 supervisor 会替换 DSH 子进程；每 session authority 刷新则无需重启子进程即可轮换短期 subject。
 
@@ -49,7 +50,7 @@ Slark Edge 必须在 `HttpOnly` session cookie 之外签发可读取的 `__Host-
 
 #### 模型看到的内容
 
-`slark-cloud` persona 明确说明：文件和 Shell 操作以选定 Slark Desktop 设备为目标，Device 或 Grant 失败即为最终结果。现有工具 schema 保持复用；仅本地可用的工具不会出现在目录中。
+灰度所选择的 `slark-cloud` persona 会准确描述当前能力面：v2 说明文件操作以显式选择的 Slark Desktop 设备为目标，并且 Shell／进程执行不可用；旧版 v1 继续说明远程文件与 Shell 操作。Device 或 Grant 失败都仍是最终结果。
 
 #### Token 影响
 
@@ -61,6 +62,6 @@ Slark Edge 必须在 `HttpOnly` session cookie 之外签发可读取的 `__Host-
 
 ## 已知限制与延期工作
 
-- 尚无远程文件搜索 Provider。Agent 可通过远程 Shell 执行有界搜索命令，但 `glob` 和 `grep` 仍不提供。
+- 尚无远程文件搜索 Provider。Web profile 中不提供 Shell、`glob` 和 `grep`。
 - 一个 DSH 子进程固定一个 Workspace Grant。切换 workspace 需要由 Slark supervisor 替换该子进程。
 - 本组合包只提供配置和静态证明；Edge／Cell 进程隔离、authority 发布、supervisor 重载、资源限额、健康检查和 draining 属于 Slark 部署任务。

@@ -228,7 +228,7 @@ describe('connection client apply', () => {
     expect(seen.every(({ headers }) => headers.get('x-slark-dsh-csrf') === 'csrf-token')).toBe(true)
   })
 
-  it('keeps non-Slark and non-POST requests unchanged and overwrites a supplied CSRF header', () => {
+  it('keeps safe requests unchanged and secures every unsafe method', () => {
     const post: RequestInit = { method: 'POST', headers: { 'x-slark-dsh-csrf': 'caller-value' } }
     expect(withSlarkCsrfHeader(post)).toBe(post)
     vi.stubGlobal('document', { cookie: '__Host-dsh_csrf=cookie-value' })
@@ -239,9 +239,45 @@ describe('connection client apply', () => {
       expect(secured).not.toBe(post)
       expect(new Headers(secured?.headers).get('x-slark-dsh-csrf')).toBe('cookie-value')
       expect(new Headers(post.headers).get('x-slark-dsh-csrf')).toBe('caller-value')
+      for (const method of ['PUT', 'PATCH', 'DELETE']) {
+        expect(new Headers(withSlarkCsrfHeader({ method })?.headers).get('x-slark-dsh-csrf')).toBe('cookie-value')
+      }
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+
+  it('keeps Slark Edge calls same-origin and applies the unsafe-method CSRF policy', async () => {
+    ;(globalThis as Win).location = { hostname: 'dsh.example', search: '', origin: 'https://dsh.example' }
+    vi.stubGlobal('document', { cookie: '__Host-dsh_csrf=edge-token' })
+    const handle = await mount()
+    const original = globalThis.fetch
+    const seen: Array<{ path: string; method: string; csrf: string | null }> = []
+    globalThis.fetch = async (input: URL | RequestInfo, init?: RequestInit) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      seen.push({
+        path,
+        method: init?.method ?? 'GET',
+        csrf: new Headers(init?.headers).get('x-slark-dsh-csrf'),
+      })
+      return Response.json({ ok: true })
+    }
+    try {
+      await handle.fetchSlarkEdge('/api/slark/v1/local-computer-targets', { method: 'GET' })
+      await handle.fetchSlarkEdge('/api/slark/v1/local-computer-target', { method: 'PUT' })
+      expect(() => handle.fetchSlarkEdge('/api/host.describe')).toThrow(/same-origin/)
+      expect(() => handle.fetchSlarkEdge('https://evil.example/api/slark/x')).toThrow(/same-origin/)
+      expect(() => handle.fetchSlarkEdge('/api/slark/../../api/host.describe')).toThrow(/same-origin/)
+      expect(() => handle.fetchSlarkEdge('/api/slark/%2fapi/host.describe')).toThrow(/same-origin/)
+      expect(() => handle.fetchSlarkEdge('/api/slark/v1/local-computer-targets#leak')).toThrow(/same-origin/)
+    } finally {
+      globalThis.fetch = original
+      vi.unstubAllGlobals()
+    }
+    expect(seen).toEqual([
+      { path: '/api/slark/v1/local-computer-targets', method: 'GET', csrf: null },
+      { path: '/api/slark/v1/local-computer-target', method: 'PUT', csrf: 'edge-token' },
+    ])
   })
 
   it('opens one WebSocket per downlink, parses frames, and aborts both without using fetch', async () => {

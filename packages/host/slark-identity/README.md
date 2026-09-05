@@ -8,6 +8,7 @@ Slark Edge identity adapter for an isolated DSH Runtime Cell. It binds the [`Sla
 
 | Field | Required | Meaning |
 |---|---:|---|
+| `callerProfile` | no | Set `web_dsh_v1` to require the complete v2 Web authority and publication fence |
 | `authorityDirectory` | yes | Absolute private directory containing one atomically replaced `<sessionId>.json` authority document per DSH Session |
 | `workspaceRoot` | yes | Absolute private root containing the selected workspace's read-only local projection |
 | `expectedWorkspaceHandle` | yes | Workspace handle fixed into the Runtime Cell's remote filesystem and Shell providers |
@@ -19,7 +20,7 @@ Slark Edge identity adapter for an isolated DSH Runtime Cell. It binds the [`Sla
 | `refreshTimeoutMs` | no | Timeout for one Edge refresh request; default 5 seconds, maximum 30 seconds |
 | `maxAuthorityBytes` | no | Maximum authority document bytes; default 64 KiB, hard maximum 256 KiB |
 
-Each document uses exact fields: `protocol_version=1`, `kind=slark-dsh-runtime-authority-v1`, environment, assignment, generation, owner, personal-project, subject-token, computer, workspace handle and alias, Grant, epoch, and expiry facts. The adapter opens the session-specific file with no symlink following, accepts only mode `0600` or writer-owned `0640`, validates every field on every use, and rejects expired or composition-mismatched authority.
+Legacy documents use the exact v1 field set. `callerProfile=web_dsh_v1` instead requires `slark-dsh-runtime-authority-v2`, including caller profile, authority version, consent profile, protected-root policy, safe-file-broker protocol, and selection-publication version. The adapter opens the session-specific file without following symlinks, accepts only mode `0600` or writer-owned `0640`, validates every field on every use, and verifies the Web assignment, generation, workspace, and publication version against `.publication-state`.
 
 Missing or near-expiry authority triggers one body-bound HMAC refresh per session; concurrent callers share that request and then reread the writer-owned file. The Edge response contains only workspace metadata and expiry, never the subject token. Refresh failure, malformed publication, or a file that remains missing makes remote execution unavailable.
 

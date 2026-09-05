@@ -24,7 +24,7 @@ const TERMINAL_STATES = new Set([
 ])
 
 /** Stable authority supplied by the later Slark identity adapter for one task. */
-export interface SlarkDeviceAuthority {
+interface SlarkDeviceAuthorityBase {
   /** Short-lived subject token with audience `dsh-device-gateway`. */
   subjectToken: string
   /** DSH session identity fenced by the subject token. */
@@ -39,8 +39,30 @@ export interface SlarkDeviceAuthority {
   grantEpoch: number
 }
 
+/** Legacy authority used by non-Web Runtime Cell profiles. */
+export interface SlarkDeviceAuthorityV1 extends SlarkDeviceAuthorityBase {
+  callerProfile?: undefined
+}
+
+/** Complete authority fences required by the Web DSH local-computer profile. */
+export interface SlarkDeviceAuthorityV2 extends SlarkDeviceAuthorityBase {
+  callerProfile: 'web_dsh_v1'
+  authorityVersion: number
+  assignmentId: string
+  assignmentGeneration: number
+  selectionPublicationVersion: number
+  consentProfileVersion: 1
+  protectedRootPolicyVersion: 1
+  safeFileBrokerProtocolVersion: 1
+}
+
+/** Versioned authority accepted from the identity adapter for one Device Task. */
+export type SlarkDeviceAuthority = SlarkDeviceAuthorityV1 | SlarkDeviceAuthorityV2
+
 /** Task request accepted from remote capability providers. */
 export interface SlarkDeviceTaskRequest {
+  /** Runtime caller profile; Web requests fail closed unless authority carries the same profile. */
+  callerProfile?: 'web_dsh_v1'
   /** Reject authority rebinding to another workspace during the operation. */
   expectedWorkspaceHandle: string
   /** Grant capability required by the operation. */
@@ -202,6 +224,40 @@ function validateAuthority(value: SlarkDeviceAuthority): void {
     || value.grantEpoch < 1
   ) {
     throw new SlarkDeviceClientError('identity_invalid', 'Slark Device authority is invalid')
+  }
+  if (value.callerProfile === undefined) return
+  const fences = value as unknown as Row
+  if (
+    fences.callerProfile !== 'web_dsh_v1'
+    || !positiveAuthorityInteger(fences.authorityVersion)
+    || typeof fences.assignmentId !== 'string'
+    || !IDENTIFIER.test(fences.assignmentId)
+    || !positiveAuthorityInteger(fences.assignmentGeneration)
+    || !positiveAuthorityInteger(fences.selectionPublicationVersion)
+    || fences.consentProfileVersion !== 1
+    || fences.protectedRootPolicyVersion !== 1
+    || fences.safeFileBrokerProtocolVersion !== 1
+  ) {
+    throw new SlarkDeviceClientError('identity_invalid', 'Slark Web authority fences are invalid')
+  }
+}
+
+function positiveAuthorityInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0
+}
+
+function validateCallerProfile(authority: SlarkDeviceAuthority, request: SlarkDeviceTaskRequest): void {
+  if (authority.callerProfile !== request.callerProfile) {
+    throw new SlarkDeviceClientError('caller_profile_mismatch', 'Slark Device caller profile does not match authority')
+  }
+  if (request.callerProfile !== 'web_dsh_v1') return
+  const readOperations = new Set(['resolve', 'stat', 'lstat', 'read', 'list'])
+  const writeOperations = new Set(['write', 'edit'])
+  if (
+    !((request.capability === 'fs_read' && readOperations.has(request.operation))
+      || (request.capability === 'fs_write' && writeOperations.has(request.operation)))
+  ) {
+    throw new SlarkDeviceClientError('capability_denied', 'Web DSH permits versioned filesystem operations only')
   }
 }
 
@@ -386,6 +442,7 @@ export class SlarkDeviceClient extends Service {
     if (source === undefined) throw new SlarkDeviceClientError('identity_unavailable', 'Slark Device identity is unavailable')
     const authority = await source()
     validateAuthority(authority)
+    validateCallerProfile(authority, request)
     if (authority.workspaceHandle !== request.expectedWorkspaceHandle) {
       throw new SlarkDeviceClientError('workspace_changed', 'Slark workspace authority changed before execution')
     }
