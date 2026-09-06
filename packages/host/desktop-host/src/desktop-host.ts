@@ -28,7 +28,7 @@ interface DesktopHostOptions {
 interface ViewLease {
   readonly profileId: PersonProfileId
   readonly generation: number
-  readonly expiresAt: number
+  expiresAt: number
   readonly ownerId: string
   activationHandle?: ProfileViewActivationHandle
   activating?: boolean
@@ -150,7 +150,7 @@ export class DesktopHost {
   }
 
   /**
-   * Mint a short-lived, generation-fenced lease retained by Desktop Main.
+   * Mint or extend a short-lived, generation-fenced lease retained by Desktop Main.
    * @param input - binding and authenticated connection owner.
    * @returns a Profile lease without URL, token, credential, or path data.
    */
@@ -167,9 +167,12 @@ export class DesktopHost {
     if (!profile || !this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)) {
       throw new HostAuthorityError('profile_locked')
     }
+    const now = this.options.clock.now()
+    const expiresAt = now + (this.options.viewLeaseTtlMs ?? 60_000)
     for (const [viewLeaseId, lease] of this.leases) {
-      if (lease.ownerId === input.ownerId && lease.profileId === profile.profileId && lease.expiresAt > this.options.clock.now()
+      if (lease.ownerId === input.ownerId && lease.profileId === profile.profileId && lease.expiresAt > now
         && this.generations.get(profile.profileId) === lease.generation) {
+        lease.expiresAt = expiresAt
         lease.activationHandle ??= activationHandle()
         return {
           profileId: profile.profileId,
@@ -184,7 +187,6 @@ export class DesktopHost {
     const generation = (this.generations.get(profile.profileId) ?? 0) + 1
     this.generations.set(profile.profileId, generation)
     const viewLeaseId = randomUUID() as ProfileViewLeaseId
-    const expiresAt = this.options.clock.now() + (this.options.viewLeaseTtlMs ?? 60_000)
     const viewActivationHandle = activationHandle()
     this.leases.set(viewLeaseId, {
       profileId: profile.profileId, generation, expiresAt, ownerId: input.ownerId, activationHandle: viewActivationHandle,

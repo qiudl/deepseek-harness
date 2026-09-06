@@ -699,6 +699,56 @@ describe('worker and Desktop-only bundle', () => {
     expect(JSON.stringify(opened)).not.toContain(accountSubject)
   })
 
+  it('atomically extends an activated lease when the same owner reopens its Profile', async () => {
+    let now = 1_000
+    const leaseClock = { now: () => now }
+    const registry = new ProfileRegistry({
+      root: dir(), deviceIndexKey: Buffer.alloc(32, 4), clock: leaseClock,
+      keyHandleUnlocked: () => true,
+    })
+    await registry.registerAccount({
+      issuer: slarkIssuer, subject: 'lease-renewal', keyHandle: 'keychain:renewal',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:renewal',
+      authorityBindingVersion: 1, unlockMaterial,
+    })
+    const host = new DesktopHost({
+      registry, clock: leaseClock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => undefined,
+      activateProfileView: async () => ({
+        origin: 'http://127.0.0.1:4123', generation: 7, bootstrapCookie,
+      }),
+    })
+    await host.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'lease-renewal',
+      accountAccessToken: accountToken(slarkIssuer, 'lease-renewal'),
+      keyHandle: 'keychain:renewal', authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:renewal', authorityBindingVersion: 1,
+      unlockMaterial, ownerId: 'connection-renewal',
+    })
+    const input = {
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:renewal',
+      authorityBindingVersion: 1,
+      ownerId: 'connection-renewal',
+    }
+    const first = await host.openProfile(input)
+    await host.activateView({
+      profileId: first.profileId, viewLeaseId: first.viewLeaseId,
+      viewActivationHandle: first.viewActivationHandle, leaseGeneration: first.leaseGeneration,
+      runtimeGeneration: first.runtimeGeneration, ownerId: input.ownerId,
+    })
+
+    now += 20_000
+    const renewed = await host.openProfile(input)
+    expect(renewed).toMatchObject({
+      viewLeaseId: first.viewLeaseId,
+      leaseGeneration: first.leaseGeneration,
+      expiresAt: first.expiresAt + 20_000,
+    })
+    expect(renewed.viewActivationHandle).not.toBe(first.viewActivationHandle)
+  })
+
   it('rejects invalid or mismatched Account authority before Profile registry mutation', async () => {
     const registry = new ProfileRegistry({
       root: dir(), deviceIndexKey: Buffer.alloc(32, 3), clock, keyHandleUnlocked: () => true,
