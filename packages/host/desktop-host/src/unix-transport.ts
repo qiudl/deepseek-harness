@@ -358,6 +358,9 @@ class FrameChannel {
 
   send(frame: HostControlFrame): void { this.socket.write(encodeHostControlFrame(frame)) }
 
+  /** Whether the authenticated transport is still usable by its owner. */
+  isConnected(): boolean { return this.failed === undefined && !this.socket.destroyed }
+
   call(frame: HostControlFrame, signal?: AbortSignal): Promise<HostControlFrame> {
     if (this.failed) return Promise.reject(this.failed)
     const id = frame.request_id
@@ -933,6 +936,9 @@ export class UnixHostClient {
       processNonce: frame.result.process_nonce,
     }, options.now ?? Date.now, frame.result)
   }
+
+  /** Report only local transport liveness; authority is still rechecked by every operation. */
+  isConnected(): boolean { return this.channel.isConnected() }
 
   /**
    * Read Profile status over the authenticated Host process generation.

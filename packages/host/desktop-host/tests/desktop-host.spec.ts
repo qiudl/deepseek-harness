@@ -269,7 +269,10 @@ describe('authenticated Unix transport', () => {
       origin: 'http://127.0.0.1:4123', activationGeneration: 7, expiresAt: opened.expiresAt, bootstrapCookie,
     })
     await expect(client.activateView(input)).rejects.toMatchObject({ code: 'stale' })
-    client.close(); await server.close()
+    expect(client.isConnected()).toBe(true)
+    client.close()
+    expect(client.isConnected()).toBe(false)
+    await server.close()
   })
 
   it('provisions an empty-root Profile on first click, reuses one person, and isolates another', async () => {
