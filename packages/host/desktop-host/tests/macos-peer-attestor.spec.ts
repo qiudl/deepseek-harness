@@ -5,7 +5,11 @@ import { join } from 'node:path'
 import { realpathSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { createMacOSPeerAttestor, HostAuthorityError } from '../src/index.ts'
-import { readMacOSPeerIdentity } from '../src/macos-peer-attestor.ts'
+import {
+  parseMacOSProcessExecutable,
+  readMacOSPeerIdentity,
+  resolveMacOSProcessExecutable,
+} from '../src/macos-peer-attestor.ts'
 
 const executable = (): string => {
   const path = join(mkdtempSync(join(tmpdir(), 'dsh-peer-')), 'slark-daemon')
@@ -31,6 +35,22 @@ describe('macOS Unix peer attestation', () => {
     })
     expect(calls).toEqual(['getpeereid', 'getsockopt'])
     expect(peer).toEqual({ uid: 501, pid: 42 })
+  })
+
+  it('falls back to the launchd process text mapping when proc_pidpath returns zero', async () => {
+    const calls: number[] = []
+    const path = await resolveMacOSProcessExecutable(42, () => 0, async (pid) => {
+      calls.push(pid)
+      return 'p42\nftxt\nn/usr/local/libexec/slark-daemon\n'
+    })
+    expect(calls).toEqual([42])
+    expect(path).toBe('/usr/local/libexec/slark-daemon')
+  })
+
+  it('selects the primary text mapping and rejects malformed lsof identity output', () => {
+    expect(parseMacOSProcessExecutable('p42\nftxt\nn/bin/a\nftxt\nn/usr/lib/dyld\n', 42)).toBe('/bin/a')
+    expect(() => parseMacOSProcessExecutable('p43\nftxt\nn/bin/a\n', 42)).toThrow(HostAuthorityError)
+    expect(() => parseMacOSProcessExecutable('p42\nftxt\n', 42)).toThrow(HostAuthorityError)
   })
 
   it('binds the peer fd to PID, executable, Team ID, and executable digest', async () => {

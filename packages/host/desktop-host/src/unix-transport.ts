@@ -358,6 +358,9 @@ class FrameChannel {
 
   send(frame: HostControlFrame): void { this.socket.write(encodeHostControlFrame(frame)) }
 
+  /** Whether the authenticated transport is still usable by its owner. */
+  isConnected(): boolean { return this.failed === undefined && !this.socket.destroyed }
+
   call(frame: HostControlFrame, signal?: AbortSignal): Promise<HostControlFrame> {
     if (this.failed) return Promise.reject(this.failed)
     const id = frame.request_id
@@ -746,6 +749,9 @@ export class UnixHostServer {
           const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
           const profile = await this.options.host.restoreProfile({
             profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation,
+            authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
             keyHandle: frame.params.profile_key_handle,
             unlockMaterial: frame.params.profile_unlock_material,
             ownerId,
@@ -931,6 +937,9 @@ export class UnixHostClient {
     }, options.now ?? Date.now, frame.result)
   }
 
+  /** Report only local transport liveness; authority is still rechecked by every operation. */
+  isConnected(): boolean { return this.channel.isConnected() }
+
   /**
    * Read Profile status over the authenticated Host process generation.
    * @param input - opaque binding plus optional cancellation.
@@ -1003,6 +1012,9 @@ export class UnixHostClient {
    */
   async restoreProfile(input: {
     readonly profileSelector: string
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly signal?: AbortSignal
@@ -1010,7 +1022,10 @@ export class UnixHostClient {
     const request: ProfileRestoreRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.restore',
       params: {
-        ...this.auth(), profile_selector: input.profileSelector, profile_key_handle: input.keyHandle,
+        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        profile_selector: input.profileSelector, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
       },
     }

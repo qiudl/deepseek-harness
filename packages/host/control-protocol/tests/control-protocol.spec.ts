@@ -105,11 +105,12 @@ describe('Main-only Profile operations', () => {
 
   it('round-trips Profile status, open, activation, and lease close without secret fields', () => {
     const status = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.status","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"keychain-binding:opaque","authority_binding_version":1}}\n`
+    const restore = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3144","method":"profile.restore","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"keychain-binding:opaque","authority_binding_version":1,"profile_selector":"${'A'.repeat(32)}.${'A'.repeat(86)}","profile_key_handle":"keychain:person","profile_unlock_material":"${'A'.repeat(43)}"}}\n`
     const open = '{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"profile.open","result":{"profile_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3150","view_lease_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3151","view_activation_handle":"ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8","lease_generation":2,"expires_at":2000,"runtime_generation":5}}\n'
     const activate = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3143","method":"profile.view_activate","params":{${auth},"profile_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3150","view_lease_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3151","view_activation_handle":"ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8","lease_generation":2,"runtime_generation":5}}\n`
     const activated = `{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3143","method":"profile.view_activate","result":{"origin":"http://127.0.0.1:4123","activation_generation":7,"expires_at":2000,"bootstrap_cookie":{"name":"dsh-auth-${'a'.repeat(43)}","value":"v1.${'b'.repeat(8)}.${'c'.repeat(43)}"}}}\n`
     const close = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3142","method":"profile.lease_close","params":{${auth},"view_lease_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3151","lease_generation":2,"runtime_generation":5}}\n`
-    for (const source of [status, open, activate, activated, close]) {
+    for (const source of [status, restore, open, activate, activated, close]) {
       expect(encodeHostControlFrame(decodeHostControlFrame(source))).toBe(source)
       expect(source).not.toMatch(/"(?:token|cookie|path|subject)"/)
     }

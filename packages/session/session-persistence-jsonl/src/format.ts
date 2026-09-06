@@ -9,19 +9,19 @@
  */
 
 import { join } from 'node:path'
-import { decodeSeqRanges, encodeSeqRanges } from '@deepseek-ai/dsh-session/src/seq-ranges.ts'
-import { decodeStorageRecord, packChunkRuns, type StorageRecord } from '@deepseek-ai/dsh-session/src/chunk-rows.ts'
+import { decodeSeqRanges, encodeSeqRanges } from '@deepseek-ai/dsh-session/seq-ranges'
+import { decodeStorageRecord, packChunkRuns, type StorageRecord } from '@deepseek-ai/dsh-session/chunk-rows'
 import {
   SESSION_FORMAT_VERSION,
   type SessionEvent,
   type SessionHeader,
   type SessionId,
   type SessionScopeRef,
-} from '@deepseek-ai/dsh-session/src/types.ts'
+} from '@deepseek-ai/dsh-session/types'
 import {
   SessionFormatUnsupportedError,
   sessionFormatVersionRefusal,
-} from '@deepseek-ai/dsh-session-persistence/src/errors.ts'
+} from '@deepseek-ai/dsh-session-persistence/errors'
 
 /** Physical encoding selected for JSONL session artifacts. */
 export type JsonlCompression = 'zstd' | 'none'

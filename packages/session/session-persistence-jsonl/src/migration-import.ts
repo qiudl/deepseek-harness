@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
-import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol'
 import {
   migrationOwnerStateRecords,
   migrationSemanticRecords,

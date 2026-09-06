@@ -33,6 +33,39 @@ interface PeerCredentialFunctions {
   getsockopt(fd: number, level: number, name: number, pid: Int32Array, size: Uint32Array): unknown
 }
 
+type ProcPidPath = (pid: number, buffer: Buffer, size: number) => unknown
+
+/** @internal Parse the primary executable mapping reported by `lsof -d txt -Fn`. */
+export function parseMacOSProcessExecutable(stdout: string, expectedPid: number): string {
+  const lines = stdout.split(/\r?\n/u)
+  if (lines[0] !== `p${expectedPid}`) throw new HostAuthorityError('unauthorized')
+  const textDescriptor = lines.indexOf('ftxt', 1)
+  const path = textDescriptor < 0 ? undefined : lines[textDescriptor + 1]?.slice(1)
+  if (!lines[textDescriptor + 1]?.startsWith('n/') || !path?.startsWith('/')) {
+    throw new HostAuthorityError('unauthorized')
+  }
+  return path
+}
+
+/** @internal Resolve a peer executable, falling back when proc_pidpath is unavailable for launchd services. */
+export async function resolveMacOSProcessExecutable(
+  pid: number,
+  procPidPath: ProcPidPath,
+  runLsof: (pid: number) => Promise<string> = async (candidatePid) => {
+    const { stdout } = await execFileAsync('/usr/sbin/lsof', ['-a', '-p', String(candidatePid), '-d', 'txt', '-Fn'], {
+      encoding: 'utf8', maxBuffer: 64 * 1024,
+    })
+    return stdout
+  },
+): Promise<string> {
+  const buffer = Buffer.alloc(4096)
+  const length = procPidPath(pid, buffer, buffer.byteLength)
+  if (typeof length === 'number' && length > 0 && length < buffer.byteLength) {
+    return buffer.subarray(0, length).toString('utf8')
+  }
+  return parseMacOSProcessExecutable(await runLsof(pid), pid)
+}
+
 function socketFd(socket: Socket): number {
   const fd = (socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd
   if (!Number.isSafeInteger(fd) || (fd as number) < 0) throw new HostAuthorityError('unauthorized')
@@ -72,10 +105,7 @@ async function nativeBindings(): Promise<MacOSPeerBindings> {
       return readMacOSPeerIdentity(fd, { getpeereid, getsockopt })
     },
     executablePath(pid) {
-      const buffer = Buffer.alloc(4096)
-      const length = procPidPath(pid, buffer, buffer.byteLength)
-      if (typeof length !== 'number' || length <= 0 || length >= buffer.byteLength) throw new HostAuthorityError('unauthorized')
-      return buffer.subarray(0, length).toString('utf8')
+      return resolveMacOSProcessExecutable(pid, procPidPath)
     },
     async verifyCodeSignature(path) {
       await execFileAsync('/usr/bin/codesign', ['--verify', '--strict', '--all-architectures', path], {

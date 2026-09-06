@@ -9,11 +9,11 @@ import { MaterializedMigrationOwnerStateSource } from '../src/materialized-migra
 
 const uid = process.getuid?.() ?? 0
 
-function state(): MigrationOwnerStateBundle {
+function state(defaultPreset = 'workspace-write'): MigrationOwnerStateBundle {
   return {
     version: 1,
     documents: [
-      { kind: 'settings', schemaVersion: 1, value: { permission: { defaultPreset: 'workspace-write' } } },
+      { kind: 'settings', schemaVersion: 1, value: { permission: { defaultPreset } } },
       { kind: 'credentials', schemaVersion: 1, value: { refs: { DEEPSEEK_API_KEY: 'sk-private' }, records: {} } },
       { kind: 'workspace', schemaVersion: 1, value: {
         grants: ['/workspace'],
@@ -56,6 +56,23 @@ describe('migration owner-state generation applicator', () => {
       refs: { UPDATED: 'value' },
     })
     expect(await exportSource.inventoryDigest()).not.toBe(initialDigest)
+  })
+
+  it('reopens a secure legacy generation after its mutable owner documents diverge', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-state-restart-'))
+    const applicator = new MigrationOwnerStateApplicator(uid)
+    const result = await applicator.apply(root, 5, state())
+    await writeFile(result.settingsPath, '{"permission":{"defaultPreset":"read-only"}}\n')
+    await expect(applicator.apply(root, 5, state('full-access'))).resolves.toEqual(result)
+    expect(await readFile(result.settingsPath, 'utf8')).toContain('read-only')
+  })
+
+  it('rejects a malformed legacy generation seed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-state-invalid-seed-'))
+    const applicator = new MigrationOwnerStateApplicator(uid)
+    await applicator.apply(root, 5, state())
+    await writeFile(join(root, 'migration-owner-state', '5', '.migration-seed.sha256'), 'invalid\n')
+    await expect(applicator.apply(root, 5, state())).rejects.toThrow(/migration_owner_state_conflict/u)
   })
 
   it('never returns a partial generation after an injected crash', async () => {

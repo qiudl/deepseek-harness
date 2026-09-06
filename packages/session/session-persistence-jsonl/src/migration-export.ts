@@ -6,7 +6,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto'
-import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type {
   SessionInspection, SessionPersistenceRevision, SessionPersistenceSnapshot,

@@ -112,12 +112,15 @@ export class MigrationOwnerStateApplicator {
       throw error
     }
     await this.checkedDirectory(join(target, 'storages'))
-    for (const [name, content] of Object.entries(files)) {
+    for (const name of Object.keys(files)) {
       const path = join(target, name)
       const metadata = await lstat(path)
       if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
         || metadata.nlink !== 1 || (metadata.mode & 0o077) !== 0) throw new Error('migration_owner_state_conflict')
-      if (name === '.migration-seed.sha256' && await readFile(path, 'utf8') !== content) {
+      // Mutable owner documents legitimately diverge after first activation. Treat the legacy
+      // seed as an ownership marker on restart; exact source equality would make those profiles
+      // unbootable after migration while adding no protection against the same owner rewriting it.
+      if (name === '.migration-seed.sha256' && !/^[a-f0-9]{64}\n$/u.test(await readFile(path, 'utf8'))) {
         throw new Error('migration_owner_state_conflict')
       }
     }

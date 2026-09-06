@@ -269,7 +269,10 @@ describe('authenticated Unix transport', () => {
       origin: 'http://127.0.0.1:4123', activationGeneration: 7, expiresAt: opened.expiresAt, bootstrapCookie,
     })
     await expect(client.activateView(input)).rejects.toMatchObject({ code: 'stale' })
-    client.close(); await server.close()
+    expect(client.isConnected()).toBe(true)
+    client.close()
+    expect(client.isConnected()).toBe(false)
+    await server.close()
   })
 
   it('provisions an empty-root Profile on first click, reuses one person, and isolates another', async () => {
@@ -336,17 +339,41 @@ describe('authenticated Unix transport', () => {
     expect(production.profileSelector).not.toBe(first.profileSelector)
     expect(other.profileId).not.toBe(first.profileId)
     expect(started).toEqual([first.profileId, other.profileId])
-    await expect(client.restoreProfile({ profileSelector: first.profileSelector, keyHandle: 'keychain:a', unlockMaterial }))
-      .rejects.toMatchObject({ code: 'stale' })
-    await expect(client.restoreProfile({ profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial }))
+    await expect(client.restoreProfile({
+      profileSelector: first.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1,
+    })).resolves.toMatchObject({ profileId: first.profileId })
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    }))
       .resolves.toMatchObject({ profileId: first.profileId })
-    await expect(client.restoreProfile({ profileSelector: production.profileSelector, keyHandle: 'keychain:attacker', unlockMaterial }))
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector, keyHandle: 'keychain:attacker', unlockMaterial,
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    }))
       .rejects.toMatchObject({ code: 'unauthorized' })
     await expect(client.restoreProfile({
       profileSelector: production.profileSelector,
       keyHandle: 'keychain:a', unlockMaterial: Buffer.alloc(32, 8).toString('base64url'),
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
     })).rejects.toMatchObject({ code: 'unauthorized' })
+    await client.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a:next', keyHandle: 'keychain:a',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
+      authorityEnvironmentId: stagingEnvironmentId, authorityBindingVersion: 2, unlockMaterial,
+    })
+    await expect(client.restoreProfile({
+      profileSelector: first.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1,
+    })).rejects.toMatchObject({ code: 'stale' })
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    })).resolves.toMatchObject({ profileId: first.profileId })
     await expect(client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1 }))
+      .rejects.toMatchObject({ code: 'profile_locked' })
+    await expect(client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a:next', authorityBindingVersion: 2 }))
       .resolves.toMatchObject({ profileId: first.profileId })
     await expect(client.openProfile({ authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1 }))
       .resolves.toMatchObject({ profileId: first.profileId })
@@ -697,6 +724,56 @@ describe('worker and Desktop-only bundle', () => {
     expect(opened).not.toHaveProperty('url')
     expect(opened).not.toHaveProperty('token')
     expect(JSON.stringify(opened)).not.toContain(accountSubject)
+  })
+
+  it('atomically extends an activated lease when the same owner reopens its Profile', async () => {
+    let now = 1_000
+    const leaseClock = { now: () => now }
+    const registry = new ProfileRegistry({
+      root: dir(), deviceIndexKey: Buffer.alloc(32, 4), clock: leaseClock,
+      keyHandleUnlocked: () => true,
+    })
+    await registry.registerAccount({
+      issuer: slarkIssuer, subject: 'lease-renewal', keyHandle: 'keychain:renewal',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:renewal',
+      authorityBindingVersion: 1, unlockMaterial,
+    })
+    const host = new DesktopHost({
+      registry, clock: leaseClock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => undefined,
+      activateProfileView: async () => ({
+        origin: 'http://127.0.0.1:4123', generation: 7, bootstrapCookie,
+      }),
+    })
+    await host.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'lease-renewal',
+      accountAccessToken: accountToken(slarkIssuer, 'lease-renewal'),
+      keyHandle: 'keychain:renewal', authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:renewal', authorityBindingVersion: 1,
+      unlockMaterial, ownerId: 'connection-renewal',
+    })
+    const input = {
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:renewal',
+      authorityBindingVersion: 1,
+      ownerId: 'connection-renewal',
+    }
+    const first = await host.openProfile(input)
+    await host.activateView({
+      profileId: first.profileId, viewLeaseId: first.viewLeaseId,
+      viewActivationHandle: first.viewActivationHandle, leaseGeneration: first.leaseGeneration,
+      runtimeGeneration: first.runtimeGeneration, ownerId: input.ownerId,
+    })
+
+    now += 20_000
+    const renewed = await host.openProfile(input)
+    expect(renewed).toMatchObject({
+      viewLeaseId: first.viewLeaseId,
+      leaseGeneration: first.leaseGeneration,
+      expiresAt: first.expiresAt + 20_000,
+    })
+    expect(renewed.viewActivationHandle).not.toBe(first.viewActivationHandle)
   })
 
   it('rejects invalid or mismatched Account authority before Profile registry mutation', async () => {

@@ -22,6 +22,8 @@ Later operation tasks extend the decoded payload union. They do not weaken the f
 
 `profile.ensure` carries a short-lived ES256 access token issued by the canonical DSH Account authority for the `dsh-host` audience. The `profile.ensure_account_token` capability marks this payload revision. A new client refuses to send the revised payload to a Host without the capability, while a new Host still decodes the legacy payload and returns `upgrade_required` before registry access. The Host verifies the exact JWT shape and signature against an owner-private public keyring whose SHA-256 digest is pinned by the embedding release, then requires the verified issuer and subject to equal the Desktop-supplied account fields before it reads or mutates the Profile registry. The token is neither persisted nor logged.
 
+`profile.open` is also the renewal operation for an unexpired lease owned by the same authenticated connection and Profile. Renewal keeps the lease id and generation, advances expiry from the Host clock, and issues a fresh one-use activation handle after the previous handle was consumed. The Desktop refreshes the HttpOnly bootstrap cookie without replacing the active renderer; disconnect, explicit close, Profile generation change, and expiry still revoke the lease.
+
 ## Defect-analysis iterations
 
 Round 1 found four defects: outbound values were not runtime-validated, base64url trailing bits were not canonicalized, the Desktop client id reused the Host identity brand, and version negotiation accepted only `[1]`. All four are covered by focused tests.
@@ -42,14 +44,18 @@ Round 5 found two reliability defects: direct parser callers had no keyring byte
 
 **Let each Slark environment assert Account identity.** A staging or production assertion would make the environment an Account authority and could create different machine Profiles for one person. Both environments instead present the same canonical DSH Account credential to the one Host.
 
+**Close and reopen the lease in Desktop.** Closing first creates an authorization gap and may stop the Profile view origin, which replaces the renderer and loses in-progress UI state. Repeating the authenticated `profile.open` operation extends the existing lease atomically inside the Host.
+
 ## Consequences
 
 The protocol deliberately rejects semantically equivalent JSON. This reduces parser differential and cross-language ambiguity, but every implementation must follow the committed golden vectors. A peer advertising a future version can still negotiate down by sending (for example) `[2,1]`; version-1 framing remains the compatibility bootstrap.
 
 Profile creation depends on a live DSH Account session long enough to obtain a valid Host-audience token. This prevents offline environment assertions from creating Profiles, at the cost of requiring Desktop to refresh an expired Account session before retrying `profile.ensure`.
 
+An active Desktop renews its one-minute view lease periodically. The Host keeps expiry authoritative and extends only an unexpired lease owned by the same authenticated connection and Profile; an inactive or disconnected Desktop cannot create an immortal lease.
+
 A decoder receives a complete string, so it can reject an oversized frame but cannot prevent the transport from first buffering it. The Unix-domain-socket carrier must enforce the byte cap incrementally and close on the first error. Invalid input without a trustworthy request id receives no error frame; the connection closes.
 
 ## Testing
 
-The focused suite starts from committed request, result, error, and signing-payload vectors and round-trips them byte-for-byte. Negative coverage pins extra and missing fields, whitespace, multiple frames, size overflow, forged outbound data, non-canonical base64url, missing baseline capability, reused identities, future-client downgrade negotiation, malformed or expired Account tokens, and verified Account mismatch before registry mutation.
+The focused suite starts from committed request, result, error, and signing-payload vectors and round-trips them byte-for-byte. Negative coverage pins extra and missing fields, whitespace, multiple frames, size overflow, forged outbound data, non-canonical base64url, missing baseline capability, reused identities, future-client downgrade negotiation, malformed or expired Account tokens, and verified Account mismatch before registry mutation. Host lifecycle coverage proves that reopening an activated lease preserves its id and generation while advancing expiry and rotating its one-use activation handle.

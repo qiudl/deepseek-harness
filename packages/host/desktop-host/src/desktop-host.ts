@@ -28,7 +28,7 @@ interface DesktopHostOptions {
 interface ViewLease {
   readonly profileId: PersonProfileId
   readonly generation: number
-  readonly expiresAt: number
+  expiresAt: number
   readonly ownerId: string
   activationHandle?: ProfileViewActivationHandle
   activating?: boolean
@@ -126,22 +126,31 @@ export class DesktopHost {
   }
 
   /**
-   * Restore a selector-authorized Profile only when its Main vault returns the exact stored key handle.
-   * @param input - verified selector facts and opaque vault handle.
+   * Restore a selector-authorized Profile only when its current binding and Main-vault proof match.
+   * A selector made stale by another environment's binding update may be refreshed offline, but a
+   * revoked/replaced binding, future selector generation, or different Keychain proof is rejected.
+   * @param input - verified selector facts, current binding authority, and opaque vault handle.
    * @returns ready Profile id and current binding generation.
    */
   async restoreProfile(input: {
     readonly profileId: PersonProfileId
     readonly bindingGeneration: number
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly ownerId: string
   }): Promise<{ readonly profileId: PersonProfileId; readonly bindingGeneration: number }> {
     const profile = this.options.registry.resolveProfile(input.profileId)
     if (!profile || profile.kind !== 'account') throw new HostAuthorityError('unauthorized')
-    if (profile.bindingGeneration !== input.bindingGeneration) throw new HostAuthorityError('stale')
+    if (profile.bindingGeneration < input.bindingGeneration) throw new HostAuthorityError('stale')
     if (profile.keyHandle !== input.keyHandle) throw new HostAuthorityError('unauthorized')
     this.options.registry.verifyUnlock(profile, input.keyHandle, input.unlockMaterial)
+    const bindingProfile = this.options.registry.resolveBinding(
+      input.authorityEnvironmentId, input.accountBindingHandle, input.authorityBindingVersion,
+    )
+    if (bindingProfile?.profileId !== profile.profileId) throw new HostAuthorityError('stale')
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
     await ensureWorker(profile)
@@ -150,7 +159,7 @@ export class DesktopHost {
   }
 
   /**
-   * Mint a short-lived, generation-fenced lease retained by Desktop Main.
+   * Mint or extend a short-lived, generation-fenced lease retained by Desktop Main.
    * @param input - binding and authenticated connection owner.
    * @returns a Profile lease without URL, token, credential, or path data.
    */
@@ -167,9 +176,12 @@ export class DesktopHost {
     if (!profile || !this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)) {
       throw new HostAuthorityError('profile_locked')
     }
+    const now = this.options.clock.now()
+    const expiresAt = now + (this.options.viewLeaseTtlMs ?? 60_000)
     for (const [viewLeaseId, lease] of this.leases) {
-      if (lease.ownerId === input.ownerId && lease.profileId === profile.profileId && lease.expiresAt > this.options.clock.now()
+      if (lease.ownerId === input.ownerId && lease.profileId === profile.profileId && lease.expiresAt > now
         && this.generations.get(profile.profileId) === lease.generation) {
+        lease.expiresAt = expiresAt
         lease.activationHandle ??= activationHandle()
         return {
           profileId: profile.profileId,
@@ -184,7 +196,6 @@ export class DesktopHost {
     const generation = (this.generations.get(profile.profileId) ?? 0) + 1
     this.generations.set(profile.profileId, generation)
     const viewLeaseId = randomUUID() as ProfileViewLeaseId
-    const expiresAt = this.options.clock.now() + (this.options.viewLeaseTtlMs ?? 60_000)
     const viewActivationHandle = activationHandle()
     this.leases.set(viewLeaseId, {
       profileId: profile.profileId, generation, expiresAt, ownerId: input.ownerId, activationHandle: viewActivationHandle,

@@ -22,12 +22,22 @@
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
     },
+    "./errors": {
+      "types": "./lib/types/errors.d.ts",
+      "default": "./lib/types/errors.js"
+    },
+    "./revision": {
+      "types": "./lib/types/revision.d.ts",
+      "default": "./lib/types/revision.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
     "lib/invariant.js",
+    "lib/types/errors.js",
+    "lib/types/revision.js",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",

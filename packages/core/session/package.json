@@ -30,6 +30,10 @@
       "types": "./lib/types/chunk-rows.d.ts",
       "default": "./lib/types/chunk-rows.js"
     },
+    "./seq-ranges": {
+      "types": "./lib/types/seq-ranges.d.ts",
+      "default": "./lib/types/seq-ranges.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json",
     "./surface": {
