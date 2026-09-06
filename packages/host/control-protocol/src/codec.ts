@@ -387,11 +387,18 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     }
   }
   if (frame.method === 'profile.restore') {
-    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'profile_key_handle', 'profile_unlock_material'])
+    exactKeys(params, [
+      ...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'profile_selector', 'profile_key_handle', 'profile_unlock_material',
+    ])
     return {
       version: 1, type: 'request', request_id: requestId, method: 'profile.restore',
       params: {
-        ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        ...authorized(params),
+        authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+        account_binding_handle: opaqueHandle(params.account_binding_handle),
+        authority_binding_version: generation(params.authority_binding_version),
+        profile_selector: profileSelector(params.profile_selector),
         profile_key_handle: boundedText(params.profile_key_handle, 512),
         profile_unlock_material: unlockMaterial(params.profile_unlock_material),
       },

@@ -746,6 +746,9 @@ export class UnixHostServer {
           const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
           const profile = await this.options.host.restoreProfile({
             profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation,
+            authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
             keyHandle: frame.params.profile_key_handle,
             unlockMaterial: frame.params.profile_unlock_material,
             ownerId,
@@ -1003,6 +1006,9 @@ export class UnixHostClient {
    */
   async restoreProfile(input: {
     readonly profileSelector: string
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly signal?: AbortSignal
@@ -1010,7 +1016,10 @@ export class UnixHostClient {
     const request: ProfileRestoreRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.restore',
       params: {
-        ...this.auth(), profile_selector: input.profileSelector, profile_key_handle: input.keyHandle,
+        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        profile_selector: input.profileSelector, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
       },
     }

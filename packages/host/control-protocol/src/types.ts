@@ -166,6 +166,9 @@ export interface ProfileRestoreRequest {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.restore'
   readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly authority_binding_version: number
     readonly profile_selector: string
     readonly profile_key_handle: string
     readonly profile_unlock_material: string

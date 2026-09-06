@@ -126,22 +126,31 @@ export class DesktopHost {
   }
 
   /**
-   * Restore a selector-authorized Profile only when its Main vault returns the exact stored key handle.
-   * @param input - verified selector facts and opaque vault handle.
+   * Restore a selector-authorized Profile only when its current binding and Main-vault proof match.
+   * A selector made stale by another environment's binding update may be refreshed offline, but a
+   * revoked/replaced binding, future selector generation, or different Keychain proof is rejected.
+   * @param input - verified selector facts, current binding authority, and opaque vault handle.
    * @returns ready Profile id and current binding generation.
    */
   async restoreProfile(input: {
     readonly profileId: PersonProfileId
     readonly bindingGeneration: number
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly ownerId: string
   }): Promise<{ readonly profileId: PersonProfileId; readonly bindingGeneration: number }> {
     const profile = this.options.registry.resolveProfile(input.profileId)
     if (!profile || profile.kind !== 'account') throw new HostAuthorityError('unauthorized')
-    if (profile.bindingGeneration !== input.bindingGeneration) throw new HostAuthorityError('stale')
+    if (profile.bindingGeneration < input.bindingGeneration) throw new HostAuthorityError('stale')
     if (profile.keyHandle !== input.keyHandle) throw new HostAuthorityError('unauthorized')
     this.options.registry.verifyUnlock(profile, input.keyHandle, input.unlockMaterial)
+    const bindingProfile = this.options.registry.resolveBinding(
+      input.authorityEnvironmentId, input.accountBindingHandle, input.authorityBindingVersion,
+    )
+    if (bindingProfile?.profileId !== profile.profileId) throw new HostAuthorityError('stale')
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
     await ensureWorker(profile)

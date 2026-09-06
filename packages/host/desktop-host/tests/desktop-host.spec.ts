@@ -336,17 +336,41 @@ describe('authenticated Unix transport', () => {
     expect(production.profileSelector).not.toBe(first.profileSelector)
     expect(other.profileId).not.toBe(first.profileId)
     expect(started).toEqual([first.profileId, other.profileId])
-    await expect(client.restoreProfile({ profileSelector: first.profileSelector, keyHandle: 'keychain:a', unlockMaterial }))
-      .rejects.toMatchObject({ code: 'stale' })
-    await expect(client.restoreProfile({ profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial }))
+    await expect(client.restoreProfile({
+      profileSelector: first.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1,
+    })).resolves.toMatchObject({ profileId: first.profileId })
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    }))
       .resolves.toMatchObject({ profileId: first.profileId })
-    await expect(client.restoreProfile({ profileSelector: production.profileSelector, keyHandle: 'keychain:attacker', unlockMaterial }))
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector, keyHandle: 'keychain:attacker', unlockMaterial,
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    }))
       .rejects.toMatchObject({ code: 'unauthorized' })
     await expect(client.restoreProfile({
       profileSelector: production.profileSelector,
       keyHandle: 'keychain:a', unlockMaterial: Buffer.alloc(32, 8).toString('base64url'),
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
     })).rejects.toMatchObject({ code: 'unauthorized' })
+    await client.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a:next', keyHandle: 'keychain:a',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
+      authorityEnvironmentId: stagingEnvironmentId, authorityBindingVersion: 2, unlockMaterial,
+    })
+    await expect(client.restoreProfile({
+      profileSelector: first.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1,
+    })).rejects.toMatchObject({ code: 'stale' })
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    })).resolves.toMatchObject({ profileId: first.profileId })
     await expect(client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1 }))
+      .rejects.toMatchObject({ code: 'profile_locked' })
+    await expect(client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a:next', authorityBindingVersion: 2 }))
       .resolves.toMatchObject({ profileId: first.profileId })
     await expect(client.openProfile({ authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1 }))
       .resolves.toMatchObject({ profileId: first.profileId })
