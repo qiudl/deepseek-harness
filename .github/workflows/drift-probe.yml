@@ -1,0 +1,28 @@
+name: dsh-drift-probe
+on:
+  workflow_dispatch:
+    inputs:
+      fail_on_high:
+        description: 'fail job when upstream drift is high'
+        type: boolean
+        default: false
+  schedule:
+    - cron: '17 3 * * 1'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: measure upstream drift
+        run: |
+          git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git || true
+          git fetch -q upstream master || { echo 'upstream fetch failed'; exit 0; }
+          MERGE=$(git merge-base HEAD upstream/master || true)
+          TOTAL=$(git rev-list --count "$MERGE"..upstream/master 2>/dev/null || echo 0)
+          RECENT=$(git rev-list --count --since='7 days ago' HEAD..upstream/master 2>/dev/null || echo 0)
+          echo "merge_base=${MERGE:0:12} total_ahead=${TOTAL} last7d=${RECENT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "total_ahead=${TOTAL}" >> "$GITHUB_OUTPUT"
+          echo "last7d=${RECENT}" >> "$GITHUB_OUTPUT"
+          echo "drift total_ahead=$TOTAL last7d=$RECENT"
+          if [ "$TOTAL" -ge 50 ] && [ "${{ inputs.fail_on_high }}" = "true" ]; then exit 1; fi
