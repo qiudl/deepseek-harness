@@ -212,6 +212,13 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     const firstLine = lines[0]
     if (firstLine === undefined) throw new Error('migration_export_source_corrupt')
     const headerValue = JSON.parse(firstLine) as unknown
+    if (typeof headerValue === 'object' && headerValue !== null && 'scope' in headerValue) {
+      // Fork 0.1.2 released v0/v1 stores never carried the upstream plugin-owned
+      // scope key; forwarding it across the released v0→v1→v2 chain is a
+      // registered follow-up (REQ-20260907-0021 P5d, decision A). Refuse
+      // fail-closed with an explicit marker instead of a generic codec error.
+      throw new Error('migration_export_source_scope_legacy_pending')
+    }
     const rowValues = lines.slice(1).map(line => JSON.parse(line) as unknown)
     const decoded = sessionFormatCatalog.decodeRecoverableArtifact(headerValue, rowValues)
     const current = sessionFormatCatalog.migrate(decoded)
