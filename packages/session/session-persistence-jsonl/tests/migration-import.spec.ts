@@ -3,7 +3,7 @@ import { mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
 import {
   FileOwnerMigrationTransferStore,
@@ -22,7 +22,7 @@ import {
   type MigrationSemanticRecord,
 } from '../src/migration-export.ts'
 
-const header: SessionHeader = { version: 0, id: SessionId('session-1'), createdAt: 1 }
+const header: SessionHeader = { version: SESSION_FORMAT_VERSION, id: SessionId('session-1'), createdAt: 1, isSeeded: false }
 const events: SessionEvent[] = [
   { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
   { type: 'turn/end', seq: 1, time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
