@@ -16,7 +16,7 @@ import type {
 import { assertReleasedV2Header, assertReleasedV2PhysicalArtifact } from './validation.ts'
 
 const HEADER_REQUIRED = ['type', 'version', 'id', 'createdAt', 'isSeeded', 'delegationDepth'] as const
-const HEADER_OPTIONAL = ['cwd', 'parentSession', 'origin', 'agentPreset'] as const
+const HEADER_OPTIONAL = ['cwd', 'parentSession', 'origin', 'agentPreset', 'scope'] as const
 /** Frozen physical JSON codec for released v2. */
 export const releasedV2SessionFormatCodec = Object.freeze({
   version: 2,
@@ -55,6 +55,7 @@ function decodePhysicalHeader(value: unknown): SessionFormatHeader {
   if (record['origin'] !== undefined && record['origin'] !== 'subagent') {
     throw new SessionFormatError('released v2 header origin must be "subagent"')
   }
+  const scope = record['scope'] === undefined ? undefined : decodeHeaderScope(record['scope'])
   const header = snapshotSessionFormatJson({
     version: 2,
     id: record['id'],
@@ -65,9 +66,24 @@ function decodePhysicalHeader(value: unknown): SessionFormatHeader {
     ...(record['origin'] === undefined ? {} : { origin: record['origin'] }),
     delegationDepth,
     ...(record['agentPreset'] === undefined ? {} : { agentPreset: record['agentPreset'] }),
+    ...(scope === undefined ? {} : { scope }),
   }, 'released v2 logical header') as SessionFormatHeader
   assertReleasedV2Header(header)
   return header
+}
+
+/** Decode and validate the optional plugin-owned scope header record (REQ-20260907-0021). */
+function decodeHeaderScope(value: unknown): { readonly provider: string; readonly ref: string; readonly schemaVersion: number } {
+  const record = jsonRecord(snapshotSessionFormatJson(value, 'released v2 header scope'), 'released v2 header scope')
+  if (typeof record['provider'] !== 'string' || record['provider'].length === 0) {
+    throw new SessionFormatError('released v2 header scope provider must be a non-empty string')
+  }
+  if (typeof record['ref'] !== 'string' || record['ref'].length === 0) {
+    throw new SessionFormatError('released v2 header scope ref must be a non-empty string')
+  }
+  const schemaVersion = sessionFormatCount(record['schemaVersion'], 'released v2 header scope schemaVersion')
+  if (schemaVersion < 1) throw new SessionFormatError('released v2 header scope schemaVersion must be a positive integer')
+  return { provider: record['provider'], ref: record['ref'], schemaVersion }
 }
 
 function decodeArtifact(
@@ -152,6 +168,7 @@ function encodeArtifact(artifact: SessionFormatArtifact): EncodedSessionFormatAr
     ...(header.origin === undefined ? {} : { origin: header.origin }),
     delegationDepth: header.delegationDepth,
     ...(header.agentPreset === undefined ? {} : { agentPreset: header.agentPreset }),
+    ...(header.scope === undefined ? {} : { scope: header.scope }),
   }, 'released v2 encoded header') as SessionFormatJsonObject
   const rows = Object.freeze(artifact.events.map(event => encodeProvenance(event)))
   return Object.freeze({ header: physicalHeader, rows })
