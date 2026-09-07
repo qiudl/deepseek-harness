@@ -140,8 +140,10 @@ function headerPayload(header: SessionHeader): unknown {
     origin: header.origin,
     delegationDepth: header.delegationDepth,
     agentPreset: header.agentPreset,
-    // fork 0.1.2 header 扩展字段 seedLength/scope 在 0.1.3 SessionHeader 不存在（0.1.3 移入 meta.inheritedEventCount，
-    // scope=durable plugin scope 属 P5 未路由）；payload 语义相应收敛，见 REQ-0020 F1 判定记录。
+    // fork 0.1.2 的 seedLength 概念在 0.1.3 已移至 meta.inheritedEventCount，不进 payload；
+    // scope（plugin-owned durable scope）经决策 A（REQ-20260907-0021）重新为 0.1.3 header
+    // 一等字段，恢复进迁移语义记录，保证 0.1.3-scope 会话的迁移 digest 自洽。
+    ...header.scope === undefined ? {} : { scope: header.scope },
   }
 }
 
