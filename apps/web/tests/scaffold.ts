@@ -866,8 +866,18 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
 function rawSessionLog(session: Session): string {
   const encoded = sessionFormatCatalog.encodeCurrent({
     header: {
-      ...session.header,
+      // Physical format header excludes plugin-owned scope until the P5
+      // physical-carry landing (REQ-20260907-0021 P5c); keep the upstream
+      // SessionFormatHeader conversion scope-free under exactOptionalPropertyTypes.
+      version: session.header.version,
+      id: session.header.id,
+      createdAt: session.header.createdAt,
+      ...session.header.cwd !== undefined ? { cwd: session.header.cwd } : {},
+      ...session.header.parentSession !== undefined ? { parentSession: session.header.parentSession } : {},
+      isSeeded: session.header.isSeeded,
+      ...session.header.origin !== undefined ? { origin: session.header.origin } : {},
       delegationDepth: session.header.delegationDepth ?? 0,
+      ...session.header.agentPreset !== undefined ? { agentPreset: session.header.agentPreset } : {},
     },
     inheritedEventCount: session.inheritedEventCount,
     // Session validates durable payloads as JSON; its closed event unions do

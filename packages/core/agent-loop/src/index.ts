@@ -810,6 +810,15 @@ export class AgentLoop extends Service implements AgentFactory {
       throw error
     }
     try {
+      await raceAbort(
+        () => this.runtime.ctx.agents.admitSessionScope(
+          session.header.scope,
+          prepared.agent.ctx,
+          prepared.signal,
+        ),
+        prepared.signal,
+        id,
+      )
       const setupCommit = await raceAbort(setup?.(prepared.agent.ctx), prepared.signal, id)
       setupCommit?.commit()
       await this.appendUnstoredSuffix(stored, session)
