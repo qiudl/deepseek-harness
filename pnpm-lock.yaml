@@ -5748,6 +5748,18 @@ importers:
         specifier: workspace:^
         version: link:../../core/tools
 
+  packages/host/control-protocol:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:^
+        version: link:../../util/brand
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
   packages/host/directory-picker:
     devDependencies:
       '@deepseek-ai/cordis':
@@ -7262,6 +7274,9 @@ importers:
 
   packages/session/session-persistence-jsonl:
     dependencies:
+      '@deepseek-ai/dsh-host-control-protocol':
+        specifier: workspace:^
+        version: link:../../host/control-protocol
       '@deepseek-ai/dsh-session-format':
         specifier: workspace:^
         version: link:../session-format

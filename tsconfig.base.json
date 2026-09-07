@@ -268,7 +268,10 @@
       "@deepseek-ai/dsh-credentials/invariant": ["./packages/credentials/credentials/src/invariant.ts"],
       "@deepseek-ai/dsh-credentials-local": ["./packages/credentials/credentials-local/src"],
       "@deepseek-ai/dsh-deepseek-llm-api-extensions": ["./packages/llm/deepseek-llm-api-extensions/src"],
-      "@deepseek-ai/dsh-deque": ["./packages/util/deque/src"],
+            "@deepseek-ai/dsh-host-control-protocol": ["./packages/host/control-protocol/src"],
+      "@deepseek-ai/dsh-host-control-protocol/*": ["./packages/host/control-protocol/src/*"],      "@deepseek-ai/dsh-host-control-protocol/src/*": ["./packages/host/control-protocol/src/*"],
+
+"@deepseek-ai/dsh-deque": ["./packages/util/deque/src"],
       "@deepseek-ai/dsh-e2b": ["./packages/e2b/e2b/src"],
       "@deepseek-ai/dsh-file-reference": ["./packages/context/file-reference/src"],
       "@deepseek-ai/dsh-file-reference-local": ["./packages/context/file-reference-local/src"],
