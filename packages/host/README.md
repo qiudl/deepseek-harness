@@ -1,15 +1,15 @@
 ---
-description: "Package map for the web GUI host half: the HTTP and SPA servers, workspace-directory picking implementations, and the plugin inventory projection."
+description: "Host package map: the Desktop control protocol plus web GUI servers, directory picking, and plugin inventory."
 kind: "package-group"
 ---
 
-# host/ — web-GUI host half
+# host/ — Host-side packages
 
 English | [中文](README.zh.md)
 
 ## Summary
 
-The `host/` group provides the web GUI's plain HTTP server, the SPA dist server that serves the built Web shell, the workspace-directory picking seam with its native, browse, and adaptive composition packages, and the read-only plugin inventory projection. All seven packages are product packages; the browser transport lives in [`client/`](../client/README.md), and the composed application is [`apps/cli`](../../apps/cli/README.md) booting the [`dsh-base` bundle](../bundle/base/cordis.patch.yml) that serves the web app under `apps/web/`. The picker backends replace one another behind the shared seam.
+The `host/` group provides the Desktop-to-Host control wire and single-Host authority alongside the web GUI's HTTP and SPA servers, workspace-directory picking seam, and read-only plugin inventory projection. All nine packages are product packages; the browser transport lives in [`client/`](../client/README.md), and the composed application is [`apps/cli`](../../apps/cli/README.md) booting the [`dsh-base` bundle](../bundle/base/cordis.patch.yml) that serves the web app under `apps/web/`. The Desktop Host owns no HTTP listener; the picker backends replace one another behind their shared seam.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ The `host/` group provides the web GUI's plain HTTP server, the SPA dist server 
 <a id="packages"></a>
 ## Packages
 
-Seven packages play the host roles; each package README owns its contract and configuration.
+Nine packages play Host-side roles; each package README owns its contract and configuration.
 
 | Package | Role | ctx key |
 |---|---|---|
@@ -33,6 +33,8 @@ Seven packages play the host roles; each package README owns its contract and co
 | [`directory-picker-browse/`](directory-picker-browse/README.md) | In-app directory-browser backend, including for remote clients | registers `ctx.directoryPicker` |
 | [`directory-picker-auto/`](directory-picker-auto/README.md) | Host-adaptive chooser that mounts the matching backend at boot | mounts a backend |
 | [`plugin-inventory/`](plugin-inventory/README.md) | Read-only projection of current Loader entries | Remote `pluginInventory/list` |
+| [`control-protocol/`](control-protocol/README.md) | Strict Desktop-to-single-Host identity negotiation and control frame codec | zero-I/O library |
+| [`desktop-host/`](desktop-host/README.md) | Person Profile, session, lease, worker, and authenticated Unix transport authority | Main-only local SDK |
 
 -----
 
