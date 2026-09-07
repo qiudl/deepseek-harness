@@ -40,6 +40,26 @@ import { createProcessShutdown, type ProcessShutdown } from './process-shutdown.
 
 const NAME = 'dsh'
 
+/** Installation-owned authority profiles accept no user-controlled input. */
+const INSTALLATION_OWNED_PROFILES = new Set(['desktop-host'])
+
+/**
+ * Reject every user-controlled overlay and app argument on installation-owned
+ * authority profiles (Desktop Host). Ordinary profiles keep full customization.
+ * @param profile - the profile name being booted.
+ * @param patchFiles - `--patch` overlay paths.
+ * @param args - the invocation's inner arguments.
+ */
+export function assertProfileInvocationPolicy(
+  profile: string,
+  patchFiles: readonly string[],
+  args: readonly string[],
+): void {
+  if (INSTALLATION_OWNED_PROFILES.has(profile) && (patchFiles.length !== 0 || args.length !== 0)) {
+    throw new Error(`dsh: ${profile} profile does not accept user overlays or arguments`)
+  }
+}
+
 /** Launcher-owned readiness signal committed only after boot and host setup succeed. */
 function createAppReady(): { service: AppReady; commit(): void } {
   let ready = false
@@ -228,9 +248,13 @@ async function composeProfile(
   patchFiles: readonly string[],
   fromDefaultProfile?: string,
 ): Promise<ComposedProfile> {
-  const profile = prepareProfile(name, true, fromDefaultProfile)
+  const installationOwned = INSTALLATION_OWNED_PROFILES.has(name)
+  if (installationOwned && patchFiles.length !== 0) {
+    throw new Error(`dsh: ${name} profile does not accept user overlays`)
+  }
+  const profile = prepareProfile(name, !installationOwned, fromDefaultProfile)
   await healProfilesModuleFallback({ installAnchor: INSTALL_ANCHOR, profile })
-  const homePatches = loadOptionalPatches(NAME, homePatchPath()) ?? []
+  const homePatches = installationOwned ? [] : loadOptionalPatches(NAME, homePatchPath()) ?? []
   const overlays = patchFiles.flatMap(file => loadOverlayPatches(NAME, resolve(file)))
   const bundlePatches = profile.layers.flatMap(layer => layer.patches)
   const rows = new Map<string, EntryOptions>()
@@ -284,6 +308,7 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
   // proxy environment on its own, so every profile would otherwise connect directly. Resolving from
   // the launcher's snapshot — not `process.env` — is what lets a proxy declared in a `.env` layer
   // work, which the NODE_USE_ENV_PROXY flag cannot do because Node samples the environment at start.
+  assertProfileInvocationPolicy(options.profile, options.patchFiles, options.args)
   const disposeProxy = await installProxyFromEnvironment(
     options.environment,
     (message) => { process.stderr.write(`${NAME}: ${message}\n`) },
