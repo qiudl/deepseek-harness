@@ -62,6 +62,38 @@ export type SessionSeqCursor = SessionSeq | -1
 export type OptionalSessionSeq = SessionSeq | null
 
 /**
+ * Identifies the plugin-owned namespace that can interpret a session scope
+ * reference. Core never interprets this value; the named plugin provider owns
+ * its authorization and lifecycle semantics.
+ */
+export type SessionScopeProviderId = Branded<'SessionScopeProviderId'>
+
+/** Brand a string as a {@link SessionScopeProviderId}. */
+export function SessionScopeProviderId(id: string): SessionScopeProviderId {
+  return brandString<SessionScopeProviderId>(id)
+}
+
+/** An opaque, provider-owned reference within one session scope namespace. */
+export type SessionScopeReference = Branded<'SessionScopeReference'>
+
+/** Brand a string as a {@link SessionScopeReference}. */
+export function SessionScopeReference(ref: string): SessionScopeReference {
+  return brandString<SessionScopeReference>(ref)
+}
+
+/**
+ * Durable, provider-neutral routing metadata for one session. Core preserves
+ * this value but never interprets `ref`; the named plugin provider owns its
+ * authorization and lifecycle semantics
+ * (REQ-20260830-0014 → REQ-20260907-0021 fork overlay, decision A).
+ */
+export interface SessionScopeRef {
+  readonly provider: SessionScopeProviderId
+  readonly ref: SessionScopeReference
+  readonly schemaVersion: number
+}
+
+/**
  * Current logical Session format version, stamped into every newly written
  * {@link SessionHeader}. Current Session and persistence code accept only this
  * value; header-only readers classify supported historical formats, while an
@@ -125,6 +157,11 @@ export interface SessionHeader {
    * would replay history the model can no longer act on.
    */
   readonly agentPreset?: string
+  /**
+   * Optional plugin-owned scope identity that must survive resume and fork.
+   * Core persists and preserves the value; the named provider owns admission.
+   */
+  readonly scope?: SessionScopeRef
 }
 
 /**
@@ -153,6 +190,7 @@ export interface CreateSessionOptions {
     readonly origin?: 'subagent'
     readonly delegationDepth?: number
     readonly agentPreset?: string
+    readonly scope?: SessionScopeRef
   }
 }
 
