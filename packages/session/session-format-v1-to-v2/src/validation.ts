@@ -23,7 +23,7 @@ import {
 import { RELEASED_V2_EVENT_DISPOSITIONS, RELEASED_V2_EVENT_TYPES } from './dispositions.ts'
 
 const HEADER_REQUIRED = ['version', 'id', 'createdAt', 'isSeeded', 'delegationDepth'] as const
-const HEADER_OPTIONAL = ['cwd', 'parentSession', 'origin', 'agentPreset'] as const
+const HEADER_OPTIONAL = ['cwd', 'parentSession', 'origin', 'agentPreset', 'scope'] as const
 const EVENT_REQUIRED = ['type', 'seq', 'time', 'data'] as const
 const SURFACE_TYPES = new Set(['user/message', 'assistant/message', 'tool/result'])
 const SURFACE_OPTIONAL = ['ignorable', 'sourceEventSeqs', 'surfaceOp'] as const
@@ -57,6 +57,18 @@ export function assertReleasedV2Header(header: SessionFormatHeader): void {
   }
   if (record['origin'] !== undefined && record['origin'] !== 'subagent') {
     throw new SessionFormatError('format v2 header origin must be "subagent"')
+  }
+  if (record['scope'] !== undefined) {
+    const scope = jsonRecord(record['scope'], 'format v2 header scope')
+    exactKeys(scope, ['provider', 'ref', 'schemaVersion'], [], 'format v2 header scope')
+    if (typeof scope['provider'] !== 'string' || scope['provider'].length === 0) {
+      throw new SessionFormatError('format v2 header scope provider must be a non-empty string')
+    }
+    if (typeof scope['ref'] !== 'string' || scope['ref'].length === 0) {
+      throw new SessionFormatError('format v2 header scope ref must be a non-empty string')
+    }
+    const schemaVersion = sessionFormatCount(scope['schemaVersion'], 'format v2 header scope schemaVersion')
+    if (schemaVersion < 1) throw new SessionFormatError('format v2 header scope schemaVersion must be a positive integer')
   }
 }
 

@@ -23,6 +23,13 @@ export interface SessionFormatHeader extends SessionFormatJsonObject {
   readonly origin?: 'subagent'
   readonly delegationDepth: number
   readonly agentPreset?: string
+  /**
+   * Optional plugin-owned durable scope routing metadata: a structural
+   * plain-JSON shape carried verbatim by the physical codecs; the named
+   * provider owns authorization and lifecycle semantics. Fork overlay for the
+   * released v2 header (REQ-20260907-0021, decision A; registered to upstream).
+   */
+  readonly scope?: { readonly provider: string; readonly ref: string; readonly schemaVersion: number }
 }
 
 /** One decoded logical Session event. */
