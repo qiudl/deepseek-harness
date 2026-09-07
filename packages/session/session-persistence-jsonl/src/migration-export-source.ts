@@ -4,7 +4,8 @@ import { lstat, open, readFile, readdir, realpath } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { SESSION_FORMAT_VERSION, SessionId, type SessionHeader } from '@deepseek-ai/dsh-session/types'
 import type { SessionInspection, SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
-import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
+import { SessionPersistenceRevision, SessionFormatUnsupportedError } from '@deepseek-ai/dsh-session-persistence'
+import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { generationLogFilename, scanLog } from './format.ts'
 import { createZstdFrameDecoder, scanZstdFrames } from './zstd.ts'
 import {
@@ -171,9 +172,24 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         } finally { decoder.close() }
         plaintext = Buffer.concat(decodedFrames, decodedBytes)
       }
-      const decoded = scanLog(plaintext)
-      if (decoded.committedBytes !== plaintext.byteLength) {
-        throw new Error('migration_export_source_corrupt')
+      let decoded: ReturnType<typeof scanLog>
+      try {
+        decoded = scanLog(plaintext)
+        if (decoded.committedBytes !== plaintext.byteLength) {
+          throw new Error('migration_export_source_corrupt')
+        }
+      } catch (error) {
+        // Decision B (recommended default, owner-vetoable): a released foreign log
+        // (v0/v1 physical, upstream-identical to the fork 0.1.2-era store) is read
+        // through the build-static adjacent chain. Scope-bearing fork stores are
+        // NOT upstream v0 and fail in the v0 codec's exact-keys check — that path
+        // stays blocked pending decision A (P5 durable-scope routing, REQ-0019).
+        if (!(error instanceof SessionFormatUnsupportedError)) throw error
+        const upgraded = this.upgradeForeignLog(plaintext)
+        decoded = scanLog(upgraded)
+        if (decoded.committedBytes !== upgraded.byteLength) {
+          throw new Error('migration_export_source_corrupt')
+        }
       }
       const revision = SessionPersistenceRevision([
         before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs,
@@ -186,6 +202,24 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     } finally {
       await handle.close()
     }
+  }
+
+  /** Translate a released foreign physical log (v0/v1) to the current format buffer. */
+  private upgradeForeignLog(plaintext: Buffer): Buffer {
+    const text = plaintext.toString('utf8')
+    const lines = text.split('\n').filter(line => line.length !== 0)
+    if (lines.length === 0) throw new Error('migration_export_source_corrupt')
+    const firstLine = lines[0]
+    if (firstLine === undefined) throw new Error('migration_export_source_corrupt')
+    const headerValue = JSON.parse(firstLine) as unknown
+    const rowValues = lines.slice(1).map(line => JSON.parse(line) as unknown)
+    const decoded = sessionFormatCatalog.decodeRecoverableArtifact(headerValue, rowValues)
+    const current = sessionFormatCatalog.migrate(decoded)
+    const encoded = sessionFormatCatalog.encodeCurrent(current)
+    const header = JSON.stringify(encoded.header)
+    const rows = encoded.rows.map(row => JSON.stringify(row))
+    if (rows.length === 0) return Buffer.from(`${header}\n`, 'utf8')
+    return Buffer.from(`${header}\n${rows.join('\n')}\n`, 'utf8')
   }
 
   private async checkedDirectory(path: string): Promise<string> {
