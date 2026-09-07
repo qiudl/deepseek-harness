@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset, SessionSeq, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceRevision, type SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import {
   JsonlMigrationExportService, migrationOwnerStateRecords, migrationSourceInventoryDigest,
@@ -17,15 +17,15 @@ const ownerState: MigrationOwnerStateBundle = {
   ],
 }
 const INVENTORY = migrationSourceInventoryDigest([{
-  header: { version: 0, id: SessionId('session-1'), createdAt: 1 },
+  header: { version: SESSION_FORMAT_VERSION, id: SessionId('session-1'), createdAt: 1, isSeeded: false },
   revision: SessionPersistenceRevision('revision-1'),
 }], ownerState)
 
 class FakeSource implements MigrationExportSource {
-  readonly header: SessionHeader = { version: 0, id: SessionId('session-1'), createdAt: 1 }
+  readonly header: SessionHeader = { version: SESSION_FORMAT_VERSION, id: SessionId('session-1'), createdAt: 1, isSeeded: false }
   events: SessionEvent[] = [
-    { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
-    { type: 'turn/end', seq: 1, time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+    { type: 'turn/end', seq: SessionSeq(1), time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
   ]
   revision = SessionPersistenceRevision('revision-1')
   mutateAfterInspect = false
@@ -37,8 +37,8 @@ class FakeSource implements MigrationExportSource {
     return [{ header: this.header, revision: this.revision }]
   }
 
-  async inspect(): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }> {
-    const result = { meta: this.header, events: [...this.events] }
+  async inspect(): Promise<{ meta: SessionHeader; inheritedEventCount: SessionLogOffset; events: readonly SessionEvent[] }> {
+    const result = { meta: this.header, inheritedEventCount: SessionLogOffset(0), events: [...this.events] }
     if (this.mutateAfterInspect) this.revision = SessionPersistenceRevision('revision-2')
     return result
   }
@@ -86,8 +86,8 @@ describe('JsonlMigrationExportService', () => {
 
   it('splits large logical exports without exceeding the control frame allowance', async () => {
     const source = new FakeSource()
-    source.events = Array.from({ length: 500 }, (_, seq): SessionEvent => ({
-      type: 'turn/start', seq, time: seq, data: { turn: seq + 1 },
+    source.events = Array.from({ length: 500 }, (_, index): SessionEvent => ({
+      type: 'turn/start', seq: SessionSeq(index), time: index, data: { turn: index + 1 },
     }))
     const exporter = service(source)
     const receipt = await exporter.begin({ expectedInventoryDigest: INVENTORY, maxRecords: 1_000, maxBytes: 500_000 })
