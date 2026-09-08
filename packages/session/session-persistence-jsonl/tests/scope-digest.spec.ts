@@ -1,22 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { SESSION_FORMAT_VERSION, SessionId, SessionScopeProviderId, SessionScopeReference } from '@deepseek-ai/dsh-session'
+import {
+  SESSION_FORMAT_VERSION,
+  SessionId,
+  SessionScopeProviderId,
+  SessionScopeReference,
+  type SessionHeader,
+  type SessionScopeRef,
+} from '@deepseek-ai/dsh-session'
 import { migrationSemanticRecords } from '../src/migration-export.ts'
 
-function header(scope: boolean) {
+const SCOPE: SessionScopeRef = {
+  provider: SessionScopeProviderId('example.scope'),
+  ref: SessionScopeReference('opaque:subject:1'),
+  schemaVersion: 1,
+}
+
+function header(scope: boolean): SessionHeader {
   return {
     version: SESSION_FORMAT_VERSION,
     id: SessionId('scope-digest'),
     createdAt: 1,
     isSeeded: false,
-    ...(scope
-      ? {
-        scope: {
-          provider: SessionScopeProviderId('example.scope'),
-          ref: SessionScopeReference('opaque:subject:1'),
-          schemaVersion: 1,
-        },
-      }
-      : {}),
+    ...(scope ? { scope: SCOPE } : {}),
   }
 }
 
