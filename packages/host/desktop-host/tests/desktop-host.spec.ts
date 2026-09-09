@@ -519,10 +519,8 @@ describe('authenticated Unix transport', () => {
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: () => now,
     })
-    const profile = await client.ensureAccountProfile({
-      issuer: slarkIssuer, subject: 'legacy-user', authorityEnvironmentId: stagingEnvironmentId,
-      accountAccessToken: accountToken(slarkIssuer, 'legacy-user'),
-      accountBindingHandle: 'binding:legacy', authorityBindingVersion: 1, keyHandle: 'keychain:legacy', unlockMaterial,
+    const profile = await client.bootstrapLocalProfile({
+      keyHandle: 'keychain:legacy-local', unlockMaterial,
     })
     const proof = await client.getExistingMigrationSourceInventory({ targetProfileSelector: profile.profileSelector })
     expect(proof.sourceInventoryAuthority).toMatch(/^[A-Za-z0-9_-]{43}$/u)
