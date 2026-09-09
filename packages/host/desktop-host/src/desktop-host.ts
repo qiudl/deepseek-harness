@@ -158,6 +158,40 @@ export class DesktopHost {
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
+  /** Bootstrap or unlock one local-only Profile without accepting an Account identity or token. */
+  async bootstrapLocalProfile(input: {
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly ownerId: string
+  }): Promise<{ readonly profileId: PersonProfileId; readonly bindingGeneration: number }> {
+    const profile = await this.options.registry.createLocalAnonymous(input)
+    const ensureWorker = this.options.ensureProfileWorker
+    if (!ensureWorker) throw new HostAuthorityError('unavailable')
+    await ensureWorker(profile)
+    this.unlock(input.ownerId, profile.profileId)
+    return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
+  }
+
+  /** Restore an existing local-only Profile using only Main-vault material. */
+  async restoreLocalProfile(input: {
+    readonly profileId: PersonProfileId
+    readonly bindingGeneration: number
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly ownerId: string
+  }): Promise<{ readonly profileId: PersonProfileId; readonly bindingGeneration: number }> {
+    const profile = this.options.registry.resolveProfile(input.profileId)
+    if (!profile || profile.kind !== 'local-anonymous' || profile.bindingGeneration !== input.bindingGeneration) {
+      throw new HostAuthorityError('stale')
+    }
+    this.options.registry.verifyUnlock(profile, input.keyHandle, input.unlockMaterial)
+    const ensureWorker = this.options.ensureProfileWorker
+    if (!ensureWorker) throw new HostAuthorityError('unavailable')
+    await ensureWorker(profile)
+    this.unlock(input.ownerId, profile.profileId)
+    return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
+  }
+
   /**
    * Mint or extend a short-lived, generation-fenced lease retained by Desktop Main.
    * @param input - binding and authenticated connection owner.
@@ -176,15 +210,31 @@ export class DesktopHost {
     if (!profile || !this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)) {
       throw new HostAuthorityError('profile_locked')
     }
+    return this.openUnlockedProfile(profile.profileId, input.ownerId)
+  }
+
+  /** Open a local-only Profile after bootstrap or restore on the same authenticated connection. */
+  async openLocalProfile(input: {
+    readonly profileId: PersonProfileId
+    readonly ownerId: string
+  }): Promise<ProfileOpenResult> {
+    const profile = this.options.registry.resolveProfile(input.profileId)
+    if (!profile || profile.kind !== 'local-anonymous' || !this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)) {
+      throw new HostAuthorityError('profile_locked')
+    }
+    return this.openUnlockedProfile(profile.profileId, input.ownerId)
+  }
+
+  private openUnlockedProfile(profileId: PersonProfileId, ownerId: string): ProfileOpenResult {
     const now = this.options.clock.now()
     const expiresAt = now + (this.options.viewLeaseTtlMs ?? 60_000)
     for (const [viewLeaseId, lease] of this.leases) {
-      if (lease.ownerId === input.ownerId && lease.profileId === profile.profileId && lease.expiresAt > now
-        && this.generations.get(profile.profileId) === lease.generation) {
+      if (lease.ownerId === ownerId && lease.profileId === profileId && lease.expiresAt > now
+        && this.generations.get(profileId) === lease.generation) {
         lease.expiresAt = expiresAt
         lease.activationHandle ??= activationHandle()
         return {
-          profileId: profile.profileId,
+          profileId,
           viewLeaseId,
           viewActivationHandle: lease.activationHandle,
           leaseGeneration: lease.generation,
@@ -193,15 +243,15 @@ export class DesktopHost {
         }
       }
     }
-    const generation = (this.generations.get(profile.profileId) ?? 0) + 1
-    this.generations.set(profile.profileId, generation)
+    const generation = (this.generations.get(profileId) ?? 0) + 1
+    this.generations.set(profileId, generation)
     const viewLeaseId = randomUUID() as ProfileViewLeaseId
     const viewActivationHandle = activationHandle()
     this.leases.set(viewLeaseId, {
-      profileId: profile.profileId, generation, expiresAt, ownerId: input.ownerId, activationHandle: viewActivationHandle,
+      profileId, generation, expiresAt, ownerId, activationHandle: viewActivationHandle,
     })
     return {
-      profileId: profile.profileId,
+      profileId,
       viewLeaseId,
       viewActivationHandle,
       leaseGeneration: generation,

@@ -103,6 +103,20 @@ describe('Main-only Profile operations', () => {
     }
   })
 
+  it('round-trips local Profile bootstrap, restore, and open without account fields', () => {
+    const selector = `${'A'.repeat(32)}.${'A'.repeat(86)}`
+    const bootstrap = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.bootstrap_local","params":{${auth},"profile_key_handle":"keychain:local","profile_unlock_material":"${'A'.repeat(43)}"}}\n`
+    const restore = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"profile.restore_local","params":{${auth},"profile_selector":"${selector}","profile_key_handle":"keychain:local","profile_unlock_material":"${'A'.repeat(43)}"}}\n`
+    const open = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3142","method":"profile.open_local","params":{${auth},"profile_selector":"${selector}"}}\n`
+    const result = `{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3143","method":"profile.bootstrap_local","result":{"state":"ready","profile_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3150","profile_selector":"${selector}"}}\n`
+    for (const source of [bootstrap, restore, open, result]) {
+      expect(encodeHostControlFrame(decodeHostControlFrame(source))).toBe(source)
+      expect(source).not.toMatch(/"(?:account|issuer|subject|token|environment)_/u)
+    }
+    expect(() => decodeHostControlFrame(bootstrap.replace('"profile_key_handle"', '"account_subject":"forged","profile_key_handle"')))
+      .toThrow(HostControlProtocolError)
+  })
+
   it('round-trips Profile status, open, activation, and lease close without secret fields', () => {
     const status = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.status","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"keychain-binding:opaque","authority_binding_version":1}}\n`
     const restore = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3144","method":"profile.restore","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"keychain-binding:opaque","authority_binding_version":1,"profile_selector":"${'A'.repeat(32)}.${'A'.repeat(86)}","profile_key_handle":"keychain:person","profile_unlock_material":"${'A'.repeat(43)}"}}\n`

@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-这个零 I/O 库拥有 Desktop Broker 与唯一 DSH Host Supervisor 共享的本地控制线协议。版本 1 从带签名的 `host.inspect` 挑战交换开始，并包含 Profile lease 与迁移导出载荷。后续操作必须保留本包的规范 JSON-Lines 信封、品牌化身份、有界帧和脱敏错误词汇。
+这个零 I/O 库拥有 Desktop Broker 与唯一 DSH Host Supervisor 共享的本地控制线协议。版本 1 从带签名的 `host.inspect` 挑战交换开始，并包含账号与本地专用 Profile 操作、lease 与迁移导出载荷。后续操作必须保留本包的规范 JSON-Lines 信封、品牌化身份、有界帧和脱敏错误词汇。
 
 该传输不是 JSON-RPC。畸形行是必须关闭连接的协议违规，不能被忽略后继续读取。
 
@@ -71,6 +71,6 @@ kind: "package-reference"
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延后工作
 
-- **操作集合有明确上限**——版本 1 解析 `host.inspect`、Profile open/status/lease-close、迁移导出 begin/read 与通用错误。environment、session、approval 和 upgrade 操作需要显式扩展协议。
+- **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read 与通用错误。environment、session、approval 和 upgrade 操作需要显式扩展协议。
 - **传输上限由外部执行**——Unix domain socket carrier 必须在字节上限停止读取，并在首次 codec 失败时关闭连接。
 - **密码学策略由外部执行**——密钥持久化、代码签名检查、挑战签名与验证、重放存储和密钥轮换属于 Host identity 与 Desktop broker 包。

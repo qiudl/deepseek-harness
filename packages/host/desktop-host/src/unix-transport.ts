@@ -21,7 +21,10 @@ import type {
   ProfileLeaseCloseRequest,
   ProfileEnsureRequest,
   ProfileRestoreRequest,
+  ProfileBootstrapLocalRequest,
+  ProfileRestoreLocalRequest,
   ProfileOpenRequest,
+  ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   ProfileStatusRequest,
   MigrationExportBeginRequest,
@@ -214,8 +217,11 @@ const capabilities = [
   'profile.lease_close',
   'profile.ensure',
   'profile.ensure_account_token',
+  'profile.bootstrap_local',
   'profile.open',
+  'profile.open_local',
   'profile.restore',
+  'profile.restore_local',
   'profile.status',
   'profile.view_activate',
 ] as const satisfies readonly string[]
@@ -763,6 +769,35 @@ export class UnixHostServer {
               profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
             },
           })
+        } else if (frame.method === 'profile.bootstrap_local') {
+          const profile = await this.options.host.bootstrapLocalProfile({
+            keyHandle: frame.params.profile_key_handle,
+            unlockMaterial: frame.params.profile_unlock_material,
+            ownerId,
+          })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: {
+              state: 'ready', profile_id: profile.profileId as never,
+              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
+            },
+          })
+        } else if (frame.method === 'profile.restore_local') {
+          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+          const profile = await this.options.host.restoreLocalProfile({
+            profileId: selector.profile_id as never,
+            bindingGeneration: selector.binding_generation,
+            keyHandle: frame.params.profile_key_handle,
+            unlockMaterial: frame.params.profile_unlock_material,
+            ownerId,
+          })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: {
+              state: 'ready', profile_id: profile.profileId as never,
+              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
+            },
+          })
         } else if (frame.method === 'profile.status') {
           const status = this.options.host.getProfileStatus({
             authorityEnvironmentId: frame.params.authority_environment_id,
@@ -787,6 +822,20 @@ export class UnixHostServer {
           })
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: 'profile.open',
+            result: {
+              profile_id: opened.profileId as never,
+              view_lease_id: opened.viewLeaseId as never,
+              view_activation_handle: opened.viewActivationHandle as never,
+              lease_generation: opened.leaseGeneration,
+              expires_at: opened.expiresAt,
+              runtime_generation: opened.runtimeGeneration,
+            },
+          })
+        } else if (frame.method === 'profile.open_local') {
+          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+          const opened = await this.options.host.openLocalProfile({ profileId: selector.profile_id as never, ownerId })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: {
               profile_id: opened.profileId as never,
               view_lease_id: opened.viewLeaseId as never,
@@ -1034,6 +1083,43 @@ export class UnixHostClient {
     return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
   }
 
+  /** Bootstrap one account-independent local Profile using only Main-vault material. */
+  async bootstrapLocalProfile(input: {
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly profileId: string; readonly profileSelector: string }> {
+    if (!this.inspection.capabilities.includes('profile.bootstrap_local' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileBootstrapLocalRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bootstrap_local',
+      params: { ...this.auth(), profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
+  }
+
+  /** Restore one local-only Profile selected by its Host-signed selector. */
+  async restoreLocalProfile(input: {
+    readonly profileSelector: string
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly profileId: string; readonly profileSelector: string }> {
+    const request: ProfileRestoreLocalRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.restore_local',
+      params: {
+        ...this.auth(), profile_selector: input.profileSelector, profile_key_handle: input.keyHandle,
+        profile_unlock_material: input.unlockMaterial,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
+  }
+
   /**
    * Open one Main-only view lease; abort destroys the connection and revokes all its leases.
    * @param input - opaque binding plus optional cancellation.
@@ -1058,6 +1144,24 @@ export class UnixHostClient {
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== 'profile.open') throw new HostAuthorityError('unavailable')
+    return {
+      profileId: frame.result.profile_id as never,
+      viewLeaseId: frame.result.view_lease_id as never,
+      viewActivationHandle: frame.result.view_activation_handle as never,
+      leaseGeneration: frame.result.lease_generation,
+      expiresAt: frame.result.expires_at,
+      runtimeGeneration: frame.result.runtime_generation,
+    }
+  }
+
+  /** Open one previously unlocked local-only Profile through its signed selector. */
+  async openLocalProfile(input: { readonly profileSelector: string; readonly signal?: AbortSignal }): Promise<ProfileOpenResult> {
+    const request: ProfileOpenLocalRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.open_local',
+      params: { ...this.auth(), profile_selector: input.profileSelector },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     return {
       profileId: frame.result.profile_id as never,
       viewLeaseId: frame.result.view_lease_id as never,

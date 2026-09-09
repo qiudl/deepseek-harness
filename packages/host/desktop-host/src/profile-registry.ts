@@ -229,19 +229,36 @@ export class ProfileRegistry {
   }
 
   /**
-   * Create a Profile that can never be merged into an account Profile.
-   * @param input - opaque Keychain handle for the local Profile key.
-   * @returns the new durable local-anonymous Profile.
+   * Create or resolve one key-unlocked Profile that can never be merged into an account Profile.
+   * @param input - opaque Keychain handle and Main-only unlock material for the local Profile key.
+   * @returns the durable local-anonymous Profile.
    */
-  async createLocalAnonymous(input: { readonly keyHandle: string }): Promise<PersonProfileRecord> {
+  async createLocalAnonymous(input: {
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+  }): Promise<PersonProfileRecord> {
     await Promise.resolve()
+    const keyHandle = handle(input.keyHandle)
+    const material = unlockMaterial(input.unlockMaterial)
+    const existing = this.profiles.find(profile =>
+      profile.kind === 'local-anonymous' && profile.keyHandle === keyHandle,
+    )
+    if (existing) {
+      if (existing.unlockVerifier === null) throw new HostAuthorityError('unauthorized')
+      const verifier = this.unlockVerifier(existing.profileId, keyHandle, material)
+      if (!timingSafeEqual(Buffer.from(existing.unlockVerifier, 'hex'), Buffer.from(verifier, 'hex'))) {
+        throw new HostAuthorityError('unauthorized')
+      }
+      return existing
+    }
+    const profileId = randomUUID() as PersonProfileId
     const profile: PersonProfileRecord = {
-      profileId: randomUUID() as PersonProfileId,
+      profileId,
       kind: 'local-anonymous',
       personIndex: createHmac('sha256', this.options.deviceIndexKey).update(`dsh-local-anonymous/v1\0${randomUUID()}`).digest('hex'),
-      keyHandle: handle(input.keyHandle),
-      unlockVerifier: null,
-      bindingGeneration: 0,
+      keyHandle,
+      unlockVerifier: this.unlockVerifier(profileId, keyHandle, material),
+      bindingGeneration: 1,
       createdAt: this.options.clock.now(),
     }
     const next = [...this.profiles, profile]

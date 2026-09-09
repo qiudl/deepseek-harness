@@ -55,11 +55,29 @@ describe('person profile registry', () => {
     await expect(registry.resolveAccount({ issuer: 'https://other.example', subject: 'opaque-user' })).resolves.toBeNull()
   })
 
-  it('keeps local-anonymous profiles isolated from account binding', async () => {
+  it('keeps one local Profile key-unlocked, idempotent, and isolated from account binding', async () => {
     const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 8), clock })
-    const local = await registry.createLocalAnonymous({ keyHandle: 'keychain:anonymous' })
+    const local = await registry.createLocalAnonymous({ keyHandle: 'keychain:anonymous', unlockMaterial })
+    const restored = await registry.createLocalAnonymous({ keyHandle: 'keychain:anonymous', unlockMaterial })
+    expect(restored).toEqual(local)
+    expect(() => { registry.verifyUnlock(local, 'keychain:anonymous', unlockMaterial) }).not.toThrow()
+    expect(() => { registry.verifyUnlock(local, 'keychain:anonymous', Buffer.alloc(32, 8).toString('base64url')) })
+      .toThrow(/unauthorized/)
     await expect(registry.bindAccount(local.profileId, { issuer: 'https://account.deepseek.com', subject: 'user' }))
       .rejects.toMatchObject({ code: 'profile_mismatch' })
+  })
+
+  it('bootstraps, restores, and opens a local Profile without an Account token', async () => {
+    const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 10), clock })
+    const host = new DesktopHost({ registry, clock, runtimeGeneration: 5, ensureProfileWorker: async () => undefined })
+    const local = await host.bootstrapLocalProfile({ keyHandle: 'keychain:local', unlockMaterial, ownerId: 'owner-1' })
+    const opened = await host.openLocalProfile({ profileId: local.profileId, ownerId: 'owner-1' })
+    expect(opened.profileId).toBe(local.profileId)
+    host.revokeOwner('owner-1')
+    await expect(host.openLocalProfile({ profileId: local.profileId, ownerId: 'owner-1' }))
+      .rejects.toMatchObject({ code: 'profile_locked' })
+    await expect(host.restoreLocalProfile({ ...local, keyHandle: 'keychain:local', unlockMaterial, ownerId: 'owner-2' }))
+      .resolves.toEqual(local)
   })
 
   it('uses issuer-qualified, device-keyed HMAC indexes', () => {
@@ -98,7 +116,7 @@ describe('person profile registry', () => {
     const key = Buffer.alloc(32, 6)
     const root = dir()
     const registry = new ProfileRegistry({ root, deviceIndexKey: key, clock })
-    await registry.createLocalAnonymous({ keyHandle: 'keychain:one' })
+    await registry.createLocalAnonymous({ keyHandle: 'keychain:one', unlockMaterial })
     const path = join(root, 'profiles.json')
     const backup = join(root, 'profiles.backup')
     linkSync(path, backup)
@@ -206,6 +224,30 @@ describe('authenticated Unix transport', () => {
       client.closeViewLease(closeInput),
     ])
     client.close()
+    await server.close()
+  })
+
+  it('bootstraps, restores, and opens a local Profile through the Unix adapter without Account credentials', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const local = await client.bootstrapLocalProfile({ keyHandle: 'keychain:local-wire', unlockMaterial })
+    const opened = await client.openLocalProfile({ profileSelector: local.profileSelector })
+    expect(opened.profileId).toBe(local.profileId)
+
+    client.close()
+    const restoredClient = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    await expect(restoredClient.restoreLocalProfile({
+      profileSelector: local.profileSelector, keyHandle: 'keychain:local-wire', unlockMaterial,
+    })).resolves.toMatchObject({ profileId: local.profileId })
+    restoredClient.close()
     await server.close()
   })
 
