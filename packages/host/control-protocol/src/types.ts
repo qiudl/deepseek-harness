@@ -202,7 +202,12 @@ export interface ProfileBootstrapLocalResult {
   readonly type: 'result'
   readonly request_id: HostControlRequestId
   readonly method: 'profile.bootstrap_local'
-  readonly result: { readonly state: 'ready'; readonly profile_id: HostProfileId; readonly profile_selector: string }
+  readonly result: {
+    readonly state: 'ready'
+    readonly profile_id: HostProfileId
+    readonly profile_selector: string
+    readonly persistence_generation: number
+  }
 }
 
 /** Restore one local-only Profile through a Host-signed selector and Main-vault material. */
@@ -224,7 +229,12 @@ export interface ProfileRestoreLocalResult {
   readonly type: 'result'
   readonly request_id: HostControlRequestId
   readonly method: 'profile.restore_local'
-  readonly result: { readonly state: 'ready'; readonly profile_id: HostProfileId; readonly profile_selector: string }
+  readonly result: {
+    readonly state: 'ready'
+    readonly profile_id: HostProfileId
+    readonly profile_selector: string
+    readonly persistence_generation: number
+  }
 }
 
 /** Open a previously unlocked local-only Profile by Host-signed selector. */

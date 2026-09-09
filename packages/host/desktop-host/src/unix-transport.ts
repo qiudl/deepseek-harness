@@ -775,11 +775,13 @@ export class UnixHostServer {
             unlockMaterial: frame.params.profile_unlock_material,
             ownerId,
           })
+          const persistenceGeneration = await this.options.profilePersistenceGeneration(profile.profileId)
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: {
               state: 'ready', profile_id: profile.profileId as never,
               profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
+              persistence_generation: persistenceGeneration,
             },
           })
         } else if (frame.method === 'profile.restore_local') {
@@ -791,11 +793,13 @@ export class UnixHostServer {
             unlockMaterial: frame.params.profile_unlock_material,
             ownerId,
           })
+          const persistenceGeneration = await this.options.profilePersistenceGeneration(profile.profileId)
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: {
               state: 'ready', profile_id: profile.profileId as never,
               profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
+              persistence_generation: persistenceGeneration,
             },
           })
         } else if (frame.method === 'profile.status') {
@@ -1088,7 +1092,7 @@ export class UnixHostClient {
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly signal?: AbortSignal
-  }): Promise<{ readonly profileId: string; readonly profileSelector: string }> {
+  }): Promise<{ readonly profileId: string; readonly profileSelector: string; readonly persistenceGeneration: number }> {
     if (!this.inspection.capabilities.includes('profile.bootstrap_local' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
@@ -1098,7 +1102,11 @@ export class UnixHostClient {
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
+    return {
+      profileId: frame.result.profile_id,
+      profileSelector: frame.result.profile_selector,
+      persistenceGeneration: frame.result.persistence_generation,
+    }
   }
 
   /** Restore one local-only Profile selected by its Host-signed selector. */
@@ -1107,7 +1115,7 @@ export class UnixHostClient {
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly signal?: AbortSignal
-  }): Promise<{ readonly profileId: string; readonly profileSelector: string }> {
+  }): Promise<{ readonly profileId: string; readonly profileSelector: string; readonly persistenceGeneration: number }> {
     const request: ProfileRestoreLocalRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.restore_local',
       params: {
@@ -1117,7 +1125,11 @@ export class UnixHostClient {
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
+    return {
+      profileId: frame.result.profile_id,
+      profileSelector: frame.result.profile_selector,
+      persistenceGeneration: frame.result.persistence_generation,
+    }
   }
 
   /**
