@@ -329,6 +329,24 @@ interface SessionLogScan {
   committedBytes: number
 }
 
+/** Derive and validate a fork cut from the last lineage-tagged seed marker. */
+export function sessionInheritedEventCount(
+  meta: SessionHeader,
+  events: readonly SessionEvent[],
+): SessionLogOffsetType {
+  let cut: SessionLogOffsetType | undefined
+  for (const event of events) {
+    if (event.type === 'session/end-seed' && event.data.inherited === true) cut = SessionLogOffset(event.seq)
+  }
+  if (meta.isSeeded && cut === undefined) {
+    throw new Error('corrupt session log: seeded v2 header lacks an inherited end-seed marker')
+  }
+  if (!meta.isSeeded && cut !== undefined) {
+    throw new Error('corrupt session log: unseeded v2 header contains an inherited end-seed marker')
+  }
+  return cut ?? SessionLogOffset(0)
+}
+
 /**
  * Refuse a header carrying a format version this build does not read BEFORE
  * validating the current header shape or decoding any event row: a future

@@ -124,6 +124,33 @@ describe('owner-only migration import', () => {
     await expect(target.abortGeneration(5)).rejects.toThrow(/already_committed/u)
   })
 
+  it('materializes a seeded session with its inherited event cut', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-generation-seeded-'))
+    const target = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 1)
+    const seededHeader: SessionHeader = {
+      ...header,
+      id: SessionId('session-seeded'),
+      parentSession: SessionId('session-parent'),
+      isSeeded: true,
+      origin: 'subagent',
+    }
+    const seededEvents: SessionEvent[] = [{
+      type: 'session/end-seed',
+      seq: SessionSeq(0),
+      time: 1,
+      data: { inherited: true },
+    }]
+
+    await target.prepareEmptyGeneration(2)
+    await target.importOwnerState(2, ownerState)
+    await target.importSession(2, seededHeader, seededEvents)
+
+    const source = new FileJsonlMigrationExportSource(target.generationRoot(2), uid, {
+      read: async () => ownerState,
+    })
+    expect((await source.inspect(seededHeader.id)).events).toEqual(seededEvents)
+  })
+
   it('allows only one concurrent active-generation CAS winner', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-owner-generation-cas-'))
     const left = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 4)
