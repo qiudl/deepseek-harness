@@ -184,6 +184,67 @@ export interface ProfileRestoreResult {
   readonly result: { readonly state: 'ready'; readonly profile_id: HostProfileId; readonly profile_selector: string }
 }
 
+/** Bootstrap one device-local Profile without any account identity or cloud authority. */
+export interface ProfileBootstrapLocalRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bootstrap_local'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_key_handle: string
+    readonly profile_unlock_material: string
+  }
+}
+
+/** Local Profile provisioning result; the selector is Host-signed and identity-free. */
+export interface ProfileBootstrapLocalResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bootstrap_local'
+  readonly result: { readonly state: 'ready'; readonly profile_id: HostProfileId; readonly profile_selector: string }
+}
+
+/** Restore one local-only Profile through a Host-signed selector and Main-vault material. */
+export interface ProfileRestoreLocalRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.restore_local'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly profile_key_handle: string
+    readonly profile_unlock_material: string
+  }
+}
+
+/** Refreshed local Profile selector after a successful restore. */
+export interface ProfileRestoreLocalResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.restore_local'
+  readonly result: { readonly state: 'ready'; readonly profile_id: HostProfileId; readonly profile_selector: string }
+}
+
+/** Open a previously unlocked local-only Profile by Host-signed selector. */
+export interface ProfileOpenLocalRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.open_local'
+  readonly params: HostAuthorizedParams & { readonly profile_selector: string }
+}
+
+/** Local Profile lease result has the same non-secret surface as an account lease. */
+export interface ProfileOpenLocalResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.open_local'
+  readonly result: ProfileOpenResult['result']
+}
+
 /** Open the same Profile through a Main-only local view lease. */
 export interface ProfileOpenRequest {
   readonly version: 1
@@ -562,8 +623,14 @@ export type HostControlFrame =
   | ProfileEnsureResult
   | ProfileRestoreRequest
   | ProfileRestoreResult
+  | ProfileBootstrapLocalRequest
+  | ProfileBootstrapLocalResult
+  | ProfileRestoreLocalRequest
+  | ProfileRestoreLocalResult
   | ProfileOpenRequest
   | ProfileOpenResult
+  | ProfileOpenLocalRequest
+  | ProfileOpenLocalResult
   | ProfileViewActivateRequest
   | ProfileViewActivateResult
   | ProfileLeaseCloseRequest

@@ -22,6 +22,8 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 `profile.ensure` 携带由规范 DSH Account 权威为 `dsh-host` audience 签发的短时 ES256 access token。`profile.ensure_account_token` capability 标识这一载荷修订。新客户端拒绝向缺少该 capability 的 Host 发送修订载荷；新 Host 仍解析旧载荷，并在访问 registry 前返回 `upgrade_required`。Host 使用 owner-private 公钥环校验精确 JWT 形状与签名，该公钥环的 SHA-256 摘要由嵌入应用发布版本固定；Host 随后要求已验证的 issuer 与 subject 等于 Desktop 提供的账号字段，才会读取或修改 Profile registry。Host 既不持久化也不记录该 token。
 
+`profile.bootstrap_local`、`profile.restore_local` 与 `profile.open_local` 负责不依赖账号的本地 Profile 路径。Bootstrap 只接收 Main-vault key handle 和 32 字节 unlock material，并返回与账号 provisioning 相同、绑定 installation 与 generation 的 Host selector。Restore 校验 selector、本地专用 Profile kind、精确 generation 与新鲜 unlock material；open 要求该 Profile 已被同一 authenticated connection 的 bootstrap 或 restore 解锁。这些操作绝不接收或创建 Account binding、issuer、subject、token 或 environment assertion。各自发布的 capability 让新版 Desktop 能在向旧 Host 发送本地 unlock material 前报告 `upgrade_required`。
+
 `profile.open` 也是同一 authenticated connection 与 Profile 所拥有未过期 lease 的续期操作。续期保留 lease id 和 generation，按照 Host 时钟延后 expiry，并在上一个 handle 已消费后签发新的单次 activation handle。Desktop 刷新 HttpOnly bootstrap cookie 时无需替换活跃 renderer；disconnect、显式 close、Profile generation 变化和 expiry 仍会撤销 lease。
 
 ## 缺陷分析迭代
@@ -50,7 +52,7 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 协议会拒绝语义等价的 JSON。这减少解析器差异与跨语言歧义，但每个实现都必须遵守已提交黄金向量。未来 peer 仍可用 `[2,1]` 降级协商；版本 1 framing 是兼容 bootstrap。
 
-Profile 创建依赖一个仍可获取有效 Host-audience token 的 DSH Account session。这会阻止离线 environment assertion 创建 Profile，但代价是 Desktop 必须刷新过期的 Account session，才能重试 `profile.ensure`。
+账号关联的 Profile 创建依赖一个仍可获取有效 Host-audience token 的 DSH Account session。本地专用 Profile 路径不依赖该 session，只有可信 Host、Keychain material 或本地 worker 不可用时才不可用。过期 Account token 只影响后续账号关联的 `profile.ensure` 重试。
 
 活跃 Desktop 会定期续期其一分钟 view lease。Host 继续拥有 expiry 权威，且只延长同一 authenticated connection 与 Profile 所拥有的未过期 lease；inactive 或 disconnected Desktop 无法制造永久 lease。
 
@@ -58,4 +60,4 @@ Decoder 接收完整字符串，因此能拒绝超限帧，却不能阻止 trans
 
 ## 测试
 
-聚焦套件从已提交的 request、result、error 和签名原文向量开始，逐字节 round-trip。负向覆盖未知／缺失字段、空白、多帧、超限、伪造出站值、非规范 base64url、缺失基线 capability、身份复用、未来客户端降级协商、畸形或过期 Account token，以及 registry mutation 前的已验证 Account 不匹配。Host 生命周期覆盖证明：再次打开已激活 lease 会保留 id 和 generation，同时延后 expiry 并轮换单次 activation handle。
+聚焦套件从已提交的 request、result、error 和签名原文向量开始，逐字节 round-trip。负向覆盖未知／缺失字段、空白、多帧、超限、伪造出站值、非规范 base64url、缺失基线 capability、身份复用、未来客户端降级协商、畸形或过期 Account token，以及 registry mutation 前的已验证 Account 不匹配。Host 生命周期覆盖证明：再次打开已激活 lease 会保留 id 和 generation，同时延后 expiry 并轮换单次 activation handle；本地 Profile 可以在没有 Account 凭据时 bootstrap、重连、restore 和 open。
