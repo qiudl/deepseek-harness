@@ -371,8 +371,11 @@ interface SessionLogScan {
   committedBytes: number
 }
 
-/** Derive the v2 fork cut from the last lineage-tagged seed marker. */
-function inheritedCut(meta: SessionHeader, events: readonly SessionEvent[]): SessionLogOffsetType {
+/** Derive and validate the v2 fork cut from the last lineage-tagged seed marker. */
+export function sessionInheritedEventCount(
+  meta: SessionHeader,
+  events: readonly SessionEvent[],
+): SessionLogOffsetType {
   let cut: SessionLogOffsetType | undefined
   for (const event of events) {
     if (event.type === 'session/end-seed' && event.data.inherited === true) cut = SessionLogOffset(event.seq)
@@ -505,7 +508,7 @@ export class SessionLogScanner {
     this.finished = true
     return {
       meta: this.meta,
-      inheritedEventCount: inheritedCut(this.meta, this.events),
+      inheritedEventCount: sessionInheritedEventCount(this.meta, this.events),
       events: this.events,
       committedBytes: this.committedBytes,
     }

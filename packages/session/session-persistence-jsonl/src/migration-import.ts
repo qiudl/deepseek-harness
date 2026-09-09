@@ -11,7 +11,13 @@ import {
   type MigrationOwnerTransferBundle,
   type MigrationSemanticRecord,
 } from './migration-export.ts'
-import { eventLines, generationLogFilename, logPath, toHeaderLine } from './format.ts'
+import {
+  eventLines,
+  generationLogFilename,
+  logPath,
+  sessionInheritedEventCount,
+  toHeaderLine,
+} from './format.ts'
 
 const HEX_256 = /^[a-f0-9]{64}$/u
 const OPAQUE_ID = /^[a-f0-9]{32,64}$/u
@@ -223,7 +229,10 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     const project = dirname(dirname(log))
     await this.ensureOwnedDirectory(project, true)
     await this.ensureOwnedDirectory(dirname(log), false)
-    const body = `${JSON.stringify(toHeaderLine(header))}\n${eventLines(events)}${events.length === 0 ? '' : '\n'}`
+    const body = `${JSON.stringify(toHeaderLine(
+      header,
+      sessionInheritedEventCount(header, events),
+    ))}\n${eventLines(events)}${events.length === 0 ? '' : '\n'}`
     await this.writeExclusive(log, body)
     const recordsFile = join(dirname(log), 'migration-records.json')
     await this.writeExclusive(recordsFile, `${JSON.stringify(migrationSemanticRecords([{ header, events }]))}\n`)
