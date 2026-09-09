@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { copyFileSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,5 +26,17 @@ describe('standalone Host control client artifact', () => {
     }
     expect(loaded.UnixHostClient).toBeTypeOf('function')
     expect(loaded.discoverUnixHost).toBeTypeOf('function')
+  })
+})
+
+describe('desktop Host startup artifact', () => {
+  const path = 'packages/host/desktop-host/lib/startup.js'
+  const source = (() => {
+    try { return readFileSync(path, 'utf8') } catch { return undefined }
+  })()
+
+  it.skipIf(source === undefined)('is valid JavaScript for the supported Node runtime', () => {
+    const checked = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' })
+    expect(checked.status, checked.stderr || checked.stdout).toBe(0)
   })
 })

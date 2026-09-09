@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsdown'
+import { typertPlugin } from '../../typert/generator/lib/types/tsdown-plugin.js'
 
 /** Build Host authority entries plus the standalone Main-only client artifact. */
 export default defineConfig([
@@ -13,6 +14,7 @@ export default defineConfig([
     clean: false,
     codeSplitting: false,
     noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
+    plugins: [typertPlugin({ mode: 'package', faces: ['host'] })],
   },
   {
     entry: { invariant: 'lib/types/invariant.js' },
@@ -36,6 +38,7 @@ export default defineConfig([
     clean: false,
     codeSplitting: false,
     noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
+    plugins: [typertPlugin({ mode: 'package', faces: ['host'] })],
   },
   {
     entry: { 'host-control-client': 'lib/types/client.js' },
