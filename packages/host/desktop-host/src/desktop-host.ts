@@ -271,7 +271,8 @@ export class DesktopHost {
     readonly ownerId: string
   }): PersonProfileId {
     const profile = this.options.registry.resolveProfile(input.profileId)
-    if (!profile || profile.kind !== 'account' || profile.bindingGeneration !== input.bindingGeneration
+    if (!profile || !['account', 'local-anonymous'].includes(profile.kind)
+      || profile.bindingGeneration !== input.bindingGeneration
       || !this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)) {
       throw new HostAuthorityError('unauthorized')
     }
