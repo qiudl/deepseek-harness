@@ -1536,7 +1536,9 @@ export class UnixHostClient {
 
   private async call(
     request: ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
-      | ProfileOpenRequest | ProfileViewActivateRequest | ProfileLeaseCloseRequest
+      | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
+      | ProfileOpenRequest | ProfileOpenLocalRequest
+      | ProfileViewActivateRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest
       | MigrationImportStageRequest | MigrationImportStatusRequest | MigrationImportVerifyRequest
