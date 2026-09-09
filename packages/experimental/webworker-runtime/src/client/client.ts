@@ -21,7 +21,21 @@ import type {
 export interface BootPayload {
   /** Structured index injection table, executed by the page interpreter. */
   injections: IndexInjection[]
+  /** Local data availability is independent from Slark/account connectivity. */
+  localPersistence: WebDshLocalPersistence
 }
+
+/** Browser-local durability reported independently from account or network readiness. */
+export type WebDshLocalPersistence =
+  | { readonly kind: 'session_only'; readonly reasonCode: 'WEB_DSH_LOCAL_PROFILE_NOT_SELECTED' }
+  | { readonly kind: 'durable' }
+  | {
+    readonly kind: 'session_only'
+    readonly reasonCode:
+      | 'WEB_DSH_STORAGE_NOT_DURABLE'
+      | 'WEB_DSH_STORAGE_UNAVAILABLE'
+      | 'WEB_DSH_EXCLUSIVE_LOCK_UNAVAILABLE'
+  }
 
 /** Fetch-shaped transport the client tree consumes. */
 export type TunnelFetch = (input: URL | string, init?: RequestInit) => Promise<Response>
@@ -185,9 +199,17 @@ export class WorkerTunnel {
    * Open the tunnel: the worker assembles its host from this frame.
    * @param image - VFS image URL the worker fetches.
    * @param overlays - Ordered data overlay URLs applied before boot.
+   * @param localProfile - Optional origin-local profile and its page-unlocked key.
    */
-  init(image: string, overlays: readonly string[] = []): void {
-    this.worker.postMessage({ t: 'init', image, overlays })
+  init(
+    image: string,
+    overlays: readonly string[] = [],
+    localProfile?: { readonly environmentId: string; readonly profileId: string; readonly encryptionKey: CryptoKey },
+  ): void {
+    this.worker.postMessage({
+      t: 'init', image, overlays,
+      ...(localProfile === undefined ? {} : { localProfile }),
+    })
   }
 
   /** Fetch-shaped entry: one request frame, one Response (streamed when the worker streams). */

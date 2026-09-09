@@ -40,6 +40,12 @@ export interface TunnelInitFrame {
   readonly t: 'init'
   readonly image: string
   readonly overlays: readonly string[]
+  /** Optional page-unlocked, origin-local profile. The key is structured-cloned, never serialized. */
+  readonly localProfile?: {
+    readonly environmentId: string
+    readonly profileId: string
+    readonly encryptionKey: CryptoKey
+  }
 }
 
 /** Every frame the page sends the worker. */
@@ -146,7 +152,20 @@ export function parseInboundFrame(data: unknown): TunnelInboundFrame {
     if (!Array.isArray(frame.overlays) || frame.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('webworker tunnel: init frame needs an array of string overlay urls')
     }
-    return { t: 'init', image: frame.image, overlays: frame.overlays as string[] }
+    const localProfile = frame.localProfile
+    if (localProfile !== undefined && (typeof localProfile !== 'object' || localProfile === null
+      || typeof (localProfile as Record<string, unknown>).environmentId !== 'string'
+      || typeof (localProfile as Record<string, unknown>).profileId !== 'string'
+      || typeof (localProfile as Record<string, unknown>).encryptionKey !== 'object'
+      || (localProfile as Record<string, unknown>).encryptionKey === null)) {
+      throw new Error('webworker tunnel: init frame carries an invalid local profile')
+    }
+    return {
+      t: 'init', image: frame.image, overlays: frame.overlays as string[],
+      ...(localProfile === undefined ? {} : {
+        localProfile: localProfile as NonNullable<TunnelInitFrame['localProfile']>,
+      }),
+    }
   }
   const id = frame.id
   if (typeof id !== 'string' && typeof id !== 'number') {

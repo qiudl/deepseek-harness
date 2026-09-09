@@ -32,6 +32,8 @@ import { TunnelServer, type TunnelPort } from './transport/tunnel.ts'
 import { inflateImage, inflateImageStream } from './storage/image-gzip.ts'
 import { loadVfsImage, loadVfsOverlay, MemoryVfs } from './storage/memory.ts'
 import { setActiveVfs } from './storage/active.ts'
+import { openEncryptedWebVfsProfile } from './storage/indexeddb.ts'
+import type { WebDshLocalPersistence } from './client/client.ts'
 import {
   DEFAULT_ROOT, IMAGE_CONFIG_PATH, IMAGE_EMPTY_DIRECTORIES, IMAGE_HOME_DIRECTORY, IMAGE_MANIFEST_PATH,
   LOWERING_VERSION,
@@ -121,6 +123,12 @@ export interface WorkerHostOptions {
   readonly unaryApiLane?: 'route' | 'direct'
   /** Channel back to the page; defaults to the worker global scope. */
   readonly channel?: TunnelPort
+  /** Optional local profile already unlocked by the page's user-verification ceremony. */
+  readonly localProfile?: {
+    readonly environmentId: string
+    readonly profileId: string
+    readonly encryptionKey: CryptoKey
+  }
 }
 
 /** The assembled worker host. */
@@ -179,6 +187,10 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
   let vfs: MemoryVfs | undefined
   let modules: WorkerModuleLoader | undefined
   let context: HostContext | undefined
+  let releasePersistence: (() => Promise<void>) | undefined
+  let localPersistence: WebDshLocalPersistence = {
+    kind: 'session_only', reasonCode: 'WEB_DSH_LOCAL_PROFILE_NOT_SELECTED',
+  }
 
   const start = async (): Promise<void> => {
     try {
@@ -189,8 +201,28 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
         readImage(options.image),
         Promise.all((options.overlays ?? []).map(readImage)),
       ])
-      const mounted = loadVfsImage(bytes, root)
+      // Finish fallible image I/O before taking the exclusive profile lease.
+      // Once the lease exists, publish its release handle before any later
+      // operation can fail so the catch/finally paths always own cleanup.
+      const openedProfile = options.localProfile === undefined
+        ? undefined
+        : await openEncryptedWebVfsProfile(options.localProfile)
+      if (openedProfile?.kind === 'blocked') throw new Error(openedProfile.reasonCode)
+      if (openedProfile !== undefined) {
+        localPersistence = openedProfile.kind === 'durable'
+          ? { kind: 'durable' }
+          : { kind: 'session_only', reasonCode: openedProfile.reasonCode }
+      }
+      if (openedProfile?.kind === 'durable') releasePersistence = openedProfile.release
+      const mounted = loadVfsImage(
+        bytes,
+        root,
+        new MemoryVfs(openedProfile?.kind === 'durable' ? { sink: openedProfile.mirror } : {}),
+      )
       for (const overlay of overlays) loadVfsOverlay(overlay, root, mounted)
+      if (openedProfile?.kind === 'durable') {
+        await openedProfile.mirror.hydrate(mounted)
+      }
       // Belt and braces over the image's own empty-directory entries: a hand
       // -built image without them still boots.
       for (const directory of IMAGE_EMPTY_DIRECTORIES) {
@@ -255,12 +287,14 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
 
       tunnel.serve({
         directFetch: (request: Request) => handler.fetch(request),
-        bootPayload: () => readBootPayload(ctx),
+        bootPayload: () => readBootPayload(ctx, localPersistence),
         openStream: typertGateway.wireStream.open,
         streamFailure: typertGateway.wireStream.failure,
       })
     } catch (reason) {
       tunnel.fail(reason)
+      await releasePersistence?.()
+      releasePersistence = undefined
       throw reason
     }
   }
@@ -270,7 +304,13 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
     start,
     stop: async (): Promise<void> => {
       tunnel.fail(new Error('webworker host: the tree was disposed'))
-      await context?.fiber.dispose()
+      try {
+        await context?.fiber.dispose()
+        await vfs?.flush()
+      } finally {
+        await releasePersistence?.()
+        releasePersistence = undefined
+      }
     },
     get vfs(): MemoryVfs | undefined {
       return vfs
@@ -420,12 +460,15 @@ function bootPatches(
  * @param ctx - Booted host context.
  * @returns Boot payload for `GET /__boot__`.
  */
-function readBootPayload(ctx: HostContext): { injections: unknown } {
+function readBootPayload(
+  ctx: HostContext,
+  localPersistence: WebDshLocalPersistence,
+): { injections: unknown; localPersistence: WebDshLocalPersistence } {
   const webServer = ctx.get('webServer') as { collectIndexInjections(): unknown } | undefined
   if (webServer === undefined) {
     throw new Error('webworker host: no webServer service, so the page cannot receive its boot injections')
   }
-  return { injections: webServer.collectIndexInjections() }
+  return { injections: webServer.collectIndexInjections(), localPersistence }
 }
 
 /**
