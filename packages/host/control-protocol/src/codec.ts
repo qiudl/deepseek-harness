@@ -493,7 +493,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
     if (result.state !== 'unbound' && result.state !== 'locked') reject()
     return { version: 1, type: 'result', request_id, method: 'profile.status', result: { state: result.state } }
   }
-  if (frame.method === 'profile.ensure' || frame.method === 'profile.bootstrap_local') {
+  if (frame.method === 'profile.ensure') {
     exactKeys(result, ['state', 'profile_id', 'profile_selector'])
     if (result.state !== 'ready') reject()
     return {
@@ -504,7 +504,19 @@ function decodeProfileResult(frame: Record<string, unknown>):
       },
     }
   }
-  if (frame.method === 'profile.restore' || frame.method === 'profile.restore_local') {
+  if (frame.method === 'profile.bootstrap_local') {
+    exactKeys(result, ['state', 'profile_id', 'profile_selector', 'persistence_generation'])
+    if (result.state !== 'ready') reject()
+    return {
+      version: 1, type: 'result', request_id, method: frame.method,
+      result: {
+        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
+        profile_selector: profileSelector(result.profile_selector),
+        persistence_generation: generation(result.persistence_generation),
+      },
+    }
+  }
+  if (frame.method === 'profile.restore') {
     exactKeys(result, ['state', 'profile_id', 'profile_selector'])
     if (result.state !== 'ready') reject()
     return {
@@ -512,6 +524,18 @@ function decodeProfileResult(frame: Record<string, unknown>):
       result: {
         state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
         profile_selector: profileSelector(result.profile_selector),
+      },
+    }
+  }
+  if (frame.method === 'profile.restore_local') {
+    exactKeys(result, ['state', 'profile_id', 'profile_selector', 'persistence_generation'])
+    if (result.state !== 'ready') reject()
+    return {
+      version: 1, type: 'result', request_id, method: frame.method,
+      result: {
+        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
+        profile_selector: profileSelector(result.profile_selector),
+        persistence_generation: generation(result.persistence_generation),
       },
     }
   }

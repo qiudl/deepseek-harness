@@ -235,6 +235,7 @@ describe('authenticated Unix transport', () => {
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     })
     const local = await client.bootstrapLocalProfile({ keyHandle: 'keychain:local-wire', unlockMaterial })
+    expect(local.persistenceGeneration).toBe(1)
     const opened = await client.openLocalProfile({ profileSelector: local.profileSelector })
     expect(opened.profileId).toBe(local.profileId)
 
@@ -246,7 +247,7 @@ describe('authenticated Unix transport', () => {
     })
     await expect(restoredClient.restoreLocalProfile({
       profileSelector: local.profileSelector, keyHandle: 'keychain:local-wire', unlockMaterial,
-    })).resolves.toMatchObject({ profileId: local.profileId })
+    })).resolves.toMatchObject({ profileId: local.profileId, persistenceGeneration: 1 })
     restoredClient.close()
     await server.close()
   })

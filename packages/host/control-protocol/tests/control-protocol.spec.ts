@@ -108,7 +108,7 @@ describe('Main-only Profile operations', () => {
     const bootstrap = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.bootstrap_local","params":{${auth},"profile_key_handle":"keychain:local","profile_unlock_material":"${'A'.repeat(43)}"}}\n`
     const restore = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"profile.restore_local","params":{${auth},"profile_selector":"${selector}","profile_key_handle":"keychain:local","profile_unlock_material":"${'A'.repeat(43)}"}}\n`
     const open = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3142","method":"profile.open_local","params":{${auth},"profile_selector":"${selector}"}}\n`
-    const result = `{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3143","method":"profile.bootstrap_local","result":{"state":"ready","profile_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3150","profile_selector":"${selector}"}}\n`
+    const result = `{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3143","method":"profile.bootstrap_local","result":{"state":"ready","profile_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3150","profile_selector":"${selector}","persistence_generation":1}}\n`
     for (const source of [bootstrap, restore, open, result]) {
       expect(encodeHostControlFrame(decodeHostControlFrame(source))).toBe(source)
       expect(source).not.toMatch(/"(?:account|issuer|subject|token|environment)_/u)
