@@ -6,6 +6,7 @@ import {
 } from '../src/account-access-token.ts'
 
 const ISSUER = 'https://accounts.dsh.colorbuyai.com'
+const STAGING_ISSUER = 'https://accounts.staging.dsh.colorbuyai.com'
 const NOW = 1_780_000_000_000
 const ACCOUNT = '30000000-0000-4000-8000-000000000003'
 const SESSION = '40000000-0000-4000-8000-000000000004'
@@ -74,7 +75,7 @@ describe('DSH Account Host access token', () => {
     const privateJwk = keys.privateKey.export({ format: 'jwk' })
     for (const value of [
       { version: 2, issuer: ISSUER, keys: [{ kid: 'private', publicJwk: privateJwk }] },
-      { version: 2, issuer: 'https://accounts.staging.dsh.colorbuyai.com', keys: [] },
+      { version: 2, issuer: STAGING_ISSUER, keys: [] },
       { version: 2, issuer: ISSUER, keys: [
         { kid: 'same', publicJwk }, { kid: 'same', publicJwk },
       ] },
@@ -83,6 +84,18 @@ describe('DSH Account Host access token', () => {
       }] },
     ]) expect(() => parseDshAccountAccessKeyring(JSON.stringify(value))).toThrow(/keyring/u)
     expect(() => parseDshAccountAccessKeyring(' '.repeat(16 * 1024 + 1))).toThrow(/keyring/u)
+  })
+
+  it('accepts the pinned staging issuer without allowing cross-environment tokens', () => {
+    const stagingKeyring = JSON.stringify({
+      version: 2,
+      issuer: STAGING_ISSUER,
+      keys: [{ kid: 'identity-2026-09', publicJwk }],
+    })
+    expect(parseDshAccountAccessKeyring(stagingKeyring).issuer).toBe(STAGING_ISSUER)
+    const verifier = new DshAccountAccessTokenVerifier(stagingKeyring, { now: () => NOW })
+    expect(verifier.verify(token({ iss: STAGING_ISSUER })).issuer).toBe(STAGING_ISSUER)
+    expect(() => verifier.verify(token())).toThrow(/Account access token/u)
   })
 
   it('rejects a tampered signature, unknown kid, oversized token, and excessive lifetime', () => {
