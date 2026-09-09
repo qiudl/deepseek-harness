@@ -73,6 +73,16 @@ function stubWorker(): {
   check('the direct init path defaults to no overlays', direct.sent[0], {
     t: 'init', image: 'https://preview.test/base.tar.gz', overlays: [],
   })
+
+  const profile = stubWorker()
+  const encryptionKey = { type: 'secret' } as CryptoKey
+  new WorkerTunnel(profile.worker).init('https://preview.test/base.tar.gz', [], {
+    environmentId: 'staging', profileId: 'profile', encryptionKey,
+  })
+  check('the local key is carried only in the structured-clone init frame', profile.sent[0], {
+    t: 'init', image: 'https://preview.test/base.tar.gz', overlays: [],
+    localProfile: { environmentId: 'staging', profileId: 'profile', encryptionKey },
+  })
 }
 
 // A normal reply resolves and says nothing on the console.

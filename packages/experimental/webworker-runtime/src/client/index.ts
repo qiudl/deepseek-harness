@@ -10,12 +10,17 @@
  */
 import { IMAGE_FILE_NAME } from '../image-layout.ts'
 import { PREVIEW_FIXTURE_MANIFEST_FILE } from '../fixture-manifest.ts'
-import { WorkerTunnel, type TunnelFetch } from './client.ts'
+import { WorkerTunnel, type TunnelFetch, type WebDshLocalPersistence } from './client.ts'
 import { applyIndexInjections } from './apply-injections.ts'
 import { choosePreviewSource } from './source-chooser.ts'
 
-export { WorkerTunnel, type TunnelFetch } from './client.ts'
+export { WorkerTunnel, type TunnelFetch, type WebDshLocalPersistence } from './client.ts'
 export { applyIndexInjections } from './apply-injections.ts'
+export {
+  enrollWebDshPasskeyProfile, parseWebDshPasskeyEnvelope, unlockWebDshPasskeyProfile,
+  type WebDshPasskeyDependencies, type WebDshPasskeyEnrollment, type WebDshPasskeyEnvelope,
+  type WebDshPasskeyLabels,
+} from './passkey-profile.ts'
 export { IMAGE_FILE_NAME } from '../image-layout.ts'
 export {
   parsePreviewFixtureManifest, PREVIEW_FIXTURE_MANIFEST_FILE, PREVIEW_FIXTURE_MANIFEST_VERSION,
@@ -43,6 +48,12 @@ export interface WorkerHostConnectOptions {
   readonly image?: string | URL
   /** Ordered data overlay URLs, resolved against the page like the base image. */
   readonly overlays?: readonly (string | URL)[]
+  /** Page-unlocked profile key, cloned directly into this origin's Host Worker. */
+  readonly localProfile?: {
+    readonly environmentId: string
+    readonly profileId: string
+    readonly encryptionKey: CryptoKey
+  }
 }
 
 /** Inputs for the optional pre-boot filesystem-source chooser. */
@@ -63,6 +74,8 @@ export interface WorkerHostSource {
 export interface WorkerHostConnection {
   readonly worker: Worker
   readonly tunnel: WorkerTunnel
+  /** Local persistence selected during Worker boot; this says nothing about online connectivity. */
+  readonly localPersistence: WebDshLocalPersistence
   /** Bundle transport for the shell's boot seam. */
   loadBundle(url: string): Promise<void>
 }
@@ -141,6 +154,7 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
     tunnel.init(
       new URL(options?.image ?? IMAGE_FILE_NAME, document.baseURI).href,
       (options?.overlays ?? []).map(overlay => new URL(overlay, document.baseURI).href),
+      options?.localProfile,
     )
     const payload = await tunnel.bootPayload()
     ;(globalThis as ClientTransportGlobal).__DSH_TRANSPORT__ = {
@@ -153,7 +167,10 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
     }
     await applyIndexInjections(payload.injections, src => tunnel.loadBundle(src))
     ready.resolve()
-    return { worker, tunnel, loadBundle: (url: string) => tunnel.loadBundle(url) }
+    return {
+      worker, tunnel, localPersistence: payload.localPersistence,
+      loadBundle: (url: string) => tunnel.loadBundle(url),
+    }
   } catch (reason) {
     ready.reject(reason)
     throw reason

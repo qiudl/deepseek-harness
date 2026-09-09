@@ -6,6 +6,7 @@
  */
 import { dirname, join, normalize, resolve, SEP } from '../module-system/posix-path.ts'
 import { IMAGE_OVERLAY_DIRECTORIES } from '../image-layout.ts'
+import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { parseTar } from './tar.ts'
 import type {
   Vfs, VfsBigIntStats, VfsDir, VfsDirent, VfsEncoding, VfsError, VfsFileHandle, VfsMutation, VfsOpenFile,
@@ -24,6 +25,8 @@ interface FileNode {
   identity?: bigint
   /** One path normally, a Set only for hard links, or undefined after the final unlink. */
   paths: string | Set<string> | undefined
+  /** Durable hard-link group, independent from the stat identity. */
+  linkGroup: string
 }
 
 /** Creation default for files, Node's `0o666` under the classic `022` umask. */
@@ -191,6 +194,9 @@ export class MemoryVfs implements Vfs {
   // descriptors, renames, and hard links continue to address the same file.
   private readonly identities = new Map<string, bigint>()
   private lastIdentity = 0n
+  private readonly linkGroupPrefix = randomUUID()
+  private lastLinkGroup = 0
+  private readonly hydratedLinkGroups = new Map<string, FileNode>()
 
   /**
    * Build the synchronous filesystem authority.
@@ -386,9 +392,19 @@ export class MemoryVfs implements Vfs {
   }
 
   /** Publish one linked name after a content or metadata write. */
-  private publishFilePath(node: FileNode, path: string, appendedFrom?: number): void {
+  private publishFilePath(
+    node: FileNode,
+    path: string,
+    appendedFrom?: number,
+    linkSetChanged?: boolean,
+    entryChanged = false,
+  ): void {
+    const linkedPaths = typeof node.paths === 'string' ? [node.paths] : [...(node.paths ?? [])]
     this.publish({
-      kind: 'write', path, bytes: node.bytes, mode: node.mode, entryChanged: false,
+      kind: 'write', path, bytes: node.bytes, mode: node.mode, entryChanged,
+      linkGroup: node.linkGroup,
+      linkedPaths,
+      ...linkSetChanged === undefined ? {} : { linkSetChanged },
       ...appendedFrom === undefined ? {} : { appendedFrom },
     })
   }
@@ -566,10 +582,15 @@ export class MemoryVfs implements Vfs {
       this.replaceFile(previous, bytes)
       return
     }
-    const node: FileNode = { bytes, mtimeMs: this.touch(target), mode, paths: undefined }
+    const node: FileNode = {
+      bytes, mtimeMs: this.touch(target), mode, paths: undefined, linkGroup: this.nextLinkGroup(),
+    }
     this.setFile(target, node)
     this.touchDirectory(dirname(target))
-    this.publish({ kind: 'write', path: target, bytes, mode, entryChanged: true })
+    this.publish({
+      kind: 'write', path: target, bytes, mode, entryChanged: true,
+      linkGroup: node.linkGroup, linkedPaths: [target],
+    })
   }
 
   /**
@@ -745,7 +766,11 @@ export class MemoryVfs implements Vfs {
       this.touchDirectory(dirname(source))
       this.touchDirectory(dirname(destination))
       this.publish({ kind: 'remove', path: source })
-      this.publish({ kind: 'write', path: destination, bytes: node.bytes, mode: node.mode, entryChanged: true })
+      this.publish({
+        kind: 'write', path: destination, bytes: node.bytes, mode: node.mode, entryChanged: true,
+        linkGroup: node.linkGroup,
+        linkedPaths: typeof node.paths === 'string' ? [node.paths] : [...(node.paths ?? [])],
+      })
       return
     }
     if (!this.directories.has(source)) fail('ENOENT', 'rename', source)
@@ -791,6 +816,11 @@ export class MemoryVfs implements Vfs {
     for (const entry of movedFiles) {
       this.publish({
         kind: 'write', path: entry.path, bytes: entry.bytes, mode: entry.mode, entryChanged: true,
+        linkGroup: this.files.get(entry.path)?.linkGroup ?? this.nextLinkGroup(),
+        linkedPaths: (() => {
+          const paths = this.files.get(entry.path)?.paths
+          return typeof paths === 'string' ? [paths] : [...(paths ?? [])]
+        })(),
       })
     }
   }
@@ -812,7 +842,7 @@ export class MemoryVfs implements Vfs {
     if (!this.directories.has(dirname(target))) fail('ENOENT', 'link', target)
     this.setFile(target, node)
     this.touchDirectory(dirname(target))
-    this.publish({ kind: 'write', path: target, bytes: node.bytes, mode: node.mode, entryChanged: true })
+    this.publishFilePath(node, target, undefined, true, true)
   }
 
   /**
@@ -837,17 +867,26 @@ export class MemoryVfs implements Vfs {
     const node = this.files.get(target)
     if (node !== undefined) {
       node.mode = mode & 0o777
+      const linkedPaths = typeof node.paths === 'string' ? [node.paths] : [...(node.paths ?? [])]
       if (typeof node.paths === 'string') {
-        this.publish({ kind: 'chmod', path: node.paths, mode: node.mode })
+        this.publish({
+          kind: 'chmod', path: node.paths, mode: node.mode, entryKind: 'file',
+          bytes: node.bytes, linkGroup: node.linkGroup, linkedPaths,
+        })
       } else if (node.paths !== undefined) {
-        for (const path of node.paths) this.publish({ kind: 'chmod', path, mode: node.mode })
+        for (const path of node.paths) {
+          this.publish({
+            kind: 'chmod', path, mode: node.mode, entryKind: 'file',
+            bytes: node.bytes, linkGroup: node.linkGroup, linkedPaths,
+          })
+        }
       }
       return
     }
     if (this.directories.has(target)) {
       const bits = mode & 0o777
       this.directoryModes.set(target, bits)
-      this.publish({ kind: 'chmod', path: target, mode: bits })
+      this.publish({ kind: 'chmod', path: target, mode: bits, entryKind: 'directory' })
       return
     }
     fail('ENOENT', 'chmod', target)
@@ -920,13 +959,34 @@ export class MemoryVfs implements Vfs {
   seed(path: string, data: string | Uint8Array, options: VfsSeedOptions = {}): void {
     const target = this.key(path)
     this.seedDirectory(dirname(target))
-    this.setFile(target, {
-      bytes: typeof data === 'string' ? encoder.encode(data) : data,
-      mtimeMs: options.mtimeMs ?? this.touch(target),
-      mode: (options.mode ?? DEFAULT_FILE_MODE) & 0o777,
-      paths: undefined,
-    })
+    const bytes = typeof data === 'string' ? encoder.encode(data) : data
+    const mode = (options.mode ?? DEFAULT_FILE_MODE) & 0o777
+    const linked = options.linkGroup === undefined
+      ? undefined
+      : this.hydratedLinkGroups.get(options.linkGroup)
+    if (linked !== undefined) {
+      if (linked.mode !== mode || linked.bytes.length !== bytes.length
+        || linked.bytes.some((byte, index) => byte !== bytes[index])) {
+        throw new Error(`webworker vfs: hard-link group ${options.linkGroup} has conflicting state`)
+      }
+      this.setFile(target, linked)
+    } else {
+      const node: FileNode = {
+        bytes,
+        mtimeMs: options.mtimeMs ?? this.touch(target),
+        mode,
+        paths: undefined,
+        linkGroup: options.linkGroup ?? this.nextLinkGroup(),
+      }
+      this.setFile(target, node)
+      if (options.linkGroup !== undefined) this.hydratedLinkGroups.set(options.linkGroup, node)
+    }
     this.touchDirectory(dirname(target))
+  }
+
+  private nextLinkGroup(): string {
+    this.lastLinkGroup += 1
+    return `${this.linkGroupPrefix}:${this.lastLinkGroup.toString(36)}`
   }
 
   /**

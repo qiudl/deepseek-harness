@@ -24,6 +24,7 @@ import { installProcessGlobal } from './node/globals/process.ts'
 import { installCryptoGlobals } from './node/globals/crypto.ts'
 import { isShellStartFrame } from './shell/process/protocol.ts'
 import { runShellProcess } from './shell/process/host.ts'
+import { parseInboundFrame } from './transport/frames.ts'
 
 // Before the timer globals, so the wrappers close over the patched platform.
 installAsyncContextHooks()
@@ -49,19 +50,16 @@ self.addEventListener('message', (event: MessageEvent) => {
     return
   }
   if (host === undefined && data !== null && typeof data === 'object' && data.t === 'init') {
-    if (typeof data.image !== 'string') {
-      throw new Error('webworker: init frame needs a string image url')
-    }
-    if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
-      throw new Error('webworker: init frame needs an array of string overlay urls')
-    }
+    const init = parseInboundFrame(data)
+    if (init.t !== 'init') throw new Error('webworker: opening frame is not init')
     const created = createWorkerHost({
       staticModules: createNodeBuiltins(),
       staticModulePrefixes: REPLACED_PREFIXES,
       requestListener: whenRequestListener,
       alsCausality,
-      image: data.image,
-      overlays: data.overlays as string[],
+      image: init.image,
+      overlays: init.overlays,
+      ...init.localProfile === undefined ? {} : { localProfile: init.localProfile },
     })
     host = created
     for (const queued of pending) {

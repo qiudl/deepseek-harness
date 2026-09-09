@@ -41,10 +41,15 @@ export {
   type PreviewFixtureManifest, type PreviewFixtureManifestEntry,
 } from './fixture-manifest.ts'
 export { loadVfsImage, loadVfsOverlay, MemoryVfs } from './storage/memory.ts'
+export {
+  EncryptedVfsMirror, IndexedDbVfsProfileBackend, openEncryptedWebVfsProfile,
+  type OpenWebVfsProfileOptions, type StoredVfsEntry, type StoredVfsProfile,
+  type VfsProfileBackend, type WebLockManager, type WebVfsPersistenceAvailability,
+} from './storage/indexeddb.ts'
 export { inflateImage, inflateImageStream } from './storage/image-gzip.ts'
 export { packTar, parseTar, type TarEntry } from './storage/tar.ts'
 export { requireActiveVfs, setActiveVfs } from './storage/active.ts'
 export {
   type VfsDir, type VfsDirent, type VfsEncoding, type VfsError, type VfsFileHandle,
-  type VfsReadOptions, type VfsStats, type VfsWriteOptions,
+  type VfsMutation, type VfsMutationSink, type VfsReadOptions, type VfsStats, type VfsWriteOptions,
 } from './storage/types.ts'

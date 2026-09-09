@@ -94,6 +94,8 @@ export interface VfsWriteOptions {
 export interface VfsSeedOptions {
   readonly mode?: number
   readonly mtimeMs?: number
+  /** Durable identity shared by hard-linked file names during hydration. */
+  readonly linkGroup?: string
 }
 
 /** Directory entry as `readdir` with `withFileTypes` reports it. */
@@ -175,11 +177,26 @@ export type VfsMutation =
     readonly bytes: Uint8Array
     readonly mode: number
     readonly entryChanged: boolean
+    /** Stable within one mounted VFS and shared by every hard-linked name. */
+    readonly linkGroup: string
+    /** Complete names for this node; used only when {@link linkSetChanged} is true. */
+    readonly linkedPaths: readonly string[]
+    /** A newly linked name requires the durable sink to snapshot the complete link set. */
+    readonly linkSetChanged?: boolean
     readonly appendedFrom?: number
   }
   | { readonly kind: 'mkdir'; readonly path: string; readonly mode: number }
   | { readonly kind: 'remove'; readonly path: string }
-  | { readonly kind: 'chmod'; readonly path: string; readonly mode: number }
+  | {
+    readonly kind: 'chmod'
+    readonly path: string
+    readonly mode: number
+    readonly entryKind: 'file'
+    readonly bytes: Uint8Array
+    readonly linkGroup: string
+    readonly linkedPaths: readonly string[]
+  }
+  | { readonly kind: 'chmod'; readonly path: string; readonly mode: number; readonly entryKind: 'directory' }
 
 /** Receives one committed VFS mutation. */
 export type VfsMutationListener = (mutation: VfsMutation) => void
