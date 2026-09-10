@@ -326,12 +326,25 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
       preflight: Awaited<ReturnType<typeof inspectOfflineAccountProfile>>,
     ): Promise<void> => {
       await recoveryInspector.prepareConfirmedProfile(profile, preflight)
-      await workers.ensure({
-        profileId: profile.profileId,
-        profileRoot: join(root, 'profiles', profile.profileId),
-        credentialHandle: profile.keyHandle,
-        pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
-      })
+      try {
+        await workers.ensure({
+          profileId: profile.profileId,
+          profileRoot: join(root, 'profiles', profile.profileId),
+          credentialHandle: profile.keyHandle,
+          pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
+        })
+        // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
+        // Reinspect and pin those generated links into the Profile-owned content-addressed closure
+        // before returning an offline grant, so replacing the App cannot break the next launch.
+        const stabilized = await recoveryInspector.inspect(profile, {
+          runtimeGeneration: config.runtimeGeneration,
+          schemaGeneration: config.schemaGeneration,
+        })
+        await recoveryInspector.prepareConfirmedProfile(profile, stabilized)
+      } catch (error) {
+        await workers.dispose(profile.profileId).catch(() => undefined)
+        throw error
+      }
     }
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,

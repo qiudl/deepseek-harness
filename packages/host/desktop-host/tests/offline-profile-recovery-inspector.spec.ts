@@ -76,6 +76,8 @@ describe('offline Profile existing-only inspector', () => {
     expect(inspected.preflightDigest).toMatch(/^[a-f0-9]{64}$/u)
     expect(await readFile(join(profileRoot, 'cordis.patch.yml'))).toEqual(patchBefore)
     await expect(inspector.prepareConfirmedProfile(profile(), inspected)).resolves.toBeUndefined()
+    const dependency = await readlink(join(profileRoot, 'profiles', 'web', 'node_modules', 'fixture-plugin'))
+    expect(dependency).toContain(`${join(profileRoot, 'runtime-compat', 'closures')}/`)
   })
 
   it('detects an intact dependency closure owned by a different packaged runtime', async () => {
