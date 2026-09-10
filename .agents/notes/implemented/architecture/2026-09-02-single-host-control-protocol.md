@@ -50,6 +50,8 @@ Round 5 found two reliability defects: direct parser callers had no keyring byte
 
 ## Consequences
 
+Account provisioning captures the prior Profile record and applies registration without an asynchronous gap. Worker failure restores that record only while the registered object is still current; a concurrent change returns `stale`. Looking up only the target identity cannot identify the prior record during issuer or subject replacement, so rollback belongs to the registry rather than the Desktop Host caller. Missing worker support rejects before mutation. This preserves local registry metadata, not a distributed cloud-migration transaction; process-loss recovery and cloud authorization require separate coordination.
+
 The protocol deliberately rejects semantically equivalent JSON. This reduces parser differential and cross-language ambiguity, but every implementation must follow the committed golden vectors. A peer advertising a future version can still negotiate down by sending (for example) `[2,1]`; version-1 framing remains the compatibility bootstrap.
 
 Account-backed Profile creation depends on a live DSH Account session long enough to obtain a valid Host-audience token. The local-only Profile path is independent of that session and remains unavailable only when the trusted Host, Keychain material, or local worker is unavailable. An expired Account token affects only a later account-backed `profile.ensure` retry.

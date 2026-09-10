@@ -31,6 +31,10 @@ kind: "package-bundle"
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
 
+账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。注册表出现并发变更时，回退被阻止并返回 `stale`。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
+
+恢复不含可选绑定字段的记录后再添加账号绑定时，Host 按注册表的规范字段顺序写入，使更新后的记录在 Host 重启后仍可读取。
+
 Profile registry 为每个 Profile 保存 opaque Profile id、opaque Keychain handle 与域隔离 unlock verifier。账号 Profile 还保存规范 DSH Account issuer 与 opaque subject 的设备密钥 HMAC，以及按环境划分的当前 binding handle／version；同一个人的 staging 与 production binding 解析到同一账号 Profile。本地专用 Profile 使用设备密钥随机 index，永远不会获得账号 binding。更高的服务端签名 binding version 只原子替换对应环境的旧账号 handle，并使旧签名 selector 失效。替换 Account issuer 时，只有请求携带同一环境 binding handle、严格递增的 version、相同 Keychain handle、匹配的 unlock material，以及替代身份的有效 token，Host 才会保留原 Profile。文件中不含原始账号身份或 Main vault 的 32 字节解锁材料；常量时间校验成功后只授权当前已认证连接。
 
 `profile.ensure` 返回绑定 installation、Profile、binding generation、runtime generation 与 schema generation 的 Host 签名 opaque selector。`profile.restore` 接受该 selector、精确 Keychain handle 与新鲜 Main-vault material。跨 installation 复制、binding 轮换后重放、猜测 handle／material，或证明连接断开，都会 fail closed。

@@ -50,6 +50,8 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 ## 后果
 
+账号 provisioning 捕获原 Profile 记录并执行登记，两者之间没有异步间隙。worker 失败只会在登记对象仍为当前对象时恢复原记录；并发变更会返回 `stale`。issuer 或 subject 替换时，仅查询目标身份无法识别原记录，因此回退由注册表而非 Desktop Host 调用方负责。缺少 worker 支持时，在变更前拒绝操作。该机制保留本地注册表元数据，并非跨云端的迁移事务；进程丢失恢复和云端授权仍需单独协调。
+
 协议会拒绝语义等价的 JSON。这减少解析器差异与跨语言歧义，但每个实现都必须遵守已提交黄金向量。未来 peer 仍可用 `[2,1]` 降级协商；版本 1 framing 是兼容 bootstrap。
 
 账号关联的 Profile 创建依赖一个仍可获取有效 Host-audience token 的 DSH Account session。本地专用 Profile 路径不依赖该 session，只有可信 Host、Keychain material 或本地 worker 不可用时才不可用。过期 Account token 只影响后续账号关联的 `profile.ensure` 重试。
