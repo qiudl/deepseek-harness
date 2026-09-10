@@ -2,11 +2,12 @@
 import { constants } from 'node:fs'
 import { lstat, open, readFile, readdir, realpath } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
-import { SESSION_FORMAT_VERSION, SessionId, type SessionHeader } from '@deepseek-ai/dsh-session/types'
+import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session/types'
 import type { SessionInspection, SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import { SessionPersistenceRevision, SessionFormatUnsupportedError } from '@deepseek-ai/dsh-session-persistence'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
-import { generationLogFilename, scanLog } from './format.ts'
+import { parseGenerationLogFilename, scanLog } from './format.ts'
+import { LEASE_FILENAME } from './lease.ts'
 import { createZstdFrameDecoder, scanZstdFrames } from './zstd.ts'
 import {
   migrationSourceInventoryDigest,
@@ -113,21 +114,26 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         signal?.throwIfAborted()
         if (!session.isDirectory() || session.isSymbolicLink()) throw new Error('migration_export_source_unsafe')
         const sessionPath = await this.checkedDirectory(join(projectPath, session.name))
-        const names = (await readdir(sessionPath)).sort()
-        if (names.length === 0 && session.name === 'preset-user-default') continue
-        const current = generationLogFilename(SESSION_FORMAT_VERSION, 'none')
-        const ordinary = JSON.stringify(names) === JSON.stringify(['session.jsonl'])
-        const legacyZstd = JSON.stringify(names) === JSON.stringify(['session.jsonl.zstd'])
-        const currentGen = JSON.stringify(names) === JSON.stringify([current])
-        const imported = JSON.stringify(names) === JSON.stringify(['migration-records.json', 'session.jsonl'])
-        const importedCurrent = JSON.stringify(names) === JSON.stringify(['migration-records.json', current])
-        if (!ordinary && !legacyZstd && !currentGen && !imported && !importedCurrent) {
+        const directoryNames = (await readdir(sessionPath)).sort()
+        if (directoryNames.length === 0 && session.name === 'preset-user-default') continue
+        const names = directoryNames.filter(name => name !== LEASE_FILENAME)
+        const ordinaryGenerations = names.flatMap((name) => {
+          const version = parseGenerationLogFilename(name, 'none')
+          return version === undefined ? [] : [{ name, version }]
+        })
+        const legacyZstd = names.filter(name => parseGenerationLogFilename(name, 'zstd') !== undefined)
+        const metadata = names.filter(name => name === 'migration-records.json')
+        if (ordinaryGenerations.length + legacyZstd.length + metadata.length !== names.length
+          || ordinaryGenerations.length + legacyZstd.length < 1
+          || (ordinaryGenerations.length > 0 && legacyZstd.length > 0)
+          || (legacyZstd.length > 0 && JSON.stringify(legacyZstd) !== JSON.stringify(['session.jsonl.zstd']))) {
           throw new Error('migration_export_source_unsafe')
         }
-        if (imported || importedCurrent) await this.checkedRegularFile(join(sessionPath, 'migration-records.json'))
-        const file = currentGen || importedCurrent ? join(sessionPath, current)
-          : join(sessionPath, legacyZstd ? 'session.jsonl.zstd' : 'session.jsonl')
-        rows.push(await this.readLog(file, legacyZstd, signal))
+        for (const name of names) await this.checkedRegularFile(join(sessionPath, name))
+        if (directoryNames.includes(LEASE_FILENAME)) await this.checkedLeaseFile(join(sessionPath, LEASE_FILENAME))
+        const selected = ordinaryGenerations.sort((left, right) => right.version - left.version)[0]?.name
+          ?? legacyZstd[0] as string
+        rows.push(await this.readLog(join(sessionPath, selected), legacyZstd.length > 0, signal))
       }
     }
     const ids = new Set<string>()
@@ -239,5 +245,13 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     const metadata = await lstat(path)
     if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
       || metadata.nlink !== 1 || (metadata.mode & 0o077) !== 0) throw new Error('migration_export_source_unsafe')
+  }
+
+  private async checkedLeaseFile(path: string): Promise<void> {
+    const metadata = await lstat(path)
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
+      || metadata.nlink !== 1 || metadata.size !== 0 || (metadata.mode & 0o022) !== 0) {
+      throw new Error('migration_export_source_unsafe')
+    }
   }
 }
