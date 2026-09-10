@@ -185,9 +185,6 @@ importers:
       '@deepseek-ai/dsh-cordis-client-runner':
         specifier: workspace:^
         version: link:../../packages/extensions/cordis-client-runner
-      '@deepseek-ai/dsh-desktop-host':
-        specifier: workspace:^
-        version: link:../../packages/host/desktop-host
       '@deepseek-ai/dsh-fs-local':
         specifier: workspace:^
         version: link:../../packages/fs/fs-local
@@ -254,6 +251,9 @@ importers:
       '@deepseek-ai/dsh-skill-filesystem':
         specifier: workspace:^
         version: link:../../packages/skill/skill-filesystem
+      '@deepseek-ai/dsh-slark-desktop-host':
+        specifier: workspace:^
+        version: link:../../packages/host/desktop-host
       '@deepseek-ai/dsh-terminal':
         specifier: workspace:^
         version: link:../../packages/terminal/terminal
@@ -8222,12 +8222,12 @@ importers:
 
   packages/session/session-persistence-jsonl:
     dependencies:
-      '@deepseek-ai/dsh-llm':
-        specifier: workspace:^
-        version: link:../../llm/llm
       '@deepseek-ai/dsh-host-control-protocol':
         specifier: workspace:^
         version: link:../../host/control-protocol
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:^
+        version: link:../../llm/llm
       '@deepseek-ai/dsh-session-format':
         specifier: workspace:^
         version: link:../session-format

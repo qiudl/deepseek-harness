@@ -1,4 +1,4 @@
-/** Main-process-only Unix Host client artifact embedded by Slark Desktop. @module @deepseek-ai/dsh-desktop-host/client */
+/** Main-process-only Unix Host client artifact embedded by Slark Desktop. @module @deepseek-ai/dsh-slark-desktop-host/client */
 
 export { UnixHostClient, discoverUnixHost } from './unix-transport.ts'
 export type {

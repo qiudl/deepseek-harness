@@ -1,4 +1,4 @@
-/** Machine-local authority for one Desktop-managed DSH Host. @module @deepseek-ai/dsh-desktop-host */
+/** Machine-local authority for one Slark-managed DSH Host. @module @deepseek-ai/dsh-slark-desktop-host */
 
 export { HostAuthorityError } from './types.ts'
 export type * from './types.ts'

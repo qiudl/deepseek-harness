@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-desktop-host",
+  "name": "@deepseek-ai/dsh-slark-desktop-host",
   "description": "Single-machine DSH Host authority used by trusted Desktop brokers",
   "version": "0.1.5-rc.2",
   "publishConfig": {

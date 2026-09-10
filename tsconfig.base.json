@@ -293,10 +293,10 @@
       "@deepseek-ai/dsh-deepseek-llm-api-extensions": ["./packages/llm/deepseek-llm-api-extensions/src"],
             "@deepseek-ai/dsh-host-control-protocol": ["./packages/host/control-protocol/src"],
       "@deepseek-ai/dsh-host-control-protocol/*": ["./packages/host/control-protocol/src/*"],      "@deepseek-ai/dsh-host-control-protocol/src/*": ["./packages/host/control-protocol/src/*"],
-      "@deepseek-ai/dsh-desktop-host": ["./packages/host/desktop-host/src"],
-      "@deepseek-ai/dsh-desktop-host/client": ["./packages/host/desktop-host/src/client.ts"],
-      "@deepseek-ai/dsh-desktop-host/invariant": ["./packages/host/desktop-host/src/invariant.ts"],
-      "@deepseek-ai/dsh-desktop-host/startup": ["./packages/host/desktop-host/src/startup.ts"],
+      "@deepseek-ai/dsh-slark-desktop-host": ["./packages/host/desktop-host/src"],
+      "@deepseek-ai/dsh-slark-desktop-host/client": ["./packages/host/desktop-host/src/client.ts"],
+      "@deepseek-ai/dsh-slark-desktop-host/invariant": ["./packages/host/desktop-host/src/invariant.ts"],
+      "@deepseek-ai/dsh-slark-desktop-host/startup": ["./packages/host/desktop-host/src/startup.ts"],
 
 
 "@deepseek-ai/dsh-deque": ["./packages/util/deque/src"],

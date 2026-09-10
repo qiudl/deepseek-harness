@@ -1,10 +1,10 @@
-/** Package-owned invariant companion for the Desktop Host authority. @module @deepseek-ai/dsh-desktop-host/invariant */
+/** Package-owned invariant companion for the Desktop Host authority. @module @deepseek-ai/dsh-slark-desktop-host/invariant */
 
 /* jscpd:ignore-start */
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-desktop-host'
+const PACKAGE_NAME = '@deepseek-ai/dsh-slark-desktop-host'
 /** Cordis companion plugin name. */
 export const name = 'desktop-host-invariant'
 /** Service required before the companion can reserve package ownership. */
