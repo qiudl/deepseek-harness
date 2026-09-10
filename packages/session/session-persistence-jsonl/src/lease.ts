@@ -34,10 +34,10 @@ import { join } from 'node:path'
 import { flock } from 'fs-ext'
 import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { LEASE_FILENAME } from './lease-filename.ts'
 import { acquireLockHandleWin32, releaseLockHandleWin32 } from './win32.ts'
 
-/** Base name of the kernel lock file inside a session's directory. */
-export const LEASE_FILENAME = 'session.lock'
+export { LEASE_FILENAME } from './lease-filename.ts'
 
 /** The held kernel lock: a POSIX descriptor or a Win32 semaphore handle. */
 type HeldLock =
