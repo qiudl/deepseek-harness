@@ -112,6 +112,52 @@ describe('person profile registry', () => {
     })).rejects.toMatchObject({ code: 'conflict' })
   })
 
+  it('moves one bound Profile to a replacement Account issuer only with the same binding and unlock key', async () => {
+    const root = dir()
+    const key = Buffer.alloc(32, 4)
+    const registry = new ProfileRegistry({ root, deviceIndexKey: key, clock })
+    const legacy = await registry.registerAccount({
+      issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 1, keyHandle: 'keychain:same', unlockMaterial,
+    })
+
+    await expect(registry.registerAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 1, keyHandle: 'keychain:same', unlockMaterial,
+    })).rejects.toMatchObject({ code: 'stale' })
+    const replacement = await registry.registerAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 2, keyHandle: 'keychain:same', unlockMaterial,
+    })
+
+    expect(replacement.profileId).toBe(legacy.profileId)
+    await expect(registry.resolveAccount({
+      issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'same-person',
+    })).resolves.toBeNull()
+    await expect(registry.resolveAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+    })).resolves.toMatchObject({ profileId: legacy.profileId })
+
+    const restarted = new ProfileRegistry({ root, deviceIndexKey: key, clock })
+    await expect(restarted.registerAccount({
+      issuer: 'https://accounts.third.example', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 3, keyHandle: 'keychain:other', unlockMaterial,
+    })).rejects.toMatchObject({ code: 'profile_mismatch' })
+    await expect(restarted.registerAccount({
+      issuer: 'https://accounts.third.example', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 3, keyHandle: 'keychain:same',
+      unlockMaterial: Buffer.alloc(32, 8).toString('base64url'),
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(restarted.resolveAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+    })).resolves.toMatchObject({ profileId: legacy.profileId })
+  })
+
   it('rejects symlink, hardlink, and malformed registry authority files', async () => {
     const key = Buffer.alloc(32, 6)
     const root = dir()
@@ -223,6 +269,31 @@ describe('authenticated Unix transport', () => {
       client.closeViewLease(closeInput),
       client.closeViewLease(closeInput),
     ])
+    client.close()
+    await server.close()
+  })
+
+  it('keeps the existing Profile when a newer binding replaces its Account issuer', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const current = await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
+      keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    const replacement = await client.ensureAccountProfile({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'u1',
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken('https://accounts.staging.dsh.colorbuyai.com', 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 2,
+      keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    expect(replacement.profileId).toBe(current.profileId)
     client.close()
     await server.close()
   })
