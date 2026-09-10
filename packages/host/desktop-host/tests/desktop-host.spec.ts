@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from 'node:crypto'
+import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -190,6 +190,8 @@ describe('person profile registry', () => {
 })
 
 describe('authenticated Unix transport', () => {
+  const recoveryKeyHandle = 'A'.repeat(43)
+  const recoveryPreflightDigest = 'a'.repeat(64)
   const executableDigest = '1'.repeat(64)
   const desktopDigest = '2'.repeat(64)
   const uid = process.getuid?.() ?? 501
@@ -211,6 +213,7 @@ describe('authenticated Unix transport', () => {
     createMigrationImport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationImport']>,
     createLegacyMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createLegacyMigrationExport']>,
     now: () => number = clock.now,
+    offlineRecovery = true,
   ): Promise<{ server: UnixHostServer; host: DesktopHost; socketPath: string }> {
     const root = dir()
     const socketPath = join(root, 'host.sock')
@@ -220,10 +223,20 @@ describe('authenticated Unix transport', () => {
       authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
       unlockMaterial,
     })
+    await registry.registerAccount({
+      issuer: slarkIssuer, subject: 'offline-recovery', keyHandle: recoveryKeyHandle, unlockMaterial,
+    })
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: 5,
       verifyAccountAccessToken: verifyTestAccountToken,
       ensureProfileWorker: async () => undefined,
+      ...(offlineRecovery ? {
+        inspectOfflineAccountProfile: async () => ({
+          state: 'recoverable' as const, compatibility: 'current' as const, persistenceGeneration: 11,
+          sessionCount: 86, pluginCount: 6, preflightDigest: recoveryPreflightDigest,
+        }),
+        ensureRecoveredProfileWorker: async () => undefined,
+      } : {}),
       activateProfileView: async () => ({ origin: 'http://127.0.0.1:4123', generation: 7, bootstrapCookie }),
     })
     const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: identity.processNonce })
@@ -238,6 +251,21 @@ describe('authenticated Unix transport', () => {
     await server.start()
     return { server, host, socketPath }
   }
+
+  it('advertises offline recovery only when both recovery adapters are installed', async () => {
+    const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, false)
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    expect(client.inspection.capabilities).not.toContain('profile.recovery_inspect')
+    expect(client.inspection.capabilities).not.toContain('profile.recover_offline_account')
+    expect(client.inspection.capabilities).not.toContain('profile.open_offline_account')
+    expect(client.inspection.capabilities).not.toContain('profile.recovery_status')
+    client.close()
+    await server.close()
+  })
 
   it('verifies UID, installation key, executable digest, and serves the exact Desktop adapter', async () => {
     const { server, socketPath } = await fixture()
@@ -320,6 +348,46 @@ describe('authenticated Unix transport', () => {
       profileSelector: local.profileSelector, keyHandle: 'keychain:local-wire', unlockMaterial,
     })).resolves.toMatchObject({ profileId: local.profileId, persistenceGeneration: 1 })
     restoredClient.close()
+    await server.close()
+  })
+
+  it('recovers and opens an offline Account Profile through a domain-separated selector', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const inspected = await client.inspectOfflineAccountProfiles({ profileKeyHandles: [recoveryKeyHandle] })
+    expect(inspected.candidates).toEqual([expect.objectContaining({
+      state: 'recoverable', bindingCount: 0, sessionCount: 86, pluginCount: 6,
+      preflightDigest: recoveryPreflightDigest,
+    })])
+    const candidate = inspected.candidates[0]!
+    const operationId = randomUUID()
+    const recovered = await client.recoverOfflineAccountProfile({
+      profileKeyHandle: recoveryKeyHandle, profileUnlockMaterial: unlockMaterial,
+      recoveryOperationId: operationId, candidateId: candidate.candidateId,
+      preflightDigest: candidate.preflightDigest,
+    })
+    expect(recovered).toMatchObject({
+      state: 'offline_ready', accessScope: 'offline_local', persistenceGeneration: 11,
+    })
+    await expect(client.getOfflineAccountRecoveryStatus({ recoveryOperationId: operationId }))
+      .resolves.toEqual({ state: 'offline_ready' })
+    await expect(client.openOfflineAccountProfile({ profileSelector: recovered.profileSelector }))
+      .resolves.toMatchObject({ accessScope: 'offline_local' })
+    await expect(client.openLocalProfile({ profileSelector: recovered.profileSelector }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+
+    const connected = await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'), accountBindingHandle: 'binding:opaque',
+      authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    await expect(client.openOfflineAccountProfile({ profileSelector: connected.profileSelector }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    client.close()
     await server.close()
   })
 

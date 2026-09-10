@@ -361,6 +361,21 @@ export class ProfileRegistry {
   }
 
   /**
+   * Resolve exactly one account Profile from an opaque Main-vault key handle.
+   * @param keyHandle - Keychain handle already selected by trusted Desktop Main.
+   * @returns the unique account Profile; missing and ambiguous handles fail closed.
+   */
+  resolveUniqueAccountByKeyHandle(keyHandle: string): PersonProfileRecord {
+    const normalized = handle(keyHandle)
+    const matches = this.profiles.filter(profile => profile.kind === 'account' && profile.keyHandle === normalized)
+    if (matches.length === 0) throw new HostAuthorityError('profile_not_found')
+    if (matches.length !== 1) throw new HostAuthorityError('profile_ambiguous')
+    const [match] = matches
+    if (!match) throw new HostAuthorityError('profile_not_found')
+    return match
+  }
+
+  /**
    * Resolve the secure local binding selected by Desktop Main.
    * @param authorityEnvironmentId - globally stable authority environment UUID.
    * @param accountBindingHandle - opaque binding minted outside Renderer.

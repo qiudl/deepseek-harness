@@ -38,6 +38,16 @@ import type {
   ProfileOpenLocalResult,
   ProfileRestoreRequest,
   ProfileRestoreResult,
+  ProfileRecoveryInspectRequest,
+  ProfileRecoveryInspectResult,
+  ProfileRecoverOfflineAccountRequest,
+  ProfileRecoverOfflineAccountResult,
+  ProfileOpenOfflineAccountRequest,
+  ProfileOpenOfflineAccountResult,
+  ProfileRecoveryStatusRequest,
+  ProfileRecoveryStatusResult,
+  HostRecoveryCandidateId,
+  HostRecoveryOperationId,
   MigrationExportBeginRequest,
   MigrationExportBeginResult,
   MigrationExportInventoryRequest,
@@ -107,6 +117,18 @@ const ERROR_CODES: ReadonlySet<string> = new Set<HostControlErrorCode>([
   'migration_required',
   'unavailable',
   'internal_error',
+  'profile_not_found',
+  'profile_ambiguous',
+  'profile_integrity_failed',
+  'runtime_incompatible',
+  'recovery_proof_mismatch',
+  'recovery_preflight_stale',
+  'recovery_in_progress',
+  'recovery_worker_failed',
+  'recovery_timeout_unknown',
+  'scope_mismatch',
+  'selector_stale',
+  'lease_conflict',
 ])
 
 function reject(code: HostControlProtocolFailure = 'invalid_frame'): never {
@@ -350,6 +372,8 @@ function authorized(params: Record<string, unknown>): {
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
+  | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
+  | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileLeaseCloseRequest {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
@@ -439,6 +463,55 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector) },
     }
   }
+  if (frame.method === 'profile.recovery_inspect') {
+    exactKeys(params, [
+      ...AUTHORIZED_KEYS, 'profile_key_handles', 'expected_runtime_generation', 'expected_schema_generation',
+    ])
+    if (!Array.isArray(params.profile_key_handles) || params.profile_key_handles.length < 1
+      || params.profile_key_handles.length > 128) reject()
+    const profile_key_handles = params.profile_key_handles.map(unlockMaterial)
+    if (new Set(profile_key_handles).size !== profile_key_handles.length) reject()
+    return {
+      version: 1, type: 'request', request_id: requestId, method: 'profile.recovery_inspect',
+      params: {
+        ...authorized(params), profile_key_handles,
+        expected_runtime_generation: generation(params.expected_runtime_generation),
+        expected_schema_generation: generation(params.expected_schema_generation),
+      },
+    }
+  }
+  if (frame.method === 'profile.recover_offline_account') {
+    exactKeys(params, [
+      ...AUTHORIZED_KEYS, 'profile_key_handle', 'profile_unlock_material', 'recovery_operation_id',
+      'candidate_id', 'preflight_digest',
+    ])
+    return {
+      version: 1, type: 'request', request_id: requestId, method: 'profile.recover_offline_account',
+      params: {
+        ...authorized(params), profile_key_handle: unlockMaterial(params.profile_key_handle),
+        profile_unlock_material: unlockMaterial(params.profile_unlock_material),
+        recovery_operation_id: uuid(params.recovery_operation_id) as HostRecoveryOperationId,
+        candidate_id: uuid(params.candidate_id) as HostRecoveryCandidateId,
+        preflight_digest: digest(params.preflight_digest),
+      },
+    }
+  }
+  if (frame.method === 'profile.open_offline_account') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector'])
+    return {
+      version: 1, type: 'request', request_id: requestId, method: 'profile.open_offline_account',
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector) },
+    }
+  }
+  if (frame.method === 'profile.recovery_status') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'recovery_operation_id'])
+    return {
+      version: 1, type: 'request', request_id: requestId, method: 'profile.recovery_status',
+      params: {
+        ...authorized(params), recovery_operation_id: uuid(params.recovery_operation_id) as HostRecoveryOperationId,
+      },
+    }
+  }
   if (frame.method === 'profile.lease_close') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation'])
     return {
@@ -477,6 +550,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
 function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
+  | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
+  | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileLeaseCloseResult {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
@@ -537,6 +612,85 @@ function decodeProfileResult(frame: Record<string, unknown>):
         profile_selector: profileSelector(result.profile_selector),
         persistence_generation: generation(result.persistence_generation),
       },
+    }
+  }
+  if (frame.method === 'profile.recovery_inspect') {
+    exactKeys(result, ['candidates'])
+    if (!Array.isArray(result.candidates) || result.candidates.length < 1 || result.candidates.length > 128) reject()
+    const candidates = result.candidates.map((value) => {
+      const candidate = record(value)
+      const withReason = Object.hasOwn(candidate, 'reason_code')
+      exactKeys(candidate, [
+        'state', 'candidate_id', 'profile_kind', 'binding_count', 'persistence_generation',
+        'session_count', 'plugin_count', 'compatibility', 'preflight_digest',
+        ...(withReason ? ['reason_code'] : []),
+      ])
+      if ((candidate.state !== 'recoverable' && candidate.state !== 'compatibility_blocked')
+        || candidate.profile_kind !== 'account'
+        || !['current', 'legacy_runtime_required', 'read_only_export_only'].includes(String(candidate.compatibility))) reject()
+      const state: 'recoverable' | 'compatibility_blocked' = candidate.state === 'recoverable'
+        ? 'recoverable'
+        : 'compatibility_blocked'
+      return {
+        state,
+        candidate_id: uuid(candidate.candidate_id) as HostRecoveryCandidateId,
+        profile_kind: 'account' as const,
+        binding_count: nonnegative(candidate.binding_count),
+        persistence_generation: nonnegative(candidate.persistence_generation),
+        session_count: nonnegative(candidate.session_count),
+        plugin_count: nonnegative(candidate.plugin_count),
+        compatibility: candidate.compatibility as 'current' | 'legacy_runtime_required' | 'read_only_export_only',
+        preflight_digest: digest(candidate.preflight_digest),
+        ...(withReason ? { reason_code: boundedText(candidate.reason_code, 128) } : {}),
+      }
+    })
+    return { version: 1, type: 'result', request_id, method: 'profile.recovery_inspect', result: { candidates } }
+  }
+  if (frame.method === 'profile.recover_offline_account') {
+    exactKeys(result, [
+      'state', 'profile_selector', 'access_scope', 'persistence_generation', 'runtime_generation',
+    ])
+    if (result.state !== 'offline_ready' || result.access_scope !== 'offline_local') reject()
+    return {
+      version: 1, type: 'result', request_id, method: 'profile.recover_offline_account',
+      result: {
+        state: 'offline_ready', profile_selector: profileSelector(result.profile_selector),
+        access_scope: 'offline_local', persistence_generation: nonnegative(result.persistence_generation),
+        runtime_generation: generation(result.runtime_generation),
+      },
+    }
+  }
+  if (frame.method === 'profile.open_offline_account') {
+    exactKeys(result, [
+      'profile_id', 'view_lease_id', 'view_activation_handle', 'lease_generation', 'expires_at',
+      'runtime_generation', 'access_scope',
+    ])
+    if (result.access_scope !== 'offline_local') reject()
+    return {
+      version: 1, type: 'result', request_id, method: 'profile.open_offline_account',
+      result: {
+        profile_id: uuid(result.profile_id) as HostProfileId,
+        view_lease_id: uuid(result.view_lease_id) as HostViewLeaseId,
+        view_activation_handle: activationHandle(result.view_activation_handle),
+        lease_generation: generation(result.lease_generation), expires_at: timestamp(result.expires_at),
+        runtime_generation: generation(result.runtime_generation), access_scope: 'offline_local',
+      },
+    }
+  }
+  if (frame.method === 'profile.recovery_status') {
+    if (result.state === 'failed') {
+      exactKeys(result, ['state', 'reason_code'])
+      if (result.reason_code !== 'recovery_worker_failed') reject()
+      return {
+        version: 1, type: 'result', request_id, method: 'profile.recovery_status',
+        result: { state: 'failed', reason_code: 'recovery_worker_failed' },
+      }
+    }
+    exactKeys(result, ['state'])
+    if (!['recovering', 'offline_ready', 'unknown'].includes(String(result.state))) reject()
+    return {
+      version: 1, type: 'result', request_id, method: 'profile.recovery_status',
+      result: { state: result.state as 'recovering' | 'offline_ready' | 'unknown' },
     }
   }
   if (frame.method === 'profile.open' || frame.method === 'profile.open_local') {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -115,6 +115,11 @@ describe('owner-only migration import', () => {
     expect(await readFile(join(active.root, '_no-cwd', 'session-1', 'session.v2.jsonl'), 'utf8'))
       .toContain('"turn/start"')
     expect(await target.activeOwnerState()).toEqual(ownerState)
+    const inspected = await target.inspectExistingPersistence()
+    expect(inspected).toMatchObject({ generation: 5, compression: 'none' })
+    expect(inspected.root.endsWith('/generations/5')).toBe(true)
+    expect(inspected.sessionCount).toBe(1)
+    expect(inspected.inventoryDigest).toMatch(/^[a-f0-9]{64}$/u)
     const source = new FileJsonlMigrationExportSource(active.root, uid, { read: async () => ownerState })
     expect(await source.listSnapshots()).toHaveLength(1)
     expect((await source.inspect(header.id)).events).toEqual(events)
@@ -122,6 +127,14 @@ describe('owner-only migration import', () => {
     expect(await source.listSnapshots()).toHaveLength(1)
     await expect(target.commitGeneration(4, 5)).rejects.toThrow(/generation_changed/u)
     await expect(target.abortGeneration(5)).rejects.toThrow(/already_committed/u)
+  })
+
+  it('does not create any persistence artifact while inspecting a missing Profile', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-owner-generation-inspect-missing-'))
+    const root = join(base, 'persistence')
+    const target = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 4)
+    await expect(target.inspectExistingPersistence()).rejects.toThrow()
+    await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('materializes a seeded session with its inherited event cut', async () => {
