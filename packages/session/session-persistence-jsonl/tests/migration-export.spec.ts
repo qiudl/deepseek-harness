@@ -69,7 +69,7 @@ describe('JsonlMigrationExportService', () => {
     })
     const receipt = await exporter.begin({ expectedInventoryDigest: INVENTORY, maxRecords: 10, maxBytes: 20_000 })
     expect(receipt).toMatchObject({
-      transferId: 'c'.repeat(48), schemaVersion: 0,
+      transferId: 'c'.repeat(48), schemaVersion: SESSION_FORMAT_VERSION,
       recordCount: 3 + migrationOwnerStateRecords(ownerState).length,
       firstEventSequence: 1, lastEventSequence: 2,
     })

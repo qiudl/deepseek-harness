@@ -210,7 +210,7 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     }
   }
 
-  /** Translate a released foreign physical log (v0/v1) to the current format buffer. */
+  /** Translate a released foreign physical log to the current format buffer. */
   private upgradeForeignLog(plaintext: Buffer): Buffer {
     const text = plaintext.toString('utf8')
     const lines = text.split('\n').filter(line => line.length !== 0)
@@ -219,11 +219,16 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     if (firstLine === undefined) throw new Error('migration_export_source_corrupt')
     const headerValue = JSON.parse(firstLine) as unknown
     const rowValues = lines.slice(1).map(line => JSON.parse(line) as unknown)
-    const decoded = sessionFormatCatalog.decodeRecoverableArtifact(headerValue, rowValues)
-    const current = sessionFormatCatalog.migrate(decoded)
-    const encoded = sessionFormatCatalog.encodeCurrent(current)
-    const header = JSON.stringify(encoded.header)
-    const rows = encoded.rows.map(row => JSON.stringify(row))
+    const restore = sessionFormatCatalog.createRestore(headerValue, {
+      recovery: 'recoverable',
+      validation: 'current',
+    })
+    for (const rowValue of rowValues) restore.decodeRow(rowValue)
+    const current = restore.finish()
+    const header = JSON.stringify(
+      sessionFormatCatalog.encodeCurrentHeader(current.header, current.inheritedEventCount),
+    )
+    const rows = current.events.map(event => JSON.stringify(sessionFormatCatalog.encodeCurrentEvent(event)))
     if (rows.length === 0) return Buffer.from(`${header}\n`, 'utf8')
     return Buffer.from(`${header}\n${rows.join('\n')}\n`, 'utf8')
   }

@@ -112,7 +112,7 @@ describe('owner-only migration import', () => {
     const active = await new FileOwnerJsonlMigrationGenerationTarget(root, uid, 4).activePersistenceConfig()
     expect(active).toMatchObject({ generation: 5, compression: 'none' })
     expect(active.root.endsWith('/generations/5')).toBe(true)
-    expect(await readFile(join(active.root, '_no-cwd', 'session-1', 'session.v2.jsonl'), 'utf8'))
+    expect(await readFile(join(active.root, '_no-cwd', 'session-1', `session.v${SESSION_FORMAT_VERSION}.jsonl`), 'utf8'))
       .toContain('"turn/start"')
     expect(await target.activeOwnerState()).toEqual(ownerState)
     const inspected = await target.inspectExistingPersistence()
