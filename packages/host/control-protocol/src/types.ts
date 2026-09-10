@@ -39,6 +39,10 @@ export type HostMigrationTransferId = Branded<'HostMigrationTransferId'>
 export type HostMigrationImportId = Branded<'HostMigrationImportId'>
 /** Connection-bound authority for one verified owner-local legacy inventory. */
 export type HostMigrationSourceAuthority = Branded<'HostMigrationSourceAuthority'>
+/** Short-lived Host candidate id for one offline Account Profile preflight. */
+export type HostRecoveryCandidateId = Branded<'HostRecoveryCandidateId'>
+/** Desktop idempotency key for one confirmed offline recovery operation. */
+export type HostRecoveryOperationId = Branded<'HostRecoveryOperationId'>
 
 /**
  * Negotiated operation token. A capability is syntax-checked, sorted, and
@@ -64,6 +68,18 @@ export type HostControlErrorCode =
   | 'migration_required'
   | 'unavailable'
   | 'internal_error'
+  | 'profile_not_found'
+  | 'profile_ambiguous'
+  | 'profile_integrity_failed'
+  | 'runtime_incompatible'
+  | 'recovery_proof_mismatch'
+  | 'recovery_preflight_stale'
+  | 'recovery_in_progress'
+  | 'recovery_worker_failed'
+  | 'recovery_timeout_unknown'
+  | 'scope_mismatch'
+  | 'selector_stale'
+  | 'lease_conflict'
 
 /** Initial challenge request; it is the only payload decoded before negotiation. */
 export interface HostInspectRequest {
@@ -253,6 +269,109 @@ export interface ProfileOpenLocalResult {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.open_local'
   readonly result: ProfileOpenResult['result']
+}
+
+/** Inspect only Account Profiles named by Main-vault key handles. */
+export interface ProfileRecoveryInspectRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_inspect'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_key_handles: readonly string[]
+    readonly expected_runtime_generation: number
+    readonly expected_schema_generation: number
+  }
+}
+
+/** Anonymous recovery candidates; Profile ids, key handles, and paths are excluded. */
+export interface ProfileRecoveryInspectResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_inspect'
+  readonly result: {
+    readonly candidates: readonly {
+      readonly state: 'recoverable' | 'compatibility_blocked'
+      readonly candidate_id: HostRecoveryCandidateId
+      readonly profile_kind: 'account'
+      readonly binding_count: number
+      readonly persistence_generation: number
+      readonly session_count: number
+      readonly plugin_count: number
+      readonly compatibility: 'current' | 'legacy_runtime_required' | 'read_only_export_only'
+      readonly preflight_digest: HostControlSha256
+      readonly reason_code?: string
+    }[]
+  }
+}
+
+/** Confirm one inspected offline Account Profile with ephemeral Main-vault material. */
+export interface ProfileRecoverOfflineAccountRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recover_offline_account'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_key_handle: string
+    readonly profile_unlock_material: string
+    readonly recovery_operation_id: HostRecoveryOperationId
+    readonly candidate_id: HostRecoveryCandidateId
+    readonly preflight_digest: HostControlSha256
+  }
+}
+
+/** Offline grant plus a selector signed in the offline-only domain. */
+export interface ProfileRecoverOfflineAccountResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recover_offline_account'
+  readonly result: {
+    readonly state: 'offline_ready'
+    readonly profile_selector: string
+    readonly access_scope: 'offline_local'
+    readonly persistence_generation: number
+    readonly runtime_generation: number
+  }
+}
+
+/** Open an Account Profile through an offline-domain selector. */
+export interface ProfileOpenOfflineAccountRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.open_offline_account'
+  readonly params: HostAuthorizedParams & { readonly profile_selector: string }
+}
+
+/** Offline-only view lease; access scope is explicit on the wire. */
+export interface ProfileOpenOfflineAccountResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.open_offline_account'
+  readonly result: ProfileOpenResult['result'] & { readonly access_scope: 'offline_local' }
+}
+
+/** Query one process-local recovery operation without restarting it. */
+export interface ProfileRecoveryStatusRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_status'
+  readonly params: HostAuthorizedParams & { readonly recovery_operation_id: HostRecoveryOperationId }
+}
+
+/** Stable recovery operation state without secrets or Profile identifiers. */
+export interface ProfileRecoveryStatusResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_status'
+  readonly result:
+    | { readonly state: 'recovering' | 'offline_ready' | 'unknown' }
+    | { readonly state: 'failed'; readonly reason_code: 'recovery_worker_failed' }
 }
 
 /** Open the same Profile through a Main-only local view lease. */
@@ -641,6 +760,14 @@ export type HostControlFrame =
   | ProfileOpenResult
   | ProfileOpenLocalRequest
   | ProfileOpenLocalResult
+  | ProfileRecoveryInspectRequest
+  | ProfileRecoveryInspectResult
+  | ProfileRecoverOfflineAccountRequest
+  | ProfileRecoverOfflineAccountResult
+  | ProfileOpenOfflineAccountRequest
+  | ProfileOpenOfflineAccountResult
+  | ProfileRecoveryStatusRequest
+  | ProfileRecoveryStatusResult
   | ProfileViewActivateRequest
   | ProfileViewActivateResult
   | ProfileLeaseCloseRequest

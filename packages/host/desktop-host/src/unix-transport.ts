@@ -27,6 +27,10 @@ import type {
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   ProfileStatusRequest,
+  ProfileRecoveryInspectRequest,
+  ProfileRecoverOfflineAccountRequest,
+  ProfileOpenOfflineAccountRequest,
+  ProfileRecoveryStatusRequest,
   MigrationExportBeginRequest,
   MigrationExportInventoryRequest,
   MigrationExistingSourceInventoryRequest,
@@ -44,7 +48,13 @@ import {
   encodeHostInspectSignaturePayload,
   migrationProfileSelectorHash,
 } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
-import type { HostAuthorityErrorCode, PersonProfileId, ProfileOpenResult, ProfileViewLeaseId } from './types.ts'
+import type {
+  HostAuthorityErrorCode,
+  OfflineProfileOpenResult,
+  PersonProfileId,
+  ProfileOpenResult,
+  ProfileViewLeaseId,
+} from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { SingleHostLock } from './single-instance.ts'
@@ -226,6 +236,13 @@ const capabilities = [
   'profile.view_activate',
 ] as const satisfies readonly string[]
 
+const recoveryCapabilities = [
+  'profile.recovery_inspect',
+  'profile.recover_offline_account',
+  'profile.open_offline_account',
+  'profile.recovery_status',
+] as const satisfies readonly string[]
+
 function nonce(): HostControlNonce { return randomBytes(32).toString('base64url') as HostControlNonce }
 function requestId(): HostControlRequestId { return randomUUID() as HostControlRequestId }
 function validSha256(value: string): boolean { return /^[0-9a-f]{64}$/.test(value) }
@@ -255,6 +272,10 @@ interface ProfileSelectorPayload {
   readonly binding_generation: number
   readonly runtime_generation: number
   readonly schema_generation: number
+}
+
+interface OfflineProfileSelectorPayload extends ProfileSelectorPayload {
+  readonly access_scope: 'offline_local'
 }
 
 function mintProfileSelector(identity: HostIdentity, profileId: string, bindingGeneration: number): string {
@@ -289,6 +310,40 @@ function verifyProfileSelector(identity: HostIdentity, selector: string): Profil
   return value as ProfileSelectorPayload
 }
 
+function mintOfflineProfileSelector(identity: HostIdentity, profileId: string, bindingGeneration: number): string {
+  const payload: OfflineProfileSelectorPayload = {
+    version: 1, installation_id: identity.installationId, profile_id: profileId, binding_generation: bindingGeneration,
+    runtime_generation: identity.runtimeGeneration, schema_generation: identity.schemaGeneration,
+    access_scope: 'offline_local',
+  }
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  const signature = sign(
+    null, Buffer.from(`dsh-profile-offline-selector/v1\0${encoded}`),
+    privateKeyObject(identity.installationPrivateKey),
+  ).toString('base64url')
+  return `${encoded}.${signature}`
+}
+
+function verifyOfflineProfileSelector(identity: HostIdentity, selector: string): OfflineProfileSelectorPayload {
+  const [encoded, signature, extra] = selector.split('.')
+  if (!encoded || !signature || extra !== undefined || !verify(
+    null, Buffer.from(`dsh-profile-offline-selector/v1\0${encoded}`), publicKeyObject(identity.installationPublicKey),
+    Buffer.from(signature, 'base64url'),
+  )) throw new HostAuthorityError('unauthorized')
+  let payload: unknown
+  try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as unknown } catch {
+    throw new HostAuthorityError('unauthorized')
+  }
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) throw new HostAuthorityError('unauthorized')
+  const value = payload as Partial<OfflineProfileSelectorPayload>
+  if (Object.keys(value).join(',') !== 'version,installation_id,profile_id,binding_generation,runtime_generation,schema_generation,access_scope'
+    || value.version !== 1 || value.installation_id !== identity.installationId
+    || typeof value.profile_id !== 'string' || !Number.isSafeInteger(value.binding_generation) || (value.binding_generation ?? -1) < 0
+    || value.runtime_generation !== identity.runtimeGeneration || value.schema_generation !== identity.schemaGeneration
+    || value.access_scope !== 'offline_local') throw new HostAuthorityError('stale')
+  return value as OfflineProfileSelectorPayload
+}
+
 function safeError(
   code: HostControlErrorCode,
   request: { request_id: HostControlRequestId; method: string },
@@ -298,7 +353,11 @@ function safeError(
     type: 'error',
     request_id: request.request_id,
     method: request.method as HostControlCapability,
-    error: { code, retryable: code === 'busy' || code === 'unavailable', correlation_id: randomUUID() as never },
+    error: {
+      code,
+      retryable: ['busy', 'unavailable', 'recovery_in_progress', 'recovery_worker_failed', 'recovery_timeout_unknown'].includes(code),
+      correlation_id: randomUUID() as never,
+    },
   }
 }
 
@@ -319,6 +378,18 @@ function authorityCodeFromFrame(code: HostControlErrorCode): HostAuthorityErrorC
     case 'conflict':
     case 'busy':
     case 'upgrade_required':
+    case 'profile_not_found':
+    case 'profile_ambiguous':
+    case 'profile_integrity_failed':
+    case 'runtime_incompatible':
+    case 'recovery_proof_mismatch':
+    case 'recovery_preflight_stale':
+    case 'recovery_in_progress':
+    case 'recovery_worker_failed':
+    case 'recovery_timeout_unknown':
+    case 'scope_mismatch':
+    case 'selector_stale':
+    case 'lease_conflict':
       return code
     default:
       return 'unavailable'
@@ -572,7 +643,10 @@ export class UnixHostServer {
       if (frame.type !== 'request') { socket.destroy(); return }
       if (!inspected) {
         if (frame.method !== 'host.inspect') { socket.destroy(); return }
-        const response = this.inspect(frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled)
+        const response = this.inspect(
+          frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
+          this.options.host.supportsOfflineAccountRecovery(),
+        )
         inspected = true
         authorizer = new HostRequestAuthorizer({
           clientInstanceId: frame.params.client_instance_id,
@@ -732,6 +806,70 @@ export class UnixHostServer {
               import_id: stage.importId as never, stage_version: stage.version, aborted: true,
             } })
           } catch (error) { channel.send(safeError(migrationImportCode(error), frame)) }
+        } else if (frame.method === 'profile.recovery_inspect') {
+          const inspected = await this.options.host.inspectOfflineAccountProfiles({
+            keyHandles: frame.params.profile_key_handles,
+            expectedRuntimeGeneration: frame.params.expected_runtime_generation,
+            expectedSchemaGeneration: frame.params.expected_schema_generation,
+            ownerId,
+          })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: {
+              candidates: inspected.candidates.map(candidate => ({
+                state: candidate.state, candidate_id: candidate.candidateId as never,
+                profile_kind: candidate.profileKind, binding_count: candidate.bindingCount,
+                persistence_generation: candidate.persistenceGeneration, session_count: candidate.sessionCount,
+                plugin_count: candidate.pluginCount, compatibility: candidate.compatibility,
+                preflight_digest: candidate.preflightDigest as never,
+                ...(candidate.reasonCode === undefined ? {} : { reason_code: candidate.reasonCode }),
+              })),
+            },
+          })
+        } else if (frame.method === 'profile.recover_offline_account') {
+          const recovered = await this.options.host.recoverOfflineAccountProfile({
+            candidateId: frame.params.candidate_id as never,
+            preflightDigest: frame.params.preflight_digest,
+            keyHandle: frame.params.profile_key_handle,
+            unlockMaterial: frame.params.profile_unlock_material,
+            operationId: frame.params.recovery_operation_id,
+            ownerId,
+          })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: {
+              state: 'offline_ready',
+              profile_selector: mintOfflineProfileSelector(
+                this.options.identity, recovered.profileId, recovered.bindingGeneration,
+              ),
+              access_scope: 'offline_local', persistence_generation: recovered.persistenceGeneration,
+              runtime_generation: recovered.runtimeGeneration,
+            },
+          })
+        } else if (frame.method === 'profile.open_offline_account') {
+          const selector = verifyOfflineProfileSelector(this.options.identity, frame.params.profile_selector)
+          const opened = await this.options.host.openOfflineAccountProfile({
+            profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation, ownerId,
+          })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: {
+              profile_id: opened.profileId as never, view_lease_id: opened.viewLeaseId as never,
+              view_activation_handle: opened.viewActivationHandle as never,
+              lease_generation: opened.leaseGeneration, expires_at: opened.expiresAt,
+              runtime_generation: opened.runtimeGeneration, access_scope: 'offline_local',
+            },
+          })
+        } else if (frame.method === 'profile.recovery_status') {
+          const status = this.options.host.getOfflineAccountRecoveryStatus({
+            operationId: frame.params.recovery_operation_id, ownerId,
+          })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: status.state === 'failed'
+              ? { state: 'failed', reason_code: status.reasonCode }
+              : { state: status.state },
+          })
         } else if (frame.method === 'profile.ensure') {
           if (!frame.params.account_access_token) throw new HostAuthorityError('upgrade_required')
           const profile = await this.options.host.ensureAccountProfile({
@@ -886,6 +1024,7 @@ export class UnixHostServer {
     migrationExport: boolean,
     migrationImport: boolean,
     legacyMigration: boolean,
+    offlineAccountRecovery: boolean,
   ): HostInspectResult {
     if (!request.params.supported_versions.includes(1)) throw new HostAuthorityError('unavailable')
     const identity = this.options.identity
@@ -904,6 +1043,7 @@ export class UnixHostServer {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
+          ...(offlineAccountRecovery ? recoveryCapabilities : []),
           ...(migrationExport ? [
             'migration.export_snapshot.inventory', 'migration.export_snapshot.begin', 'migration.export_snapshot.read',
           ] : []),
@@ -1024,6 +1164,141 @@ export class UnixHostClient {
       state: 'ready', profileId: frame.result.profile_id,
       persistenceGeneration: frame.result.persistence_generation,
     } : { state: frame.result.state }
+  }
+
+  /**
+   * Inspect Main-vault handles for recoverable offline Account Profiles.
+   * Runtime and schema expectations are pinned to the attested Host inspection.
+   * @param input - bounded opaque key handles and optional cancellation.
+   * @returns anonymous preflight candidates without Profile ids or handles.
+   */
+  async inspectOfflineAccountProfiles(input: {
+    readonly profileKeyHandles: readonly string[]
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly candidates: readonly {
+    readonly state: 'recoverable' | 'compatibility_blocked'
+    readonly candidateId: string
+    readonly profileKind: 'account'
+    readonly bindingCount: number
+    readonly persistenceGeneration: number
+    readonly sessionCount: number
+    readonly pluginCount: number
+    readonly compatibility: 'current' | 'legacy_runtime_required' | 'read_only_export_only'
+    readonly preflightDigest: string
+    readonly reasonCode?: string
+  }[] }> {
+    if (!this.inspection.capabilities.includes('profile.recovery_inspect' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRecoveryInspectRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_inspect',
+      params: {
+        ...this.auth(), profile_key_handles: input.profileKeyHandles,
+        expected_runtime_generation: this.inspection.runtime_generation,
+        expected_schema_generation: this.inspection.schema_generation,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { candidates: frame.result.candidates.map(candidate => ({
+      state: candidate.state, candidateId: candidate.candidate_id, profileKind: candidate.profile_kind,
+      bindingCount: candidate.binding_count, persistenceGeneration: candidate.persistence_generation,
+      sessionCount: candidate.session_count, pluginCount: candidate.plugin_count,
+      compatibility: candidate.compatibility, preflightDigest: candidate.preflight_digest,
+      ...(candidate.reason_code === undefined ? {} : { reasonCode: candidate.reason_code }),
+    })) }
+  }
+
+  /**
+   * Confirm one inspected Account Profile and acquire an offline-only selector.
+   * @param input - candidate proof, idempotency id, and ephemeral Main-vault material.
+   * @returns offline selector and generation facts after worker readiness.
+   */
+  async recoverOfflineAccountProfile(input: {
+    readonly profileKeyHandle: string
+    readonly profileUnlockMaterial: string
+    readonly recoveryOperationId: string
+    readonly candidateId: string
+    readonly preflightDigest: string
+    readonly signal?: AbortSignal
+  }): Promise<{
+    readonly state: 'offline_ready'
+    readonly profileSelector: string
+    readonly accessScope: 'offline_local'
+    readonly persistenceGeneration: number
+    readonly runtimeGeneration: number
+  }> {
+    if (!this.inspection.capabilities.includes('profile.recover_offline_account' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRecoverOfflineAccountRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recover_offline_account',
+      params: {
+        ...this.auth(), profile_key_handle: input.profileKeyHandle,
+        profile_unlock_material: input.profileUnlockMaterial,
+        recovery_operation_id: input.recoveryOperationId as never,
+        candidate_id: input.candidateId as never, preflight_digest: input.preflightDigest as never,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return {
+      state: frame.result.state, profileSelector: frame.result.profile_selector,
+      accessScope: frame.result.access_scope, persistenceGeneration: frame.result.persistence_generation,
+      runtimeGeneration: frame.result.runtime_generation,
+    }
+  }
+
+  /**
+   * Query one recovery operation without starting another worker.
+   * @param input - operation id and optional cancellation.
+   * @returns stable process-local recovery state.
+   */
+  async getOfflineAccountRecoveryStatus(input: {
+    readonly recoveryOperationId: string
+    readonly signal?: AbortSignal
+  }): Promise<
+    | { readonly state: 'recovering' | 'offline_ready' | 'unknown' }
+    | { readonly state: 'failed'; readonly reasonCode: 'recovery_worker_failed' }
+  > {
+    if (!this.inspection.capabilities.includes('profile.recovery_status' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRecoveryStatusRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_status',
+      params: { ...this.auth(), recovery_operation_id: input.recoveryOperationId as never },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.state === 'failed'
+      ? { state: 'failed', reasonCode: frame.result.reason_code }
+      : { state: frame.result.state }
+  }
+
+  /**
+   * Open one recovered Account Profile through an offline-domain selector.
+   * @param input - offline selector and optional cancellation.
+   * @returns offline-scoped generation-fenced view lease.
+   */
+  async openOfflineAccountProfile(input: {
+    readonly profileSelector: string
+    readonly signal?: AbortSignal
+  }): Promise<OfflineProfileOpenResult> {
+    if (!this.inspection.capabilities.includes('profile.open_offline_account' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileOpenOfflineAccountRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.open_offline_account',
+      params: { ...this.auth(), profile_selector: input.profileSelector },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return {
+      profileId: frame.result.profile_id as never, viewLeaseId: frame.result.view_lease_id as never,
+      viewActivationHandle: frame.result.view_activation_handle as never,
+      leaseGeneration: frame.result.lease_generation, expiresAt: frame.result.expires_at,
+      runtimeGeneration: frame.result.runtime_generation, accessScope: frame.result.access_scope,
+    }
   }
 
   /**
@@ -1565,6 +1840,8 @@ export class UnixHostClient {
     request: ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest
+      | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
+      | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -34,6 +34,7 @@ describe('migration owner-state generation applicator', () => {
   it('writes provider-owned strict YAML inputs under one immutable generation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-owner-state-'))
     const result = await new MigrationOwnerStateApplicator(uid).apply(root, 5, state())
+    await expect(new MigrationOwnerStateApplicator(uid).inspectExisting(root, 5)).resolves.toEqual(result)
     expect(JSON.parse(await readFile(result.settingsPath, 'utf8'))).toMatchObject({
       permission: { defaultPreset: 'workspace-write' },
     })
@@ -56,6 +57,13 @@ describe('migration owner-state generation applicator', () => {
       refs: { UPDATED: 'value' },
     })
     expect(await exportSource.inventoryDigest()).not.toBe(initialDigest)
+  })
+
+  it('does not materialize a missing owner-state generation during existing-only inspection', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-state-inspect-missing-'))
+    const applicator = new MigrationOwnerStateApplicator(uid)
+    await expect(applicator.inspectExisting(root, 5)).rejects.toThrow()
+    await expect(access(join(root, 'migration-owner-state'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('reopens a secure legacy generation after its mutable owner documents diverge', async () => {

@@ -130,6 +130,25 @@ describe('Main-only Profile operations', () => {
     }
   })
 
+  it('round-trips the offline Account recovery protocol without identity or path fields', () => {
+    const handle = 'A'.repeat(43)
+    const material = 'A'.repeat(43)
+    const digest = 'a'.repeat(64)
+    const selector = `${'B'.repeat(64)}.${'A'.repeat(86)}`
+    const inspect = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.recovery_inspect","params":{${auth},"profile_key_handles":["${handle}"],"expected_runtime_generation":5,"expected_schema_generation":3}}\n`
+    const inspected = `{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.recovery_inspect","result":{"candidates":[{"state":"recoverable","candidate_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3160","profile_kind":"account","binding_count":1,"persistence_generation":11,"session_count":86,"plugin_count":6,"compatibility":"current","preflight_digest":"${digest}"}]}}\n`
+    const recover = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"profile.recover_offline_account","params":{${auth},"profile_key_handle":"${handle}","profile_unlock_material":"${material}","recovery_operation_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3170","candidate_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3160","preflight_digest":"${digest}"}}\n`
+    const recovered = `{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"profile.recover_offline_account","result":{"state":"offline_ready","profile_selector":"${selector}","access_scope":"offline_local","persistence_generation":11,"runtime_generation":5}}\n`
+    const open = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3142","method":"profile.open_offline_account","params":{${auth},"profile_selector":"${selector}"}}\n`
+    const opened = '{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3142","method":"profile.open_offline_account","result":{"profile_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3150","view_lease_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3151","view_activation_handle":"ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8","lease_generation":2,"expires_at":2000,"runtime_generation":5,"access_scope":"offline_local"}}\n'
+    const status = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3143","method":"profile.recovery_status","params":{${auth},"recovery_operation_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3170"}}\n`
+    const statusResult = '{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3143","method":"profile.recovery_status","result":{"state":"offline_ready"}}\n'
+    for (const source of [inspect, inspected, recover, recovered, open, opened, status, statusResult]) {
+      expect(encodeHostControlFrame(decodeHostControlFrame(source))).toBe(source)
+      expect(source).not.toMatch(/"(?:account_subject|account_issuer|path)"/u)
+    }
+  })
+
   it('rejects reordered auth fields and lease results carrying a URL', () => {
     const reordered = '{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.status","params":{"host_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3120","client_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3111","process_nonce":"_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q","jti":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3130","issued_at":1000,"expires_at":2000,"account_binding_handle":"binding"}}\n'
     const leaked = '{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3141","method":"profile.open","result":{"profile_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3150","view_lease_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3151","lease_generation":2,"expires_at":2000,"runtime_generation":5,"url":"http://127.0.0.1"}}\n'

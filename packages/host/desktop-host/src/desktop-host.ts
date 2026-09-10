@@ -1,8 +1,16 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type {
   HostClock,
+  OfflineProfileOpenResult,
+  OfflineProfileRecoveryCandidate,
+  OfflineProfileRecoveryCandidateId,
+  OfflineProfileRecoveryOperationId,
+  OfflineProfileRecoveryPreflight,
+  OfflineProfileRecoveryResult,
+  OfflineProfileRecoveryStatus,
   PersonProfileId,
   PersonProfileRecord,
+  ProfileAccessScope,
   ProfileOpenResult,
   ProfileViewActivationHandle,
   ProfileViewActivationResult,
@@ -23,6 +31,14 @@ interface DesktopHostOptions {
     readonly bootstrapCookie: { readonly name: string; readonly value: string }
   }>
   readonly ensureProfileWorker?: (profile: PersonProfileRecord) => Promise<void>
+  readonly inspectOfflineAccountProfile?: (
+    profile: PersonProfileRecord,
+    expected: { readonly runtimeGeneration: number; readonly schemaGeneration: number },
+  ) => Promise<OfflineProfileRecoveryPreflight>
+  readonly ensureRecoveredProfileWorker?: (
+    profile: PersonProfileRecord,
+    preflight: OfflineProfileRecoveryPreflight,
+  ) => Promise<void>
 }
 
 interface ViewLease {
@@ -33,6 +49,38 @@ interface ViewLease {
   activationHandle?: ProfileViewActivationHandle
   activating?: boolean
 }
+
+interface ProfileAccessGrant {
+  readonly scope: ProfileAccessScope
+  readonly operationId?: OfflineProfileRecoveryOperationId
+  readonly grantedAt: number
+}
+
+interface RecoveryCandidateState {
+  readonly ownerId: string
+  readonly profile: PersonProfileRecord
+  readonly keyHandle: string
+  readonly preflight: OfflineProfileRecoveryPreflight
+  readonly expectedRuntimeGeneration: number
+  readonly expectedSchemaGeneration: number
+  readonly expiresAt: number
+}
+
+type RecoveryOperationState = {
+  readonly ownerId: string
+  readonly candidateId: OfflineProfileRecoveryCandidateId
+  readonly profileId: PersonProfileId
+  readonly keyHandle: string
+  readonly preflightDigest: string
+  promise?: Promise<OfflineProfileRecoveryResult>
+  result?: OfflineProfileRecoveryResult
+  errorCode?: 'recovery_worker_failed'
+  revoked?: boolean
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+const SHA256 = /^[0-9a-f]{64}$/u
+const RECOVERY_CANDIDATE_TTL_MS = 5 * 60_000
 
 function exactLoopbackOrigin(value: string): string {
   if (!/^http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})$/u.test(value)) throw new HostAuthorityError('unavailable')
@@ -49,11 +97,20 @@ function activationHandle(): ProfileViewActivationHandle {
 export class DesktopHost {
   private readonly leases = new Map<ProfileViewLeaseId, ViewLease>()
   private readonly generations = new Map<PersonProfileId, number>()
-  private readonly ownerUnlocks = new Map<string, Set<PersonProfileId>>()
+  private readonly ownerGrants = new Map<string, Map<PersonProfileId, ProfileAccessGrant>>()
+  private readonly recoveryCandidates = new Map<OfflineProfileRecoveryCandidateId, RecoveryCandidateState>()
+  private readonly recoveryOperations = new Map<OfflineProfileRecoveryOperationId, RecoveryOperationState>()
+  private readonly profileRecoveries = new Map<PersonProfileId, OfflineProfileRecoveryOperationId>()
   constructor(private readonly options: DesktopHostOptions) {
     if (!Number.isSafeInteger(options.runtimeGeneration) || options.runtimeGeneration <= 0) {
       throw new HostAuthorityError('invalid_input')
     }
+  }
+
+  /** Return whether this Host can inspect and prepare existing offline Account Profiles. */
+  supportsOfflineAccountRecovery(): boolean {
+    return this.options.inspectOfflineAccountProfile !== undefined
+      && this.options.ensureRecoveredProfileWorker !== undefined
   }
 
   /**
@@ -73,7 +130,7 @@ export class DesktopHost {
       input.authorityEnvironmentId, input.accountBindingHandle, input.authorityBindingVersion,
     )
     if (!profile) return { state: 'unbound' }
-    return this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)
+    return this.hasGrant(input.ownerId, profile.profileId, 'connected')
       ? { state: 'ready', profileId: profile.profileId }
       : { state: 'locked' }
   }
@@ -109,7 +166,7 @@ export class DesktopHost {
       authorityBindingVersion: input.authorityBindingVersion, keyHandle: input.keyHandle,
       unlockMaterial: input.unlockMaterial,
     }, ensureWorker)
-    this.unlock(input.ownerId, profile.profileId)
+    this.grant(input.ownerId, profile.profileId, 'connected')
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
@@ -142,7 +199,7 @@ export class DesktopHost {
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
     await ensureWorker(profile)
-    this.unlock(input.ownerId, profile.profileId)
+    this.grant(input.ownerId, profile.profileId, 'connected')
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
@@ -160,7 +217,7 @@ export class DesktopHost {
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
     await ensureWorker(profile)
-    this.unlock(input.ownerId, profile.profileId)
+    this.grant(input.ownerId, profile.profileId, 'local_profile')
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
@@ -184,7 +241,7 @@ export class DesktopHost {
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
     await ensureWorker(profile)
-    this.unlock(input.ownerId, profile.profileId)
+    this.grant(input.ownerId, profile.profileId, 'local_profile')
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
@@ -203,7 +260,7 @@ export class DesktopHost {
     const profile = this.options.registry.resolveBinding(
       input.authorityEnvironmentId, input.accountBindingHandle, input.authorityBindingVersion,
     )
-    if (!profile || !this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)) {
+    if (!profile || !this.hasGrant(input.ownerId, profile.profileId, 'connected')) {
       throw new HostAuthorityError('profile_locked')
     }
     return this.openUnlockedProfile(profile.profileId, input.ownerId)
@@ -219,10 +276,199 @@ export class DesktopHost {
     readonly ownerId: string
   }): Promise<ProfileOpenResult> {
     const profile = this.options.registry.resolveProfile(input.profileId)
-    if (!profile || profile.kind !== 'local-anonymous' || !this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)) {
+    if (!profile || profile.kind !== 'local-anonymous' || !this.hasGrant(input.ownerId, profile.profileId, 'local_profile')) {
       throw new HostAuthorityError('profile_locked')
     }
     return await Promise.resolve(this.openUnlockedProfile(profile.profileId, input.ownerId))
+  }
+
+  /**
+   * Inspect only the Account Profiles named by trusted Main-vault key handles.
+   * No unlock proof is read and no Profile worker or plugin is started.
+   * @param input - bounded opaque handles and packaged runtime/schema expectations.
+   * @returns anonymous, owner-bound recovery candidates.
+   */
+  async inspectOfflineAccountProfiles(input: {
+    readonly keyHandles: readonly string[]
+    readonly expectedRuntimeGeneration: number
+    readonly expectedSchemaGeneration: number
+    readonly ownerId: string
+  }): Promise<{ readonly candidates: readonly OfflineProfileRecoveryCandidate[] }> {
+    if (input.keyHandles.length < 1 || input.keyHandles.length > 128
+      || new Set(input.keyHandles).size !== input.keyHandles.length
+      || !Number.isSafeInteger(input.expectedRuntimeGeneration) || input.expectedRuntimeGeneration <= 0
+      || input.expectedRuntimeGeneration !== this.options.runtimeGeneration
+      || !Number.isSafeInteger(input.expectedSchemaGeneration) || input.expectedSchemaGeneration <= 0) {
+      throw new HostAuthorityError('invalid_input')
+    }
+    const inspect = this.options.inspectOfflineAccountProfile
+    if (!inspect) throw new HostAuthorityError('unavailable')
+    for (const [candidateId, candidate] of this.recoveryCandidates) {
+      if (candidate.expiresAt <= this.options.clock.now()) this.recoveryCandidates.delete(candidateId)
+    }
+    const candidates: OfflineProfileRecoveryCandidate[] = []
+    for (const keyHandle of input.keyHandles) {
+      let profile: PersonProfileRecord
+      try { profile = this.options.registry.resolveUniqueAccountByKeyHandle(keyHandle) } catch (error) {
+        if (error instanceof HostAuthorityError && error.code === 'profile_not_found') continue
+        throw error
+      }
+      const preflight = await inspect(profile, {
+        runtimeGeneration: input.expectedRuntimeGeneration,
+        schemaGeneration: input.expectedSchemaGeneration,
+      })
+      this.validateRecoveryPreflight(preflight)
+      const candidateId = randomUUID() as OfflineProfileRecoveryCandidateId
+      this.recoveryCandidates.set(candidateId, {
+        ownerId: input.ownerId, profile, keyHandle, preflight,
+        expectedRuntimeGeneration: input.expectedRuntimeGeneration,
+        expectedSchemaGeneration: input.expectedSchemaGeneration,
+        expiresAt: this.options.clock.now() + RECOVERY_CANDIDATE_TTL_MS,
+      })
+      candidates.push({
+        ...preflight, candidateId, profileKind: 'account',
+        bindingCount: profile.accountBindings?.length ?? 0,
+      })
+    }
+    if (candidates.length === 0) throw new HostAuthorityError('profile_not_found')
+    return { candidates }
+  }
+
+  /**
+   * Confirm one inspected Account Profile using its Main-vault proof and start it existing-only.
+   * Registry identity and account bindings are never mutated by this operation.
+   * @param input - owner-bound candidate, idempotency key, digest, and ephemeral unlock proof.
+   * @returns an offline-only grant after the recovered worker reports ready.
+   */
+  async recoverOfflineAccountProfile(input: {
+    readonly candidateId: OfflineProfileRecoveryCandidateId
+    readonly preflightDigest: string
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly operationId: string
+    readonly ownerId: string
+  }): Promise<OfflineProfileRecoveryResult> {
+    if (!UUID.test(input.operationId) || !SHA256.test(input.preflightDigest)) {
+      throw new HostAuthorityError('invalid_input')
+    }
+    const operationId = input.operationId as OfflineProfileRecoveryOperationId
+    const existing = this.recoveryOperations.get(operationId)
+    if (existing) {
+      if (existing.ownerId !== input.ownerId || existing.candidateId !== input.candidateId
+        || existing.keyHandle !== input.keyHandle || existing.preflightDigest !== input.preflightDigest) {
+        throw new HostAuthorityError('idempotency_conflict')
+      }
+      if (!existing.promise) throw new HostAuthorityError('unavailable')
+      return await existing.promise
+    }
+    const candidate = this.recoveryCandidates.get(input.candidateId)
+    if (!candidate || candidate.ownerId !== input.ownerId || candidate.expiresAt <= this.options.clock.now()) {
+      throw new HostAuthorityError('recovery_preflight_stale')
+    }
+    if (candidate.keyHandle !== input.keyHandle || candidate.preflight.preflightDigest !== input.preflightDigest) {
+      throw new HostAuthorityError('recovery_preflight_stale')
+    }
+    const current = this.options.registry.resolveProfile(candidate.profile.profileId)
+    if (current !== candidate.profile) throw new HostAuthorityError('recovery_preflight_stale')
+    try { this.options.registry.verifyUnlock(current, input.keyHandle, input.unlockMaterial) } catch (error) {
+      if (error instanceof HostAuthorityError && error.code === 'invalid_input') throw error
+      throw new HostAuthorityError('recovery_proof_mismatch')
+    }
+    const inspect = this.options.inspectOfflineAccountProfile
+    if (!inspect) throw new HostAuthorityError('unavailable')
+    if (candidate.preflight.state !== 'recoverable') throw new HostAuthorityError('runtime_incompatible')
+    const ensureWorker = this.options.ensureRecoveredProfileWorker
+    if (!ensureWorker) throw new HostAuthorityError('unavailable')
+    const existingGrant = this.ownerGrants.get(input.ownerId)?.get(current.profileId)
+    if (existingGrant && existingGrant.scope !== 'offline_local') throw new HostAuthorityError('scope_mismatch')
+    if (this.profileRecoveries.has(current.profileId)) throw new HostAuthorityError('recovery_in_progress')
+
+    const operation: RecoveryOperationState = {
+      ownerId: input.ownerId, candidateId: input.candidateId, profileId: current.profileId,
+      keyHandle: input.keyHandle, preflightDigest: input.preflightDigest,
+    }
+    const promise = (async (): Promise<OfflineProfileRecoveryResult> => {
+      try {
+        await Promise.resolve()
+        const refreshed = await inspect(current, {
+          runtimeGeneration: candidate.expectedRuntimeGeneration,
+          schemaGeneration: candidate.expectedSchemaGeneration,
+        })
+        this.validateRecoveryPreflight(refreshed)
+        if (refreshed.preflightDigest !== candidate.preflight.preflightDigest
+          || refreshed.state !== candidate.preflight.state
+          || refreshed.persistenceGeneration !== candidate.preflight.persistenceGeneration
+          || refreshed.sessionCount !== candidate.preflight.sessionCount
+          || refreshed.pluginCount !== candidate.preflight.pluginCount
+          || refreshed.compatibility !== candidate.preflight.compatibility
+          || refreshed.reasonCode !== candidate.preflight.reasonCode) {
+          throw new HostAuthorityError('recovery_preflight_stale')
+        }
+        await ensureWorker(current, refreshed)
+        if (operation.revoked) throw new HostAuthorityError('recovery_worker_failed')
+        const result: OfflineProfileRecoveryResult = {
+          state: 'offline_ready', profileId: current.profileId, accessScope: 'offline_local',
+          persistenceGeneration: candidate.preflight.persistenceGeneration,
+          runtimeGeneration: this.options.runtimeGeneration,
+          bindingGeneration: current.bindingGeneration,
+        }
+        this.grant(input.ownerId, current.profileId, 'offline_local', operationId)
+        operation.result = result
+        return result
+      } catch (error) {
+        if (error instanceof HostAuthorityError
+          && ['recovery_preflight_stale', 'runtime_incompatible', 'profile_integrity_failed'].includes(error.code)) {
+          this.recoveryOperations.delete(operationId)
+          throw error
+        }
+        operation.errorCode = 'recovery_worker_failed'
+        throw new HostAuthorityError('recovery_worker_failed')
+      } finally {
+        this.profileRecoveries.delete(current.profileId)
+        if (operation.revoked) this.recoveryOperations.delete(operationId)
+      }
+    })()
+    operation.promise = promise
+    this.recoveryOperations.set(operationId, operation)
+    this.profileRecoveries.set(current.profileId, operationId)
+    return await promise
+  }
+
+  /**
+   * Query one process-local recovery operation without retrying worker startup.
+   * @param input - Desktop idempotency key and the same authenticated connection owner.
+   * @returns stable progress or terminal state without Profile or credential data.
+   */
+  getOfflineAccountRecoveryStatus(input: {
+    readonly operationId: string
+    readonly ownerId: string
+  }): OfflineProfileRecoveryStatus {
+    if (!UUID.test(input.operationId)) throw new HostAuthorityError('invalid_input')
+    const operation = this.recoveryOperations.get(input.operationId as OfflineProfileRecoveryOperationId)
+    if (!operation || operation.ownerId !== input.ownerId || operation.revoked) return { state: 'unknown' }
+    if (operation.result) return { state: 'offline_ready' }
+    if (operation.errorCode) return { state: 'failed', reasonCode: operation.errorCode }
+    return { state: 'recovering' }
+  }
+
+  /**
+   * Open an Account Profile only when this owner holds an offline_local grant.
+   * @param input - recovered Profile id and authenticated connection owner.
+   * @returns an offline-scoped local view lease.
+   */
+  async openOfflineAccountProfile(input: {
+    readonly profileId: PersonProfileId
+    readonly bindingGeneration: number
+    readonly ownerId: string
+  }): Promise<OfflineProfileOpenResult> {
+    const profile = this.options.registry.resolveProfile(input.profileId)
+    if (!profile || profile.kind !== 'account' || profile.bindingGeneration !== input.bindingGeneration
+      || !this.hasGrant(input.ownerId, profile.profileId, 'offline_local')) {
+      throw new HostAuthorityError('profile_locked')
+    }
+    return await Promise.resolve({
+      ...this.openUnlockedProfile(profile.profileId, input.ownerId), accessScope: 'offline_local' as const,
+    })
   }
 
   private openUnlockedProfile(profileId: PersonProfileId, ownerId: string): ProfileOpenResult {
@@ -273,7 +519,8 @@ export class DesktopHost {
     const profile = this.options.registry.resolveProfile(input.profileId)
     if (!profile || !['account', 'local-anonymous'].includes(profile.kind)
       || profile.bindingGeneration !== input.bindingGeneration
-      || !this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)) {
+      || (!this.hasGrant(input.ownerId, profile.profileId, 'connected')
+        && !this.hasGrant(input.ownerId, profile.profileId, 'local_profile'))) {
       throw new HostAuthorityError('unauthorized')
     }
     return profile.profileId
@@ -363,7 +610,15 @@ export class DesktopHost {
    */
   revokeOwner(ownerId: string): void {
     for (const [leaseId, lease] of this.leases) if (lease.ownerId === ownerId) this.leases.delete(leaseId)
-    this.ownerUnlocks.delete(ownerId)
+    this.ownerGrants.delete(ownerId)
+    for (const [candidateId, candidate] of this.recoveryCandidates) {
+      if (candidate.ownerId === ownerId) this.recoveryCandidates.delete(candidateId)
+    }
+    for (const [operationId, operation] of this.recoveryOperations) {
+      if (operation.ownerId !== ownerId) continue
+      operation.revoked = true
+      if (operation.result !== undefined || operation.errorCode !== undefined) this.recoveryOperations.delete(operationId)
+    }
   }
 
   /**
@@ -374,9 +629,31 @@ export class DesktopHost {
     for (const [leaseId, lease] of this.leases) if (lease.profileId === profileId) this.leases.delete(leaseId)
   }
 
-  private unlock(ownerId: string, profileId: PersonProfileId): void {
-    const profiles = this.ownerUnlocks.get(ownerId) ?? new Set<PersonProfileId>()
-    profiles.add(profileId)
-    this.ownerUnlocks.set(ownerId, profiles)
+  private grant(
+    ownerId: string,
+    profileId: PersonProfileId,
+    scope: ProfileAccessScope,
+    operationId?: OfflineProfileRecoveryOperationId,
+  ): void {
+    const profiles = this.ownerGrants.get(ownerId) ?? new Map<PersonProfileId, ProfileAccessGrant>()
+    profiles.set(profileId, { scope, ...(operationId === undefined ? {} : { operationId }), grantedAt: this.options.clock.now() })
+    this.ownerGrants.set(ownerId, profiles)
+  }
+
+  private hasGrant(ownerId: string, profileId: PersonProfileId, scope: ProfileAccessScope): boolean {
+    return this.ownerGrants.get(ownerId)?.get(profileId)?.scope === scope
+  }
+
+  private validateRecoveryPreflight(preflight: OfflineProfileRecoveryPreflight): void {
+    if (!['recoverable', 'compatibility_blocked'].includes(preflight.state)
+      || !['current', 'legacy_runtime_required', 'read_only_export_only'].includes(preflight.compatibility)
+      || !Number.isSafeInteger(preflight.persistenceGeneration) || preflight.persistenceGeneration < 0
+      || !Number.isSafeInteger(preflight.sessionCount) || preflight.sessionCount < 0
+      || !Number.isSafeInteger(preflight.pluginCount) || preflight.pluginCount < 0
+      || !SHA256.test(preflight.preflightDigest)
+      || (preflight.reasonCode !== undefined
+        && (preflight.reasonCode.length < 1 || preflight.reasonCode.length > 128))) {
+      throw new HostAuthorityError('profile_integrity_failed')
+    }
   }
 }

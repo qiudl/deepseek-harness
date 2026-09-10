@@ -104,6 +104,30 @@ export class MigrationOwnerStateApplicator {
     return this.result(target, generation)
   }
 
+  /**
+   * Validate one already-materialized owner-state generation without creating
+   * directories or replacing mutable settings and credential documents.
+   * @param dshHome - existing owner-private Profile root.
+   * @param generation - active persistence generation that must already exist.
+   * @returns the exact provider-owned paths consumed by an existing-only worker.
+   */
+  async inspectExisting(dshHome: string, generation: number): Promise<AppliedMigrationOwnerState> {
+    if (!Number.isSafeInteger(generation) || generation < 1) throw new Error('migration_owner_state_generation_invalid')
+    const root = resolve(dshHome)
+    await this.checkedDirectory(root)
+    const parent = join(root, 'migration-owner-state')
+    await this.checkedDirectory(parent)
+    const target = join(parent, String(generation))
+    if (!await this.matches(target, {
+      'settings.yaml': '',
+      '.credentials.yaml': '',
+      'profile.json': '',
+      'storages/workspace.json': '',
+      '.migration-seed.sha256': '',
+    })) throw new Error('migration_owner_state_missing')
+    return this.result(target, generation)
+  }
+
   private async matches(target: string, files: Readonly<Record<string, string>>): Promise<boolean> {
     try {
       await this.checkedDirectory(target)

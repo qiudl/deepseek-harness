@@ -8,6 +8,13 @@ export type ProfileViewLeaseId = Branded<'ProfileViewLeaseId'>
 export type ProfileViewActivationHandle = Branded<'ProfileViewActivationHandle'>
 /** Session-scoped enterprise context lease. */
 export type ContextLeaseId = Branded<'ContextLeaseId'>
+/** Process-local opaque candidate for one inspected offline Account Profile. */
+export type OfflineProfileRecoveryCandidateId = Branded<'OfflineProfileRecoveryCandidateId'>
+/** Desktop-minted idempotency key for one confirmed offline recovery operation. */
+export type OfflineProfileRecoveryOperationId = Branded<'OfflineProfileRecoveryOperationId'>
+
+/** Mutually exclusive authority granted to one authenticated Host connection. */
+export type ProfileAccessScope = 'connected' | 'local_profile' | 'offline_local'
 
 /** Clock dependency used to make expiry decisions deterministic. */
 export interface HostClock { now(): number }
@@ -25,6 +32,18 @@ export type HostAuthorityErrorCode =
   | 'busy'
   | 'upgrade_required'
   | 'unavailable'
+  | 'profile_not_found'
+  | 'profile_ambiguous'
+  | 'profile_integrity_failed'
+  | 'runtime_incompatible'
+  | 'recovery_proof_mismatch'
+  | 'recovery_preflight_stale'
+  | 'recovery_in_progress'
+  | 'recovery_worker_failed'
+  | 'recovery_timeout_unknown'
+  | 'scope_mismatch'
+  | 'selector_stale'
+  | 'lease_conflict'
 
 /** Typed failure that Desktop maps onto the Host control protocol vocabulary. */
 export class HostAuthorityError extends Error {
@@ -90,6 +109,45 @@ export interface ProfileOpenResult {
   readonly leaseGeneration: number
   readonly expiresAt: number
   readonly runtimeGeneration: number
+}
+
+/** Safe, non-identifying facts returned by an offline Account Profile preflight. */
+export interface OfflineProfileRecoveryCandidate {
+  readonly state: 'recoverable' | 'compatibility_blocked'
+  readonly candidateId: OfflineProfileRecoveryCandidateId
+  readonly profileKind: 'account'
+  readonly bindingCount: number
+  readonly persistenceGeneration: number
+  readonly sessionCount: number
+  readonly pluginCount: number
+  readonly compatibility: 'current' | 'legacy_runtime_required' | 'read_only_export_only'
+  readonly preflightDigest: string
+  readonly reasonCode?: string
+}
+
+/** Host-internal preflight facts supplied by the persistence/runtime inspector. */
+export type OfflineProfileRecoveryPreflight = Omit<OfflineProfileRecoveryCandidate,
+  'candidateId' | 'profileKind' | 'bindingCount'>
+
+/** Result of a confirmed offline Account Profile recovery. */
+export interface OfflineProfileRecoveryResult {
+  readonly state: 'offline_ready'
+  readonly profileId: PersonProfileId
+  readonly accessScope: 'offline_local'
+  readonly persistenceGeneration: number
+  readonly runtimeGeneration: number
+  /** Internal selector fence consumed by the Host transport; not returned on the wire. */
+  readonly bindingGeneration: number
+}
+
+/** Stable, secret-free state for an idempotent offline recovery operation. */
+export type OfflineProfileRecoveryStatus =
+  | { readonly state: 'recovering' | 'offline_ready' | 'unknown' }
+  | { readonly state: 'failed'; readonly reasonCode: 'recovery_worker_failed' }
+
+/** View lease available only through the offline Account entry point. */
+export interface OfflineProfileOpenResult extends ProfileOpenResult {
+  readonly accessScope: 'offline_local'
 }
 
 /** Verified Main-only loopback view activation. */

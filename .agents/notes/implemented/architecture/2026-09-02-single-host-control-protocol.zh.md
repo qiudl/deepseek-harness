@@ -24,6 +24,10 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 `profile.bootstrap_local`、`profile.restore_local` 与 `profile.open_local` 负责不依赖账号的本地 Profile 路径。Bootstrap 只接收 Main-vault key handle 和 32 字节 unlock material，并返回与账号 provisioning 相同、绑定 installation 与 generation 的 Host selector。Restore 校验 selector、本地专用 Profile kind、精确 generation 与新鲜 unlock material；open 要求该 Profile 已被同一 authenticated connection 的 bootstrap 或 restore 解锁。这些操作绝不接收或创建 Account binding、issuer、subject、token 或 environment assertion。各自发布的 capability 让新版 Desktop 能在向旧 Host 发送本地 unlock material 前报告 `upgrade_required`。
 
+REQ-20260909-0002 为 selector 缓存缺失的已有 Account Profile 增加第三种、域隔离的访问 scope。`profile.recovery_inspect` 只接收可信 Desktop Main 从 vault 枚举出的不透明 key handle，在不启动 worker 或插件的前提下，对已有 persistence、owner-state、manifest、lockfile、插件链接与 runtime 内容执行 existing-only 检查。用户通过原生确认后调用 `profile.recover_offline_account`；Host 再次预检、验证 Main-vault unlock material，并只向该 authenticated connection 授予 `offline_local`。`profile.open_offline_account` 不能消费 connected 或 local-anonymous selector，`profile.recovery_status` 让超时确认可以按同一 operation 幂等查询。这些 capability 只在两个恢复 adapter 都安装时发布。
+
+升级替换应用后，Host 不会静默继续依赖旧应用中的插件链接。确认后，它把完整 legacy runtime 复制进 owner-private、按内容寻址的 Profile 闭包，只重写预检计划证明过的链接，校验复制树摘要，并记录 prepared/committed journal。该路径不合并 Profile 目录、不创建空 owner state、不修改账号 binding，也不要求邮箱登录。Desktop 使用独立加密缓存保存 recovery selector；持久恢复权威仍是 Keychain proof 与 Host verifier。
+
 `profile.open` 也是同一 authenticated connection 与 Profile 所拥有未过期 lease 的续期操作。续期保留 lease id 和 generation，按照 Host 时钟延后 expiry，并在上一个 handle 已消费后签发新的单次 activation handle。Desktop 刷新 HttpOnly bootstrap cookie 时无需替换活跃 renderer；disconnect、显式 close、Profile generation 变化和 expiry 仍会撤销 lease。
 
 ## 缺陷分析迭代
@@ -38,6 +42,10 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 第 5 轮发现两个可靠性缺陷：直接 parser 调用没有 keyring 字节上限，且 bundle patch 会加载 startup subpath，但该 subpath 缺少源码 alias。Parser 现在拥有与 startup 相同的 16 KiB 限制，`tsconfig.base.json` 也将 startup export 映射到源码。第 6 轮没有在 token 校验、密钥固定、滚动兼容、授权顺序、错误映射或凭据留存方面发现新缺陷。
 
+第 7 轮审计离线恢复实现，发现 runtime facts 未绑定文件内容、静默选择会话最多候选、退出后保留 pending operation，以及二次预检 stale 被伪装成 worker failure。Runtime tree digest、原生显式选择、生命周期 reset 与精确 stale 传播关闭了这些问题。第 8 轮发现 operation 预约竞态、已撤销 operation 留存、短时 plan 无界增长、跨 scope grant 覆盖和缓存持久性不足；Host 现在会在异步复检前预约、清理 owner/candidate 状态、替换同 Profile plan、拒绝 scope 改写并 fsync 私有缓存。
+
+第 9 轮沿 Web、Main、daemon、Host 完整产品路径检查，发现未实现仍宣告 capability、不可读 vault 被误报为冲突、映射错误落回通用工作台失败，以及 Web 入口在本地恢复前先触发 Account binding。现在 capability 反映真实 adapter，缺失与不可读 vault 分离，稳定恢复错误有可行动文案，已有本机数据先于任何可选 Account 流程打开。第 10 轮修复多个 legacy vault 间映射后 `not-found` 的处理、把超时失败状态统一进 Desktop 错误域，并移除会隐藏权限故障的 `existsSync` 过滤。第 11 轮发现内部绝对链接被改写到 staging 目录，原子 rename 后会断链；现在链接直接指向最终 content-addressed root，并在 rename 前后分别校验树摘要。第 12 轮发现运行时内部断链，以及词法上位于闭包内、但经第二层链接最终逃出的目标；恢复现在解析每个最终目标并要求其仍处于 runtime 闭包内。
+
 ## Alternatives considered
 
 **复用 SDK JSON-RPC carrier。** 它是会跳过畸形行、且不拥有安装身份的 Agent Runtime stdio 协议，无法执行本地 supervisor 所需的连接级致命认证。
@@ -47,6 +55,10 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 **让每个 Slark 环境声明 Account 身份。** staging 或 production assertion 会让环境成为 Account 权威，并可能为同一个人创建不同的机器 Profile。两个环境改为向唯一 Host 提交同一个规范 DSH Account 凭据。
 
 **由 Desktop 关闭再重新打开 lease。** 先关闭会产生授权空档，还可能停止 Profile view origin，导致 renderer 被替换并丢失进行中的 UI 状态。重复执行 authenticated `profile.open` 会在 Host 内原子延长现有 lease。
+
+**伪造替代 selector 或把 Account Profile 改成 local。** 两者都会绕过 Host 权威，并混淆 Account、local-anonymous 与 offline 访问。恢复改为证明已有 registry verifier，再由独立 `dsh-profile-offline-selector/v1` 域签发 selector。
+
+**把旧 Profile 目录合并到新建本地 Profile。** Session 与插件状态拥有独立 generation 和所有权，目录复制会使回滚与来源不清。方案是在原地打开原 Profile，只把它依赖的外部 runtime 闭包私有化。
 
 ## 后果
 
@@ -58,8 +70,12 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 活跃 Desktop 会定期续期其一分钟 view lease。Host 继续拥有 expiry 权威，且只延长同一 authenticated connection 与 Profile 所拥有的未过期 lease；inactive 或 disconnected Desktop 无法制造永久 lease。
 
+本地 Account Profile 恢复刻意独立于 Slark 登录、环境 routing 与 DSH Account 邮箱验证。退出会撤销 connection grant 并清理重连 selector，但不会删除 Main vault 或 Profile 数据；后续连接可以重新证明。`offline_local` 只启用本机会话与已安装插件；云同步和 connected 能力仍需独立在线授权转换，不能由相同邮箱推断。
+
 Decoder 接收完整字符串，因此能拒绝超限帧，却不能阻止 transport 先缓冲它。Unix domain socket carrier 必须增量执行字节上限，并在首次错误时关闭。没有可信 request id 的无效输入不返回错误帧，只关闭连接。
 
 ## 测试
 
 聚焦套件从已提交的 request、result、error 和签名原文向量开始，逐字节 round-trip。负向覆盖未知／缺失字段、空白、多帧、超限、伪造出站值、非规范 base64url、缺失基线 capability、身份复用、未来客户端降级协商、畸形或过期 Account token，以及 registry mutation 前的已验证 Account 不匹配。Host 生命周期覆盖证明：再次打开已激活 lease 会保留 id 和 generation，同时延后 expiry 并轮换单次 activation handle；本地 Profile 可以在没有 Account 凭据时 bootstrap、重连、restore 和 open。
+
+离线恢复覆盖 scope 分离、唯一 handle 解析、缺失 root 的只读行为、二次预检 stale、operation 幂等、断线撤销、条件 capability 发布、多 vault 选择、映射后 not-found 继续、不可读 vault 报告和超时状态映射。Runtime fixture 覆盖 legacy closure 复制、内容摘要校验、最终根绝对链接重写、原子发布、recovery journal 完成，以及断链、逃逸、特殊 inode 或不安全依赖拒绝。聚焦 recovery inspector 保持 statements、branches、functions、lines 四项 100%；任何用户批准的 materialization 前，真实 legacy Profile 只做只读检查。

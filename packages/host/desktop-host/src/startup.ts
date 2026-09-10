@@ -28,6 +28,7 @@ import { createMacOSPeerAttestor } from './macos-peer-attestor.ts'
 import { ProfileRegistry } from './profile-registry.ts'
 import { MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
 import { MaterializedMigrationOwnerStateSource } from './materialized-migration-owner-state-source.ts'
+import { OfflineProfileRecoveryInspector, packagedRuntimeAppRoot } from './offline-profile-recovery.ts'
 import { RestartingMigrationTarget } from './restarting-migration-target.ts'
 import { FileHostJournal, SessionCommandAuthority } from './session-command.ts'
 import { acquireSingleHostLock, type SingleHostLock } from './single-instance.ts'
@@ -307,11 +308,38 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
         pluginRoots: [join(profileRoot, 'plugins')],
       })
     }
+    const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
+    const recoveryInspector = new OfflineProfileRecoveryInspector({
+      hostRoot: root,
+      installationId: config.installationId,
+      expectedUid: uid,
+      ...(currentRuntimeAppRoot === undefined ? {} : { currentRuntimeAppRoot }),
+      targetFor,
+      ownerStateApplicator,
+    })
+    const inspectOfflineAccountProfile = (
+      profile: PersonProfileRecord,
+      expected: { readonly runtimeGeneration: number; readonly schemaGeneration: number },
+    ) => recoveryInspector.inspect(profile, expected)
+    const ensureRecoveredProfileWorker = async (
+      profile: PersonProfileRecord,
+      preflight: Awaited<ReturnType<typeof inspectOfflineAccountProfile>>,
+    ): Promise<void> => {
+      await recoveryInspector.prepareConfirmedProfile(profile, preflight)
+      await workers.ensure({
+        profileId: profile.profileId,
+        profileRoot: join(root, 'profiles', profile.profileId),
+        credentialHandle: profile.keyHandle,
+        pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
+      })
+    }
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
       verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
       activateProfileView: profileId => workers.activate(profileId),
       ensureProfileWorker: ensureWorker,
+      inspectOfflineAccountProfile,
+      ensureRecoveredProfileWorker,
     })
     const journal = new FileHostJournal(join(root, 'control', 'commands.jsonl'))
     const commandAuthority = new SessionCommandAuthority(journal, clock)
