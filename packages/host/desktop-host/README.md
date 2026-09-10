@@ -29,6 +29,10 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 ## Profile and execution authority
 
+Account provisioning preserves the exact prior registry row when worker preparation fails, including an issuer or subject replacement. A concurrent registry change prevents rollback and returns `stale`. A missing worker provider rejects before registration. These rules affect registry metadata only; they neither authorize a cloud identity migration nor move or delete Profile content.
+
+Adding an account binding after restoring a row without the optional binding field writes the canonical registry field order, so the updated row remains readable after Host restart.
+
 The Profile registry stores an opaque Profile id, opaque Keychain handle, and domain-separated unlock verifier for every Profile. Account Profiles also store a device-keyed HMAC of canonical DSH Account issuer plus opaque subject and environment-scoped current binding handles and versions; staging and production bindings for the same person resolve to one account Profile. Local-only Profiles use a device-keyed random index and never gain an account binding. A higher server-signed binding version atomically replaces only that environment's old account handle and invalidates older signed selectors. An Account issuer replacement preserves the existing Profile only when the request carries that same environment binding handle, a strictly higher version, the same Keychain handle, matching unlock material, and a valid token for the replacement identity. Raw account identity and the 32-byte Main-vault unlock material are absent from the file, and successful constant-time verification authorizes only the current authenticated connection.
 
 `profile.ensure` returns a Host-signed opaque selector bound to the installation, Profile, binding generation, runtime generation, and schema generation. `profile.restore` accepts that selector, the exact Keychain handle, and fresh Main-vault material. Copying a selector to another installation, replaying it after a binding rotation, guessing a handle/material, or disconnecting the proving connection fails closed.

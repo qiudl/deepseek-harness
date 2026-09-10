@@ -101,28 +101,16 @@ export class DesktopHost {
     if (account.issuer !== input.issuer || account.subject !== input.subject) {
       throw new HostAuthorityError('profile_mismatch')
     }
-    const existing = await this.options.registry.resolveAccount(input)
-    const profile = await this.options.registry.registerAccount({
+    const ensureWorker = this.options.ensureProfileWorker
+    if (!ensureWorker) throw new HostAuthorityError('unavailable')
+    const profile = await this.options.registry.provisionAccount({
       issuer: input.issuer, subject: input.subject, accountBindingHandle: input.accountBindingHandle,
       authorityEnvironmentId: input.authorityEnvironmentId,
       authorityBindingVersion: input.authorityBindingVersion, keyHandle: input.keyHandle,
       unlockMaterial: input.unlockMaterial,
-    })
-    const ensureWorker = this.options.ensureProfileWorker
-    if (!ensureWorker) {
-      if (existing) this.options.registry.rollbackUpdate(profile, existing)
-      else this.options.registry.rollbackRegistration(profile.profileId)
-      throw new HostAuthorityError('unavailable')
-    }
-    try {
-      await ensureWorker(profile)
-      this.unlock(input.ownerId, profile.profileId)
-      return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
-    } catch (error) {
-      if (existing) this.options.registry.rollbackUpdate(profile, existing)
-      else this.options.registry.rollbackRegistration(profile.profileId)
-      throw error
-    }
+    }, ensureWorker)
+    this.unlock(input.ownerId, profile.profileId)
+    return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
   /**
@@ -158,7 +146,11 @@ export class DesktopHost {
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
-  /** Bootstrap or unlock one local-only Profile without accepting an Account identity or token. */
+  /**
+   * Bootstrap or unlock one local-only Profile without accepting an Account identity or token.
+   * @param input - Main-vault unlock material and authenticated connection owner.
+   * @returns The Profile identity and binding generation after worker readiness.
+   */
   async bootstrapLocalProfile(input: {
     readonly keyHandle: string
     readonly unlockMaterial: string
@@ -172,7 +164,11 @@ export class DesktopHost {
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
-  /** Restore an existing local-only Profile using only Main-vault material. */
+  /**
+   * Restore an existing local-only Profile using only Main-vault material.
+   * @param input - Exact Profile generation, unlock material, and connection owner.
+   * @returns The restored Profile identity and binding generation after worker readiness.
+   */
   async restoreLocalProfile(input: {
     readonly profileId: PersonProfileId
     readonly bindingGeneration: number
@@ -213,7 +209,11 @@ export class DesktopHost {
     return this.openUnlockedProfile(profile.profileId, input.ownerId)
   }
 
-  /** Open a local-only Profile after bootstrap or restore on the same authenticated connection. */
+  /**
+   * Open a local-only Profile after bootstrap or restore on the same authenticated connection.
+   * @param input - Local Profile and the authenticated owner that unlocked it.
+   * @returns A short-lived view lease without URL or credential data.
+   */
   async openLocalProfile(input: {
     readonly profileId: PersonProfileId
     readonly ownerId: string
@@ -222,7 +222,7 @@ export class DesktopHost {
     if (!profile || profile.kind !== 'local-anonymous' || !this.ownerUnlocks.get(input.ownerId)?.has(profile.profileId)) {
       throw new HostAuthorityError('profile_locked')
     }
-    return this.openUnlockedProfile(profile.profileId, input.ownerId)
+    return await Promise.resolve(this.openUnlockedProfile(profile.profileId, input.ownerId))
   }
 
   private openUnlockedProfile(profileId: PersonProfileId, ownerId: string): ProfileOpenResult {

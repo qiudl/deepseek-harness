@@ -61,7 +61,6 @@ function parseProfile(value: unknown, legacyBindings: boolean): PersonProfileRec
     throw new HostAuthorityError('unavailable')
   }
   const accountBindings = record.accountBindings
-  if (record.kind === 'local-anonymous' && accountBindings !== undefined) throw new HostAuthorityError('unavailable')
   if (accountBindings !== undefined && !Array.isArray(accountBindings)) throw new HostAuthorityError('unavailable')
   const parsedBindings = (accountBindings ?? []).map((value: unknown) => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HostAuthorityError('unavailable')
@@ -145,7 +144,39 @@ export class ProfileRegistry {
       readonly unlockMaterial: string
     },
   ): Promise<PersonProfileRecord> {
-    await Promise.resolve()
+    return await Promise.resolve(this.registerAccountRecord(input))
+  }
+
+  /**
+   * Register an account and restore its exact prior row if worker preparation fails.
+   * @param input - Account identity, binding authority, and local unlock material.
+   * @param prepare - Worker readiness operation; must reject when readiness fails.
+   * @returns The prepared Profile; rejects stale rather than undoing a concurrent registry change.
+   */
+  async provisionAccount(
+    input: Parameters<ProfileRegistry['registerAccount']>[0],
+    prepare: (profile: PersonProfileRecord) => Promise<void>,
+  ): Promise<PersonProfileRecord> {
+    // Capture and mutate without yielding: the prior owner may have a different identity index.
+    const before = this.profiles
+    const profile = this.registerAccountRecord(input)
+    const previous = before.find(candidate => candidate.profileId === profile.profileId)
+    try {
+      await prepare(profile)
+    } catch (error) {
+      if (this.profiles.find(candidate => candidate.profileId === profile.profileId) !== profile) {
+        throw new HostAuthorityError('stale')
+      }
+      if (previous !== profile) {
+        if (previous) this.rollbackUpdate(profile, previous)
+        else this.rollbackRegistration(profile.profileId)
+      }
+      throw error
+    }
+    return profile
+  }
+
+  private registerAccountRecord(input: Parameters<ProfileRegistry['registerAccount']>[0]): PersonProfileRecord {
     const index = personIndex(this.options.deviceIndexKey, input)
     const material = unlockMaterial(input.unlockMaterial)
     const existing = this.profiles.find(profile => profile.personIndex === index)
@@ -162,16 +193,23 @@ export class ProfileRegistry {
       || !Number.isSafeInteger(binding.authorityBindingVersion) || binding.authorityBindingVersion < 1)) {
       throw new HostAuthorityError('invalid_input')
     }
-    const bindingOwner = binding === undefined ? undefined : this.profiles.find(profile =>
-      profile.accountBindings?.some(candidate => candidate.authorityEnvironmentId === binding.authorityEnvironmentId
-        && candidate.handle === binding.handle),
-    )
-    if (bindingOwner !== undefined && bindingOwner.personIndex !== index) {
+    let owner: { profile: PersonProfileRecord; bindings: NonNullable<PersonProfileRecord['accountBindings']> } | undefined
+    if (binding !== undefined) {
+      for (const profile of this.profiles) {
+        const bindings = profile.accountBindings
+        if (bindings?.some(candidate => candidate.authorityEnvironmentId === binding.authorityEnvironmentId
+          && candidate.handle === binding.handle)) {
+          owner = { profile, bindings }
+          break
+        }
+      }
+    }
+    if (binding !== undefined && owner !== undefined && owner.profile.personIndex !== index) {
+      const bindingOwner = owner.profile
       if (existing !== undefined || bindingOwner.kind !== 'account'
         || bindingOwner.keyHandle !== handle(input.keyHandle)) {
         throw new HostAuthorityError('profile_mismatch')
       }
-      if (binding === undefined) throw new HostAuthorityError('invalid_input')
       const current = bindingOwner.accountBindings?.find(candidate =>
         candidate.authorityEnvironmentId === binding.authorityEnvironmentId
           && candidate.handle === binding.handle)
@@ -186,8 +224,8 @@ export class ProfileRegistry {
       const migrated = {
         ...bindingOwner,
         personIndex: index,
-        accountBindings: [...bindingOwner.accountBindings?.filter(candidate =>
-          candidate.authorityEnvironmentId !== binding.authorityEnvironmentId) ?? [], binding],
+        accountBindings: [...owner.bindings.filter(candidate =>
+          candidate.authorityEnvironmentId !== binding.authorityEnvironmentId), binding],
         bindingGeneration: bindingOwner.bindingGeneration + 1,
       }
       const next = this.profiles.map(profile => profile.profileId === bindingOwner.profileId ? migrated : profile)
@@ -226,10 +264,15 @@ export class ProfileRegistry {
         }
       }
       const updated = {
-        ...currentProfile,
+        profileId: currentProfile.profileId,
+        kind: currentProfile.kind,
+        personIndex: currentProfile.personIndex,
+        keyHandle: currentProfile.keyHandle,
+        unlockVerifier: currentProfile.unlockVerifier,
         accountBindings: [...currentProfile.accountBindings?.filter(candidate =>
           candidate.authorityEnvironmentId !== binding.authorityEnvironmentId) ?? [], binding],
         bindingGeneration: currentProfile.bindingGeneration + 1,
+        createdAt: currentProfile.createdAt,
       }
       const next = this.profiles.map(profile => profile.profileId === existing.profileId ? updated : profile)
       this.save(next)

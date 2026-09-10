@@ -1,8 +1,8 @@
 import { generateKeyPairSync } from 'node:crypto'
-import { linkSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import {
   ApprovalAuthority,
   ContextLeaseAuthority,
@@ -949,5 +949,120 @@ describe('worker and Desktop-only bundle', () => {
       ownerId: 'connection-rollback',
     })).rejects.toThrow('worker failed')
     expect(host.getProfileStatus({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:rollback', authorityBindingVersion: 1, ownerId: 'connection-rollback' })).toEqual({ state: 'unbound' })
+  })
+
+  it.each(['missing', 'failed'] as const)('preserves the original account registration when a replacement worker is %s', async (failure) => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const options = { root, deviceIndexKey: Buffer.alloc(32, 4), clock }
+    const registry = new ProfileRegistry(options)
+    const source = { issuer: slarkIssuer, subject: 'original-person' }
+    const target = { issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'replacement-person' }
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:preserve',
+      authorityBindingVersion: 1, keyHandle: 'keychain:preserve', unlockMaterial,
+    }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5, verifyAccountAccessToken: verifyTestAccountToken,
+      ...(failure === 'failed' ? { ensureProfileWorker: async () => { throw new Error('worker failed') } } : {}),
+    })
+    const input = {
+      ...target, ...binding, authorityBindingVersion: 2,
+      accountAccessToken: accountToken(target.issuer, target.subject), ownerId: 'connection-preserve',
+    }
+    await expect(host.ensureAccountProfile(input)).rejects.toThrow(failure === 'failed' ? 'worker failed' : 'unavailable')
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+    const restarted = new ProfileRegistry(options)
+    expect(await restarted.resolveAccount(source)).toEqual(original)
+    expect(await restarted.resolveAccount(target)).toBeNull()
+    const retry = new DesktopHost({
+      registry: restarted, clock, runtimeGeneration: 5, verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => {},
+    })
+    expect((await retry.ensureAccountProfile(input)).profileId).toBe(original.profileId)
+  })
+
+  it('does not undo a newer registration when an older replacement worker fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 4), clock })
+    const source = { issuer: slarkIssuer, subject: 'original-person' }
+    const target = { issuer: slarkIssuer, subject: 'replacement-person' }
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:concurrent',
+      authorityBindingVersion: 1, keyHandle: 'keychain:concurrent', unlockMaterial,
+    }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5, verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => {
+        await registry.registerAccount({ ...target, ...binding, authorityBindingVersion: 3 })
+        throw new Error('older worker failed')
+      },
+    })
+    await expect(host.ensureAccountProfile({
+      ...target, ...binding, authorityBindingVersion: 2,
+      accountAccessToken: accountToken(target.issuer, target.subject), ownerId: 'connection-concurrent',
+    })).rejects.toMatchObject({ code: 'stale' })
+    expect(registry.resolveBinding(stagingEnvironmentId, binding.accountBindingHandle, 3)?.profileId).toBe(original.profileId)
+  })
+
+  it('leaves an unchanged registration intact when worker preparation fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 4), clock })
+    const input = { issuer: slarkIssuer, subject: 'unchanged', keyHandle: 'keychain:unchanged', unlockMaterial }
+    const original = await registry.registerAccount(input)
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    await expect(registry.provisionAccount(input, async () => { throw new Error('worker failed') }))
+      .rejects.toThrow('worker failed')
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+    expect(await registry.resolveAccount(input)).toBe(original)
+  })
+
+  it('preserves unrelated profiles when a replacement worker fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const options = { root, deviceIndexKey: Buffer.alloc(32, 4), clock }
+    const registry = new ProfileRegistry(options)
+    const local = await registry.createLocalAnonymous({ keyHandle: 'keychain:independent', unlockMaterial })
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:preserve-others',
+      authorityBindingVersion: 1, keyHandle: 'keychain:preserve-others', unlockMaterial,
+    }
+    const source = { issuer: slarkIssuer, subject: 'source-with-neighbors' }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const neighbor = await registry.registerAccount({ issuer: slarkIssuer, subject: 'neighbor', keyHandle: 'keychain:neighbor', unlockMaterial })
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    await expect(registry.provisionAccount({
+      ...source, ...binding, subject: 'replacement-with-neighbors', authorityBindingVersion: 2,
+    }, async () => { throw new Error('worker failed') })).rejects.toThrow('worker failed')
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+    const restarted = new ProfileRegistry(options)
+    for (const profile of [local, original, neighbor]) expect(restarted.resolveProfile(profile.profileId)).toEqual(profile)
+  })
+
+  it('does not start a worker or alter the registry when replacement persistence fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const options = { root, deviceIndexKey: Buffer.alloc(32, 4), clock }
+    const registry = new ProfileRegistry(options)
+    const source = { issuer: slarkIssuer, subject: 'persist-source' }
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:persist-failure',
+      authorityBindingVersion: 1, keyHandle: 'keychain:persist-failure', unlockMaterial,
+    }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    const failing = new ProfileRegistry({ ...options, persistSnapshot: () => { throw new Error('write failed') } })
+    let workerStarts = 0
+    await expect(failing.provisionAccount({
+      ...source, ...binding, subject: 'persist-target', authorityBindingVersion: 2,
+    }, async () => { workerStarts += 1 })).rejects.toThrow('write failed')
+    expect(workerStarts).toBe(0)
+    expect(await failing.resolveAccount(source)).toEqual(original)
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
   })
 })
