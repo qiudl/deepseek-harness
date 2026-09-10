@@ -21,6 +21,8 @@ A turn flows through the six packages in one loop: the driver in [`agent-loop`](
 
 ## Creation and ownership
 
+`SessionScopeProvider` owns admission for one plugin-defined durable scope namespace. Its `admit(scope, agentCtx, signal)` method accepts a persisted scope reference, the unpublished agent context, and cancellation; throwing refuses admission. `ctx.agents.registerScopeProvider` rejects duplicate namespaces and returns an effect-owned disposer. `admitSessionScope` permits an absent scope, but a named provider must exist and remain the same provider until its admission completes.
+
 Consumers create agents through `ctx.agents` — `create()` builds a fresh session and agent under one caller-supplied `SessionId`, `resume()` loads a persisted session first — or declaratively through the loop's config entries. Programmatic creation returns the owner's handle:
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
@@ -739,6 +741,23 @@ withoutInitiator<T>(operation: () => T): T
 setFactory(factory: AgentFactory): () => void
 
 /**
+ * Register one plugin-owned durable session-scope namespace.
+ * @param id - Unique namespace owned by the provider.
+ * @param provider - Authorization and lifecycle implementation for the namespace.
+ * @returns Effect-owned disposer that removes this provider's registration.
+ */
+registerScopeProvider(id: SessionScopeProviderId, provider: SessionScopeProvider): () => void
+
+/**
+ * Fail-closed execution admission for a persisted scope. The exact provider
+ * must remain registered for the whole await.
+ * @param scope - the session's persisted scope, or `undefined` when absent.
+ * @param agentCtx - the unpublished Agent scope granted to the provider.
+ * @param signal - cancellation observed during admission.
+ */
+async admitSessionScope( scope: SessionScopeRef | undefined, agentCtx: Context, signal: AbortSignal, ): Promise<void>
+
+/**
  * Create and publish a new agent through the registered factory.
  * Distinct from {@link register} (which records an already-constructed
  * agent): this constructs the agent and its session. Rejects if no factory is
@@ -835,6 +854,8 @@ list(): Agent[]
  */
 roots(): Agent[]
 ```
+
+Types: [SessionScopeProviderId](persistence.md) · [SessionScopeRef](persistence.md)
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
 

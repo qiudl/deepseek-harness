@@ -68,7 +68,11 @@ export type OptionalSessionSeq = SessionSeq | null
  */
 export type SessionScopeProviderId = Branded<'SessionScopeProviderId'>
 
-/** Brand a string as a {@link SessionScopeProviderId}. */
+/**
+ * Brand a string as a {@link SessionScopeProviderId}.
+ * @param id - Provider namespace identifier.
+ * @returns The branded provider identifier.
+ */
 export function SessionScopeProviderId(id: string): SessionScopeProviderId {
   return brandString<SessionScopeProviderId>(id)
 }
@@ -76,7 +80,11 @@ export function SessionScopeProviderId(id: string): SessionScopeProviderId {
 /** An opaque, provider-owned reference within one session scope namespace. */
 export type SessionScopeReference = Branded<'SessionScopeReference'>
 
-/** Brand a string as a {@link SessionScopeReference}. */
+/**
+ * Brand a string as a {@link SessionScopeReference}.
+ * @param ref - Opaque reference interpreted by the named provider.
+ * @returns The branded scope reference.
+ */
 export function SessionScopeReference(ref: string): SessionScopeReference {
   return brandString<SessionScopeReference>(ref)
 }

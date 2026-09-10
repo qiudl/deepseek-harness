@@ -990,7 +990,10 @@ export class UnixHostClient {
     }, options.now ?? Date.now, frame.result)
   }
 
-  /** Report only local transport liveness; authority is still rechecked by every operation. */
+  /**
+   * Report only local transport liveness; authority is still rechecked by every operation.
+   * @returns Whether the local channel remains connected.
+   */
   isConnected(): boolean { return this.channel.isConnected() }
 
   /**
@@ -1087,7 +1090,11 @@ export class UnixHostClient {
     return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
   }
 
-  /** Bootstrap one account-independent local Profile using only Main-vault material. */
+  /**
+   * Bootstrap one account-independent local Profile using only Main-vault material.
+   * @param input - Local key handle, unlock material, and optional cancellation.
+   * @returns The Profile identity, signed selector, and persistence generation.
+   */
   async bootstrapLocalProfile(input: {
     readonly keyHandle: string
     readonly unlockMaterial: string
@@ -1109,7 +1116,11 @@ export class UnixHostClient {
     }
   }
 
-  /** Restore one local-only Profile selected by its Host-signed selector. */
+  /**
+   * Restore one local-only Profile selected by its Host-signed selector.
+   * @param input - Signed selector, local unlock material, and optional cancellation.
+   * @returns The restored Profile identity, signed selector, and persistence generation.
+   */
   async restoreLocalProfile(input: {
     readonly profileSelector: string
     readonly keyHandle: string
@@ -1166,7 +1177,11 @@ export class UnixHostClient {
     }
   }
 
-  /** Open one previously unlocked local-only Profile through its signed selector. */
+  /**
+   * Open one previously unlocked local-only Profile through its signed selector.
+   * @param input - Signed Profile selector and optional cancellation.
+   * @returns A short-lived Profile view lease without URL or credential data.
+   */
   async openLocalProfile(input: { readonly profileSelector: string; readonly signal?: AbortSignal }): Promise<ProfileOpenResult> {
     const request: ProfileOpenLocalRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.open_local',

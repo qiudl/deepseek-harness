@@ -371,7 +371,12 @@ interface SessionLogScan {
   committedBytes: number
 }
 
-/** Derive and validate the v2 fork cut from the last lineage-tagged seed marker. */
+/**
+ * Derive and validate the v2 fork cut from the last lineage-tagged seed marker.
+ * @param meta - Header whose seeded flag must agree with the lineage marker.
+ * @param events - Ordered events scanned for the last inherited end-seed marker.
+ * @returns The inherited cut, or zero for an unseeded log; throws on inconsistent lineage.
+ */
 export function sessionInheritedEventCount(
   meta: SessionHeader,
   events: readonly SessionEvent[],

@@ -23,6 +23,8 @@
 
 ## 创建与所有权
 
+`SessionScopeProvider` 负责一个由插件定义的持久作用域命名空间的准入。其 `admit(scope, agentCtx, signal)` 方法接收持久化的作用域引用、尚未发布的 agent 上下文以及取消信号；抛出异常即拒绝准入。`ctx.agents.registerScopeProvider` 拒绝重复命名空间并返回由 effect 拥有的 disposer。`admitSessionScope` 允许作用域缺省，但指定的提供方必须存在，且在其准入完成前始终为同一个提供方。
+
 消费方通过 `ctx.agents` 创建 agent——`create()` 在一个调用方提供的 `SessionId` 下构建全新会话与 agent，`resume()` 先加载持久会话——或者通过循环的声明式配置条目创建。编程式创建返回归属所有者的句柄：
 
 源码：[`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
@@ -749,6 +751,23 @@ withoutInitiator<T>(operation: () => T): T
 setFactory(factory: AgentFactory): () => void
 
 /**
+ * Register one plugin-owned durable session-scope namespace.
+ * @param id - Unique namespace owned by the provider.
+ * @param provider - Authorization and lifecycle implementation for the namespace.
+ * @returns Effect-owned disposer that removes this provider's registration.
+ */
+registerScopeProvider(id: SessionScopeProviderId, provider: SessionScopeProvider): () => void
+
+/**
+ * Fail-closed execution admission for a persisted scope. The exact provider
+ * must remain registered for the whole await.
+ * @param scope - the session's persisted scope, or `undefined` when absent.
+ * @param agentCtx - the unpublished Agent scope granted to the provider.
+ * @param signal - cancellation observed during admission.
+ */
+async admitSessionScope( scope: SessionScopeRef | undefined, agentCtx: Context, signal: AbortSignal, ): Promise<void>
+
+/**
  * Create and publish a new agent through the registered factory.
  * Distinct from {@link register} (which records an already-constructed
  * agent): this constructs the agent and its session. Rejects if no factory is
@@ -845,6 +864,8 @@ list(): Agent[]
  */
 roots(): Agent[]
 ```
+
+Types: [SessionScopeProviderId](persistence.zh.md) · [SessionScopeRef](persistence.zh.md)
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
 

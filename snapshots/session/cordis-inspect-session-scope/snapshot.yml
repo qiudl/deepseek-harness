@@ -1,0 +1,9 @@
+version: 1
+scenario: cordis-inspect-session-scope
+profile: headless
+composition: advanced
+recording: authored
+header:
+  class: advanced
+  systemPromptSource: cordis-inspect-jsdoc
+  toolSchemasSource: cordis-inspect-jsdoc

@@ -123,6 +123,8 @@ interface SessionLocation {
 
 ## `SessionHeader`：日志旁的元数据
 
+`SessionScopeRef` 包含带品牌的 `SessionScopeProviderId`、不透明的 `SessionScopeReference` 和数值型 `schemaVersion`。header 在恢复和 fork 时保留这份插件拥有的路由元数据；由指定提供方解释引用并负责准入，核心不会从引用推断授权。
+
 每个会话的元数据与事件日志**分开**存储：header 携带格式版本、cwd 与 `isSeeded` 谱系 bit，含正文的存储值则在其旁边单独携带精确 inherited cut。二者都不进入 `SessionEventMap`，也不会到达 `deriveMessages()`。logical header 通过 `session.header` 附加，Session 则以 `inheritedEventCount` 暴露其 cut。
 
 源码：[`packages/core/session/src/types.ts`](../../packages/core/session/src/types.ts)
@@ -168,6 +170,11 @@ interface SessionHeader {
    * would replay history the model can no longer act on.
    */
   readonly agentPreset?: string
+  /**
+   * Optional plugin-owned scope identity that must survive resume and fork.
+   * Core persists and preserves the value; the named provider owns admission.
+   */
+  readonly scope?: SessionScopeRef
 }
 ```
 
@@ -206,6 +213,7 @@ interface CreateSessionOptions {
     readonly origin?: 'subagent'
     readonly delegationDepth?: number
     readonly agentPreset?: string
+    readonly scope?: SessionScopeRef
   }
 }
 ```

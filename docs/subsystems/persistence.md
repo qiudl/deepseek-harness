@@ -123,6 +123,8 @@ interface SessionLocation {
 
 ## `SessionHeader` — metadata beside the log
 
+`SessionScopeRef` carries a branded `SessionScopeProviderId`, an opaque `SessionScopeReference`, and a numeric `schemaVersion`. The header retains this plugin-owned routing metadata through resume and fork; the named provider interprets the reference and owns admission, rather than core inferring authorization from the reference.
+
 Per-session metadata travels **separately** from the event log: the header carries format version, cwd, and the `isSeeded` lineage bit, while body-bearing storage values carry the exact inherited cut beside it. Neither belongs to `SessionEventMap` or reaches `deriveMessages()`. The logical header is attached through `session.header`; the Session exposes its cut as `inheritedEventCount`.
 
 Source: [`packages/core/session/src/types.ts`](../../packages/core/session/src/types.ts)
@@ -168,6 +170,11 @@ interface SessionHeader {
    * would replay history the model can no longer act on.
    */
   readonly agentPreset?: string
+  /**
+   * Optional plugin-owned scope identity that must survive resume and fork.
+   * Core persists and preserves the value; the named provider owns admission.
+   */
+  readonly scope?: SessionScopeRef
 }
 ```
 
@@ -206,6 +213,7 @@ interface CreateSessionOptions {
     readonly origin?: 'subagent'
     readonly delegationDepth?: number
     readonly agentPreset?: string
+    readonly scope?: SessionScopeRef
   }
 }
 ```

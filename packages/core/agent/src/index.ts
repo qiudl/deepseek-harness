@@ -394,7 +394,12 @@ export class AgentRegistry extends Service {
     return dispose
   }
 
-  /** Register one plugin-owned durable session-scope namespace. */
+  /**
+   * Register one plugin-owned durable session-scope namespace.
+   * @param id - Unique namespace owned by the provider.
+   * @param provider - Authorization and lifecycle implementation for the namespace.
+   * @returns Effect-owned disposer that removes this provider's registration.
+   */
   registerScopeProvider(id: SessionScopeProviderId, provider: SessionScopeProvider): () => void {
     const dispose = this.ctx.effect(() => {
       if (this.scopeProviders.has(id)) throw new Error(`session scope provider "${id}" is already registered`)
