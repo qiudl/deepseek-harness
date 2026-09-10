@@ -22,8 +22,8 @@ type LinkFact = Readonly<{
 type RecoveryPlan = Readonly<{
   profileId: string
   profileRoot: string
-  legacyRuntimeRoot?: string
-  legacyRuntimeDigest?: string
+  sourceRuntimeRoot?: string
+  sourceRuntimeDigest?: string
   links: readonly LinkFact[]
 }>
 
@@ -285,7 +285,8 @@ export class OfflineProfileRecoveryInspector {
       }
       const pluginCount = Object.keys(dependencies).length
       const links = await linkFacts(profileComposition, this.options.expectedUid)
-      const externalRuntimeRoots = new Set<string>()
+      const sourceRuntimeRoots = new Set<string>()
+      const legacyRuntimeRoots = new Set<string>()
       const runtimeRoots = new Set<string>()
       const publishedClosures = new Map<string, string>()
       for (const link of links) {
@@ -297,17 +298,18 @@ export class OfflineProfileRecoveryInspector {
         const runtimeRoot = runtimeRootFor(link.resolved)
         if (!runtimeRoot) throw new HostAuthorityError('runtime_incompatible')
         runtimeRoots.add(runtimeRoot)
-        if (runtimeRoot !== this.options.currentRuntimeAppRoot) externalRuntimeRoots.add(runtimeRoot)
+        sourceRuntimeRoots.add(runtimeRoot)
+        if (runtimeRoot !== this.options.currentRuntimeAppRoot) legacyRuntimeRoots.add(runtimeRoot)
       }
-      if (externalRuntimeRoots.size > 1) throw new HostAuthorityError('runtime_incompatible')
-      const compatibility = externalRuntimeRoots.size === 0 ? 'current' : 'legacy_runtime_required'
+      if (sourceRuntimeRoots.size > 1) throw new HostAuthorityError('runtime_incompatible')
+      const compatibility = legacyRuntimeRoots.size === 0 ? 'current' : 'legacy_runtime_required'
       const runtimeClosures: Array<Readonly<{ kind: 'current' | 'legacy' | 'published'; digest: string; bytes: number }>> = []
-      let legacyRuntimeDigest: string | undefined
+      let sourceRuntimeDigest: string | undefined
       for (const runtimeRoot of [...runtimeRoots].sort()) {
         const closure = await runtimeTreeDigest(runtimeRoot, this.options.expectedUid, true)
         const kind = runtimeRoot === this.options.currentRuntimeAppRoot ? 'current' : 'legacy'
         runtimeClosures.push({ kind, ...closure })
-        if (kind === 'legacy') legacyRuntimeDigest = closure.digest
+        if (sourceRuntimeRoots.has(runtimeRoot)) sourceRuntimeDigest = closure.digest
       }
       for (const [closureRoot, expectedDigest] of [...publishedClosures].sort()) {
         const closure = await runtimeTreeDigest(closureRoot, this.options.expectedUid, false)
@@ -339,8 +341,8 @@ export class OfflineProfileRecoveryInspector {
       this.plans.set(preflightDigest, {
         profileId: profile.profileId,
         profileRoot,
-        ...(externalRuntimeRoots.size === 0 ? {} : { legacyRuntimeRoot: [...externalRuntimeRoots][0] }),
-        ...(legacyRuntimeDigest === undefined ? {} : { legacyRuntimeDigest }),
+        ...(sourceRuntimeRoots.size === 0 ? {} : { sourceRuntimeRoot: [...sourceRuntimeRoots][0] }),
+        ...(sourceRuntimeDigest === undefined ? {} : { sourceRuntimeDigest }),
         links,
       })
       this.planDigestByProfile.set(profile.profileId, preflightDigest)
@@ -368,10 +370,10 @@ export class OfflineProfileRecoveryInspector {
     // lookup only consumes the exact plan produced by that successful call.
     const plan = this.plans.get(preflight.preflightDigest)
     if (!plan || plan.profileId !== profile.profileId) throw new HostAuthorityError('recovery_preflight_stale')
-    if (!plan.legacyRuntimeRoot) return
+    if (!plan.sourceRuntimeRoot) return
 
-    const source = await runtimeTreeDigest(plan.legacyRuntimeRoot, this.options.expectedUid, true)
-    if (source.digest !== plan.legacyRuntimeDigest) throw new HostAuthorityError('recovery_preflight_stale')
+    const source = await runtimeTreeDigest(plan.sourceRuntimeRoot, this.options.expectedUid, true)
+    if (source.digest !== plan.sourceRuntimeDigest) throw new HostAuthorityError('recovery_preflight_stale')
     const compatibilityRoot = join(plan.profileRoot, 'runtime-compat')
     const closuresRoot = join(compatibilityRoot, 'closures')
     const journalsRoot = join(compatibilityRoot, 'journals')
@@ -397,10 +399,10 @@ export class OfflineProfileRecoveryInspector {
       const stagingApp = join(stagingRoot, 'app')
       await mkdir(stagingRoot, { mode: 0o700 })
       try {
-        await cp(plan.legacyRuntimeRoot, stagingApp, {
+        await cp(plan.sourceRuntimeRoot, stagingApp, {
           recursive: true, dereference: false, preserveTimestamps: true, verbatimSymlinks: true,
         })
-        await rewriteAbsoluteRuntimeLinks(stagingApp, plan.legacyRuntimeRoot, publishedApp)
+        await rewriteAbsoluteRuntimeLinks(stagingApp, plan.sourceRuntimeRoot, publishedApp)
         const copied = await runtimeTreeDigest(stagingApp, this.options.expectedUid, false, publishedApp)
         /* v8 ignore next 3 -- copy digest divergence requires a concurrent filesystem mutation after source verification. */
         if (copied.digest !== source.digest || copied.bytes !== source.bytes) {
@@ -425,10 +427,10 @@ export class OfflineProfileRecoveryInspector {
     }
 
     const rewrites = plan.links.filter(link => !contained(plan.profileRoot, link.resolved)
-      && contained(plan.legacyRuntimeRoot as string, link.resolved)).map(link => ({
+      && contained(plan.sourceRuntimeRoot as string, link.resolved)).map(link => ({
       path: link.path,
       originalTarget: link.target,
-      replacementTarget: join(publishedApp, relative(plan.legacyRuntimeRoot as string, link.resolved)),
+      replacementTarget: join(publishedApp, relative(plan.sourceRuntimeRoot as string, link.resolved)),
     }))
     const journalPath = join(journalsRoot, `${preflight.preflightDigest}.json`)
     await atomicJson(journalPath, {
