@@ -3,6 +3,8 @@
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 
 const ENVELOPE_VERSION = 1 as const
+const RECOVERY_ENVELOPE_VERSION = 1 as const
+const RECOVERY_ITERATIONS = 600_000 as const
 const IDENTIFIER = /^[a-z0-9][a-z0-9_-]{0,63}$/u
 const PROFILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const BASE64URL = /^[A-Za-z0-9_-]+$/u
@@ -30,6 +32,28 @@ export interface WebDshPasskeyEnvelope {
 /** Result of enrolling one passkey-backed Web-local DSH profile. */
 export interface WebDshPasskeyEnrollment {
   readonly envelope: WebDshPasskeyEnvelope
+  readonly encryptionKey: CryptoKey
+}
+
+/** Versioned PBKDF2 wrapper for recovering one profile data key without its passkey. */
+export interface WebDshRecoveryEnvelope {
+  readonly version: typeof RECOVERY_ENVELOPE_VERSION
+  readonly environmentId: string
+  readonly profileId: string
+  readonly kdf: {
+    readonly name: 'PBKDF2'
+    readonly hash: 'SHA-256'
+    readonly iterations: typeof RECOVERY_ITERATIONS
+  }
+  readonly recoverySalt: string
+  readonly wrappedDataKey: string
+  readonly createdAt: number
+}
+
+/** Result of atomically preparing both passkey and recovery wrappers for one random data key. */
+export interface WebDshLocalProfileEnrollment {
+  readonly passkeyEnvelope: WebDshPasskeyEnvelope
+  readonly recoveryEnvelope: WebDshRecoveryEnvelope
   readonly encryptionKey: CryptoKey
 }
 
@@ -63,6 +87,53 @@ async function performCredentialRequest(operation: () => Promise<Credential | nu
     }
     throw new Error('WEB_DSH_PASSKEY_FAILED', { cause })
   }
+}
+
+function recoveryPassphraseBytes(passphrase: string): Uint8Array<ArrayBuffer> {
+  if (typeof passphrase !== 'string' || passphrase.length > 512) {
+    throw new Error('WEB_DSH_RECOVERY_PASSPHRASE_INVALID')
+  }
+  const normalized = passphrase.normalize('NFKC')
+  const codePoints = Array.from(normalized).length
+  if (normalized !== normalized.trim() || codePoints < 16 || codePoints > 256) {
+    throw new Error('WEB_DSH_RECOVERY_PASSPHRASE_INVALID')
+  }
+  const bytes = encoder.encode(normalized)
+  if (bytes.byteLength > 1024) {
+    bytes.fill(0)
+    throw new Error('WEB_DSH_RECOVERY_PASSPHRASE_INVALID')
+  }
+  return bytes
+}
+
+async function recoveryWrappingKey(
+  passphrase: string,
+  salt: Uint8Array<ArrayBuffer>,
+  iterations: number,
+  environmentId: string,
+  profileId: string,
+  crypto: Crypto,
+): Promise<CryptoKey> {
+  const bytes = recoveryPassphraseBytes(passphrase)
+  let material: CryptoKey
+  try {
+    material = await crypto.subtle.importKey('raw', bytes, 'PBKDF2', false, ['deriveKey'])
+  } finally {
+    bytes.fill(0)
+  }
+  const context = encoder.encode(JSON.stringify({
+    environmentId, profileId, purpose: 'dsh-web-vfs-recovery-wrap', version: 1,
+  }))
+  const scopedSalt = new Uint8Array(salt.byteLength + context.byteLength)
+  scopedSalt.set(salt)
+  scopedSalt.set(context, salt.byteLength)
+  return await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: scopedSalt, iterations },
+    material,
+    { name: 'AES-KW', length: 256 },
+    false,
+    ['wrapKey', 'unwrapKey'],
+  )
 }
 
 function base64Url(bytes: Uint8Array): string {
@@ -155,28 +226,15 @@ function credentialRequest(
   }
 }
 
-/**
- * Enroll a resident passkey and wrap a fresh Web-local data key with its PRF output.
- * @param environmentId - Exact DSH environment that owns the new profile.
- * @param labels - Localized relying-party and profile names for the browser ceremony.
- * @param dependencies - Browser capabilities, with deterministic replacements for tests.
- * @returns The durable passkey envelope and a non-extractable Worker data key.
- * @throws `WEB_DSH_PASSKEY_CANCELLED` when no credential is created, or a stable passkey error when PRF is unavailable or invalid.
- */
-export async function enrollWebDshPasskeyProfile(
+async function enrollPasskeyEnvelope(
   environmentId: string,
+  profileId: string,
   labels: WebDshPasskeyLabels,
-  dependencies: WebDshPasskeyDependencies = {},
-): Promise<WebDshPasskeyEnrollment> {
-  if (!IDENTIFIER.test(environmentId)) throw new Error('web passkey: invalid environment id')
-  if (labels.relyingParty.trim().length < 1 || labels.relyingParty.length > 64
-    || labels.profile.trim().length < 1 || labels.profile.length > 64) {
-    throw new Error('web passkey: invalid localized labels')
-  }
+  dataKey: CryptoKey,
+  dependencies: WebDshPasskeyDependencies,
+): Promise<WebDshPasskeyEnvelope> {
   const crypto = dependencies.crypto ?? globalThis.crypto
   const credentials = dependencies.credentials ?? navigator.credentials
-  const profileId = (dependencies.randomUuid ?? randomUUID)()
-  validEnvironmentAndProfile(environmentId, profileId)
   const prfSalt = crypto.getRandomValues(new Uint8Array(32))
   const credential = passkeyCredential(await performCredentialRequest(async () => await credentials.create({
     publicKey: {
@@ -208,33 +266,198 @@ export async function enrollWebDshPasskeyProfile(
     )),
   ))
   const wrapKey = await wrappingKey(prf, prfSalt, environmentId, profileId, crypto)
-  const extractableDataKey = await crypto.subtle.generateKey(
-    { name: 'AES-GCM', length: 256 },
-    true,
-    ['encrypt', 'decrypt'],
-  )
-  const wrapped = await crypto.subtle.wrapKey('raw', extractableDataKey, wrapKey, 'AES-KW')
-  const raw = await crypto.subtle.exportKey('raw', extractableDataKey)
-  let encryptionKey: CryptoKey
+  const wrapped = await crypto.subtle.wrapKey('raw', dataKey, wrapKey, 'AES-KW')
+  return {
+    version: ENVELOPE_VERSION,
+    environmentId,
+    profileId,
+    credentialId: base64Url(new Uint8Array(credential.rawId)),
+    prfSalt: base64Url(prfSalt),
+    wrappedDataKey: base64Url(new Uint8Array(wrapped)),
+    createdAt: (dependencies.now ?? Date.now)(),
+  }
+}
+
+async function nonExtractableDataKey(dataKey: CryptoKey, crypto: Crypto): Promise<CryptoKey> {
+  const raw = await crypto.subtle.exportKey('raw', dataKey)
   try {
-    encryptionKey = await crypto.subtle.importKey(
+    return await crypto.subtle.importKey(
       'raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'],
     )
   } finally {
     new Uint8Array(raw).fill(0)
   }
+}
+
+async function createRecoveryEnvelope(
+  environmentId: string,
+  profileId: string,
+  dataKey: CryptoKey,
+  passphrase: string,
+  dependencies: WebDshPasskeyDependencies,
+): Promise<WebDshRecoveryEnvelope> {
+  const crypto = dependencies.crypto ?? globalThis.crypto
+  const recoverySalt = crypto.getRandomValues(new Uint8Array(32))
+  const wrapKey = await recoveryWrappingKey(
+    passphrase, recoverySalt, RECOVERY_ITERATIONS, environmentId, profileId, crypto,
+  )
+  const wrapped = await crypto.subtle.wrapKey('raw', dataKey, wrapKey, 'AES-KW')
   return {
-    envelope: {
-      version: ENVELOPE_VERSION,
-      environmentId,
-      profileId,
-      credentialId: base64Url(new Uint8Array(credential.rawId)),
-      prfSalt: base64Url(prfSalt),
-      wrappedDataKey: base64Url(new Uint8Array(wrapped)),
-      createdAt: (dependencies.now ?? Date.now)(),
-    },
+    version: RECOVERY_ENVELOPE_VERSION,
+    environmentId,
+    profileId,
+    kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: RECOVERY_ITERATIONS },
+    recoverySalt: base64Url(recoverySalt),
+    wrappedDataKey: base64Url(new Uint8Array(wrapped)),
+    createdAt: (dependencies.now ?? Date.now)(),
+  }
+}
+
+/**
+ * Enroll a resident passkey and wrap a fresh Web-local data key with its PRF output.
+ * @param environmentId - Exact DSH environment that owns the new profile.
+ * @param labels - Localized relying-party and profile names for the browser ceremony.
+ * @param dependencies - Browser capabilities, with deterministic replacements for tests.
+ * @returns The durable passkey envelope and a non-extractable Worker data key.
+ * @throws `WEB_DSH_PASSKEY_CANCELLED` when no credential is created, or a stable passkey error when PRF is unavailable or invalid.
+ */
+export async function enrollWebDshPasskeyProfile(
+  environmentId: string,
+  labels: WebDshPasskeyLabels,
+  dependencies: WebDshPasskeyDependencies = {},
+): Promise<WebDshPasskeyEnrollment> {
+  if (!IDENTIFIER.test(environmentId)) throw new Error('web passkey: invalid environment id')
+  if (labels.relyingParty.trim().length < 1 || labels.relyingParty.length > 64
+    || labels.profile.trim().length < 1 || labels.profile.length > 64) {
+    throw new Error('web passkey: invalid localized labels')
+  }
+  const crypto = dependencies.crypto ?? globalThis.crypto
+  const profileId = (dependencies.randomUuid ?? randomUUID)()
+  validEnvironmentAndProfile(environmentId, profileId)
+  const extractableDataKey = await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 },
+    true,
+    ['encrypt', 'decrypt'],
+  )
+  const envelope = await enrollPasskeyEnvelope(
+    environmentId, profileId, labels, extractableDataKey, dependencies,
+  )
+  const encryptionKey = await nonExtractableDataKey(extractableDataKey, crypto)
+  return {
+    envelope,
     encryptionKey,
   }
+}
+
+/**
+ * Prepare passkey and recovery wrappers for the same new local-profile data key.
+ * @param environmentId - Exact DSH environment that owns the profile.
+ * @param labels - Localized relying-party and profile names for the passkey ceremony.
+ * @param recoveryPassphrase - User-held recovery phrase; it is never persisted.
+ * @param dependencies - Browser capabilities, with deterministic replacements for tests.
+ * @returns Both durable wrappers and the non-extractable key for the Host Worker.
+ */
+export async function enrollWebDshLocalProfile(
+  environmentId: string,
+  labels: WebDshPasskeyLabels,
+  recoveryPassphrase: string,
+  dependencies: WebDshPasskeyDependencies = {},
+): Promise<WebDshLocalProfileEnrollment> {
+  if (!IDENTIFIER.test(environmentId)) throw new Error('web passkey: invalid environment id')
+  if (labels.relyingParty.trim().length < 1 || labels.relyingParty.length > 64
+    || labels.profile.trim().length < 1 || labels.profile.length > 64) {
+    throw new Error('web passkey: invalid localized labels')
+  }
+  const crypto = dependencies.crypto ?? globalThis.crypto
+  const profileId = (dependencies.randomUuid ?? randomUUID)()
+  validEnvironmentAndProfile(environmentId, profileId)
+  const dataKey = await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'],
+  )
+  const recoveryEnvelope = await createRecoveryEnvelope(
+    environmentId, profileId, dataKey, recoveryPassphrase, dependencies,
+  )
+  const passkeyEnvelope = await enrollPasskeyEnvelope(
+    environmentId, profileId, labels, dataKey, dependencies,
+  )
+  return {
+    passkeyEnvelope,
+    recoveryEnvelope,
+    encryptionKey: await nonExtractableDataKey(dataKey, crypto),
+  }
+}
+
+/**
+ * Unlock one profile data key from its user-held recovery phrase.
+ * @param environmentId - Environment selected independently by the caller.
+ * @param profileId - Profile selected independently by the caller.
+ * @param envelope - Untrusted durable recovery wrapper metadata.
+ * @param recoveryPassphrase - User-provided phrase; it is never persisted.
+ * @param dependencies - Browser crypto replacement for deterministic tests.
+ * @returns A non-extractable AES-256-GCM key bound to the selected profile.
+ */
+export async function unlockWebDshRecoveryProfile(
+  environmentId: string,
+  profileId: string,
+  envelope: WebDshRecoveryEnvelope,
+  recoveryPassphrase: string,
+  dependencies: Pick<WebDshPasskeyDependencies, 'crypto'> = {},
+): Promise<CryptoKey> {
+  validEnvironmentAndProfile(environmentId, profileId)
+  const parsed = parseWebDshRecoveryEnvelope(envelope)
+  if (parsed === null || parsed.environmentId !== environmentId || parsed.profileId !== profileId) {
+    throw new Error('WEB_DSH_RECOVERY_ENVELOPE_INVALID')
+  }
+  const crypto = dependencies.crypto ?? globalThis.crypto
+  const salt = decodeBase64Url(parsed.recoverySalt)
+  const wrapKey = await recoveryWrappingKey(
+    recoveryPassphrase, salt, parsed.kdf.iterations, environmentId, profileId, crypto,
+  )
+  try {
+    return await crypto.subtle.unwrapKey(
+      'raw',
+      decodeBase64Url(parsed.wrappedDataKey),
+      wrapKey,
+      'AES-KW',
+      { name: 'AES-GCM' },
+      false,
+      ['encrypt', 'decrypt'],
+    )
+  } catch {
+    throw new Error('WEB_DSH_RECOVERY_PASSPHRASE_INVALID')
+  }
+}
+
+/**
+ * Parse untrusted recovery metadata with an exact, bounded KDF contract.
+ * @param value - Durable or imported value to validate.
+ * @returns The validated envelope, or `null` when any field is invalid.
+ */
+export function parseWebDshRecoveryEnvelope(value: unknown): WebDshRecoveryEnvelope | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const item = value as Record<string, unknown>
+  if (Object.keys(item).toSorted().join(',')
+    !== 'createdAt,environmentId,kdf,profileId,recoverySalt,version,wrappedDataKey'
+    || item.version !== RECOVERY_ENVELOPE_VERSION || typeof item.environmentId !== 'string'
+    || typeof item.profileId !== 'string' || !IDENTIFIER.test(item.environmentId)
+    || !PROFILE_ID.test(item.profileId) || !Number.isSafeInteger(item.createdAt)
+    || (item.createdAt as number) < 0 || typeof item.kdf !== 'object' || item.kdf === null
+    || Array.isArray(item.kdf)) return null
+  const kdf = item.kdf as Record<string, unknown>
+  if (Object.keys(kdf).toSorted().join(',') !== 'hash,iterations,name'
+    || kdf.name !== 'PBKDF2' || kdf.hash !== 'SHA-256'
+    || kdf.iterations !== RECOVERY_ITERATIONS
+    || typeof item.recoverySalt !== 'string' || typeof item.wrappedDataKey !== 'string'
+    || item.recoverySalt.length < 16 || item.recoverySalt.length > 128
+    || item.wrappedDataKey.length < 16 || item.wrappedDataKey.length > 128
+    || !BASE64URL.test(item.recoverySalt) || !BASE64URL.test(item.wrappedDataKey)) return null
+  try {
+    if (decodeBase64Url(item.recoverySalt).byteLength !== 32
+      || decodeBase64Url(item.wrappedDataKey).byteLength !== 40) return null
+  } catch {
+    return null
+  }
+  return item as unknown as WebDshRecoveryEnvelope
 }
 
 /**

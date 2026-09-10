@@ -17,9 +17,24 @@ import { choosePreviewSource } from './source-chooser.ts'
 export { WorkerTunnel, type TunnelFetch, type WebDshLocalPersistence } from './client.ts'
 export { applyIndexInjections } from './apply-injections.ts'
 export {
-  enrollWebDshPasskeyProfile, parseWebDshPasskeyEnvelope, unlockWebDshPasskeyProfile,
-  type WebDshPasskeyDependencies, type WebDshPasskeyEnrollment, type WebDshPasskeyEnvelope,
-  type WebDshPasskeyLabels,
+  createWebDshLocalProfileRecord, IndexedDbWebDshLocalProfileRegistry,
+  parseWebDshLocalProfileRecord,
+  type WebDshLocalProfileRecord, type WebDshLocalProfileRegistry,
+} from './local-profile-registry.ts'
+export {
+  exportWebDshRecoveryPack, importWebDshRecoveryPack, initializeWebDshLocalProfile,
+  IndexedDbWebDshLocalProfileSnapshotStore, parseWebDshRecoveryPack,
+  type ExportWebDshRecoveryPackOptions, type ImportedWebDshLocalProfile,
+  type ImportWebDshRecoveryPackOptions, type InitializeWebDshLocalProfileOptions,
+  type WebDshLocalProfileSnapshot,
+  type WebDshLocalProfileSnapshotStore, type WebDshRecoveryPack,
+} from './local-profile-transfer.ts'
+export {
+  enrollWebDshLocalProfile,
+  parseWebDshPasskeyEnvelope, parseWebDshRecoveryEnvelope,
+  unlockWebDshPasskeyProfile, unlockWebDshRecoveryProfile,
+  type WebDshPasskeyDependencies, type WebDshPasskeyEnvelope,
+  type WebDshLocalProfileEnrollment, type WebDshPasskeyLabels, type WebDshRecoveryEnvelope,
 } from './passkey-profile.ts'
 export { IMAGE_FILE_NAME } from '../image-layout.ts'
 export {
