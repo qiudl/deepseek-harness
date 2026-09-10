@@ -15,9 +15,11 @@ import {
   eventLines,
   generationLogFilename,
   logPath,
+  parseGenerationLogFilename,
   sessionInheritedEventCount,
   toHeaderLine,
 } from './format.ts'
+import { LEASE_FILENAME } from './lease.ts'
 
 const HEX_256 = /^[a-f0-9]{64}$/u
 const OPAQUE_ID = /^[a-f0-9]{32,64}$/u
@@ -236,14 +238,25 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
       for (const session of await readdir(projectPath, { withFileTypes: true })) {
         if (!session.isDirectory() || session.isSymbolicLink()) throw new Error('migration_generation_unsafe')
         const sessionPath = join(projectPath, session.name)
-        const files = (await readdir(sessionPath)).sort()
-        if (files.length === 0 && session.name === 'preset-user-default') continue
-        const current = generationLogFilename(SESSION_FORMAT_VERSION, 'none')
-        const allowed = [
-          ['session.jsonl'], ['session.jsonl.zstd'], [current],
-          ['migration-records.json', 'session.jsonl'], ['migration-records.json', current],
-        ].some(shape => JSON.stringify(files) === JSON.stringify(shape))
-        if (!allowed) throw new Error('migration_generation_unsafe')
+        const directoryFiles = (await readdir(sessionPath)).sort()
+        if (directoryFiles.length === 0 && session.name === 'preset-user-default') continue
+        const files = directoryFiles.filter(name => name !== LEASE_FILENAME)
+        const ordinaryGenerations = files.filter(name => parseGenerationLogFilename(name, 'none') !== undefined)
+        const legacyZstd = files.filter(name => parseGenerationLogFilename(name, 'zstd') !== undefined)
+        const metadata = files.filter(name => name === 'migration-records.json')
+        const recognized = ordinaryGenerations.length + legacyZstd.length + metadata.length
+        if (recognized !== files.length || ordinaryGenerations.length + legacyZstd.length < 1
+          || (ordinaryGenerations.length > 0 && legacyZstd.length > 0)
+          || (legacyZstd.length > 0 && JSON.stringify(legacyZstd) !== JSON.stringify(['session.jsonl.zstd']))) {
+          throw new Error('migration_generation_unsafe')
+        }
+        if (directoryFiles.includes(LEASE_FILENAME)) {
+          const lock = await lstat(join(sessionPath, LEASE_FILENAME), { bigint: true })
+          if (!lock.isFile() || lock.isSymbolicLink() || lock.uid !== BigInt(this.expectedUid)
+            || (lock.mode & 0o022n) !== 0n || lock.nlink !== 1n || lock.size !== 0n) {
+            throw new Error('migration_generation_unsafe')
+          }
+        }
         const sizes: string[] = []
         for (const name of files) {
           const metadata = await lstat(join(sessionPath, name), { bigint: true })
