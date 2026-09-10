@@ -167,7 +167,33 @@ export class ProfileRegistry {
         && candidate.handle === binding.handle),
     )
     if (bindingOwner !== undefined && bindingOwner.personIndex !== index) {
-      throw new HostAuthorityError('profile_mismatch')
+      if (existing !== undefined || bindingOwner.kind !== 'account'
+        || bindingOwner.keyHandle !== handle(input.keyHandle)) {
+        throw new HostAuthorityError('profile_mismatch')
+      }
+      if (binding === undefined) throw new HostAuthorityError('invalid_input')
+      const current = bindingOwner.accountBindings?.find(candidate =>
+        candidate.authorityEnvironmentId === binding.authorityEnvironmentId
+          && candidate.handle === binding.handle)
+      if (current === undefined || binding.authorityBindingVersion <= current.authorityBindingVersion) {
+        throw new HostAuthorityError('stale')
+      }
+      const verifier = this.unlockVerifier(bindingOwner.profileId, bindingOwner.keyHandle, material)
+      if (bindingOwner.unlockVerifier === null
+        || !timingSafeEqual(Buffer.from(bindingOwner.unlockVerifier, 'hex'), Buffer.from(verifier, 'hex'))) {
+        throw new HostAuthorityError('unauthorized')
+      }
+      const migrated = {
+        ...bindingOwner,
+        personIndex: index,
+        accountBindings: [...bindingOwner.accountBindings?.filter(candidate =>
+          candidate.authorityEnvironmentId !== binding.authorityEnvironmentId) ?? [], binding],
+        bindingGeneration: bindingOwner.bindingGeneration + 1,
+      }
+      const next = this.profiles.map(profile => profile.profileId === bindingOwner.profileId ? migrated : profile)
+      this.save(next)
+      this.profiles = next
+      return migrated
     }
     if (existing) {
       if (existing.kind !== 'account') throw new HostAuthorityError('profile_mismatch')
