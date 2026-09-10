@@ -1,14 +1,15 @@
 /** Encrypted, environment-scoped persistence for the browser Worker VFS. */
 import { DEFAULT_ROOT, IMAGE_OVERLAY_DIRECTORIES } from '../image-layout.ts'
 import { join, normalize } from '../module-system/posix-path.ts'
+import {
+  openWebDshDatabase,
+  WEB_DSH_ENTRY_NAMESPACE_INDEX,
+  WEB_DSH_ENTRY_STORE,
+  WEB_DSH_VFS_PROFILE_STORE,
+} from './indexeddb-schema.ts'
 import type { MemoryVfs } from './memory.ts'
 import type { VfsMutation, VfsMutationSink } from './types.ts'
 
-const DATABASE_NAME = 'dsh-web-local-vfs'
-const DATABASE_VERSION = 1
-const PROFILE_STORE = 'profiles'
-const ENTRY_STORE = 'entries'
-const ENTRY_NAMESPACE_INDEX = 'namespace'
 const ENTRY_VERSION = 1 as const
 const IDENTIFIER = /^[a-z0-9][a-z0-9_-]{0,63}$/u
 const PROFILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
@@ -165,6 +166,21 @@ function validateEntry(value: unknown, namespace: string): asserts value is Stor
   }
 }
 
+/**
+ * Parse an untrusted durable VFS entry for one exact environment/profile namespace.
+ * @param value - IndexedDB or imported entry value.
+ * @param namespace - Independently selected environment/profile namespace.
+ * @returns The validated entry, or `null` for malformed or cross-profile data.
+ */
+export function parseStoredVfsEntry(value: unknown, namespace: string): StoredVfsEntry | null {
+  try {
+    validateEntry(value, namespace)
+    return value
+  } catch {
+    return null
+  }
+}
+
 function cloneMutation(mutation: VfsMutation): VfsMutation {
   return mutation.kind === 'write' || mutation.kind === 'chmod' && mutation.entryKind === 'file'
     ? { ...mutation, bytes: mutation.bytes.slice() }
@@ -193,12 +209,36 @@ function validateProfile(value: unknown, namespace: string): asserts value is St
     || profile.namespace !== namespace || !Number.isSafeInteger(profile.createdAt)
     || (profile.createdAt as number) < 0
     || !(profile.keyCheckIv instanceof Uint8Array) || profile.keyCheckIv.byteLength !== 12
-    || !(profile.keyCheckCiphertext instanceof ArrayBuffer) || profile.keyCheckCiphertext.byteLength < 16) {
+    || !(profile.keyCheckCiphertext instanceof ArrayBuffer)
+    || profile.keyCheckCiphertext.byteLength !== KEY_CHECK_PLAINTEXT.byteLength + 16) {
     throw new Error('WEB_DSH_PROFILE_CORRUPT')
   }
 }
 
-async function createProfileEnvelope(
+/**
+ * Parse an untrusted durable VFS key-check record for one exact profile namespace.
+ * @param value - IndexedDB or imported profile value.
+ * @param namespace - Independently selected environment/profile namespace.
+ * @returns The validated key-check record, or `null` for malformed or cross-profile data.
+ */
+export function parseStoredVfsProfile(value: unknown, namespace: string): StoredVfsProfile | null {
+  try {
+    validateProfile(value, namespace)
+    return value
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Create the authenticated VFS key-check record for a new profile.
+ * @param namespace - Exact environment/profile storage namespace.
+ * @param key - New non-extractable AES-GCM data key.
+ * @param crypto - Web Crypto implementation.
+ * @param createdAt - Stable profile creation timestamp.
+ * @returns Durable key-check metadata that contains no unwrapped key.
+ */
+export async function createStoredVfsProfile(
   namespace: string,
   key: CryptoKey,
   crypto: Crypto,
@@ -213,7 +253,14 @@ async function createProfileEnvelope(
   return { namespace, createdAt, keyCheckIv, keyCheckCiphertext }
 }
 
-async function profileAcceptsKey(
+/**
+ * Authenticate a profile key against its durable key-check record.
+ * @param profile - Strict profile key-check record.
+ * @param key - Candidate non-extractable AES-GCM data key.
+ * @param crypto - Web Crypto implementation.
+ * @returns Whether the candidate key authenticates the exact profile namespace.
+ */
+export async function storedVfsProfileAcceptsKey(
   profile: StoredVfsProfile,
   key: CryptoKey,
   crypto: Crypto,
@@ -429,11 +476,11 @@ export async function openEncryptedWebVfsProfile(
   }
   try {
     const backend = options.backend ?? new IndexedDbVfsProfileBackend()
-    const profile = await backend.getOrCreateProfile(await createProfileEnvelope(
+    const profile = await backend.getOrCreateProfile(await createStoredVfsProfile(
       namespace, options.encryptionKey, crypto, (options.now ?? Date.now)(),
     ))
     validateProfile(profile, namespace)
-    if (!await profileAcceptsKey(profile, options.encryptionKey, crypto)) {
+    if (!await storedVfsProfileAcceptsKey(profile, options.encryptionKey, crypto)) {
       await lease.release()
       return { kind: 'blocked', reasonCode: 'WEB_DSH_PROFILE_LOCKED' }
     }
@@ -491,38 +538,6 @@ async function acquireExclusiveProfileLease(
   }
 }
 
-function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION)
-    request.onupgradeneeded = () => {
-      const database = request.result
-      if (!database.objectStoreNames.contains(PROFILE_STORE)) {
-        database.createObjectStore(PROFILE_STORE, { keyPath: 'namespace' })
-      }
-      if (!database.objectStoreNames.contains(ENTRY_STORE)) {
-        database.createObjectStore(ENTRY_STORE, { keyPath: 'id' })
-          .createIndex(ENTRY_NAMESPACE_INDEX, 'namespace', { unique: false })
-      }
-    }
-    request.onsuccess = () => {
-      if (settled) { request.result.close(); return }
-      settled = true
-      resolve(request.result)
-    }
-    request.onerror = () => {
-      if (settled) return
-      settled = true
-      reject(request.error ?? new Error('web VFS: IndexedDB open failed'))
-    }
-    request.onblocked = () => {
-      if (settled) return
-      settled = true
-      reject(new Error('web VFS: IndexedDB upgrade blocked'))
-    }
-  })
-}
-
 function settleTransaction<T>(
   database: IDBDatabase,
   transaction: IDBTransaction,
@@ -548,9 +563,9 @@ function settleTransaction<T>(
 /** IndexedDB backend used inside the dedicated Host Worker. */
 export class IndexedDbVfsProfileBackend implements VfsProfileBackend {
   async getOrCreateProfile(candidate: StoredVfsProfile): Promise<StoredVfsProfile> {
-    const database = await openDatabase()
-    const transaction = database.transaction(PROFILE_STORE, 'readwrite')
-    const store = transaction.objectStore(PROFILE_STORE)
+    const database = await openWebDshDatabase()
+    const transaction = database.transaction(WEB_DSH_VFS_PROFILE_STORE, 'readwrite')
+    const store = transaction.objectStore(WEB_DSH_VFS_PROFILE_STORE)
     return await settleTransaction(database, transaction, (finish, reject) => {
       const request = store.get(candidate.namespace)
       request.onsuccess = () => {
@@ -565,20 +580,21 @@ export class IndexedDbVfsProfileBackend implements VfsProfileBackend {
   }
 
   async listEntries(namespace: string): Promise<readonly StoredVfsEntry[]> {
-    const database = await openDatabase()
-    const transaction = database.transaction(ENTRY_STORE, 'readonly')
+    const database = await openWebDshDatabase()
+    const transaction = database.transaction(WEB_DSH_ENTRY_STORE, 'readonly')
     return await settleTransaction(database, transaction, (finish, reject) => {
-      const request = transaction.objectStore(ENTRY_STORE).index(ENTRY_NAMESPACE_INDEX).getAll(namespace)
+      const request = transaction.objectStore(WEB_DSH_ENTRY_STORE)
+        .index(WEB_DSH_ENTRY_NAMESPACE_INDEX).getAll(namespace)
       request.onsuccess = () => { finish(request.result as StoredVfsEntry[]) }
       request.onerror = () => { reject(request.error) }
     })
   }
 
   async getEntry(namespace: string, path: string): Promise<StoredVfsEntry | null> {
-    const database = await openDatabase()
-    const transaction = database.transaction(ENTRY_STORE, 'readonly')
+    const database = await openWebDshDatabase()
+    const transaction = database.transaction(WEB_DSH_ENTRY_STORE, 'readonly')
     return await settleTransaction(database, transaction, (finish, reject) => {
-      const request = transaction.objectStore(ENTRY_STORE).get(entryId(namespace, path))
+      const request = transaction.objectStore(WEB_DSH_ENTRY_STORE).get(entryId(namespace, path))
       request.onsuccess = () => { finish((request.result as StoredVfsEntry | undefined) ?? null) }
       request.onerror = () => { reject(request.error) }
     })
@@ -586,10 +602,10 @@ export class IndexedDbVfsProfileBackend implements VfsProfileBackend {
 
   async putEntries(entries: readonly StoredVfsEntry[]): Promise<void> {
     if (entries.length === 0) return
-    const database = await openDatabase()
-    const transaction = database.transaction(ENTRY_STORE, 'readwrite')
+    const database = await openWebDshDatabase()
+    const transaction = database.transaction(WEB_DSH_ENTRY_STORE, 'readwrite')
     await settleTransaction(database, transaction, (finish, reject) => {
-      const store = transaction.objectStore(ENTRY_STORE)
+      const store = transaction.objectStore(WEB_DSH_ENTRY_STORE)
       let remaining = entries.length
       for (const entry of entries) {
         const request = store.put(entry)
@@ -603,11 +619,11 @@ export class IndexedDbVfsProfileBackend implements VfsProfileBackend {
   }
 
   async removeSubtree(namespace: string, path: string): Promise<void> {
-    const database = await openDatabase()
-    const transaction = database.transaction(ENTRY_STORE, 'readwrite')
-    const store = transaction.objectStore(ENTRY_STORE)
+    const database = await openWebDshDatabase()
+    const transaction = database.transaction(WEB_DSH_ENTRY_STORE, 'readwrite')
+    const store = transaction.objectStore(WEB_DSH_ENTRY_STORE)
     await settleTransaction(database, transaction, (finish, reject) => {
-      const request = store.index(ENTRY_NAMESPACE_INDEX).getAll(namespace)
+      const request = store.index(WEB_DSH_ENTRY_NAMESPACE_INDEX).getAll(namespace)
       request.onsuccess = () => {
         const prefix = `${path}/`
         for (const entry of request.result as StoredVfsEntry[]) {

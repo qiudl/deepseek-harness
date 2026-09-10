@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-10-encrypted-webworker-local-profiles.md
-2026-09-10-encrypted-webworker-local-profiles.md: 073f3d734dece11c389869feeba5fd41812ec93b
-2026-09-10-encrypted-webworker-local-profiles.zh.md: 21c906eb39b65c83602278cf819de8c4f01dbdc4
+2026-09-10-encrypted-webworker-local-profiles.md: eec9ac711a5641c83d194bbbadd6321eea5114bc
+2026-09-10-encrypted-webworker-local-profiles.zh.md: b92dde0e8d248c45d02b4fbe0d0f823f8ec3a7a3
