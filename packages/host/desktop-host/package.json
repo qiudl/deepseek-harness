@@ -42,6 +42,7 @@
     "lib/invariant.js",
     "lib/startup.js",
     "lib/host-control-client.js",
+    "lib/assets/*.node",
     "cordis.patch.yml",
     "lib/types/**/*.d.ts"
   ],
