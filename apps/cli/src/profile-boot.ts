@@ -41,7 +41,7 @@ import { createProcessShutdown, type ProcessShutdown } from './process-shutdown.
 const NAME = 'dsh'
 
 /** Installation-owned authority profiles accept no user-controlled input. */
-const INSTALLATION_OWNED_PROFILES = new Set(['desktop-host'])
+const INSTALLATION_OWNED_PROFILES = new Set(['desktop-host', 'slark-desktop-host'])
 
 /**
  * Reject every user-controlled overlay and app argument on installation-owned

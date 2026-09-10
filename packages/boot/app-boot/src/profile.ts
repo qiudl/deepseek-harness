@@ -127,6 +127,10 @@ export const PROFILE_TEMPLATES: Record<string, ProfileTemplate> = {
     bundles: ['@deepseek-ai/dsh-desktop-host'],
     patchReload: 'startup',
   },
+  'slark-desktop-host': {
+    bundles: ['@deepseek-ai/dsh-slark-desktop-host'],
+    patchReload: 'startup',
+  },
 }
 
 /** Installation-owned bundle tuples normalized to the shipped template. */
