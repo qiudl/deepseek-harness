@@ -7,7 +7,7 @@ import type { SessionInspection, SessionPersistenceSnapshot } from '@deepseek-ai
 import { SessionPersistenceRevision, SessionFormatUnsupportedError } from '@deepseek-ai/dsh-session-persistence'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { parseGenerationLogFilename, scanLog } from './format.ts'
-import { LEASE_FILENAME } from './lease.ts'
+import { LEASE_FILENAME } from './lease-filename.ts'
 import { createZstdFrameDecoder, scanZstdFrames } from './zstd.ts'
 import {
   migrationSourceInventoryDigest,

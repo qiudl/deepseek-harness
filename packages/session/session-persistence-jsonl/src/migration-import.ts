@@ -19,7 +19,7 @@ import {
   sessionInheritedEventCount,
   toHeaderLine,
 } from './format.ts'
-import { LEASE_FILENAME } from './lease.ts'
+import { LEASE_FILENAME } from './lease-filename.ts'
 
 const HEX_256 = /^[a-f0-9]{64}$/u
 const OPAQUE_ID = /^[a-f0-9]{32,64}$/u
