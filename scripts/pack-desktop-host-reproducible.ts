@@ -64,6 +64,10 @@ try {
   const manifest = canonical(JSON.parse(readFileSync(manifestPath, 'utf8'))) as Record<string, unknown>
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
   const files = filesBelow(stagedPackage)
+  const nativeAssets = files.filter(file => /^package\/lib\/assets\/[^/]+\.node$/u.test(file))
+  if (nativeAssets.length === 0) {
+    throw new Error('desktop-host pack is missing its native runtime assets')
+  }
   for (const file of files) utimesSync(join(extracted, file), FIXED_TIME, FIXED_TIME)
   const list = join(temporary, 'files.txt')
   writeFileSync(list, `${files.join('\n')}\n`)
@@ -82,6 +86,7 @@ try {
     sha256: sha256(output),
     startupSha256: sha256(join(stagedPackage, 'lib', 'startup.js')),
     clientSha256: sha256(join(stagedPackage, 'lib', 'host-control-client.js')),
+    nativeAssets,
     files: files.length,
   })}\n`)
 } finally {
