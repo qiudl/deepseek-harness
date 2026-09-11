@@ -69,8 +69,17 @@ function jsonValue(value: unknown, seen = new Set<object>()): void {
 
 function credentials(value: unknown): { refs: Record<string, string>; records: Record<string, unknown> } {
   const root = map(value)
-  if (Object.keys(root).length === 0) return { refs: {}, records: {} }
-  if (root.version !== 1 || Object.keys(root).some(key => !['version', 'refs', 'records'].includes(key))) {
+  const keys = Object.keys(root)
+  if (keys.length === 0) return { refs: {}, records: {} }
+  const versionedKeys = ['version', 'refs', 'records']
+  if (!keys.some(key => versionedKeys.includes(key))) {
+    if (Object.entries(root).some(([key, entry]) => !REF.test(key)
+      || typeof entry !== 'string' || entry.length === 0)) {
+      throw new Error('legacy_migration_source_schema_unsupported')
+    }
+    return { refs: root as Record<string, string>, records: {} }
+  }
+  if (root.version !== 1 || keys.some(key => !versionedKeys.includes(key))) {
     throw new Error('legacy_migration_source_schema_unsupported')
   }
   const refs = map(root.refs ?? {})

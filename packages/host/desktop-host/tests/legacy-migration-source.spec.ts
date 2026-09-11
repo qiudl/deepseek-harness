@@ -59,6 +59,49 @@ async function fixture(): Promise<{ home: string; source: string }> {
 }
 
 describe('fixed owner legacy migration source', () => {
+  it('imports released flat environment credentials without rewriting the source', async () => {
+    const { home, source } = await fixture()
+    const path = join(source, '.credentials.yaml')
+    await writeFile(path, JSON.stringify({ DEEPSEEK_API_KEY: 'legacy-secret' }), { mode: 0o600 })
+    const before = createHash('sha256').update(await readFile(path)).digest('hex')
+    let transferred = ''
+    const service = createLegacyMigrationExportService({
+      expectedUid: uid,
+      _testOwnerHome: home,
+      assertSourceQuiescent: async () => undefined,
+      stageOwnerTransfer: async (bundle) => {
+        transferred = JSON.stringify(bundle)
+        return { transferId: 'a'.repeat(48), transferDigest: 'b'.repeat(64) }
+      },
+    })
+
+    const proof = await service.inventory()
+    await service.begin({
+      expectedInventoryDigest: proof.inventoryDigest,
+      maxRecords: proof.requiredMaxRecords,
+      maxBytes: proof.requiredMaxBytes,
+    })
+
+    expect(transferred).toContain('"refs":{"DEEPSEEK_API_KEY":"legacy-secret"}')
+    expect(transferred).toContain('"records":{}')
+    expect(createHash('sha256').update(await readFile(path)).digest('hex')).toBe(before)
+  })
+
+  it('rejects mixed flat and versioned credential schemas', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, '.credentials.yaml'), JSON.stringify({
+      version: 1, refs: {}, records: {}, DEEPSEEK_API_KEY: 'legacy-secret',
+    }), { mode: 0o600 })
+    const service = createLegacyMigrationExportService({
+      expectedUid: uid,
+      _testOwnerHome: home,
+      assertSourceQuiescent: async () => undefined,
+      stageOwnerTransfer: async () => { throw new Error('unexpected_transfer') },
+    })
+
+    await expect(service.inventory()).rejects.toThrow(/schema_unsupported/u)
+  })
+
   it('exports ordinary JSONL and four owner documents without writing the source', async () => {
     const { home, source } = await fixture()
     const before = createHash('sha256').update(await readFile(join(source, '.credentials.yaml'))).digest('hex')
