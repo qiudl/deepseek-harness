@@ -37,3 +37,40 @@ it('confirms deactivation only when the exact disabled row has no running fiber'
     await expect(waitForPluginRuntime(worker, [], AbortSignal.timeout(30), [], expected)).rejects.toThrow()
   }
 })
+
+it.each([null, 42, {}, { type: 'client-request' }, { type: 'server-response', rpcId: 'wrong', result: { ok: true, value: { entries: [] } } }])('rejects malformed inventory envelopes: %#', async (value) => {
+  vi.stubGlobal('fetch', async () => Response.json(value))
+  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('invalid_runtime_response')
+})
+
+it.each([401, 204])('refuses HTTP %s without acknowledging startup', async (status) => {
+  vi.stubGlobal('fetch', async () => new Response(null, { status }))
+  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('runtime_unavailable')
+})
+
+it('cancels an error response body and rejects excessive response bytes', async () => {
+  const cancel = vi.fn()
+  vi.stubGlobal('fetch', async () => new Response(new ReadableStream({ cancel }), { status: 503 }))
+  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('runtime_unavailable')
+  expect(cancel).toHaveBeenCalledOnce()
+  vi.stubGlobal('fetch', async () => new Response('x'.repeat(524_289)))
+  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('runtime_response_too_large')
+})
+
+it('rejects duplicate disabled identities instead of confirming deactivation', async () => {
+  const row = { ...expected[0], enabled: false, fiberPhase: null }
+  response([row, row])
+  await expect(waitForPluginRuntime(worker, [], new AbortController().signal, [], expected)).rejects.toThrow('invalid_runtime_response')
+})
+
+it('waits for actual disappearance of removed entries while ignoring unrelated metadata', async () => {
+  const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+    const { rpcId } = JSON.parse(String(init.body)) as { rpcId: string }
+    return Response.json({ type: 'server-response', rpcId, result: { ok: true, value: {
+      entries: fetcher.mock.calls.length === 1 ? [null, 42, { entryId: 'other' }, { entryId: 'removed' }] : [null, 42, { entryId: 'other' }],
+    } } })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  await expect(waitForPluginRuntime(worker, [], new AbortController().signal, ['removed'])).resolves.toBeUndefined()
+  expect(fetcher).toHaveBeenCalledTimes(2)
+})
