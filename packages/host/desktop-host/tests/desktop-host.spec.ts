@@ -2,6 +2,7 @@ import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createConnection } from 'node:net'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import {
   ApprovalAuthority,
@@ -20,6 +21,8 @@ import {
   discoverUnixHost,
   personIndex,
 } from '../src/index.ts'
+import { discoverWindowsHost } from '../src/client.ts'
+import { windowsNamedPipePath } from '../src/windows-named-pipe-policy.ts'
 
 const dir = (): string => mkdtempSync(join(tmpdir(), 'dsh-desktop-host-'))
 const clock = { now: () => 1_000 }
@@ -744,6 +747,90 @@ describe('authenticated Unix transport', () => {
     expect(await discoverUnixHost(base)).toEqual({ state: 'stopped', code: 'trusted_host_not_running' })
     symlinkSync(join(root, 'target'), base.socketPath)
     expect(await discoverUnixHost(base)).toEqual({ state: 'unknown', code: 'host_unverified' })
+  })
+
+  it('discovers a Windows named-pipe Host through the same signed challenge protocol', async () => {
+    const { server, socketPath } = await fixture()
+    const endpointRegistrationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180'
+    const pipePath = windowsNamedPipePath({
+      installationId: identity.installationId,
+      endpointRegistrationId,
+    })
+    const result = await discoverWindowsHost({
+      platform: 'win32',
+      arch: 'x64',
+      socketPath: pipePath,
+      trustedEndpoint: true,
+      endpointRegistrationId,
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      now: clock.now,
+      connectSocket: () => createConnection(socketPath),
+    })
+    expect(result.state).toBe('running')
+    if (result.state === 'running') {
+      expect(result.inspection.installation_id).toBe(identity.installationId)
+      result.client.close()
+    }
+    await server.close()
+  })
+
+  it('fails closed before connecting when a Windows registration names the wrong pipe', async () => {
+    let connections = 0
+    const result = await discoverWindowsHost({
+      platform: 'win32',
+      arch: 'x64',
+      socketPath: String.raw`\\.\pipe\slark-dsh-host-v1-${'0'.repeat(64)}`,
+      trustedEndpoint: true,
+      endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180',
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      connectSocket: () => {
+        connections += 1
+        return createConnection(join(dir(), 'must-not-connect.sock'))
+      },
+    })
+    expect(result).toEqual({ state: 'unknown', code: 'host_unverified' })
+    expect(connections).toBe(0)
+  })
+
+  it('distinguishes a missing trusted Windows pipe from a failed signed challenge', async () => {
+    const endpointRegistrationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180'
+    const pipePath = windowsNamedPipePath({
+      installationId: identity.installationId,
+      endpointRegistrationId,
+    })
+    const base = {
+      platform: 'win32',
+      arch: 'x64',
+      socketPath: pipePath,
+      trustedEndpoint: true as const,
+      endpointRegistrationId,
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      now: clock.now,
+    }
+    expect(
+      await discoverWindowsHost({
+        ...base,
+        connectSocket: () => createConnection(join(dir(), 'missing.sock')),
+      }),
+    ).toEqual({ state: 'stopped', code: 'trusted_host_not_running' })
+
+    const { server, socketPath } = await fixture()
+    const otherKey = generateKeyPairSync('ed25519').publicKey
+      .export({ format: 'der', type: 'spki' }) as Buffer
+    expect(
+      await discoverWindowsHost({
+        ...base,
+        trustedInstallationPublicKey: otherKey.subarray(-32).toString('base64url'),
+        connectSocket: () => createConnection(socketPath),
+      }),
+    ).toEqual({ state: 'unknown', code: 'host_unverified' })
+    await server.close()
   })
 
   it('fences replay, expiry, and a restarted Host process nonce', () => {

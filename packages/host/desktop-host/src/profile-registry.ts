@@ -6,9 +6,12 @@ import { HostAuthorityError } from './types.ts'
 
 interface ProfileRegistryOptions {
   readonly root: string
+  readonly snapshotPath?: string
   readonly deviceIndexKey: Uint8Array
   readonly clock: HostClock
   readonly keyHandleUnlocked?: (keyHandle: string) => boolean
+  readonly prepareRoot?: (root: string) => void
+  readonly loadSnapshot?: (path: string) => unknown
   readonly persistSnapshot?: (path: string, root: string, snapshot: RegistryFile) => void
 }
 
@@ -121,12 +124,15 @@ export class ProfileRegistry {
 
   constructor(private readonly options: ProfileRegistryOptions) {
     if (options.deviceIndexKey.byteLength !== 32) throw new HostAuthorityError('invalid_input')
-    mkdirSync(options.root, { recursive: true, mode: 0o700 })
-    const root = lstatSync(options.root)
-    if (!root.isDirectory() || root.isSymbolicLink() || root.uid !== (process.getuid?.() ?? root.uid) || (root.mode & 0o077) !== 0) {
-      throw new HostAuthorityError('unavailable')
+    if (options.prepareRoot) options.prepareRoot(options.root)
+    else {
+      mkdirSync(options.root, { recursive: true, mode: 0o700 })
+      const root = lstatSync(options.root)
+      if (!root.isDirectory() || root.isSymbolicLink() || root.uid !== (process.getuid?.() ?? root.uid) || (root.mode & 0o077) !== 0) {
+        throw new HostAuthorityError('unavailable')
+      }
     }
-    this.path = join(options.root, 'profiles.json')
+    this.path = options.snapshotPath ?? join(options.root, 'profiles.json')
     this.profiles = this.load()
   }
 
@@ -469,6 +475,15 @@ export class ProfileRegistry {
   }
 
   private load(): PersonProfileRecord[] {
+    if (this.options.loadSnapshot) {
+      try {
+        const parsed = this.options.loadSnapshot(this.path)
+        return parsed === undefined ? [] : this.parseSnapshot(parsed)
+      } catch (error) {
+        if (error instanceof HostAuthorityError) throw error
+        throw new HostAuthorityError('unavailable')
+      }
+    }
     let fd: number
     try { fd = openSync(this.path, constants.O_RDONLY | constants.O_NOFOLLOW) } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
@@ -477,37 +492,40 @@ export class ProfileRegistry {
     try {
       const stat = fstatSync(fd)
       if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== (process.getuid?.() ?? stat.uid) || (stat.mode & 0o077) !== 0) throw new HostAuthorityError('unavailable')
-      const parsed: unknown = JSON.parse(readFileSync(fd, 'utf8'))
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HostAuthorityError('unavailable')
-      const registry = parsed as Record<string, unknown>
-      if (!exact(registry, ['version', 'profiles'])
-        || (registry.version !== 2 && registry.version !== 3) || !Array.isArray(registry.profiles)) {
-        throw new HostAuthorityError('unavailable')
-      }
-      const legacyBindings = registry.version === 2
-      const profiles = registry.profiles.map(profile => parseProfile(profile, legacyBindings))
-      const profileIds = new Set<string>()
-      const indexes = new Set<string>()
-      const bindings = new Set<string>()
-      const environments = new Set<string>()
-      for (const profile of profiles) {
-        if (profileIds.has(profile.profileId) || indexes.has(profile.personIndex)
-          || profile.accountBindings?.some(binding => bindings.has(`${binding.authorityEnvironmentId}\0${binding.handle}`)
-            || environments.has(`${profile.profileId}\0${binding.authorityEnvironmentId}`))) {
-          throw new HostAuthorityError('unavailable')
-        }
-        profileIds.add(profile.profileId); indexes.add(profile.personIndex)
-        for (const binding of profile.accountBindings ?? []) {
-          bindings.add(`${binding.authorityEnvironmentId}\0${binding.handle}`)
-          environments.add(`${profile.profileId}\0${binding.authorityEnvironmentId}`)
-        }
-      }
-      if (legacyBindings) this.save(profiles)
-      return profiles
+      return this.parseSnapshot(JSON.parse(readFileSync(fd, 'utf8')))
     } catch (error) {
       if (error instanceof HostAuthorityError) throw error
       throw new HostAuthorityError('unavailable')
     } finally { closeSync(fd) }
+  }
+
+  private parseSnapshot(parsed: unknown): PersonProfileRecord[] {
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HostAuthorityError('unavailable')
+    const registry = parsed as Record<string, unknown>
+    if (!exact(registry, ['version', 'profiles'])
+      || (registry.version !== 2 && registry.version !== 3) || !Array.isArray(registry.profiles)) {
+      throw new HostAuthorityError('unavailable')
+    }
+    const legacyBindings = registry.version === 2
+    const profiles = registry.profiles.map(profile => parseProfile(profile, legacyBindings))
+    const profileIds = new Set<string>()
+    const indexes = new Set<string>()
+    const bindings = new Set<string>()
+    const environments = new Set<string>()
+    for (const profile of profiles) {
+      if (profileIds.has(profile.profileId) || indexes.has(profile.personIndex)
+        || profile.accountBindings?.some(binding => bindings.has(`${binding.authorityEnvironmentId}\0${binding.handle}`)
+          || environments.has(`${profile.profileId}\0${binding.authorityEnvironmentId}`))) {
+        throw new HostAuthorityError('unavailable')
+      }
+      profileIds.add(profile.profileId); indexes.add(profile.personIndex)
+      for (const binding of profile.accountBindings ?? []) {
+        bindings.add(`${binding.authorityEnvironmentId}\0${binding.handle}`)
+        environments.add(`${profile.profileId}\0${binding.authorityEnvironmentId}`)
+      }
+    }
+    if (legacyBindings) this.save(profiles)
+    return profiles
   }
 
   private save(profiles: readonly PersonProfileRecord[]): void {

@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { ProfileRegistry, personIndex } from '../src/index.ts'
 
 const key = Buffer.alloc(32, 7)
@@ -19,6 +19,31 @@ function fixture() {
 }
 
 describe('registry authority validation', () => {
+  it('supports one external stable-file authority without touching POSIX metadata', async () => {
+    let snapshot: unknown
+    const prepareRoot = vi.fn()
+    const loadSnapshot = vi.fn(() => snapshot)
+    const persistSnapshot = vi.fn((_path: string, _root: string, value: unknown) => { snapshot = value })
+    const options = {
+      root: '/dev/null/windows-registry',
+      deviceIndexKey: key,
+      clock,
+      prepareRoot,
+      loadSnapshot,
+      persistSnapshot,
+    }
+    const first = new ProfileRegistry(options)
+    const profile = await first.createLocalAnonymous({
+      keyHandle: 'windows-credential:local',
+      unlockMaterial: Buffer.alloc(32, 8).toString('base64url'),
+    })
+    const restarted = new ProfileRegistry(options)
+    expect(restarted.resolveProfile(profile.profileId)).toEqual(profile)
+    expect(prepareRoot).toHaveBeenCalledTimes(2)
+    expect(loadSnapshot).toHaveBeenCalledTimes(2)
+    expect(persistSnapshot).toHaveBeenCalledOnce()
+  })
+
   it.each(['', 'x'.repeat(513)])('rejects invalid subject length %s', (subject) => {
     expect(() => personIndex(key, { ...base, subject })).toThrow(/invalid_input/)
   })

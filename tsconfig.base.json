@@ -252,6 +252,15 @@
       // session-log-export lives under session-query/, so the generated aliases map only its
       // bare name; the browser half needs this explicit subpath for source-mode dynamic imports.
       "@deepseek-ai/dsh-session-log-export/client": ["./packages/session-query/session-log-export/src/client"],
+      "@deepseek-ai/dsh-session-persistence-jsonl/src/*": ["./packages/session/session-persistence-jsonl/src/*"],
+      // Host package names differ from their directories, so these aliases are hand-written.
+      "@deepseek-ai/dsh-host-control-protocol": ["./packages/host/control-protocol/src"],
+      "@deepseek-ai/dsh-host-control-protocol/*": ["./packages/host/control-protocol/src/*"],
+      "@deepseek-ai/dsh-host-control-protocol/src/*": ["./packages/host/control-protocol/src/*"],
+      "@deepseek-ai/dsh-slark-desktop-host": ["./packages/host/desktop-host/src"],
+      "@deepseek-ai/dsh-slark-desktop-host/client": ["./packages/host/desktop-host/src/client.ts"],
+      "@deepseek-ai/dsh-slark-desktop-host/invariant": ["./packages/host/desktop-host/src/invariant.ts"],
+      "@deepseek-ai/dsh-slark-desktop-host/startup": ["./packages/host/desktop-host/src/startup.ts"],
       // BEGIN generated package aliases — pnpm run gen-tsconfig-paths
       "@deepseek-ai/dsh-acp": ["./packages/acp/acp/src"],
       "@deepseek-ai/dsh-acp-app": ["./packages/bundle/acp-app/src"],
@@ -291,15 +300,7 @@
       "@deepseek-ai/dsh-credentials/invariant": ["./packages/credentials/credentials/src/invariant.ts"],
       "@deepseek-ai/dsh-credentials-local": ["./packages/credentials/credentials-local/src"],
       "@deepseek-ai/dsh-deepseek-llm-api-extensions": ["./packages/llm/deepseek-llm-api-extensions/src"],
-            "@deepseek-ai/dsh-host-control-protocol": ["./packages/host/control-protocol/src"],
-      "@deepseek-ai/dsh-host-control-protocol/*": ["./packages/host/control-protocol/src/*"],      "@deepseek-ai/dsh-host-control-protocol/src/*": ["./packages/host/control-protocol/src/*"],
-      "@deepseek-ai/dsh-slark-desktop-host": ["./packages/host/desktop-host/src"],
-      "@deepseek-ai/dsh-slark-desktop-host/client": ["./packages/host/desktop-host/src/client.ts"],
-      "@deepseek-ai/dsh-slark-desktop-host/invariant": ["./packages/host/desktop-host/src/invariant.ts"],
-      "@deepseek-ai/dsh-slark-desktop-host/startup": ["./packages/host/desktop-host/src/startup.ts"],
-
-
-"@deepseek-ai/dsh-deque": ["./packages/util/deque/src"],
+      "@deepseek-ai/dsh-deque": ["./packages/util/deque/src"],
       "@deepseek-ai/dsh-e2b": ["./packages/e2b/e2b/src"],
       "@deepseek-ai/dsh-file-reference": ["./packages/context/file-reference/src"],
       "@deepseek-ai/dsh-file-reference-local": ["./packages/context/file-reference-local/src"],
@@ -371,7 +372,7 @@
       "@deepseek-ai/dsh-session-log-export": ["./packages/session-query/session-log-export/src"],
       "@deepseek-ai/dsh-session-persistence": ["./packages/session/session-persistence/src"],
       "@deepseek-ai/dsh-session-persistence-jsonl": ["./packages/session/session-persistence-jsonl/src"],
-      "@deepseek-ai/dsh-session-persistence-jsonl/src/*": ["./packages/session/session-persistence-jsonl/src/*"],
+      "@deepseek-ai/dsh-session-persistence-jsonl/invariant": ["./packages/session/session-persistence-jsonl/src/invariant.ts"],
       "@deepseek-ai/dsh-session-projection": ["./packages/session/session-projection/src"],
       "@deepseek-ai/dsh-session-projection-cache": ["./packages/session/session-projection-cache/src"],
       "@deepseek-ai/dsh-session-query": ["./packages/session-query/session-query/src"],

@@ -15,7 +15,6 @@ import type {
   HostControlSignature,
   HostInspectRequest,
   HostInspectResult,
-  HostAuthorizedParams,
   HostInstanceId,
   InstallationId,
   ProfileLeaseCloseRequest,
@@ -57,6 +56,7 @@ import type {
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import type { DesktopHost } from './desktop-host.ts'
+import { HostControlServerSession } from './host-control-session.ts'
 import type { SingleHostLock } from './single-instance.ts'
 
 /** Native peer evidence supplied by the embedding Desktop/Host process. */
@@ -199,6 +199,13 @@ interface MigrationExportChunk {
   readonly final: boolean
 }
 
+/** Transport-independent Host account, Profile, and migration authority inputs. */
+export type HostControlAuthorityOptions = Pick<
+  UnixHostServerOptions,
+  'identity' | 'host' | 'createMigrationExport' | 'createLegacyMigrationExport'
+    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now'
+>
+
 /** Client trust roots and native Host process attestation. */
 export interface UnixHostClientOptions {
   readonly socketPath: string
@@ -215,12 +222,6 @@ export type UnixHostDiscovery =
   | { readonly state: 'running'; readonly client: UnixHostClient; readonly inspection: HostInspectResult['result'] }
   | { readonly state: 'stopped'; readonly code: 'trusted_host_not_running' }
   | { readonly state: 'unknown'; readonly code: 'host_unverified' | 'transport_unavailable' }
-
-interface HandshakeState {
-  readonly clientInstanceId: HostControlClientInstanceId
-  readonly hostInstanceId: HostInstanceId
-  readonly processNonce: HostControlNonce
-}
 
 const capabilities = [
   'host.inspect',
@@ -421,7 +422,14 @@ function migrationImportCode(error: unknown): HostControlErrorCode {
   return 'internal_error'
 }
 
-class FrameChannel {
+/** Internal request/response transport shared by socket and native Worker carriers. */
+export interface HostClientFrameTransport {
+  call(frame: HostControlFrame, signal?: AbortSignal): Promise<HostControlFrame>
+  isConnected(): boolean
+  close(): void
+}
+
+class FrameChannel implements HostClientFrameTransport {
   private buffer = Buffer.alloc(0)
   private readonly pending = new Map<string, { resolve(frame: HostControlFrame): void; reject(error: Error): void }>()
   private failed: Error | undefined
@@ -437,6 +445,8 @@ class FrameChannel {
 
   /** Whether the authenticated transport is still usable by its owner. */
   isConnected(): boolean { return this.failed === undefined && !this.socket.destroyed }
+
+  close(): void { this.socket.destroy() }
 
   call(frame: HostControlFrame, signal?: AbortSignal): Promise<HostControlFrame> {
     if (this.failed) return Promise.reject(this.failed)
@@ -491,105 +501,12 @@ class FrameChannel {
   }
 }
 
-/** Post-inspection expiry, process-generation, and single-use JTI authority. */
-export class HostRequestAuthorizer {
-  private readonly consumed = new Map<HostControlJti, number>()
-  constructor(private readonly state: HandshakeState, private readonly now: () => number) {}
+/** Shared post-attestation authority used identically by Unix and Windows carriers. */
+export class HostControlAuthority {
+  constructor(private readonly options: HostControlAuthorityOptions) {}
 
-  /**
-   * Consume one request authorization tuple exactly once.
-   * @param params - process-bound request identity, expiry, and JTI.
-   */
-  authorize(params: HostAuthorizedParams): void {
-    const current = this.now()
-    for (const [jti, expiry] of this.consumed) if (expiry <= current) this.consumed.delete(jti)
-    if (params.client_instance_id !== this.state.clientInstanceId || params.host_instance_id !== this.state.hostInstanceId
-      || params.process_nonce !== this.state.processNonce) throw new HostAuthorityError('stale')
-    if (params.issued_at >= params.expires_at || params.issued_at > current + 5_000 || params.issued_at < current - 30_000
-      || params.expires_at <= current || params.expires_at - params.issued_at > 30_000) {
-      throw new HostAuthorityError('stale')
-    }
-    if (this.consumed.has(params.jti)) throw new HostAuthorityError('replayed')
-    this.consumed.set(params.jti, params.expires_at)
-  }
-}
-
-/** Running owner-only UDS server. */
-export class UnixHostServer {
-  private server: Server | undefined
-  private socketIdentity?: { dev: number; ino: number }
-  private readonly connections = new Set<Socket>()
-  constructor(private readonly options: UnixHostServerOptions) {}
-
-  /** Bind the UDS path after refusing link/regular-file substitution. */
-  async start(): Promise<void> {
-    if (this.server) throw new HostAuthorityError('conflict')
-    this.options.ownership.assertOwner()
-    try {
-      const stat = lstatSync(this.options.socketPath)
-      if (!stat.isSocket() || stat.isSymbolicLink() || stat.uid !== this.options.expectedUid) throw new HostAuthorityError('conflict')
-      this.options.ownership.assertOwner()
-      unlinkSync(this.options.socketPath)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-    const server = createServer((socket) => { void this.accept(socket) })
-    this.server = server
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(this.options.socketPath, () => {
-        server.off('error', reject)
-        resolve()
-      })
-    })
-    chmodSync(this.options.socketPath, 0o600)
-    const stat = lstatSync(this.options.socketPath)
-    this.socketIdentity = { dev: stat.dev, ino: stat.ino }
-  }
-
-  /** Close connections and remove only the socket inode this server created. */
-  async close(): Promise<void> {
-    const server = this.server
-    this.server = undefined
-    for (const socket of this.connections) socket.destroy()
-    if (server) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error)
-          else resolve()
-        })
-      })
-    }
-    try {
-      const stat = lstatSync(this.options.socketPath)
-      if (this.socketIdentity && stat.isSocket()
-        && stat.dev === this.socketIdentity.dev && stat.ino === this.socketIdentity.ino) {
-        unlinkSync(this.options.socketPath)
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-  }
-
-  private async accept(socket: Socket): Promise<void> {
-    const ownerId = randomUUID()
-    const lifetime = new AbortController()
-    this.connections.add(socket)
-    socket.once('close', () => {
-      lifetime.abort()
-      this.connections.delete(socket)
-      this.options.host.revokeOwner(ownerId)
-    })
-    socket.pause()
-    try {
-      const peer = await this.options.attestPeer(socket)
-      if (peer.uid !== this.options.expectedUid || !validSha256(peer.executableSignatureDigest)
-        || !this.options.allowedDesktopExecutableDigests.has(peer.executableSignatureDigest)) {
-        throw new HostAuthorityError('unauthorized')
-      }
-    } catch { socket.destroy(); return }
-    let inspected = false
-    let authorizer: HostRequestAuthorizer | undefined
+  /** Open one connection-owned control session after the carrier has authenticated its peer. */
+  openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const migrationExports = new Map<string, MigrationExportService>()
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
@@ -639,27 +556,16 @@ export class UnixHostServer {
       if (!service) throw new HostAuthorityError('unauthorized')
       return { service, selectorHash: migrationProfileSelectorHash(selector) }
     }
-    const channel = new FrameChannel(socket, async (frame) => {
-      if (frame.type !== 'request') { socket.destroy(); return }
-      if (!inspected) {
-        if (frame.method !== 'host.inspect') { socket.destroy(); return }
-        const response = this.inspect(
-          frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
-          this.options.host.supportsOfflineAccountRecovery(),
-        )
-        inspected = true
-        authorizer = new HostRequestAuthorizer({
-          clientInstanceId: frame.params.client_instance_id,
-          hostInstanceId: response.result.host_instance_id,
-          processNonce: response.result.process_nonce,
-        }, this.options.now ?? Date.now)
-        channel.send(response)
-        return
-      }
-      if (frame.method === 'host.inspect') { socket.destroy(); return }
-      if (!authorizer) { socket.destroy(); return }
-      try {
-        authorizer.authorize(frame.params)
+    const session = new HostControlServerSession({
+      ownerId,
+      now: this.options.now ?? Date.now,
+      signal,
+      inspect: frame => this.inspect(
+        frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
+        this.options.host.supportsOfflineAccountRecovery(),
+      ),
+      dispatchAuthorized: async (frame, context, respond) => {
+        const channel = { send: respond }
         if (frame.method === 'migration.existing_source.inventory') {
           try {
             const decoded = verifyProfileSelector(this.options.identity, frame.params.target_profile_selector)
@@ -670,7 +576,7 @@ export class UnixHostServer {
             })
             const service = await this.options.createLegacyMigrationExport?.(ownerId, profileId)
             if (!service) throw new HostAuthorityError('unavailable')
-            const proof = await service.inventory(lifetime.signal)
+            const proof = await service.inventory(context.signal)
             const authority = randomBytes(32).toString('base64url')
             const expiresAt = (this.options.now ?? Date.now)() + 60_000
             legacyAuthorities.set(authority, { profileId, expiresAt, service, exportIds: new Set() })
@@ -690,7 +596,7 @@ export class UnixHostServer {
             const migrationExport = await migrationExportFor(
               frame.params.source_profile_selector, frame.params.source_inventory_authority,
             )
-            const proof = await migrationExport.inventory(lifetime.signal)
+            const proof = await migrationExport.inventory(context.signal)
             channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result: {
               inventory_digest: proof.inventoryDigest as never,
               source_generation: proof.sourceGeneration as never,
@@ -708,7 +614,7 @@ export class UnixHostServer {
               expectedInventoryDigest: frame.params.expected_inventory_digest,
               maxRecords: frame.params.max_records,
               maxBytes: frame.params.max_bytes,
-            }, lifetime.signal)
+            }, context.signal)
             if (frame.params.source_inventory_authority !== undefined) {
               legacyAuthorities.get(frame.params.source_inventory_authority)?.exportIds.add(receipt.exportId)
             }
@@ -1014,9 +920,11 @@ export class UnixHostServer {
           })
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: 'profile.lease_close', result: { closed: true } })
         }
-      } catch (error) { channel.send(safeError(authorityCode(error), frame)) }
+      },
+      errorResponse: (frame, error) => safeError(authorityCode(error), frame),
+      revokeOwner: (connectionOwnerId) => { this.options.host.revokeOwner(connectionOwnerId) },
     })
-    socket.resume()
+    return session
   }
 
   private inspect(
@@ -1067,10 +975,101 @@ export class UnixHostServer {
   }
 }
 
+/** Running owner-only UDS server. */
+export class UnixHostServer {
+  private server: Server | undefined
+  private socketIdentity?: { dev: number; ino: number }
+  private readonly connections = new Set<Socket>()
+  private readonly authority: HostControlAuthority
+  constructor(private readonly options: UnixHostServerOptions) {
+    this.authority = new HostControlAuthority(options)
+  }
+
+  /** Bind the UDS path after refusing link/regular-file substitution. */
+  async start(): Promise<void> {
+    if (this.server) throw new HostAuthorityError('conflict')
+    this.options.ownership.assertOwner()
+    try {
+      const stat = lstatSync(this.options.socketPath)
+      if (!stat.isSocket() || stat.isSymbolicLink() || stat.uid !== this.options.expectedUid) throw new HostAuthorityError('conflict')
+      this.options.ownership.assertOwner()
+      unlinkSync(this.options.socketPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    const server = createServer((socket) => { void this.accept(socket) })
+    this.server = server
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(this.options.socketPath, () => {
+        server.off('error', reject)
+        resolve()
+      })
+    })
+    chmodSync(this.options.socketPath, 0o600)
+    const stat = lstatSync(this.options.socketPath)
+    this.socketIdentity = { dev: stat.dev, ino: stat.ino }
+  }
+
+  /** Close connections and remove only the socket inode this server created. */
+  async close(): Promise<void> {
+    const server = this.server
+    this.server = undefined
+    for (const socket of this.connections) socket.destroy()
+    if (server) {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error)
+          else resolve()
+        })
+      })
+    }
+    try {
+      const stat = lstatSync(this.options.socketPath)
+      if (this.socketIdentity && stat.isSocket()
+        && stat.dev === this.socketIdentity.dev && stat.ino === this.socketIdentity.ino) {
+        unlinkSync(this.options.socketPath)
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+
+  private async accept(socket: Socket): Promise<void> {
+    const ownerId = randomUUID()
+    const transportLifetime = new AbortController()
+    this.connections.add(socket)
+    socket.once('close', () => {
+      transportLifetime.abort()
+      this.connections.delete(socket)
+    })
+    socket.pause()
+    try {
+      const peer = await this.options.attestPeer(socket)
+      if (peer.uid !== this.options.expectedUid || !validSha256(peer.executableSignatureDigest)
+        || !this.options.allowedDesktopExecutableDigests.has(peer.executableSignatureDigest)) {
+        throw new HostAuthorityError('unauthorized')
+      }
+    } catch { socket.destroy(); return }
+    const session = this.authority.openSession(ownerId, transportLifetime.signal)
+    const channel = new FrameChannel(socket, async (frame) => {
+      channel.send(await session.handleRequest(frame))
+    })
+    socket.resume()
+  }
+
+}
+
+interface HandshakeState {
+  readonly clientInstanceId: HostControlClientInstanceId
+  readonly hostInstanceId: HostInstanceId
+  readonly processNonce: HostControlNonce
+}
+
 /** Connected Main-only SDK matching Slark's `DshPersonalHostAdapter`. */
 export class UnixHostClient {
   private constructor(
-    private readonly channel: FrameChannel,
+    private readonly channel: HostClientFrameTransport,
     private readonly state: HandshakeState,
     private readonly now: () => number,
     readonly inspection: HostInspectResult['result'],
@@ -1084,21 +1083,104 @@ export class UnixHostClient {
    */
   static async connect(options: UnixHostClientOptions, signal?: AbortSignal): Promise<UnixHostClient> {
     const socket = createConnection(options.socketPath)
-    await new Promise<void>((resolve, reject) => {
+    await UnixHostClient.waitForConnection(socket, signal)
+    try {
+      const peer = await options.attestPeer(socket)
+      if (peer.uid !== options.expectedUid || peer.executableSignatureDigest !== options.trustedExecutableSignatureDigest) {
+        throw new HostAuthorityError('unavailable')
+      }
+      return await UnixHostClient.authenticate(socket, options, signal)
+    } catch (error) {
+      socket.destroy()
+      throw error
+    }
+  }
+
+  /**
+   * Connect a protected Windows named pipe after its derived path was checked by the caller.
+   * The Host's installation key signs a fresh challenge; the server separately attests the
+   * connected Desktop daemon before it accepts any request.
+   * @param options - Registration trust anchors and the already checked pipe path.
+   * @param signal - Optional cancellation for connection and authentication.
+   * @param connectSocket - Pipe connector; the client takes ownership of its socket.
+   * @returns Authenticated client; authentication failure destroys the socket and rejects.
+   */
+  static async connectNamedPipe(
+    options: Omit<UnixHostClientOptions, 'expectedUid' | 'attestPeer'>,
+    signal?: AbortSignal,
+    connectSocket: (path: string) => Socket = createConnection,
+  ): Promise<UnixHostClient> {
+    const socket = connectSocket(options.socketPath)
+    await UnixHostClient.waitForConnection(socket, signal)
+    try {
+      return await UnixHostClient.authenticate(socket, options, signal)
+    } catch (error) {
+      socket.destroy()
+      throw error
+    }
+  }
+
+  /**
+   * Authenticate an already peer-attested non-socket carrier.
+   * @internal
+   * @param options - Installation trust anchors used to verify the signed challenge.
+   * @param transport - Attested carrier whose lifetime is transferred to the client.
+   * @param signal - Optional authentication cancellation.
+   * @returns Authenticated client; failure closes the transferred carrier and rejects.
+   */
+  static async connectAuthenticatedTransport(
+    options: Omit<UnixHostClientOptions, 'expectedUid' | 'attestPeer' | 'socketPath'>,
+    transport: HostClientFrameTransport,
+    signal?: AbortSignal,
+  ): Promise<UnixHostClient> {
+    try {
+      return await UnixHostClient.authenticateTransport(transport, options, signal)
+    } catch (error) {
+      transport.close()
+      throw error
+    }
+  }
+
+  private static waitForConnection(socket: Socket, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       const abort = (): void => {
+        socket.removeListener('connect', connected)
+        socket.removeListener('error', failed)
         socket.destroy()
         reject(errorReason(signal?.reason))
       }
+      const connected = (): void => {
+        signal?.removeEventListener('abort', abort)
+        socket.removeListener('error', failed)
+        resolve()
+      }
+      const failed = (error: Error): void => {
+        signal?.removeEventListener('abort', abort)
+        socket.removeListener('connect', connected)
+        socket.destroy()
+        reject(error)
+      }
       if (signal?.aborted) { abort(); return }
-      socket.once('connect', () => { signal?.removeEventListener('abort', abort); resolve() })
-      socket.once('error', reject)
+      socket.once('connect', connected)
+      socket.once('error', failed)
       signal?.addEventListener('abort', abort, { once: true })
     })
-    const peer = await options.attestPeer(socket)
-    if (peer.uid !== options.expectedUid || peer.executableSignatureDigest !== options.trustedExecutableSignatureDigest) {
-      socket.destroy(); throw new HostAuthorityError('unavailable')
-    }
+  }
+
+  private static async authenticate(
+    socket: Socket,
+    options: Omit<UnixHostClientOptions, 'expectedUid' | 'attestPeer'>,
+    signal?: AbortSignal,
+  ): Promise<UnixHostClient> {
     const channel = new FrameChannel(socket)
+    return await UnixHostClient.authenticateTransport(channel, options, signal)
+  }
+
+  private static async authenticateTransport(
+    channel: HostClientFrameTransport,
+    options: Omit<UnixHostClientOptions, 'expectedUid' | 'attestPeer' | 'socketPath'>,
+    signal?: AbortSignal,
+  ): Promise<UnixHostClient> {
     const clientInstanceId = randomUUID() as HostControlClientInstanceId
     const request: HostInspectRequest = {
       version: 1,
@@ -1109,7 +1191,7 @@ export class UnixHostClient {
     }
     const frame = await channel.call(request, signal)
     if (frame.type !== 'result' || frame.method !== 'host.inspect') {
-      socket.destroy()
+      channel.close()
       throw new HostAuthorityError('unavailable')
     }
     if (frame.result.installation_id !== options.trustedInstallationId
@@ -1121,7 +1203,7 @@ export class UnixHostClient {
         publicKeyObject(options.trustedInstallationPublicKey),
         Buffer.from(frame.result.challenge_signature, 'base64url'),
       )) {
-      socket.destroy(); throw new HostAuthorityError('unavailable')
+      channel.close(); throw new HostAuthorityError('unavailable')
     }
     return new UnixHostClient(channel, {
       clientInstanceId,
@@ -1130,7 +1212,10 @@ export class UnixHostClient {
     }, options.now ?? Date.now, frame.result)
   }
 
-  /** Report only local transport liveness; authority is still rechecked by every operation. */
+  /**
+   * Report only local transport liveness; authority is still rechecked by every operation.
+   * @returns Whether the local channel remains connected, not whether a Profile is authorized.
+   */
   isConnected(): boolean { return this.channel.isConnected() }
 
   /**
@@ -1362,7 +1447,11 @@ export class UnixHostClient {
     return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
   }
 
-  /** Bootstrap one account-independent local Profile using only Main-vault material. */
+  /**
+   * Bootstrap one account-independent local Profile using only Main-vault material.
+   * @param input - Opaque vault handle, unlock material, and optional connection cancellation.
+   * @returns Profile selector and persistence generation; rejects absent Host capability before sending.
+   */
   async bootstrapLocalProfile(input: {
     readonly keyHandle: string
     readonly unlockMaterial: string
@@ -1384,7 +1473,11 @@ export class UnixHostClient {
     }
   }
 
-  /** Restore one local-only Profile selected by its Host-signed selector. */
+  /**
+   * Restore one local-only Profile selected by its Host-signed selector.
+   * @param input - Signed selector, matching vault proof, and optional connection cancellation.
+   * @returns Restored Profile selector and persistence generation; Host rejection is propagated.
+   */
   async restoreLocalProfile(input: {
     readonly profileSelector: string
     readonly keyHandle: string
@@ -1441,7 +1534,11 @@ export class UnixHostClient {
     }
   }
 
-  /** Open one previously unlocked local-only Profile through its signed selector. */
+  /**
+   * Open one previously unlocked local-only Profile through its signed selector.
+   * @param input - Signed selector and optional cancellation, which revokes this connection's leases.
+   * @returns Generation-fenced view lease; rejects if this connection has not unlocked the Profile.
+   */
   async openLocalProfile(input: { readonly profileSelector: string; readonly signal?: AbortSignal }): Promise<ProfileOpenResult> {
     const request: ProfileOpenLocalRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.open_local',
@@ -1804,7 +1901,7 @@ export class UnixHostClient {
   }
 
   /** Close the local connection; Host revokes every lease it minted. */
-  close(): void { this.channel.socket.destroy() }
+  close(): void { this.channel.close() }
 
   private auth(): Pick<
     ProfileStatusRequest['params'],

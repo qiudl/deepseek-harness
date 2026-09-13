@@ -41,7 +41,11 @@
     "lib/index.js",
     "lib/invariant.js",
     "lib/startup.js",
+    "lib/windows-startup.js",
     "lib/host-control-client.js",
+    "lib/windows-host-pipe-worker-entry.js",
+    "lib/windows-host-client-worker-entry.js",
+    "lib/windows-embedding-identity-entry.js",
     "cordis.patch.yml",
     "lib/types/**/*.d.ts"
   ],

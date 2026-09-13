@@ -11,8 +11,6 @@ English | [中文](README.zh.md)
 
 This package owns the machine-local DSH Host authority used by Desktop Main. It keeps issuer-qualified Person Profiles outside Slark environments, serializes same-session commands, fences approvals and environment context leases, supervises isolated Profile workers, and exposes an owner-only authenticated Unix socket. The Host control component owns no HTTP listener. Its product composition starts the existing `dsh web` worker, exchanges the one-use launch URL itself, and returns only a verified loopback origin plus an HttpOnly cookie name/value to trusted Main; neither the launch token nor a filesystem path reaches Renderer.
 
-`discoverUnixHost` reports `running`, `stopped`, or `unknown`. Only a registry-owned endpoint with no listening process is `stopped`; failed UID, installation-key, executable-signature, challenge, frame, or socket-shape verification is `unknown`.
-
 ## Table of Contents
 
 - [Desktop adapter](#desktop-adapter)
@@ -22,6 +20,26 @@ This package owns the machine-local DSH Host authority used by Desktop Main. It 
 - [Dev Note](#dev-note)
 
 ## Desktop adapter
+
+The pinned native helper creates its default loader only after validating the exact addon path and bytes. Importing that helper does not resolve a native package. The private `windows-startup.js` composition passes the same release pin to its parent SID, registration, listener, and cancellation adapters and includes it in strictly decoded Worker boot data. The file Worker independently revalidates and loads that exact addon for cancellation, pipe I/O, lifecycle, and peer attestation. Neither production path searches the Koffi package; the embedding must still verify release metadata and protect the installed files throughout use.
+
+Windows directory security evidence preserves generic, standard, and file-specific SDDL rights as unsigned masks. Unknown tokens and masks wider than 32 bits reject inspection. Parsing generic rights does not grant private-storage access: private files still require the exact protected three-principal file-full-control DACL.
+
+The startup artifact exposes `loadWindowsLegacySourceProbe` for trusted embedding code. Assembly resolves the current process SID through the same release-pinned native addon as local-vault storage, performs no legacy filesystem inspection, and returns only a read-only probe. Unsupported platforms, missing pins, native identity failures, or a missing directory inspector reject loading. The embedding must protect the addon throughout later probe calls and supply the OS-selected user home.
+
+The Windows native directory inspector reads existing-path attributes and security evidence without creating directories or repairing permissions. Missing paths, denied access, sharing conflicts, and inspection failures throw. Its evidence does not authorize migration or prove ancestor safety after the read handle closes; complete legacy inventory remains separate.
+
+The legacy-home metadata probe distinguishes an observed missing `.dsh` leaf from an existing directory or an unknown result. It inspects ancestors first, rejects redirected paths and foreign user-home ownership, and treats empty existing homes as present without reading their contents. Only the native leaf-open file-not-found error produces observed absence; no result admits migration or replacement creation. Source enumeration, schema checks, and stable-tree verification remain required.
+
+`discoverUnixHost` reports `running`, `stopped`, or `unknown`. Only a registry-owned endpoint with no listening process is `stopped`; failed UID, installation-key, executable-signature, challenge, frame, or socket-shape verification is `unknown`.
+
+Windows local Profile storage accepts embedding-encrypted envelopes up to 16 KiB. It reuses native SID/DACL and reparse checks, requires a verified file lease for replacement, and releases the lease after synchronous callbacks, including failures. Missing files return null; permission and integrity failures do not authorize a new identity. Native assembly requires one canonical, singly linked Koffi addon and its independently release-verified SHA-256; it never searches alternate packages or paths. The embedding owns encryption, environment-root selection, and protection against addon replacement throughout loading and use. Digest checks alone do not prove Windows installation ACLs or publisher signatures; native installation validation remains required.
+
+The Windows client uses a private file-backed Worker to attest the connected pipe server before sending Host frames. Its Bun Main cancellation adapter is supplied by this package through the verified client artifact; callers provide the release-pinned Worker and publisher anchors. Worker exit must be confirmed before its transferred thread handle is closed. Windows distribution remains subject to signed-carrier and native installation validation.
+
+Windows Host startup converts canonical absolute Worker paths with Windows file-URL rules, preserving Unicode, spaces, literal percent signs, and hash characters in installation directories.
+
+Client cancellation retains a thread handle transferred after startup cancellation. If the cancellation retry budget expires, the parent retains the handle until a later normal or failed Worker exit confirms it can be closed; exhausting the budget does not prove shutdown.
 
 `UnixHostClient` exposes Profile account ensure/restore/status/open, local bootstrap/restore/open, view-activation/close, and owner-only migration operations. The local operations accept no account identity, token, binding, or environment assertion; the Host selector plus Keychain material restores the local-only Profile on a later authenticated connection. Reopening the same Profile from its authenticated owner atomically extends the existing short-lived view lease and issues a fresh one-use activation handle, so an active Desktop can renew authorization without replacing its renderer. The `profile.ensure_account_token` capability marks a Host that accepts the token-bearing `profile.ensure` payload; either peer reports `upgrade_required` before mutation when that capability is absent. `profile.ensure` requires a short-lived canonical DSH Account token with the `dsh-host` audience; the Host verifies it offline and requires its issuer and subject to match the requested account before any Profile registry mutation. Every operation accepts an `AbortSignal`. Aborting destroys the authenticated connection, and the Host revokes every view lease and Profile unlock reference owned by that connection. Another staging or production connection that independently proved the same Profile remains authorized.
 
@@ -61,5 +79,7 @@ No direct invalidation; Host control facts do not enter model context.
 <summary>Working context for maintainers — click to expand</summary>
 
 See the [single Host control protocol Agent Note](../../../.agents/notes/implemented/architecture/2026-09-02-single-host-control-protocol.md).
+
+REQ-20260911-0004 native-storage evidence is limited to an isolated Windows 11 x64 administrator probe with synthetic envelopes: create, read, reopen, competing-lease rejection, replacement, and oversize-write preservation passed. SID decoding uses the LPWSTR output slot; file creation uses a typed security-attributes pointer; repeated loading uses an anonymous structure. Standard-user installation, encryption, signed-carrier integration, and full Desktop startup remain unverified by this probe.
 
 </details>
