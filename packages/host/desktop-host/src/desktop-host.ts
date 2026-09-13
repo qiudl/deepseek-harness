@@ -107,7 +107,10 @@ export class DesktopHost {
     }
   }
 
-  /** Return whether this Host can inspect and prepare existing offline Account Profiles. */
+  /**
+   * Report whether offline Account recovery has both required providers.
+   * @returns Whether this Host can inspect and prepare existing offline Account Profiles.
+   */
   supportsOfflineAccountRecovery(): boolean {
     return this.options.inspectOfflineAccountProfile !== undefined
       && this.options.ensureRecoveredProfileWorker !== undefined
