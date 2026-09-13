@@ -83,6 +83,8 @@ Markdown 文件导入接受 `{ name, markdown }`，保留原始字节、元数�
 
 可选[真实 worker 探测](tests/plugin-worker-live.spec.ts) 要求 CLI、Client 包和 Web 资源已构建。设置 `HOST_PLUGIN_LIVE_WORKER=1` 和 `SLARK_PLUGIN_ACCEPTANCE_ROOT` 后，[插件集成测试](tests/plugin-command-integration.spec.ts) 还通过 Unix socket 驱动真实 Slark broker、本地接口、桌面安装协调器和回执日志，从本地回环仓库安装插件，重启正式 Web worker，并验证其认证清单与更新的 worker 代次。测试替代了目录预检、确认和操作系统进程身份校验，不证明原生批准点击或签名应用。
 
+Windows 回执存储复用现有私有文件接口，原子替换有容量上限的记录集合。每次读取均核验 SID 所有权、受保护的 DACL、链接数量与重解析点证据；损坏或超限数据会拒绝访问，不会变成空历史。共享操作管理器将中断记录转为待核实，不会重放。Windows 启动端仍需接入执行器，才能声明扩展写入能力。
+
 <a id="model-experience"></a>
 ## 模型体验
 

@@ -81,6 +81,8 @@ The optional `pnpmEntrypointPath` startup field receives the packaged command pa
 
 The opt-in [live worker probe](tests/plugin-worker-live.spec.ts) requires the built CLI, Client packages and Web assets. With `HOST_PLUGIN_LIVE_WORKER=1` and `SLARK_PLUGIN_ACCEPTANCE_ROOT`, the [plugin integration fixture](tests/plugin-command-integration.spec.ts) also drives the real Slark broker, local endpoint, Desktop coordinator and receipt journal through a Unix socket, installs from a loopback registry, restarts the shipped Web worker, and verifies its authenticated inventory and a newer worker generation. The fixture substitutes catalog preflight, confirmation and OS peer attestation; it does not certify native approval clicks or the signed application.
 
+The Windows receipt store uses the existing private-file bindings to atomically replace a bounded collection. Every read verifies SID ownership, protected DACL, link count and reparse evidence; malformed or oversized data rejects access instead of becoming an empty history. The shared operation owner converts interrupted records to unknown without replay. Windows startup still requires executor integration before it can advertise extension writes.
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.

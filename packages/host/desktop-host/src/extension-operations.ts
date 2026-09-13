@@ -95,7 +95,8 @@ function uuid(value: unknown): string {
   if (typeof value !== 'string' || !UUID.test(value)) throw new Error('invalid_input')
   return value
 }
-function validate(input: unknown): asserts input is ExtensionReceipt {
+/** @param input Durable metadata decoded from private storage. @returns Nothing; rejects invalid receipt fields. */
+export function validateExtensionReceipt(input: unknown): asserts input is ExtensionReceipt {
   if (!input || typeof input !== 'object') throw new Error('invalid_receipt')
   const value = input as Record<string, unknown>
   uuid(value.operationId); uuid(value.profileId); uuid(value.planId)
@@ -154,8 +155,18 @@ function validate(input: unknown): asserts input is ExtensionReceipt {
   }
 }
 
+/** Private receipt persistence serialized under the single Host process lease. */
+export interface ExtensionReceiptStore {
+  /** @param operationId Opaque UUID. @returns Validated metadata, or undefined only when absent. */
+  read(operationId: string): ExtensionReceipt | undefined
+  /** @param receipt Validated metadata to atomically publish. */
+  write(receipt: ExtensionReceipt): void
+  /** @param profileId Authorized Profile UUID. @returns Persisted operations belonging to that Profile. */
+  list(profileId: string): ExtensionReceipt[]
+}
+
 /** Private, atomically replaced receipts. One Host process owns this directory under the Host lock. */
-export class FileExtensionReceipts {
+export class FileExtensionReceipts implements ExtensionReceiptStore {
   /** @param root Host-owned private directory. @param uid Expected operating-system owner. */
   constructor(private readonly root: string, private readonly uid: number) {
     if (!existsSync(root)) mkdirSync(root, { mode: 0o700 })
@@ -178,14 +189,14 @@ export class FileExtensionReceipts {
       const stat = fstatSync(fd)
       if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.uid || (stat.mode & 0o077) !== 0 || stat.size > 65_536) throw new Error('unsafe_receipt')
       const receipt: unknown = JSON.parse(readFileSync(fd, 'utf8'))
-      validate(receipt)
+      validateExtensionReceipt(receipt)
       if (receipt.operationId !== operationId) throw new Error('invalid_receipt')
       return receipt
     } finally { closeSync(fd) }
   }
   /** @param receipt Metadata only; raw installation payloads must never be stored here. */
   write(receipt: ExtensionReceipt): void {
-    validate(receipt)
+    validateExtensionReceipt(receipt)
     if (Buffer.byteLength(JSON.stringify(receipt)) > 65_536) throw Error('invalid_receipt')
     this.directory(); this.read(receipt.operationId)
     const temp = join(this.root, `.${randomUUID()}.tmp`)
@@ -213,7 +224,7 @@ export class ProfileExtensionOperations {
   private closed = false
   /** @param store Host-owned receipt store. @param executor Profile-aware executor. @param clock Host clock. */
   constructor(
-    private readonly store: FileExtensionReceipts,
+    private readonly store: ExtensionReceiptStore,
     private readonly executor: ExtensionExecutor,
     private readonly clock: { now(): number },
   ) {}
