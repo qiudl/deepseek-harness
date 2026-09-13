@@ -2,6 +2,11 @@ import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'n
 import { win32 } from 'node:path'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { DesktopHost } from './desktop-host.ts'
+import { ProfileExtensionOperations } from './extension-operations.ts'
+import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
+import { waitForMcpRuntime } from './mcp-runtime-ack.ts'
+import { WindowsMcpStorage } from './windows-mcp-storage.ts'
+import { WindowsExtensionReceipts } from './windows-extension-receipts.ts'
 import {
   DshWebProfileWorkerFactory,
   type DshWebProfileWorkerFactoryOptions,
@@ -57,6 +62,8 @@ export interface WindowsDesktopHostBaseConfig extends Omit<
   readonly maximumRegistryBytes: number
   readonly maximumManagedFileBytes: number
   readonly maximumJournalBytes: number
+  /** Explicit receipt capacity enables MCP extensions; omission retains the existing local-only composition. */
+  readonly maximumExtensionReceiptBytes?: number
   readonly profileReadyTimeoutMs: number
   readonly profileAbortTimeoutMs: number
 }
@@ -129,6 +136,7 @@ function validatePublicConfig(config: WindowsDesktopHostBaseConfig): void {
     || !positive(config.runtimeGeneration) || !positive(config.schemaGeneration)
     || !positive(config.maximumRegistryBytes) || !positive(config.maximumManagedFileBytes)
     || !positive(config.maximumJournalBytes) || !positive(config.profileReadyTimeoutMs)
+    || (config.maximumExtensionReceiptBytes !== undefined && !positive(config.maximumExtensionReceiptBytes))
     || !positive(config.profileAbortTimeoutMs)) throw new HostAuthorityError('invalid_input')
 }
 
@@ -288,6 +296,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
     readonly host: DesktopHost
     readonly commandAuthority: SessionCommandAuthority
     readonly authority: HostControlAuthority
+    readonly extensionOperations?: ProfileExtensionOperations
   } | undefined
   const startTransport = dependencies.startTransport ?? startWindowsHostTransport
   const transport = await startTransport({
@@ -338,6 +347,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           profileId: profile.profileId,
           userSid,
           maximumManagedFileBytes: config.maximumManagedFileBytes,
+          prepareMcpStorage: config.maximumExtensionReceiptBytes !== undefined,
           bindings,
         })
         await workers.ensure({
@@ -361,6 +371,26 @@ async function startWindowsDesktopHostApplicationWithTrust(
         maximumJournalBytes: config.maximumJournalBytes,
         bindings,
       }), clock)
+      const mcp = config.maximumExtensionReceiptBytes === undefined ? undefined : new ProfileMcpExecutor({
+        storage: new WindowsMcpStorage({ userSid, bindings, profileRoot: (profileId) => {
+          if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+          return win32.join(config.root, 'profiles', profileId)
+        } }),
+        reload: async (profileId, signal, entryIds, guard, removedIds) => {
+          guard()
+          const profile = registry.resolveProfile(profileId as never)
+          if (!profile) throw new HostAuthorityError('stale')
+          await workers.dispose(profileId)
+          guard()
+          await ensureWorker(profile)
+          guard()
+          await waitForMcpRuntime(await workers.activate(profileId), entryIds, signal, removedIds)
+        },
+      })
+      const extensionOperations = mcp && config.maximumExtensionReceiptBytes !== undefined
+        ? new ProfileExtensionOperations(new WindowsExtensionReceipts({
+          root: win32.join(config.root, 'control'), userSid, bindings, maximumBytes: config.maximumExtensionReceiptBytes,
+        }), mcp, clock) : undefined
       const authority = new HostControlAuthority({
         identity: {
           hostInstanceId: config.hostInstanceId,
@@ -373,16 +403,20 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
+        ...(mcp && extensionOperations ? { extensions: { operations: extensionOperations, kinds: ['mcp'] as const,
+          mcpRemove: true, mcpUpdate: true, inventory: (profileId: string) => mcp.inventory(profileId) } } : {}),
         profilePersistenceGeneration: () => 1,
         now: () => clock.now(),
       })
-      state = { host, commandAuthority, authority }
+      state = { host, commandAuthority, authority, ...(extensionOperations ? { extensionOperations } : {}) }
     },
     openSession: (ownerId, signal) => {
       if (state === undefined) throw new HostAuthorityError('unavailable')
       return state.authority.openSession(ownerId, signal)
     },
-    quiesceOwnedResources: () => workers.disposeAll(),
+    quiesceOwnedResources: async () => {
+      try { await state?.extensionOperations?.dispose() } finally { await workers.disposeAll() }
+    },
   }, {
     loadCancellation: () => loadWindowsWorkerIoCancellation({
       ...nativeOptions,

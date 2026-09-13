@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsdown'
+import { fileURLToPath } from 'node:url'
 import { typertPlugin } from '../../typert/generator/lib/types/tsdown-plugin.js'
 
 /** Build Host authority entries plus the standalone Main-only client artifact. */
@@ -42,6 +43,8 @@ export default defineConfig([
   },
   {
     entry: { 'windows-startup': 'lib/types/windows-startup.js' },
+    // The verified startup loads from a data URL; YAML's default ESM export avoids createRequire(import.meta.url).
+    alias: { yaml: fileURLToPath(new URL('./node_modules/yaml/browser/index.js', import.meta.url)) },
     outDir: 'lib',
     format: ['esm'],
     platform: 'node',
@@ -50,7 +53,7 @@ export default defineConfig([
     dts: false,
     clean: false,
     codeSplitting: false,
-    noExternal: [/^@deepseek-ai\//u],
+    noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
   },
   {
     entry: { 'windows-host-pipe-worker-entry': 'lib/types/windows-host-pipe-worker-entry.js' },

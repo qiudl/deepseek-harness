@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import type { ProfileWorkerFactory } from '../src/types.ts'
 import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-registration.ts'
@@ -10,6 +10,7 @@ import {
 import { WindowsHostTransport, type StartWindowsHostTransportOptions } from '../src/windows-host-transport.ts'
 import { WindowsHostCarrier } from '../src/windows-host-carrier.ts'
 import { acquireWindowsSingleHostLock } from '../src/windows-single-instance.ts'
+import { UnixHostClient } from '../src/unix-transport.ts'
 
 const root = String.raw`C:\Users\alice\AppData\Local\Slark\DSH`
 const userSid = 'S-1-5-21-1000-2000-3000-1001'
@@ -51,15 +52,20 @@ function fixture() {
     files.set(path, Buffer.from(contents)); return pathEvidence('file')
   })
   const bindings: WindowsHostRegistrationFileBindings = {
+    inspectExistingDirectory: vi.fn(() => pathEvidence('directory')),
     ensurePrivateDirectory: vi.fn(() => pathEvidence('directory')),
     createPrivateFile,
     readPrivateFile,
     replacePrivateFile,
+    removePrivateFile: (path, expected, _sid, guard) => {
+      if (!files.get(path)?.equals(expected)) throw Error('revision_conflict')
+      guard(); files.delete(path)
+    },
     acquirePrivateFileLease: vi.fn(() => ({
       evidence: pathEvidence('file'), initialize: vi.fn(), release: vi.fn(),
     })),
   }
-  const dispose = vi.fn(async () => undefined)
+  const dispose = vi.fn(async () => { await transportOptions?.quiesceOwnedResources() })
   const createProfileWorker = vi.fn<ProfileWorkerFactory>(async () => ({
     closeNotifications: vi.fn(), abort: vi.fn(), done: Promise.resolve(),
     viewOrigin: 'http://127.0.0.1:49152', generation: 1,
@@ -119,7 +125,7 @@ function fixture() {
     accountKeyringSha256: createHash('sha256').update(accountAccessKeyring).digest('hex'),
     installationPrivateKey: installationKeys.privateKey.export({ format: 'pem', type: 'pkcs8' }),
     installationPublicKey,
-    installationId: 'slark-dsh-d3a7a33ed99e8ce5b4d3522d96336dffa8da2820',
+    installationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3125',
     endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3126',
     hostInstanceId: '11111111-1111-4111-8111-111111111111',
     processNonce: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8',
@@ -156,6 +162,71 @@ function fixture() {
 }
 
 describe('Windows Desktop Host startup', () => {
+  it('advertises opted-in MCP and commits through the authenticated control session after worker acknowledgement', async () => {
+    const state = fixture()
+    const application = await startWindowsDesktopHostApplication({ ...state.options, maximumExtensionReceiptBytes: 131072 },
+      undefined, state.dependencies)
+    const lifetime = new AbortController()
+    const session = state.transportOptions()?.openSession(randomUUID(), lifetime.signal)
+    if (!session) throw Error('missing session')
+    const client = await UnixHostClient.connectAuthenticatedTransport({
+      trustedInstallationId: state.options.installationId,
+      trustedInstallationPublicKey: state.options.installationPublicKey,
+      trustedExecutableSignatureDigest: state.options.executableSignatureDigest,
+    }, { call: async (frame, signal) => session.handleRequest(frame, signal ?? lifetime.signal),
+      isConnected: () => !lifetime.signal.aborted, close: () => { lifetime.abort() } })
+    let patch = ''
+    const observed = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      expect(url).toBe('http://127.0.0.1:49152/api/pluginInventory/list')
+      expect(state.files.get(patch)?.toString()).toContain('mcp-demo')
+      if (typeof options?.body !== 'string') throw Error('missing RPC body')
+      const request = JSON.parse(options.body) as { rpcId: string }
+      return new Response(JSON.stringify({ type: 'server-response', rpcId: request.rpcId, result: { ok: true, value: {
+        entries: [{ entryId: 'include:mcp-demo', moduleName: '@deepseek-ai/dsh-mcp-client', enabled: true, fiberPhase: 'active' }],
+      } } }))
+    })
+    try {
+      expect(client.inspection.capabilities).toContain('profile.extensions')
+      const local = await client.bootstrapLocalProfile({ keyHandle: 'windows-credential:local', unlockMaterial })
+      const lease = await client.openLocalProfile({ profileSelector: local.profileSelector })
+      patch = `${root}\\profiles\\${local.profileId}\\profiles\\web\\cordis.patch.yml`
+      expect(await client.extensions({ ...lease, command: { action: 'inventory', kind: 'mcp' } }))
+        .toMatchObject({ state: 'inventory', entries: [], mcp_remove: true, mcp_update: true })
+      await expect(client.extensions({ ...lease, command: { action: 'inventory', kind: 'plugin' } }))
+        .rejects.toMatchObject({ code: 'upgrade_required' })
+      const plan = await client.extensions({ ...lease, command: { action: 'prepare', kind: 'mcp',
+        payload: JSON.stringify({ mcpServers: { demo: { url: 'https://example.com/mcp' } } }) } })
+      if (plan.state !== 'prepared') throw Error('missing plan')
+      const operationId = randomUUID() as never
+      await client.extensions({ ...lease, command: { action: 'commit', plan_id: plan.plan_id, operation_id: operationId } })
+      await expect.poll(async () => client.extensions({ ...lease, command: { action: 'status', operation_id: operationId } }))
+        .toMatchObject({ state: 'receipt', outcome: 'succeeded' })
+      expect(observed).toHaveBeenCalledOnce()
+      expect(state.createProfileWorker).toHaveBeenCalledTimes(2)
+      expect(state.files.get(`${root}\\control\\extensions.v1.json`)?.toString()).toContain(operationId)
+      let acknowledgeStarted = () => {}
+      const started = new Promise<void>((resolve) => { acknowledgeStarted = resolve })
+      let requestAborted = false
+      observed.mockImplementation(async (_url, options) => new Promise<Response>((_resolve, reject) => {
+        const signal = options?.signal
+        if (!signal) throw Error('missing operation lifetime')
+        signal.addEventListener('abort', () => { requestAborted = true; reject(new Error('acknowledgement_aborted')) }, { once: true })
+        acknowledgeStarted()
+      }))
+      const pending = await client.extensions({ ...lease, command: { action: 'prepare', kind: 'mcp',
+        payload: JSON.stringify({ mcpServers: { demo: { url: 'https://example.com/mcp' } } }) } })
+      if (pending.state !== 'prepared') throw Error('missing pending plan')
+      const pendingId = randomUUID() as never
+      await client.extensions({ ...lease, command: { action: 'commit', plan_id: pending.plan_id, operation_id: pendingId } })
+      await started
+      await application.close()
+      expect(requestAborted).toBe(true)
+      const saved = JSON.parse(state.files.get(`${root}\\control\\extensions.v1.json`)!.toString()) as {
+        receipts: Array<{ operationId: string; state: string }>
+      }
+      expect(saved.receipts.find(receipt => receipt.operationId === pendingId)).toMatchObject({ state: 'unknown' })
+    } finally { observed.mockRestore(); client.close(); await application.close() }
+  })
   it('starts local-only DSH without migration capability and prepares an isolated Profile on demand', async () => {
     const state = fixture()
     const application = await startWindowsDesktopHostApplication(state.options, undefined, state.dependencies)
@@ -190,6 +261,7 @@ describe('Windows Desktop Host startup', () => {
       { registrationRoot: String.raw`C:\Users\alice\.dsh\host` },
       { accountKeyringSha256: '0'.repeat(64) },
       { installationPublicKey: 'A'.repeat(43) },
+      { maximumExtensionReceiptBytes: 0 },
     ]) {
       const state = fixture()
       await expect(startWindowsDesktopHostApplication(

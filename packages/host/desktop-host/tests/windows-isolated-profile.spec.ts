@@ -52,6 +52,31 @@ function fixture(existing = new Map<string, Buffer>()) {
 }
 
 describe('Windows isolated Profile preparation', () => {
+  it('prepares private MCP directories and preserves a large customized patch on restart', () => {
+    const state = fixture()
+    const options = { root, profileId, userSid, maximumManagedFileBytes: 64 * 1024,
+      prepareMcpStorage: true, bindings: state.bindings }
+    prepareWindowsIsolatedProfile(options)
+    const web = `${root}\\profiles\\${profileId}\\profiles\\web`
+    expect(state.ensurePrivateDirectory.mock.calls.map(([path]) => path)).toContain(web)
+    expect(state.existing.get(`${web}\\cordis.patch.yml`)?.toString()).toBe('[]\n')
+    const custom = Buffer.from(`#${'x'.repeat(70_000)}\n[]\n`)
+    state.existing.set(`${web}\\cordis.patch.yml`, custom)
+    prepareWindowsIsolatedProfile(options)
+    expect(state.existing.get(`${web}\\cordis.patch.yml`)).toEqual(custom)
+    expect(state.readPrivateFile).toHaveBeenCalledWith(`${web}\\cordis.patch.yml`, 1_048_576)
+    state.existing.set(`${web}\\cordis.patch.yml`, Buffer.alloc(1_048_577))
+    expect(() => { prepareWindowsIsolatedProfile(options) }).toThrow()
+  })
+  it('rejects unsafe existing web directories without creating or replacing their patch', () => {
+    const state = fixture()
+    const web = `${root}\\profiles\\${profileId}\\profiles\\web`
+    state.ensurePrivateDirectory.mockImplementation(path => path === web
+      ? { ...evidence('directory'), daclProtected: false } : evidence('directory'))
+    expect(() => { prepareWindowsIsolatedProfile({ root, profileId, userSid,
+      maximumManagedFileBytes: 64 * 1024, prepareMcpStorage: true, bindings: state.bindings }) }).toThrow()
+    expect(state.createPrivateFile).not.toHaveBeenCalled()
+  })
   it('creates a complete local-only Profile without touching a legacy source', () => {
     const state = fixture()
     const result = prepareWindowsIsolatedProfile({

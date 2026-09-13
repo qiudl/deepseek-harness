@@ -83,9 +83,9 @@ Markdown 文件导入接受 `{ name, markdown }`，保留原始字节、元数�
 
 可选[真实 worker 探测](tests/plugin-worker-live.spec.ts) 要求 CLI、Client 包和 Web 资源已构建。设置 `HOST_PLUGIN_LIVE_WORKER=1` 和 `SLARK_PLUGIN_ACCEPTANCE_ROOT` 后，[插件集成测试](tests/plugin-command-integration.spec.ts) 还通过 Unix socket 驱动真实 Slark broker、本地接口、桌面安装协调器和回执日志，从本地回环仓库安装插件，重启正式 Web worker，并验证其认证清单与更新的 worker 代次。测试替代了目录预检、确认和操作系统进程身份校验，不证明原生批准点击或签名应用。
 
-Windows 回执存储复用现有私有文件接口，原子替换有容量上限的记录集合。每次读取均核验 SID 所有权、受保护的 DACL、链接数量与重解析点证据；损坏或超限数据会拒绝访问，不会变成空历史。共享操作管理器将中断记录转为待核实，不会重放。Windows 启动端仍需接入执行器，才能声明扩展写入能力。
+Windows 回执存储复用现有私有文件接口，原子替换有容量上限的记录集合。每次读取均核验 SID 所有权、受保护的 DACL、链接数量与重解析点证据；损坏或超限数据会拒绝访问，不会变成空历史。共享操作管理器将中断记录转为待核实，不会重放。嵌入应用提供正数 `maximumExtensionReceiptBytes` 后，Windows 启动端启用 MCP；省略该字段时扩展不可用。启用后支持 MCP 清单、安装、更新、移除及显式恢复，并在销毁 worker 和释放 Host 锁之前等待操作停止。
 
-MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个执行器。Windows 存储校验 Profile 私有目录及文件证据，独占创建操作备份，并在恢复时区分配置文件不存在与空文件。删除操作在同一个独占原生句柄上比较预期内容并校验 SID/DACL，最后检查授权后设置句柄删除状态，不重新按路径打开文件执行删除。这些适配器本身不会启用 Windows 启动入口的扩展能力。
+MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个执行器。Windows 启动产物内联 YAML 的 ESM 版本，使校验后的字节可从 data URL 加载，无需查找依赖包或使用依赖文件路径的 CommonJS 加载器。Windows 存储校验 Profile 私有目录及文件证据，独占创建操作备份，并在恢复时区分配置文件不存在与空文件。删除操作在同一个独占原生句柄上比较预期内容并校验 SID/DACL，最后检查授权后设置句柄删除状态，不重新按路径打开文件执行删除。启用 MCP 时，Host 在启动 Profile 前创建缺失的私有 web 目录及初始配置；重启会保留 MCP 字节上限内的自定义配置。权限异常或继承权限的现存路径会被拒绝，不自动修复；这些现存 Profile 的迁移仍需单独处理。
 
 <a id="model-experience"></a>
 ## 模型体验
@@ -99,7 +99,7 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延后工作
 
-- **扩展支持由执行器决定** — `profile.extensions` 通过有效窗口租约接受清单、准备、提交、状态和取消请求。插件执行要求配置随包 pnpm 产物。Windows 启动组合尚未配置扩展执行器，因此不声明此能力。技能清单使用 `transport: markdown` 和有长度限制、由文件名生成的标识。安装或恢复配置导致 worker 重启后，Desktop 必须重新打开同一 Profile 视图。打包运行时固定版本、完整 Profile 迁移保留、杀进程恢复和未知回执核对，仍需在发布前单独完成端到端验证。
+- **扩展支持由执行器决定** — `profile.extensions` 通过有效窗口租约接受清单、准备、提交、状态和取消请求。插件执行要求配置随包 pnpm 产物。Windows 启动组合支持显式启用的 MCP，Windows 插件及 Skill 执行器仍不可用。嵌入应用必须启用并固定此组合的版本，用户才能获得该能力。技能清单使用 `transport: markdown` 和有长度限制、由文件名生成的标识。安装或恢复配置导致 worker 重启后，Desktop 必须重新打开同一 Profile 视图。打包运行时固定版本、完整 Profile 迁移保留、杀进程恢复和未知回执核对，仍需在发布前单独完成端到端验证。
 
 - **解锁材料仍由嵌入应用拥有**——Slark Main 必须把随机 32 字节 Profile material 保存在 macOS Keychain／safeStorage 中，并且只通过已认证 Main-to-Host 链路提供；它绝不能进入 Renderer、argv、environment、日志或 registration 文件。
 - **Account access 与 session 绑定**——Slark Main 必须从 DSH Account 获取 `dsh-host` token，并且只通过已认证 Main-to-Host 链路提供。Host 不持久化或记录该凭据；token 过期后，Slark Main 必须刷新 Account session，`profile.ensure` 才能成功。
