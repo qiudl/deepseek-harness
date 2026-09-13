@@ -1,3 +1,4 @@
+import { readWorkerRuntimeResponse } from './worker-runtime-response.ts'
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 
@@ -26,17 +27,7 @@ export async function waitForPluginRuntime(
       headers: { 'content-type': 'application/json', cookie: `${worker.bootstrapCookie.name}=${worker.bootstrapCookie.value}` },
       body: JSON.stringify({ type: 'client-request', rpcId, method: 'pluginInventory/list', payload: { args: {} } }),
     })
-    if (!response.ok || !response.body) {
-      await response.body?.cancel()
-      throw new Error('runtime_unavailable')
-    }
-    const chunks: Uint8Array[] = []; let bytes = 0
-    for await (const chunk of response.body) {
-      bytes += chunk.byteLength
-      if (bytes > 524_288) throw new Error('runtime_response_too_large')
-      chunks.push(chunk)
-    }
-    const result: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    const result = await readWorkerRuntimeResponse(response, 524_288)
     if (!result || typeof result !== 'object') throw new Error('invalid_runtime_response')
     const envelope = result as { type?: unknown; rpcId?: unknown; result?: { ok?: unknown; value?: { entries?: unknown } } }
     const entries = envelope.result?.value?.entries
