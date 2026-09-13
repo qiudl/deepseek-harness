@@ -46,3 +46,49 @@ it('bounds declared expansion and rejects deflate content hidden behind a zero s
   for (let offset = data.indexOf(local); offset >= 0; offset = data.indexOf(local, offset + 4)) data.writeUInt32LE(0, offset + 22)
   expect(() => inspectSkillArchive(data, '', 'demo')).toThrow()
 })
+
+it('rejects invalid selections and entry-count limits before extracting files', () => {
+  expect(() => inspectSkillArchive(zip({ 'SKILL.md': markdown }), '../outside', 'demo')).toThrow('invalid_archive')
+  expect(() => inspectSkillArchive(zip({}), '', 'demo')).toThrow('archive_limit')
+  const files = Object.fromEntries(Array.from({ length: 513 }, (_, index) => [`file-${index}`, 'x']))
+  expect(() => inspectSkillArchive(zip(files), '', 'demo')).toThrow('archive_limit')
+})
+
+it('selects a unique nested skill while retaining only its own resources', () => {
+  const result = inspectSkillArchive(zip({ 'repo/nested/SKILL.md': markdown, 'repo/other.txt': 'outside' }), '', 'demo')
+  expect(result.files.map(file => file.path)).toEqual(['SKILL.md'])
+})
+
+it('bounds total declared expansion across individually valid entries', () => {
+  const files = Object.fromEntries(Array.from({ length: 11 }, (_, index) => [`file-${index}`, 'x']))
+  const data = zip(files)
+  const signature = Buffer.from([0x50, 0x4b, 0x01, 0x02])
+  for (let offset = data.indexOf(signature); offset >= 0; offset = data.indexOf(signature, offset + 4)) {
+    data.writeUInt32LE(10 * 1024 * 1024, offset + 24)
+  }
+  expect(() => inspectSkillArchive(data, '', 'demo')).toThrow('archive_limit')
+})
+
+it('rejects expansion whose bytes disagree with the declared size', () => {
+  const data = zip({ 'SKILL.md': markdown })
+  const central = data.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]))
+  const local = data.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]))
+  data.writeUInt32LE(Buffer.byteLength(markdown) + 1, central + 24)
+  data.writeUInt32LE(Buffer.byteLength(markdown) + 1, local + 22)
+  expect(() => inspectSkillArchive(data, '', 'demo')).toThrow('archive_size_mismatch')
+})
+
+it('rejects a one-byte deflated resource that claims to be empty', () => {
+  const archive = new AdmZip(zip({ 'SKILL.md': markdown, 'resource': 'x' }))
+  archive.getEntry('resource')!.header.size = 0
+  expect(() => inspectSkillArchive(archive.toBuffer(), '', 'demo')).toThrow('archive_size_mismatch')
+})
+
+it.each([
+  markdown + 'x'.repeat(32768),
+  '---\nname: demo\ndescription: Test\nwhenToUse: 42\n---\nBody',
+  '---\nname: demo\ndescription: Test\ndisable-model-invocation: yes\n---\nBody',
+  '---\nname: demo\ndescription: Test\nuser-invocable: yes\n---\nBody',
+])('rejects oversized or invalid Skill instruction metadata: %#', (content) => {
+  expect(() => inspectSkillArchive(zip({ 'SKILL.md': content }), '', 'demo')).toThrow('invalid_skill')
+})

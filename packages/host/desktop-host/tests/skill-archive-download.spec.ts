@@ -47,3 +47,30 @@ it('rejects cancellation before download and after a response arrives', async ()
   await expect(downloadSkillArchive(source, controller.signal)).rejects.toThrow()
   expect(fetcher).toHaveBeenCalledOnce()
 })
+
+it.each([
+  null, [], 'archive', { ...source, url: null }, { ...source, url: 'a'.repeat(2049) },
+  { ...source, sha256: null }, { ...source, sha256: 'A'.repeat(64) },
+  { ...source, subPath: null }, { ...source, subPath: 'a'.repeat(1025) },
+  { ...source, url: 'https://codeload.github.com:8443/owner/repo/zip/refs/heads/main' },
+  { ...source, url: 'https://:secret@codeload.github.com/owner/repo/zip/refs/heads/main' },
+  { ...source, url: `${source.url}#fragment` },
+  { ...source, url: 'https://codeload.github.com/owner/repo/tar.gz/refs/heads/main' },
+])('rejects invalid archive capability fields: %#', (value) => {
+  expect(() => archiveSource(value)).toThrow('invalid_archive_source')
+})
+
+it('accepts an archive rooted at the selected repository', () => {
+  expect(archiveSource({ ...source, subPath: '' })).toEqual({ ...source, subPath: '' })
+})
+
+it.each([401, 204])('rejects HTTP %s instead of accepting an empty archive', async (status) => {
+  vi.stubGlobal('fetch', async () => new Response(null, { status }))
+  await expect(downloadSkillArchive(source, new AbortController().signal)).rejects.toThrow('archive_download_failed')
+})
+
+it('preserves cancellation when a bodyless response arrives after revocation', async () => {
+  const controller = new AbortController()
+  vi.stubGlobal('fetch', async () => { controller.abort(); return new Response(null, { status: 204 }) })
+  await expect(downloadSkillArchive(source, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+})
