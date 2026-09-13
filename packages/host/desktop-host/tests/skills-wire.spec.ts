@@ -71,7 +71,8 @@ it('installs through the leased socket and acknowledges the real default preset 
     ]))
     loaded = await boot('skill-wire', config, [], undefined, new URL('../../../api/session-controller/', import.meta.url).href)
     new SessionSkillCatalog(loaded)
-    const { TYPERT } = await import('@deepseek-ai/dsh-api-session-controller/typert')
+    // This built-runtime fixture loads generated RPC only after the Host build.
+    const { TYPERT } = await import(new URL('../../../api/session-controller/lib/typert.host.js', import.meta.url).href)
     loaded.effect(() => loaded!.typert.register(TYPERT as Parameters<Context['typert']['register']>[0]))
     expect(await loaded.skills.get(name, { signal })).toBeUndefined()
     guard()
