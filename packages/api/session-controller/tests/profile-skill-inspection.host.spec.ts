@@ -53,3 +53,34 @@ it('preserves incomplete provider observations and rejects missing scope or canc
   await expect(catalog.profileCatalog(AbortSignal.abort())).rejects.toThrow()
   expect(snapshot).not.toHaveBeenCalled()
 })
+
+it('rejects invalid names before mounting the default preset', async () => {
+  const ctx = new Context(); onTestFinished(async () => { await ctx.fiber.dispose() })
+  const standingKeyFor = vi.fn()
+  ctx.provide('agentPresets', { standingKeyFor } as never)
+  const catalog = new SessionSkillCatalog(ctx)
+  for (const name of ['../outside', 'a'.repeat(65)]) {
+    await expect(catalog.inspectProfile({ name }, new AbortController().signal)).rejects.toThrow('invalid skill name')
+  }
+  expect(standingKeyFor).not.toHaveBeenCalled()
+})
+
+it('rejects a missing Profile registry instead of falling back after preset mounting', async () => {
+  const ctx = new Context(); onTestFinished(async () => { await ctx.fiber.dispose() })
+  ctx.provide('agentPresets', { standingKeyFor: async () => ({ id: 'standing' }) } as never)
+  await expect(new SessionSkillCatalog(ctx).profileCatalog(new AbortController().signal)).rejects.toThrow('profile skill registry unavailable')
+})
+
+it('preserves absent skills and optional metadata without inventing a filesystem path', async () => {
+  const ctx = new Context(); onTestFinished(async () => { await ctx.fiber.dispose() })
+  const skill = { name: 'demo', description: 'Demo', content: 'Instructions', source: 'runtime', provider: 'fixture',
+    whenToUse: 'On request', invocation: { modelInvocable: true, userInvocable: false } }
+  const get = vi.fn(async () => skill as typeof skill | undefined)
+  ctx.provide('agentPresets', { standingKeyFor: async () => ({ id: 'standing' }) } as never)
+  ctx.provide('skills', { get, snapshot: async () => ({ complete: true, skills: [skill] }) } as never)
+  const catalog = new SessionSkillCatalog(ctx); const signal = new AbortController().signal
+  expect(await catalog.inspectProfile({ name: 'demo' }, signal)).toEqual({ skill })
+  expect(await catalog.profileCatalog(signal)).toEqual({ complete: true, skills: [{ name: 'demo', source: 'runtime', invocation: skill.invocation }] })
+  get.mockResolvedValueOnce(undefined)
+  expect(await catalog.inspectProfile({ name: 'missing' }, signal)).toEqual({ skill: null })
+})

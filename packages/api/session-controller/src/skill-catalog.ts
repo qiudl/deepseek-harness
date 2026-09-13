@@ -36,12 +36,7 @@ export class SessionSkillCatalog extends TypertRemoteService {
   async inspectProfile(request: ProfileSkillInspectionRequest, signal: AbortSignal): Promise<ProfileSkillInspectionValue> {
     signal.throwIfAborted()
     if (!isSkillName(request.name) || request.name.length > 64) throw new RemoteError('gateway/internal', 'invalid skill name', {})
-    const presets = this.ctx.get('agentPresets')
-    if (!presets) throw new RemoteError('gateway/internal', 'profile preset unavailable', {})
-    const scope = await presets.standingKeyFor()
-    signal.throwIfAborted()
-    const registry = this.ctx.get('skills')
-    if (!registry) throw new RemoteError('gateway/internal', 'profile skill registry unavailable', {})
+    const { scope, registry } = await this.profileRegistry(signal)
     const skill = await registry.get(request.name, { scope, signal })
     signal.throwIfAborted()
     if (!skill) return { skill: null }
@@ -62,12 +57,7 @@ export class SessionSkillCatalog extends TypertRemoteService {
   @Remote
   async profileCatalog(signal: AbortSignal): Promise<ProfileSkillCatalogValue> {
     signal.throwIfAborted()
-    const presets = this.ctx.get('agentPresets')
-    if (!presets) throw new RemoteError('gateway/internal', 'profile preset unavailable', {})
-    const scope = await presets.standingKeyFor()
-    signal.throwIfAborted()
-    const registry = this.ctx.get('skills')
-    if (!registry) throw new RemoteError('gateway/internal', 'profile skill registry unavailable', {})
+    const { scope, registry } = await this.profileRegistry(signal)
     const snapshot = await registry.snapshot({ scope, signal })
     signal.throwIfAborted()
     return { complete: snapshot.complete, skills: snapshot.skills.map(skill => ({
@@ -139,6 +129,17 @@ export class SessionSkillCatalog extends TypertRemoteService {
     } catch (error: unknown) {
       throw new RemoteError('gateway/internal', `skill listing failed: ${String(error)}`, {})
     }
+  }
+
+  /** Resolve the default Profile registry without falling back to a global scope. */
+  private async profileRegistry(signal: AbortSignal) {
+    const presets = this.ctx.get('agentPresets')
+    if (!presets) throw new RemoteError('gateway/internal', 'profile preset unavailable', {})
+    const scope = await presets.standingKeyFor()
+    signal.throwIfAborted()
+    const registry = this.ctx.get('skills')
+    if (!registry) throw new RemoteError('gateway/internal', 'profile skill registry unavailable', {})
+    return { scope, registry }
   }
 
   /** Resolve a live or standing preset scope without creating an Agent. */
