@@ -53,6 +53,16 @@ export interface WindowsHostRegistrationFileBindings {
     path: string,
     maximumBytes: number,
   ): { readonly contents: Buffer; readonly evidence: WindowsHostPrivatePathEvidence } | undefined
+  /**
+   * Delete only a SID-owned, private, singly linked regular file matching the expected bytes.
+   * Inspection, comparison and disposition use one exclusive non-reparse handle; missing files throw.
+   * The caller verifies ancestors and holds the Host lease throughout use. A close failure throws even after disposition.
+   * @param path Exact Host-owned file path.
+   * @param expected Exact current bytes, also bounding the native read.
+   * @param userSid Expected owner and private DACL principal.
+   * @param guard Synchronous authority check immediately before marking the handle for deletion.
+   */
+  removePrivateFile?(path: string, expected: Buffer, userSid: string, guard: () => void): void
   replacePrivateFile(
     path: string,
     contents: Buffer,

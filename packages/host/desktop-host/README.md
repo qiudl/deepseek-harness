@@ -83,6 +83,8 @@ The opt-in [live worker probe](tests/plugin-worker-live.spec.ts) requires the bu
 
 The Windows receipt store uses the existing private-file bindings to atomically replace a bounded collection. Every read verifies SID ownership, protected DACL, link count and reparse evidence; malformed or oversized data rejects access instead of becoming an empty history. The shared operation owner converts interrupted records to unknown without replay. Windows startup still requires executor integration before it can advertise extension writes.
 
+MCP configuration parsing and runtime acknowledgement share one executor across POSIX and Windows storage adapters. Windows storage verifies private Profile directories and file evidence, preserves exclusive operation backups, and distinguishes a missing patch from an empty patch during recovery. Deletion compares expected bytes and verifies SID/DACL evidence on the same exclusive native handle before a final authority check and handle disposition; it never reopens the path for deletion. These adapters do not by themselves enable Windows startup extension capability.
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.

@@ -4,7 +4,7 @@ import type {
   WindowsHostPrivatePathEvidence,
   WindowsHostRegistrationFileBindings,
 } from './windows-host-registration.ts'
-import { WindowsHostPrivateLeaseConflictError } from './windows-host-registration.ts'
+import { assertWindowsHostPrivatePathEvidence, WindowsHostPrivateLeaseConflictError } from './windows-host-registration.ts'
 
 const ERROR_FILE_NOT_FOUND = 2
 const ERROR_PATH_NOT_FOUND = 3
@@ -18,6 +18,8 @@ const SECURITY_DESCRIPTOR_REVISION = 1
 const OWNER_SECURITY_INFORMATION = 0x00000001
 const DACL_SECURITY_INFORMATION = 0x00000004
 const READ_CONTROL = 0x00020000
+const DELETE_ACCESS = 0x00010000
+const FILE_DISPOSITION_INFO = 4
 const FILE_READ_ATTRIBUTES = 0x00000080
 const GENERIC_READ = 0x80000000
 const GENERIC_WRITE = 0x40000000
@@ -202,6 +204,7 @@ export async function loadWindowsHostRegistrationFileBindings(
   const setEndOfFile = bind(kernel32, 'SetEndOfFile', 'int', [pointer])
   const moveFile = bind(kernel32, 'MoveFileExW', 'int', ['str16', 'str16', 'uint32'])
   const deleteFile = bind(kernel32, 'DeleteFileW', 'int', ['str16'])
+  const setFileInformation = bind(kernel32, 'SetFileInformationByHandle', 'int', [pointer, 'uint32', pointer, 'uint32'])
   const localFree = bind(kernel32, 'LocalFree', pointer, [pointer])
   const closeHandle = bind(kernel32, 'CloseHandle', 'int', [pointer])
   const getLastError = bind(kernel32, 'GetLastError', 'uint32', [])
@@ -433,6 +436,22 @@ export async function loadWindowsHostRegistrationFileBindings(
       try { checkedClose(handle) } catch (error) { failure ??= error }
       if (failure !== undefined) throwFailure(failure)
       return value
+    },
+    removePrivateFile(path, expected, userSid, guard) {
+      const handle = createFile(path, (GENERIC_READ | READ_CONTROL | FILE_READ_ATTRIBUTES | DELETE_ACCESS) >>> 0,
+        0, null, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, null) as NativePointer
+      if (!validHandle(handle)) lastError('CreateFileW')
+      const stable = handle as bigint
+      let failure: unknown
+      try {
+        assertWindowsHostPrivatePathEvidence(inspect(stable, path), 'file', userSid)
+        if (!readBounded(stable, expected.length).equals(expected)) throw Error('revision_conflict')
+        guard()
+        // FILE_DISPOSITION_INFO contains one BOOLEAN. Close deletes this verified object, never a reopened path.
+        if (Number(setFileInformation(stable, FILE_DISPOSITION_INFO, Buffer.from([1]), 1)) === 0) lastError('SetFileInformationByHandle')
+      } catch (error) { failure = error }
+      try { checkedClose(stable) } catch (error) { failure ??= error }
+      if (failure !== undefined) throwFailure(failure)
     },
     replacePrivateFile(path, contents, sddl) {
       const temporary = `${path}.${randomUUID()}.tmp`

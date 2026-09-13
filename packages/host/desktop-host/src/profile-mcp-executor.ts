@@ -1,14 +1,10 @@
-import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { isSeq, parseDocument } from 'yaml'
+import { PosixMcpStorage, type ProfileMcpStorage } from './profile-mcp-storage.ts'
 import { convertToRows, deleteMcpRow, extractMcpServers, mergeMcpRows, parseMcpJson, updateMcpRow } from '#hub-mcp'
 import type { ExtensionExecutor, ExtensionKind, ExtensionReceipt, McpRecovery } from './extension-operations.ts'
 
-interface ProfileMcpExecutorOptions {
-  /** Host resolves this from its registry; never accept a caller-supplied path. */
-  profileRoot(profileId: string): string
-  uid: number
+type ProfileMcpExecutorOptions = ({ profileRoot(profileId: string): string; uid: number } | { storage: ProfileMcpStorage }) & {
   /** Resolve only after the installed MCP configuration is observed by the running Profile. */
   reload(profileId: string, signal: AbortSignal, entryIds: readonly string[],
     guard: () => void, removedIds: readonly string[]): Promise<void>
@@ -17,33 +13,17 @@ interface ProfileMcpExecutorOptions {
 /** Reuses Hub conversion and AST merging while keeping file and reload authority inside Host. */
 export class ProfileMcpExecutor implements ExtensionExecutor {
   /** @param options Host-owned target resolver and runtime acknowledgement. */
-  constructor(private readonly options: ProfileMcpExecutorOptions) {}
-
-  private directory(profileId: string): string {
-    const root = this.options.profileRoot(profileId)
-    for (const path of [root, join(root, 'profiles'), join(root, 'profiles', 'web')]) {
-      const stat = lstatSync(path)
-      if (!stat.isDirectory() || stat.uid !== this.options.uid || (stat.mode & 0o022) !== 0) throw new Error('unsafe_profile')
-    }
-    return join(root, 'profiles', 'web')
+  constructor(private readonly options: ProfileMcpExecutorOptions) {
+    this.storage = 'storage' in options ? options.storage : new PosixMcpStorage(options)
   }
+  private readonly storage: ProfileMcpStorage
+
   private snapshot(profileId: string): string | null {
-    const file = join(this.directory(profileId), 'cordis.patch.yml')
-    let fd: number
-    try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    }
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.options.uid || (stat.mode & 0o022) !== 0 || stat.size > 1_048_576) {
-        throw new Error('unsafe_patch')
-      }
-      const text = readFileSync(fd, 'utf8')
-      const doc = parseDocument(text)
-      if (doc.errors.length || (doc.contents !== null && !isSeq(doc.contents))) throw new Error('invalid_patch')
-      return text
-    } finally { closeSync(fd) }
+    const text = this.storage.snapshot(profileId)
+    if (text === null) return null
+    const doc = parseDocument(text)
+    if (doc.errors.length || (doc.contents !== null && !isSeq(doc.contents))) throw new Error('invalid_patch')
+    return text
   }
   private read(profileId: string): string {
     return this.snapshot(profileId) ?? ''
@@ -129,10 +109,10 @@ export class ProfileMcpExecutor implements ExtensionExecutor {
     const evidence: McpRecovery = { beforeRevision: this.digest(originalSnapshot), afterRevision: this.digest(merged),
       originalPresent: originalSnapshot !== null, introducedIds, stage: 'prepared' }
     if (context.checkpointMcp && context.operationId) {
-      this.backup(profileId, context.operationId, originalSnapshot)
+      this.storage.backup(profileId, context.operationId, originalSnapshot)
       context.checkpointMcp(evidence)
     }
-    this.publish(profileId, merged, originalSnapshot, context.guard)
+    this.storage.publish(profileId, merged, originalSnapshot, context.guard)
     context.checkpointMcp?.({ ...evidence, stage: 'published' })
     try {
       await this.options.reload(profileId, context.signal, rows.map(row => row.id), context.guard, removedIds)
@@ -140,7 +120,7 @@ export class ProfileMcpExecutor implements ExtensionExecutor {
       if (this.snapshot(profileId) !== merged) throw Error('revision_conflict')
     } catch {
       // Restore only bytes still owned by this operation. Revocation or a concurrent edit leaves an unknown receipt.
-      this.publish(profileId, originalSnapshot, merged, context.guard)
+      this.storage.publish(profileId, originalSnapshot, merged, context.guard)
       context.checkpointMcp?.({ ...evidence, stage: 'restored' })
       await this.options.reload(profileId, context.signal, originalIds, context.guard, introducedIds)
       context.guard()
@@ -154,26 +134,9 @@ export class ProfileMcpExecutor implements ExtensionExecutor {
   private digest(snapshot: string | null): string {
     return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')
   }
-  private backupPath(profileId: string, operationId: string): string {
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(operationId)) throw Error('invalid_input')
-    return join(this.directory(profileId), `.mcp-before-${operationId}`)
-  }
-  private backup(profileId: string, operationId: string, snapshot: string | null): void {
-    const file = this.backupPath(profileId, operationId)
-    const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    try { writeFileSync(fd, snapshot === null ? '0' : `1${snapshot}`); fsyncSync(fd) } finally { closeSync(fd) }
-    this.syncDirectory(this.directory(profileId))
-  }
   private readBackup(profileId: string, original: ExtensionReceipt): string | null {
     if (original.profileId !== profileId || original.kind !== 'mcp' || !original.mcpRecovery) throw Error('invalid_recovery')
-    const fd = openSync(this.backupPath(profileId, original.operationId), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-    let text: string
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.options.uid || (stat.mode & 0o077) !== 0
-        || stat.size < 1 || stat.size > 1_048_577) throw Error('unsafe_backup')
-      text = readFileSync(fd, 'utf8')
-    } finally { closeSync(fd) }
+    const text = this.storage.readBackup(profileId, original.operationId)
     if (text !== '0' && !text.startsWith('1')) throw Error('invalid_backup')
     const snapshot = text === '0' ? null : text.slice(1)
     if ((snapshot !== null) !== original.mcpRecovery.originalPresent || this.digest(snapshot) !== original.mcpRecovery.beforeRevision) throw Error('invalid_backup')
@@ -205,7 +168,7 @@ export class ProfileMcpExecutor implements ExtensionExecutor {
     const evidence = original.mcpRecovery
     if (!evidence) throw Error('invalid_recovery')
     if (this.digest(current) !== evidence.afterRevision && current !== snapshot) throw Error('revision_conflict')
-    if (current !== snapshot) this.publish(profileId, snapshot, current, context.guard)
+    if (current !== snapshot) this.storage.publish(profileId, snapshot, current, context.guard)
     await this.options.reload(profileId, context.signal, extractMcpServers(snapshot ?? '').map(row => row.id),
       context.guard, evidence.introducedIds)
     context.guard()
@@ -219,32 +182,6 @@ export class ProfileMcpExecutor implements ExtensionExecutor {
     const rows = extractMcpServers(this.read(profileId)).filter(row => row.id === input.id)
     if (rows.length !== 1) throw new Error('invalid_input')
     return input.id
-  }
-  private publish(profileId: string, content: string | null, expected: string | null, guard: () => void): void {
-    guard()
-    const directory = this.directory(profileId)
-    if (content === null) {
-      guard()
-      if (this.snapshot(profileId) !== expected) throw new Error('revision_conflict')
-      if (expected !== null) unlinkSync(join(directory, 'cordis.patch.yml'))
-      this.syncDirectory(directory)
-      return
-    }
-    const temporary = join(directory, `.${randomUUID()}.mcp-tmp`)
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    let published = false
-    try {
-      try { writeFileSync(fd, content); fsyncSync(fd) } finally { closeSync(fd) }
-      guard()
-      if (this.snapshot(profileId) !== expected) throw new Error('revision_conflict')
-      renameSync(temporary, join(directory, 'cordis.patch.yml'))
-      published = true
-      this.syncDirectory(directory)
-    } finally { if (!published) unlinkSync(temporary) }
-  }
-  private syncDirectory(directory: string): void {
-    const dir = openSync(directory, constants.O_RDONLY | constants.O_NOFOLLOW)
-    try { fsyncSync(dir) } finally { closeSync(dir) }
   }
 
 }
