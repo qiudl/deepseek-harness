@@ -2,6 +2,7 @@ import { createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, verif
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import type {
+  HostExtensionCommand, HostExtensionResponse, HostExtensionKind, ProfileExtensionsRequest,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlErrorCode,
@@ -57,6 +58,7 @@ import type {
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import type { DesktopHost } from './desktop-host.ts'
+import type { ProfileExtensionOperations } from './extension-operations.ts'
 import type { SingleHostLock } from './single-instance.ts'
 
 /** Native peer evidence supplied by the embedding Desktop/Host process. */
@@ -84,6 +86,22 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  readonly extensions?: {
+    readonly operations: ProfileExtensionOperations
+    readonly kinds: readonly HostExtensionKind[]
+    readonly skillArchives?: boolean
+    readonly pluginRemove?: boolean
+    readonly pluginUpdate?: boolean
+    readonly pluginToggle?: boolean
+    readonly skillRemove?: boolean
+    readonly skillReplace?: boolean
+    readonly skillFiles?: boolean
+    readonly skillInvocation?: boolean
+    readonly mcpRemove?: boolean
+    readonly mcpUpdate?: boolean
+    inventory(profileId: string, kind: HostExtensionKind, signal?: AbortSignal):
+    Promise<readonly { id: string; name: string; transport: string }[]>
+  }
   readonly createMigrationExport?: (
     ownerId: string,
     profileId: string,
@@ -552,6 +570,7 @@ export class UnixHostServer {
     const server = this.server
     this.server = undefined
     for (const socket of this.connections) socket.destroy()
+    await this.options.extensions?.operations.dispose()
     if (server) {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -987,6 +1006,57 @@ export class UnixHostServer {
               runtime_generation: opened.runtimeGeneration,
             },
           })
+        } else if (frame.method === 'profile.extensions') {
+          const extension = this.options.extensions
+          if (!extension) throw new HostAuthorityError('upgrade_required')
+          const authority = () => {
+            if (lifetime.signal.aborted) throw new HostAuthorityError('stale')
+            return this.options.host.authorizeExtensionView({ viewLeaseId: frame.params.view_lease_id as never,
+              leaseGeneration: frame.params.lease_generation, runtimeGeneration: frame.params.runtime_generation, ownerId })
+          }
+          const profileId = authority()
+          const command = frame.params.command
+          if ('kind' in command && !extension.kinds.includes(command.kind)) throw new HostAuthorityError('upgrade_required')
+          let result: HostExtensionResponse
+          try {
+            if (command.action === 'inventory') {
+              const entries = await extension.inventory(profileId, command.kind, lifetime.signal)
+              authority()
+              result = { state: 'inventory', kind: command.kind, entries, ...(command.kind === 'plugin' && extension.pluginRemove ? { plugin_remove: true } : {}), ...(command.kind === 'plugin' && extension.pluginUpdate ? { plugin_update: true } : {}), ...(command.kind === 'plugin' && extension.pluginToggle ? { plugin_toggle: true } : {}), ...(command.kind === 'skill' && extension.skillArchives ? { skill_archives: true } : {}), ...(command.kind === 'skill' && extension.skillRemove ? { skill_remove: true } : {}), ...(command.kind === 'skill' && extension.skillReplace ? { skill_replace: true } : {}), ...(command.kind === 'skill' && extension.skillFiles ? { skill_files: true } : {}), ...(command.kind === 'skill' && extension.skillInvocation ? { skill_invocation: true } : {}), ...(command.kind === 'mcp' && extension.mcpRemove ? { mcp_remove: true } : {}), ...(command.kind === 'mcp' && extension.mcpUpdate ? { mcp_update: true } : {}) }
+            } else if (command.action === 'prepare') {
+              const plan = await extension.operations.prepare(authority, command.kind, command.payload)
+              result = { state: 'prepared', plan_id: plan.planId as never, kind: plan.kind, digest: plan.digest as never, expires_at: plan.expiresAt }
+            } else {
+              const receipt = command.action === 'commit'
+                ? extension.operations.commit(authority, command.plan_id, command.operation_id, lifetime.signal)
+                : command.action === 'cancel'
+                  ? extension.operations.cancel(authority, command.operation_id)
+                  : extension.operations.status(authority, command.operation_id)
+              result = { state: 'receipt', operation_id: receipt.operationId as never, outcome: receipt.state,
+                cancellation_requested: receipt.cancellationRequested, created_at: receipt.createdAt, updated_at: receipt.updatedAt,
+                ...(receipt.reason === undefined ? {} : { reason: receipt.reason }),
+                ...(receipt.skillSource === undefined ? {} : { skill_source: receipt.skillSource }),
+                ...(receipt.canRestore && receipt.skillRemoval ? { skill_restore: receipt.skillRemoval.entryId } : {}),
+                ...(receipt.canRestore && receipt.mcpRecovery ? { mcp_restore: true as const } : {}),
+                ...(receipt.canRestore && receipt.pluginToggleRecovery ? { plugin_restore: receipt.pluginToggleRecovery.packageName } : {}),
+                ...(receipt.canComplete && receipt.pluginPackage ? { plugin_complete: { action: receipt.pluginPackage.action,
+                  package_name: receipt.pluginPackage.packageName,
+                  ...(receipt.pluginPackage.spec ? { spec: receipt.pluginPackage.spec } : {}) } } : {}),
+                ...(receipt.restoredBy ? { restored_by: receipt.restoredBy as never } : {}),
+                ...(receipt.restores && receipt.recoveryMode !== 'complete' ? { restores_operation: receipt.restores as never } : {}),
+                ...(receipt.completedBy ? { completed_by: receipt.completedBy as never } : {}),
+                ...(receipt.restores && receipt.recoveryMode === 'complete' ? { completes_operation: receipt.restores as never } : {}) }
+            }
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            const code = error instanceof Error ? error.message : ''
+            if (code === 'expired') throw new HostAuthorityError('stale')
+            if (code === 'busy' || code === 'idempotency_conflict' || code === 'unauthorized' || code === 'upgrade_required') {
+              throw new HostAuthorityError(code)
+            }
+            throw new HostAuthorityError('invalid_input')
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.view_activate') {
           const activated = await this.options.host.activateView({
             profileId: frame.params.profile_id as never,
@@ -1043,6 +1113,7 @@ export class UnixHostServer {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
+          ...(this.options.extensions ? ['profile.extensions'] : []),
           ...(offlineAccountRecovery ? recoveryCapabilities : []),
           ...(migrationExport ? [
             'migration.export_snapshot.inventory', 'migration.export_snapshot.begin', 'migration.export_snapshot.read',
@@ -1496,6 +1567,32 @@ export class UnixHostClient {
   }
 
   /**
+   * Execute a negotiated extension command using a Main-held lease; no target paths cross the socket.
+   * @param input - lease, runtime generation, bounded command and optional cancellation.
+   * @returns a prepared plan, sanitized inventory or durable receipt; old Hosts reject before mutation.
+   */
+  async extensions(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: HostExtensionCommand
+    readonly signal?: AbortSignal
+  }): Promise<HostExtensionResponse> {
+    if (!this.inspection.capabilities.includes('profile.extensions' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileExtensionsRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.extensions', params: {
+        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+        runtime_generation: input.runtimeGeneration, command: input.command,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== 'profile.extensions') throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
    * Close one view lease on the connection that minted it.
    * @param input - lease identity, generations, and optional cancellation.
    */
@@ -1822,7 +1919,7 @@ export class UnixHostClient {
   }
 
   private async call(
-    request: ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
+    request: ProfileExtensionsRequest | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest

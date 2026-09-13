@@ -581,6 +581,26 @@ export class DesktopHost {
   }
 
   /**
+   * Resolve an extension target exclusively from a live, writable view lease.
+   * Offline recovery access cannot install extensions. Call again before each effect.
+   * @param input - Main-held lease and runtime generation, bound to the authenticated broker.
+   * @returns the currently authorized Profile id; throws for expired or revoked access.
+   */
+  authorizeExtensionView(input: {
+    readonly viewLeaseId: ProfileViewLeaseId
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly ownerId: string
+  }): PersonProfileId {
+    if (input.runtimeGeneration !== this.options.runtimeGeneration) throw new HostAuthorityError('stale')
+    const profileId = this.validateViewLease(input)
+    const profile = this.options.registry.resolveProfile(profileId)
+    if (!profile || (!this.hasGrant(input.ownerId, profileId, 'connected')
+      && !this.hasGrant(input.ownerId, profileId, 'local_profile'))) throw new HostAuthorityError('unauthorized')
+    return profileId
+  }
+
+  /**
    * Revoke one local window lease.
    * @param viewLeaseId - opaque lease to revoke.
    */

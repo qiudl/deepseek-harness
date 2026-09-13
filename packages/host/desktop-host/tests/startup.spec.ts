@@ -42,7 +42,8 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
       executableSignatureDigest: '1'.repeat(64), desktopTeamIdentifiers: ['TEAM123'],
       desktopExecutableDigests: ['2'.repeat(64)], runtimeGeneration: 1, schemaGeneration: 1,
     }
-    const app = await startDesktopHostApplication(config)
+    await expect(startDesktopHostApplication(Object.assign({}, config, { pnpmEntrypointPath: 'relative/pnpm.mjs' }))).rejects.toMatchObject({ code: 'invalid_input' })
+    const app = await startDesktopHostApplication(Object.assign({}, config, { pnpmEntrypointPath: privateKey }))
     expect(existsSync(join(root, 'host.sock'))).toBe(true)
     expect(JSON.parse(readFileSync(join(legacyDshRoot, 'host', 'registration.v1.json'), 'utf8'))).toEqual({
       schema_version: 1,

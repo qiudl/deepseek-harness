@@ -15,6 +15,8 @@ export type { HostControlProtocolFailure } from './codec.ts'
 export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.ts'
 export type { CanonicalMigrationRecord } from './migration-canonical.ts'
 export type {
+  HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
+  ProfileExtensionsRequest, ProfileExtensionsResult,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlCorrelationId,

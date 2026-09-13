@@ -263,6 +263,9 @@ describe('authenticated Unix transport', () => {
     expect(client.inspection.capabilities).not.toContain('profile.recover_offline_account')
     expect(client.inspection.capabilities).not.toContain('profile.open_offline_account')
     expect(client.inspection.capabilities).not.toContain('profile.recovery_status')
+    await expect(client.extensions({ viewLeaseId: randomUUID(), leaseGeneration: 1, runtimeGeneration: 5,
+      command: { action: 'inventory', kind: 'mcp' } })).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(client.isConnected()).toBe(true)
     client.close()
     await server.close()
   })

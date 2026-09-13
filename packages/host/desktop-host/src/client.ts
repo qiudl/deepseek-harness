@@ -9,3 +9,5 @@ export type {
 } from './unix-transport.ts'
 export type { ProfileOpenResult } from './types.ts'
 export { canonicalMigrationRecords, migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+
+export type { HostExtensionCommand, HostExtensionResponse } from '@deepseek-ai/dsh-host-control-protocol'

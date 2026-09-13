@@ -37,6 +37,8 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 
 面向用户调用的 `skills/list` 元数据包含胜出提供方可选的指令文件 `path`。输入框可据此预览文件，无需加载每个 skill 的正文或激活冷态 Agent。
 
+`skills/inspectProfile` 接受技能名称，返回默认预设 standing scope 中不按调用权限过滤的技能定义，包含正文和提供方路径。它不启动 Session、不传项目 cwd，默认预设缺失或不可用时直接拒绝，不回退到全局清单。Desktop Host 使用此认证 Remote 确认 Profile 内技能发布；项目覆盖和其他预设不在确认范围内。
+
 <a id="session-media-references"></a>
 ## 会话媒体引用
 
@@ -86,3 +88,5 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 </details>
 
 **运行时不变式：** 不发布伴生入口。每个分页与帧都会对照其指向的持久 Session 校验。
+
+`skills/profileCatalog` 从同一默认预设读取不按调用权限过滤的胜出摘要，返回名称、来源、可选的 Host 内部路径、调用开关和注册表快照完整性标记，不加载指令正文。Desktop Host 组合管理列表时拒绝不完整快照。

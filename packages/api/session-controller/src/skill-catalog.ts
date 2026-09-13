@@ -4,10 +4,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { SessionQueryError } from '@deepseek-ai/dsh-session-query'
-import { isUserInvocable } from '@deepseek-ai/dsh-skill'
+import { isSkillName, isUserInvocable } from '@deepseek-ai/dsh-skill'
 import type { ScopeKey } from '@deepseek-ai/dsh-scope'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import type { SkillListRequest, SkillListValue } from './types.ts'
+import type { ProfileSkillCatalogValue, ProfileSkillInspectionRequest, ProfileSkillInspectionValue, SkillListRequest, SkillListValue } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -23,6 +23,58 @@ export class SessionSkillCatalog extends TypertRemoteService {
   /** @param ctx - Host context carrying Session reads and optional skill/preset services. */
   constructor(ctx: Context) {
     super(ctx, 'sessionSkillCatalog', { namespace: 'skills' })
+  }
+
+  /**
+   * Read a Profile skill through the default standing preset without starting a Session.
+   * @param request Skill name; no caller-controlled filesystem path or project context.
+   * @param signal Lookup lifetime propagated into the registry.
+   * @returns The invocation-neutral winning definition, or null when absent.
+   * @throws RemoteError when the name is invalid or the preset or registry is unavailable; never falls back to a global catalog.
+   */
+  @Remote
+  async inspectProfile(request: ProfileSkillInspectionRequest, signal: AbortSignal): Promise<ProfileSkillInspectionValue> {
+    signal.throwIfAborted()
+    if (!isSkillName(request.name) || request.name.length > 64) throw new RemoteError('gateway/internal', 'invalid skill name', {})
+    const presets = this.ctx.get('agentPresets')
+    if (!presets) throw new RemoteError('gateway/internal', 'profile preset unavailable', {})
+    const scope = await presets.standingKeyFor()
+    signal.throwIfAborted()
+    const registry = this.ctx.get('skills')
+    if (!registry) throw new RemoteError('gateway/internal', 'profile skill registry unavailable', {})
+    const skill = await registry.get(request.name, { scope, signal })
+    signal.throwIfAborted()
+    if (!skill) return { skill: null }
+    return { skill: {
+      name: skill.name, description: skill.description, content: skill.content, source: skill.source, provider: skill.provider,
+      invocation: skill.invocation,
+      ...(skill.path === undefined ? {} : { path: skill.path }),
+      ...(skill.whenToUse === undefined ? {} : { whenToUse: skill.whenToUse }),
+    } }
+  }
+
+  /**
+   * List winning Profile skill summaries without loading instruction bodies or starting a Session.
+   * @param signal Lookup lifetime propagated into the default standing preset registry.
+   * @returns Invocation-neutral summaries and whether every provider was observed successfully.
+   * @throws RemoteError when the preset or registry is unavailable; never falls back to a global catalog.
+   */
+  @Remote
+  async profileCatalog(signal: AbortSignal): Promise<ProfileSkillCatalogValue> {
+    signal.throwIfAborted()
+    const presets = this.ctx.get('agentPresets')
+    if (!presets) throw new RemoteError('gateway/internal', 'profile preset unavailable', {})
+    const scope = await presets.standingKeyFor()
+    signal.throwIfAborted()
+    const registry = this.ctx.get('skills')
+    if (!registry) throw new RemoteError('gateway/internal', 'profile skill registry unavailable', {})
+    const snapshot = await registry.snapshot({ scope, signal })
+    signal.throwIfAborted()
+    return { complete: snapshot.complete, skills: snapshot.skills.map(skill => ({
+      name: skill.name, source: skill.source,
+      ...(skill.path === undefined ? {} : { path: skill.path }),
+      invocation: { modelInvocable: skill.invocation.modelInvocable, userInvocable: skill.invocation.userInvocable },
+    })) }
   }
 
   /**

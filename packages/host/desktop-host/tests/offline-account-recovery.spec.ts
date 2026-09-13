@@ -102,10 +102,14 @@ describe('offline Account Profile recovery', () => {
     })
     expect(workerStarts).toBe(1)
 
-    await expect(host.openOfflineAccountProfile({
+    const opened = await host.openOfflineAccountProfile({
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
-    }))
-      .resolves.toMatchObject({ profileId: original.profileId, accessScope: 'offline_local' })
+    })
+    expect(opened).toMatchObject({ profileId: original.profileId, accessScope: 'offline_local' })
+    expect(() => host.authorizeExtensionView({
+      viewLeaseId: opened.viewLeaseId, leaseGeneration: opened.leaseGeneration,
+      runtimeGeneration: 5, ownerId: 'connection-1',
+    })).toThrow(expect.objectContaining({ code: 'unauthorized' }))
     await expect(host.openProfile({
       authorityEnvironmentId: environmentId, accountBindingHandle: 'binding:original',
       authorityBindingVersion: 1, ownerId: 'connection-1',

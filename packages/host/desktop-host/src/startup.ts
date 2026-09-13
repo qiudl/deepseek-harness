@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync,
 } from 'node:fs'
+import { existsSync } from 'node:fs'
+import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -19,6 +21,17 @@ import {
 import {
   FileJsonlMigrationExportSource,
 } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export-source.ts'
+import { FileExtensionReceipts, ProfileExtensionOperations } from './extension-operations.ts'
+import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
+import { ProfileSkillExecutor } from './profile-skill-executor.ts'
+import { ProfilePluginExecutor } from './profile-plugin-executor.ts'
+import { runProfilePluginCommand } from './plugin-command.ts'
+import { planPluginToggle } from './plugin-toggle-plan.ts'
+import { pluginBundleEntries } from './plugin-bundle-entries.ts'
+import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
+import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
+import { readProfileSkillCatalog, readProfileSkillRuntime } from './skill-worker-client.ts'
+import { waitForMcpRuntime } from './mcp-runtime-ack.ts'
 import { DesktopHost } from './desktop-host.ts'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'
@@ -68,6 +81,7 @@ export interface Config {
   readonly registrationRoot?: string
   readonly nodeExecutablePath: string
   readonly dshEntrypointPath: string
+  readonly pnpmEntrypointPath?: string
   readonly deviceIndexKeyPath: string
   readonly accountKeyringPath: string
   readonly accountKeyringSha256: string
@@ -91,6 +105,7 @@ export const Config: z<Config> = z.object({
   registrationRoot: z.string(),
   nodeExecutablePath: z.string().required(),
   dshEntrypointPath: z.string().required(),
+  pnpmEntrypointPath: z.string(),
   deviceIndexKeyPath: z.string().required(),
   accountKeyringPath: z.string().required(),
   accountKeyringSha256: z.string().required(),
@@ -234,6 +249,7 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
   let server: UnixHostServer | undefined
   executableArtifact(config.nodeExecutablePath, uid)
   executableArtifact(config.dshEntrypointPath, uid)
+  if (config.pnpmEntrypointPath !== undefined) executableArtifact(config.pnpmEntrypointPath, uid)
   const workerFactory = new DshWebProfileWorkerFactory({
     nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
   })
@@ -357,6 +373,111 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
     const journal = new FileHostJournal(join(root, 'control', 'commands.jsonl'))
     const commandAuthority = new SessionCommandAuthority(journal, clock)
     const imports = new Map<string, OwnerMigrationImportService>()
+    const mcpExecutor = new ProfileMcpExecutor({
+      uid,
+      profileRoot: (profileId) => {
+        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        return join(root, 'profiles', profileId)
+      },
+      reload: async (profileId, signal, entryIds, guard, removedIds) => {
+        guard()
+        const profile = registry.resolveProfile(profileId as never)
+        if (!profile) throw new HostAuthorityError('stale')
+        await workers.dispose(profileId)
+        guard()
+        await ensureWorker(profile)
+        guard()
+        await waitForMcpRuntime(await workers.activate(profileId), entryIds, signal, removedIds)
+      },
+    })
+    const skillExecutor = new ProfileSkillExecutor({
+      uid,
+      catalog: async (profileId, signal) => {
+        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        return readProfileSkillCatalog(await workers.activate(profileId), signal)
+      },
+      profileRoot: (profileId) => {
+        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        return join(root, 'profiles', profileId)
+      },
+      acknowledge: async (profileId, name, _content, signal, guard) => {
+        guard()
+        const profile = registry.resolveProfile(profileId as never)
+        if (!profile) throw new HostAuthorityError('stale')
+        await workers.dispose(profileId)
+        guard()
+        await ensureWorker(profile)
+        guard()
+        return readProfileSkillRuntime(await workers.activate(profileId), name, signal)
+      },
+    })
+    const pnpmEntrypointPath = config.pnpmEntrypointPath
+    const pluginExecutor = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
+      uid,
+      togglePlan: (profileId, packageName, enabled, patch) => {
+        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        const profileRoot = join(root, 'profiles', profileId)
+        const loaded = loadProfileDirectory('dsh', join(profileRoot, 'profiles/web'), config.dshEntrypointPath)
+        const homePatch = join(profileRoot, 'cordis.patch.yml')
+        return planPluginToggle(loaded.layers, patch, existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [], packageName, enabled)
+      },
+      repair: (profileRoot, packageName, context) => runProfilePluginCommand({
+        nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+        pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec: packageName, action: 'repair',
+        signal: context.signal, guard: context.guard,
+      }),
+      remove: (profileRoot, packageName, context) => runProfilePluginCommand({
+        nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+        pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec: packageName, action: 'remove',
+        signal: context.signal, guard: context.guard,
+      }),
+      acknowledgeRemoval: async (profileId, ids, context) => {
+        context.guard(); context.signal.throwIfAborted()
+        const profile = registry.resolveProfile(profileId as never)
+        if (!profile) throw new HostAuthorityError('stale')
+        await workers.dispose(profileId)
+        context.guard(); await ensureWorker(profile); context.guard()
+        await waitForPluginRuntime(await workers.activate(profileId), [], context.signal, ids)
+      },
+      acknowledgeToggle: async (profileId, plan, context) => {
+        context.guard(); context.signal.throwIfAborted()
+        const profile = registry.resolveProfile(profileId as never)
+        if (!profile) throw new HostAuthorityError('stale')
+        await workers.dispose(profileId)
+        context.guard(); context.signal.throwIfAborted()
+        await ensureWorker(profile)
+        context.guard(); context.signal.throwIfAborted()
+        await waitForPluginRuntime(await workers.activate(profileId), plan.expected, context.signal, [], plan.disabled)
+      },
+      resolve: (profileId) => {
+        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        return join(root, 'profiles', profileId)
+      },
+      install: (profileRoot, spec, context) => runProfilePluginCommand({
+        nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+        pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec,
+        signal: context.signal, guard: context.guard,
+      }),
+      acknowledge: async (profileId, packageName, context) => {
+        context.guard(); context.signal.throwIfAborted()
+        const profile = registry.resolveProfile(profileId as never)
+        if (!profile) throw new HostAuthorityError('stale')
+        const profileRoot = join(root, 'profiles', profileId)
+        const loaded = loadProfileDirectory('dsh', join(profileRoot, 'profiles/web'), config.dshEntrypointPath)
+        const homePatch = join(profileRoot, 'cordis.patch.yml')
+        const overrides = [...loaded.patches, ...(existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [])]
+        const expected = pluginBundleEntries(loaded.layers, overrides, packageName)
+        await workers.dispose(profileId)
+        context.guard(); context.signal.throwIfAborted()
+        await ensureWorker(profile)
+        context.guard(); context.signal.throwIfAborted()
+        await waitForPluginRuntime(await workers.activate(profileId), expected, context.signal)
+      },
+    })
+    const executor = new ProfileExtensionExecutor(mcpExecutor, skillExecutor, pluginExecutor)
+    const extensionOperations = new ProfileExtensionOperations(
+      new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid), executor, clock,
+    )
     const socketPath = join(root, 'host.sock')
     server = new UnixHostServer({
       socketPath, ownership, expectedUid: uid,
@@ -370,6 +491,11 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
         runtimeGeneration: config.runtimeGeneration, schemaGeneration: config.schemaGeneration,
       },
       host,
+      extensions: { operations: extensionOperations, kinds: pluginExecutor ? ['plugin', 'mcp', 'skill'] : ['mcp', 'skill'],
+        pluginRemove: pluginExecutor !== undefined, pluginUpdate: pluginExecutor !== undefined, pluginToggle: pluginExecutor !== undefined,
+        skillArchives: true, skillRemove: true, skillReplace: true, skillFiles: true, skillInvocation: true,
+        mcpRemove: true, mcpUpdate: true,
+        inventory: (profileId, kind, signal) => executor.inventory(profileId, kind, signal) },
       profilePersistenceGeneration: async profileId => (await targetFor(profileId).activePersistenceConfig()).generation,
       ...(config.legacySourceQuiescent === true ? {
         createLegacyMigrationExport: () => createLegacyMigrationExportService({
