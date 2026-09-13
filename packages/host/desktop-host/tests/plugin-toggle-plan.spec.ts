@@ -2,9 +2,36 @@ import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { composeEntries } from '@deepseek-ai/dsh-app-boot'
 import { parseDocument } from 'yaml'
-import { planPluginToggle } from '../src/plugin-toggle-plan.ts'
+import { planPluginToggle, removePluginToggleOverrides } from '../src/plugin-toggle-plan.ts'
 const base = { packageName: 'base', patches: [{ insert: [{ id: 'core', name: 'core-service' }] }] }
 const bundle = { packageName: 'fixture', patches: [{ insert: [{ id: 'tool', name: 'fixture-tool', config: { value: 1 } }] }] }
+it('refuses empty bundles and duplicate entry identities as toggle targets', () => {
+  expect(() => planPluginToggle([base, { packageName: 'fixture', patches: [] }], '', [], 'fixture', false))
+    .toThrow('plugin_toggle_unsupported')
+  const duplicate = { packageName: 'fixture', patches: [{ insert: [{ id: 'core', name: 'other' }] }] }
+  expect(() => planPluginToggle([base, duplicate], '', [], 'fixture', false)).toThrow('plugin_entry_ambiguous')
+})
+it('rejects malformed YAML and patches exceeding the persisted byte limit', () => {
+  expect(() => planPluginToggle([base, bundle], '- id: [', [], 'fixture', false)).toThrow('invalid_patch')
+  expect(() => planPluginToggle([base, bundle], `# ${'x'.repeat(1_048_576)}\n`, [], 'fixture', false))
+    .toThrow('invalid_patch')
+})
+it('removes only the removed plugin standalone toggles while retaining unrelated settings', () => {
+  const patch = '# retained\n- id: core\n  disabled: false\n- id: tool\n  disabled: true\n- id: tool\n  config:\n    value: 3\n  disabled: false\n- id: tool\n  disabled: !!js process.platform\n'
+  const result = removePluginToggleOverrides(patch, ['tool'])
+  expect(result).toContain('# retained')
+  expect(result).toContain('!!js process.platform')
+  expect(parseDocument(result).toJSON()).toEqual([
+    { id: 'core', disabled: false }, { id: 'tool', config: { value: 3 }, disabled: false },
+    { id: 'tool', disabled: 'process.platform' },
+  ])
+})
+it.each(['', '# preserved\n', '[]\n', '- scalar\n- id: 7\n  disabled: true\n'])('retains an unchanged patch byte-for-byte: %j', (patch) => {
+  expect(removePluginToggleOverrides(patch, ['tool'])).toBe(patch)
+})
+it.each(['not: a-list', '- id: ['])('refuses invalid patch syntax during removal: %j', (patch) => {
+  expect(() => removePluginToggleOverrides(patch, ['tool'])).toThrow('invalid_patch')
+})
 it('plans reversible toggles for independent bundle entries without changing configuration or other entries', () => {
   const patch = '# keep comment\n- id: core\n  config:\n    value: !!js process.platform\n'
   const disabled = planPluginToggle([base, bundle], patch, [], 'fixture', false)

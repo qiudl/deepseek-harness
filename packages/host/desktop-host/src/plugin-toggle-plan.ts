@@ -24,8 +24,10 @@ export function planPluginToggle(
 ): PluginTogglePlan {
   if (layers.filter(layer => layer.packageName === packageName).length !== 1) throw Error('plugin_bundle_missing')
   const doc: Document = parseDocument(patch)
-  if (doc.errors.length || doc.contents !== null && !isSeq(doc.contents)) throw Error('invalid_patch')
-  const local = (doc.toJSON() ?? []) as ProfileLayer['patches']
+  if (doc.errors.length) throw Error('invalid_patch')
+  if (doc.contents === null) doc.contents = doc.createNode([])
+  if (!isSeq(doc.contents)) throw Error('invalid_patch')
+  const local = doc.toJSON() as ProfileLayer['patches']
   const baseline = layers.filter(layer => layer.packageName !== packageName).map(layer => layer.patches)
   const before = composeEntries([...baseline, local, overrides])
   const after = composeEntries([...layers.map(layer => layer.patches), local, overrides])
@@ -42,8 +44,6 @@ export function planPluginToggle(
       throw Error('plugin_toggle_unsupported')
     }
   }
-  if (doc.contents === null) doc.contents = doc.createNode([])
-  if (!isSeq(doc.contents)) throw Error('invalid_patch')
   for (const row of changed) {
     if ((row.disabled !== true) === enabled) continue
     const last = doc.contents.items.at(-1)
