@@ -350,6 +350,13 @@ describe('CI workflow', () => {
       }
     }
 
+    for (const job of [node24, node24Coverage, node24Consumers]) {
+      for (const login of ['maintainer', 'dependabot[bot]']) {
+        expect(evaluate(job['runs-on'] as string, { DSH_CI_FAILOVER_LINUX: 'github' }, login)).toBe('ubuntu-24.04')
+      }
+    }
+    expect(evaluate(selectors.windows, { DSH_CI_FAILOVER_LINUX: 'github' })).toBe('dsh-windows-2025-16core')
+
     // The run-gates aggregate lanes stop at the first blocking gate failure so
     // a red aggregate does not keep burning runner time on the remaining
     // gates. Removing the flag silently reverts to running every independent

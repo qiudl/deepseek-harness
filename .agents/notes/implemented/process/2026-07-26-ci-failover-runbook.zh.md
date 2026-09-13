@@ -38,6 +38,10 @@ Status: implemented
 
 **谁能扳动这个变量。**GitHub 的 API 允许任何具有写权限的协作者管理仓库变量，因此每个开关实际是写者级而非严格的管理员级。在本仓库的信任模型下这并不构成升权：runner group 接纳本私有、禁 fork 仓库的全部工作流（这是让 PR 引用的故障切换得以成立的刻意取舍），因此任何写者本就可以通过推送分支工作流触达这台虚拟机。抵御不可信代码的边界是仓库成员资格；变量只是为成员路由工作。
 
+## 无企业运行器的 fork
+
+`DSH_CI_FAILOVER_LINUX=github` 仅将 `ci.yml` 中三个企业 Linux worker 路由到 GitHub 标准 `ubuntu-24.04` 镜像。这个由写者显式选择的取值使 fork 无需上游私有 runner 标签也能执行静态、覆盖率及快照/产物检查。命令、阈值、超时与依赖汇总结论保持原样；基准作业保留既有主机，不借此重新定义性能基线。Windows 路由独立。标准机器可能耗时更长或资源不足，这些仍然是失败，调整调度预算前必须有证据。删除变量即可恢复默认企业标签；已排队作业需要新运行。
+
 ## 切换期间的容量
 
 Linux 开关启用期间，容量需覆盖 master 热备、主 CI 作业，以及每个符合条件的 PR 或 master 推送的三个发布演练作业。每个可信 PR 还会增加三个门禁并发度为一的 Node 兼容性作业，包括需要构建的 Node 22 条目和冷临时运行时下载。发布演练工作流依据[取消策略](2026-09-09-cancel-superseded-ci.zh.md)取消各工作流/引用组内被取代的运行；不同引用仍可能增加并发构建、打包和安装负载。延长自托管运行前，检查当前 CPU、内存、磁盘和队列压力；同一虚拟机上新增注册只增加调度槽位，不增加机器资源。不能只依据热备负载推断空闲容量。主机资源允许增加注册实例时，使用组织级注册 token（组织 Settings → Actions → Runners → New runner）。复制现有 runner 目录时**必须排除身份文件**——`rsync -a --exclude '.runner*' --exclude '.credentials*' --exclude '_diag' --exclude '_work' <src>/ <dst>/`（通配同时排除 `.runner_migrated`/`.credentials_migrated`——GitHub 会在迁移过的运行器上写入这些文件，它们同样会触发 already-configured 拒绝）——再跑 `config.sh`（原样拷贝 `.runner`/`.credentials` 会使其以 "already configured" 拒绝），然后**启动监听器**：`sudo ./svc.sh install ubuntu && sudo ./svc.sh start`。仅注册不会上线；启动服务增加的是调度槽位，而非 CPU 或内存。
@@ -45,7 +49,7 @@ Linux 开关启用期间，容量需覆盖 master 热备、主 CI 作业，以�
 
 ### 切回
 
-删除 `DSH_CI_FAILOVER_LINUX` 或 `DSH_CI_FAILOVER_WINDOWS` 变量（或改为 `selfhosted` 与 `blacksmith` 之外的任何值），新的运行即解析回各自的托管池。设为 `blacksmith` 会让作业留在 Blacksmith，直到该值改变。若故障期间追加注册过实例，将其移除。
+删除 `DSH_CI_FAILOVER_LINUX` 或 `DSH_CI_FAILOVER_WINDOWS` 变量（或改为 `selfhosted`、`blacksmith` 及仅 Linux 支持的 `github` 之外的任何值），新的运行即解析回各自的托管池。设为 `blacksmith` 会让作业留在 Blacksmith，直到该值改变。若故障期间追加注册过实例，将其移除。
 
 ### 信任边界
 

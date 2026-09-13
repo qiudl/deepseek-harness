@@ -38,6 +38,10 @@ The two switches are independent: flip only the one whose platform is degraded.
 
 **Who can flip the variable.** GitHub's API lets any collaborator with write access manage repository variables, so each switch is writer-level, not strictly admin-only. In this repository's trust model that is not an escalation: the runner groups admit all workflows of this private, fork-disabled repository (a deliberate trade to make PR-ref failover possible at all), so any writer could already reach the VMs by pushing a branch workflow. The boundary against untrusted code is repository membership; the variables only route work for members.
 
+## Forks without enterprise runners
+
+`DSH_CI_FAILOVER_LINUX=github` routes only the three enterprise Linux workers in `ci.yml` to GitHub's standard `ubuntu-24.04` images. This explicit writer-controlled choice lets a fork run static, coverage, and snapshot/artifact checks without access to upstream private runner labels. The commands, thresholds, timeouts, and dependency verdict remain intact; benchmark jobs retain their existing hosts so this route does not redefine performance baselines. Windows routing is independent. Standard machines may take longer or exhaust resources; such failures remain failures and require evidence before changing scheduling budgets. Delete the variable to restore the default enterprise labels. Already queued jobs need a fresh run.
+
 ## Capacity during failover
 
 Capacity includes the master standby, main-CI jobs, and three release-rehearsal jobs for each eligible PR or master push while the Linux switch is set. Each trusted PR also adds three Node compatibility jobs at gate concurrency one, including the build-backed Node 22 leg and cold temporary runtime downloads. The release rehearsal workflows cancel superseded runs within each workflow/ref group under the [cancellation policy](2026-09-09-cancel-superseded-ci.md); different refs can still add concurrent build, pack, and install load. Check current CPU, memory, disk, and queue pressure before extending self-hosted operation; extra registrations on this VM add scheduling slots, not machine resources. Do not infer spare capacity from the standby alone. When host resources permit extra registrations, use an org registration token (org Settings → Actions → Runners → New runner). Clone an existing runner directory **excluding its identity files** — `rsync -a --exclude '.runner*' --exclude '.credentials*' --exclude '_diag' --exclude '_work' <src>/ <dst>/` (the globs also catch `.runner_migrated`/`.credentials_migrated`, which GitHub writes on migrated runners and which equally trigger the already-configured refusal) — then run `config.sh` (copying `.runner`/`.credentials` verbatim makes it refuse with "already configured"), and **start the listener**: `sudo ./svc.sh install ubuntu && sudo ./svc.sh start`. Registration alone leaves the runner offline; a started service adds a scheduling slot, not CPU or memory.
@@ -45,7 +49,7 @@ Capacity includes the master standby, main-CI jobs, and three release-rehearsal 
 
 ### Switch back
 
-Delete the `DSH_CI_FAILOVER_LINUX` or `DSH_CI_FAILOVER_WINDOWS` variable (or set it to any value other than `selfhosted` or `blacksmith`). New runs resolve back to their hosted pools. Setting it to `blacksmith` keeps the jobs on Blacksmith until the value changes. Remove any extra instances that were registered during the incident.
+Delete the `DSH_CI_FAILOVER_LINUX` or `DSH_CI_FAILOVER_WINDOWS` variable (or set it to any value other than `selfhosted`, `blacksmith`, or the Linux-only `github`). New runs resolve back to their hosted pools. Setting it to `blacksmith` keeps the jobs on Blacksmith until the value changes. Remove any extra instances that were registered during the incident.
 
 ### Trust boundary
 
