@@ -1,5 +1,6 @@
+import { readExtensionStateFile, readExtensionBackupFile } from './posix-extension-files.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, lstatSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import type { ExtensionExecutor, ExtensionKind, ExtensionReceipt, PluginToggleRecovery } from './extension-operations.ts'
 import { removePluginToggleOverrides, type PluginTogglePlan } from './plugin-toggle-plan.ts'
@@ -69,18 +70,9 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     return root
   }
   private read(root: string, path: string): string | null {
-    let fd: number
-    try { fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    }
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.options.uid || (stat.mode & 0o022) !== 0
-        || stat.size > 16_777_216) throw Error('unsafe_plugin_state')
-      return readFileSync(fd, 'utf8')
-    } finally { closeSync(fd) }
+    return readExtensionStateFile(join(root, path), this.options.uid, 16_777_216, 'unsafe_plugin_state')
   }
+
   private manifest(profileId: string): Record<string, unknown> {
     return record(JSON.parse(this.read(this.root(profileId), 'profiles/web/package.json') ?? 'null'))
   }
@@ -230,14 +222,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   private readToggleBackup(profileId: string, receipt: ExtensionReceipt): string | null {
     const evidence = receipt.pluginToggleRecovery
     if (receipt.profileId !== profileId || receipt.kind !== 'plugin' || !evidence) throw Error('invalid_recovery')
-    const fd = openSync(this.backupPath(profileId, receipt.operationId), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-    let text: string
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.options.uid || (stat.mode & 0o077) !== 0
-        || stat.size < 1 || stat.size > 1_048_577) throw Error('unsafe_backup')
-      text = readFileSync(fd, 'utf8')
-    } finally { closeSync(fd) }
+    const text = readExtensionBackupFile(this.backupPath(profileId, receipt.operationId), this.options.uid)
     if (text !== '0' && !text.startsWith('1')) throw Error('invalid_backup')
     const patch = text === '0' ? null : text.slice(1)
     if (this.patchDigest(patch) !== evidence.backupDigest) throw Error('invalid_backup')

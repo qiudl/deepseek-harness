@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { FileExtensionReceipts, ProfileExtensionOperations } from '../src/extension-operations.ts'
 import { ProfileMcpExecutor } from '../src/profile-mcp-executor.ts'
+import { PosixMcpStorage } from '../src/profile-mcp-storage.ts'
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'host-mcp-'))
@@ -22,6 +23,29 @@ function fixture() {
   return { root, profileId, home, web, patch, original, receipts, target }
 }
 const payload = JSON.stringify({ mcpServers: { demo: { url: 'http://127.0.0.1:1234/mcp', headers: { Authorization: '${MCP_TEST_KEY}' } } } })
+
+it('rejects invalid recovery identities before creating or reading a backup', () => {
+  const f = fixture()
+  const storage = new PosixMcpStorage({ profileRoot: f.target, uid: process.getuid!() })
+  for (const id of ['../outside', '', 'not-a-uuid']) {
+    expect(() => storage.backup(f.profileId, id, f.original)).toThrow('invalid_input')
+    expect(() => storage.readBackup(f.profileId, id)).toThrow('invalid_input')
+  }
+  expect(readFileSync(f.patch, 'utf8')).toBe(f.original)
+})
+it('preserves a concurrently changed patch instead of deleting it during restoration', () => {
+  const f = fixture()
+  const storage = new PosixMcpStorage({ profileRoot: f.target, uid: process.getuid!() })
+  expect(() => storage.publish(f.profileId, null, 'older patch', () => {})).toThrow('revision_conflict')
+  expect(readFileSync(f.patch, 'utf8')).toBe(f.original)
+})
+it('accepts an already absent patch when restoring original absence', () => {
+  const f = fixture()
+  const storage = new PosixMcpStorage({ profileRoot: f.target, uid: process.getuid!() })
+  unlinkSync(f.patch)
+  storage.publish(f.profileId, null, null, () => {})
+  expect(storage.snapshot(f.profileId)).toBeNull()
+})
 
 describe('Host Profile MCP execution', () => {
   it('merges using Hub semantics into only the resolved Profile and waits for reload acknowledgement', async () => {

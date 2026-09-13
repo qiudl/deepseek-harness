@@ -1,5 +1,6 @@
+import { readExtensionStateFile, readExtensionBackupFile } from './posix-extension-files.ts'
 import { randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, lstatSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Profile patch persistence; callers own authorization and the single Host lease. */
@@ -33,20 +34,9 @@ export class PosixMcpStorage implements ProfileMcpStorage {
   }
   snapshot(profileId: string): string | null {
     const file = join(this.directory(profileId), 'cordis.patch.yml')
-    let fd: number
-    try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    }
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.options.uid || (stat.mode & 0o022) !== 0 || stat.size > 1_048_576) {
-        throw new Error('unsafe_patch')
-      }
-      const text = readFileSync(fd, 'utf8')
-      return text
-    } finally { closeSync(fd) }
+    return readExtensionStateFile(file, this.options.uid, 1_048_576, 'unsafe_patch')
   }
+
   private backupPath(profileId: string, operationId: string): string {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(operationId)) throw Error('invalid_input')
     return join(this.directory(profileId), `.mcp-before-${operationId}`)
@@ -58,16 +48,9 @@ export class PosixMcpStorage implements ProfileMcpStorage {
     this.syncDirectory(this.directory(profileId))
   }
   readBackup(profileId: string, operationId: string): string {
-    const fd = openSync(this.backupPath(profileId, operationId), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-    let text: string
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.options.uid || (stat.mode & 0o077) !== 0
-        || stat.size < 1 || stat.size > 1_048_577) throw Error('unsafe_backup')
-      text = readFileSync(fd, 'utf8')
-    } finally { closeSync(fd) }
-    return text
+    return readExtensionBackupFile(this.backupPath(profileId, operationId), this.options.uid)
   }
+
   publish(profileId: string, content: string | null, expected: string | null, guard: () => void): void {
     guard()
     const directory = this.directory(profileId)

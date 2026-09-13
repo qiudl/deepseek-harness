@@ -99,3 +99,5 @@ Boundary tests exercise untrusted Skill catalog metadata, merged inventory limit
 Profile Skill inspection and catalog reads share one default-preset registry resolver, preserving cancellation after mounting and refusal when the preset or registry is missing. Source-plane tests cover both Profile and existing Session reads; the catalog module now reaches per-file 100% coverage without a duplicate preset-validation block.
 
 Plugin inventory and Skill reads share bounded worker-response decoding. Their 512 KiB and 256 KiB limits remain endpoint-owned; RPC identity and payload checks remain in each caller. The shared reader cancels rejected HTTP bodies and rejects oversized streams before JSON parsing.
+
+MCP patches and Plugin dependency state share POSIX file reads with endpoint-owned size limits and error identities. Recovery backups share the stricter private-file mode and presence-marker size bounds. Missing state remains distinct from an unreadable, linked, foreign-owned or oversized file; backup absence remains an error.

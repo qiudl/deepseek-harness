@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
@@ -27,6 +27,16 @@ function fixture(acknowledged = true) {
   return { root, web, manifest, executor, store, operations, authority, calls: () => calls }
 }
 const payload = JSON.stringify({ packageName: 'fixture', spec: 'fixture@1.0.0' })
+it('refuses a symlink manifest before installing without changing its target', () => {
+  const f = fixture()
+  const target = join(f.root, 'preserved-package.json')
+  renameSync(f.manifest, target)
+  symlinkSync(target, f.manifest)
+  expect(() => f.executor.validate(f.authority(), 'plugin', payload))
+    .toThrowError(expect.objectContaining({ code: 'ELOOP' }))
+  expect(f.calls()).toBe(0)
+  expect(readFileSync(target, 'utf8')).toBe('{}')
+})
 it('persists success after acknowledgement and does not repeat a confirmed install', async () => {
   const f = fixture(); const plan = await f.operations.prepare(f.authority, 'plugin', payload); const id = randomUUID()
   f.operations.commit(f.authority, plan.planId, id); f.operations.commit(f.authority, plan.planId, id)
