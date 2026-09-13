@@ -42,7 +42,18 @@ it('installs MCP through the authenticated socket into the leased Profile and re
       { id: 'tools', name: '@deepseek-ai/dsh-tools' },
     ]))
     loaded = await boot('host-wire-test', config, loadOptionalPatches('host-wire-test', join(home(id), 'profiles/web/cordis.patch.yml')),
-      undefined, new URL('../../../../apps/cli/', import.meta.url).href)
+      (context) => {
+        // Resolve real plugins through Vitest so coverage needs no built lib tree.
+        context.loader.internal = {
+          version: 'v2',
+          async import(specifier: string) {
+            if (specifier === '@deepseek-ai/dsh-system-prompt') return import('@deepseek-ai/dsh-system-prompt')
+            if (specifier === '@deepseek-ai/dsh-tools') return import('@deepseek-ai/dsh-tools')
+            if (specifier === '@deepseek-ai/dsh-mcp-client') return import('@deepseek-ai/dsh-mcp-client')
+            throw Error(`unexpected Loader import: ${specifier}`)
+          },
+        } as unknown as NonNullable<typeof context.loader.internal>
+      })
     for (const entry of entries) expect(loaded.tools.get(`mcp__${entry.slice(4)}__ping`)).toBeDefined()
     for (const entry of removed) expect(loaded.tools.get(`mcp__${entry.slice(4)}__ping`)).toBeUndefined()
   } })

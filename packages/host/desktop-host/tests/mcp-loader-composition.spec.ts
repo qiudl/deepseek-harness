@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
 import { expect, it, onTestFinished } from 'vitest'
 import { boot, loadOptionalPatches } from '@deepseek-ai/dsh-app-boot'
 import type { Context } from '@deepseek-ai/cordis'
@@ -27,7 +26,18 @@ it('loads the installed Hub MCP rows through the real Loader and calls the disco
     uid: process.getuid!(), reload: async () => {
       await ctx?.fiber.dispose()
       ctx = await boot('host-mcp-test', config, loadOptionalPatches('host-mcp-test', join(web, 'cordis.patch.yml')),
-        undefined, pathToFileURL(fileURLToPath(new URL('../../../../apps/cli/', import.meta.url))).href)
+        (context) => {
+          // Resolve real plugins through Vitest so coverage needs no built lib tree.
+          context.loader.internal = {
+            version: 'v2',
+            async import(specifier: string) {
+              if (specifier === '@deepseek-ai/dsh-system-prompt') return import('@deepseek-ai/dsh-system-prompt')
+              if (specifier === '@deepseek-ai/dsh-tools') return import('@deepseek-ai/dsh-tools')
+              if (specifier === '@deepseek-ai/dsh-mcp-client') return import('@deepseek-ai/dsh-mcp-client')
+              throw Error(`unexpected Loader import: ${specifier}`)
+            },
+          } as unknown as NonNullable<typeof context.loader.internal>
+        })
     } })
   const operations = new ProfileExtensionOperations(new FileExtensionReceipts(join(root, 'receipts'), process.getuid!()), executor, { now: () => 1000 })
   onTestFinished(async () => {

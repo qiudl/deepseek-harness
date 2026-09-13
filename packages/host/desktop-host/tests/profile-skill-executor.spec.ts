@@ -79,7 +79,18 @@ it('loads the installed Markdown through the real Cordis Loader and filesystem s
           config: { dshHome: join(root, id), agentsHome: join(root, 'isolated-agents'), watch: false } },
       ]))
       await loaded?.fiber.dispose()
-      loaded = await boot('host-skill-test', config, [], undefined, new URL('../../../../apps/cli/', import.meta.url).href)
+      loaded = await boot('host-skill-test', config, [], (ctx) => {
+        // Keep this coverage fixture in Vitest's source plane, like the other
+        // Loader composition suites; native imports require prebuilt lib files.
+        ctx.loader.internal = {
+          version: 'v2',
+          async import(specifier: string) {
+            if (specifier === '@deepseek-ai/dsh-skill') return import('@deepseek-ai/dsh-skill')
+            if (specifier === '@deepseek-ai/dsh-skill-filesystem') return import('@deepseek-ai/dsh-skill-filesystem')
+            throw Error(`unexpected Loader import: ${specifier}`)
+          },
+        } as unknown as NonNullable<typeof ctx.loader.internal>
+      })
       const actual = await loaded.skills.get(name, { signal })
       expect(actual?.source).toBe('user-dsh')
       expect(actual?.path).toBe(join(root, id, 'skills', name, 'SKILL.md'))

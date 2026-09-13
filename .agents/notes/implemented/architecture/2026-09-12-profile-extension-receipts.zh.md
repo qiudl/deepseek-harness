@@ -46,7 +46,7 @@ worker 生命周期按 Profile 串行，防止并发确保运行产生第二个�
 
 [运行时观测校验器](../../../../packages/host/desktop-host/src/skill-runtime-ack.ts) 拒绝名称相同但路径、来源、正文、路由元数据或调用权限不同的技能。它读取不按调用权限过滤的定义，因为会话命令清单会排除仅允许模型调用的技能。回调未返回定义时，回执保持持久未知状态。worker 接口先解析默认预设的 standing scope 再返回定义；全局清单不能证明预设可见性。
 
-[Skill socket 组合测试](../../../../packages/host/desktop-host/tests/skills-wire.spec.ts) 通过认证 Unix client 提交计划，写入 Profile 技能，再经 HTTP、生成的 RPC 分发、真实默认预设与文件系统提供方读取定义。定义在全局注册表中不存在，但在预设作用域中可见。重复提交仅执行一次确认，另一 Profile 无法读取回执，期间发生的 MCP 编辑会使 Skill 计划失效。夹具提供 Cookie 认证和 peer attestation；原生 worker 启动、浏览器刷新和打包仍需安装后的应用验收。
+[Skill socket 组合测试](../../../../packages/host/desktop-host/tests/skills-wire.e2e.ts) 通过认证 Unix client 提交计划，写入 Profile 技能，再经 HTTP、生成的 RPC 分发、真实默认预设与文件系统提供方读取定义。定义在全局注册表中不存在，但在预设作用域中可见。重复提交仅执行一次确认，另一 Profile 无法读取回执，期间发生的 MCP 编辑会使 Skill 计划失效。夹具提供 Cookie 认证和 peer attestation；原生 worker 启动、浏览器刷新和打包仍需安装后的应用验收。
 
 Skill socket 测试也接受 `SLARK_EXTENSION_ACCEPTANCE_ROOT`，其子进程运行真实 Slark broker、本地 HTTP 端点、Desktop client、共用安装协调器和持久 UUID 日志，并验证回执恢复、视图 context 更新和 Profile 隔离。Electron 单独验证 Hub 新建/模板按钮及断连处理；该夹具不显示真实 Main 确认框，也不启动打包 worker。
 
@@ -91,3 +91,5 @@ MCP 存储将 POSIX 文件权限与 Windows SID/DACL 校验分离，同时保留
 Windows 启动组合现在接受显式回执容量以仅启用 MCP。内存加载的产物内联 YAML 默认 ESM 版本，因为 Node CommonJS 版本引入的 createRequire(import.meta.url) 无法解析 data URL。Host 在 CLI 初始化可能生成继承权限之前，创建缺失的私有 web 目录与初始配置；既有不安全路径仍被拒绝，不修复 ACL。配置保留采用 MCP 上限，而非较小的身份管理文件上限。运行确认使用重启后的 worker，关闭时先中止并等待操作结束，再销毁 worker 和释放 Host 锁。签名控制会话测试通过原生文件及运行清单替身验证准备、提交、状态与运行确认期间的关闭。这不是 Windows 原生安装证据；嵌入端启用、现存 Profile 迁移、插件及 Skill 集成和签名验收仍未完成。
 
 当前 Profile 已有 128 个本地 Skill 条目时，新安装在创建文件和重启 worker 前拒绝。达到上限后仍可编辑或删除已有条目，已接受的写入不能使下一次清单读取超过自身边界。
+
+源码层 Skill 与 MCP Loader 夹具沿用仓库组合测试方式，通过 Vitest 解析真实插件模块，避免读取未构建或过期的 `lib` 文件。Skill socket 夹具消费生成的 RPC，移入构建后产物门禁且仍为必跑项；生成文件缺失直接导致该门失败，不跳过测试。Windows 不执行该 POSIX socket 夹具。

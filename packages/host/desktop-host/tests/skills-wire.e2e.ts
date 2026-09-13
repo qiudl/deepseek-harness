@@ -22,7 +22,9 @@ import { ProfileMcpExecutor } from '../src/profile-mcp-executor.ts'
 import { ProfileExtensionExecutor } from '../src/profile-extension-executor.ts'
 import { readProfileSkillCatalog, readProfileSkillRuntime } from '../src/skill-worker-client.ts'
 
-it('installs through the leased socket and acknowledges the real default preset through HTTP and generated RPC dispatch', async () => {
+// This POSIX socket fixture consumes generated RPC and native Loader imports.
+// It belongs to the mandatory post-build artifact gate, with no missing-build skip.
+it.skipIf(process.platform === 'win32')('installs through the leased socket and acknowledges the real default preset through HTTP and generated RPC dispatch', { retry: 0 }, async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'hskill-wire-'))); const uid = process.getuid!()
   const clock = { now: () => Date.now() }; const keys = generateKeyPairSync('ed25519')
   const publicKey = (keys.publicKey.export({ format: 'der', type: 'spki' }) as Buffer).subarray(-32).toString('base64url')
@@ -186,4 +188,4 @@ it('installs through the leased socket and acknowledges the real default preset 
       .toMatchObject({ source: 'user-agents', content: 'Fallback instructions.' })
   }
 
-}, 90_000)
+})
