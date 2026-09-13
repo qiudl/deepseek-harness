@@ -5,7 +5,9 @@ import {
 import { existsSync } from 'node:fs'
 import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, win32 } from 'node:path'
+import { pathToFileURL } from 'node:url'
+export { loadWindowsLocalProfileStorage, loadWindowsLegacySourceProbe } from './windows-local-profile-storage-native.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import {
@@ -49,6 +51,11 @@ import type { HostClock, PersonProfileRecord } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import { UnixHostServer } from './unix-transport.ts'
 import { ProfileWorkerSupervisor } from './worker-supervisor.ts'
+import {
+  startWindowsDesktopHostApplicationFromPrivateFiles,
+  type WindowsDesktopHostApplication,
+  type WindowsDesktopHostPrivateFileConfig,
+} from './windows-startup.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'desktop-host-startup'
@@ -75,7 +82,7 @@ const EMPTY_OWNER_STATE: MigrationOwnerStateBundle = Object.freeze({
   ]),
 })
 
-/** Desktop Host application configuration supplied by the macOS embedding. */
+/** Desktop Host application configuration supplied by the signed embedding. */
 export interface Config {
   readonly root?: string
   readonly registrationRoot?: string
@@ -94,6 +101,21 @@ export interface Config {
   readonly executableSignatureDigest: string
   readonly desktopTeamIdentifiers: string[]
   readonly desktopExecutableDigests: string[]
+  readonly desktopPublisherThumbprints?: string[]
+  readonly windowsWorkerEntryPath?: string
+  readonly windowsNativeModulePath?: string
+  readonly windowsNativeModuleSha256?: string
+  readonly windowsWorkerGeneration?: number
+  readonly windowsMaxCancelAttempts?: number
+  readonly windowsCancelRetryMs?: number
+  readonly windowsStartupTimeoutMs?: number
+  readonly windowsExitTimeoutMs?: number
+  readonly windowsSessionCleanupTimeoutMs?: number
+  readonly windowsMaximumRegistryBytes?: number
+  readonly windowsMaximumManagedFileBytes?: number
+  readonly windowsMaximumJournalBytes?: number
+  readonly windowsProfileReadyTimeoutMs?: number
+  readonly windowsProfileAbortTimeoutMs?: number
   readonly runtimeGeneration: number
   readonly schemaGeneration: number
   readonly legacySourceQuiescent?: boolean
@@ -118,6 +140,21 @@ export const Config: z<Config> = z.object({
   executableSignatureDigest: z.string().required(),
   desktopTeamIdentifiers: z.array(String).required(),
   desktopExecutableDigests: z.array(String).required(),
+  desktopPublisherThumbprints: z.array(String),
+  windowsWorkerEntryPath: z.string(),
+  windowsNativeModulePath: z.string(),
+  windowsNativeModuleSha256: z.string(),
+  windowsWorkerGeneration: z.number(),
+  windowsMaxCancelAttempts: z.number(),
+  windowsCancelRetryMs: z.number(),
+  windowsStartupTimeoutMs: z.number(),
+  windowsExitTimeoutMs: z.number(),
+  windowsSessionCleanupTimeoutMs: z.number(),
+  windowsMaximumRegistryBytes: z.number(),
+  windowsMaximumManagedFileBytes: z.number(),
+  windowsMaximumJournalBytes: z.number(),
+  windowsProfileReadyTimeoutMs: z.number(),
+  windowsProfileAbortTimeoutMs: z.number(),
   runtimeGeneration: z.number().required(),
   schemaGeneration: z.number().required(),
   legacySourceQuiescent: z.boolean(),
@@ -130,6 +167,121 @@ export interface DesktopHostApplication {
   readonly workers: ProfileWorkerSupervisor
   readonly commandAuthority: SessionCommandAuthority
   close(): Promise<void>
+}
+
+interface ClosableDesktopHostApplication {
+  close(): Promise<void>
+}
+
+const WINDOWS_DEFAULTS = Object.freeze({
+  workerGeneration: 1,
+  maxCancelAttempts: 4,
+  cancelRetryMs: 250,
+  startupTimeoutMs: 30_000,
+  exitTimeoutMs: 5_000,
+  sessionCleanupTimeoutMs: 5_000,
+  maximumRegistryBytes: 1024 * 1024,
+  maximumManagedFileBytes: 256 * 1024,
+  maximumJournalBytes: 8 * 1024 * 1024,
+  profileReadyTimeoutMs: 30_000,
+  profileAbortTimeoutMs: 5_000,
+})
+
+function boundedInteger(value: number | undefined, fallback: number): number {
+  const resolved = value ?? fallback
+  if (!Number.isSafeInteger(resolved) || resolved < 1) throw new HostAuthorityError('invalid_input')
+  return resolved
+}
+
+function deadlineAfter(milliseconds: number): (signal: AbortSignal) => Promise<void> {
+  return signal => new Promise<void>((resolve) => {
+    if (signal.aborted) { resolve(); return }
+    const timer = setTimeout(resolve, milliseconds)
+    signal.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
+  })
+}
+
+function windowsFileUrl(path: string): URL {
+  if (!/^[A-Za-z]:\\/u.test(path) || path.slice(2).includes(':')
+    || /[\u0000-\u001f\u007f]/u.test(path) || win32.normalize(path) !== path) {
+    throw new HostAuthorityError('invalid_input')
+  }
+  return pathToFileURL(path, { windows: true })
+}
+
+/**
+ * Translate secret-free Cordis settings into the locked Windows Host composition.
+ * @param config - Cordis settings with explicit private roots and a canonical Worker path.
+ * @returns Windows configuration; rejects missing paths or invalid timeout bounds before startup.
+ */
+export function windowsDesktopHostConfig(config: Config): WindowsDesktopHostPrivateFileConfig {
+  if (config.root === undefined || config.registrationRoot === undefined
+    || config.windowsWorkerEntryPath === undefined || config.windowsNativeModulePath === undefined
+    || config.windowsNativeModuleSha256 === undefined) throw new HostAuthorityError('invalid_input')
+  const retryMs = boundedInteger(config.windowsCancelRetryMs, WINDOWS_DEFAULTS.cancelRetryMs)
+  const startupMs = boundedInteger(config.windowsStartupTimeoutMs, WINDOWS_DEFAULTS.startupTimeoutMs)
+  const exitMs = boundedInteger(config.windowsExitTimeoutMs, WINDOWS_DEFAULTS.exitTimeoutMs)
+  const cleanupMs = boundedInteger(
+    config.windowsSessionCleanupTimeoutMs,
+    WINDOWS_DEFAULTS.sessionCleanupTimeoutMs,
+  )
+  return {
+    platform: 'win32',
+    arch: 'x64',
+    root: config.root,
+    registrationRoot: config.registrationRoot,
+    nodeExecutablePath: config.nodeExecutablePath,
+    dshEntrypointPath: config.dshEntrypointPath,
+    deviceIndexKeyPath: config.deviceIndexKeyPath,
+    accountKeyringPath: config.accountKeyringPath,
+    accountKeyringSha256: config.accountKeyringSha256,
+    installationPrivateKeyPath: config.installationPrivateKeyPath,
+    installationPublicKey: config.installationPublicKey,
+    installationId: config.installationId,
+    endpointRegistrationId: config.endpointRegistrationId,
+    hostInstanceId: config.hostInstanceId,
+    processNonce: config.processNonce,
+    executableSignatureDigest: config.executableSignatureDigest,
+    runtimeGeneration: config.runtimeGeneration,
+    schemaGeneration: config.schemaGeneration,
+    workerEntry: windowsFileUrl(config.windowsWorkerEntryPath),
+    nativeModule: {
+      path: config.windowsNativeModulePath,
+      sha256: config.windowsNativeModuleSha256,
+    },
+    workerGeneration: boundedInteger(config.windowsWorkerGeneration, WINDOWS_DEFAULTS.workerGeneration),
+    allowedPublisherThumbprints: new Set(config.desktopPublisherThumbprints ?? []),
+    allowedDesktopExecutableDigests: new Set(config.desktopExecutableDigests),
+    maximumRegistryBytes: boundedInteger(
+      config.windowsMaximumRegistryBytes,
+      WINDOWS_DEFAULTS.maximumRegistryBytes,
+    ),
+    maximumManagedFileBytes: boundedInteger(
+      config.windowsMaximumManagedFileBytes,
+      WINDOWS_DEFAULTS.maximumManagedFileBytes,
+    ),
+    maximumJournalBytes: boundedInteger(
+      config.windowsMaximumJournalBytes,
+      WINDOWS_DEFAULTS.maximumJournalBytes,
+    ),
+    profileReadyTimeoutMs: boundedInteger(
+      config.windowsProfileReadyTimeoutMs,
+      WINDOWS_DEFAULTS.profileReadyTimeoutMs,
+    ),
+    profileAbortTimeoutMs: boundedInteger(
+      config.windowsProfileAbortTimeoutMs,
+      WINDOWS_DEFAULTS.profileAbortTimeoutMs,
+    ),
+    maxCancelAttempts: boundedInteger(config.windowsMaxCancelAttempts, WINDOWS_DEFAULTS.maxCancelAttempts),
+    waitForCancelRetry: () => new Promise((resolve) => { setTimeout(resolve, retryMs) }),
+    startupDeadline: deadlineAfter(startupMs),
+    exitWithoutHandleDeadline: deadlineAfter(exitMs),
+    sessionCleanupDeadline: deadlineAfter(cleanupMs),
+    processFallback: () => {
+      process.kill(process.pid, 'SIGKILL')
+      throw new HostAuthorityError('unavailable')
+    },
+  }
 }
 
 function ownerFile(path: string, expectedBytes?: number): Buffer {
@@ -600,10 +752,55 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
   }
 }
 
-/** Start and dispose the application with its Cordis profile lifecycle. */
+/** Platform selection and application factories; omitted factories use the native adapters. */
+export interface StartConfiguredDesktopHostDependencies {
+  readonly platform?: NodeJS.Platform
+  readonly startMacOS?: (config: Config) => Promise<DesktopHostApplication>
+  readonly startWindows?: (
+    config: WindowsDesktopHostPrivateFileConfig,
+  ) => Promise<WindowsDesktopHostApplication>
+}
+
+/**
+ * Select exactly one platform adapter; unsupported packages fail closed.
+ * @param config - Host settings passed to the selected adapter.
+ * @param dependencies - Optional platform and startup factories for embedding or tests.
+ * @returns Started application whose close operation belongs to the caller; rejects startup failures.
+ */
+export async function startConfiguredDesktopHostApplication(
+  config: Config,
+  dependencies: StartConfiguredDesktopHostDependencies = {},
+): Promise<ClosableDesktopHostApplication> {
+  const platform = dependencies.platform ?? process.platform
+  if (platform === 'darwin') return (dependencies.startMacOS ?? startDesktopHostApplication)(config)
+  if (platform === 'win32') {
+    return (dependencies.startWindows ?? startWindowsDesktopHostApplicationFromPrivateFiles)(
+      windowsDesktopHostConfig(config),
+    )
+  }
+  throw new HostAuthorityError('unavailable')
+}
+
+/** Start and dispose the platform application with its Cordis profile lifecycle. */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   await ctx.effect(async () => {
-    const application = await startDesktopHostApplication(config)
+    const application = await startConfiguredDesktopHostApplication(config)
     return () => application.close()
   })
 }
+
+export {
+  prepareWindowsDesktopHostEmbeddingIdentity,
+  type PrepareWindowsDesktopHostEmbeddingIdentityDependencies,
+  type WindowsDesktopHostEmbeddingIdentity,
+} from './windows-embedding-identity.ts'
+
+export {
+  startWindowsDesktopHostApplication,
+  startWindowsDesktopHostApplicationFromPrivateFiles,
+  type StartWindowsDesktopHostApplicationDependencies,
+  type WindowsDesktopHostApplication,
+  type WindowsDesktopHostBaseConfig,
+  type WindowsDesktopHostConfig,
+  type WindowsDesktopHostPrivateFileConfig,
+} from './windows-startup.ts'

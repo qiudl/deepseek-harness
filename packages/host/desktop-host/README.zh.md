@@ -22,7 +22,25 @@ kind: "package-bundle"
 <a id="desktop-adapter"></a>
 ## Desktop adapter
 
+固定摘要的原生辅助模块只在验证精确原生模块路径和字节后创建默认加载器。导入该辅助模块不会解析原生包。私有 `windows-startup.js` 组合会把同一发布固定值传给父线程的 SID、注册、监听器和取消适配器，并把它放入严格解码的 Worker 启动数据。文件 Worker 会独立重新校验并加载这个精确原生模块，供取消、管道 I/O、生命周期和对端认证使用。两条生产路径都不会搜索 Koffi 包；嵌入方仍须验证发布元数据，并在整个使用期间保护已安装文件。
+
+Windows 目录安全证据将 SDDL 的通用权限、标准权限和文件专用权限保留为无符号位掩码。未知标记和超过 32 位的掩码会使检查失败。解析通用权限不会授予私有存储访问权：私有文件仍要求精确的、受保护的三主体文件完全控制 DACL。
+
+启动产物向可信嵌入代码提供 `loadWindowsLegacySourceProbe`。装配通过与本地凭据存储相同的发布版本固定原生模块解析当前进程 SID，不检查旧数据文件系统，并且只返回只读探测函数。不支持的平台、缺失摘要固定值、原生身份解析失败或缺少目录检查器都会使加载失败。嵌入方必须在后续探测调用期间持续保护原生模块，并提供操作系统选定的用户主目录。
+
+Windows 原生目录检查器读取已有路径的属性与安全证据，不创建目录或修复权限。路径不存在、访问被拒绝、共享冲突和检查失败均抛出错误。该证据不授权迁移，也不证明读取句柄关闭后的祖先路径安全性；完整旧数据盘点仍是独立工作。
+
+旧主目录元数据探测区分观察到的 `.dsh` 末级目录缺失、目录存在和无法确认。它先检查祖先路径，拒绝重定向路径及非当前用户拥有的用户主目录，不读取目录内容，并将已有空目录视为存在。只有原生末级打开操作的文件不存在错误才产生“观察到不存在”；任何结果都不授权迁移或创建替代 Profile。仍须完成源枚举、schema 检查和稳定目录树验证。
+
 `discoverUnixHost` 返回 `running`、`stopped` 或 `unknown`。只有注册表信任的 endpoint 确认没有监听进程时才返回 `stopped`；UID、安装密钥、可执行文件签名、challenge、帧或 socket 类型验证失败一律返回 `unknown`。
+
+Windows 本地 Profile 存储接收嵌入方加密的信封，大小不超过 16 KiB。它复用原生 SID/DACL 与重解析点检查，替换文件前要求已验证的文件租约，并在同步回调结束（包括失败）后释放租约。文件不存在时返回 null；权限与完整性错误不授权创建新身份。原生装配要求一个路径规范、只有单个硬链接的 Koffi 原生模块，以及经过独立发布验证的 SHA-256；绝不搜索其他包或路径。加密、环境根选择，以及加载和使用期间防止原生模块被替换，均由嵌入方负责。仅校验摘要不能证明 Windows 安装目录 ACL 或发布者签名；仍需原生安装验证。
+
+Windows 客户端使用私有文件 Worker，在发送 Host 帧前证明已连接的管道服务端身份。Bun Main 的取消适配器由本包通过已验证的客户端产物提供；调用方传入发布版本固定的 Worker 和发布者信任锚。只有确认 Worker 退出后，才能关闭其移交的线程句柄。Windows 分发仍须通过签名 Carrier 和原生安装验证。
+
+Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路径，保留安装目录中的 Unicode、空格、百分号和井号字符。
+
+客户端取消逻辑会接管启动取消后才移交的线程句柄。取消重试预算耗尽时，父线程继续持有该句柄，直到 Worker 后续正常或异常退出，确认可以关闭；预算耗尽不代表已经停止。
 
 `UnixHostClient` 提供 Profile 的账号 ensure／restore／status／open、本地 bootstrap／restore／open、view activation／close 与 owner-only 迁移操作。本地操作不接收账号身份、token、binding 或 environment assertion；Host selector 与 Keychain material 可在后续 authenticated connection 上恢复本地专用 Profile。同一 authenticated owner 再次打开相同 Profile 时，Host 会原子延长现有短时 view lease 并签发新的单次 activation handle，使活跃 Desktop 无需替换 renderer 即可续期授权。`profile.ensure_account_token` capability 标识 Host 接受带 token 的 `profile.ensure` 载荷；当该 capability 缺失时，任一 peer 都会在 mutation 前报告 `upgrade_required`。`profile.ensure` 要求携带面向 `dsh-host` audience 的短时规范 DSH Account token；Host 离线校验该 token，并在任何 Profile registry mutation 前要求其 issuer 与 subject 和请求账号一致。每个操作都接受 `AbortSignal`。中止会销毁已认证连接，Host 会撤销该连接拥有的全部 view lease 和 Profile 解锁引用；另一个已独立证明同一 Profile 的 staging 或 production 连接仍保持授权。
 
@@ -77,7 +95,7 @@ Markdown 文件导入接受 `{ name, markdown }`，保留原始字节、元数�
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延后工作
 
-- **扩展支持由执行器决定** — `profile.extensions` 通过有效窗口租约接受清单、准备、提交、状态和取消请求。插件执行要求配置随包 pnpm 产物。技能清单使用 `transport: markdown` 和有长度限制、由文件名生成的标识。安装或恢复配置导致 worker 重启后，Desktop 必须重新打开同一 Profile 视图。打包运行时固定版本、完整 Profile 迁移保留、杀进程恢复和未知回执核对，仍需在发布前单独完成端到端验证。
+- **扩展支持由执行器决定** — `profile.extensions` 通过有效窗口租约接受清单、准备、提交、状态和取消请求。插件执行要求配置随包 pnpm 产物。Windows 启动组合尚未配置扩展执行器，因此不声明此能力。技能清单使用 `transport: markdown` 和有长度限制、由文件名生成的标识。安装或恢复配置导致 worker 重启后，Desktop 必须重新打开同一 Profile 视图。打包运行时固定版本、完整 Profile 迁移保留、杀进程恢复和未知回执核对，仍需在发布前单独完成端到端验证。
 
 - **解锁材料仍由嵌入应用拥有**——Slark Main 必须把随机 32 字节 Profile material 保存在 macOS Keychain／safeStorage 中，并且只通过已认证 Main-to-Host 链路提供；它绝不能进入 Renderer、argv、environment、日志或 registration 文件。
 - **Account access 与 session 绑定**——Slark Main 必须从 DSH Account 获取 `dsh-host` token，并且只通过已认证 Main-to-Host 链路提供。Host 不持久化或记录该凭据；token 过期后，Slark Main 必须刷新 Account session，`profile.ensure` 才能成功。
@@ -90,6 +108,8 @@ Markdown 文件导入接受 `{ name, markdown }`，保留原始字节、元数�
 <summary>维护者的工作上下文——点击展开</summary>
 
 参见[单 Host 控制协议 Agent Note](../../../.agents/notes/implemented/architecture/2026-09-02-single-host-control-protocol.zh.md)。
+
+REQ-20260911-0004 的原生存储证据仅来自 Windows 11 x64 管理员环境中的独立合成信封探针：创建、读取、重新打开、竞争租约拒绝、替换，以及超限写入后保留原数据均通过。SID 解码使用 LPWSTR 输出 slot；文件创建使用带类型的安全属性指针；重复加载使用匿名结构。此探针尚未验证标准用户安装、加密、签名载体集成或完整 Desktop 启动。
 
 </details>
 

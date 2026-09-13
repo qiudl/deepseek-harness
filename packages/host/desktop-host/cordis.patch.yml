@@ -1,5 +1,5 @@
-# Single-machine owner authority. The macOS embedding provisions all identity
-# and signing values; missing values fail during startup.
+# Single-machine owner authority. The signed embedding provisions paths and
+# public trust anchors; private identity contents never cross the environment.
 
 - insert:
     - id: desktop-host-startup
@@ -22,6 +22,21 @@
         executableSignatureDigest: !!js process.env.DSH_HOST_EXECUTABLE_DIGEST
         desktopTeamIdentifiers: !!js JSON.parse(process.env.DSH_HOST_DESKTOP_TEAM_IDENTIFIERS ?? '[]')
         desktopExecutableDigests: !!js JSON.parse(process.env.DSH_HOST_DESKTOP_EXECUTABLE_DIGESTS ?? '[]')
+        desktopPublisherThumbprints: !!js JSON.parse(process.env.DSH_HOST_DESKTOP_PUBLISHER_THUMBPRINTS ?? '[]')
+        windowsWorkerEntryPath: !!js process.env.DSH_HOST_WINDOWS_WORKER_ENTRY
+        windowsNativeModulePath: !!js process.env.DSH_HOST_WINDOWS_NATIVE_MODULE_PATH
+        windowsNativeModuleSha256: !!js process.env.DSH_HOST_WINDOWS_NATIVE_MODULE_SHA256
+        windowsWorkerGeneration: !!js Number(process.env.DSH_HOST_WINDOWS_WORKER_GENERATION ?? '1')
+        windowsMaxCancelAttempts: !!js Number(process.env.DSH_HOST_WINDOWS_MAX_CANCEL_ATTEMPTS ?? '4')
+        windowsCancelRetryMs: !!js Number(process.env.DSH_HOST_WINDOWS_CANCEL_RETRY_MS ?? '250')
+        windowsStartupTimeoutMs: !!js Number(process.env.DSH_HOST_WINDOWS_STARTUP_TIMEOUT_MS ?? '30000')
+        windowsExitTimeoutMs: !!js Number(process.env.DSH_HOST_WINDOWS_EXIT_TIMEOUT_MS ?? '5000')
+        windowsSessionCleanupTimeoutMs: !!js Number(process.env.DSH_HOST_WINDOWS_SESSION_CLEANUP_TIMEOUT_MS ?? '5000')
+        windowsMaximumRegistryBytes: !!js Number(process.env.DSH_HOST_WINDOWS_MAXIMUM_REGISTRY_BYTES ?? '1048576')
+        windowsMaximumManagedFileBytes: !!js Number(process.env.DSH_HOST_WINDOWS_MAXIMUM_MANAGED_FILE_BYTES ?? '262144')
+        windowsMaximumJournalBytes: !!js Number(process.env.DSH_HOST_WINDOWS_MAXIMUM_JOURNAL_BYTES ?? '8388608')
+        windowsProfileReadyTimeoutMs: !!js Number(process.env.DSH_HOST_WINDOWS_PROFILE_READY_TIMEOUT_MS ?? '30000')
+        windowsProfileAbortTimeoutMs: !!js Number(process.env.DSH_HOST_WINDOWS_PROFILE_ABORT_TIMEOUT_MS ?? '5000')
         runtimeGeneration: !!js Number(process.env.DSH_HOST_RUNTIME_GENERATION)
         schemaGeneration: !!js Number(process.env.DSH_HOST_SCHEMA_GENERATION)
         legacySourceQuiescent: !!js process.env.DSH_HOST_LEGACY_SOURCE_QUIESCENT === '1'

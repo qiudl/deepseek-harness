@@ -3,7 +3,7 @@ import { dirname } from 'node:path'
 import type { HostClock } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
-type JournalEvent =
+export type JournalEvent =
   | { readonly kind: 'command_started'; readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string; readonly at: number }
   | { readonly kind: 'command_committed'; readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string; readonly outcome: unknown; readonly at: number }
   | { readonly kind: 'command_failed'; readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string; readonly at: number }
@@ -38,6 +38,12 @@ export class FileHostJournal {
   }
 }
 
+/** Durable command journal contract shared by platform file authorities. */
+export interface HostJournal {
+  append(event: JournalEvent): void
+  read(): readonly JournalEvent[]
+}
+
 interface CommandInput { readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string }
 type CommandOutcome = { readonly status: 'committed'; readonly value: unknown } | { readonly status: 'failed' | 'unknown' }
 
@@ -47,7 +53,7 @@ export class SessionCommandAuthority {
   private readonly tails = new Map<string, Promise<void>>()
   private readonly pending = new Map<string, { payloadHash: string; promise: Promise<CommandOutcome> }>()
 
-  constructor(private readonly journal: FileHostJournal, private readonly clock: HostClock) {
+  constructor(private readonly journal: HostJournal, private readonly clock: HostClock) {
     for (const event of journal.read()) {
       const key = `${event.profileId}\0${event.commandId}`
       if (event.kind === 'command_started') this.outcomes.set(key, { payloadHash: event.payloadHash, outcome: { status: 'unknown' } })
