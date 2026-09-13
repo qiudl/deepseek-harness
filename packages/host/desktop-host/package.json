@@ -36,13 +36,12 @@
   "files": [
     "lib/index.js",
     "lib/startup.js",
+    "cordis.patch.yml",
     "lib/windows-startup.js",
     "lib/host-control-client.js",
     "lib/windows-host-pipe-worker-entry.js",
     "lib/windows-host-client-worker-entry.js",
     "lib/windows-embedding-identity-entry.js",
-    "cordis.patch.yml",
-    "lib/types/**/*.d.ts",
     "hub-upstream/LICENSE",
     "hub-upstream/UPSTREAM.json",
     "hub-upstream/mcp.mjs",
@@ -50,7 +49,8 @@
     "hub-upstream/skills-codec.mjs",
     "hub-upstream/skills-codec.d.mts",
     "hub-upstream/plugin-command.mjs",
-    "hub-upstream/plugin-command.d.mts"
+    "hub-upstream/plugin-command.d.mts",
+    "lib/types/**/*.d.ts"
   ],
   "dsh": {
     "bundle": {
