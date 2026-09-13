@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
-import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
@@ -864,30 +864,37 @@ describe('authenticated Unix transport', () => {
 describe('single Host ownership', () => {
   it('admits one owner and refuses a live competing owner', async () => {
     const root = dir()
-    const first = await acquireSingleHostLock({ root, pid: 111, uid: 501, processNonce: 'nonce-a-0123456789', isProcessAlive: pid => pid === 111 })
-    await expect(acquireSingleHostLock({ root, pid: 222, uid: 501, processNonce: 'nonce-b-0123456789', isProcessAlive: pid => pid === 111 }))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const first = await acquireSingleHostLock({ root, pid: 111, uid, processNonce: 'nonce-a-0123456789', isProcessAlive: pid => pid === 111 })
+    await expect(acquireSingleHostLock({ root, pid: 222, uid, processNonce: 'nonce-b-0123456789', isProcessAlive: pid => pid === 111 }))
       .rejects.toMatchObject({ code: 'conflict' })
     await first.release()
   })
 
   it('recovers a stale regular lock but refuses a symlink-shaped lock', async () => {
     const root = dir()
-    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 111, uid: 501, processNonce: 'old', ownerId: 'stale-owner' }), { mode: 0o600 })
-    const owner = await acquireSingleHostLock({ root, pid: 222, uid: 501, processNonce: 'new-0123456789abcdef', isProcessAlive: () => false })
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 111, uid, processNonce: 'old', ownerId: 'stale-owner' }), { mode: 0o600 })
+    const owner = await acquireSingleHostLock({ root, pid: 222, uid, processNonce: 'new-0123456789abcdef', isProcessAlive: () => false })
     await owner.release()
     symlinkSync(join(root, 'missing-target'), join(root, 'host.lock'))
-    await expect(acquireSingleHostLock({ root, pid: 333, uid: 501, processNonce: 'newer-0123456789abcdef', isProcessAlive: () => false }))
+    await expect(acquireSingleHostLock({ root, pid: 333, uid, processNonce: 'newer-0123456789abcdef', isProcessAlive: () => false }))
       .rejects.toMatchObject({ code: 'conflict' })
   })
 
   it('rejects unsafe process ids and refuses to unlink a swapped owner record', async () => {
     const root = dir()
-    await expect(acquireSingleHostLock({ root, pid: -1, uid: 501, processNonce: 'nonce-0123456789abcdef' }))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    await expect(acquireSingleHostLock({ root, pid: -1, uid, processNonce: 'nonce-0123456789abcdef' }))
       .rejects.toMatchObject({ code: 'invalid_input' })
-    const owner = await acquireSingleHostLock({ root, pid: 123, uid: 501, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
+    const owner = await acquireSingleHostLock({ root, pid: 123, uid, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
     unlinkSync(join(root, 'host.lock'))
-    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid: 501, processNonce: 'attacker-0123456789', ownerId: 'attacker' }), { mode: 0o600 })
-    await expect(owner.release()).rejects.toBeInstanceOf(HostAuthorityError)
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid, processNonce: 'attacker-0123456789', ownerId: 'attacker' }), { mode: 0o600 })
+    await expect(owner.release()).rejects.toMatchObject({ code: 'stale' })
+    expect(JSON.parse(readFileSync(join(root, 'host.lock'), 'utf8')).ownerId).toBe('attacker')
   })
 })
 
