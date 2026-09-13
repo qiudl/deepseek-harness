@@ -85,6 +85,10 @@ The Windows receipt store uses the existing private-file bindings to atomically 
 
 MCP configuration parsing and runtime acknowledgement share one executor across POSIX and Windows storage adapters. The Windows startup artifact bundles YAML’s ESM distribution so verified bytes can load from a data URL without package lookup or a file-based CommonJS loader. Windows storage verifies private Profile directories and file evidence, preserves exclusive operation backups, and distinguishes a missing patch from an empty patch during recovery. Deletion compares expected bytes and verifies SID/DACL evidence on the same exclusive native handle before a final authority check and handle disposition; it never reopens the path for deletion. Before launching a Profile with MCP enabled, Host creates missing private web directories and its initial patch. Restarts preserve custom patch contents up to the MCP byte limit. Existing paths with unsafe or inherited permissions are rejected without repair; migration of those existing Profiles remains separate.
 
+## Runtime invariants
+
+No runtime invariant companion is published: filesystem and wire commit points validate owned state, while lease and crash behavior are covered by integration tests.
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.

@@ -18,17 +18,6 @@ export default defineConfig([
     plugins: [typertPlugin({ mode: 'package', faces: ['host'] })],
   },
   {
-    entry: { invariant: 'lib/types/invariant.js' },
-    outDir: 'lib',
-    format: ['esm'],
-    platform: 'node',
-    target: 'es2024',
-    fixedExtension: false,
-    dts: false,
-    clean: false,
-    codeSplitting: false,
-  },
-  {
     entry: { startup: 'lib/types/startup.js' },
     outDir: 'lib',
     format: ['esm'],

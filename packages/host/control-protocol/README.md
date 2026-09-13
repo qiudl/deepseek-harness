@@ -57,6 +57,10 @@ See the [single Host control protocol Agent Note](../../../.agents/notes/impleme
 
 </details>
 
+## Runtime invariants
+
+No runtime invariant companion is published: the codec validates the complete wire value algebra at its input boundary.
+
 ## Model Experience
 
 None, as this local Host control codec registers nothing model-facing.

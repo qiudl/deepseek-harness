@@ -62,6 +62,10 @@ kind: "package-reference"
 </details>
 
 <a id="model-experience"></a>
+## 运行时不变量
+
+不发布运行时不变量伴随插件：编解码器在输入边界验证完整的消息值结构。
+
 ## 模型体验
 
 无，因为这个本地 Host 控制编解码器不注册任何面向模型的内容。
