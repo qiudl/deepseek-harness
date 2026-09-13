@@ -352,7 +352,9 @@ export class ProfileSkillExecutor implements ExtensionExecutor {
     if (kind !== 'skill') throw new Error('upgrade_required')
     const skill = input(payload)
     if ('action' in skill) { this.existing(profileId, skill.id); return }
-    if (this.entries(profileId).some(entry => entry.name === skill.name || entry.name === `${skill.name}.md`)) throw new Error('skill_exists')
+    const entries = this.entries(profileId)
+    if (entries.some(entry => entry.name === skill.name || entry.name === `${skill.name}.md`)) throw new Error('skill_exists')
+    if (entries.length >= 128) throw new Error('skill_limit')
     if (!('archive' in skill) && !('markdown' in skill) && Buffer.byteLength(renderSkillFile(skill)) > 32768) throw new Error('invalid_input')
   }
   /** @param profileId Authorized Profile. @returns Digest of installed skill names and Markdown bytes. */

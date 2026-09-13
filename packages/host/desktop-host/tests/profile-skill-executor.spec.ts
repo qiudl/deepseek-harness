@@ -15,6 +15,21 @@ function fixture() {
   onTestFinished(() =>{  rmSync(root, { recursive: true, force: true }) })
   return root
 }
+it('refuses a new skill at capacity while keeping existing skills manageable', async () => {
+  const root = fixture()
+  const skills = join(root, 'a/skills')
+  mkdirSync(skills, { mode: 0o700 })
+  for (let i = 0; i < 128; i++) {
+    writeFileSync(join(skills, `skill-${i}.md`), `---\nname: skill-${i}\ndescription: Existing skill\n---\nKeep this skill.\n`, { mode: 0o600 })
+  }
+  const acknowledge = vi.fn(async () => undefined)
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge })
+  expect(await executor.inventory('a')).toHaveLength(128)
+  await expect(executor.execute('a', payload, { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('skill_limit')
+  expect(acknowledge).not.toHaveBeenCalled()
+  expect(readdirSync(skills)).toHaveLength(128)
+  expect(() => executor.validate('a', 'skill', JSON.stringify({ action: 'remove', id: 'flat-skill-0' }))).not.toThrow()
+})
 it('uses Hub Markdown serialization, writes only the authorized Profile and waits for acknowledgement', async () => {
   const root = fixture(); const calls: string[] = []
   const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id),
