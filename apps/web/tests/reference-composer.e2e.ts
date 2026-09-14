@@ -296,7 +296,10 @@ describe.skipIf(MODE === 'record')('web e2e: file and session references through
     await writeComposerDraft(page, input, '@folderx')
     // First folder query on this page: allow the Host index a cold start.
     await menu.getByRole('option', { name: /^folderx\// }).waitFor({ timeout: 60_000 })
-    await page.keyboard.press('Enter')
+    // Retained stale rows stay visible during refinement, but Enter is
+    // intentionally consumed until the highlighted source is ready.
+    await expect.poll(() => menu.getAttribute('aria-busy'), { timeout: 60_000 }).toBeNull()
+    await input.press('Enter')
     const chip = input.locator('[data-composer-chip]').last()
     await expect.poll(() => chip.textContent()).toBe('folderx/')
     await expect.poll(() => chip.locator('svg').count()).toBe(1)
