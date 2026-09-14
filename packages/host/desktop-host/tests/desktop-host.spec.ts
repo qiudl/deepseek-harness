@@ -1,9 +1,9 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
-import { linkSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   ApprovalAuthority,
   ContextLeaseAuthority,
@@ -15,6 +15,7 @@ import {
   RestartingMigrationTarget,
   ProfileWorkerSupervisor,
   SessionCommandAuthority,
+  SingleHostLock,
   UnixHostClient,
   UnixHostServer,
   acquireSingleHostLock,
@@ -862,6 +863,72 @@ describe('authenticated Unix transport', () => {
 })
 
 describe('single Host ownership', () => {
+  it('rejects forged leases and validates every caller-owned identity field', async () => {
+    expect(() => { new SingleHostLock('/tmp/forged', {
+      pid: 1, uid: 1, processNonce: 'forged-0123456789', ownerId: 'forged',
+    }, Symbol('forged')) }).toThrow(HostAuthorityError)
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const base = { root, pid: 1, uid: statSync(root).uid, processNonce: 'nonce-0123456789abcdef' }
+    for (const options of [
+      { ...base, pid: 1.5 },
+      { ...base, uid: -1 },
+      { ...base, processNonce: 'short' },
+      { ...base, processNonce: 'x'.repeat(257) },
+      { ...base, processNonce: 'nonce-0123456789\n' },
+    ]) {
+      await expect(acquireSingleHostLock(options)).rejects.toMatchObject({ code: 'invalid_input' })
+    }
+  })
+
+  it('fails closed on malformed, shared, and permission-open lock records', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const path = join(root, 'host.lock')
+    writeFileSync(path, '{}\n', { mode: 0o600 })
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    writeFileSync(path, JSON.stringify({ pid: 1, uid, processNonce: 'old', ownerId: 'owner' }), { mode: 0o600 })
+    chmodSync(path, 0o666)
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    chmodSync(path, 0o600)
+    linkSync(path, join(root, 'shared.lock'))
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('uses the real liveness probe and makes release idempotent while fencing stale calls', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const owner = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: 'owner-0123456789abcdef' })
+    await expect(acquireSingleHostLock({ root, pid: process.pid + 1, uid, processNonce: 'other-0123456789abcdef' }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    await owner.release()
+    await expect(owner.release()).resolves.toBeUndefined()
+    expect(() => { owner.assertOwner() }).toThrow(HostAuthorityError)
+
+    const permission = Object.assign(new Error('not permitted'), { code: 'EPERM' })
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw permission })
+    onTestFinished(() => { kill.mockRestore() })
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 123, uid, processNonce: 'old', ownerId: 'old' }), { mode: 0o600 })
+    await expect(acquireSingleHostLock({ root, pid: 456, uid, processNonce: 'new-owner-0123456789' }))
+      .rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('fences a lock whose process nonce changes without relying on owner-id mismatch', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const owner = await acquireSingleHostLock({ root, pid: 1, uid, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
+    const path = join(root, 'host.lock')
+    const record = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    writeFileSync(path, JSON.stringify({ ...record, processNonce: 'changed-0123456789abcdef' }), { mode: 0o600 })
+    expect(() => { owner.assertOwner() }).toThrow(HostAuthorityError)
+  })
+
   it('admits one owner and refuses a live competing owner', async () => {
     const root = dir()
     onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
