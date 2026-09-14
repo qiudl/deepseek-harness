@@ -3,7 +3,7 @@ import { chmodSync, existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { FileExtensionReceipts, ProfileExtensionOperations } from '../src/extension-operations.ts'
+import { FileExtensionReceipts, ProfileExtensionOperations, type McpRecovery } from '../src/extension-operations.ts'
 import { ProfileMcpExecutor } from '../src/profile-mcp-executor.ts'
 import { PosixMcpStorage } from '../src/profile-mcp-storage.ts'
 
@@ -84,6 +84,7 @@ describe('Host Profile MCP execution', () => {
       JSON.stringify({ mcpServers: { demo: { command: 'node\0bad' } } }),
       JSON.stringify({ mcpServers: { demo: { url: 'ftp://example.test/mcp' } } }),
       JSON.stringify({ mcpServers: { demo: { url: 'https://user@example.test/mcp' } } }),
+      JSON.stringify({ mcpServers: { demo: { type: 'http' } } }),
       JSON.stringify({ mcpServers: { demo: {} } }),
       JSON.stringify({ mcpServers: tooMany }),
     ]) {
@@ -100,6 +101,27 @@ describe('Host Profile MCP execution', () => {
     writeFileSync(f.patch, `# ${'x'.repeat(1_048_500)}\n[]\n`, { mode: 0o600 })
     const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(), reload: async () => {} })
     expect(() => { executor.validate(f.profileId, 'mcp', payload) }).toThrow('invalid_input')
+  })
+
+  it('rejects corrupted MCP inventory fields instead of returning ambiguous entries', async () => {
+    const f = fixture()
+    writeFileSync(f.patch, '- insert:\n    - id: mcp-demo\n      name: "@deepseek-ai/dsh-mcp-client"\n      config:\n        serverName: 7\n        transport: streamable-http\n', { mode: 0o600 })
+    const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(), reload: async () => {} })
+    await expect(executor.inventory(f.profileId)).rejects.toThrow('invalid_patch')
+  })
+
+  it('rechecks the merged size after an external patch grows between validation and execution', async () => {
+    let reads = 0; let published = false
+    const storage = {
+      snapshot: () => ++reads === 1 ? '' : `# ${'x'.repeat(1_048_500)}\n[]\n`,
+      backup() {}, readBackup: () => '0', publish() { published = true },
+    }
+    const executor = new ProfileMcpExecutor({ storage, reload: async () => {} })
+    await expect(executor.execute(randomUUID(), payload, {
+      kind: 'mcp', signal: new AbortController().signal, guard() {},
+    })).rejects.toThrow('invalid_input')
+    expect(reads).toBe(2)
+    expect(published).toBe(false)
   })
 
   it('rejects symlink Profile directories and records a reload failure as unknown', async () => {
@@ -247,6 +269,28 @@ it('does not remove an original MCP ID during failed same-name update compensati
   expect(readFileSync(f.patch, 'utf8')).toBe(original)
 })
 
+it('reloads the original MCP IDs when recovering an interrupted removal', async () => {
+  const f = fixture(); const checkpoints: McpRecovery[] = []; const reloads: string[][] = []
+  const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(),
+    reload: async (_id, _signal, entries) => { reloads.push([...entries]) } })
+  const context = { kind: 'mcp' as const, signal: new AbortController().signal, guard() {} }
+  await executor.execute(f.profileId, payload, context)
+  const operationId = randomUUID()
+  await expect(executor.execute(f.profileId, JSON.stringify({ action: 'remove', id: 'mcp-demo' }), {
+    ...context, operationId, checkpointMcp: (evidence) => {
+      checkpoints.push(evidence)
+      if (evidence.stage === 'published') throw Error('interrupted removal')
+    },
+  })).rejects.toThrow('interrupted removal')
+  const evidence = checkpoints.at(-1)
+  if (!evidence) throw Error('missing MCP recovery evidence')
+  await expect(executor.restoreMcpConfig(f.profileId, {
+    profileId: f.profileId, kind: 'mcp', operationId, mcpRecovery: evidence,
+  } as never, context)).resolves.toEqual({ state: 'succeeded' })
+  expect(reloads).toEqual([['mcp-demo'], ['mcp-demo']])
+  expect(await executor.inventory(f.profileId)).toEqual([{ id: 'mcp-demo', name: 'demo', transport: 'streamable-http' }])
+})
+
 it('keeps a concurrent patch edit when activation fails', async () => {
   const f = fixture(); let calls = 0
   const concurrent = '# concurrent user edit\n[]\n'
@@ -288,6 +332,7 @@ it('fails closed when restored MCP bytes change during rollback acknowledgement'
 it('rejects malformed recovery ownership before reading backup bytes', async () => {
   const f = fixture()
   const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(), reload: async () => {} })
+  const context = { kind: 'mcp' as const, signal: new AbortController().signal, guard() {} }
   for (const receipt of [
     { profileId: randomUUID(), kind: 'mcp', mcpRecovery: {} },
     { profileId: f.profileId, kind: 'plugin', mcpRecovery: {} },
@@ -295,16 +340,20 @@ it('rejects malformed recovery ownership before reading backup bytes', async () 
   ]) {
     await expect(executor.validateMcpRestore(f.profileId, receipt as never)).rejects.toThrow('invalid_recovery')
   }
+  await expect(executor.restoreMcpConfig(f.profileId, {
+    profileId: f.profileId, kind: 'mcp', operationId: randomUUID(),
+  } as never, context)).rejects.toThrow('invalid_recovery')
 })
 
 
 it('recovers an interrupted MCP publication through a new confirmed receipt and preserves historical outcomes', async () => {
   const f = fixture(); let acknowledge = false; let calls = 0
+  const concurrent = '# concurrent recovery acknowledgement edit\n[]\n'
   const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(),
     reload: async (_id, _signal, entries, _guard, removed) => {
       ++calls
       expect(entries).toEqual([]); expect(removed).toEqual(['mcp-demo'])
-      if (!acknowledge) throw Error('runtime not yet confirmed')
+      if (!acknowledge) writeFileSync(f.patch, concurrent)
     } })
   const execute = executor.execute.bind(executor)
   executor.execute = (profileId, input, context) => execute(profileId, input, { ...context,
@@ -322,13 +371,22 @@ it('recovers an interrupted MCP publication through a new confirmed receipt and 
   engine = new ProfileExtensionOperations(f.receipts, executor, { now: () => 1000 })
   const restore = JSON.stringify({ action: 'restore-config', operationId: id })
   await expect(engine.prepare(() => randomUUID(), 'mcp', restore)).rejects.toThrow('unauthorized')
+  const interrupted = f.receipts.list(f.profileId).find(receipt => receipt.operationId === id)
+  if (!interrupted) throw Error('missing interrupted receipt')
+  let guardCalls = 0
+  await expect(executor.restoreMcpConfig(f.profileId, interrupted, {
+    kind: 'mcp', signal: new AbortController().signal,
+    guard() { if (++guardCalls === 2) writeFileSync(f.patch, concurrent) },
+  })).rejects.toThrow('revision_conflict')
+  expect(readFileSync(f.patch, 'utf8')).toBe(concurrent)
   writeFileSync(f.patch, '# concurrent\n[]\n')
   await expect(engine.prepare(() => f.profileId, 'mcp', restore)).rejects.toThrow('revision_conflict')
   writeFileSync(f.patch, published)
   const first = await engine.prepare(() => f.profileId, 'mcp', restore); const firstId = randomUUID()
   engine.commit(() => f.profileId, first.planId, firstId); await engine.settled()
-  expect(readFileSync(f.patch, 'utf8')).toBe(f.original)
+  expect(readFileSync(f.patch, 'utf8')).toBe(concurrent)
   expect(engine.status(() => f.profileId, firstId)).toMatchObject({ state: 'unknown', restores: id })
+  writeFileSync(f.patch, f.original)
   acknowledge = true
   const retry = await engine.prepare(() => f.profileId, 'mcp', restore); const retryId = randomUUID()
   engine.commit(() => f.profileId, retry.planId, retryId); await engine.settled()

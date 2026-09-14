@@ -63,7 +63,7 @@ export class ProfileMcpExecutor implements ExtensionExecutor {
       if (server.transport === 'stdio') {
         if (!server.command?.trim() || server.command.includes('\0')) throw new Error('invalid_input')
       } else {
-        const url = new URL(server.url ?? '')
+        const url = new URL(server.url as string)
         if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('invalid_input')
       }
     }
@@ -145,9 +145,9 @@ export class ProfileMcpExecutor implements ExtensionExecutor {
   /** @param profileId Authorized Profile. @param original Interrupted MCP receipt. @returns Validation of backup and current revision. */
   validateMcpRestore(profileId: string, original: ExtensionReceipt): Promise<void> {
     return Promise.resolve().then(() => {
-      this.readBackup(profileId, original)
       const evidence = original.mcpRecovery
       if (!evidence) throw Error('invalid_recovery')
+      this.readBackup(profileId, original)
       const revision = this.digest(this.snapshot(profileId))
       if (revision !== evidence.afterRevision && revision !== evidence.beforeRevision) throw Error('revision_conflict')
     })
@@ -161,12 +161,12 @@ export class ProfileMcpExecutor implements ExtensionExecutor {
   async restoreMcpConfig(profileId: string, original: ExtensionReceipt,
     context: Parameters<ExtensionExecutor['execute']>[2]): Promise<{ state: 'succeeded' }> {
     context.guard()
+    const evidence = original.mcpRecovery
+    if (!evidence) throw Error('invalid_recovery')
     await this.validateMcpRestore(profileId, original)
     context.guard()
     const snapshot = this.readBackup(profileId, original)
     const current = this.snapshot(profileId)
-    const evidence = original.mcpRecovery
-    if (!evidence) throw Error('invalid_recovery')
     if (this.digest(current) !== evidence.afterRevision && current !== snapshot) throw Error('revision_conflict')
     if (current !== snapshot) this.storage.publish(profileId, snapshot, current, context.guard)
     await this.options.reload(profileId, context.signal, extractMcpServers(snapshot ?? '').map(row => row.id),
