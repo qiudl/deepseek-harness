@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { FileExtensionReceipts, ProfileExtensionOperations } from '../src/extension-operations.ts'
+import { FileExtensionReceipts, ProfileExtensionOperations, type ExtensionReceipt } from '../src/extension-operations.ts'
 import { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
 
 function fixture(acknowledged = true) {
@@ -155,6 +155,31 @@ it('leaves failed activation unknown and blocks replay after a partial install',
   expect(JSON.stringify(f.store.list(f.authority()))).not.toContain('private output')
   expect(() => { f.executor.validate(f.authority(), 'plugin', payload) }).toThrow('plugin_already_installed')
 })
+it.each([
+  ['missing dependency', { dependencies: {}, dsh: { profile: { bundles: ['fixture'] } } }, 'plugin_bundle_missing'],
+  ['non-string dependency', { dependencies: { fixture: 1 }, dsh: { profile: { bundles: ['fixture'] } } }, 'plugin_target_changed'],
+  ['non-array bundles', { dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: 'fixture' } } }, 'invalid_profile_manifest'],
+  ['missing bundle registration', { dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: [] } } }, 'plugin_bundle_missing'],
+] as const)('rejects an install whose command leaves %s', async (_label, installed, reason) => {
+  const f = fixture()
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    install: async () => { writeFileSync(f.manifest, JSON.stringify(installed), { mode: 0o600 }) },
+    acknowledge: async () => { throw Error('must not acknowledge malformed installation') },
+  })
+  await expect(executor.execute(f.authority(), payload,
+    { kind: 'plugin', signal: new AbortController().signal, guard() {} })).rejects.toThrow(reason)
+})
+
+it('rejects malformed package-completion receipts before inspecting Profile state', async () => {
+  const f = fixture()
+  for (const receipt of [
+    {},
+    { profileId: f.authority(), kind: 'skill' },
+    { profileId: randomUUID(), kind: 'plugin' },
+  ]) {
+    await expect(f.executor.validatePluginCompletion(f.authority(), receipt as ExtensionReceipt)).rejects.toThrow('invalid_recovery')
+  }
+})
 it('rejects changed lockfiles before installing and rejects mutable or mismatched input', async () => {
   const f = fixture(); const plan = await f.operations.prepare(f.authority, 'plugin', payload)
   writeFileSync(join(f.web, 'pnpm-lock.yaml'), 'changed', { mode: 0o600 })
@@ -272,6 +297,18 @@ it.each([null, '', '# keep\n[]\n'])('recovers interrupted plugin activation and 
   const id = randomUUID(); operations.commit(f.authority, plan.planId, id); await operations.settled()
   expect(operations.status(f.authority, id)).toMatchObject({ state: 'unknown', canRestore: true })
   expect(acknowledgements).toBe(0)
+  const receipt = f.store.read(id)!
+  await expect(executor.validatePluginRestore(randomUUID(), receipt)).rejects.toThrow('invalid_recovery')
+  await expect(executor.validatePluginRestore(f.authority(), { ...receipt, kind: 'skill' })).rejects.toThrow('invalid_recovery')
+  const withoutEvidence = { ...receipt }; delete withoutEvidence.pluginToggleRecovery
+  await expect(executor.validatePluginRestore(f.authority(), withoutEvidence)).rejects.toThrow('invalid_recovery')
+  await expect(executor.validatePluginRestore(f.authority(), { ...receipt, operationId: 'invalid' })).rejects.toThrow('invalid_input')
+  const withoutToggle = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {} })
+  await expect(withoutToggle.validatePluginRestore(f.authority(), receipt)).rejects.toThrow('upgrade_required')
+  await expect(executor.validatePluginRestore(f.authority(), { ...receipt,
+    pluginToggleRecovery: { ...receipt.pluginToggleRecovery!, beforeRevision: receipt.pluginToggleRecovery!.afterRevision } }))
+    .rejects.toThrow('plugin_state_changed')
   await operations.dispose(); operations = new ProfileExtensionOperations(f.store, executor, { now: Date.now })
   const restore = JSON.stringify({ action: 'restore-toggle', operationId: id })
   const backup = join(f.web, `.plugin-before-${id}`); const backupBytes = readFileSync(backup, 'utf8')
