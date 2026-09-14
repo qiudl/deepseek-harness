@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { setTimeout as pause } from 'node:timers/promises'
 import { join } from 'node:path'
@@ -35,6 +35,39 @@ it('rejects mutable specs and revocation before launching', async () => {
     await expect(runProfilePluginCommand({ ...f.options, spec, signal: new AbortController().signal, guard() {} })).rejects.toThrow()
   }
   await expect(runProfilePluginCommand({ ...f.options, spec: 'bundle@1.0.0', signal: new AbortController().signal, guard() { throw Error('revoked') } })).rejects.toThrow()
+})
+it('rejects unsafe Profile directories and executable paths before launching', async () => {
+  const f = fixture()
+  const signal = new AbortController().signal
+  const request = { ...f.options, spec: 'bundle@1.0.0', signal, guard() {} }
+  await expect(runProfilePluginCommand({ ...request, profileRoot: 'relative' })).rejects.toThrow('unsafe_plugin_directory')
+  chmodSync(f.profile, 0o722)
+  await expect(runProfilePluginCommand(request)).rejects.toThrow('unsafe_plugin_directory')
+  chmodSync(f.profile, 0o700)
+  await expect(runProfilePluginCommand({ ...request, nodeExecutablePath: 'node' })).rejects.toThrow('invalid_plugin_binary')
+  await expect(runProfilePluginCommand({ ...request, dshEntrypointPath: f.profile })).rejects.toThrow('invalid_plugin_binary')
+  await expect(runProfilePluginCommand({ ...request, pnpmEntrypointPath: `${f.pnpm}\n` })).rejects.toThrow('invalid_plugin_binary')
+})
+it('reports launch, exit, and post-install authority failures without leaving its shim', async () => {
+  const failedExit = fixture()
+  writeFileSync(failedExit.pnpm, 'process.exit(3)')
+  await expect(runProfilePluginCommand({ ...failedExit.options, spec: 'bundle@1.0.0',
+    signal: new AbortController().signal, guard() {} })).rejects.toThrow('plugin_install_failed')
+  expect(readdirSync(failedExit.control)).toEqual([])
+
+  const failedLaunch = fixture()
+  const blockedNode = join(failedLaunch.root, 'blocked-node')
+  writeFileSync(blockedNode, '', { mode: 0o600 })
+  await expect(runProfilePluginCommand({ ...failedLaunch.options, nodeExecutablePath: blockedNode, spec: 'bundle@1.0.0',
+    signal: new AbortController().signal, guard() {} })).rejects.toThrow('plugin_launch_failed')
+  expect(readdirSync(failedLaunch.control)).toEqual([])
+
+  const revoked = fixture(); let guards = 0
+  await expect(runProfilePluginCommand({ ...revoked.options, spec: 'bundle@1.0.0',
+    signal: new AbortController().signal, guard() { if (++guards === 3) throw Error('revoked after install') } }))
+    .rejects.toThrow('plugin_authority_revoked')
+  expect(guards).toBe(3)
+  expect(readdirSync(revoked.control)).toEqual([])
 })
 it('cancels a running installer and waits for process exit', async () => {
   const f = fixture()

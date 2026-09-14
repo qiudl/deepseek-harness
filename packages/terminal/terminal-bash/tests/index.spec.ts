@@ -398,7 +398,10 @@ describe('BashTerminalBackend startup rollback', () => {
     expect(spawned?.env?.PROMPT_COMMAND).toBeUndefined()
   })
 
-  it('accepts an executed readiness marker after an inferred-idle settlement', async () => {
+  it.each([
+    [PWSH_READY_MARKER, 'dsh> '],
+    [`startup${PWSH_READY_MARKER}`, 'startup\ndsh> '],
+  ])('accepts an executed readiness marker after an inferred-idle settlement', async (viewport, expectedMotd) => {
     const ctx = new Context()
     await ctx.plugin(EmptySandbox)
     await ctx.plugin(SessionProjectionRegistry)
@@ -411,7 +414,7 @@ describe('BashTerminalBackend startup rollback', () => {
         sends.push(request)
         return {
           done: Promise.resolve({
-            viewport: PWSH_READY_MARKER,
+            viewport,
             waitReason: 'inferred_idle' as const,
             sessionStatus: { kind: 'running' as const }, truncated: false,
           }),
@@ -429,7 +432,7 @@ describe('BashTerminalBackend startup rollback', () => {
     )
     await backend.spawn(spec(agent(ctx)))
     expect(sends).toHaveLength(1)
-    expect(session.motd).toBe('dsh> ')
+    expect(session.motd).toBe(expectedMotd)
   })
 
   it('rejects premature pwsh stdin readiness without an executed marker', async () => {

@@ -74,13 +74,32 @@ describe('Host Profile MCP execution', () => {
     const f = fixture()
     const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(), reload: async () => {} })
     const engine = new ProfileExtensionOperations(f.receipts, executor, { now: () => 1000 })
-    for (const bad of ['{}', '{', JSON.stringify({ mcpServers: { 'invalid name': { command: 'anything' } } })]) {
+    const tooMany = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`server-${index}`, { command: 'node' }]))
+    for (const bad of [
+      '{}', '{', 'null', '[]',
+      JSON.stringify({ mcpServers: { 'invalid name': { command: 'anything' } } }),
+      JSON.stringify({ mcpServers: { demo: null } }),
+      JSON.stringify({ mcpServers: { demo: [] } }),
+      JSON.stringify({ mcpServers: { demo: { command: '' } } }),
+      JSON.stringify({ mcpServers: { demo: { command: 'node\0bad' } } }),
+      JSON.stringify({ mcpServers: { demo: { url: 'ftp://example.test/mcp' } } }),
+      JSON.stringify({ mcpServers: { demo: { url: 'https://user@example.test/mcp' } } }),
+      JSON.stringify({ mcpServers: { demo: {} } }),
+      JSON.stringify({ mcpServers: tooMany }),
+    ]) {
       await expect(engine.prepare(() => f.profileId, 'mcp', bad)).rejects.toThrow()
     }
     await expect(engine.prepare(() => f.profileId, 'plugin', 'some-package')).rejects.toThrow()
     expect(readFileSync(f.patch, 'utf8')).toBe(f.original)
     expect(f.receipts.list(f.profileId)).toEqual([])
     await engine.dispose()
+  })
+
+  it('rejects an import whose merged patch exceeds the bounded Profile file', () => {
+    const f = fixture()
+    writeFileSync(f.patch, `# ${'x'.repeat(1_048_500)}\n[]\n`, { mode: 0o600 })
+    const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(), reload: async () => {} })
+    expect(() => { executor.validate(f.profileId, 'mcp', payload) }).toThrow('invalid_input')
   })
 
   it('rejects symlink Profile directories and records a reload failure as unknown', async () => {
@@ -242,6 +261,42 @@ it('keeps a concurrent patch edit when activation fails', async () => {
   expect(readFileSync(f.patch, 'utf8')).toBe(concurrent)
 })
 
+it('fails closed when successful activation acknowledgement races a patch edit', async () => {
+  const f = fixture()
+  const concurrent = '# concurrent activation edit\n[]\n'
+  const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(), reload: async () => {
+    writeFileSync(f.patch, concurrent)
+  } })
+  const context = { kind: 'mcp' as const, signal: new AbortController().signal, guard() {} }
+  await expect(executor.execute(f.profileId, payload, context)).rejects.toThrow('revision_conflict')
+  expect(readFileSync(f.patch, 'utf8')).toBe(concurrent)
+})
+
+it('fails closed when restored MCP bytes change during rollback acknowledgement', async () => {
+  const f = fixture(); let reloads = 0
+  const concurrent = '# concurrent rollback edit\n[]\n'
+  const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(), reload: async () => {
+    if (++reloads === 1) throw Error('activation failed')
+    writeFileSync(f.patch, concurrent)
+  } })
+  const context = { kind: 'mcp' as const, signal: new AbortController().signal, guard() {} }
+  await expect(executor.execute(f.profileId, payload, context)).rejects.toThrow('revision_conflict')
+  expect(reloads).toBe(2)
+  expect(readFileSync(f.patch, 'utf8')).toBe(concurrent)
+})
+
+it('rejects malformed recovery ownership before reading backup bytes', async () => {
+  const f = fixture()
+  const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(), reload: async () => {} })
+  for (const receipt of [
+    { profileId: randomUUID(), kind: 'mcp', mcpRecovery: {} },
+    { profileId: f.profileId, kind: 'plugin', mcpRecovery: {} },
+    { profileId: f.profileId, kind: 'mcp' },
+  ]) {
+    await expect(executor.validateMcpRestore(f.profileId, receipt as never)).rejects.toThrow('invalid_recovery')
+  }
+})
+
 
 it('recovers an interrupted MCP publication through a new confirmed receipt and preserves historical outcomes', async () => {
   const f = fixture(); let acknowledge = false; let calls = 0
@@ -291,7 +346,7 @@ it('recovers an interrupted MCP publication through a new confirmed receipt and 
 })
 
 
-it.each(['missing', 'tampered', 'public', 'symlink', 'hardlink'])('refuses %s MCP backup without modifying the current patch', async (damage) => {
+it.each(['missing', 'tampered', 'invalid-marker', 'public', 'symlink', 'hardlink'])('refuses %s MCP backup without modifying the current patch', async (damage) => {
   const f = fixture()
   const executor = new ProfileMcpExecutor({ profileRoot: f.target, uid: process.getuid!(), reload: async () => {} })
   const execute = executor.execute.bind(executor)
@@ -305,6 +360,7 @@ it.each(['missing', 'tampered', 'public', 'symlink', 'hardlink'])('refuses %s MC
   const published = readFileSync(f.patch, 'utf8'); const backup = join(f.web, `.mcp-before-${id}`)
   if (damage === 'missing') unlinkSync(backup)
   if (damage === 'tampered') writeFileSync(backup, '1[]')
+  if (damage === 'invalid-marker') writeFileSync(backup, 'invalid')
   if (damage === 'public') chmodSync(backup, 0o644)
   if (damage === 'symlink') { unlinkSync(backup); symlinkSync(f.patch, backup) }
   if (damage === 'hardlink') linkSync(backup, join(f.web, 'backup-alias'))
