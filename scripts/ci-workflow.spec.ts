@@ -355,6 +355,20 @@ describe('CI workflow', () => {
         expect(evaluate(job['runs-on'] as string, { DSH_CI_FAILOVER_LINUX: 'github' }, login)).toBe('ubuntu-24.04')
       }
     }
+    const consumerEnv = node24Consumers.env
+    if (!isRecord(consumerEnv)) throw new TypeError('node-24-consumers must define environment bounds')
+    for (const [name, hosted, standard] of [
+      ['DSH_GATE_CONCURRENCY', '3', '10'],
+      ['DSH_OXLINT_THREADS', '4', '8'],
+      ['DSH_PUBLINT_CONCURRENCY', '4', '8'],
+      ['DSH_WEB_SNAPSHOT_WORKERS', '2', '6'],
+    ] as const) {
+      expect(evaluate(consumerEnv[name] as string, { DSH_CI_FAILOVER_LINUX: 'github' }), `${name} hosted failover`).toBe(hosted)
+      expect(evaluate(consumerEnv[name] as string, { DSH_CI_FAILOVER_LINUX: '' }), `${name} primary runner`).toBe(standard)
+    }
+    expect(evaluate(consumerEnv.DSH_SNAPSHOT_MAX_CONCURRENCY as string, { DSH_CI_FAILOVER_LINUX: 'github' }), 'snapshot hosted failover').toBe('4')
+    expect(evaluate(consumerEnv.DSH_SNAPSHOT_MAX_CONCURRENCY as string, { DSH_CI_FAILOVER_LINUX: 'selfhosted' }), 'snapshot self-hosted failover').toBe('12')
+    expect(evaluate(consumerEnv.DSH_SNAPSHOT_MAX_CONCURRENCY as string, { DSH_CI_FAILOVER_LINUX: '' }), 'snapshot primary runner').toBe('32')
     expect(evaluate(selectors.windows, { DSH_CI_FAILOVER_LINUX: 'github' })).toBe('dsh-windows-2025-16core')
 
     // The run-gates aggregate lanes stop at the first blocking gate failure so
