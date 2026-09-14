@@ -52,6 +52,56 @@ it.each([
   expect(() => { validateExtensionReceipt(receipt) }).toThrow('invalid_receipt')
 })
 
+it.each([
+  ['complete restoration', (receipt: Record<string, unknown>) => {
+    receipt.restores = randomUUID()
+    receipt.recoveryMode = 'complete'
+  }],
+  ['plugin toggle recovery', (receipt: Record<string, unknown>) => {
+    receipt.pluginToggleRecovery = {
+      packageName: '@scope/fixture', backupDigest: hash('backup'), beforeRevision: hash('before'),
+      afterRevision: hash('after'), stage: 'restoration_verified',
+    }
+  }],
+  ['MCP recovery', (receipt: Record<string, unknown>) => {
+    receipt.kind = 'mcp'
+    receipt.mcpRecovery = {
+      beforeRevision: hash('before'), afterRevision: hash('after'), originalPresent: false,
+      introducedIds: ['mcp-demo'], stage: 'application_verified',
+    }
+  }],
+  ['Skill recovery and source', (receipt: Record<string, unknown>) => {
+    receipt.kind = 'skill'
+    receipt.state = 'succeeded'
+    receipt.skillSource = 'bundled'
+    receipt.skillRemoval = {
+      entryId: 'bundle-demo', originalDigest: hash('original'), beforeRevision: hash('before'),
+      removedRevision: hash('removed'), stage: 'removal_verified',
+    }
+  }],
+  ['failure reason', (receipt: Record<string, unknown>) => { receipt.reason = 'executor_failed' }],
+] as const)('accepts bounded receipt metadata: %s', (_label, mutate) => {
+  const receipt = receiptRecord()
+  mutate(receipt)
+  expect(() => { validateExtensionReceipt(receipt) }).not.toThrow()
+})
+
+it.each([
+  ['uppercase digest', (receipt: Record<string, unknown>) => { receipt.digest = hash('payload').toUpperCase() }],
+  ['array-valued state', (receipt: Record<string, unknown>) => { receipt.state = ['running'] }],
+  ['unsafe creation time', (receipt: Record<string, unknown>) => { receipt.createdAt = Number.MAX_SAFE_INTEGER + 1 }],
+  ['updated before creation', (receipt: Record<string, unknown>) => { receipt.updatedAt = 0 }],
+  ['array-valued reason', (receipt: Record<string, unknown>) => { receipt.reason = ['executor_failed'] }],
+  ['Skill source on a Plugin receipt', (receipt: Record<string, unknown>) => {
+    receipt.state = 'succeeded'
+    receipt.skillSource = 'bundled'
+  }],
+] as const)('rejects invalid receipt core metadata: %s', (_label, mutate) => {
+  const receipt = receiptRecord()
+  mutate(receipt)
+  expect(() => { validateExtensionReceipt(receipt) }).toThrow('invalid_receipt')
+})
+
 it.each(['action', 'stage'])('refuses persisted plugin recovery with an array-valued %s', (field) => {
   const f = setup()
   onTestFinished(() => f.operations.dispose())
