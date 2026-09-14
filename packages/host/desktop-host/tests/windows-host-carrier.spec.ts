@@ -52,11 +52,12 @@ describe('Windows Host carrier startup', () => {
     const state = fixture()
     expect(() => { assertWindowsHostCarrierInputs({ ...state.options, installationPublicKey: 'bad' }) }).toThrow()
     expect(() => { assertWindowsHostCarrierInputs({ ...state.options, executableSignatureDigest: 'bad' }) }).toThrow()
+    const { platform: _platform, arch: _arch, ...runtimeDefaults } = state.options
     const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
-    expect(() => { assertWindowsHostCarrierInputs({ ...state.options, platform: undefined, arch: undefined }) }).toThrow()
+    expect(() => { assertWindowsHostCarrierInputs(runtimeDefaults) }).toThrow()
     platform.mockRestore()
     const arch = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64')
-    expect(() => { assertWindowsHostCarrierInputs({ ...state.options, platform: 'win32', arch: undefined }) }).toThrow()
+    expect(() => { assertWindowsHostCarrierInputs({ ...runtimeDefaults, platform: 'win32' }) }).toThrow()
     arch.mockRestore()
   })
 
