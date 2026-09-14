@@ -376,9 +376,7 @@ export class ProfileRegistry {
     const matches = this.profiles.filter(profile => profile.kind === 'account' && profile.keyHandle === normalized)
     if (matches.length === 0) throw new HostAuthorityError('profile_not_found')
     if (matches.length !== 1) throw new HostAuthorityError('profile_ambiguous')
-    const [match] = matches
-    if (!match) throw new HostAuthorityError('profile_not_found')
-    return match
+    return matches[0] as PersonProfileRecord
   }
 
   /**

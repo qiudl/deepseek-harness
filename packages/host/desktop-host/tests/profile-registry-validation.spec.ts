@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
-import { ProfileRegistry, personIndex } from '../src/index.ts'
+import { HostAuthorityError, ProfileRegistry, personIndex } from '../src/index.ts'
 
 const key = Buffer.alloc(32, 7)
 const clock = { now: () => 1000 }
@@ -42,6 +42,18 @@ describe('registry authority validation', () => {
     expect(prepareRoot).toHaveBeenCalledTimes(2)
     expect(loadSnapshot).toHaveBeenCalledTimes(2)
     expect(persistSnapshot).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed when an external stable-file authority cannot load its snapshot', () => {
+    for (const failure of [new Error('native read failed'), new HostAuthorityError('unauthorized')]) {
+      expect(() => new ProfileRegistry({
+        root: '/dev/null/windows-registry',
+        deviceIndexKey: key,
+        clock,
+        prepareRoot: () => undefined,
+        loadSnapshot: () => { throw failure },
+      })).toThrow(failure instanceof HostAuthorityError ? /unauthorized/ : /unavailable/)
+    }
   })
 
   it.each(['', 'x'.repeat(513)])('rejects invalid subject length %s', (subject) => {
@@ -157,6 +169,7 @@ describe('registry authority validation', () => {
     expect(() => { registry.rollbackUpdate(first, first) }).toThrow(/stale/)
     await expect(registry.bindAccount(first.profileId, base)).rejects.toMatchObject({ code: 'profile_mismatch' })
     expect(registry.resolveProfile(second.profileId)).toEqual(second)
+    expect(registry.resolveProfile('018f0f4c-87f8-7e2d-a2f8-7b93d34e3199' as never)).toBeNull()
   })
 
   it('rejects incorrect keys and unlock material without modifying the existing Profile', async () => {
