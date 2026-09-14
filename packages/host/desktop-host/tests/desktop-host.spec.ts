@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
-import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
@@ -255,6 +255,24 @@ describe('authenticated Unix transport', () => {
     await server.start()
     return { server, host, socketPath }
   }
+
+  it('can retry the same server after its socket parent appears', async () => {
+    const root = dir()
+    const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: identity.processNonce })
+    const parent = join(root, 'late')
+    const socketPath = join(parent, 'host.sock')
+    const server = new UnixHostServer({
+      socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
+      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity,
+      host: {} as never, profilePersistenceGeneration: () => 1,
+    })
+    await expect(server.start()).rejects.toSatisfy((error: unknown) => error instanceof Error
+      && 'code' in error && typeof error.code === 'string' && /^(?:EACCES|ENOENT)$/u.test(error.code))
+    mkdirSync(parent)
+    await expect(server.start()).resolves.toBeUndefined()
+    await server.close()
+    await ownership.release()
+  })
 
   it('advertises offline recovery only when both recovery adapters are installed', async () => {
     const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, false)

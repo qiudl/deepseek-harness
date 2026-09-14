@@ -1141,17 +1141,24 @@ export class UnixHostServer {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     const server = createServer((socket) => { void this.accept(socket) })
+    delete this.socketIdentity
     this.server = server
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(this.options.socketPath, () => {
-        server.off('error', reject)
-        resolve()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(this.options.socketPath, () => {
+          server.off('error', reject)
+          resolve()
+        })
       })
-    })
-    chmodSync(this.options.socketPath, 0o600)
-    const stat = lstatSync(this.options.socketPath)
-    this.socketIdentity = { dev: stat.dev, ino: stat.ino }
+      chmodSync(this.options.socketPath, 0o600)
+      const stat = lstatSync(this.options.socketPath)
+      this.socketIdentity = { dev: stat.dev, ino: stat.ino }
+    } catch (error) {
+      this.server = undefined
+      if (server.listening) await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
+      throw error
+    }
   }
 
   /** Close connections and remove only the socket inode this server created. */
