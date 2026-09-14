@@ -128,18 +128,22 @@ async function startupSession(
     // accept only backend stdin_read evidence; echoed setup source containing
     // the printable prompt is not readiness. Follow-up sends bridge silence
     // settlements during startup, while one absolute deadline bounds them.
+    let first = true
     let viewport = ''
     for (;;) {
-      const first = viewport.length === 0
       startupOperation = session.startSend({
         text: first ? ENCODING_PREAMBLE + PWSH_PROMPT_SETUP : '',
         submit: first,
         ...signal !== undefined ? { signal } : {},
       })
+      first = false
       const result = await startupOperation.done
       if (result.waitReason === 'session_exit') throw new Error('PTY shell exited during startup')
       if (result.waitReason === 'timeout') throw new Error('PTY shell did not reach readiness before startup timeout')
-      viewport = result.viewport
+      // A loaded host can settle the command-output phase by silence, then
+      // prove stdin readiness with an empty follow-up operation. Retain the
+      // last non-empty startup view instead of erasing the MOTD at that seam.
+      if (result.viewport.length > 0) viewport = result.viewport
       if (result.waitReason === 'stdin_read') break
     }
     session.motd = viewport

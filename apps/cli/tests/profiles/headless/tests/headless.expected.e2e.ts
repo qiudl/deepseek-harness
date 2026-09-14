@@ -46,6 +46,11 @@ const headlessSessionExpected = join(goldensDir, 'headless-profile', 'session.ex
 const headlessReasoningExpected = join(goldensDir, 'headless-profile', 'reasoning.stderr.expected.txt')
 const headlessFailureExpected = join(goldensDir, 'headless-profile', 'stderr.expected.txt')
 const refreshing = process.env.DSH_SNAPSHOT === 'refresh'
+// The consumers lane assembles and boots several release-shaped apps in
+// parallel. Preserve a bounded failure diagnostic while allowing that cold
+// start to cross the shared helper's ordinary 30-second deadline.
+const PROFILE_FAILURE_PROCESS_TIMEOUT_MS = 60_000
+const PROFILE_FAILURE_TEST_TIMEOUT_MS = PROFILE_FAILURE_PROCESS_TIMEOUT_MS + 15_000
 
 interface JsonObject {
   [key: string]: unknown
@@ -260,6 +265,7 @@ describe('headless stream-json snapshots', () => {
       binArgs: ['--profile', 'headless', '--patch', headlessOverlayPath, 'Trigger the keyless model failure.'],
       tsconfigPath,
       expectedExitCode: 1,
+      processTimeoutMs: PROFILE_FAILURE_PROCESS_TIMEOUT_MS,
       env: {
         DSH_CLI_MOCK_FAILURE: '1',
         DSH_TELEMETRY_DISABLED: '1',
@@ -269,7 +275,7 @@ describe('headless stream-json snapshots', () => {
 
     expect(result.stdout).toBe('\n')
     await expect(result.stderr).toMatchFileSnapshot(headlessFailureExpected)
-  }, LOADER_SMOKE_TEST_TIMEOUT_MS)
+  }, PROFILE_FAILURE_TEST_TIMEOUT_MS)
 
   it('prints the original Loader activation error through the assembled one-shot app', async () => {
     const result = await runLoaderSmoke({
@@ -445,7 +451,7 @@ describe('headless stream-json snapshots', () => {
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
   it('keeps provider comments alive and sends DeepSeek defaults through the one-shot app', async () => {
-    const server = await deepseekDefaultsServer()
+    const server = await deepseekDefaultsServer({ waitForTitleRequest: true })
     try {
       const result = await runLoaderSmoke({
         label: 'DeepSeek adapter defaults headless stream-json snapshot',
