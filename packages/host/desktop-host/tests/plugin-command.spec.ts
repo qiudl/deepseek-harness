@@ -34,7 +34,8 @@ it('rejects mutable specs and revocation before launching', async () => {
   for (const spec of ['bundle@latest', '../local', '--ignore-scripts', 'github:owner/repo#main']) {
     await expect(runProfilePluginCommand({ ...f.options, spec, signal: new AbortController().signal, guard() {} })).rejects.toThrow()
   }
-  await expect(runProfilePluginCommand({ ...f.options, spec: 'bundle@1.0.0', signal: new AbortController().signal, guard() { throw Error('revoked') } })).rejects.toThrow()
+  await expect(runProfilePluginCommand({ ...f.options, spec: 'bundle@1.0.0', signal: new AbortController().signal, guard() { throw Error('revoked') } }))
+    .rejects.toThrow('plugin_authority_revoked')
 })
 it('rejects unsafe Profile directories and executable paths before launching', async () => {
   const f = fixture()

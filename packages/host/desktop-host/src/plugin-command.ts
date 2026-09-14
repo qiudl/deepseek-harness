@@ -27,6 +27,9 @@ export function isPinnedPluginSpec(spec: string): boolean {
   return spec.length <= 256 && (exactNpm.test(spec) || !!git && [git[1], git[2]].every(part => part !== '.' && part !== '..'))
 }
 function shellQuote(path: string): string { return `'${path.replaceAll("'", "'\\''")}'` }
+function assertPluginAuthority(guard: () => void): void {
+  try { guard() } catch { throw Error('plugin_authority_revoked') }
+}
 
 /**
  * Run add/remove or dependency repair with explicit binaries, disabled lifecycle scripts, and a private pnpm shim.
@@ -34,7 +37,7 @@ function shellQuote(path: string): string { return `'${path.replaceAll("'", "'\\
  * @returns Completion after CLI exit; it does not acknowledge plugin activation or repair partial installs.
  */
 export async function runProfilePluginCommand(input: ProfilePluginCommand): Promise<void> {
-  input.guard(); input.signal.throwIfAborted()
+  assertPluginAuthority(input.guard); input.signal.throwIfAborted()
   if (process.platform === 'win32' || (input.action === 'remove' || input.action === 'repair'
     ? input.spec.length > 214 || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(input.spec) : !isPinnedPluginSpec(input.spec))) throw Error('invalid_plugin_command')
   for (const path of [input.profileRoot, input.controlRoot]) {
@@ -48,7 +51,7 @@ export async function runProfilePluginCommand(input: ProfilePluginCommand): Prom
   const shim = mkdtempSync(join(input.controlRoot, 'plugin-command-'))
   try {
     writeFileSync(join(shim, 'pnpm'), `#!/bin/sh\nexec ${shellQuote(input.nodeExecutablePath)} ${shellQuote(input.pnpmEntrypointPath)} "$@"\n`, { mode: 0o700 })
-    input.guard(); input.signal.throwIfAborted()
+    assertPluginAuthority(input.guard); input.signal.throwIfAborted()
     await new Promise<void>((resolve, reject) => {
       const child = spawn(input.nodeExecutablePath, [input.dshEntrypointPath,
         ...(input.action === 'repair' ? ['plugin', '--profile', 'web', 'install', '--no-frozen-lockfile', '--ignore-scripts']
@@ -71,7 +74,7 @@ export async function runProfilePluginCommand(input: ProfilePluginCommand): Prom
       const abort = () => { stop('plugin_install_cancelled') }
       input.signal.addEventListener('abort', abort, { once: true })
       const deadline = setTimeout(() => { stop('plugin_install_timeout') }, 120_000)
-      const authority = setInterval(() => { try { input.guard() } catch { stop('plugin_authority_revoked') } }, 100)
+      const authority = setInterval(() => { try { assertPluginAuthority(input.guard) } catch { stop('plugin_authority_revoked') } }, 100)
       // Drain both pipes without retaining package output or credentials in Host receipts.
       child.stdout.resume(); child.stderr.resume()
       child.once('error', () => { failure = 'plugin_launch_failed' })
@@ -84,6 +87,6 @@ export async function runProfilePluginCommand(input: ProfilePluginCommand): Prom
       })
       if (input.signal.aborted) abort()
     })
-    input.guard(); input.signal.throwIfAborted()
+    assertPluginAuthority(input.guard); input.signal.throwIfAborted()
   } finally { rmSync(shim, { recursive: true, force: true }) }
 }
