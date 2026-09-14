@@ -1,5 +1,4 @@
-import { writeFileSync } from 'node:fs'
-import { mkdtempSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { realpathSync } from 'node:fs'
@@ -37,6 +36,23 @@ describe('macOS Unix peer attestation', () => {
     expect(peer).toEqual({ uid: 501, pid: 42 })
   })
 
+  it('rejects incomplete or invalid native peer credentials', () => {
+    const valid = {
+      getpeereid: (_fd: number, uid: Uint32Array) => { uid[0] = 501; return 0 },
+      getsockopt: (_fd: number, _level: number, _name: number, pid: Int32Array) => { pid[0] = 42; return 0 },
+    }
+    expect(() => readMacOSPeerIdentity(9, { ...valid, getpeereid: () => -1 })).toThrow(HostAuthorityError)
+    expect(() => readMacOSPeerIdentity(9, { ...valid, getsockopt: () => -1 })).toThrow(HostAuthorityError)
+    expect(() => readMacOSPeerIdentity(9, {
+      ...valid,
+      getsockopt: (_fd, _level, _name, pid, size) => { pid[0] = 42; size[0] = 0; return 0 },
+    })).toThrow(HostAuthorityError)
+    expect(() => readMacOSPeerIdentity(9, {
+      ...valid,
+      getsockopt: (_fd, _level, _name, pid) => { pid[0] = 0; return 0 },
+    })).toThrow(HostAuthorityError)
+  })
+
   it('falls back to the launchd process text mapping when proc_pidpath returns zero', async () => {
     const calls: number[] = []
     const path = await resolveMacOSProcessExecutable(42, () => 0, async (pid) => {
@@ -47,10 +63,19 @@ describe('macOS Unix peer attestation', () => {
     expect(path).toBe('/usr/local/libexec/slark-daemon')
   })
 
+  it('uses a complete proc_pidpath result without invoking lsof', async () => {
+    const path = await resolveMacOSProcessExecutable(42, (_pid, buffer) => {
+      return buffer.write('/Applications/Slark.app/Contents/MacOS/Slark')
+    }, async () => { throw new Error('lsof must not run') })
+    expect(path).toBe('/Applications/Slark.app/Contents/MacOS/Slark')
+  })
+
   it('selects the primary text mapping and rejects malformed lsof identity output', () => {
     expect(parseMacOSProcessExecutable('p42\nftxt\nn/bin/a\nftxt\nn/usr/lib/dyld\n', 42)).toBe('/bin/a')
     expect(() => parseMacOSProcessExecutable('p43\nftxt\nn/bin/a\n', 42)).toThrow(HostAuthorityError)
     expect(() => parseMacOSProcessExecutable('p42\nftxt\n', 42)).toThrow(HostAuthorityError)
+    expect(() => parseMacOSProcessExecutable('p42\nf1\nn/bin/a\n', 42)).toThrow(HostAuthorityError)
+    expect(() => parseMacOSProcessExecutable('p42\nftxt\nnrelative\n', 42)).toThrow(HostAuthorityError)
   })
 
   it('binds the peer fd to PID, executable, Team ID, and executable digest', async () => {
@@ -62,7 +87,8 @@ describe('macOS Unix peer attestation', () => {
         peerIdentity: () => ({ uid, pid: 42 }),
         executablePath: () => path,
         verifyCodeSignature: async (candidate) => {
-          expect(candidate).toBe(realpathSync(path))
+          expect(candidate).not.toBe(realpathSync(path))
+          expect(readFileSync(candidate, 'utf8')).toBe('signed daemon fixture')
           return 'TEAM123'
         },
       },
@@ -85,5 +111,46 @@ describe('macOS Unix peer attestation', () => {
     })
     await expect(attest({ _handle: { fd: 9 } } as never)).rejects.toBeInstanceOf(HostAuthorityError)
     await expect(attest({} as never)).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('rejects invalid trust roots, peer facts, paths, permissions, and binding failures', async () => {
+    expect(() => createMacOSPeerAttestor({ allowedTeamIdentifiers: new Set() })).toThrow(HostAuthorityError)
+    expect(() => createMacOSPeerAttestor({ allowedTeamIdentifiers: new Set(['bad team']) })).toThrow(HostAuthorityError)
+    const uid = process.getuid?.() ?? 501
+    const path = executable()
+    const bindings = {
+      peerIdentity: () => ({ uid, pid: 42 }),
+      executablePath: () => path,
+      verifyCodeSignature: async () => 'TEAM123',
+    }
+    const attest = (overrides: Partial<typeof bindings>) => createMacOSPeerAttestor({
+      allowedTeamIdentifiers: new Set(['TEAM123']), bindings: { ...bindings, ...overrides },
+    })({ _handle: { fd: 9 } } as never)
+    await expect(attest({ peerIdentity: () => ({ uid: -1, pid: 42 }) })).rejects.toBeInstanceOf(HostAuthorityError)
+    await expect(attest({ peerIdentity: () => ({ uid, pid: 0 }) })).rejects.toBeInstanceOf(HostAuthorityError)
+    await expect(attest({ executablePath: () => 'relative' })).rejects.toBeInstanceOf(HostAuthorityError)
+    await expect(attest({ executablePath: () => { throw new Error('native failure') } })).rejects.toBeInstanceOf(HostAuthorityError)
+    chmodSync(path, 0o722)
+    await expect(attest({})).rejects.toBeInstanceOf(HostAuthorityError)
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-peer-dir-')), 'daemon')
+    mkdirSync(directory)
+    await expect(attest({ executablePath: () => directory })).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('rejects executable bytes changed while the code signature is verified', async () => {
+    const path = executable()
+    const uid = process.getuid?.() ?? 501
+    const attest = createMacOSPeerAttestor({
+      allowedTeamIdentifiers: new Set(['TEAM123']),
+      bindings: {
+        peerIdentity: () => ({ uid, pid: 42 }),
+        executablePath: () => path,
+        verifyCodeSignature: async () => {
+          writeFileSync(path, 'unsigned replacement bytes', { mode: 0o700 })
+          return 'TEAM123'
+        },
+      },
+    })
+    await expect(attest({ _handle: { fd: 9 } } as never)).rejects.toBeInstanceOf(HostAuthorityError)
   })
 })
