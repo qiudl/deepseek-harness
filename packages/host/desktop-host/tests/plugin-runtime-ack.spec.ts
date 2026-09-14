@@ -65,7 +65,8 @@ it('rejects duplicate disabled identities instead of confirming deactivation', a
 
 it('waits for actual disappearance of removed entries while ignoring unrelated metadata', async () => {
   const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
-    const { rpcId } = JSON.parse(String(init.body)) as { rpcId: string }
+    if (typeof init.body !== 'string') throw new Error('expected string request body')
+    const { rpcId } = JSON.parse(init.body) as { rpcId: string }
     return Response.json({ type: 'server-response', rpcId, result: { ok: true, value: {
       entries: fetcher.mock.calls.length === 1 ? [null, 42, { entryId: 'other' }, { entryId: 'removed' }] : [null, 42, { entryId: 'other' }],
     } } })

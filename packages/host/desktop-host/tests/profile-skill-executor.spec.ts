@@ -63,7 +63,7 @@ it.each([
   const acknowledge = vi.fn(async () => undefined)
   const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge })
   const request = JSON.stringify(value)
-  expect(() => executor.validate('a', 'skill', request)).toThrow('invalid_input')
+  expect(() => { executor.validate('a', 'skill', request) }).toThrow('invalid_input')
   await expect(executor.execute('a', request, { kind: 'skill', signal: new AbortController().signal, guard() {} }))
     .rejects.toThrow('invalid_input')
   expect(readdirSync(join(root, 'a'))).toEqual([])
@@ -90,7 +90,7 @@ it.each([{ kind: ['model'] }, { kind: ['user'] }])('rejects an array-valued invo
   const acknowledge = vi.fn(async () => undefined)
   const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge })
   const request = JSON.stringify({ action: 'invocation', id: 'bundle-host-demo', kind, value: false })
-  expect(() => executor.validate('a', 'skill', request)).toThrow('invalid_input')
+  expect(() => { executor.validate('a', 'skill', request) }).toThrow('invalid_input')
   await expect(executor.execute('a', request, { kind: 'skill', signal: new AbortController().signal, guard() {} }))
     .rejects.toThrow('invalid_input')
   expect(readFileSync(file, 'utf8')).toBe(original)
@@ -109,7 +109,7 @@ it('refuses a new skill at capacity while keeping existing skills manageable', a
   await expect(executor.execute('a', payload, { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('skill_limit')
   expect(acknowledge).not.toHaveBeenCalled()
   expect(readdirSync(skills)).toHaveLength(128)
-  expect(() => executor.validate('a', 'skill', JSON.stringify({ action: 'remove', id: 'flat-skill-0' }))).not.toThrow()
+  expect(() => { executor.validate('a', 'skill', JSON.stringify({ action: 'remove', id: 'flat-skill-0' })) }).not.toThrow()
 })
 it('uses Hub Markdown serialization, writes only the authorized Profile and waits for acknowledgement', async () => {
   const root = fixture(); const calls: string[] = []

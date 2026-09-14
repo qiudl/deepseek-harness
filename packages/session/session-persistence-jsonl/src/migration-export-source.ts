@@ -132,7 +132,8 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         for (const name of names) await this.checkedRegularFile(join(sessionPath, name))
         if (directoryNames.includes(LEASE_FILENAME)) await this.checkedLeaseFile(join(sessionPath, LEASE_FILENAME))
         const selected = ordinaryGenerations.sort((left, right) => right.version - left.version)[0]?.name
-          ?? legacyZstd[0] as string
+          ?? legacyZstd.at(0)
+        if (selected === undefined) throw new Error('migration_export_source_unsafe')
         rows.push(await this.readLog(join(sessionPath, selected), legacyZstd.length > 0, signal))
       }
     }

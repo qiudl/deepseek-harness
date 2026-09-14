@@ -9,7 +9,7 @@ const intent = {
 it.each([
   ['action', ['install']], ['stage', ['prepared']],
 ])('rejects a persisted array masquerading as a %s string', (field, value) => {
-  expect(validPluginPackageRecovery({ ...intent, [field as string]: value })).toBe(false)
+  expect(validPluginPackageRecovery({ ...intent, [field]: value })).toBe(false)
 })
 
 it.each(['prepared', 'command_completed', 'verified'])('accepts a pinned intent at stage %s', (stage) => {

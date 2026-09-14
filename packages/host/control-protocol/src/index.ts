@@ -10,10 +10,10 @@ export {
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
-} from './codec.ts'
-export type { HostControlProtocolFailure } from './codec.ts'
-export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.ts'
-export type { CanonicalMigrationRecord } from './migration-canonical.ts'
+} from './codec.js'
+export type { HostControlProtocolFailure } from './codec.js'
+export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.js'
+export type { CanonicalMigrationRecord } from './migration-canonical.js'
 export type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
@@ -90,4 +90,4 @@ export type {
   MigrationImportAbortResult,
   HostInstanceId,
   InstallationId,
-} from './types.ts'
+} from './types.js'

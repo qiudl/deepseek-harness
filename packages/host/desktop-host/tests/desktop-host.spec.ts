@@ -894,7 +894,8 @@ describe('single Host ownership', () => {
     unlinkSync(join(root, 'host.lock'))
     writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid, processNonce: 'attacker-0123456789', ownerId: 'attacker' }), { mode: 0o600 })
     await expect(owner.release()).rejects.toMatchObject({ code: 'stale' })
-    expect(JSON.parse(readFileSync(join(root, 'host.lock'), 'utf8')).ownerId).toBe('attacker')
+    const replacedOwner: unknown = JSON.parse(readFileSync(join(root, 'host.lock'), 'utf8'))
+    expect(replacedOwner).toMatchObject({ ownerId: 'attacker' })
   })
 })
 

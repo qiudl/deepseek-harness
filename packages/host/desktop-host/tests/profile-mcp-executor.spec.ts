@@ -28,15 +28,15 @@ it('rejects invalid recovery identities before creating or reading a backup', ()
   const f = fixture()
   const storage = new PosixMcpStorage({ profileRoot: f.target, uid: process.getuid!() })
   for (const id of ['../outside', '', 'not-a-uuid']) {
-    expect(() => storage.backup(f.profileId, id, f.original)).toThrow('invalid_input')
-    expect(() => storage.readBackup(f.profileId, id)).toThrow('invalid_input')
+    expect(() => { storage.backup(f.profileId, id, f.original) }).toThrow('invalid_input')
+    expect(() => { storage.readBackup(f.profileId, id) }).toThrow('invalid_input')
   }
   expect(readFileSync(f.patch, 'utf8')).toBe(f.original)
 })
 it('preserves a concurrently changed patch instead of deleting it during restoration', () => {
   const f = fixture()
   const storage = new PosixMcpStorage({ profileRoot: f.target, uid: process.getuid!() })
-  expect(() => storage.publish(f.profileId, null, 'older patch', () => {})).toThrow('revision_conflict')
+  expect(() => { storage.publish(f.profileId, null, 'older patch', () => {}) }).toThrow('revision_conflict')
   expect(readFileSync(f.patch, 'utf8')).toBe(f.original)
 })
 it('accepts an already absent patch when restoring original absence', () => {

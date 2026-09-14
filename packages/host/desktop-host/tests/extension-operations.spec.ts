@@ -17,8 +17,11 @@ it.each(['action', 'stage'])('refuses persisted plugin recovery with an array-va
   f.store.write({ version: 1, operationId: id, profileId: f.profileId, planId: randomUUID(), kind: 'plugin',
     digest: hash('payload'), state: 'running', cancellationRequested: false, createdAt: 1, updatedAt: 2, pluginPackage: intent })
   const file = join(f.root, 'receipts', `${id}.json`)
-  const receipt = JSON.parse(readFileSync(file, 'utf8'))
-  receipt.pluginPackage[field] = [receipt.pluginPackage[field]]
+  const receipt: unknown = JSON.parse(readFileSync(file, 'utf8'))
+  if (typeof receipt !== 'object' || receipt === null || !('pluginPackage' in receipt)
+    || typeof receipt.pluginPackage !== 'object' || receipt.pluginPackage === null) throw new Error('invalid fixture')
+  const pluginPackage = receipt.pluginPackage as Record<string, unknown>
+  pluginPackage[field] = [pluginPackage[field]]
   const malformed = JSON.stringify(receipt)
   writeFileSync(file, malformed)
   expect(() => f.store.read(id)).toThrow('invalid_receipt')

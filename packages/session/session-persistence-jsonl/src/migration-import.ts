@@ -10,7 +10,7 @@ import {
   type MigrationOwnerStateBundle,
   type MigrationOwnerTransferBundle,
   type MigrationSemanticRecord,
-} from './migration-export.ts'
+} from './migration-export.js'
 import {
   eventLines,
   generationLogFilename,
@@ -18,8 +18,8 @@ import {
   parseGenerationLogFilename,
   sessionInheritedEventCount,
   toHeaderLine,
-} from './format.ts'
-import { LEASE_FILENAME } from './lease-filename.ts'
+} from './format.js'
+import { LEASE_FILENAME } from './lease-filename.js'
 
 const HEX_256 = /^[a-f0-9]{64}$/u
 const OPAQUE_ID = /^[a-f0-9]{32,64}$/u

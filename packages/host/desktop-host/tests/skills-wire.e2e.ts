@@ -74,7 +74,9 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
     loaded = await boot('skill-wire', config, [], undefined, new URL('../../../api/session-controller/', import.meta.url).href)
     new SessionSkillCatalog(loaded)
     // This built-runtime fixture loads generated RPC only after the Host build.
-    const { TYPERT } = await import(new URL('../../../api/session-controller/lib/typert.host.js', import.meta.url).href)
+    const generated: unknown = await import(new URL('../../../api/session-controller/lib/typert.host.js', import.meta.url).href)
+    if (typeof generated !== 'object' || generated === null || !('TYPERT' in generated)) throw new Error('missing generated TYPERT')
+    const { TYPERT } = generated
     loaded.effect(() => loaded!.typert.register(TYPERT as Parameters<Context['typert']['register']>[0]))
     expect(await loaded.skills.get(name, { signal })).toBeUndefined()
     guard()
