@@ -11,7 +11,7 @@ import SandboxPolicyService, { setSandboxMode } from '@deepseek-ai/dsh-sandbox-p
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import TerminalSessionService, { TerminalBackendCleanupError, TerminalSessionId } from '@deepseek-ai/dsh-terminal'
 import type { TerminalSendRequest, TerminalWaitReason } from '@deepseek-ai/dsh-terminal'
-import { BashTerminalBackend, PWSH_PROMPT_SETUP, PWSH_READY_MARKER } from '@deepseek-ai/dsh-terminal-bash'
+import { BashTerminalBackend, PWSH_PROMPT_SETUP } from '@deepseek-ai/dsh-terminal-bash'
 import { ENCODING_PREAMBLE } from '@deepseek-ai/dsh-pwsh-local'
 import * as ptyLocal from '@deepseek-ai/dsh-terminal-bash'
 import type { ResolvedConfig } from '@deepseek-ai/dsh-terminal-bash/src/config.ts'
@@ -23,6 +23,8 @@ import type {
   SubprocessTerminalHandle,
   SubprocessTerminalSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
+
+const PWSH_READY_MARKER = 'DSH_PWSH_READY'
 import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 
 class EmptySandbox extends SandboxProvider {

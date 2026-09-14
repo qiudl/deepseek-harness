@@ -96,7 +96,7 @@ function childEnvironment(spec: TerminalBackendSpawnSpec, dialect: ShellDialect)
  */
 export const PWSH_PROMPT_SETUP =
   "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); -join [char[]](100,115,104,62,32) }"
-export const PWSH_READY_MARKER = 'DSH_PWSH_READY'
+const PWSH_READY_MARKER = 'DSH_PWSH_READY'
 const PWSH_READY_SIGNAL = '[Console]::WriteLine((-join [char[]](68,83,72,95,80,87,83,72,95,82,69,65,68,89)))'
 
 function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxExecutionPolicy): string[] {
