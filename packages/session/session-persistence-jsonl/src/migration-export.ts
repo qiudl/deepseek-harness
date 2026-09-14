@@ -111,7 +111,7 @@ function canonicalValue(value: unknown): unknown {
   if (typeof value !== 'object' || value === null) return value
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
     .filter(([, entry]) => entry !== undefined)
-    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .sort(([left], [right]) => left.localeCompare(right, 'en'))
     .map(([key, entry]) => [key, canonicalValue(entry)]))
 }
 
@@ -251,9 +251,8 @@ function sameSnapshots(
 ): boolean {
   if (left.length !== right.length) return false
   return left.every((snapshot, index) => {
-    const candidate = right[index]
-    return candidate !== undefined
-      && candidate.header.id === snapshot.header.id
+    const candidate = right[index] as SessionPersistenceSnapshot
+    return candidate.header.id === snapshot.header.id
       && candidate.revision === snapshot.revision
   })
 }
@@ -377,7 +376,7 @@ export class JsonlMigrationExportService {
         sessions.push({ header: structuredClone(inspection.meta), events: structuredClone(inspection.events) })
         for (const record of additions) {
           if (records.length >= request.maxRecords) throw new Error('migration_export_too_large')
-          encodedBytes += Buffer.byteLength(canonicalJson(record)) + (records.length === 0 ? 0 : 1)
+          encodedBytes += Buffer.byteLength(canonicalJson(record)) + 1
           if (encodedBytes > request.maxBytes) throw new Error('migration_export_too_large')
           records.push(record)
         }
@@ -407,7 +406,6 @@ export class JsonlMigrationExportService {
           chunkRecords[chunkRecords.length - 1] = candidate
         }
       }
-      if (chunkRecords.length === 0) chunkRecords.push([])
       const chunks = chunkRecords.map((chunk, chunkIndex): MigrationExportChunk => ({
         exportId,
         chunkIndex,

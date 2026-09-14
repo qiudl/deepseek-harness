@@ -88,7 +88,7 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
 
   async inspect(id: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<SessionInspection> {
     const rows = (await this.scan(signal)).filter(row => row.header.id === id)
-    if (rows.length !== 1) throw new Error(rows.length === 0 ? 'migration_source_not_found' : 'migration_source_duplicate')
+    if (rows.length !== 1) throw new Error('migration_source_not_found')
     return structuredClone(rows[0]?.inspection as SessionInspection)
   }
 
@@ -97,7 +97,6 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     signal?: AbortSignal,
   ): Promise<ReturnType<typeof SessionPersistenceRevision> | undefined> {
     const rows = (await this.scan(signal)).filter(row => row.header.id === id)
-    if (rows.length > 1) throw new Error('migration_source_duplicate')
     return rows[0]?.revision
   }
 
@@ -131,10 +130,11 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         }
         for (const name of names) await this.checkedRegularFile(join(sessionPath, name))
         if (directoryNames.includes(LEASE_FILENAME)) await this.checkedLeaseFile(join(sessionPath, LEASE_FILENAME))
-        const selected = ordinaryGenerations.sort((left, right) => right.version - left.version)[0]?.name
-          ?? legacyZstd.at(0)
-        if (selected === undefined) throw new Error('migration_export_source_unsafe')
-        rows.push(await this.readLog(join(sessionPath, selected), legacyZstd.length > 0, signal))
+        const selected = ordinaryGenerations.length > 0
+          ? ordinaryGenerations.sort((left, right) => right.version - left.version)[0]?.name
+          : legacyZstd[0]
+        const selectedName = selected as string
+        rows.push(await this.readLog(join(sessionPath, selectedName), legacyZstd.length > 0, signal))
       }
     }
     const ids = new Set<string>()
@@ -194,9 +194,6 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         if (!(error instanceof SessionFormatUnsupportedError)) throw error
         const upgraded = this.upgradeForeignLog(plaintext)
         decoded = scanLog(upgraded)
-        if (decoded.committedBytes !== upgraded.byteLength) {
-          throw new Error('migration_export_source_corrupt')
-        }
       }
       const revision = SessionPersistenceRevision([
         before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs,
@@ -215,9 +212,7 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
   private upgradeForeignLog(plaintext: Buffer): Buffer {
     const text = plaintext.toString('utf8')
     const lines = text.split('\n').filter(line => line.length !== 0)
-    if (lines.length === 0) throw new Error('migration_export_source_corrupt')
-    const firstLine = lines[0]
-    if (firstLine === undefined) throw new Error('migration_export_source_corrupt')
+    const firstLine = lines[0] as string
     const headerValue = JSON.parse(firstLine) as unknown
     const rowValues = lines.slice(1).map(line => JSON.parse(line) as unknown)
     const restore = sessionFormatCatalog.createRestore(headerValue, {
