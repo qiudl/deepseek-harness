@@ -441,6 +441,8 @@ describe('Profile extension operations', () => {
 it('binds checkpoints to the original Skill removal target and refuses rewritten evidence', async () => {
   const f = setup()
   const evidence = { entryId:'flat-demo',originalDigest:hash('body'),beforeRevision:hash('before'),removedRevision:hash('after'),stage:'prepared' as const }
+  let validations = 0
+  let restorations = 0
   const owner = new ProfileExtensionOperations(f.store, { revision: f.executor.revision,
     execute: async (_id, _payload, context) => {
       expect(context.operationId).toBeDefined()
@@ -450,6 +452,16 @@ it('binds checkpoints to the original Skill removal target and refuses rewritten
       expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,originalDigest:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
       throw Error('interrupted')
     },
+    validateSkillRestore: async (_profileId, original) => {
+      validations++
+      expect(original.skillRemoval).toEqual(evidence)
+    },
+    restoreSkillRemoval: async (_profileId, original, context) => {
+      context.guard()
+      restorations++
+      expect(original.skillRemoval).toEqual(evidence)
+      return { state: 'succeeded' }
+    },
   }, { now:()=>1000 })
   onTestFinished(async () => { await owner.dispose() })
   const plan = await owner.prepare(f.authority,'skill',JSON.stringify({ action:'remove',id:'flat-demo' }))
@@ -457,4 +469,13 @@ it('binds checkpoints to the original Skill removal target and refuses rewritten
   expect(owner.status(f.authority,id)).toMatchObject({ state:'unknown',skillRemoval:evidence })
   const invalid = { ...f.store.read(id)!,skillRemoval:{ ...evidence,entryId:'../escape' } }
   expect(() =>{  f.store.write(invalid) }).toThrow('invalid_receipt')
+  expect(owner.status(f.authority, id)).toMatchObject({ canRestore: true })
+  const recovery = await owner.prepare(f.authority, 'skill', JSON.stringify({ action: 'restore-removal', operationId: id }))
+  const recoveryId = randomUUID()
+  owner.commit(f.authority, recovery.planId, recoveryId)
+  await owner.settled()
+  expect(validations).toBe(1)
+  expect(restorations).toBe(1)
+  expect(owner.status(f.authority, recoveryId).state).toBe('succeeded')
+  expect(owner.status(f.authority, id)).toMatchObject({ state: 'unknown', restoredBy: recoveryId })
 })
