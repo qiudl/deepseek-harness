@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import { FileExtensionReceipts, ProfileExtensionOperations } from '../src/extension-operations.ts'
 import { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
 
@@ -27,6 +27,110 @@ function fixture(acknowledged = true) {
   return { root, web, manifest, executor, store, operations, authority, calls: () => calls }
 }
 const payload = JSON.stringify({ packageName: 'fixture', spec: 'fixture@1.0.0' })
+it.each([
+  ['null', null],
+  ['array', []],
+  ['string', 'fixture'],
+  ['remove missing name', { action: 'remove' }],
+  ['remove extra field', { action: 'remove', packageName: 'fixture', extra: true }],
+  ['remove invalid name', { action: 'remove', packageName: '../fixture' }],
+  ['update extra field', { action: 'update', packageName: 'fixture', spec: 'fixture@1.0.0', extra: true }],
+  ['toggle missing state', { action: 'toggle', packageName: 'fixture' }],
+  ['toggle array state', { action: 'toggle', packageName: 'fixture', enabled: [true] }],
+] as const)('rejects malformed plugin input before reading Profile state: %s', (_label, value) => {
+  const f = fixture()
+  expect(() => { f.executor.validate(f.authority(), 'plugin', JSON.stringify(value)) }).toThrow('invalid_plugin_input')
+  expect(f.calls()).toBe(0)
+})
+
+it('rejects unsupported kinds, relative roots, unsafe Profile directories, and malformed manifests', () => {
+  const f = fixture()
+  expect(() => { f.executor.validate(f.authority(), 'skill', payload) }).toThrow('upgrade_required')
+  const relative = new ProfilePluginExecutor({ resolve: () => 'relative', uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {} })
+  expect(() => { relative.validate(f.authority(), 'plugin', payload) }).toThrow('unsafe_profile')
+  chmodSync(f.web, 0o777)
+  expect(() => { f.executor.validate(f.authority(), 'plugin', payload) }).toThrow('unsafe_profile')
+  chmodSync(f.web, 0o700)
+  for (const manifest of [null, [], { dependencies: [] }, { dsh: [] }, { dsh: { profile: [] } }]) {
+    writeFileSync(f.manifest, JSON.stringify(manifest), { mode: 0o600 })
+    expect(() => { f.executor.validate(f.authority(), 'plugin', payload) }).toThrow('invalid_profile_manifest')
+  }
+})
+
+it('reports enabled, disabled, mixed, unsupported, and unavailable plugin toggle states', async () => {
+  const f = fixture()
+  const names = ['enabled', 'disabled', 'mixed', 'unsupported']
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: Object.fromEntries(names.map(name => [name, '1.0.0'])),
+    dsh: { profile: { bundles: [...names, 'unmanaged'] } } }), { mode: 0o600 })
+  const expected = { entryId: 'include:expected', moduleName: 'expected' }
+  const disabled = { entryId: 'include:disabled', moduleName: 'disabled' }
+  const togglePlan = vi.fn((_profileId: string, name: string) => {
+    if (name === 'unsupported') throw Error('unsupported composition')
+    return { patch: '', expected: [], disabled: [],
+      previousExpected: name === 'mixed' ? [expected] : [],
+      previousDisabled: name === 'enabled' ? [] : [disabled] }
+  })
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {}, togglePlan, acknowledgeToggle: async () => {} })
+  expect(await executor.inventory(f.authority())).toEqual([
+    expect.objectContaining({ name: 'enabled', plugin_state: 'enabled' }),
+    expect.objectContaining({ name: 'disabled', plugin_state: 'disabled' }),
+    expect.objectContaining({ name: 'mixed', plugin_state: 'mixed' }),
+    expect.objectContaining({ name: 'unsupported', plugin_state: 'unsupported' }),
+    expect.objectContaining({ name: 'unmanaged', plugin_state: 'unsupported' }),
+  ])
+  const withoutToggle = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {} })
+  expect((await withoutToggle.inventory(f.authority())).map(({ name, plugin_state }) => ({ name, plugin_state })))
+    .toEqual([...names, 'unmanaged'].map(name => ({ name, plugin_state: undefined })))
+})
+
+it('rejects malformed and oversized plugin inventory entries', async () => {
+  const f = fixture()
+  for (const bundles of [null, Array.from({ length: 129 }, (_, index) => `plugin-${index}`), ['valid', ['array']], ['../escape']]) {
+    writeFileSync(f.manifest, JSON.stringify({ dsh: { profile: { bundles } } }), { mode: 0o600 })
+    await expect(f.executor.inventory(f.authority())).rejects.toThrow('invalid_profile_manifest')
+  }
+})
+
+it('enforces managed bundle uniqueness and required action capabilities', () => {
+  const f = fixture()
+  const action = (value: object) => JSON.stringify({ packageName: 'fixture', ...value })
+  const manifest = (bundles: string[]) => {
+    writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles } } }), { mode: 0o600 })
+  }
+  manifest([])
+  expect(() => { f.executor.validate(f.authority(), 'plugin', action({ action: 'toggle', enabled: false })) })
+    .toThrow('plugin_bundle_missing')
+  manifest(['fixture', 'fixture'])
+  expect(() => { f.executor.validate(f.authority(), 'plugin', action({ action: 'toggle', enabled: false })) })
+    .toThrow('plugin_bundle_missing')
+  manifest(['fixture'])
+  expect(() => { f.executor.validate(f.authority(), 'plugin', action({ action: 'toggle', enabled: false })) })
+    .toThrow('upgrade_required')
+
+  const base = { resolve: () => f.root, uid: process.getuid!(), install: async () => {}, acknowledge: async () => {},
+    togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }),
+    acknowledgeToggle: async () => {} }
+  const withoutRemove = new ProfilePluginExecutor(base)
+  expect(() => { withoutRemove.validate(f.authority(), 'plugin', action({ action: 'remove' })) }).toThrow('upgrade_required')
+  const disabledUpdate = new ProfilePluginExecutor({ ...base,
+    togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [{ entryId: 'include:x', moduleName: 'x' }],
+      expected: [], disabled: [] }) })
+  expect(() => { disabledUpdate.validate(f.authority(), 'plugin',
+    action({ action: 'update', spec: 'fixture@2.0.0' })) }).toThrow('plugin_update_requires_enabled')
+})
+
+it('rejects malformed bundle declarations and duplicate registrations before installation', () => {
+  const f = fixture()
+  for (const bundles of [{}, [7]]) {
+    writeFileSync(f.manifest, JSON.stringify({ dsh: { profile: { bundles } } }), { mode: 0o600 })
+    expect(() => { f.executor.validate(f.authority(), 'plugin', payload) }).toThrow('invalid_profile_manifest')
+  }
+  writeFileSync(f.manifest, JSON.stringify({ dsh: { profile: { bundles: ['fixture'] } } }), { mode: 0o600 })
+  expect(() => { f.executor.validate(f.authority(), 'plugin', payload) }).toThrow('plugin_already_installed')
+})
 it('refuses a symlink manifest before installing without changing its target', () => {
   const f = fixture()
   const target = join(f.root, 'preserved-package.json')
