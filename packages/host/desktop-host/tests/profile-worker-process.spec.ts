@@ -1,8 +1,12 @@
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { PassThrough } from 'node:stream'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory } from '../src/index.ts'
+import type { ChildProcess } from 'node:child_process'
+import type { ProfileWorkerHandle } from '../src/types.ts'
 
 function fixture(source: string): string {
   const path = join(mkdtempSync(join(tmpdir(), 'dsh-worker-')), 'worker.mjs')
@@ -19,7 +23,112 @@ const spec = (root: string) => ({
   env: {},
 })
 
+class ControlledChild extends EventEmitter {
+  readonly stderr = new PassThrough()
+  readonly kill = () => true
+  readonly send = (_message: unknown, callback: (error: Error | null) => void) => { callback(null); return true }
+}
+
+async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle> {
+  const factory = new ProfileWorkerProcessFactory({ executablePath: process.execPath, arguments: () => [] })
+  const pending = (factory as unknown as { readyHandle(child: ChildProcess): Promise<ProfileWorkerHandle> })
+    .readyHandle(child as unknown as ChildProcess)
+  child.emit('message', { type: 'ready' })
+  return await pending
+}
+
 describe('profile worker child process', () => {
+  it('rejects every malformed executable and Profile-owned launch field', async () => {
+    expect(() => { new ProfileWorkerProcessFactory({ executablePath: 'node', arguments: () => [] }) }).toThrow()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const factory = new ProfileWorkerProcessFactory({ executablePath: process.execPath, arguments: () => ['--version'] })
+    for (const invalid of [
+      { ...spec(root), profileId: '' },
+      { ...spec(root), profileId: 'p'.repeat(129) },
+      { ...spec(root), profileRoot: 'relative' },
+      { ...spec(root), credentialHandle: '' },
+      { ...spec(root), credentialHandle: 'c'.repeat(513) },
+      { ...spec(root), pluginRoots: ['relative'] },
+    ]) {
+      await expect(factory.create(invalid)).rejects.toMatchObject({ code: 'invalid_input' })
+    }
+  })
+
+  it('rejects a child that exits, errors, or stays silent before exact readiness', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const silent = fixture('setInterval(() => {}, 1000)')
+    const timed = new ProfileWorkerProcessFactory({
+      executablePath: process.execPath, arguments: () => [silent], readyTimeoutMs: 25,
+    })
+    await expect(timed.create(spec(root))).rejects.toMatchObject({ code: 'unavailable' })
+
+    const cleanExit = fixture('process.exit(0)')
+    const exited = new ProfileWorkerProcessFactory({
+      executablePath: process.execPath, arguments: () => [cleanExit], readyTimeoutMs: 25,
+    })
+    await expect(exited.create(spec(root))).rejects.toMatchObject({ code: 'unavailable' })
+
+    const missing = new ProfileWorkerProcessFactory({
+      executablePath: join(root, 'missing-node'), arguments: () => [], readyTimeoutMs: 100,
+    })
+    await expect(missing.create(spec(root))).rejects.toThrow()
+  })
+
+  it('ignores malformed IPC messages and force-kills a ready child that refuses shutdown', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const script = fixture(`
+      process.send(null)
+      process.send([])
+      process.send({ type: 'ready', extra: true })
+      process.send({ type: 'ready' })
+      process.on('message', () => {})
+      process.on('SIGTERM', () => {})
+      setInterval(() => {}, 1000)
+    `)
+    const factory = new ProfileWorkerProcessFactory({
+      executablePath: process.execPath, arguments: () => [script], abortTimeoutMs: 25,
+    })
+    const worker = await factory.create(spec(root))
+    worker.abort()
+    worker.abort()
+    await expect(worker.done).resolves.toBeUndefined()
+    worker.abort()
+  })
+
+  it('falls back to SIGTERM when a ready child closes its IPC channel', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const script = fixture(`
+      process.send({ type: 'ready' }, () => {
+        process.disconnect()
+        setInterval(() => {}, 1000)
+      })
+    `)
+    const factory = new ProfileWorkerProcessFactory({ executablePath: process.execPath, arguments: () => [script] })
+    const worker = await factory.create(spec(root))
+    await new Promise(resolve => setTimeout(resolve, 25))
+    worker.abort()
+    await expect(worker.done).resolves.toBeUndefined()
+  })
+
+  it('settles done once when child error and exit events arrive out of order', async () => {
+    const exited = new ControlledChild()
+    const clean = await readyHandle(exited)
+    exited.emit('exit', 0, null)
+    exited.emit('error', new Error('late error'))
+    await expect(clean.done).resolves.toBeUndefined()
+
+    const errored = new ControlledChild()
+    const failed = await readyHandle(errored)
+    const rejection = expect(failed.done).rejects.toThrow('first error')
+    errored.emit('error', new Error('first error'))
+    errored.emit('exit', 1, null)
+    await rejection
+  })
+
   it('starts with a scrubbed explicit environment and reaches quiescence on abort', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
     const script = fixture(`
