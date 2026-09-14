@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { setTimeout as pause } from 'node:timers/promises'
 import { join } from 'node:path'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import { runProfilePluginCommand } from '../src/plugin-command.ts'
 
 function fixture() {
@@ -77,6 +77,37 @@ it('cancels a running installer and waits for process exit', async () => {
   const pending = runProfilePluginCommand({ ...f.options, spec: `github:owner/repo#${'a'.repeat(40)}`, signal: controller.signal, guard() {} })
   const timer = setTimeout(() => { controller.abort() }, 150)
   try { await expect(pending).rejects.toThrow('plugin_install_cancelled') } finally { clearTimeout(timer) }
+})
+
+it('enforces the install deadline and force-kills a process that ignores graceful termination', async () => {
+  const f = fixture()
+  writeFileSync(f.cli, "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)")
+  const schedule = globalThis.setTimeout
+  const timers = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay) => schedule(
+    callback, delay === 120_000 ? 1_000 : delay === 2_000 ? 100 : delay,
+  ))
+  onTestFinished(() => { timers.mockRestore() })
+  await expect(runProfilePluginCommand({ ...f.options, spec: 'bundle@1.0.0',
+    signal: new AbortController().signal, guard() {} })).rejects.toThrow('plugin_install_timeout')
+  expect(readdirSync(f.control)).toEqual([])
+})
+
+it('reports a process-group termination failure and still performs the forced cleanup', async () => {
+  const f = fixture(); let authorized = true
+  writeFileSync(f.cli, "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)")
+  const nativeKill = process.kill.bind(process)
+  const denied = Object.assign(new Error('denied'), { code: 'EACCES' })
+  const kill = vi.spyOn(process, 'kill')
+    .mockImplementationOnce(() => { throw denied })
+    .mockImplementation((pid, signal) => nativeKill(pid, signal))
+  onTestFinished(() => { kill.mockRestore() })
+  const controller = new AbortController()
+  const pending = runProfilePluginCommand({ ...f.options, spec: 'bundle@1.0.0', signal: controller.signal,
+    guard() { if (!authorized) throw Error('revoked') } })
+  const timer = setTimeout(() => { authorized = false; controller.abort() }, 150)
+  try { await expect(pending).rejects.toThrow('plugin_termination_failed') } finally { clearTimeout(timer) }
+  expect(kill).toHaveBeenCalledWith(expect.any(Number), 'SIGKILL')
+  expect(readdirSync(f.control)).toEqual([])
 })
 
 it('stops an in-flight installer when the Profile lease is revoked', async () => {

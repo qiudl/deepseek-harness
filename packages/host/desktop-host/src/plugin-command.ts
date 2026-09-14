@@ -85,7 +85,6 @@ export async function runProfilePluginCommand(input: ProfilePluginCommand): Prom
         else if (code !== 0) reject(Error('plugin_install_failed'))
         else resolve()
       })
-      if (input.signal.aborted) abort()
     })
     assertPluginAuthority(input.guard); input.signal.throwIfAborted()
   } finally { rmSync(shim, { recursive: true, force: true }) }
