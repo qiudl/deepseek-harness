@@ -21,6 +21,10 @@ const receiptRecord = (): Record<string, unknown> => ({
   updatedAt: 2,
 })
 
+it.each([null, false, 'receipt'])('rejects a non-object persisted receipt: %j', (receipt) => {
+  expect(() => { validateExtensionReceipt(receipt) }).toThrow('invalid_receipt')
+})
+
 it.each([
   ['self restoration', (receipt: Record<string, unknown>) => { receipt.restores = receipt.operationId }],
   ['recovery mode without a restoration', (receipt: Record<string, unknown>) => { receipt.recoveryMode = 'complete' }],
@@ -46,6 +50,40 @@ it.each([
     }
   }],
   ['unexpected metadata', (receipt: Record<string, unknown>) => { receipt.secret = 'must-not-persist' }],
+  ['unexpected plugin evidence metadata', (receipt: Record<string, unknown>) => {
+    receipt.pluginToggleRecovery = {
+      packageName: 'fixture', backupDigest: hash('backup'), beforeRevision: hash('before'),
+      afterRevision: hash('after'), stage: 'prepared', secret: 'must-not-persist',
+    }
+  }],
+  ['invalid plugin evidence digest', (receipt: Record<string, unknown>) => {
+    receipt.pluginToggleRecovery = {
+      packageName: 'fixture', backupDigest: 'invalid', beforeRevision: hash('before'),
+      afterRevision: hash('after'), stage: 'prepared',
+    }
+  }],
+  ['array-valued MCP evidence', (receipt: Record<string, unknown>) => {
+    receipt.kind = 'mcp'
+    receipt.mcpRecovery = []
+  }],
+  ['invalid MCP evidence digest', (receipt: Record<string, unknown>) => {
+    receipt.kind = 'mcp'
+    receipt.mcpRecovery = {
+      beforeRevision: hash('before'), afterRevision: 'invalid', originalPresent: true,
+      introducedIds: ['mcp-demo'], stage: 'prepared',
+    }
+  }],
+  ['array-valued Skill evidence', (receipt: Record<string, unknown>) => {
+    receipt.kind = 'skill'
+    receipt.skillRemoval = []
+  }],
+  ['invalid Skill evidence digest', (receipt: Record<string, unknown>) => {
+    receipt.kind = 'skill'
+    receipt.skillRemoval = {
+      entryId: 'flat-demo', originalDigest: 'invalid', beforeRevision: hash('before'),
+      removedRevision: hash('removed'), stage: 'prepared',
+    }
+  }],
 ] as const)('rejects malformed receipt metadata: %s', (_label, mutate) => {
   const receipt = receiptRecord()
   mutate(receipt)
