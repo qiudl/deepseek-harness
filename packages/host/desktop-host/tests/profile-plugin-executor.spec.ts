@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -56,6 +56,8 @@ it('rejects unsupported kinds, relative roots, unsafe Profile directories, and m
     writeFileSync(f.manifest, JSON.stringify(manifest), { mode: 0o600 })
     expect(() => { f.executor.validate(f.authority(), 'plugin', payload) }).toThrow('invalid_profile_manifest')
   }
+  unlinkSync(f.manifest)
+  expect(() => { f.executor.validate(f.authority(), 'plugin', payload) }).toThrow('invalid_profile_manifest')
 })
 
 it('reports enabled, disabled, mixed, unsupported, and unavailable plugin toggle states', async () => {
@@ -159,6 +161,7 @@ it.each([
   ['missing dependency', { dependencies: {}, dsh: { profile: { bundles: ['fixture'] } } }, 'plugin_bundle_missing'],
   ['non-string dependency', { dependencies: { fixture: 1 }, dsh: { profile: { bundles: ['fixture'] } } }, 'plugin_target_changed'],
   ['non-array bundles', { dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: 'fixture' } } }, 'invalid_profile_manifest'],
+  ['duplicate bundle registrations', { dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture', 'fixture'] } } }, 'plugin_target_changed'],
   ['missing bundle registration', { dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: [] } } }, 'plugin_bundle_missing'],
 ] as const)('rejects an install whose command leaves %s', async (_label, installed, reason) => {
   const f = fixture()
@@ -241,6 +244,58 @@ it('rejects an oversized original toggle patch before creating its recovery back
     .rejects.toThrow('invalid_patch')
 })
 
+it.each(['oversized patch', 'revision drift', 'patch drift', 'revision result drift'] as const)(
+  'rejects toggle publication with %s', async (mode) => {
+    const f = fixture(); const file = join(f.web, 'cordis.patch.yml'); let plans = 0; let guards = 0
+    writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+    const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+      install: async () => {}, acknowledge: async () => {},
+      togglePlan: () => {
+        plans++
+        if (mode === 'revision drift' && plans === 2) writeFileSync(join(f.root, 'pnpm-lock.yaml'), 'changed', { mode: 0o600 })
+        return { patch: mode === 'oversized patch' ? 'x'.repeat(1_048_577) : 'next',
+          previousExpected: [], previousDisabled: [], expected: [], disabled: [] }
+      },
+      acknowledgeToggle: async () => { throw Error('must not acknowledge an unpublished patch') },
+    })
+    if (mode === 'revision result drift') {
+      const revision = executor.revision.bind(executor); let revisions = 0
+      executor.revision = async profileId => ++revisions === 3 ? '0'.repeat(64) : revision(profileId)
+    }
+    await expect(executor.execute(f.authority(), JSON.stringify({ action: 'toggle', packageName: 'fixture', enabled: false }),
+      { kind: 'plugin', signal: new AbortController().signal, guard() {
+        guards++
+        if (mode === 'patch drift' && guards === 3) writeFileSync(file, 'changed', { mode: 0o600 })
+      } })).rejects.toThrow(mode === 'oversized patch' ? 'invalid_patch' : 'plugin_state_changed')
+  })
+
+it.each(['application', 'restoration'] as const)('rejects %s acknowledgement state drift after a toggle', async (mode) => {
+  const f = fixture(); let acknowledgements = 0
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    install: async () => {}, acknowledge: async () => {},
+    togglePlan: () => ({ patch: 'next', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }),
+    acknowledgeToggle: async () => {
+      acknowledgements++
+      if (mode === 'restoration' && acknowledgements === 1) throw Error('reload failed')
+      writeFileSync(join(f.root, 'pnpm-lock.yaml'), 'changed', { mode: 0o600 })
+    },
+  })
+  await expect(executor.execute(f.authority(), JSON.stringify({ action: 'toggle', packageName: 'fixture', enabled: false }),
+    { kind: 'plugin', signal: new AbortController().signal, guard() {} })).rejects.toThrow('plugin_state_changed')
+})
+
+it.each(['toggle', 'remove'] as const)('retains an execution-layer capability guard for %s', async (action) => {
+  const f = fixture()
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    install: async () => {}, acknowledge: async () => {} })
+  executor.validate = () => {}
+  const request = action === 'toggle' ? { action, packageName: 'fixture', enabled: false } : { action, packageName: 'fixture' }
+  await expect(executor.execute(f.authority(), JSON.stringify(request),
+    { kind: 'plugin', signal: new AbortController().signal, guard() {} })).rejects.toThrow('upgrade_required')
+})
+
 it('updates only an installed independently enabled bundle to the confirmed exact source', async () => {
   const { planPluginToggle } = await import('../src/plugin-toggle-plan.ts')
   const f = fixture()
@@ -283,21 +338,34 @@ it('removes an installed bundle, clears its standalone toggle override and requi
   expect(readFileSync(file,'utf8')).toContain('!!js process.platform')
 })
 
-it.each(['bundle remains', 'acknowledgement drift'] as const)('rejects an unconfirmed plugin removal when %s', async (mode) => {
-  const f = fixture(); const file = join(f.web, 'cordis.patch.yml')
+it.each(['bundle remains', 'bundle metadata missing', 'acknowledgement drift'] as const)(
+  'rejects an unconfirmed plugin removal when %s', async (mode) => {
+    const f = fixture(); const file = join(f.web, 'cordis.patch.yml')
+    writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+    const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+      install: async () => {}, acknowledge: async () => {},
+      togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }), acknowledgeToggle: async () => {},
+      remove: async () => { writeFileSync(f.manifest, JSON.stringify({ dependencies: {}, dsh: { profile:
+        mode === 'bundle metadata missing' ? {} : { bundles: mode === 'bundle remains' ? ['fixture'] : [] } } })) },
+      acknowledgeRemoval: async () => {
+        if (mode === 'acknowledgement drift') writeFileSync(file, 'changed', { mode: 0o600 })
+      },
+    })
+    await expect(executor.execute(f.authority(), JSON.stringify({ action: 'remove', packageName: 'fixture' }),
+      { kind: 'plugin', signal: new AbortController().signal, guard() {} }))
+      .rejects.toThrow(mode === 'acknowledgement drift' ? 'plugin_state_changed' : 'plugin_removal_unconfirmed')
+  })
+
+it('rejects a remove command that leaves the managed dependency installed', async () => {
+  const f = fixture()
   writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
   const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
     install: async () => {}, acknowledge: async () => {},
     togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }), acknowledgeToggle: async () => {},
-    remove: async () => { writeFileSync(f.manifest, JSON.stringify({ dependencies: {},
-      dsh: { profile: { bundles: mode === 'bundle remains' ? ['fixture'] : [] } } })) },
-    acknowledgeRemoval: async () => {
-      if (mode === 'acknowledgement drift') writeFileSync(file, 'changed', { mode: 0o600 })
-    },
+    remove: async () => {}, acknowledgeRemoval: async () => { throw Error('must not acknowledge an installed dependency') },
   })
   await expect(executor.execute(f.authority(), JSON.stringify({ action: 'remove', packageName: 'fixture' }),
-    { kind: 'plugin', signal: new AbortController().signal, guard() {} }))
-    .rejects.toThrow(mode === 'bundle remains' ? 'plugin_removal_unconfirmed' : 'plugin_state_changed')
+    { kind: 'plugin', signal: new AbortController().signal, guard() {} })).rejects.toThrow('plugin_removal_unconfirmed')
 })
 
 
@@ -340,6 +408,41 @@ it.each([null, '', '# keep\n[]\n'])('recovers interrupted plugin activation and 
   await expect(executor.validatePluginRestore(f.authority(), { ...receipt,
     pluginToggleRecovery: { ...receipt.pluginToggleRecovery!, beforeRevision: receipt.pluginToggleRecovery!.afterRevision } }))
     .rejects.toThrow('plugin_state_changed')
+  if (original === '') {
+    const drift = join(f.root, '.npmrc'); let guards = 0
+    await expect(executor.restorePluginToggle(f.authority(), receipt,
+      { kind: 'plugin', signal: new AbortController().signal, guard() {
+        guards++
+        if (guards === 2) writeFileSync(drift, 'changed', { mode: 0o600 })
+      } })).rejects.toThrow('plugin_state_changed')
+    unlinkSync(drift)
+    const published = readFileSync(file, 'utf8')
+    const driftingAcknowledgement = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+      install: async () => {}, acknowledge: async () => {},
+      togglePlan: (_id, name, enabled, patch) => planPluginToggle(layers, patch, [], name, enabled),
+      acknowledgeToggle: async () => { writeFileSync(drift, 'changed', { mode: 0o600 }) },
+    })
+    await expect(driftingAcknowledgement.restorePluginToggle(f.authority(), receipt,
+      { kind: 'plugin', signal: new AbortController().signal, guard() {} })).rejects.toThrow('plugin_state_changed')
+    unlinkSync(drift); writeFileSync(file, published, { mode: 0o600 })
+  }
+  if (original === '# keep\n[]\n') {
+    const drift = join(f.root, '.npmrc'); const published = readFileSync(file, 'utf8')
+    const publishingDrift = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+      install: async () => {}, acknowledge: async () => {},
+      togglePlan: (_id, name, enabled, patch) => planPluginToggle(layers, patch, [], name, enabled),
+      acknowledgeToggle: async () => { throw Error('must not acknowledge an unstable restoration') },
+    })
+    const revision = publishingDrift.revision.bind(publishingDrift); let revisions = 0
+    publishingDrift.revision = async (profileId) => {
+      const value = await revision(profileId)
+      if (++revisions === 2) writeFileSync(drift, 'changed', { mode: 0o600 })
+      return value
+    }
+    await expect(publishingDrift.restorePluginToggle(f.authority(), receipt,
+      { kind: 'plugin', signal: new AbortController().signal, guard() {} })).rejects.toThrow('plugin_state_changed')
+    unlinkSync(drift); writeFileSync(file, published, { mode: 0o600 })
+  }
   await operations.dispose(); operations = new ProfileExtensionOperations(f.store, executor, { now: Date.now })
   const restore = JSON.stringify({ action: 'restore-toggle', operationId: id })
   const backup = join(f.web, `.plugin-before-${id}`); const backupBytes = readFileSync(backup, 'utf8')
@@ -400,6 +503,31 @@ it.each(['install', 'update', 'remove'] as const)('explicitly completes an inter
   operations.commit(f.authority, plan.planId, id); await operations.settled()
   expect(operations.status(f.authority, id)).toMatchObject({ state: 'unknown', canComplete: true, pluginPackage: { action, stage: 'prepared' } })
   expect(acknowledgements).toBe(0)
+  const receipt = f.store.read(id)!
+  const completionContext = { kind: 'plugin' as const, signal: new AbortController().signal, guard() {} }
+  if (action === 'install') {
+    const validateCompletion = executor.validatePluginCompletion.bind(executor)
+    executor.validatePluginCompletion = async () => {}
+    const withoutEvidence = { ...receipt }; delete withoutEvidence.pluginPackage
+    await expect(executor.completePluginPackage(f.authority(), withoutEvidence, completionContext)).rejects.toThrow('invalid_recovery')
+    const withoutSpecEvidence = { ...receipt.pluginPackage! }; delete withoutSpecEvidence.spec
+    const interrupted = readFileSync(f.manifest, 'utf8'); writeFileSync(f.manifest, JSON.stringify(before))
+    await expect(executor.completePluginPackage(f.authority(),
+      { ...receipt, pluginPackage: withoutSpecEvidence }, completionContext)).rejects.toThrow('invalid_package_intent')
+    writeFileSync(f.manifest, interrupted)
+    executor.validatePluginCompletion = validateCompletion
+  }
+  if (action === 'remove') {
+    const withoutRepair = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+      install: async () => {}, acknowledge: async () => {}, remove: async () => {}, acknowledgeRemoval: async () => {} })
+    await expect(withoutRepair.validatePluginCompletion(f.authority(), receipt)).rejects.toThrow('upgrade_required')
+    const withoutRemove = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+      install: async () => {}, acknowledge: async () => {}, repair: async () => {}, acknowledgeRemoval: async () => {} })
+    withoutRemove.validatePluginCompletion = async () => {}
+    await expect(withoutRemove.completePluginPackage(f.authority(), receipt, completionContext)).rejects.toThrow('upgrade_required')
+    withoutRepair.validatePluginCompletion = async () => {}
+    await expect(withoutRepair.completePluginPackage(f.authority(), receipt, completionContext)).rejects.toThrow('upgrade_required')
+  }
   await operations.dispose(); operations = new ProfileExtensionOperations(f.store, executor, { now: Date.now })
   const complete = JSON.stringify({ action: 'complete-package', operationId: id })
   const partial = readFileSync(f.manifest, 'utf8')
@@ -433,6 +561,20 @@ it('preserves unrelated dsh metadata when installation creates the first bundle 
     acknowledge: async () => {},
   })
   expect(await executor.execute(f.authority(), payload, { kind: 'plugin', signal: new AbortController().signal, guard() {} })).toEqual({ state: 'succeeded' })
+})
+
+it('normalizes non-local package scope and unordered metadata without changing it', async () => {
+  const f = fixture(); const rootManifest = join(f.root, 'package.json')
+  writeFileSync(rootManifest, JSON.stringify({ a: true, z: { a: 2, b: 1 } }), { mode: 0o600 })
+  writeFileSync(f.manifest, JSON.stringify({ dsh: { profile: {} } }), { mode: 0o600 })
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    install: async () => { writeFileSync(f.manifest,
+      JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } })) },
+    acknowledge: async () => {},
+  })
+  await expect(executor.execute(f.authority(), payload,
+    { kind: 'plugin', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'succeeded' })
+  expect(JSON.parse(readFileSync(rootManifest, 'utf8'))).toEqual({ a: true, z: { a: 2, b: 1 } })
 })
 
 
