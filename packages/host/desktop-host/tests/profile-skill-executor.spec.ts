@@ -1,7 +1,7 @@
 import AdmZip from 'adm-zip'
 import { parseSkillFile } from '#hub-skills'
 import { createHash, randomUUID } from 'node:crypto'
-import { FileExtensionReceipts, ProfileExtensionOperations } from '../src/extension-operations.ts'
+import { FileExtensionReceipts, ProfileExtensionOperations, type ExtensionReceipt } from '../src/extension-operations.ts'
 import type {} from '@deepseek-ai/dsh-skill'
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -47,6 +47,41 @@ it.each(['hardlink', 'oversized', 'too-many'] as const)('refuses an unsafe or un
   await expect(executor.revision('a')).rejects.toThrow(mode === 'too-many' ? 'skill_limit' : 'unsafe_skill_file')
   expect(acknowledge).not.toHaveBeenCalled()
 })
+it('rejects excessive, link-shaped, invalidly named, and mismatched Skill inventory entries', async () => {
+  const root = fixture(); const skills = join(root, 'a/skills')
+  mkdirSync(skills, { mode: 0o700 })
+  for (let index = 0; index < 129; index++) {
+    writeFileSync(join(skills, `skill-${index}.md`), `---\nname: skill-${index}\ndescription: Existing\n---\nBody.\n`, { mode: 0o600 })
+  }
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id),
+    acknowledge: async () => undefined })
+  await expect(executor.revision('a')).rejects.toThrow('skill_limit')
+
+  rmSync(skills, { recursive: true }); mkdirSync(skills, { mode: 0o700 })
+  symlinkSync(join(root, 'b'), join(skills, 'linked'))
+  await expect(executor.inventory('a')).rejects.toThrow('unsafe_skill_entry')
+
+  rmSync(join(skills, 'linked'))
+  writeFileSync(join(skills, '_invalid.md'), '---\nname: valid\ndescription: Existing\n---\nBody.\n', { mode: 0o600 })
+  await expect(executor.inventory('a')).rejects.toThrow('unsafe_skill_entry')
+
+  renameSync(join(skills, '_invalid.md'), join(skills, 'expected.md'))
+  expect(() => { executor.validate('a', 'skill', JSON.stringify({ action: 'remove', id: 'flat-expected' })) })
+    .toThrow('skill_name_mismatch')
+})
+it('rechecks a selected Skill descriptor after inventory enumeration', () => {
+  const root = fixture(); const skills = join(root, 'a/skills')
+  mkdirSync(skills, { mode: 0o700 })
+  const file = join(skills, 'host-demo.md')
+  writeFileSync(file, '---\nname: host-demo\ndescription: Existing\n---\nBody.\n', { mode: 0o600 })
+  let roots = 0
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: (id) => {
+    if (++roots === 2) chmodSync(file, 0o666)
+    return join(root, id)
+  }, acknowledge: async () => undefined })
+  expect(() => { executor.validate('a', 'skill', JSON.stringify({ action: 'remove', id: 'flat-host-demo' })) })
+    .toThrow('unsafe_skill_file')
+})
 it.each([
   ['null', null], ['array', []], ['string', 'skill'],
   ['remove traversal', { action: 'remove', id: '../outside' }],
@@ -56,6 +91,7 @@ it.each([
   ['routing metadata size', { ...JSON.parse(payload), whenToUse: 'a'.repeat(1025) }],
   ['routing metadata NUL', { ...JSON.parse(payload), whenToUse: 'use\0this' }],
   ['multibyte body size', { ...JSON.parse(payload), body: '界'.repeat(8193) }],
+  ['rendered Markdown expansion', { ...JSON.parse(payload), description: '\x01'.repeat(1024), whenToUse: '\x01'.repeat(1024), body: 'x'.repeat(24576) }],
   ['Markdown routing type', { name: 'host-demo', markdown: '---\nname: host-demo\ndescription: Test\nwhenToUse: [wrong]\n---\nBody.\n' }],
   ['Markdown routing size', { name: 'host-demo', markdown: `---\nname: host-demo\ndescription: Test\nwhenToUse: ${'a'.repeat(1025)}\n---\nBody.\n` }],
 ])('rejects invalid Skill input before publication: %s', async (_label, value) => {
@@ -255,6 +291,59 @@ it('publishes the exact confirmed GitHub bundle with scripts and attachments, an
   expect(await executor.inventory('b')).toEqual([])
 })
 
+it('rejects an archive resource changed while runtime acknowledgement is in flight', async () => {
+  const root = fixture(); const archive = new AdmZip()
+  const markdown = '---\nname: host-demo\ndescription: Archive test\n---\nBody.\n'
+  archive.addFile('repo-main/demo/SKILL.md', Buffer.from(markdown))
+  archive.addFile('repo-main/demo/resource.txt', Buffer.from('original'))
+  const data = archive.toBuffer()
+  vi.stubGlobal('fetch', async () => new Response(new Uint8Array(data))); onTestFinished(() => { vi.unstubAllGlobals() })
+  const file = join(root, 'a/skills/host-demo/SKILL.md')
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => {
+    writeFileSync(join(root, 'a/skills/host-demo/resource.txt'), 'changed', { mode: 0o600 })
+    return { name: 'host-demo', description: 'Archive test', content: 'Body.', source: 'user-dsh', path: file,
+      invocation: { modelInvocable: true, userInvocable: true } }
+  } })
+  const request = JSON.stringify({ name: 'host-demo', archive: {
+    url: 'https://codeload.github.com/fixture/repo/zip/refs/heads/main', subPath: 'demo', sha256: createHash('sha256').update(data).digest('hex'),
+  } })
+  await expect(executor.execute('a', request,
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('skill_changed')
+  expect(readFileSync(join(root, 'a/skills/host-demo/resource.txt'), 'utf8')).toBe('changed')
+})
+
+it('rejects an archive target replaced before writing its resources', async () => {
+  const root = fixture(); const archive = new AdmZip()
+  const markdown = '---\nname: host-demo\ndescription: Archive test\n---\nBody.\n'
+  archive.addFile('repo-main/demo/SKILL.md', Buffer.from(markdown))
+  archive.addFile('repo-main/demo/resource.txt', Buffer.from('original'))
+  const data = archive.toBuffer()
+  vi.stubGlobal('fetch', async () => new Response(new Uint8Array(data))); onTestFinished(() => { vi.unstubAllGlobals() })
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id),
+    acknowledge: async () => undefined })
+  const request = JSON.stringify({ name: 'host-demo', archive: {
+    url: 'https://codeload.github.com/fixture/repo/zip/refs/heads/main', subPath: 'demo', sha256: createHash('sha256').update(data).digest('hex'),
+  } })
+  let guards = 0
+  await expect(executor.execute('a', request, { kind: 'skill', signal: new AbortController().signal, guard() {
+    if (++guards === 4) {
+      renameSync(join(root, 'a/skills/host-demo'), join(root, 'displaced'))
+      mkdirSync(join(root, 'a/skills/host-demo'), { mode: 0o700 })
+    }
+  } })).rejects.toThrow('skill_changed')
+  expect(readdirSync(join(root, 'a/skills/host-demo'))).toEqual([])
+})
+
+it('rejects a non-Skill executor kind and a read-only Profile before publication', async () => {
+  const root = fixture(); const acknowledge = vi.fn(async () => undefined)
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge })
+  expect(() => { executor.validate('a', 'plugin', payload) }).toThrow('upgrade_required')
+  chmodSync(join(root, 'a'), 0o500)
+  await expect(executor.execute('a', payload,
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow()
+  expect(acknowledge).not.toHaveBeenCalled()
+})
+
 it('changes one invocation field without losing metadata or resources and compensates failed acknowledgement', async () => {
   const root = fixture(); const directory = join(root, 'a/skills/host-demo')
   mkdirSync(directory, { recursive: true, mode: 0o700 })
@@ -336,6 +425,86 @@ it('replaces only the selected same-name Markdown, retains attachments, and rest
   }
 })
 
+it('rejects an invocation edit whose serialized Markdown crosses the storage limit', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills/host-demo')
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const header = '---\nname: host-demo\ndescription: Original\n---\n'
+  const file = join(directory, 'SKILL.md')
+  writeFileSync(file, header + 'x'.repeat(32760 - Buffer.byteLength(header)), { mode: 0o600 })
+  const acknowledge = vi.fn(async () => undefined)
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge })
+  await expect(executor.execute('a', JSON.stringify({ action: 'invocation', id: 'bundle-host-demo', kind: 'model', value: false }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('invalid_input')
+  expect(acknowledge).not.toHaveBeenCalled()
+})
+
+it('rejects a concurrent edit before publication and a revision change after acknowledgement', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills/host-demo')
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const file = join(directory, 'SKILL.md'); const original = '---\nname: host-demo\ndescription: Original\n---\nBody.\n'
+  const updated = original.replace('Original', 'Updated')
+  writeFileSync(file, original, { mode: 0o600 })
+  const runtime = (content: string) => {
+    const parsed = parseSkillFile(content)
+    return { name: 'host-demo', description: parsed.meta.description, content: parsed.body.trim(), source: 'user-dsh', path: file,
+      invocation: { modelInvocable: true, userInvocable: true } }
+  }
+  let guards = 0
+  const beforePublish = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id),
+    acknowledge: async (_id, _name, content) => runtime(content) })
+  await expect(beforePublish.execute('a', JSON.stringify({ action: 'replace', id: 'bundle-host-demo', markdown: updated }), {
+    kind: 'skill', signal: new AbortController().signal, guard() {
+      if (++guards === 4) writeFileSync(file, original.replace('Body.', 'Concurrent.'), { mode: 0o600 })
+    },
+  })).rejects.toThrow('skill_changed')
+  expect(readFileSync(file, 'utf8')).toContain('Concurrent.')
+
+  writeFileSync(file, original, { mode: 0o600 })
+  const afterAcknowledge = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id),
+    acknowledge: async (_id, _name, content) => {
+      writeFileSync(join(directory, 'concurrent.txt'), 'new revision', { mode: 0o600 })
+      return runtime(content)
+    } })
+  await expect(afterAcknowledge.execute('a', JSON.stringify({ action: 'replace', id: 'bundle-host-demo', markdown: updated }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('skill_changed')
+  expect(readFileSync(file, 'utf8')).toBe(updated)
+})
+
+it('rejects revision drift before an edit publish and after its compensating acknowledgement', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills/host-demo')
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const file = join(directory, 'SKILL.md'); const original = '---\nname: host-demo\ndescription: Original\n---\nBody.\n'
+  const updated = original.replace('Original', 'Updated')
+  writeFileSync(file, original, { mode: 0o600 })
+  const stableRuntime = (content: string) => {
+    const { meta, body } = parseSkillFile(content)
+    return { name: 'host-demo', description: meta.description, content: body.trim(), source: 'user-dsh', path: file,
+      invocation: { modelInvocable: true, userInvocable: true } }
+  }
+  const beforePublish = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id),
+    acknowledge: async (_id, _name, content) => stableRuntime(content) })
+  const revision = beforePublish.revision.bind(beforePublish); let revisions = 0
+  vi.spyOn(beforePublish, 'revision').mockImplementation(async (profileId) => {
+    if (++revisions === 2) writeFileSync(join(directory, 'concurrent.txt'), 'revision drift', { mode: 0o600 })
+    return revision(profileId)
+  })
+  await expect(beforePublish.execute('a', JSON.stringify({ action: 'replace', id: 'bundle-host-demo', markdown: updated }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('skill_changed')
+  expect(readFileSync(file, 'utf8')).toBe(original)
+
+  rmSync(join(directory, 'concurrent.txt'))
+  let acknowledgements = 0
+  const afterCompensation = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id),
+    acknowledge: async (_id, _name, content) => {
+      if (acknowledgements++ === 0) throw Error('reload failed')
+      writeFileSync(join(directory, 'concurrent.txt'), 'revision drift', { mode: 0o600 })
+      return stableRuntime(content)
+    } })
+  await expect(afterCompensation.execute('a', JSON.stringify({ action: 'replace', id: 'bundle-host-demo', markdown: updated }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('skill_changed')
+  expect(readFileSync(file, 'utf8')).toBe(original)
+})
+
 it.each(['absent', 'user-agents'] as const)('removes a bundle after observing %s and retains a durable source receipt', async (source) => {
   const root = fixture(); const directory = join(root, 'a/skills/host-demo')
   mkdirSync(directory, { recursive: true, mode: 0o700 })
@@ -375,6 +544,174 @@ it('restores the complete removed bundle when runtime removal cannot be confirme
   expect(readFileSync(file,'utf8')).toBe(original)
   expect(readFileSync(join(directory,'reference.txt'),'utf8')).toBe('attachment')
   expect(calls).toBe(2)
+})
+
+it.each([
+  ['undefined observation', undefined],
+  ['array observation', []],
+  ['wrong identity', { name: 'other', description: 'Fallback', content: 'Fallback.', source: 'user-agents', path: '/safe', invocation: { modelInvocable: true, userInvocable: true } }],
+  ['empty source', { name: 'host-demo', description: 'Fallback', content: 'Fallback.', source: '', path: '/safe', invocation: { modelInvocable: true, userInvocable: true } }],
+  ['owned source without a path', { name: 'host-demo', description: 'Fallback', content: 'Fallback.', source: 'user-dsh', invocation: { modelInvocable: true, userInvocable: true } }],
+  ['invalid invocation', { name: 'host-demo', description: 'Fallback', content: 'Fallback.', source: 'user-agents', path: '/safe', invocation: { modelInvocable: 'yes', userInvocable: true } }],
+] as const)('restores a removed Skill after a malformed runtime result: %s', async (_label, observed) => {
+  const root = fixture(); const directory = join(root, 'a/skills')
+  mkdirSync(directory, { mode: 0o700 })
+  const file = join(directory, 'host-demo.md'); const markdown = '---\nname: host-demo\ndescription: Original\n---\nBody.\n'
+  writeFileSync(file, markdown, { mode: 0o600 })
+  let calls = 0
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => {
+    if (calls++ === 0) return observed
+    return { name: 'host-demo', description: 'Original', content: 'Body.', source: 'user-dsh', path: file,
+      invocation: { modelInvocable: true, userInvocable: true } }
+  } })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'failed' })
+  expect(readFileSync(file, 'utf8')).toBe(markdown)
+  expect(calls).toBe(2)
+})
+
+it('classifies an unknown fallback source as other after a confirmed removal', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills')
+  mkdirSync(directory, { mode: 0o700 })
+  const file = join(directory, 'host-demo.md')
+  writeFileSync(file, '---\nname: host-demo\ndescription: Original\n---\nBody.\n', { mode: 0o600 })
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => ({
+    name: 'host-demo', description: 'Fallback', content: 'Fallback.', source: 'future-source', path: '/safe/fallback.md',
+    invocation: { modelInvocable: true, userInvocable: false },
+  }) })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'succeeded', skillSource: 'other' })
+  expect(readdirSync(directory)).toEqual([])
+})
+
+it('rejects removal identity and pre-publication races without moving the concurrent Skill', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills')
+  mkdirSync(directory, { mode: 0o700 })
+  const file = join(directory, 'host-demo.md'); const markdown = '---\nname: host-demo\ndescription: Original\n---\nBody.\n'
+  writeFileSync(file, markdown, { mode: 0o600 })
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => null })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }),
+    { kind: 'skill', operationId: 'not-a-uuid', signal: new AbortController().signal, guard() {} })).rejects.toThrow('invalid_input')
+
+  let guards = 0
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {
+      if (++guards === 3) writeFileSync(file, markdown.replace('Body.', 'Concurrent body.'), { mode: 0o600 })
+    } })).rejects.toThrow('skill_changed')
+  expect(readFileSync(file, 'utf8')).toContain('Concurrent body.')
+  expect(readdirSync(join(root, 'a')).some(name => name.startsWith('.skill-removed-'))).toBe(false)
+})
+
+it('detects a Skill changed after its prepared removal checkpoint', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills')
+  mkdirSync(directory, { mode: 0o700 })
+  const file = join(directory, 'host-demo.md'); const markdown = '---\nname: host-demo\ndescription: Original\n---\nBody.\n'
+  writeFileSync(file, markdown, { mode: 0o600 })
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => null })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }), {
+    kind: 'skill', signal: new AbortController().signal, guard() {}, checkpointSkillRemoval(evidence) {
+      if (evidence.stage === 'prepared') writeFileSync(file, markdown.replace('Body.', 'Checkpoint race.'), { mode: 0o600 })
+    },
+  })).rejects.toThrow('skill_changed')
+  expect(readFileSync(file, 'utf8')).toContain('Checkpoint race.')
+})
+
+it('rechecks a flat Skill descriptor immediately before preparing its removal', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills')
+  mkdirSync(directory, { mode: 0o700 })
+  const file = join(directory, 'host-demo.md')
+  writeFileSync(file, '---\nname: host-demo\ndescription: Original\n---\nBody.\n', { mode: 0o600 })
+  let roots = 0
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: (id) => {
+    if (++roots === 5) chmodSync(file, 0o666)
+    return join(root, id)
+  }, acknowledge: async () => null })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('unsafe_skill_file')
+  expect(readdirSync(join(root, 'a')).some(name => name.startsWith('.skill-removed-'))).toBe(false)
+})
+
+it('does not delete a concurrent replacement that appears during removal acknowledgement', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills')
+  mkdirSync(directory, { mode: 0o700 })
+  const file = join(directory, 'host-demo.md'); const original = '---\nname: host-demo\ndescription: Original\n---\nBody.\n'
+  const concurrent = original.replace('Body.', 'Concurrent replacement.')
+  writeFileSync(file, original, { mode: 0o600 })
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => {
+    writeFileSync(file, concurrent, { mode: 0o600 }); return null
+  } })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('skill_changed')
+  expect(readFileSync(file, 'utf8')).toBe(concurrent)
+  expect(readdirSync(join(root, 'a')).some(name => name.startsWith('.skill-removed-'))).toBe(true)
+})
+
+it('rejects a revision that changes while a removed Skill is being published', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills')
+  mkdirSync(directory, { mode: 0o700 })
+  writeFileSync(join(directory, 'host-demo.md'), '---\nname: host-demo\ndescription: Original\n---\nBody.\n', { mode: 0o600 })
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => null })
+  const revision = executor.revision.bind(executor)
+  vi.spyOn(executor, 'revision').mockImplementation(async (profileId) => {
+    writeFileSync(join(directory, 'concurrent.md'), '---\nname: concurrent\ndescription: Concurrent\n---\nBody.\n', { mode: 0o600 })
+    return revision(profileId)
+  })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('skill_changed')
+  expect(readdirSync(join(root, 'a')).some(name => name.startsWith('.skill-removed-'))).toBe(true)
+})
+
+it('rejects a revision changed while a failed removal is being acknowledged after restoration', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills')
+  mkdirSync(directory, { mode: 0o700 })
+  const file = join(directory, 'host-demo.md'); const markdown = '---\nname: host-demo\ndescription: Original\n---\nBody.\n'
+  writeFileSync(file, markdown, { mode: 0o600 })
+  let calls = 0
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => {
+    if (calls++ === 0) throw Error('runtime unavailable')
+    writeFileSync(join(directory, 'concurrent.md'), '---\nname: concurrent\ndescription: Concurrent\n---\nBody.\n', { mode: 0o600 })
+    return { name: 'host-demo', description: 'Original', content: 'Body.', source: 'user-dsh', path: file,
+      invocation: { modelInvocable: true, userInvocable: true } }
+  } })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('skill_changed')
+  expect(readFileSync(file, 'utf8')).toBe(markdown)
+})
+
+it('rejects missing recovery evidence before inspecting Profile storage', async () => {
+  const root = fixture()
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id),
+    acknowledge: async () => undefined })
+  const receipt = { profileId: 'a' } as ExtensionReceipt
+  await expect(executor.validateSkillRestore('a', receipt)).rejects.toThrow('invalid_recovery')
+  await expect(executor.restoreSkillRemoval('a', receipt,
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('invalid_recovery')
+})
+
+it('restores a bundled Skill from operation-owned evidence and rejects a stale removed revision', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills/host-demo')
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const file = join(directory, 'SKILL.md'); const markdown = '---\nname: host-demo\ndescription: Original\n---\nBody.\n'
+  writeFileSync(file, markdown, { mode: 0o600 }); writeFileSync(join(directory, 'resource.txt'), 'resource', { mode: 0o600 })
+  const operationId = randomUUID(); const controller = new AbortController()
+  let evidence: NonNullable<ExtensionReceipt['skillRemoval']> | undefined
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => {
+    if (!controller.signal.aborted) { controller.abort(); throw Error('interrupted') }
+    return { name: 'host-demo', description: 'Original', content: 'Body.', source: 'user-dsh', path: file,
+      invocation: { modelInvocable: true, userInvocable: true } }
+  } })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'bundle-host-demo' }), {
+    kind: 'skill', operationId, signal: controller.signal, guard() {}, checkpointSkillRemoval(next) { evidence = { ...next } },
+  })).rejects.toThrow()
+  expect(evidence?.stage).toBe('removed')
+  const original = { profileId: 'a', operationId, skillRemoval: evidence } as ExtensionReceipt
+  await expect(executor.validateSkillRestore('a', { ...original,
+    skillRemoval: { ...evidence!, removedRevision: '0'.repeat(64) } })).rejects.toThrow('recovery_conflict')
+  await expect(executor.validateSkillRestore('a', original)).resolves.toBeUndefined()
+  await expect(executor.restoreSkillRemoval('a', original,
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'succeeded' })
+  expect(readFileSync(file, 'utf8')).toBe(markdown)
+  expect(readFileSync(join(directory, 'resource.txt'), 'utf8')).toBe('resource')
 })
 
 it('does not overwrite a concurrent replacement while restoring an unconfirmed Skill removal', async () => {
