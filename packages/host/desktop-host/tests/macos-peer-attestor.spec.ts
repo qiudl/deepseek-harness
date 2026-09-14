@@ -1,8 +1,10 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
+import { once } from 'node:events'
+import { createConnection, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { realpathSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import { createMacOSPeerAttestor, HostAuthorityError } from '../src/index.ts'
 import {
   parseMacOSProcessExecutable,
@@ -17,6 +19,31 @@ const executable = (): string => {
 }
 
 describe('macOS Unix peer attestation', () => {
+  it.runIf(process.platform === 'darwin')('fails closed through the real kernel, proc, and codesign bindings for an untrusted Node peer', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-peer-native-'))
+    const socketPath = join(root, 'peer.sock')
+    const server = createServer()
+    onTestFinished(async () => {
+      server.close()
+      await once(server, 'close').catch(() => {})
+      rmSync(root, { recursive: true, force: true })
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(socketPath, resolve)
+    })
+    const attestation = new Promise((resolve, reject) => {
+      server.once('connection', (socket) => {
+        createMacOSPeerAttestor({ allowedTeamIdentifiers: new Set(['UNTRUSTEDTEAM']) })(socket)
+          .then(resolve, reject).finally(() => { socket.destroy() })
+      })
+    })
+    const client = createConnection(socketPath)
+    onTestFinished(() => { client.destroy() })
+    await once(client, 'connect')
+    await expect(attestation).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
   it('reads LOCAL_PEERPID only after getsockopt populates the output buffer', () => {
     const calls: string[] = []
     const peer = readMacOSPeerIdentity(9, {
@@ -68,6 +95,11 @@ describe('macOS Unix peer attestation', () => {
       return buffer.write('/Applications/Slark.app/Contents/MacOS/Slark')
     }, async () => { throw new Error('lsof must not run') })
     expect(path).toBe('/Applications/Slark.app/Contents/MacOS/Slark')
+  })
+
+  it.runIf(process.platform === 'darwin')('resolves the current executable through the real lsof fallback', async () => {
+    const path = await resolveMacOSProcessExecutable(process.pid, () => 0)
+    expect(realpathSync(path)).toBe(realpathSync(process.execPath))
   })
 
   it('selects the primary text mapping and rejects malformed lsof identity output', () => {
@@ -135,6 +167,12 @@ describe('macOS Unix peer attestation', () => {
     const directory = join(mkdtempSync(join(tmpdir(), 'dsh-peer-dir-')), 'daemon')
     mkdirSync(directory)
     await expect(attest({ executablePath: () => directory })).rejects.toBeInstanceOf(HostAuthorityError)
+    const oversized = executable()
+    truncateSync(oversized, 512 * 1024 * 1024 + 1)
+    await expect(attest({ executablePath: () => oversized })).rejects.toBeInstanceOf(HostAuthorityError)
+    const empty = executable()
+    truncateSync(empty, 0)
+    await expect(attest({ executablePath: () => empty })).rejects.toBeInstanceOf(HostAuthorityError)
   })
 
   it('rejects executable bytes changed while the code signature is verified', async () => {

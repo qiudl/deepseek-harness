@@ -22,6 +22,7 @@ import { HostAuthorityError } from './types.ts'
 
 const execFileAsync = promisify(execFile)
 const TEAM_IDENTIFIER = /^[A-Z0-9][A-Z0-9.-]{0,127}$/u
+const MAX_TRUSTED_EXECUTABLE_BYTES = 512 * 1024 * 1024
 
 /** Native facts and signature verification used by the macOS peer attestor. */
 export interface MacOSPeerBindings {
@@ -59,7 +60,9 @@ function sameExecutable(
 }
 
 function readExecutable(fd: number, size: number): Buffer {
-  if (!Number.isSafeInteger(size) || size < 0) throw new HostAuthorityError('unauthorized')
+  if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_TRUSTED_EXECUTABLE_BYTES) {
+    throw new HostAuthorityError('unauthorized')
+  }
   const bytes = Buffer.alloc(size)
   let offset = 0
   while (offset < bytes.length) {
