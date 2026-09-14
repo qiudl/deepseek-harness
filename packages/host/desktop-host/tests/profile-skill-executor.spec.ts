@@ -3,7 +3,7 @@ import { parseSkillFile } from '#hub-skills'
 import { createHash, randomUUID } from 'node:crypto'
 import { FileExtensionReceipts, ProfileExtensionOperations } from '../src/extension-operations.ts'
 import type {} from '@deepseek-ai/dsh-skill'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -15,6 +15,38 @@ function fixture() {
   onTestFinished(() =>{  rmSync(root, { recursive: true, force: true }) })
   return root
 }
+it.each(['hardlink', 'writable', 'oversized'] as const)('refuses an unsafe flat Skill during revision and installation: %s', async (mode) => {
+  const root = fixture(); const skills = join(root, 'a/skills')
+  mkdirSync(skills, { mode: 0o700 })
+  const file = join(skills, 'keep.md')
+  writeFileSync(file, '---\nname: keep\ndescription: Keep\n---\nKeep this file.\n', { mode: 0o600 })
+  if (mode === 'hardlink') linkSync(file, join(root, 'linked.md'))
+  else if (mode === 'writable') chmodSync(file, 0o666)
+  else truncateSync(file, 32769)
+  const before = readFileSync(file)
+  const acknowledge = vi.fn(async () => undefined)
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge })
+  await expect(executor.revision('a')).rejects.toThrow('unsafe_skill_file')
+  await expect(executor.execute('a', payload, { kind: 'skill', signal: new AbortController().signal, guard() {} }))
+    .rejects.toThrow('unsafe_skill_file')
+  expect(readdirSync(skills)).toEqual(['keep.md'])
+  expect(readFileSync(file)).toEqual(before)
+  expect(acknowledge).not.toHaveBeenCalled()
+})
+it.each(['hardlink', 'oversized', 'too-many'] as const)('refuses an unsafe or unbounded Skill bundle resource tree: %s', async (mode) => {
+  const root = fixture(); const bundle = join(root, 'a/skills/keep')
+  mkdirSync(bundle, { recursive: true, mode: 0o700 })
+  writeFileSync(join(bundle, 'SKILL.md'), '---\nname: keep\ndescription: Keep\n---\nKeep this bundle.\n', { mode: 0o600 })
+  const resource = join(bundle, 'resource.bin')
+  writeFileSync(resource, 'resource', { mode: 0o600 })
+  if (mode === 'hardlink') linkSync(resource, join(root, 'resource-link'))
+  else if (mode === 'oversized') truncateSync(resource, 10 * 1024 * 1024 + 1)
+  else for (let i = 0; i < 511; i++) writeFileSync(join(bundle, `extra-${i}`), '', { mode: 0o600 })
+  const acknowledge = vi.fn(async () => undefined)
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge })
+  await expect(executor.revision('a')).rejects.toThrow(mode === 'too-many' ? 'skill_limit' : 'unsafe_skill_file')
+  expect(acknowledge).not.toHaveBeenCalled()
+})
 it.each([
   ['null', null], ['array', []], ['string', 'skill'],
   ['remove traversal', { action: 'remove', id: '../outside' }],
@@ -444,6 +476,24 @@ it('restores an operation-owned Skill backup after a confirmed recovery and ackn
     .rejects.toThrow('recovery_conflict')
   expect(readFileSync(file, 'utf8')).toBe('Concurrent author')
   rmSync(file)
+  const backup = join(root, 'a', `.skill-removed-${originalId}`)
+  const restorePayload = JSON.stringify({ action: 'restore-removal', operationId: originalId })
+  writeFileSync(backup, 'Changed backup')
+  await expect(owner.prepare(() => profileId, 'skill', restorePayload)).rejects.toThrow('recovery_conflict')
+  expect(readFileSync(backup, 'utf8')).toBe('Changed backup')
+  expect(readdirSync(directory)).toEqual([])
+  writeFileSync(backup, markdown)
+  chmodSync(backup, 0o666)
+  await expect(owner.prepare(() => profileId, 'skill', restorePayload)).rejects.toThrow('unsafe_skill_file')
+  chmodSync(backup, 0o600)
+  const alias = join(root, 'backup-alias')
+  linkSync(backup, alias)
+  await expect(owner.prepare(() => profileId, 'skill', restorePayload)).rejects.toThrow('unsafe_skill_file')
+  rmSync(alias)
+  renameSync(backup, alias)
+  await expect(owner.prepare(() => profileId, 'skill', restorePayload)).rejects.toThrow('recovery_conflict')
+  renameSync(alias, backup)
+  await expect(executor.validateSkillRestore(randomUUID(), store.read(originalId)!)).rejects.toThrow('invalid_recovery')
   const recovery=await owner.prepare(()=>profileId,'skill',JSON.stringify({ action:'restore-removal',operationId:originalId }))
   verifyFailure=true
   const firstRecoveryId=randomUUID();owner.commit(()=>profileId,recovery.planId,firstRecoveryId);await owner.settled()
