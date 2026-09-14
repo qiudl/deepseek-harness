@@ -1,11 +1,11 @@
 import { randomUUID, createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, linkSync, chmodSync, unlinkSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, symlinkSync, linkSync, chmodSync, unlinkSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
-import { FileExtensionReceipts, ProfileExtensionOperations, validateExtensionReceipt } from '../src/extension-operations.ts'
+import { FileExtensionReceipts, ProfileExtensionOperations, validateExtensionReceipt, type ExtensionReceipt } from '../src/extension-operations.ts'
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex')
 const receiptRecord = (): Record<string, unknown> => ({
@@ -14,6 +14,18 @@ const receiptRecord = (): Record<string, unknown> => ({
   profileId: randomUUID(),
   planId: randomUUID(),
   kind: 'plugin',
+  digest: hash('payload'),
+  state: 'running',
+  cancellationRequested: false,
+  createdAt: 1,
+  updatedAt: 2,
+})
+const durableReceipt = (profileId: string, operationId = randomUUID()): ExtensionReceipt => ({
+  version: 1,
+  operationId,
+  profileId,
+  planId: randomUUID(),
+  kind: 'mcp',
   digest: hash('payload'),
   state: 'running',
   cancellationRequested: false,
@@ -300,6 +312,29 @@ describe('Profile extension operations', () => {
     expect(substituted.operationId).not.toBe(requestedId)
     expect(() => store.read(requestedId)).toThrow('invalid_receipt')
   })
+  it('bounds serialized receipts and removes a temporary file after a lost publication race', async () => {
+    const f = setup()
+    const originalStringify = JSON.stringify
+    const oversized = durableReceipt(f.profileId)
+    const sizeSpy = vi.spyOn(JSON, 'stringify').mockImplementation((value: unknown) =>
+      value === oversized ? 'x'.repeat(65_537) : originalStringify(value))
+    try { expect(() => { f.store.write(oversized) }).toThrow('invalid_receipt') }
+    finally { sizeSpy.mockRestore() }
+
+    const raced = durableReceipt(f.profileId)
+    const receipts = join(f.root, 'receipts')
+    const destination = join(receipts, `${raced.operationId}.json`)
+    let serializations = 0
+    const raceSpy = vi.spyOn(JSON, 'stringify').mockImplementation((value: unknown) => {
+      const result = originalStringify(value)
+      if (value === raced && ++serializations === 2) mkdirSync(destination)
+      return result
+    })
+    try { expect(() => { f.store.write(raced) }).toThrow() }
+    finally { raceSpy.mockRestore() }
+    expect(readdirSync(receipts).filter(name => name.endsWith('.tmp'))).toEqual([])
+    await f.operations.dispose()
+  })
   it('rejects expired plans and duplicate confirmation under a different operation id', async () => {
     const f = setup(); let now = 1000
     const engine = new ProfileExtensionOperations(f.store, f.executor, { now: () => now })
@@ -311,6 +346,121 @@ describe('Profile extension operations', () => {
     expect(() => engine.commit(f.authority, plan.planId, randomUUID())).toThrow('idempotency_conflict')
     expect(() => engine.commit(f.authority, randomUUID(), id)).toThrow('idempotency_conflict')
     await engine.dispose(); await f.operations.dispose()
+  })
+
+  it('rejects malformed recovery plans, missing recovery support and changed prepare authority', async () => {
+    const f = setup()
+    await expect(f.operations.prepare(f.authority, 'invalid' as never, 'payload')).rejects.toThrow('invalid_input')
+    const operationId = randomUUID()
+    f.store.write({ version: 1, operationId, profileId: f.profileId, planId: randomUUID(), kind: 'skill',
+      digest: hash('payload'), state: 'unknown', cancellationRequested: false, createdAt: 1, updatedAt: 2,
+      skillRemoval: { entryId: 'flat-demo', originalDigest: hash('body'), beforeRevision: hash('before'),
+        removedRevision: hash('after'), stage: 'prepared' } })
+    await expect(f.operations.prepare(f.authority, 'skill', JSON.stringify({ action: 'restore-removal', operationId, extra: true })))
+      .rejects.toThrow('invalid_input')
+    await expect(f.operations.prepare(f.authority, 'mcp', JSON.stringify({ action: 'restore-config', operationId })))
+      .rejects.toThrow('invalid_input')
+    await expect(f.operations.prepare(f.authority, 'skill', JSON.stringify({ action: 'restore-removal', operationId })))
+      .rejects.toThrow('upgrade_required')
+    const blockerId = randomUUID()
+    f.store.write({ version: 1, operationId: blockerId, profileId: f.profileId, planId: randomUUID(), kind: 'mcp',
+      digest: hash('blocker'), state: 'unknown', cancellationRequested: false, createdAt: 1, updatedAt: 2 })
+    const supported = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      validateSkillRestore: async () => {},
+      restoreSkillRemoval: async () => ({ state: 'succeeded' }),
+    }, { now: () => 1000 })
+    await expect(supported.prepare(f.authority, 'skill', JSON.stringify({ action: 'restore-removal', operationId })))
+      .rejects.toThrow('busy')
+    await supported.dispose()
+    expect(() => f.operations.status(() => randomUUID(), operationId)).toThrow('unauthorized')
+
+    const otherProfile = randomUUID()
+    let changed = false
+    const authority = () => changed ? otherProfile : f.profileId
+    const owner = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      revision: async (profileId) => { changed = true; return f.executor.revision(profileId) },
+    }, { now: () => 1000 })
+    await expect(owner.prepare(authority, 'plugin', 'fixture@1.0.0')).rejects.toThrow('unauthorized')
+    await owner.dispose(); await f.operations.dispose()
+  })
+
+  it('enforces the plan capacity before and after concurrent revision reads', async () => {
+    const f = setup()
+    let reads = 0
+    let waiting = 0
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const owner = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      revision: async (profileId) => {
+        reads++
+        if (reads > 127) { waiting++; await gate }
+        return f.executor.revision(profileId)
+      },
+    }, { now: () => 1000 })
+    onTestFinished(async () => { await owner.dispose(); await f.operations.dispose() })
+    for (let index = 0; index < 127; index++) await owner.prepare(f.authority, 'mcp', `plan-${index}`)
+    const left = owner.prepare(f.authority, 'mcp', 'left')
+    const right = owner.prepare(f.authority, 'mcp', 'right')
+    await expect.poll(() => waiting).toBe(2)
+    release()
+    const outcomes = await Promise.allSettled([left, right])
+    expect(outcomes.map(result => result.status).sort()).toEqual(['fulfilled', 'rejected'])
+    const rejected = outcomes.find(result => result.status === 'rejected')
+    expect(rejected?.status).toBe('rejected')
+    if (rejected?.status !== 'rejected') throw Error('missing rejected plan')
+    expect(rejected.reason).toBeInstanceOf(Error)
+    expect((rejected.reason as Error).message).toBe('busy')
+    await expect(owner.prepare(f.authority, 'mcp', 'overflow')).rejects.toThrow('busy')
+  })
+
+  it('expires work both before and after an asynchronous revision check', async () => {
+    const f = setup()
+    let now = 1000
+    let revisionReads = 0
+    let revisionStarted!: () => void
+    let releaseRevision!: () => void
+    const started = new Promise<void>((resolve) => { revisionStarted = resolve })
+    const gate = new Promise<void>((resolve) => { releaseRevision = resolve })
+    const owner = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      revision: async (profileId) => {
+        if (++revisionReads === 3) { revisionStarted(); await gate }
+        return f.executor.revision(profileId)
+      },
+    }, { now: () => now })
+    onTestFinished(async () => { await owner.dispose(); await f.operations.dispose() })
+
+    const firstPlan = await owner.prepare(f.authority, 'mcp', 'first')
+    const firstId = randomUUID()
+    owner.commit(f.authority, firstPlan.planId, firstId)
+    now = firstPlan.expiresAt + 1
+    await owner.settled()
+    expect(owner.status(f.authority, firstId)).toMatchObject({ state: 'failed', reason: 'expired' })
+
+    const secondPlan = await owner.prepare(f.authority, 'mcp', 'second')
+    const secondId = randomUUID()
+    owner.commit(f.authority, secondPlan.planId, secondId)
+    await started
+    now = secondPlan.expiresAt + 1
+    releaseRevision()
+    await owner.settled()
+    expect(owner.status(f.authority, secondId)).toMatchObject({ state: 'failed', reason: 'expired' })
+    expect(f.executions()).toBe(0)
+  })
+
+  it('fails a committed job when its durable receipt disappears before execution', async () => {
+    const f = setup()
+    const plan = await f.operations.prepare(f.authority, 'skill', 'fixture')
+    const operationId = randomUUID()
+    f.operations.commit(f.authority, plan.planId, operationId)
+    unlinkSync(join(f.root, 'receipts', `${operationId}.json`))
+    await expect(f.operations.settled()).rejects.toThrow('missing_receipt')
+    expect(() => f.operations.status(f.authority, operationId)).toThrow('unauthorized')
+    expect(f.executions()).toBe(0)
+    await f.operations.dispose()
   })
 
   it('cancels queued writes and rechecks authority after asynchronous revision reads', async () => {
@@ -332,6 +482,108 @@ describe('Profile extension operations', () => {
     expect(f.store.read(nextId)?.reason).toBe('authority_revoked')
     expect(f.executions()).toBe(0)
     await engine.dispose(); await f.operations.dispose()
+  })
+
+  it('cancels after an asynchronous revision read without invoking the executor', async () => {
+    const f = setup()
+    let revisionReads = 0
+    let revisionStarted!: () => void
+    let releaseRevision!: () => void
+    const started = new Promise<void>((resolve) => { revisionStarted = resolve })
+    const gate = new Promise<void>((resolve) => { releaseRevision = resolve })
+    const owner = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      revision: async (profileId) => {
+        if (++revisionReads === 2) { revisionStarted(); await gate }
+        return f.executor.revision(profileId)
+      },
+    }, { now: () => 1000 })
+    onTestFinished(async () => { await owner.dispose(); await f.operations.dispose() })
+    const plan = await owner.prepare(f.authority, 'mcp', 'fixture')
+    const operationId = randomUUID()
+    const connection = new AbortController()
+    owner.commit(f.authority, plan.planId, operationId, connection.signal)
+    await started
+    connection.abort()
+    releaseRevision()
+    await owner.settled()
+    expect(owner.status(f.authority, operationId).state).toBe('cancelled')
+    expect(f.executions()).toBe(0)
+  })
+
+  it('fails closed on revision errors and leaves terminal cancellation unchanged', async () => {
+    const f = setup()
+    let revisions = 0
+    const owner = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      revision: async (profileId) => {
+        if (++revisions === 2) throw Error('revision_failed')
+        return f.executor.revision(profileId)
+      },
+    }, { now: () => 1000 })
+    onTestFinished(async () => { await owner.dispose(); await f.operations.dispose() })
+    const plan = await owner.prepare(f.authority, 'plugin', 'fixture@1.0.0')
+    const operationId = randomUUID()
+    owner.commit(f.authority, plan.planId, operationId)
+    await owner.settled()
+    expect(owner.status(f.authority, operationId)).toMatchObject({ state: 'failed', reason: 'executor_failed' })
+    expect(owner.cancel(f.authority, operationId).cancellationRequested).toBe(false)
+    expect(f.executions()).toBe(0)
+  })
+
+  it('rejects authority identity drift after the execution revision check', async () => {
+    const f = setup()
+    const otherProfile = randomUUID()
+    let changed = false
+    let revisions = 0
+    const authority = () => changed ? otherProfile : f.profileId
+    const owner = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      revision: async (profileId) => {
+        if (++revisions === 2) changed = true
+        return f.executor.revision(profileId)
+      },
+    }, { now: () => 1000 })
+    onTestFinished(async () => { await owner.dispose(); await f.operations.dispose() })
+    const plan = await owner.prepare(authority, 'plugin', 'fixture@1.0.0')
+    const operationId = randomUUID()
+    owner.commit(authority, plan.planId, operationId)
+    await owner.settled()
+    expect(f.store.read(operationId)).toMatchObject({ state: 'failed', reason: 'authority_revoked' })
+    expect(f.executions()).toBe(0)
+  })
+
+  it('normalizes an invalid executor outcome and rejects work after disposal', async () => {
+    const f = setup()
+    const owner = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      execute: async () => ({ state: 'invalid' as never }),
+    }, { now: () => 1000 })
+    const plan = await owner.prepare(f.authority, 'skill', 'fixture')
+    const operationId = randomUUID()
+    owner.commit(f.authority, plan.planId, operationId)
+    await owner.settled()
+    expect(owner.status(f.authority, operationId)).toMatchObject({ state: 'unknown', reason: 'executor_failed' })
+    await owner.dispose()
+    await expect(owner.prepare(f.authority, 'skill', 'next')).rejects.toThrow('unavailable')
+    await f.operations.dispose()
+  })
+
+  it('persists the verified source of a successful Skill operation', async () => {
+    const f = setup()
+    const owner = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      execute: async (_profileId, _payload, context) => {
+        context.guard()
+        return { state: 'succeeded', skillSource: 'bundled' }
+      },
+    }, { now: () => 1000 })
+    onTestFinished(async () => { await owner.dispose(); await f.operations.dispose() })
+    const plan = await owner.prepare(f.authority, 'skill', 'fixture')
+    const operationId = randomUUID()
+    owner.commit(f.authority, plan.planId, operationId)
+    await owner.settled()
+    expect(owner.status(f.authority, operationId)).toMatchObject({ state: 'succeeded', skillSource: 'bundled' })
   })
 
   it('honors connection aborts both before and after commit', async () => {
@@ -482,32 +734,38 @@ describe('Profile extension operations', () => {
 it('binds checkpoints to the original Skill removal target and refuses rewritten evidence', async () => {
   const f = setup()
   const evidence = { entryId:'flat-demo',originalDigest:hash('body'),beforeRevision:hash('before'),removedRevision:hash('after'),stage:'prepared' as const }
+  const removedEvidence = { ...evidence, stage: 'removed' as const }
   let validations = 0
   let restorations = 0
   const owner = new ProfileExtensionOperations(f.store, { revision: f.executor.revision,
     execute: async (_id, _payload, context) => {
       expect(context.operationId).toBeDefined()
+      expect(() => { context.checkpointMcp!({ beforeRevision: hash('before'), afterRevision: hash('after'),
+        originalPresent: false, introducedIds: [], stage: 'prepared' }) }).toThrow('invalid_checkpoint')
       expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,entryId:'flat-other' }) }).toThrow('invalid_checkpoint')
       expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,stage:'removal_verified' }) }).toThrow('invalid_checkpoint')
       context.checkpointSkillRemoval!(evidence)
       expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,originalDigest:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
+      expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,beforeRevision:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
+      expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,removedRevision:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
+      context.checkpointSkillRemoval!(removedEvidence)
       throw Error('interrupted')
     },
     validateSkillRestore: async (_profileId, original) => {
       validations++
-      expect(original.skillRemoval).toEqual(evidence)
+      expect(original.skillRemoval).toEqual(removedEvidence)
     },
     restoreSkillRemoval: async (_profileId, original, context) => {
       context.guard()
       restorations++
-      expect(original.skillRemoval).toEqual(evidence)
+      expect(original.skillRemoval).toEqual(removedEvidence)
       return { state: 'succeeded' }
     },
   }, { now:()=>1000 })
   onTestFinished(async () => { await owner.dispose() })
   const plan = await owner.prepare(f.authority,'skill',JSON.stringify({ action:'remove',id:'flat-demo' }))
   const id = randomUUID(); owner.commit(f.authority,plan.planId,id); await owner.settled()
-  expect(owner.status(f.authority,id)).toMatchObject({ state:'unknown',skillRemoval:evidence })
+  expect(owner.status(f.authority,id)).toMatchObject({ state:'unknown',skillRemoval:removedEvidence })
   const invalid = { ...f.store.read(id)!,skillRemoval:{ ...evidence,entryId:'../escape' } }
   expect(() =>{  f.store.write(invalid) }).toThrow('invalid_receipt')
   expect(owner.status(f.authority, id)).toMatchObject({ canRestore: true })
@@ -529,7 +787,10 @@ it('restores checkpointed MCP configuration without accepting rewritten evidence
   const owner = new ProfileExtensionOperations(f.store, {
     revision: f.executor.revision,
     execute: async (_profileId, _payload, context) => {
+      expect(() => { context.checkpointSkillRemoval!({ entryId: 'flat-demo', originalDigest: hash('body'),
+        beforeRevision: hash('before'), removedRevision: hash('after'), stage: 'prepared' }) }).toThrow('invalid_checkpoint')
       context.checkpointMcp!(prepared)
+      expect(() => { context.checkpointMcp!({ ...prepared, stage: 'restoration_verified' }) }).toThrow('invalid_checkpoint')
       context.checkpointMcp!(published)
       expect(() => { context.checkpointMcp!({ ...published, introducedIds: ['rewritten'] }) }).toThrow('invalid_checkpoint')
       throw Error('interrupted')
@@ -568,6 +829,7 @@ it('restores checkpointed Plugin toggle state bound to its package', async () =>
       expect(() => { context.checkpointPluginToggle!({ ...prepared, packageName: '@scope/other' }) }).toThrow('invalid_checkpoint')
       context.checkpointPluginToggle!(prepared)
       expect(() => { context.checkpointPluginToggle!({ ...published, backupDigest: hash('rewritten') }) }).toThrow('invalid_checkpoint')
+      expect(() => { context.checkpointPluginToggle!({ ...prepared, stage: 'restoration_verified' }) }).toThrow('invalid_checkpoint')
       context.checkpointPluginToggle!(published)
       throw Error('interrupted')
     },
@@ -604,8 +866,10 @@ it('completes an interrupted Plugin package operation from immutable intent', as
   const owner = new ProfileExtensionOperations(f.store, {
     revision: f.executor.revision,
     execute: async (_profileId, _payload, context) => {
+      expect(() => { context.checkpointPluginPackage!({ ...prepared, stage: ['prepared'] as never }) }).toThrow('invalid_checkpoint')
       expect(() => { context.checkpointPluginPackage!({ ...prepared, packageName: 'other', spec: 'other@1.0.0' }) }).toThrow('invalid_checkpoint')
       context.checkpointPluginPackage!(prepared)
+      expect(() => { context.checkpointPluginPackage!({ ...commandCompleted, scopeDigest: hash('rewritten') }) }).toThrow('invalid_checkpoint')
       expect(() => { context.checkpointPluginPackage!(prepared) }).toThrow('invalid_checkpoint')
       context.checkpointPluginPackage!(commandCompleted)
       context.checkpointPluginPackage!(verified)
@@ -648,4 +912,30 @@ it('completes an interrupted Plugin package operation from immutable intent', as
   expect(completions).toBe(1)
   expect(owner.status(f.authority, completionId)).toMatchObject({ state: 'succeeded', recoveryMode: 'complete' })
   expect(owner.status(f.authority, operationId)).toMatchObject({ state: 'unknown', completedBy: completionId })
+})
+
+it('fails closed when a prepared recovery executor disappears before commit', async () => {
+  const f = setup()
+  const operationId = randomUUID()
+  const evidence = { entryId: 'flat-demo', originalDigest: hash('body'), beforeRevision: hash('before'),
+    removedRevision: hash('after'), stage: 'prepared' as const }
+  f.store.write({ version: 1, operationId, profileId: f.profileId, planId: randomUUID(), kind: 'skill',
+    digest: hash('payload'), state: 'unknown', cancellationRequested: false, createdAt: 1, updatedAt: 2,
+    skillRemoval: evidence })
+  const executor = {
+    revision: f.executor.revision,
+    execute: f.executor.execute,
+    validateSkillRestore: async () => {},
+    restoreSkillRemoval: async () => ({ state: 'succeeded' as const }),
+  }
+  const owner = new ProfileExtensionOperations(f.store, executor, { now: () => 1000 })
+  onTestFinished(async () => { await owner.dispose(); await f.operations.dispose() })
+  const plan = await owner.prepare(f.authority, 'skill', JSON.stringify({ action: 'restore-removal', operationId }))
+  Reflect.deleteProperty(executor, 'restoreSkillRemoval')
+  const recoveryId = randomUUID()
+  owner.commit(f.authority, plan.planId, recoveryId)
+  await owner.settled()
+  expect(owner.status(f.authority, recoveryId)).toMatchObject({ state: 'unknown', reason: 'executor_failed' })
+  expect(owner.status(f.authority, operationId)).toMatchObject({ state: 'unknown' })
+  expect(owner.status(f.authority, operationId).canRestore).toBeUndefined()
 })
