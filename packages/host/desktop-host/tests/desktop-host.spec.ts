@@ -749,11 +749,94 @@ describe('authenticated Unix transport', () => {
       importId, expectedStageVersion: 2, targetProfileSelector: profile.profileSelector,
     }))
       .resolves.toEqual({ stageVersion: 3, semanticDigest })
+    await expect(client.abortMigrationImport({
+      importId, expectedStageVersion: 3, targetProfileSelector: profile.profileSelector,
+    }))
+      .resolves.toEqual({ stageVersion: 4 })
     await expect(client.commitMigrationImport({
       importId, expectedStageVersion: 3, expectedCurrentGeneration: 1,
       targetProfileSelector: profile.profileSelector,
     }))
       .resolves.toEqual({ stageVersion: 4, activeGeneration: 2 })
+    client.close(); await server.close()
+  })
+
+  it('maps migration export failures to bounded public authority codes', async () => {
+    const exportId = 'a'.repeat(48)
+    let failure: unknown = new Error('migration_export_busy')
+    const migrationExport = {
+      async inventory() { throw failure },
+      async begin() {
+        return { exportId, transferId: 'b'.repeat(48), transferDigest: 'c'.repeat(64), schemaVersion: 1,
+          sourceGeneration: 'd'.repeat(64), recordCount: 1, firstEventSequence: 0, lastEventSequence: 0,
+          semanticDigest: 'e'.repeat(64), chunkCount: 1 }
+      },
+      read() { return { exportId, chunkIndex: 0, records: [], chunkDigest: 'f'.repeat(64), final: true } },
+    }
+    const { server, socketPath } = await fixture(() => migrationExport)
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const profile = await client.bootstrapLocalProfile({ keyHandle: 'keychain:export-errors', unlockMaterial })
+    const cases: Array<[unknown, string]> = [
+      [new HostAuthorityError('busy'), 'busy'],
+      ['non-error', 'unavailable'],
+      [new Error('migration_export_busy'), 'busy'],
+      [new Error('migration_export_not_found'), 'stale'],
+      [new Error('migration_export_bounds_invalid'), 'unavailable'],
+      [new Error('migration_export_request_invalid'), 'unavailable'],
+      [new Error('migration_inventory_changed'), 'conflict'],
+      [new Error('migration_source_changed'), 'conflict'],
+      [new Error('migration_export_too_large'), 'conflict'],
+      [new Error('unexpected'), 'unavailable'],
+    ]
+    for (const [reason, code] of cases) {
+      failure = reason
+      await expect(client.getMigrationExportInventory({ sourceProfileSelector: profile.profileSelector }))
+        .rejects.toMatchObject({ code })
+    }
+    client.close(); await server.close()
+  })
+
+  it('maps migration import failures to bounded public authority codes', async () => {
+    const importId = 'a'.repeat(48)
+    const semanticDigest = 'b'.repeat(64)
+    let failure: unknown = new Error('migration_import_invalid')
+    const { server, socketPath } = await fixture(undefined, () => ({
+      async stage() { return { importId, version: 2, targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async status() { return { importId, version: 2, state: 'staged' as const, targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async verify() { return { importId, version: 3, semanticDigest } },
+      async commit() { return { importId, version: 4, targetGeneration: 2 } },
+      async abort() { throw failure },
+    }))
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const profile = await client.bootstrapLocalProfile({ keyHandle: 'keychain:import-errors', unlockMaterial })
+    const cases: Array<[unknown, string]> = [
+      ['non-error', 'unavailable'],
+      [new Error('migration_import_invalid'), 'unavailable'],
+      [new Error('migration_import_not_found'), 'stale'],
+      [new Error('migration_import_stale'), 'stale'],
+      [new Error('migration_import_conflict'), 'conflict'],
+      [new Error('migration_import_state'), 'conflict'],
+      [new Error('migration_import_generation_changed'), 'conflict'],
+      [new Error('migration_import_already_committed'), 'conflict'],
+      [new Error('migration_import_not_abortable'), 'conflict'],
+      [new Error('migration_import_mismatch'), 'unauthorized'],
+      [new Error('migration_import_unsafe'), 'unauthorized'],
+      [new Error('unexpected'), 'unavailable'],
+    ]
+    for (const [reason, code] of cases) {
+      failure = reason
+      await expect(client.abortMigrationImport({
+        importId, expectedStageVersion: 3, targetProfileSelector: profile.profileSelector,
+      })).rejects.toMatchObject({ code })
+    }
     client.close(); await server.close()
   })
 
@@ -767,8 +850,28 @@ describe('authenticated Unix transport', () => {
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     }
     expect(await discoverUnixHost(base)).toEqual({ state: 'stopped', code: 'trusted_host_not_running' })
+    expect(await discoverUnixHost({ ...base, endpointRegistrationId: 'invalid' }))
+      .toEqual({ state: 'unknown', code: 'transport_unavailable' })
     symlinkSync(join(root, 'target'), base.socketPath)
     expect(await discoverUnixHost(base)).toEqual({ state: 'unknown', code: 'host_unverified' })
+  })
+
+  it('discovers a running Unix Host and fails closed on protocol trust mismatch', async () => {
+    const { server, socketPath } = await fixture()
+    const base = {
+      socketPath, expectedUid: uid, trustedEndpoint: true as const,
+      endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180',
+      trustedInstallationId: identity.installationId, trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    }
+
+    const running = await discoverUnixHost(base)
+    expect(running.state).toBe('running')
+    if (running.state === 'running') running.client.close()
+    await expect(discoverUnixHost({ ...base, trustedInstallationId: randomUUID() }))
+      .resolves.toEqual({ state: 'unknown', code: 'host_unverified' })
+    await server.close()
   })
 
   it('discovers a Windows named-pipe Host through the same signed challenge protocol', async () => {
