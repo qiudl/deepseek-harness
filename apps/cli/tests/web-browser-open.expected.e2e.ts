@@ -12,6 +12,11 @@ const builtBin = join(repoRoot, 'apps/cli/lib/bin.js')
 const frontendIndex = join(repoRoot, 'apps/web/dist/index.html')
 const openerHook = new URL('./fixtures/web-browser-open/register.mjs', import.meta.url).href
 const openingMessage = 'dsh web: opening the default browser; pass --no-open to disable'
+// The consumers lane builds and starts several release-shaped applications in
+// parallel; keep a bounded diagnostic deadline without treating a saturated
+// hosted runner as a browser-handoff failure.
+const PROCESS_TIMEOUT_MS = 60_000
+const TEST_TIMEOUT_MS = PROCESS_TIMEOUT_MS + 15_000
 const tempRoots: string[] = []
 const builtArtifactsExist = existsSync(builtBin) && existsSync(frontendIndex)
 
@@ -59,7 +64,7 @@ describe.skipIf(!builtArtifactsExist)('dsh web browser-open assembled snapshot',
         SSH_TTY: '',
       },
       input: '',
-      timeout: 30_000,
+      timeout: PROCESS_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       reject: false,
     })
@@ -94,7 +99,7 @@ describe.skipIf(!builtArtifactsExist)('dsh web browser-open assembled snapshot',
         "stderr": "",
       }
     `)
-  })
+  }, TEST_TIMEOUT_MS)
 
   it('prints the launcher reason and manual URL after the Web app is ready', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-web-browser-open-failure-snapshot-'))
@@ -119,7 +124,7 @@ describe.skipIf(!builtArtifactsExist)('dsh web browser-open assembled snapshot',
         SSH_TTY: '',
       },
       input: '',
-      timeout: 30_000,
+      timeout: PROCESS_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       reject: false,
     })
@@ -142,7 +147,7 @@ describe.skipIf(!builtArtifactsExist)('dsh web browser-open assembled snapshot',
         "readyUrl": "http://127.0.0.1:{{port}}/?token={{token}}",
       }
     `)
-  })
+  }, TEST_TIMEOUT_MS)
 
   it('prints the host URL without launching a browser in a VS Code Remote SSH session', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-web-browser-open-ssh-snapshot-'))
@@ -167,7 +172,7 @@ describe.skipIf(!builtArtifactsExist)('dsh web browser-open assembled snapshot',
         VSCODE_IPC_HOOK_CLI: '/tmp/vscode-ipc',
       },
       input: '',
-      timeout: 30_000,
+      timeout: PROCESS_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       reject: false,
     })
@@ -188,7 +193,7 @@ describe.skipIf(!builtArtifactsExist)('dsh web browser-open assembled snapshot',
         "stderr": "",
       }
     `)
-  })
+  }, TEST_TIMEOUT_MS)
 
   it('rejects a project browser command before starting the Web app', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-web-browser-open-env-snapshot-'))
@@ -212,7 +217,7 @@ describe.skipIf(!builtArtifactsExist)('dsh web browser-open assembled snapshot',
         SSH_TTY: '',
       },
       input: '',
-      timeout: 30_000,
+      timeout: PROCESS_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       reject: false,
     })
@@ -236,5 +241,5 @@ describe.skipIf(!builtArtifactsExist)('dsh web browser-open assembled snapshot',
         "ready": false,
       }
     `)
-  })
+  }, TEST_TIMEOUT_MS)
 })
