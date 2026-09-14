@@ -80,6 +80,20 @@ describe('offline Profile existing-only inspector', () => {
     expect(dependency).toContain(`${join(profileRoot, 'runtime-compat', 'closures')}/`)
   })
 
+  it('needs no compatibility materialization when the Profile has no runtime dependencies', async () => {
+    const value = await fixture()
+    await unlink(join(value.web, 'node_modules', 'fixture-plugin'))
+    await writeFile(join(value.web, 'package.json'), `${JSON.stringify({ dependencies: {} })}\n`)
+    const inspected = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(inspected).toMatchObject({
+      state: 'recoverable', compatibility: 'current', persistenceGeneration: 1,
+      sessionCount: 0, pluginCount: 0,
+    })
+    await expect(value.inspector.prepareConfirmedProfile(profile(), inspected)).resolves.toBeUndefined()
+    await expect(readFile(join(value.profileRoot, 'runtime-compat', 'journals', `${inspected.preflightDigest}.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('detects an intact dependency closure owned by a different packaged runtime', async () => {
     const { profileRoot, inspector } = await fixture(true)
     const inspected = await inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })

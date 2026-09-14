@@ -367,7 +367,7 @@ describe('BashTerminalBackend startup rollback', () => {
         sent = request
         return {
           done: Promise.resolve({
-            viewport: 'setup-echo dsh> ', waitReason: 'stdin_read' as const,
+            viewport: 'startup dsh> ', waitReason: 'stdin_read' as const,
             sessionStatus: { kind: 'running' as const }, truncated: false,
           }),
           readOutput: () => ({ delta: '', truncated: false }),
@@ -383,8 +383,9 @@ describe('BashTerminalBackend startup rollback', () => {
       () => session,
     )
     expect(await backend.spawn(spec(agent(ctx)))).toBe(session)
+    expect(PWSH_PROMPT_SETUP).not.toContain('dsh> ')
     expect(sent).toMatchObject({ text: ENCODING_PREAMBLE + PWSH_PROMPT_SETUP, submit: true })
-    expect(session.motd).toBe('setup-echo dsh> ')
+    expect(session.motd).toBe('startup dsh> ')
     expect(spawned?.env).toMatchObject({
       TERM: 'dumb', NO_COLOR: '1', DSH_SHELL: '1', DSH_SESSION_ID: 'agent', DSH_PTY_SESSION_ID: 'pty-1',
     })
@@ -427,7 +428,7 @@ describe('BashTerminalBackend startup rollback', () => {
     expect(session.motd).toBe('dsh> ')
   })
 
-  it('retains pwsh startup output when an empty follow-up proves stdin readiness', async () => {
+  it('waits past premature pwsh stdin readiness until scrollback proves the controlled prompt', async () => {
     const ctx = new Context()
     await ctx.plugin(EmptySandbox)
     await ctx.plugin(SessionProjectionRegistry)
@@ -440,15 +441,18 @@ describe('BashTerminalBackend startup rollback', () => {
         const second = sends.length > 1
         return {
           done: Promise.resolve({
-            viewport: second ? '' : 'setup-echo dsh> ',
-            waitReason: second ? 'stdin_read' as const : 'inferred_idle' as const,
+            viewport: second ? '' : 'partial bootstrap echo',
+            waitReason: 'stdin_read' as const,
             sessionStatus: { kind: 'running' as const }, truncated: false,
           }),
           readOutput: () => ({ delta: '', truncated: false }),
           cancel: () => false,
         }
       },
-      read: () => ({ text: '', totalLines: 0, lineBegin: 0, lineEnd: 0, truncated: false }),
+      read: () => ({
+        text: sends.length > 1 ? 'startup dsh> ' : 'partial bootstrap echo',
+        totalLines: 1, lineBegin: 0, lineEnd: 1, truncated: false,
+      }),
     } as unknown as LocalPtySession
     const backend = new BashTerminalBackend(
       ctx,
@@ -460,7 +464,7 @@ describe('BashTerminalBackend startup rollback', () => {
     expect(sends).toHaveLength(2)
     expect(sends[0]).toMatchObject({ text: ENCODING_PREAMBLE + PWSH_PROMPT_SETUP, submit: true })
     expect(sends[1]).toMatchObject({ text: '', submit: false })
-    expect(session.motd).toBe('setup-echo dsh> ')
+    expect(session.motd).toBe('startup dsh> ')
   })
 
   it('rejects a pwsh bootstrap whose shell exits or times out', async () => {

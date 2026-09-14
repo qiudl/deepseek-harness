@@ -940,6 +940,34 @@ describe('session, approval, and context authority', () => {
 })
 
 describe('worker and Desktop-only bundle', () => {
+  it('delegates migration staging and activates a committed generation', async () => {
+    const calls: string[] = []
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async (generation) => { calls.push(`prepare:${generation}`) },
+      importOwnerState: async (generation) => { calls.push(`owner:${generation}`) },
+      importSession: async (generation, header, events) => {
+        calls.push(`session:${generation}:${String(header.id)}:${String(events.length)}`)
+      },
+      semanticRecords: async (generation) => { calls.push(`records:${generation}`); return [] },
+      activeGeneration: async () => { calls.push('active'); return 4 },
+      commitGeneration: async (expected, next) => { calls.push(`commit:${expected}->${next}`) },
+      abortGeneration: async (generation) => { calls.push(`abort:${generation}`) },
+    }, async (generation) => { calls.push(`activate:${generation}`) })
+
+    await target.prepareEmptyGeneration(5)
+    await target.importOwnerState(5, { version: 1, documents: [] })
+    await target.importSession(5, { id: 'migrated' } as never, [])
+    expect(await target.semanticRecords(5)).toEqual([])
+    expect(await target.activeGeneration()).toBe(4)
+    await target.abortGeneration(5)
+    await target.commitGeneration(4, 5)
+
+    expect(calls).toEqual([
+      'prepare:5', 'owner:5', 'session:5:migrated:0', 'records:5', 'active',
+      'abort:5', 'commit:4->5', 'activate:5',
+    ])
+  })
+
   it('rolls the active persistence pointer back when the replacement worker cannot start', async () => {
     let active = 4
     const commits: string[] = []
@@ -960,6 +988,27 @@ describe('worker and Desktop-only bundle', () => {
     await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement worker failed')
     expect(active).toBe(4)
     expect(commits).toEqual(['4->5', '5->4'])
+  })
+
+  it('preserves the replacement activation error when rollback activation also fails', async () => {
+    let active = 4
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async () => undefined,
+      importOwnerState: async () => undefined,
+      importSession: async () => undefined,
+      semanticRecords: async () => [],
+      activeGeneration: async () => active,
+      commitGeneration: async (expected, next) => {
+        expect(active).toBe(expected)
+        active = next
+      },
+      abortGeneration: async () => undefined,
+    }, async (generation) => {
+      throw new Error(generation === 5 ? 'replacement worker failed' : 'rollback worker failed')
+    })
+
+    await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement worker failed')
+    expect(active).toBe(4)
   })
 
   it('isolates worker inputs and waits for quiescence after closing notifications', async () => {

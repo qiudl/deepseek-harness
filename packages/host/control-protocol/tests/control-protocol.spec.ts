@@ -8,6 +8,7 @@ import {
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
   canonicalMigrationRecords,
+  migrationProfileSelectorHash,
   migrationSemanticDigest,
 } from '../src/index.ts'
 
@@ -165,6 +166,21 @@ describe('cross-repository migration digest vector', () => {
     ]
     expect(canonicalMigrationRecords(records)).toBe('[{"collection":"session_events","id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","payloadDigest":"2222222222222222222222222222222222222222222222222222222222222222","sequence":1,"sessionId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"collection":"sessions","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","payloadDigest":"1111111111111111111111111111111111111111111111111111111111111111","sequence":0}]')
     expect(migrationSemanticDigest(records)).toBe('bef76f5a2f77877270e332865c7e2bc88b6dd2e83952df2d005461c6b978d4d5')
+  })
+
+  it('orders collection ties by id and sequence and rejects non-JSON digest material', () => {
+    const records = [
+      { collection: 'sessions' as const, id: 'b', sequence: 0, payloadDigest: '3' },
+      { collection: 'sessions' as const, id: 'a', sequence: 2, payloadDigest: '2' },
+      { collection: 'sessions' as const, id: 'a', sequence: 1, payloadDigest: '1' },
+    ]
+    expect(JSON.parse(canonicalMigrationRecords(records))).toEqual([records[2], records[1], records[0]])
+    expect(() => canonicalMigrationRecords([{
+      collection: 'sessions', id: 'b', sequence: 0, payloadDigest: 1n as never,
+    }]))
+      .toThrow('migration_canonical_non_json_value')
+    expect(migrationProfileSelectorHash('selector')).toMatch(/^[0-9a-f]{64}$/u)
+    expect(migrationProfileSelectorHash('selector')).not.toBe(migrationProfileSelectorHash('other-selector'))
   })
 })
 

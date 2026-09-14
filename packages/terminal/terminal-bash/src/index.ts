@@ -95,7 +95,7 @@ function childEnvironment(spec: TerminalBackendSpawnSpec, dialect: ShellDialect)
  * input are unreliable under PSReadLine.
  */
 export const PWSH_PROMPT_SETUP =
-  "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); '" + CONTROLLED_PROMPT + "' }"
+  "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); -join [char[]](100,115,104,62,32) }"
 
 function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxExecutionPolicy): string[] {
   const argv = [config.shellPath, ...config.shellArgs]
@@ -140,11 +140,14 @@ async function startupSession(
       const result = await startupOperation.done
       if (result.waitReason === 'session_exit') throw new Error('PTY shell exited during startup')
       if (result.waitReason === 'timeout') throw new Error('PTY shell did not reach readiness before startup timeout')
-      // A loaded host can settle the command-output phase by silence, then
-      // prove stdin readiness with an empty follow-up operation. Retain the
-      // last non-empty startup view instead of erasing the MOTD at that seam.
-      if (result.viewport.length > 0) viewport = result.viewport
-      if (result.waitReason === 'stdin_read') break
+      // PowerShell can expose stdin-wait while PSReadLine is still consuming a
+      // long provider write. The setup deliberately does not contain the
+      // printable prompt literal, so the prompt in either the operation view
+      // or session scrollback is independent evidence that bootstrap ran.
+      const scrollback = session.read({}).text
+      if (scrollback.length > 0) viewport = scrollback
+      else if (result.viewport.length > 0) viewport = result.viewport
+      if (result.waitReason === 'stdin_read' && viewport.includes(CONTROLLED_PROMPT)) break
     }
     session.motd = viewport
   }
