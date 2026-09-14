@@ -227,6 +227,20 @@ it('atomically toggles an installed bundle and restores the exact patch after fa
   expect(() => { executor.validate(f.authority(), 'plugin', JSON.stringify({ action: 'toggle', packageName: 'other', enabled: false })) }).toThrow()
 })
 
+it('rejects an oversized original toggle patch before creating its recovery backup', async () => {
+  const f = fixture(); const file = join(f.web, 'cordis.patch.yml')
+  writeFileSync(file, 'x'.repeat(1_048_577), { mode: 0o600 })
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    install: async () => {}, acknowledge: async () => {},
+    togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }),
+    acknowledgeToggle: async () => { throw Error('must not acknowledge an unbacked toggle') },
+  })
+  await expect(executor.execute(f.authority(), JSON.stringify({ action: 'toggle', packageName: 'fixture', enabled: false }),
+    { kind: 'plugin', operationId: randomUUID(), checkpointPluginToggle() {}, signal: new AbortController().signal, guard() {} }))
+    .rejects.toThrow('invalid_patch')
+})
+
 it('updates only an installed independently enabled bundle to the confirmed exact source', async () => {
   const { planPluginToggle } = await import('../src/plugin-toggle-plan.ts')
   const f = fixture()
@@ -267,6 +281,23 @@ it('removes an installed bundle, clears its standalone toggle override and requi
   expect(await executor.inventory(f.authority())).toEqual([])
   expect(readFileSync(file,'utf8')).not.toContain('disabled: true')
   expect(readFileSync(file,'utf8')).toContain('!!js process.platform')
+})
+
+it.each(['bundle remains', 'acknowledgement drift'] as const)('rejects an unconfirmed plugin removal when %s', async (mode) => {
+  const f = fixture(); const file = join(f.web, 'cordis.patch.yml')
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    install: async () => {}, acknowledge: async () => {},
+    togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }), acknowledgeToggle: async () => {},
+    remove: async () => { writeFileSync(f.manifest, JSON.stringify({ dependencies: {},
+      dsh: { profile: { bundles: mode === 'bundle remains' ? ['fixture'] : [] } } })) },
+    acknowledgeRemoval: async () => {
+      if (mode === 'acknowledgement drift') writeFileSync(file, 'changed', { mode: 0o600 })
+    },
+  })
+  await expect(executor.execute(f.authority(), JSON.stringify({ action: 'remove', packageName: 'fixture' }),
+    { kind: 'plugin', signal: new AbortController().signal, guard() {} }))
+    .rejects.toThrow(mode === 'bundle remains' ? 'plugin_removal_unconfirmed' : 'plugin_state_changed')
 })
 
 
@@ -312,6 +343,8 @@ it.each([null, '', '# keep\n[]\n'])('recovers interrupted plugin activation and 
   await operations.dispose(); operations = new ProfileExtensionOperations(f.store, executor, { now: Date.now })
   const restore = JSON.stringify({ action: 'restore-toggle', operationId: id })
   const backup = join(f.web, `.plugin-before-${id}`); const backupBytes = readFileSync(backup, 'utf8')
+  writeFileSync(backup, 'invalid header')
+  await expect(operations.prepare(f.authority, 'plugin', restore)).rejects.toThrow('invalid_backup')
   writeFileSync(backup, '1# tampered')
   await expect(operations.prepare(f.authority, 'plugin', restore)).rejects.toThrow('invalid_backup')
   writeFileSync(backup, backupBytes); chmodSync(backup, 0o644)
