@@ -60,6 +60,7 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
     SetEndOfFile: () => 1,
     MoveFileExW: () => 1,
     DeleteFileW: deleteFile,
+    SetFileInformationByHandle: () => 1,
   }
   const koffi = {
     pointer: vi.fn((value: unknown) => ({ pointer: value })),

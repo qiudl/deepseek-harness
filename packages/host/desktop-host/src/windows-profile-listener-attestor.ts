@@ -1,5 +1,6 @@
 import type { ProfileListenerAttestor } from './dsh-web-profile-worker.ts'
 import { HostAuthorityError } from './types.ts'
+import { loadWindowsKoffi, type WindowsKoffiModule } from './windows-koffi.ts'
 
 const ERROR_SUCCESS = 0
 const ERROR_INSUFFICIENT_BUFFER = 122
@@ -10,20 +11,11 @@ const TABLE_HEADER_BYTES = 4
 const TCP_ROW_BYTES = 24
 const MAX_TCP_TABLE_BYTES = 16 * 1024 * 1024
 
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
-  load(library: string): KoffiLibrary
-}
-
 /** Injectable runtime facts for the Windows TCP owner-table loader. */
 export interface WindowsProfileListenerKoffiOptions {
   readonly platform?: string
   readonly arch?: string
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<WindowsKoffiModule>
 }
 
 /** Exact IP Helper error retained in local diagnostics. */
@@ -51,9 +43,7 @@ export async function loadWindowsProfileListenerAttestor(
   if ((options.platform ?? process.platform) !== 'win32' || (options.arch ?? process.arch) !== 'x64') {
     throw new Error('Windows Profile listener attestation requires Windows x64')
   }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
   const pointer = koffi.pointer('void')
   const iphlpapi = koffi.load('iphlpapi.dll')
   const getExtendedTcpTable = iphlpapi.func('__stdcall', 'GetExtendedTcpTable', 'uint32', [

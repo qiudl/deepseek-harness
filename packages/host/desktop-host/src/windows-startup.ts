@@ -4,7 +4,7 @@ import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { DesktopHost } from './desktop-host.ts'
 import { ProfileExtensionOperations } from './extension-operations.ts'
 import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
-import { waitForMcpRuntime } from './mcp-runtime-ack.ts'
+import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
 import { WindowsMcpStorage } from './windows-mcp-storage.ts'
 import { WindowsExtensionReceipts } from './windows-extension-receipts.ts'
 import {
@@ -376,16 +376,11 @@ async function startWindowsDesktopHostApplicationWithTrust(
           if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
           return win32.join(config.root, 'profiles', profileId)
         } }),
-        reload: async (profileId, signal, entryIds, guard, removedIds) => {
-          guard()
-          const profile = registry.resolveProfile(profileId as never)
-          if (!profile) throw new HostAuthorityError('stale')
-          await workers.dispose(profileId)
-          guard()
-          await ensureWorker(profile)
-          guard()
-          await waitForMcpRuntime(await workers.activate(profileId), entryIds, signal, removedIds)
-        },
+        reload: (profileId, signal, entryIds, guard, removedIds) => reloadProfileMcpRuntime({
+          workers,
+          resolveProfile: id => registry.resolveProfile(id as never),
+          ensureWorker,
+        }, profileId, signal, entryIds, guard, removedIds),
       })
       const extensionOperations = mcp && config.maximumExtensionReceiptBytes !== undefined
         ? new ProfileExtensionOperations(new WindowsExtensionReceipts({

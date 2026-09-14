@@ -147,12 +147,7 @@ export class FileOwnerMigrationTransferStore {
   }
 
   private async ensureRoot(): Promise<void> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const metadata = await lstat(this.root)
-    if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
-      || (metadata.mode & 0o077) !== 0) {
-      throw new Error('migration_transfer_root_unsafe')
-    }
+    await ensurePrivateRoot(this.root, this.expectedUid, 'migration_transfer_root_unsafe')
   }
 }
 
@@ -168,6 +163,13 @@ export interface MigrationImportTarget {
 }
 
 type ActiveGenerationRecord = Readonly<{ version: number; generation: number }>
+
+async function ensurePrivateRoot(root: string, expectedUid: number, unsafeCode: string): Promise<void> {
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  const metadata = await lstat(root)
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== expectedUid
+    || (metadata.mode & 0o077) !== 0) throw new Error(unsafeCode)
+}
 
 /** Read-only facts for one already-materialized persistence generation. */
 export interface ExistingPersistenceInspection {
@@ -616,12 +618,7 @@ export class FileOwnerMigrationImportJournal {
   }
 
   private async ensureRoot(): Promise<void> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const metadata = await lstat(this.root)
-    if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
-      || (metadata.mode & 0o077) !== 0) {
-      throw new Error('migration_import_journal_unsafe')
-    }
+    await ensurePrivateRoot(this.root, this.expectedUid, 'migration_import_journal_unsafe')
   }
 }
 

@@ -5,6 +5,16 @@ import type {
   WindowsHostRegistrationFileBindings,
 } from './windows-host-registration.ts'
 import { assertWindowsHostPrivatePathEvidence, WindowsHostPrivateLeaseConflictError } from './windows-host-registration.ts'
+import {
+  bindWindowsLibrary,
+  assertWindowsSecurityAttributesSize,
+  loadWindowsKoffi,
+  windowsSecurityAttributeFields,
+  windowsSecurityContext,
+  type WindowsKoffiFunction,
+  type WindowsKoffiLibrary,
+  type WindowsKoffiModule,
+} from './windows-koffi.ts'
 
 const ERROR_FILE_NOT_FOUND = 2
 const ERROR_PATH_NOT_FOUND = 3
@@ -41,23 +51,17 @@ const MAX_WINDOWS_PATH_CHARS = 32_768
 const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
 
 type NativePointer = bigint | null
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
+interface HostRegistrationKoffiModule extends WindowsKoffiModule {
   struct(fields: Record<string, unknown>): { readonly size: number }
   alloc(type: unknown, count: number): unknown
   decode(pointer: unknown, type: unknown): unknown
-  load(library: string): KoffiLibrary
 }
 
 /** Injectable runtime facts for the Windows registration filesystem loader. */
 export interface WindowsHostRegistrationKoffiOptions {
   readonly platform?: string
   readonly arch?: string
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<HostRegistrationKoffiModule>
 }
 
 /** Exact Win32 failure retained locally before Host-level error redaction. */
@@ -159,23 +163,13 @@ export async function loadWindowsHostRegistrationFileBindings(
   if ((options.platform ?? process.platform) !== 'win32' || (options.arch ?? process.arch) !== 'x64') {
     throw new Error('Windows Host registration bindings require Windows x64')
   }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
-  const pointer = koffi.pointer('void')
-  const pointerPointer = koffi.pointer(pointer)
-  const uint32Pointer = koffi.pointer('uint32')
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
+  const { pointer, pointerPointer, uint32Pointer, kernel32, advapi32 } = windowsSecurityContext(koffi)
   // Anonymous types allow independent stores to load in the same native module.
-  const securityAttributes = koffi.struct({
-    nLength: 'uint32',
-    lpSecurityDescriptor: pointer,
-    bInheritHandle: 'int',
-  })
-  if (securityAttributes.size !== 24) throw new Error('SECURITY_ATTRIBUTES x64 ABI size mismatch')
-  const kernel32 = koffi.load('kernel32.dll')
-  const advapi32 = koffi.load('advapi32.dll')
-  const bind = (library: KoffiLibrary, name: string, result: unknown, args: unknown[]): KoffiFunction =>
-    library.func('__stdcall', name, result, args)
+  const securityAttributes = koffi.struct(windowsSecurityAttributeFields(pointer))
+  assertWindowsSecurityAttributesSize(securityAttributes.size)
+  const bind = (library: WindowsKoffiLibrary, name: string, result: unknown, args: unknown[]): WindowsKoffiFunction =>
+    bindWindowsLibrary(library)(name, result, args)
   const convertSddl = bind(advapi32, 'ConvertStringSecurityDescriptorToSecurityDescriptorW', 'int', [
     'str16', 'uint32', pointerPointer, pointer,
   ])

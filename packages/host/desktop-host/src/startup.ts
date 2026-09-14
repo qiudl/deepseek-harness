@@ -33,7 +33,7 @@ import { pluginBundleEntries } from './plugin-bundle-entries.ts'
 import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
 import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { readProfileSkillCatalog, readProfileSkillRuntime } from './skill-worker-client.ts'
-import { waitForMcpRuntime } from './mcp-runtime-ack.ts'
+import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
 import { DesktopHost } from './desktop-host.ts'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'
@@ -43,7 +43,7 @@ import { createMacOSPeerAttestor } from './macos-peer-attestor.ts'
 import { ProfileRegistry } from './profile-registry.ts'
 import { MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
 import { MaterializedMigrationOwnerStateSource } from './materialized-migration-owner-state-source.ts'
-import { OfflineProfileRecoveryInspector, packagedRuntimeAppRoot } from './offline-profile-recovery.ts'
+import { existingProfilePatch, OfflineProfileRecoveryInspector, packagedRuntimeAppRoot } from './offline-profile-recovery.ts'
 import { RestartingMigrationTarget } from './restarting-migration-target.ts'
 import { FileHostJournal, SessionCommandAuthority } from './session-command.ts'
 import { acquireSingleHostLock, type SingleHostLock } from './single-instance.ts'
@@ -449,28 +449,7 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
         ownerState = await target.activeOwnerState()
       }
       const ownerPaths = await ownerStateApplicator.apply(profileRoot, persistence.generation, ownerState)
-      const patch = [
-        '- id: session-persistence-jsonl',
-        '  config:',
-        `    root: ${JSON.stringify(persistence.root)}`,
-        '    compression: none',
-      ]
-      patch.push(
-        '- id: storage-json',
-        '  config:',
-        `    root: ${JSON.stringify(ownerPaths.storageRoot)}`,
-        '- id: settings',
-        '  config:',
-        `    path: ${JSON.stringify(ownerPaths.settingsPath)}`,
-        `    dshHome: ${JSON.stringify(profileRoot)}`,
-        '    watch: false',
-        '- id: credentials',
-        '  config:',
-        `    path: ${JSON.stringify(ownerPaths.credentialsPath)}`,
-        `    dshHome: ${JSON.stringify(profileRoot)}`,
-        '    watch: false',
-      )
-      replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), `${patch.join('\n')}\n`)
+      replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
       await workers.ensure({
         profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
         pluginRoots: [join(profileRoot, 'plugins')],
@@ -531,16 +510,11 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
         if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
         return join(root, 'profiles', profileId)
       },
-      reload: async (profileId, signal, entryIds, guard, removedIds) => {
-        guard()
-        const profile = registry.resolveProfile(profileId as never)
-        if (!profile) throw new HostAuthorityError('stale')
-        await workers.dispose(profileId)
-        guard()
-        await ensureWorker(profile)
-        guard()
-        await waitForMcpRuntime(await workers.activate(profileId), entryIds, signal, removedIds)
-      },
+      reload: (profileId, signal, entryIds, guard, removedIds) => reloadProfileMcpRuntime({
+        workers,
+        resolveProfile: id => registry.resolveProfile(id as never),
+        ensureWorker,
+      }, profileId, signal, entryIds, guard, removedIds),
     })
     const skillExecutor = new ProfileSkillExecutor({
       uid,

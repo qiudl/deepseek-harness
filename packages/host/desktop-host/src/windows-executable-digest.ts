@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { isMainThread } from 'node:worker_threads'
 import { WindowsPeerProcessNativeError } from './windows-peer-process-native.ts'
+import { loadWindowsKoffi, windowsKernel32Context, type WindowsKoffiModule } from './windows-koffi.ts'
 
 const ERROR_INVALID_DATA = 13
 const FILE_BEGIN = 0
@@ -8,21 +9,12 @@ const DIGEST_CHUNK_BYTES = 64 * 1024
 const MAX_TRUSTED_EXECUTABLE_BYTES = 512n * 1024n * 1024n
 const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
 
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
-  load(library: string): KoffiLibrary
-}
-
 /** Runtime facts and injectable seam for the stable-executable digest loader. */
 export interface WindowsExecutableDigestKoffiOptions {
   readonly platform?: string
   readonly arch?: string
   readonly isMainThread?: boolean
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<WindowsKoffiModule>
 }
 
 /** SHA-256 operation over a caller-owned, replacement-locked executable handle. */
@@ -48,13 +40,8 @@ export async function loadWindowsExecutableDigest(
   if (platform !== 'win32' || arch !== 'x64' || mainThread) {
     throw new Error('Windows executable digest requires a Windows x64 worker')
   }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
-  const pointer = koffi.pointer('void')
-  const kernel32 = koffi.load('kernel32.dll')
-  const bind = (name: string, result: unknown, args: unknown[]): KoffiFunction =>
-    kernel32.func('__stdcall', name, result, args)
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
+  const { pointer, bindKernel32: bind } = windowsKernel32Context(koffi)
   const getFileSize = bind('GetFileSizeEx', 'int', [pointer, pointer])
   const setFilePointer = bind('SetFilePointerEx', 'int', [pointer, 'int64', pointer, 'uint32'])
   const readFile = bind('ReadFile', 'int', [pointer, pointer, 'uint32', koffi.pointer('uint32'), pointer])

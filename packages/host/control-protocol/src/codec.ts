@@ -704,51 +704,9 @@ function decodeProfileResult(frame: Record<string, unknown>):
     if (result.state !== 'unbound' && result.state !== 'locked') reject()
     return { version: 1, type: 'result', request_id, method: 'profile.status', result: { state: result.state } }
   }
-  if (frame.method === 'profile.ensure') {
-    exactKeys(result, ['state', 'profile_id', 'profile_selector'])
-    if (result.state !== 'ready') reject()
-    return {
-      version: 1, type: 'result', request_id, method: frame.method,
-      result: {
-        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
-        profile_selector: profileSelector(result.profile_selector),
-      },
-    }
-  }
-  if (frame.method === 'profile.bootstrap_local') {
-    exactKeys(result, ['state', 'profile_id', 'profile_selector', 'persistence_generation'])
-    if (result.state !== 'ready') reject()
-    return {
-      version: 1, type: 'result', request_id, method: frame.method,
-      result: {
-        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
-        profile_selector: profileSelector(result.profile_selector),
-        persistence_generation: generation(result.persistence_generation),
-      },
-    }
-  }
-  if (frame.method === 'profile.restore') {
-    exactKeys(result, ['state', 'profile_id', 'profile_selector'])
-    if (result.state !== 'ready') reject()
-    return {
-      version: 1, type: 'result', request_id, method: frame.method,
-      result: {
-        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
-        profile_selector: profileSelector(result.profile_selector),
-      },
-    }
-  }
-  if (frame.method === 'profile.restore_local') {
-    exactKeys(result, ['state', 'profile_id', 'profile_selector', 'persistence_generation'])
-    if (result.state !== 'ready') reject()
-    return {
-      version: 1, type: 'result', request_id, method: frame.method,
-      result: {
-        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
-        profile_selector: profileSelector(result.profile_selector),
-        persistence_generation: generation(result.persistence_generation),
-      },
-    }
+  if (frame.method === 'profile.ensure' || frame.method === 'profile.restore'
+    || frame.method === 'profile.bootstrap_local' || frame.method === 'profile.restore_local') {
+    return profileReadyResult(request_id, frame.method, result)
   }
   if (frame.method === 'profile.recovery_inspect') {
     exactKeys(result, ['candidates'])
@@ -805,11 +763,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
     return {
       version: 1, type: 'result', request_id, method: 'profile.open_offline_account',
       result: {
-        profile_id: uuid(result.profile_id) as HostProfileId,
-        view_lease_id: uuid(result.view_lease_id) as HostViewLeaseId,
-        view_activation_handle: activationHandle(result.view_activation_handle),
-        lease_generation: generation(result.lease_generation), expires_at: timestamp(result.expires_at),
-        runtime_generation: generation(result.runtime_generation), access_scope: 'offline_local',
+        ...profileLeaseFields(result), access_scope: 'offline_local',
       },
     }
   }
@@ -836,14 +790,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
       type: 'result',
       request_id,
       method: frame.method,
-      result: {
-        profile_id: uuid(result.profile_id) as HostProfileId,
-        view_lease_id: uuid(result.view_lease_id) as HostViewLeaseId,
-        view_activation_handle: activationHandle(result.view_activation_handle),
-        lease_generation: generation(result.lease_generation),
-        expires_at: timestamp(result.expires_at),
-        runtime_generation: generation(result.runtime_generation),
-      },
+      result: profileLeaseFields(result),
     }
   }
   if (frame.method === 'profile.view_activate') {
@@ -864,6 +811,39 @@ function decodeProfileResult(frame: Record<string, unknown>):
     return { version: 1, type: 'result', request_id, method: 'profile.lease_close', result: { closed: true } }
   }
   return reject('unknown_method')
+}
+
+function profileReadyResult(
+  request_id: HostControlRequestId,
+  method: 'profile.ensure' | 'profile.restore' | 'profile.bootstrap_local' | 'profile.restore_local',
+  result: Record<string, unknown>,
+): ProfileEnsureResult | ProfileRestoreResult | ProfileBootstrapLocalResult | ProfileRestoreLocalResult {
+  const local = method === 'profile.bootstrap_local' || method === 'profile.restore_local'
+  exactKeys(result, ['state', 'profile_id', 'profile_selector', ...(local ? ['persistence_generation'] : [])])
+  if (result.state !== 'ready') reject()
+  const common = {
+    state: 'ready' as const,
+    profile_id: uuid(result.profile_id) as HostProfileId,
+    profile_selector: profileSelector(result.profile_selector),
+  }
+  if (method === 'profile.ensure') return { version: 1, type: 'result', request_id, method, result: common }
+  if (method === 'profile.restore') return { version: 1, type: 'result', request_id, method, result: common }
+  const localResult = { ...common, persistence_generation: generation(result.persistence_generation) }
+  if (method === 'profile.bootstrap_local') {
+    return { version: 1, type: 'result', request_id, method, result: localResult }
+  }
+  return { version: 1, type: 'result', request_id, method, result: localResult }
+}
+
+function profileLeaseFields(result: Record<string, unknown>): ProfileOpenResult['result'] {
+  return {
+    profile_id: uuid(result.profile_id) as HostProfileId,
+    view_lease_id: uuid(result.view_lease_id) as HostViewLeaseId,
+    view_activation_handle: activationHandle(result.view_activation_handle),
+    lease_generation: generation(result.lease_generation),
+    expires_at: timestamp(result.expires_at),
+    runtime_generation: generation(result.runtime_generation),
+  }
 }
 
 function decodeMigrationRequest(frame: Record<string, unknown>):

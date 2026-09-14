@@ -190,7 +190,7 @@ describe.skipIf(process.platform === 'win32')('terminal-bash real shell', () => 
       text: `bash -c 'exec </dev/tty; printf "%s" "$BASHPID" > "$1"; printf "WAITING\\n"; read -r answer; printf "ANSWER=%s\\n" "$answer"' dsh "${readerPidFile}"`,
       submit: true,
     })
-    await waitForOutput(waiting, 'WAITING')
+    await waitForOutput(waiting, 'WAITING', 8_000)
     const result = await waiting.done
     const readerPid = Number(readFileSync(readerPidFile, 'utf8'))
     expect(readerPid).toBeGreaterThan(0)

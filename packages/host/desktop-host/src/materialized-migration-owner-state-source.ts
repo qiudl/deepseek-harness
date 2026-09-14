@@ -3,7 +3,10 @@ import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseDocument } from 'yaml'
 import { migrationOwnerStateRecords, type MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
-import type { AppliedMigrationOwnerState } from './migration-owner-state-applicator.ts'
+import {
+  migrationOwnerStateObject,
+  type AppliedMigrationOwnerState,
+} from './migration-owner-state-applicator.ts'
 
 async function readOwnerYaml(path: string, uid: number): Promise<unknown> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -23,13 +26,6 @@ async function readOwnerYaml(path: string, uid: number): Promise<unknown> {
   } finally { await handle.close() }
 }
 
-function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('migration_owner_state_invalid')
-  }
-  return value as Record<string, unknown>
-}
-
 /** Quiesced schema-owner view over one active, mutable materialized generation. */
 export class MaterializedMigrationOwnerStateSource {
   constructor(private readonly paths: AppliedMigrationOwnerState, private readonly expectedUid: number) {}
@@ -39,18 +35,18 @@ export class MaterializedMigrationOwnerStateSource {
    * @returns schema-decoded live owner state from the active generation.
    */
   async read(): Promise<MigrationOwnerStateBundle> {
-    const settings = object(await readOwnerYaml(this.paths.settingsPath, this.expectedUid))
-    const credentialDocument = object(await readOwnerYaml(this.paths.credentialsPath, this.expectedUid))
+    const settings = migrationOwnerStateObject(await readOwnerYaml(this.paths.settingsPath, this.expectedUid))
+    const credentialDocument = migrationOwnerStateObject(await readOwnerYaml(this.paths.credentialsPath, this.expectedUid))
     if (credentialDocument.version !== 1
       || Object.keys(credentialDocument).some(key => !['version', 'refs', 'records'].includes(key))) {
       throw new Error('migration_owner_state_invalid')
     }
-    const storage = object(await readOwnerYaml(join(this.paths.storageRoot, 'workspace.json'), this.expectedUid))
-    const unit = object(storage.unit)
-    const tables = object(storage.tables)
-    const workspaces = object(tables.workspaces ?? {})
+    const storage = migrationOwnerStateObject(await readOwnerYaml(join(this.paths.storageRoot, 'workspace.json'), this.expectedUid))
+    const unit = migrationOwnerStateObject(storage.unit)
+    const tables = migrationOwnerStateObject(storage.tables)
+    const workspaces = migrationOwnerStateObject(tables.workspaces ?? {})
     if (unit.name !== 'workspace' || unit.version !== 2) throw new Error('migration_owner_state_invalid')
-    const grants = Object.values(workspaces).map(record => object(record).path)
+    const grants = Object.values(workspaces).map(record => migrationOwnerStateObject(record).path)
     if (grants.some(path => typeof path !== 'string' || !path.startsWith('/'))) {
       throw new Error('migration_owner_state_invalid')
     }
@@ -59,12 +55,13 @@ export class MaterializedMigrationOwnerStateSource {
       documents: [
         { kind: 'settings', schemaVersion: 1, value: settings },
         { kind: 'credentials', schemaVersion: 1, value: {
-          refs: object(credentialDocument.refs ?? {}), records: object(credentialDocument.records ?? {}),
+          refs: migrationOwnerStateObject(credentialDocument.refs ?? {}),
+          records: migrationOwnerStateObject(credentialDocument.records ?? {}),
         } },
         { kind: 'workspace', schemaVersion: 1, value: {
           grants: [...new Set(grants as string[])].sort(), storage,
         } },
-        { kind: 'profile', schemaVersion: 1, value: object(
+        { kind: 'profile', schemaVersion: 1, value: migrationOwnerStateObject(
           await readOwnerYaml(join(this.paths.storageRoot, '..', 'profile.json'), this.expectedUid),
         ) },
       ],

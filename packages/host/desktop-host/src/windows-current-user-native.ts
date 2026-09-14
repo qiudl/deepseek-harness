@@ -1,3 +1,10 @@
+import {
+  loadWindowsKoffi,
+  windowsSecurityContext,
+  windowsTokenSidBindings,
+  type WindowsKoffiModule,
+} from './windows-koffi.ts'
+
 const ERROR_INVALID_DATA = 13
 const ERROR_INSUFFICIENT_BUFFER = 122
 const TOKEN_QUERY = 0x0008
@@ -6,21 +13,15 @@ const MIN_TOKEN_USER_BYTES_X64 = 16
 const MAX_TOKEN_USER_BYTES = 64 * 1024
 
 type NativePointer = bigint | null
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
+interface CurrentUserKoffiModule extends WindowsKoffiModule {
   decode(pointer: unknown, type: unknown): unknown
-  load(library: string): KoffiLibrary
 }
 
 /** Injectable runtime facts for the main-thread current-user SID loader. */
 export interface WindowsCurrentUserKoffiOptions {
   readonly platform?: string
   readonly arch?: string
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<CurrentUserKoffiModule>
 }
 
 /** Native SID query failure retained for local diagnostics. */
@@ -48,25 +49,13 @@ export async function loadWindowsCurrentUserSid(
   if ((options.platform ?? process.platform) !== 'win32' || (options.arch ?? process.arch) !== 'x64') {
     throw new Error('Windows current-user SID bindings require Windows x64')
   }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
-  const pointer = koffi.pointer('void')
-  const pointerPointer = koffi.pointer(pointer)
-  const uint32Pointer = koffi.pointer('uint32')
-  const kernel32 = koffi.load('kernel32.dll')
-  const advapi32 = koffi.load('advapi32.dll')
-  const bind = (library: KoffiLibrary, name: string, result: unknown, args: unknown[]): KoffiFunction =>
-    library.func('__stdcall', name, result, args)
-  const getCurrentProcess = bind(kernel32, 'GetCurrentProcess', pointer, [])
-  const openProcessToken = bind(advapi32, 'OpenProcessToken', 'int', [pointer, 'uint32', pointerPointer])
-  const getTokenInformation = bind(advapi32, 'GetTokenInformation', 'int', [
-    pointer, 'int', pointer, 'uint32', uint32Pointer,
-  ])
-  const convertSidToString = bind(advapi32, 'ConvertSidToStringSidW', 'int', [pointer, pointerPointer])
-  const localFree = bind(kernel32, 'LocalFree', pointer, [pointer])
-  const closeHandle = bind(kernel32, 'CloseHandle', 'int', [pointer])
-  const getLastError = bind(kernel32, 'GetLastError', 'uint32', [])
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
+  const context = windowsSecurityContext(koffi)
+  const { pointer, bindKernel32 } = context
+  const getCurrentProcess = bindKernel32('GetCurrentProcess', pointer, [])
+  const { openProcessToken, getTokenInformation, convertSidToString, localFree } = windowsTokenSidBindings(context)
+  const closeHandle = bindKernel32('CloseHandle', 'int', [pointer])
+  const getLastError = bindKernel32('GetLastError', 'uint32', [])
 
   const lastError = (api: string): never => {
     throw new WindowsCurrentUserNativeError(api, Number(getLastError()))

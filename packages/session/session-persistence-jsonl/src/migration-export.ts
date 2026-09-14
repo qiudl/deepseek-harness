@@ -103,17 +103,20 @@ interface RetainedExport {
   readonly chunks: readonly MigrationExportChunk[]
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (typeof value === 'object' && value !== null) {
-    const record = value as Record<string, unknown>
-    return `{${Object.keys(record).sort().filter(key => record[key] !== undefined)
-      .map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
-  }
+function canonicalValue(value: unknown): unknown {
   if (value === undefined || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
     throw new Error('migration_export_non_json_value')
   }
-  return JSON.stringify(value)
+  if (Array.isArray(value)) return value.map(canonicalValue)
+  if (typeof value !== 'object' || value === null) return value
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([key, entry]) => [key, canonicalValue(entry)]))
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalValue(value))
 }
 
 function digest(value: unknown): string {

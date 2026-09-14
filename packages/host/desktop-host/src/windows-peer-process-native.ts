@@ -1,5 +1,11 @@
 import { isMainThread } from 'node:worker_threads'
 import type { WindowsPeerProcessNativeApi } from './windows-peer-process-bindings.ts'
+import {
+  loadWindowsKoffi,
+  windowsSecurityContext,
+  windowsTokenSidBindings,
+  type WindowsKoffiModule,
+} from './windows-koffi.ts'
 
 const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 const TOKEN_QUERY = 0x0008
@@ -18,14 +24,8 @@ const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
 
 type NativePointer = bigint | null
 
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
+interface PeerProcessKoffiModule extends WindowsKoffiModule {
   decode(value: unknown, type: unknown): unknown
-  load(library: string): KoffiLibrary
 }
 
 /** Signature and bounded file-digest operations that must consume the already-open image handle. */
@@ -39,7 +39,7 @@ export interface WindowsPeerProcessKoffiOptions {
   readonly platform?: string
   readonly arch?: string
   readonly isMainThread?: boolean
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<PeerProcessKoffiModule>
 }
 
 /** Exact local Win32 failure retained for diagnostics before authority-layer redaction. */
@@ -89,40 +89,28 @@ export async function loadWindowsPeerProcessNativeApi(
     || typeof trust.digestExecutable !== 'function') {
     throw new Error('Windows peer-process bindings require complete executable trust operations')
   }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
-  const pointer = koffi.pointer('void')
-  const pointerPointer = koffi.pointer(pointer)
-  const uint32Pointer = koffi.pointer('uint32')
-  const kernel32 = koffi.load('kernel32.dll')
-  const advapi32 = koffi.load('advapi32.dll')
-  const bind = (library: KoffiLibrary, name: string, result: unknown, args: unknown[]): KoffiFunction =>
-    library.func('__stdcall', name, result, args)
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
+  const context = windowsSecurityContext(koffi)
+  const { pointer, uint32Pointer, bindKernel32 } = context
 
-  const getNamedPipeClientProcessId = bind(kernel32, 'GetNamedPipeClientProcessId', 'int', [pointer, uint32Pointer])
-  const getNamedPipeServerProcessId = bind(kernel32, 'GetNamedPipeServerProcessId', 'int', [pointer, uint32Pointer])
-  const openProcess = bind(kernel32, 'OpenProcess', pointer, ['uint32', 'int', 'uint32'])
-  const openProcessToken = bind(advapi32, 'OpenProcessToken', 'int', [pointer, 'uint32', pointerPointer])
-  const getTokenInformation = bind(advapi32, 'GetTokenInformation', 'int', [
-    pointer, 'int', pointer, 'uint32', uint32Pointer,
-  ])
-  const convertSidToString = bind(advapi32, 'ConvertSidToStringSidW', 'int', [pointer, pointerPointer])
-  const localFree = bind(kernel32, 'LocalFree', pointer, [pointer])
-  const queryProcessImagePath = bind(kernel32, 'QueryFullProcessImageNameW', 'int', [
+  const getNamedPipeClientProcessId = bindKernel32('GetNamedPipeClientProcessId', 'int', [pointer, uint32Pointer])
+  const getNamedPipeServerProcessId = bindKernel32('GetNamedPipeServerProcessId', 'int', [pointer, uint32Pointer])
+  const openProcess = bindKernel32('OpenProcess', pointer, ['uint32', 'int', 'uint32'])
+  const { openProcessToken, getTokenInformation, convertSidToString, localFree } = windowsTokenSidBindings(context)
+  const queryProcessImagePath = bindKernel32('QueryFullProcessImageNameW', 'int', [
     pointer, 'uint32', pointer, uint32Pointer,
   ])
-  const createFile = bind(kernel32, 'CreateFileW', pointer, [
+  const createFile = bindKernel32('CreateFileW', pointer, [
     'str16', 'uint32', 'uint32', pointer, 'uint32', 'uint32', pointer,
   ])
-  const getFinalPathName = bind(kernel32, 'GetFinalPathNameByHandleW', 'uint32', [
+  const getFinalPathName = bindKernel32('GetFinalPathNameByHandleW', 'uint32', [
     pointer, pointer, 'uint32', 'uint32',
   ])
-  const compareStringOrdinal = bind(kernel32, 'CompareStringOrdinal', 'int', [
+  const compareStringOrdinal = bindKernel32('CompareStringOrdinal', 'int', [
     'str16', 'int', 'str16', 'int', 'int',
   ])
-  const closeHandle = bind(kernel32, 'CloseHandle', 'int', [pointer])
-  const getLastError = bind(kernel32, 'GetLastError', 'uint32', [])
+  const closeHandle = bindKernel32('CloseHandle', 'int', [pointer])
+  const getLastError = bindKernel32('GetLastError', 'uint32', [])
 
   const lastError = (api: string): never => {
     throw new WindowsPeerProcessNativeError(api, Number(getLastError()))
