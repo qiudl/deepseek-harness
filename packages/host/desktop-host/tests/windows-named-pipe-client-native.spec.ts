@@ -6,7 +6,9 @@ import {
 
 const pipePath = String.raw`\\.\pipe\slark-dsh-host-v1-${'a'.repeat(64)}`
 
-function world(overrides: Partial<Record<'WaitNamedPipeW' | 'CreateFileW' | 'CloseHandle', number | bigint>> = {}) {
+function world(overrides: Partial<Record<'WaitNamedPipeW' | 'CreateFileW' | 'CloseHandle', number | bigint>> & {
+  throwOnClose?: unknown
+} = {}) {
   let lastError = 0
   const calls: Array<{ name: string; args: unknown[] }> = []
   const functions: Record<string, (...args: unknown[]) => unknown> = {
@@ -24,6 +26,7 @@ function world(overrides: Partial<Record<'WaitNamedPipeW' | 'CreateFileW' | 'Clo
     },
     CloseHandle: (...args) => {
       calls.push({ name: 'CloseHandle', args })
+      if ('throwOnClose' in overrides) throw overrides.throwOnClose
       const value = overrides.CloseHandle ?? 1
       if (value === 0) lastError = 6
       return value
@@ -73,6 +76,16 @@ describe('Windows named-pipe client native bindings', () => {
       loadKoffi,
     })).rejects.toThrow('Windows x64 worker')
     expect(loadKoffi).not.toHaveBeenCalled()
+
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    const arch = vi.spyOn(process, 'arch', 'get').mockReturnValue('x64')
+    await expect(loadWindowsNamedPipeClientBindings({
+      connectTimeoutMs: 5_000,
+      loadKoffi,
+    })).rejects.toThrow('Windows x64 worker')
+    platform.mockRestore()
+    arch.mockRestore()
+    expect(loadKoffi).not.toHaveBeenCalled()
   })
 
   it('preserves WaitNamedPipe and CreateFile Win32 errors for bounded discovery mapping', async () => {
@@ -106,12 +119,28 @@ describe('Windows named-pipe client native bindings', () => {
     })
     await expect(bindings.connect(String.raw`\\.\pipe\other`)).rejects.toThrow('invalid Windows named-pipe path')
     await expect(bindings.connect(pipePath)).rejects.toMatchObject({ api: 'CreateFileW' })
+    await expect(bindings.close('91' as never)).rejects.toThrow('invalid Windows named-pipe handle')
     await expect(bindings.close(91n)).rejects.toMatchObject({ api: 'CloseHandle', win32Code: 6 })
+
+    const hostile = world({ throwOnClose: 'native bridge failure' })
+    const hostileBindings = await loadWindowsNamedPipeClientBindings({
+      platform: 'win32', arch: 'x64', isMainThread: false,
+      connectTimeoutMs: 5_000,
+      loadKoffi: async () => hostile.koffi,
+    })
+    await expect(hostileBindings.close(91n)).rejects.toThrow('Unknown Windows pipe-client failure')
 
     await expect(loadWindowsNamedPipeClientBindings({
       platform: 'win32', arch: 'x64', isMainThread: false,
       connectTimeoutMs: 0,
       loadKoffi: async () => native.koffi,
     })).rejects.toThrow('invalid Windows named-pipe connect timeout')
+    for (const connectTimeoutMs of [30_001, Number.NaN]) {
+      await expect(loadWindowsNamedPipeClientBindings({
+        platform: 'win32', arch: 'x64', isMainThread: false,
+        connectTimeoutMs,
+        loadKoffi: async () => native.koffi,
+      })).rejects.toThrow('invalid Windows named-pipe connect timeout')
+    }
   })
 })

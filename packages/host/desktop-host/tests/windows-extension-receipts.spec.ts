@@ -71,7 +71,7 @@ it('rejects unsafe directory and file evidence before replacing any receipt', ()
 
 it('rejects corrupt, duplicate and oversized durable data without treating it as empty', () => {
   const a = receipt()
-  for (const source of [Buffer.from('{'), Buffer.from([0xff]), Buffer.from('{}'),
+  for (const source of [Buffer.from('{'), Buffer.from([0xff]), Buffer.from('null'), Buffer.from('[]'), Buffer.from('{}'),
     Buffer.from(JSON.stringify({ version: 2, receipts: [] })),
     Buffer.from(JSON.stringify({ version: 1, receipts: [a, a] })),
     Buffer.from(JSON.stringify({ version: 1, receipts: [{ ...a, payload: 'private' }] })), Buffer.alloc(131073)]) {

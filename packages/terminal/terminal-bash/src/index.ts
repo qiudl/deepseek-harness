@@ -96,6 +96,8 @@ function childEnvironment(spec: TerminalBackendSpawnSpec, dialect: ShellDialect)
  */
 export const PWSH_PROMPT_SETUP =
   "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); -join [char[]](100,115,104,62,32) }"
+export const PWSH_READY_MARKER = 'DSH_PWSH_READY'
+const PWSH_READY_SIGNAL = '[Console]::WriteLine((-join [char[]](68,83,72,95,80,87,83,72,95,82,69,65,68,89)))'
 
 function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxExecutionPolicy): string[] {
   const argv = [config.shellPath, ...config.shellArgs]
@@ -130,9 +132,10 @@ async function startupSession(
     // settlements during startup, while one absolute deadline bounds them.
     let first = true
     let viewport = ''
+    let markerObserved = false
     for (;;) {
       startupOperation = session.startSend({
-        text: first ? ENCODING_PREAMBLE + PWSH_PROMPT_SETUP : '',
+        text: first ? `${ENCODING_PREAMBLE}${PWSH_PROMPT_SETUP}; ${PWSH_READY_SIGNAL}` : '',
         submit: first,
         ...signal !== undefined ? { signal } : {},
       })
@@ -147,9 +150,17 @@ async function startupSession(
       const scrollback = session.read({}).text
       if (scrollback.length > 0) viewport = scrollback
       else if (result.viewport.length > 0) viewport = result.viewport
-      if (result.waitReason === 'stdin_read' && viewport.includes(CONTROLLED_PROMPT)) break
+      markerObserved ||= scrollback.includes(PWSH_READY_MARKER)
+        || result.viewport.includes(PWSH_READY_MARKER)
+      if (result.waitReason === 'stdin_read' && markerObserved) break
     }
-    session.motd = viewport
+    const visibleViewport = viewport
+      .replaceAll(`${PWSH_READY_MARKER}\r\n`, '')
+      .replaceAll(`${PWSH_READY_MARKER}\n`, '')
+      .replaceAll(PWSH_READY_MARKER, '')
+    session.motd = visibleViewport.includes(CONTROLLED_PROMPT)
+      ? visibleViewport
+      : `${visibleViewport}${visibleViewport.length > 0 && !visibleViewport.endsWith('\n') ? '\n' : ''}${CONTROLLED_PROMPT}`
   }
   const races: Promise<void>[] = []
   let onAbort: (() => void) | undefined

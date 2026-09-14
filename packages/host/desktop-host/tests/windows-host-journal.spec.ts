@@ -86,6 +86,8 @@ describe('Windows Host command journal', () => {
     const malformed = fixture(Buffer.from('{"kind":"unknown"}\n'))
     const journal = new WindowsHostJournal({ root, userSid, maximumJournalBytes: 4096, bindings: malformed.bindings })
     expect(() => { journal.read() }).toThrow()
+    expect(() => { journal.append(null as never) }).toThrow()
+    expect(() => { journal.append([] as never) }).toThrow()
     expect(() => { new WindowsHostJournal({
       root: String.raw`C:\Users\alice\AppData\Local\Slark\DSH\control\..\legacy`,
       userSid,
@@ -93,6 +95,13 @@ describe('Windows Host command journal', () => {
       bindings: malformed.bindings,
     }) }).toThrow()
     expect(path).toContain('commands.jsonl')
+
+    expect(() => { new WindowsHostJournal({
+      root, userSid, maximumJournalBytes: 1, bindings: fixture(Buffer.alloc(2)).bindings,
+    }).read() }).toThrow()
+    expect(() => { new WindowsHostJournal({
+      root, userSid, maximumJournalBytes: 4096, bindings: fixture(Buffer.from([0xff, 0x0a])).bindings,
+    }).read() }).toThrow()
   })
 
   it('rejects an event that cannot round-trip to the durable schema', () => {

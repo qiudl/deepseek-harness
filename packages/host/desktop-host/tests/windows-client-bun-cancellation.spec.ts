@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { it } from 'vitest'
+import { it, vi } from 'vitest'
 import { loadWindowsHostClientWorkerCancellation } from '../src/windows-client-bun-cancellation.ts'
 
 it('loads the Main-thread Windows cancellation ABI with HANDLE-safe u64 arguments', async () => {
@@ -42,6 +42,7 @@ it('loads the Main-thread Windows cancellation ABI with HANDLE-safe u64 argument
     { name: 'close', handle: 0x1_0000_0001n },
   ])
   assert.throws(() => cancellation.cancel(0n), /invalid thread handle/u)
+  assert.throws(() => cancellation.cancel('1' as never), /invalid thread handle/u)
   assert.throws(() => cancellation.openCurrentThreadHandle(), /belongs to the Worker/u)
   assert.throws(() =>{  cancellation.abandonUnhandedThreadHandle(1n) }, /belongs to the Worker/u)
   lastError = 5
@@ -56,6 +57,15 @@ it('rejects unsupported runtime facts before loading native code', async () => {
     arch: 'x64',
     loadFfi: async () => { loaded = true; throw new Error('must not load') },
   }), /requires Windows x64/u)
+  assert.equal(loaded, false)
+
+  const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+  const arch = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64')
+  await assert.rejects(loadWindowsHostClientWorkerCancellation({
+    loadFfi: async () => { loaded = true; throw new Error('must not load') },
+  }), /requires Windows x64/u)
+  platform.mockRestore()
+  arch.mockRestore()
   assert.equal(loaded, false)
 })
 

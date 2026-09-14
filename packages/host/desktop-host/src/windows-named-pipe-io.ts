@@ -52,8 +52,8 @@ function validHandle(handle: unknown): handle is bigint {
   return typeof handle === 'bigint' && handle > 0n && handle !== INVALID_HANDLE_VALUE
 }
 
-function validCount(value: number, maximum: number, allowZero: boolean): boolean {
-  return Number.isSafeInteger(value) && value <= maximum && (allowZero ? value >= 0 : value > 0)
+function validCount(value: number, maximum: number): boolean {
+  return Number.isSafeInteger(value) && value <= maximum && value > 0
 }
 
 function workerCall<Result>(operation: () => Result): Promise<Result> {
@@ -86,7 +86,7 @@ export function createWindowsNamedPipeIoBindings(
         throw new WindowsNamedPipeNativeError('ReadFile', outcome.win32Code)
       }
       if (outcome.result !== 1 || outcome.win32Code !== 0
-        || !validCount(outcome.byteCount, maxBytes, false)) {
+        || !validCount(outcome.byteCount, maxBytes)) {
         throw new WindowsNamedPipeNativeError('ReadFile', ERROR_INVALID_PARAMETER)
       }
       return buffer.subarray(0, outcome.byteCount)
@@ -106,7 +106,7 @@ export function createWindowsNamedPipeIoBindings(
           throw new WindowsNamedPipeNativeError('WriteFile', outcome.win32Code)
         }
         if (outcome.result !== 1 || outcome.win32Code !== 0
-          || !validCount(outcome.byteCount, remaining.byteLength, false)) {
+          || !validCount(outcome.byteCount, remaining.byteLength)) {
           throw new WindowsNamedPipeNativeError('WriteFile', ERROR_INVALID_PARAMETER)
         }
         offset += outcome.byteCount

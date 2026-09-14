@@ -37,7 +37,7 @@ export class WindowsNamedPipeClientNativeError extends Error {
 
 function validHandle(value: unknown): value is bigint {
   return typeof value === 'bigint' && value > 0n
-    && value !== -1n && value !== INVALID_HANDLE_VALUE
+    && value !== INVALID_HANDLE_VALUE
 }
 
 function callWorker<Result>(operation: () => Result): Promise<Result> {

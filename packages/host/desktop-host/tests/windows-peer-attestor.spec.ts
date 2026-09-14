@@ -204,6 +204,19 @@ describe('Windows named-pipe peer attestation', () => {
     expect(pipeAsExecutable.closeHandle).toHaveBeenCalledWith(101n)
   })
 
+  it('rejects invalid caller-owned pipe handles before any native query', async () => {
+    const native = bindings()
+    const attest = createWindowsPeerAttestor({
+      allowedPublisherThumbprints: new Set([publisher]),
+      allowedExecutableDigests: new Set([daemonDigest]),
+      bindings: native,
+    })
+    await expect(attest(0n)).rejects.toBeInstanceOf(HostAuthorityError)
+    await expect(attest('91' as unknown as bigint)).rejects.toBeInstanceOf(HostAuthorityError)
+    expect(native.openClientProcess).not.toHaveBeenCalled()
+    expect(native.closeHandle).not.toHaveBeenCalled()
+  })
+
   it('rejects empty or malformed trust anchors before accepting a connection', () => {
     expect(() => createWindowsPeerAttestor({
       allowedPublisherThumbprints: new Set(),

@@ -11,7 +11,7 @@ import SandboxPolicyService, { setSandboxMode } from '@deepseek-ai/dsh-sandbox-p
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import TerminalSessionService, { TerminalBackendCleanupError, TerminalSessionId } from '@deepseek-ai/dsh-terminal'
 import type { TerminalSendRequest, TerminalWaitReason } from '@deepseek-ai/dsh-terminal'
-import { BashTerminalBackend, PWSH_PROMPT_SETUP } from '@deepseek-ai/dsh-terminal-bash'
+import { BashTerminalBackend, PWSH_PROMPT_SETUP, PWSH_READY_MARKER } from '@deepseek-ai/dsh-terminal-bash'
 import { ENCODING_PREAMBLE } from '@deepseek-ai/dsh-pwsh-local'
 import * as ptyLocal from '@deepseek-ai/dsh-terminal-bash'
 import type { ResolvedConfig } from '@deepseek-ai/dsh-terminal-bash/src/config.ts'
@@ -367,7 +367,7 @@ describe('BashTerminalBackend startup rollback', () => {
         sent = request
         return {
           done: Promise.resolve({
-            viewport: 'startup dsh> ', waitReason: 'stdin_read' as const,
+            viewport: `startup\n${PWSH_READY_MARKER}\ndsh> `, waitReason: 'stdin_read' as const,
             sessionStatus: { kind: 'running' as const }, truncated: false,
           }),
           readOutput: () => ({ delta: '', truncated: false }),
@@ -384,8 +384,10 @@ describe('BashTerminalBackend startup rollback', () => {
     )
     expect(await backend.spawn(spec(agent(ctx)))).toBe(session)
     expect(PWSH_PROMPT_SETUP).not.toContain('dsh> ')
-    expect(sent).toMatchObject({ text: ENCODING_PREAMBLE + PWSH_PROMPT_SETUP, submit: true })
-    expect(session.motd).toBe('startup dsh> ')
+    expect(sent?.text).toContain(ENCODING_PREAMBLE + PWSH_PROMPT_SETUP)
+    expect(sent?.text).not.toContain(PWSH_READY_MARKER)
+    expect(sent).toMatchObject({ submit: true })
+    expect(session.motd).toBe('startup\ndsh> ')
     expect(spawned?.env).toMatchObject({
       TERM: 'dumb', NO_COLOR: '1', DSH_SHELL: '1', DSH_SESSION_ID: 'agent', DSH_PTY_SESSION_ID: 'pty-1',
     })
@@ -393,7 +395,7 @@ describe('BashTerminalBackend startup rollback', () => {
     expect(spawned?.env?.PROMPT_COMMAND).toBeUndefined()
   })
 
-  it('keeps waiting for stdin_read when the first settled output only echoes the prompt literal', async () => {
+  it('retains the readiness marker across an inferred-idle settlement before stdin readiness', async () => {
     const ctx = new Context()
     await ctx.plugin(EmptySandbox)
     await ctx.plugin(SessionProjectionRegistry)
@@ -406,7 +408,7 @@ describe('BashTerminalBackend startup rollback', () => {
         const second = sends.length > 1
         return {
           done: Promise.resolve({
-            viewport: second ? 'dsh> ' : "function prompt { 'dsh> ' }\n",
+            viewport: second ? '' : PWSH_READY_MARKER,
             waitReason: second ? 'stdin_read' as const : 'inferred_idle' as const,
             sessionStatus: { kind: 'running' as const }, truncated: false,
           }),
@@ -450,7 +452,7 @@ describe('BashTerminalBackend startup rollback', () => {
         }
       },
       read: () => ({
-        text: sends.length > 1 ? 'startup dsh> ' : 'partial bootstrap echo',
+        text: sends.length > 1 ? `startup ${PWSH_READY_MARKER}` : 'partial bootstrap echo',
         totalLines: 1, lineBegin: 0, lineEnd: 1, truncated: false,
       }),
     } as unknown as LocalPtySession
@@ -462,9 +464,11 @@ describe('BashTerminalBackend startup rollback', () => {
     )
     await backend.spawn(spec(agent(ctx)))
     expect(sends).toHaveLength(2)
-    expect(sends[0]).toMatchObject({ text: ENCODING_PREAMBLE + PWSH_PROMPT_SETUP, submit: true })
+    expect(sends[0]?.text).toContain(ENCODING_PREAMBLE + PWSH_PROMPT_SETUP)
+    expect(sends[0]?.text).not.toContain(PWSH_READY_MARKER)
+    expect(sends[0]).toMatchObject({ submit: true })
     expect(sends[1]).toMatchObject({ text: '', submit: false })
-    expect(session.motd).toBe('startup dsh> ')
+    expect(session.motd).toBe('startup \ndsh> ')
   })
 
   it('rejects a pwsh bootstrap whose shell exits or times out', async () => {
@@ -557,7 +561,7 @@ describe('BashTerminalBackend startup rollback', () => {
         sends.push(request)
         return {
           done: Promise.resolve({
-            viewport: 'dsh> ', waitReason: 'stdin_read' as const,
+            viewport: `${PWSH_READY_MARKER}\ndsh> `, waitReason: 'stdin_read' as const,
             sessionStatus: { kind: 'running' as const }, truncated: false,
           }),
           readOutput: () => ({ delta: '', truncated: false }),

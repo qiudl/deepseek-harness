@@ -52,6 +52,22 @@ function fixture(existing = new Map<string, Buffer>()) {
 }
 
 describe('Windows isolated Profile preparation', () => {
+  it('rejects non-canonical or control-bearing roots before native access', () => {
+    const state = fixture()
+    for (const unsafeRoot of [
+      'relative',
+      'C:\\unsafe\u0000',
+      String.raw`C:\unsafe:alternate`,
+      String.raw`C:\unsafe\..\other`,
+    ]) {
+      expect(() => prepareWindowsIsolatedProfile({
+        root: unsafeRoot, profileId, userSid, maximumManagedFileBytes: 64 * 1024,
+        bindings: state.bindings,
+      })).toThrow('invalid_input')
+    }
+    expect(state.ensurePrivateDirectory).not.toHaveBeenCalled()
+  })
+
   it('prepares private MCP directories and preserves a large customized patch on restart', () => {
     const state = fixture()
     const options = { root, profileId, userSid, maximumManagedFileBytes: 64 * 1024,
@@ -150,5 +166,20 @@ describe('Windows isolated Profile preparation', () => {
     expect(() => { prepareWindowsIsolatedProfile({
       root, profileId, userSid, maximumManagedFileBytes: 64 * 1024, bindings,
     }) }).toThrow()
+  })
+
+  it('rejects managed files beyond the limit and vanished create-only conflicts', () => {
+    const bounded = fixture()
+    expect(() => prepareWindowsIsolatedProfile({
+      root, profileId, userSid, maximumManagedFileBytes: 1, bindings: bounded.bindings,
+    })).toThrow('unavailable')
+    expect(bounded.createPrivateFile).not.toHaveBeenCalled()
+
+    const vanished = fixture()
+    vanished.createPrivateFile.mockReturnValue({ state: 'exists', evidence: evidence('file') })
+    expect(() => prepareWindowsIsolatedProfile({
+      root, profileId, userSid, maximumManagedFileBytes: 64 * 1024, bindings: vanished.bindings,
+    })).toThrow('unavailable')
+    expect(vanished.readPrivateFile).toHaveBeenCalledOnce()
   })
 })
