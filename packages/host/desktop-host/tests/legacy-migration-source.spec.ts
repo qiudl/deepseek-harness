@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -46,8 +46,9 @@ async function fixture(): Promise<{ home: string; source: string }> {
     unit: { name: 'session_projcache', version: 3 }, global: null, tables: { sessions: {} },
   }), { mode: 0o600 })
   await writeFile(join(source, 'profiles', 'web', 'package.json'), JSON.stringify({
-    name: 'dsh-profile-web', private: true, dependencies: {},
-    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
+    name: 'dsh-profile-web', private: true,
+    dependencies: { '@deepseek-ai/dsh-base': '1.0.0', '@deepseek-ai/dsh-web-app': '1.0.0' },
+    dsh: { profile: { patchReload: 'live', bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
   }), { mode: 0o644 })
   await writeFile(join(source, 'profiles', 'web', 'cordis.yml'), '[]\n', { mode: 0o644 })
   await writeFile(join(source, 'profiles', 'web', 'cordis.patch.yml'), '[]\n', { mode: 0o644 })
@@ -56,6 +57,15 @@ async function fixture(): Promise<{ home: string; source: string }> {
   ].join('\n'), { mode: 0o644 })
   await chmod(source, 0o700)
   return { home, source }
+}
+
+function service(home: string) {
+  return createLegacyMigrationExportService({
+    expectedUid: uid,
+    _testOwnerHome: home,
+    assertSourceQuiescent: async () => undefined,
+    stageOwnerTransfer: async () => { throw new Error('unexpected_transfer') },
+  })
 }
 
 describe('fixed owner legacy migration source', () => {
@@ -100,6 +110,157 @@ describe('fixed owner legacy migration source', () => {
     })
 
     await expect(service.inventory()).rejects.toThrow(/schema_unsupported/u)
+  })
+
+  it('accepts both released credential record kinds and nested JSON grant payloads', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, '.credentials.yaml'), JSON.stringify({
+      version: 1,
+      refs: { DEEPSEEK_API_KEY: 'secret' },
+      records: {
+        'deepseek/api': { kind: 'api-key', key: 'secret', env: { DEEPSEEK_API_KEY: 'secret' } },
+        'deepseek/grant': { kind: 'grant', payload: { scopes: ['chat', 1, true, null] } },
+      },
+    }), { mode: 0o600 })
+
+    await expect(service(home).inventory()).resolves.toMatchObject({ requiredMaxRecords: 6 })
+  })
+
+  it('accepts empty and minimal versioned credential documents', async () => {
+    const variants = ['{}\n', 'version: 1\n', 'version: 1\nrecords:\n  deepseek/api:\n    kind: api-key\n']
+    for (const value of variants) {
+      const { home, source } = await fixture()
+      await writeFile(join(source, '.credentials.yaml'), value, { mode: 0o600 })
+      await expect(service(home).inventory()).resolves.toMatchObject({ requiredMaxRecords: 6 })
+    }
+  })
+
+  it('rejects malformed legacy credential variants', async () => {
+    const variants: unknown[] = [
+      [],
+      { 'INVALID-REF': 'secret' },
+      { version: 2, refs: {}, records: {} },
+      { version: 1, refs: { 'INVALID-REF': 'secret' }, records: {} },
+      { version: 1, refs: {}, records: { invalid: { kind: 'api-key', key: 'secret' } } },
+      { version: 1, refs: {}, records: { 'deepseek/api': 'secret' } },
+      { version: 1, refs: {}, records: { 'deepseek/api': { kind: 'api-key', extra: true } } },
+      { version: 1, refs: {}, records: { 'deepseek/api': { kind: 'api-key', key: '' } } },
+      { version: 1, refs: {}, records: { 'deepseek/api': { kind: 'api-key', env: [] } } },
+      { version: 1, refs: {}, records: { 'deepseek/api': { kind: 'api-key', env: { TOKEN: '' } } } },
+      { version: 1, refs: {}, records: { 'deepseek/grant': { kind: 'grant' } } },
+      { version: 1, refs: {}, records: { 'deepseek/grant': { kind: 'grant', payload: 1, extra: true } } },
+      { version: 1, refs: {}, records: { 'deepseek/unknown': { kind: 'password' } } },
+    ]
+
+    for (const value of variants) {
+      const { home, source } = await fixture()
+      await writeFile(join(source, '.credentials.yaml'), JSON.stringify(value), { mode: 0o600 })
+      await expect(service(home).inventory()).rejects.toThrow(/schema_unsupported/u)
+    }
+  })
+
+  it('rejects unsafe owner paths and malformed owner documents', async () => {
+    {
+      const { home, source } = await fixture()
+      await chmod(source, 0o777)
+      await expect(service(home).inventory()).rejects.toThrow(/source_unsafe/u)
+    }
+    {
+      const { home, source } = await fixture()
+      await chmod(join(source, 'settings.yaml'), 0o644)
+      await expect(service(home).inventory()).rejects.toThrow(/source_unsafe/u)
+    }
+    {
+      const { home, source } = await fixture()
+      await writeFile(join(source, 'settings.yaml'), 'duplicate: 1\nduplicate: 2\n', { mode: 0o600 })
+      await expect(service(home).inventory()).rejects.toThrow(/schema_unsupported/u)
+    }
+    {
+      const { home, source } = await fixture()
+      await writeFile(join(source, 'settings.yaml'), '[]\n', { mode: 0o600 })
+      await expect(service(home).inventory()).rejects.toThrow(/schema_unsupported/u)
+    }
+    {
+      const { home, source } = await fixture()
+      await writeFile(join(source, 'settings.yaml'), 'value: .nan\n', { mode: 0o600 })
+      await expect(service(home).inventory()).rejects.toThrow(/schema_unsupported/u)
+    }
+    {
+      const { home, source } = await fixture()
+      await writeFile(join(source, '.anonymous-user-id'), 'not-a-uuid\n', { mode: 0o644 })
+      await expect(service(home).inventory()).rejects.toThrow(/schema_unsupported/u)
+    }
+    {
+      const { home, source } = await fixture()
+      await writeFile(join(source, 'settings.yaml'), 'externalConnections: []\n', { mode: 0o600 })
+      await expect(service(home).inventory()).rejects.toThrow(/schema_unsupported/u)
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a symlinked owner document', async () => {
+    const { home, source } = await fixture()
+    const manifest = join(source, 'profiles', 'web', 'package.json')
+    await unlink(manifest)
+    await symlink('cordis.yml', manifest)
+
+    await expect(service(home).inventory()).rejects.toMatchObject({ code: 'ELOOP' })
+  })
+
+  it('allows absent optional owner documents', async () => {
+    const { home, source } = await fixture()
+    await Promise.all([
+      unlink(join(source, '.anonymous-user-id')),
+      unlink(join(source, 'package.json')),
+      unlink(join(source, 'cordis.yml')),
+      unlink(join(source, 'pnpm-workspace.yaml')),
+    ])
+
+    await expect(service(home).inventory()).resolves.toMatchObject({ requiredMaxRecords: 6 })
+  })
+
+  it('rejects custom profile layouts and manifests', async () => {
+    const mutations: Array<(source: string) => Promise<unknown>> = [
+      source => mkdir(join(source, 'profiles', 'custom'), { mode: 0o700 }),
+      source => writeFile(join(source, 'profiles', 'web', 'extra.yml'), '[]\n', { mode: 0o644 }),
+      source => writeFile(join(source, 'profiles', 'web', 'package.json'), JSON.stringify({
+        dependencies: {}, dsh: { profile: { bundles: [], patchReload: 'restart' } },
+      }), { mode: 0o644 }),
+      source => writeFile(join(source, 'profiles', 'web', 'package.json'), JSON.stringify({
+        dependencies: { custom: '1.0.0' },
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
+      }), { mode: 0o644 }),
+      source => writeFile(join(source, 'profiles', 'web', 'package.json'), JSON.stringify({
+        dependencies: { '@deepseek-ai/dsh-base': 1 },
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
+      }), { mode: 0o644 }),
+      source => writeFile(join(source, 'profiles', 'web', 'cordis.patch.yml'), '- name: custom\n', { mode: 0o644 }),
+      source => writeFile(join(source, 'profiles', 'web', 'cordis.yml'), '{}\n', { mode: 0o644 }),
+      source => writeFile(join(source, 'profiles', 'web', 'pnpm-workspace.yaml'), 'packages:\n  - plugins/*\n', { mode: 0o644 }),
+    ]
+
+    for (const mutate of mutations) {
+      const { home, source } = await fixture()
+      await mutate(source)
+      await expect(service(home).inventory()).rejects.toThrow(/custom_profile/u)
+    }
+  })
+
+  it('rejects unknown and malformed workspace storage', async () => {
+    const mutations: Array<(source: string) => Promise<unknown>> = [
+      source => writeFile(join(source, 'storages', 'custom.json'), '{}\n', { mode: 0o600 }),
+      source => writeFile(join(source, 'storages', 'workspace.json'), JSON.stringify({
+        unit: { name: 'workspace', version: 1 }, tables: { workspaces: {} },
+      }), { mode: 0o600 }),
+      source => writeFile(join(source, 'storages', 'workspace.json'), JSON.stringify({
+        unit: { name: 'workspace', version: 2 }, tables: { workspaces: { unsafe: { path: 'relative' } } },
+      }), { mode: 0o600 }),
+    ]
+
+    for (const mutate of mutations) {
+      const { home, source } = await fixture()
+      await mutate(source)
+      await expect(service(home).inventory()).rejects.toThrow(/(?:unknown_entry|schema_unsupported)/u)
+    }
   })
 
   it('exports ordinary JSONL and four owner documents without writing the source', async () => {
