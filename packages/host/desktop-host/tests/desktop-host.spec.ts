@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomUUID } from 'node:crypto'
+import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -210,6 +210,17 @@ describe('authenticated Unix transport', () => {
     executableSignatureDigest: executableDigest,
     runtimeGeneration: 5,
     schemaGeneration: 1,
+  }
+
+  function signedSelector(domain: string, payload: unknown): string {
+    const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
+    const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), identity.installationPrivateKey).toString('base64url')
+    return `${encoded}.${signature}`
+  }
+
+  function signedEncodedSelector(domain: string, encoded: string): string {
+    const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), identity.installationPrivateKey).toString('base64url')
+    return `${encoded}.${signature}`
   }
 
   async function fixture(
@@ -584,6 +595,52 @@ describe('authenticated Unix transport', () => {
       .resolves.toMatchObject({ profileId: first.profileId })
     await expect(client.openProfile({ authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1 }))
       .resolves.toMatchObject({ profileId: first.profileId })
+    client.close(); await server.close()
+  })
+
+  it('rejects validly signed Profile selectors with malformed semantic payloads', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const valid = {
+      version: 1,
+      installation_id: identity.installationId,
+      profile_id: randomUUID(),
+      binding_generation: 1,
+      runtime_generation: identity.runtimeGeneration,
+      schema_generation: identity.schemaGeneration,
+    }
+    const malformed = [
+      { ...valid, extra: true },
+      { ...valid, version: 2 },
+      { ...valid, installation_id: randomUUID() },
+      { ...valid, profile_id: 1 },
+      { ...valid, binding_generation: 0 },
+      { ...valid, binding_generation: 1.5 },
+      { ...valid, runtime_generation: identity.runtimeGeneration + 1 },
+      { ...valid, schema_generation: identity.schemaGeneration + 1 },
+    ]
+    for (const payload of malformed) {
+      await expect(client.openLocalProfile({
+        profileSelector: signedSelector('dsh-profile-selector/v1', payload),
+      })).rejects.toMatchObject({ code: 'stale' })
+    }
+    for (const payload of ['null', '[]']) {
+      const encoded = Buffer.from(payload.padEnd(24)).toString('base64url')
+      await expect(client.openLocalProfile({
+        profileSelector: signedEncodedSelector('dsh-profile-selector/v1', encoded),
+      })).rejects.toMatchObject({ code: 'unauthorized' })
+    }
+    const encoded = Buffer.from('{'.padEnd(24)).toString('base64url')
+    await expect(client.openLocalProfile({
+      profileSelector: signedEncodedSelector('dsh-profile-selector/v1', encoded),
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(client.openOfflineAccountProfile({
+      profileSelector: signedSelector('dsh-profile-offline-selector/v1', { ...valid, access_scope: 'connected' }),
+    })).rejects.toMatchObject({ code: 'stale' })
     client.close(); await server.close()
   })
 
