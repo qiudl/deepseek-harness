@@ -122,7 +122,8 @@ describe('Windows Main local Profile ciphertext storage', () => {
       arch.mockRestore()
     }
     await expect(loadWindowsLocalProfileStorage({ root })).rejects.toThrow('Windows x64')
-    await expect(loadWindowsLocalProfileStorage({ root, platform: 'win32' })).rejects.toThrow('Windows x64')
+    const defaultArchGate = process.arch === 'x64' ? 'release pin is invalid' : 'Windows x64'
+    await expect(loadWindowsLocalProfileStorage({ root, platform: 'win32' })).rejects.toThrow(defaultArchGate)
     await expect(loadWindowsLocalProfileStorage({ root, platform: 'win32', arch: 'x64' }, {
       loadCurrentUserSid: async () => () => userSid,
     })).rejects.toThrow('release pin is invalid')
