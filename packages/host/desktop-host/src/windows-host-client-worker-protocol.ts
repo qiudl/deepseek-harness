@@ -11,6 +11,7 @@ const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
 const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const PUBLISHER = /^(?:[0-9A-F]{40}|[0-9A-F]{64})$/u
+const PACKAGE_FAMILY_NAME = /^[A-Za-z0-9.-]+_[A-Za-z0-9]+$/u
 const SHA256 = /^[0-9a-f]{64}$/u
 
 interface Base { readonly version: 1; readonly generation: number }
@@ -64,29 +65,38 @@ function frame(input: unknown, direction: 'request' | 'response'): string {
 
 function evidence(input: unknown): WindowsPeerEvidence {
   const value = record(input)
-  exactKeys(value, [
+  const baseKeys = [
     'pid',
     'userSid',
     'executablePath',
-    'authenticodePublisherThumbprint',
     'executableSignatureDigest',
-  ])
+  ]
+  const authenticode = Object.hasOwn(value, 'authenticodePublisherThumbprint')
+  const packaged = Object.hasOwn(value, 'packageFamilyName')
+  if (authenticode === packaged) return reject()
+  exactKeys(value, [...baseKeys, authenticode
+    ? 'authenticodePublisherThumbprint'
+    : 'packageFamilyName'])
   if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0
     || typeof value.userSid !== 'string' || !isWindowsDshUserSid(value.userSid)
     || typeof value.executablePath !== 'string' || !DRIVE_ROOTED_PATH.test(value.executablePath)
     || CONTROL_CHARACTER.test(value.executablePath) || value.executablePath.slice(2).includes(':')
     || win32.normalize(value.executablePath) !== value.executablePath
-    || typeof value.authenticodePublisherThumbprint !== 'string'
-    || !PUBLISHER.test(value.authenticodePublisherThumbprint)
+    || (authenticode && (typeof value.authenticodePublisherThumbprint !== 'string'
+      || !PUBLISHER.test(value.authenticodePublisherThumbprint)))
+    || (packaged && (typeof value.packageFamilyName !== 'string'
+      || !PACKAGE_FAMILY_NAME.test(value.packageFamilyName)))
     || typeof value.executableSignatureDigest !== 'string'
     || !SHA256.test(value.executableSignatureDigest)) return reject()
-  return Object.freeze({
+  const base = {
     pid: value.pid as number,
     userSid: value.userSid,
     executablePath: value.executablePath,
-    authenticodePublisherThumbprint: value.authenticodePublisherThumbprint,
     executableSignatureDigest: value.executableSignatureDigest,
-  })
+  }
+  return Object.freeze(authenticode
+    ? { ...base, authenticodePublisherThumbprint: value.authenticodePublisherThumbprint as string }
+    : { ...base, packageFamilyName: value.packageFamilyName as string })
 }
 
 /** Strictly decode both halves of the private generation-bound client Worker protocol. */

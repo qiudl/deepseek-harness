@@ -34,6 +34,7 @@ describe('Windows Host pipe Worker boot data', () => {
       policy,
       stopFlagBuffer: flag.buffer,
       allowedPublisherThumbprints: [publisher],
+      allowedPackageFamilyNames: [],
       allowedExecutableDigests: [digest],
       nativeModule,
     })

@@ -17,6 +17,10 @@ function api(overrides: Record<string, unknown> = {}) {
       openProcess: vi.fn((_pid: number) => { calls.push('process:open'); return 101n }),
       currentUserSid: vi.fn(() => 'S-1-5-21-1000-2000-3000-1001'),
       processOwnerSid: vi.fn((_handle: bigint) => 'S-1-5-21-1000-2000-3000-1001'),
+      processPackageIdentity: vi.fn((_handle: bigint) => ({
+        familyName: 'Slark.Desktop_1234567890abc',
+        packagePath: String.raw`C:\Program Files\WindowsApps\Slark.Desktop_1.4.11.0_x64__1234567890abc`,
+      })),
       queryProcessImagePath: vi.fn((_handle: bigint) => {
         calls.push('process:path')
         return executablePath
@@ -64,6 +68,16 @@ describe('Windows peer process stable-image bindings', () => {
     expect(fixture.native.getNamedPipeServerProcessId).toHaveBeenCalledTimes(2)
     expect(fixture.native.getNamedPipeClientProcessId).not.toHaveBeenCalled()
     expect(fixture.native.openProcess).toHaveBeenCalledWith(84)
+  })
+
+  it('queries package identity from the already-open peer process', async () => {
+    const fixture = api()
+    const bindings = createWindowsPeerProcessBindings(fixture.native)
+    await expect(bindings.processPackageIdentity(101n)).resolves.toEqual({
+      familyName: 'Slark.Desktop_1234567890abc',
+      packagePath: String.raw`C:\Program Files\WindowsApps\Slark.Desktop_1.4.11.0_x64__1234567890abc`,
+    })
+    expect(fixture.native.processPackageIdentity).toHaveBeenCalledWith(101n)
   })
 
   it('closes a newly opened server process when the connected server PID changes', async () => {

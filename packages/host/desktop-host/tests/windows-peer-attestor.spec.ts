@@ -7,12 +7,17 @@ const daemonBytes = Buffer.from('signed Slark daemon fixture')
 const daemonDigest = createHash('sha256').update(daemonBytes).digest('hex')
 const publisher = 'A'.repeat(64)
 const ownerSid = 'S-1-5-21-1000-2000-3000-1001'
+const packageFamilyName = 'Slark.Desktop_1234567890abc'
 
 function bindings(overrides: Partial<Parameters<typeof createWindowsPeerAttestor>[0]['bindings']> = {}) {
   return {
     openClientProcess: vi.fn(() => ({ pid: 42, handle: 101n })),
     currentUserSid: vi.fn(() => ownerSid),
     processOwnerSid: vi.fn((_processHandle: bigint) => ownerSid),
+    processPackageIdentity: vi.fn((_processHandle: bigint) => ({
+      familyName: packageFamilyName,
+      packagePath: String.raw`C:\Program Files\WindowsApps\Slark.Desktop_1.4.11.0_x64__1234567890abc`,
+    })),
     openProcessExecutable: vi.fn((_processHandle: bigint) => ({
       handle: 202n,
       path: String.raw`C:\Program Files\Slark\slark-daemon-windows-x64.exe`,
@@ -25,6 +30,43 @@ function bindings(overrides: Partial<Parameters<typeof createWindowsPeerAttestor
 }
 
 describe('Windows named-pipe peer attestation', () => {
+  it('accepts a digest-pinned executable inside the matching Store package without Authenticode', async () => {
+    const native = bindings({
+      openProcessExecutable: vi.fn(() => ({
+        handle: 202n,
+        path: String.raw`C:\Program Files\WindowsApps\Slark.Desktop_1.4.11.0_x64__1234567890abc\slark.exe`,
+      })),
+      verifyAuthenticodePublisher: vi.fn(() => { throw new Error('unsigned inner executable') }),
+    })
+    const attest = createWindowsPeerAttestor({
+      allowedPublisherThumbprints: new Set(),
+      allowedPackageFamilyNames: new Set([packageFamilyName]),
+      allowedExecutableDigests: new Set([daemonDigest]),
+      bindings: native,
+    })
+    await expect(attest(91n)).resolves.toMatchObject({
+      packageFamilyName,
+      executableSignatureDigest: daemonDigest,
+    })
+    expect(native.verifyAuthenticodePublisher).not.toHaveBeenCalled()
+  })
+
+  it('rejects Store peers outside their protected package path and mixed trust modes', async () => {
+    const escaped = createWindowsPeerAttestor({
+      allowedPublisherThumbprints: new Set(),
+      allowedPackageFamilyNames: new Set([packageFamilyName]),
+      allowedExecutableDigests: new Set([daemonDigest]),
+      bindings: bindings(),
+    })
+    await expect(escaped(91n)).rejects.toBeInstanceOf(HostAuthorityError)
+    expect(() => createWindowsPeerAttestor({
+      allowedPublisherThumbprints: new Set([publisher]),
+      allowedPackageFamilyNames: new Set([packageFamilyName]),
+      allowedExecutableDigests: new Set([daemonDigest]),
+      bindings: bindings(),
+    })).toThrow(HostAuthorityError)
+  })
+
   it('binds the kernel pipe client PID to SID, final executable, publisher, and digest', async () => {
     const native = bindings()
     const attest = createWindowsPeerAttestor({

@@ -80,6 +80,7 @@ describe('Windows Host pipe Worker composition root', () => {
     expect(state.dependencies.loadIo).toHaveBeenCalledOnce()
     expect(state.dependencies.loadAttestor).toHaveBeenCalledWith({
       allowedPublisherThumbprints: new Set(['A'.repeat(64)]),
+      allowedPackageFamilyNames: new Set(),
       allowedExecutableDigests: new Set(['b'.repeat(64)]),
     })
     const options = state.receivedRunnerOptions()

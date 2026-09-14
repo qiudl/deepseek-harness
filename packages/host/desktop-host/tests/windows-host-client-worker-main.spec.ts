@@ -9,6 +9,7 @@ const boot = {
   stopFlagBuffer: new SharedArrayBuffer(4),
   connectTimeoutMs: 5_000,
   allowedPublisherThumbprints: ['A'.repeat(64)],
+  allowedPackageFamilyNames: [],
   allowedExecutableDigests: ['b'.repeat(64)],
 }
 
@@ -41,6 +42,7 @@ describe('Windows Host client Worker main composition', () => {
     expect(state.dependencies.loadClient).toHaveBeenCalledWith({ connectTimeoutMs: 5_000 })
     expect(state.dependencies.loadAttestor).toHaveBeenCalledWith({
       allowedPublisherThumbprints: new Set(['A'.repeat(64)]),
+      allowedPackageFamilyNames: new Set(),
       allowedExecutableDigests: new Set(['b'.repeat(64)]),
       peerProcessRole: 'server',
     })

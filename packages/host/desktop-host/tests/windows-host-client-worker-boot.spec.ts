@@ -28,6 +28,7 @@ describe('Windows Host client Worker boot data', () => {
       stopFlagBuffer: stopFlag.buffer,
       connectTimeoutMs: 5_000,
       allowedPublisherThumbprints: [publisher],
+      allowedPackageFamilyNames: [],
       allowedExecutableDigests: [digest],
     })
     expect(Object.isFrozen(boot)).toBe(true)

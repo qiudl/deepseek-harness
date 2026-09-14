@@ -41,6 +41,7 @@ export interface StartWindowsHostClientWorkerTransportOptions {
   readonly pipePath: string
   readonly connectTimeoutMs: number
   readonly allowedPublisherThumbprints: ReadonlySet<string>
+  readonly allowedPackageFamilyNames?: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
   readonly cancellation: WindowsWorkerIoCancellation
   readonly maxCancelAttempts: number
@@ -215,8 +216,10 @@ class WindowsHostClientWorkerTransport implements HostClientFrameTransport {
       return
     }
     if (message.type === 'ready') {
-      if (this.phase !== 'starting' || this.threadHandle === undefined
-        || !this.options.allowedPublisherThumbprints.has(message.evidence.authenticodePublisherThumbprint)
+      const identityAllowed = 'authenticodePublisherThumbprint' in message.evidence
+        ? this.options.allowedPublisherThumbprints.has(message.evidence.authenticodePublisherThumbprint)
+        : (this.options.allowedPackageFamilyNames?.has(message.evidence.packageFamilyName) ?? false)
+      if (this.phase !== 'starting' || this.threadHandle === undefined || !identityAllowed
         || !this.options.allowedExecutableDigests.has(message.evidence.executableSignatureDigest)) {
         throw new WindowsHostClientWorkerTransportError('host_unverified')
       }

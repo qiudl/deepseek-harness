@@ -103,6 +103,7 @@ export async function runWindowsHostPipeWorkerMain(
     resolvedDependencies.loadIo(),
     resolvedDependencies.loadAttestor({
       allowedPublisherThumbprints: new Set(boot.allowedPublisherThumbprints),
+      allowedPackageFamilyNames: new Set(boot.allowedPackageFamilyNames),
       allowedExecutableDigests: new Set(boot.allowedExecutableDigests),
     }),
   ])

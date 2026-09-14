@@ -7,6 +7,9 @@ import {
 const executablePath = String.raw`C:\Program Files\Slark\slark-daemon-windows-x64.exe`
 const finalExecutablePath = String.raw`\\?\C:\Program Files\Slark\slark-daemon-windows-x64.exe`
 const userSid = 'S-1-5-21-1000-2000-3000-1001'
+const packageFullName = 'Slark.Desktop_1.4.11.0_x64__1234567890abc'
+const packageFamilyName = 'Slark.Desktop_1234567890abc'
+const packagePath = String.raw`C:\Program Files\WindowsApps\${packageFullName}`
 
 interface FakeWorldOptions {
   readonly failures?: Readonly<Record<string, number>>
@@ -69,6 +72,11 @@ function fakeWorld(options: FakeWorldOptions = {}) {
         length.writeUInt32LE(executablePath.length)
         return 1
       }),
+    GetPackageFullName: (_process, length, output) => packageString('GetPackageFullName', packageFullName, length, output),
+    PackageFamilyNameFromFullName: (_fullName, length, output) =>
+      packageString('PackageFamilyNameFromFullName', packageFamilyName, length, output),
+    GetPackagePathByFullName: (_fullName, length, output) =>
+      packageString('GetPackagePathByFullName', packagePath, length, output),
     CreateFileW: () => succeed('CreateFileW', () => 802n),
     GetFinalPathNameByHandleW: (_handle, output) => succeed('GetFinalPathNameByHandleW', () => {
       if (!Buffer.isBuffer(output)) throw new Error('expected final path buffer')
@@ -92,6 +100,17 @@ function fakeWorld(options: FakeWorldOptions = {}) {
       return name === 'OpenProcess' || name === 'CreateFileW' ? 0n : 0
     }
     return result()
+  }
+
+  function packageString(name: string, value: string, length: unknown, output: unknown): number {
+    calls.push({ name, args: [length, output] })
+    if (!Buffer.isBuffer(length)) throw new Error('expected package string length buffer')
+    const characters = value.length + 1
+    length.writeUInt32LE(characters)
+    if (output === null) { lastError = 122; return 122 }
+    if (!Buffer.isBuffer(output)) throw new Error('expected package string output buffer')
+    Buffer.from(`${value}\0`, 'utf16le').copy(output)
+    return 0
   }
 
   let currentArgs: readonly unknown[] = []
@@ -177,6 +196,11 @@ describe('Windows peer-process Koffi ABI', () => {
     expect(world.calls.find(call => call.name === 'CompareStringOrdinal')?.args).toEqual([
       executablePath, -1, executablePath.toUpperCase(), -1, 1,
     ])
+  })
+
+  it('derives package family and protected install path from the open process handle', async () => {
+    const { api } = await load()
+    expect(api.processPackageIdentity(142n)).toEqual({ familyName: packageFamilyName, packagePath })
   })
 
   it('keeps signature and digest operations on the already-open stable image handle', async () => {

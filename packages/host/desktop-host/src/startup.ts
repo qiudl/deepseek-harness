@@ -88,6 +88,7 @@ export interface Config {
   readonly desktopTeamIdentifiers: string[]
   readonly desktopExecutableDigests: string[]
   readonly desktopPublisherThumbprints?: string[]
+  readonly desktopPackageFamilyNames?: string[]
   readonly windowsWorkerEntryPath?: string
   readonly windowsNativeModulePath?: string
   readonly windowsNativeModuleSha256?: string
@@ -126,6 +127,7 @@ export const Config: z<Config> = z.object({
   desktopTeamIdentifiers: z.array(String).required(),
   desktopExecutableDigests: z.array(String).required(),
   desktopPublisherThumbprints: z.array(String),
+  desktopPackageFamilyNames: z.array(String),
   windowsWorkerEntryPath: z.string(),
   windowsNativeModulePath: z.string(),
   windowsNativeModuleSha256: z.string(),
@@ -236,6 +238,7 @@ export function windowsDesktopHostConfig(config: Config): WindowsDesktopHostPriv
     },
     workerGeneration: boundedInteger(config.windowsWorkerGeneration, WINDOWS_DEFAULTS.workerGeneration),
     allowedPublisherThumbprints: new Set(config.desktopPublisherThumbprints ?? []),
+    allowedPackageFamilyNames: new Set(config.desktopPackageFamilyNames ?? []),
     allowedDesktopExecutableDigests: new Set(config.desktopExecutableDigests),
     maximumRegistryBytes: boundedInteger(
       config.windowsMaximumRegistryBytes,

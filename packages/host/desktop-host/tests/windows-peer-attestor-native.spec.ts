@@ -17,6 +17,10 @@ describe('Windows native peer-attestor composition', () => {
       openProcess: vi.fn(() => 101n),
       currentUserSid: vi.fn(() => 'S-1-5-21-1-2-3-1001'),
       processOwnerSid: vi.fn(() => 'S-1-5-21-1-2-3-1001'),
+      processPackageIdentity: vi.fn(() => ({
+        familyName: 'Slark.Desktop_1234567890abc',
+        packagePath: String.raw`C:\Program Files\WindowsApps\Slark.Desktop_1.0.0.0_x64__1234567890abc`,
+      })),
       queryProcessImagePath: vi.fn(() => path),
       openExecutableForVerification: vi.fn(() => 202n),
       finalExecutablePath: vi.fn(() => String.raw`\\?\C:\Program Files\Slark\slark-daemon-windows-x64.exe`),
@@ -68,6 +72,10 @@ describe('Windows native peer-attestor composition', () => {
         openProcess,
         currentUserSid: vi.fn(() => 'S-1-5-21-1-2-3-1001'),
         processOwnerSid: vi.fn(() => 'S-1-5-21-1-2-3-1001'),
+        processPackageIdentity: vi.fn(() => ({
+          familyName: 'Slark.Desktop_1234567890abc',
+          packagePath: String.raw`C:\Program Files\WindowsApps\Slark.Desktop_1.0.0.0_x64__1234567890abc`,
+        })),
         queryProcessImagePath: vi.fn(() => path),
         openExecutableForVerification: vi.fn(() => 202n),
         finalExecutablePath: vi.fn(() => String.raw`\\?\C:\Program Files\Slark\slark-daemon-windows-x64.exe`),

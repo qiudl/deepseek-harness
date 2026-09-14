@@ -35,6 +35,7 @@ export interface StartWindowsHostWorkerThreadOptions {
   readonly policy: WindowsNamedPipePolicy
   readonly stopFlag: WindowsWorkerStopFlag
   readonly allowedPublisherThumbprints: ReadonlySet<string>
+  readonly allowedPackageFamilyNames?: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
   readonly nativeModule: WindowsVaultNativeModulePin
   readonly cancellation: WindowsWorkerIoCancellation

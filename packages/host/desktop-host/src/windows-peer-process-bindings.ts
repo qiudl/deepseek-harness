@@ -14,6 +14,7 @@ export interface WindowsPeerProcessNativeApi {
   openProcess(pid: number): bigint
   currentUserSid(): string
   processOwnerSid(processHandle: bigint): string
+  processPackageIdentity(processHandle: bigint): { readonly familyName: string; readonly packagePath: string }
   queryProcessImagePath(processHandle: bigint): string
   /** Open for read while denying write/delete sharing until attestation finishes. */
   openExecutableForVerification(path: string): bigint
@@ -82,6 +83,16 @@ function createWindowsPeerProcessBindingsFor(
 
     currentUserSid() { return api.currentUserSid() },
     processOwnerSid(processHandle) { return api.processOwnerSid(processHandle) },
+    processPackageIdentity(processHandle) { return workerCall(() => {
+      if (!validHandle(processHandle)) throw rejected()
+      try {
+        const identity = api.processPackageIdentity(processHandle)
+        return {
+          familyName: identity.familyName,
+          packagePath: canonicalDosPath(identity.packagePath),
+        }
+      } catch { throw rejected() }
+    }) },
 
     openProcessExecutable(processHandle) { return workerCall(() => {
       let imageHandle: bigint | undefined

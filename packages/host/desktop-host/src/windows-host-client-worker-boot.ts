@@ -3,6 +3,7 @@ import type { WindowsWorkerStopFlag } from './windows-worker-io-cancellation.ts'
 
 const PIPE_PATH = /^\\\\\.\\pipe\\slark-dsh-host-v1-[0-9a-f]{64}$/u
 const PUBLISHER = /^(?:[0-9A-F]{40}|[0-9A-F]{64})$/u
+const PACKAGE_FAMILY_NAME = /^[A-Za-z0-9.-]+_[A-Za-z0-9]+$/u
 const SHA256 = /^[0-9a-f]{64}$/u
 const MAX_CONNECT_TIMEOUT_MS = 30_000
 
@@ -13,6 +14,7 @@ export interface WindowsHostClientWorkerBootData {
   readonly stopFlagBuffer: SharedArrayBuffer
   readonly connectTimeoutMs: number
   readonly allowedPublisherThumbprints: readonly string[]
+  readonly allowedPackageFamilyNames: readonly string[]
   readonly allowedExecutableDigests: readonly string[]
 }
 
@@ -22,6 +24,7 @@ export interface CreateWindowsHostClientWorkerBootDataOptions {
   readonly stopFlag: WindowsWorkerStopFlag
   readonly connectTimeoutMs: number
   readonly allowedPublisherThumbprints: ReadonlySet<string>
+  readonly allowedPackageFamilyNames?: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
 }
 
@@ -38,8 +41,8 @@ function exactKeys(input: Record<string, unknown>, expected: readonly string[]):
   if (actual.length !== canonical.length || actual.some((key, index) => key !== canonical[index])) invalid()
 }
 
-function anchors(input: unknown, pattern: RegExp): readonly string[] {
-  if (!Array.isArray(input) || input.length === 0
+function anchors(input: unknown, pattern: RegExp, allowEmpty = false): readonly string[] {
+  if (!Array.isArray(input) || (!allowEmpty && input.length === 0)
     || input.some(value => typeof value !== 'string' || !pattern.test(value))) invalid()
   const values = input as string[]
   const sorted = [...values].sort()
@@ -58,6 +61,7 @@ export function decodeWindowsHostClientWorkerBootData(input: unknown): WindowsHo
     'stopFlagBuffer',
     'connectTimeoutMs',
     'allowedPublisherThumbprints',
+    'allowedPackageFamilyNames',
     'allowedExecutableDigests',
   ])
   if (value.version !== 1 || !Number.isSafeInteger(value.generation) || (value.generation as number) < 1
@@ -65,13 +69,17 @@ export function decodeWindowsHostClientWorkerBootData(input: unknown): WindowsHo
     || !(value.stopFlagBuffer instanceof SharedArrayBuffer) || value.stopFlagBuffer.byteLength !== 4
     || !Number.isSafeInteger(value.connectTimeoutMs) || (value.connectTimeoutMs as number) < 1
     || (value.connectTimeoutMs as number) > MAX_CONNECT_TIMEOUT_MS) invalid()
+  const allowedPublisherThumbprints = anchors(value.allowedPublisherThumbprints, PUBLISHER, true)
+  const allowedPackageFamilyNames = anchors(value.allowedPackageFamilyNames, PACKAGE_FAMILY_NAME, true)
+  if ((allowedPublisherThumbprints.length > 0) === (allowedPackageFamilyNames.length > 0)) invalid()
   return Object.freeze({
     version: 1,
     generation: value.generation as number,
     pipePath: value.pipePath,
     stopFlagBuffer: value.stopFlagBuffer,
     connectTimeoutMs: value.connectTimeoutMs as number,
-    allowedPublisherThumbprints: anchors(value.allowedPublisherThumbprints, PUBLISHER),
+    allowedPublisherThumbprints,
+    allowedPackageFamilyNames,
     allowedExecutableDigests: anchors(value.allowedExecutableDigests, SHA256),
   })
 }
@@ -88,6 +96,7 @@ export function createWindowsHostClientWorkerBootData(
       stopFlagBuffer: options.stopFlag.buffer,
       connectTimeoutMs: options.connectTimeoutMs,
       allowedPublisherThumbprints: [...options.allowedPublisherThumbprints].sort(),
+      allowedPackageFamilyNames: [...(options.allowedPackageFamilyNames ?? [])].sort(),
       allowedExecutableDigests: [...options.allowedExecutableDigests].sort(),
     })
   } catch {

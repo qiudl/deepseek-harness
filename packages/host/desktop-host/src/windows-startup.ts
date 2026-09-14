@@ -302,6 +302,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
     workerEntry: config.workerEntry,
     workerGeneration: config.workerGeneration,
     allowedPublisherThumbprints: config.allowedPublisherThumbprints,
+    allowedPackageFamilyNames: config.allowedPackageFamilyNames ?? new Set(),
     allowedExecutableDigests: config.allowedDesktopExecutableDigests,
     nativeModule: config.nativeModule,
     maxCancelAttempts: config.maxCancelAttempts,

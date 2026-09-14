@@ -23,6 +23,8 @@ export interface WindowsHostClientOptions {
   readonly clientWorkerEntry?: URL
   /** Authenticode leaf certificate anchors pinned by the signed runtime descriptor. */
   readonly trustedHostPublisherThumbprints?: ReadonlySet<string>
+  /** Store package-family anchors pinned by the packaged runtime descriptor. */
+  readonly trustedHostPackageFamilyNames?: ReadonlySet<string>
   /** Main-side native cancellation operations supplied by the private runtime supervisor. */
   readonly clientWorkerCancellation?: WindowsWorkerIoCancellation
   readonly connectTimeoutMs?: number
@@ -96,8 +98,10 @@ export async function discoverWindowsHost(
     }
     const client = options.connectSocket === undefined
       ? await (async () => {
+        const publisherAnchors = options.trustedHostPublisherThumbprints ?? new Set<string>()
+        const packageAnchors = options.trustedHostPackageFamilyNames ?? new Set<string>()
         if (options.clientWorkerEntry === undefined
-          || options.trustedHostPublisherThumbprints === undefined
+          || (publisherAnchors.size > 0) === (packageAnchors.size > 0)
           || options.clientWorkerCancellation === undefined) {
           throw new WindowsHostClientWorkerTransportError('host_unverified')
         }
@@ -106,7 +110,8 @@ export async function discoverWindowsHost(
           workerEntry: options.clientWorkerEntry,
           pipePath: options.socketPath,
           connectTimeoutMs: options.connectTimeoutMs ?? 30_000,
-          allowedPublisherThumbprints: options.trustedHostPublisherThumbprints,
+          allowedPublisherThumbprints: publisherAnchors,
+          allowedPackageFamilyNames: packageAnchors,
           allowedExecutableDigests: new Set([options.trustedExecutableSignatureDigest]),
           cancellation: options.clientWorkerCancellation,
           maxCancelAttempts: options.maxCancelAttempts ?? 3,

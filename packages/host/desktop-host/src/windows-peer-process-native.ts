@@ -6,6 +6,7 @@ const TOKEN_QUERY = 0x0008
 const TOKEN_USER = 1
 const ERROR_INVALID_DATA = 13
 const ERROR_INSUFFICIENT_BUFFER = 122
+const ERROR_SUCCESS = 0
 const GENERIC_READ = 0x80000000
 const FILE_SHARE_READ = 0x00000001
 const OPEN_EXISTING = 3
@@ -112,6 +113,15 @@ export async function loadWindowsPeerProcessNativeApi(
   const queryProcessImagePath = bind(kernel32, 'QueryFullProcessImageNameW', 'int', [
     pointer, 'uint32', pointer, uint32Pointer,
   ])
+  const getPackageFullName = bind(kernel32, 'GetPackageFullName', 'int32', [
+    pointer, uint32Pointer, pointer,
+  ])
+  const packageFamilyNameFromFullName = bind(kernel32, 'PackageFamilyNameFromFullName', 'int32', [
+    'str16', uint32Pointer, pointer,
+  ])
+  const getPackagePathByFullName = bind(kernel32, 'GetPackagePathByFullName', 'int32', [
+    'str16', uint32Pointer, pointer,
+  ])
   const createFile = bind(kernel32, 'CreateFileW', pointer, [
     'str16', 'uint32', 'uint32', pointer, 'uint32', 'uint32', pointer,
   ])
@@ -188,6 +198,27 @@ export async function loadWindowsPeerProcessNativeApi(
       })
     }, () => { checkedClose(token) })
   }
+  const packageString = (
+    operation: KoffiFunction,
+    argument: bigint | string,
+    api: string,
+  ): string => {
+    const length = Buffer.alloc(4)
+    const sizeResult = Number(operation(argument, length, null))
+    if (sizeResult !== ERROR_INSUFFICIENT_BUFFER) {
+      throw new WindowsPeerProcessNativeError(api, sizeResult)
+    }
+    const characters = length.readUInt32LE(0)
+    if (characters <= 1 || characters >= MAX_WINDOWS_PATH_CHARS) invalidData(api)
+    const output = Buffer.alloc(characters * 2)
+    const result = Number(operation(argument, length, output))
+    if (result !== ERROR_SUCCESS) throw new WindowsPeerProcessNativeError(api, result)
+    const returned = length.readUInt32LE(0)
+    if (returned <= 1 || returned > characters || output.readUInt16LE((returned - 1) * 2) !== 0) {
+      invalidData(api)
+    }
+    return utf16(output, returned - 1, api)
+  }
 
   return {
     getNamedPipeClientProcessId(pipeHandle) {
@@ -215,6 +246,15 @@ export async function loadWindowsPeerProcessNativeApi(
       )
     },
     processOwnerSid: ownerSid,
+    processPackageIdentity(processHandle) {
+      const fullName = packageString(getPackageFullName, processHandle, 'GetPackageFullName')
+      return {
+        familyName: packageString(
+          packageFamilyNameFromFullName, fullName, 'PackageFamilyNameFromFullName',
+        ),
+        packagePath: packageString(getPackagePathByFullName, fullName, 'GetPackagePathByFullName'),
+      }
+    },
     queryProcessImagePath(processHandle) {
       const output = Buffer.alloc(MAX_WINDOWS_PATH_CHARS * 2)
       const length = Buffer.alloc(4)

@@ -6,6 +6,12 @@ const SHA256 = /^[0-9a-f]{64}$/u
 const CERTIFICATE_THUMBPRINT = /^(?:[0-9A-F]{40}|[0-9A-F]{64})$/u
 const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
+const PACKAGE_FAMILY_NAME = /^[A-Za-z0-9.-]+_[A-Za-z0-9]+$/u
+
+export interface WindowsPackageIdentity {
+  readonly familyName: string
+  readonly packagePath: string
+}
 
 /** Native Windows facts obtained from an accepted named-pipe instance and its client process. */
 export interface WindowsPeerBindings {
@@ -18,6 +24,8 @@ export interface WindowsPeerBindings {
   currentUserSid(): string | Promise<string>
   /** Return the owner SID from the already-open connected process token. */
   processOwnerSid(processHandle: bigint): string | Promise<string>
+  /** Return the package identity and protected install root bound to the open process. */
+  processPackageIdentity(processHandle: bigint): WindowsPackageIdentity | Promise<WindowsPackageIdentity>
   /** Open the connected process image and return its final DOS path on the same stable handle. */
   openProcessExecutable(processHandle: bigint): {
     readonly handle: bigint
@@ -32,13 +40,18 @@ export interface WindowsPeerBindings {
 }
 
 /** Evidence bound to one accepted Windows named-pipe connection. */
-export interface WindowsPeerEvidence {
+interface WindowsPeerEvidenceBase {
   readonly pid: number
   readonly userSid: string
   readonly executablePath: string
-  readonly authenticodePublisherThumbprint: string
   readonly executableSignatureDigest: string
 }
+
+/** Evidence bound to either the Authenticode or Store package trust mode. */
+export type WindowsPeerEvidence = WindowsPeerEvidenceBase & (
+  | { readonly authenticodePublisherThumbprint: string }
+  | { readonly packageFamilyName: string }
+)
 
 /** Windows peer verifier consumed only after a native transport accepts a pipe instance. */
 export type WindowsPeerAttestor = (pipeHandle: bigint) => Promise<WindowsPeerEvidence>
@@ -46,6 +59,7 @@ export type WindowsPeerAttestor = (pipeHandle: bigint) => Promise<WindowsPeerEvi
 /** Trust anchors and native operations for strict Windows peer verification. */
 export interface WindowsPeerAttestorOptions {
   readonly allowedPublisherThumbprints: ReadonlySet<string>
+  readonly allowedPackageFamilyNames?: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
   readonly bindings: WindowsPeerBindings
 }
@@ -67,13 +81,18 @@ function validHandle(value: unknown): value is bigint {
  * @returns A verifier that rejects any missing, malformed, or untrusted native fact.
  */
 export function createWindowsPeerAttestor(options: WindowsPeerAttestorOptions): WindowsPeerAttestor {
-  if (options.allowedPublisherThumbprints.size === 0
+  const packageFamilies = options.allowedPackageFamilyNames ?? new Set<string>()
+  const authenticodeMode = options.allowedPublisherThumbprints.size > 0
+  const packageMode = packageFamilies.size > 0
+  if (authenticodeMode === packageMode
     || [...options.allowedPublisherThumbprints].some(value => !CERTIFICATE_THUMBPRINT.test(value))
+    || [...packageFamilies].some(value => !PACKAGE_FAMILY_NAME.test(value))
     || options.allowedExecutableDigests.size === 0
     || [...options.allowedExecutableDigests].some(value => !SHA256.test(value))) {
     throw new HostAuthorityError('invalid_input')
   }
   const allowedPublisherThumbprints = new Set(options.allowedPublisherThumbprints)
+  const allowedPackageFamilyNames = new Set(packageFamilies)
   const allowedExecutableDigests = new Set(options.allowedExecutableDigests)
   return async (pipeHandle) => {
     let processHandle: bigint | undefined
@@ -99,10 +118,28 @@ export function createWindowsPeerAttestor(options: WindowsPeerAttestorOptions): 
         || !validWindowsExecutablePath(executable.path)) {
         throw new HostAuthorityError('unauthorized')
       }
-      const authenticodePublisherThumbprint = await options.bindings.verifyAuthenticodePublisher(executable.handle)
-      if (!CERTIFICATE_THUMBPRINT.test(authenticodePublisherThumbprint)
-        || !allowedPublisherThumbprints.has(authenticodePublisherThumbprint)) {
-        throw new HostAuthorityError('unauthorized')
+      let peerIdentity: { readonly authenticodePublisherThumbprint: string }
+        | { readonly packageFamilyName: string }
+      if (authenticodeMode) {
+        const authenticodePublisherThumbprint = await options.bindings.verifyAuthenticodePublisher(executable.handle)
+        if (!CERTIFICATE_THUMBPRINT.test(authenticodePublisherThumbprint)
+          || !allowedPublisherThumbprints.has(authenticodePublisherThumbprint)) {
+          throw new HostAuthorityError('unauthorized')
+        }
+        peerIdentity = { authenticodePublisherThumbprint }
+      } else {
+        const identity = await options.bindings.processPackageIdentity(process.handle)
+        if (!PACKAGE_FAMILY_NAME.test(identity.familyName)
+          || !allowedPackageFamilyNames.has(identity.familyName)
+          || !validWindowsExecutablePath(identity.packagePath)) {
+          throw new HostAuthorityError('unauthorized')
+        }
+        const relative = win32.relative(identity.packagePath, executable.path)
+        if (relative === '' || win32.isAbsolute(relative) || relative === '..'
+          || relative.startsWith(`..${win32.sep}`)) {
+          throw new HostAuthorityError('unauthorized')
+        }
+        peerIdentity = { packageFamilyName: identity.familyName }
       }
       const executableSignatureDigest = await options.bindings.digestExecutable(executable.handle)
       if (!SHA256.test(executableSignatureDigest)
@@ -113,7 +150,7 @@ export function createWindowsPeerAttestor(options: WindowsPeerAttestorOptions): 
         pid: process.pid,
         userSid,
         executablePath: executable.path,
-        authenticodePublisherThumbprint,
+        ...peerIdentity,
         executableSignatureDigest,
       })
     } catch (error) {

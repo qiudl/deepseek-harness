@@ -31,6 +31,7 @@ export interface StartWindowsHostTransportOptions extends Omit<
   readonly workerEntry: URL
   readonly workerGeneration: number
   readonly allowedPublisherThumbprints: ReadonlySet<string>
+  readonly allowedPackageFamilyNames?: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
   readonly nativeModule: WindowsVaultNativeModulePin
   readonly maxCancelAttempts: number
@@ -139,6 +140,7 @@ export async function startWindowsHostTransport(
         policy: worker.policy,
         stopFlag: worker.stopFlag,
         allowedPublisherThumbprints: options.allowedPublisherThumbprints,
+        allowedPackageFamilyNames: options.allowedPackageFamilyNames ?? new Set(),
         allowedExecutableDigests: options.allowedExecutableDigests,
         nativeModule: options.nativeModule,
         cancellation,

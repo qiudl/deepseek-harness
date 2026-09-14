@@ -8,6 +8,7 @@ import type { WindowsWorkerStopFlag } from './windows-worker-io-cancellation.ts'
 const PIPE_PATH = /^\\\\\.\\pipe\\slark-dsh-host-v1-[0-9a-f]{64}$/u
 const SECURITY_DESCRIPTOR = /^O:(S-[0-9-]+)D:P\(A;;GRGW;;;(S-[0-9-]+)\)$/u
 const PUBLISHER = /^(?:[0-9A-F]{40}|[0-9A-F]{64})$/u
+const PACKAGE_FAMILY_NAME = /^[A-Za-z0-9.-]+_[A-Za-z0-9]+$/u
 const SHA256 = /^[0-9a-f]{64}$/u
 const PIPE_OPEN_MODE = 0x0008_0003
 const PIPE_MODE = 0x0000_0008
@@ -19,6 +20,7 @@ export interface WindowsHostPipeWorkerBootData {
   readonly policy: WindowsNamedPipePolicy
   readonly stopFlagBuffer: SharedArrayBuffer
   readonly allowedPublisherThumbprints: readonly string[]
+  readonly allowedPackageFamilyNames: readonly string[]
   readonly allowedExecutableDigests: readonly string[]
   readonly nativeModule: WindowsVaultNativeModulePin
 }
@@ -28,6 +30,7 @@ export interface CreateWindowsHostPipeWorkerBootDataOptions {
   readonly policy: WindowsNamedPipePolicy
   readonly stopFlag: WindowsWorkerStopFlag
   readonly allowedPublisherThumbprints: ReadonlySet<string>
+  readonly allowedPackageFamilyNames?: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
   readonly nativeModule: WindowsVaultNativeModulePin
 }
@@ -45,8 +48,8 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
   if (actual.length !== canonical.length || actual.some((key, index) => key !== canonical[index])) invalid()
 }
 
-function canonicalAnchors(value: unknown, pattern: RegExp): readonly string[] {
-  if (!Array.isArray(value) || value.length === 0 || value.some(anchor => typeof anchor !== 'string'
+function canonicalAnchors(value: unknown, pattern: RegExp, allowEmpty = false): readonly string[] {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.some(anchor => typeof anchor !== 'string'
     || !pattern.test(anchor))) return invalid()
   const anchors = value as string[]
   const sorted = [...anchors].sort()
@@ -92,6 +95,7 @@ export function decodeWindowsHostPipeWorkerBootData(input: unknown): WindowsHost
     'policy',
     'stopFlagBuffer',
     'allowedPublisherThumbprints',
+    'allowedPackageFamilyNames',
     'allowedExecutableDigests',
     'nativeModule',
   ])
@@ -99,15 +103,19 @@ export function decodeWindowsHostPipeWorkerBootData(input: unknown): WindowsHost
     || (value.generation as number) < 1
     || !(value.stopFlagBuffer instanceof SharedArrayBuffer)
     || value.stopFlagBuffer.byteLength !== 4) return invalid()
+  const allowedPublisherThumbprints = canonicalAnchors(value.allowedPublisherThumbprints, PUBLISHER, true)
+  const allowedPackageFamilyNames = canonicalAnchors(value.allowedPackageFamilyNames, PACKAGE_FAMILY_NAME, true)
+  if ((allowedPublisherThumbprints.length > 0) === (allowedPackageFamilyNames.length > 0)) invalid()
   return Object.freeze({
     version: 1,
     generation: value.generation as number,
     policy: canonicalPolicy(value.policy),
     stopFlagBuffer: value.stopFlagBuffer,
-    allowedPublisherThumbprints: canonicalAnchors(value.allowedPublisherThumbprints, PUBLISHER),
+    allowedPublisherThumbprints,
+    allowedPackageFamilyNames,
     allowedExecutableDigests: canonicalAnchors(value.allowedExecutableDigests, SHA256),
     nativeModule: canonicalNativeModule(value.nativeModule),
-  })
+  }) satisfies WindowsHostPipeWorkerBootData
 }
 
 /** Build and revalidate the payload before crossing the Worker structured-clone boundary. */
@@ -121,6 +129,7 @@ export function createWindowsHostPipeWorkerBootData(
       policy: options.policy,
       stopFlagBuffer: options.stopFlag.buffer,
       allowedPublisherThumbprints: [...options.allowedPublisherThumbprints].sort(),
+      allowedPackageFamilyNames: [...(options.allowedPackageFamilyNames ?? [])].sort(),
       allowedExecutableDigests: [...options.allowedExecutableDigests].sort(),
       nativeModule: options.nativeModule,
     })

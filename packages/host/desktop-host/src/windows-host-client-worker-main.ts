@@ -73,6 +73,7 @@ export async function runWindowsHostClientWorkerMain(
       dependencies.loadIo(),
       dependencies.loadAttestor({
         allowedPublisherThumbprints: new Set(boot.allowedPublisherThumbprints),
+        allowedPackageFamilyNames: new Set(boot.allowedPackageFamilyNames),
         allowedExecutableDigests: new Set(boot.allowedExecutableDigests),
         peerProcessRole: 'server',
       }),

@@ -24,6 +24,7 @@ interface WindowsNativeWorkerRuntime {
 /** Trust anchors and runtime facts for the complete Windows peer attestor. */
 export interface WindowsNativePeerAttestorOptions {
   readonly allowedPublisherThumbprints: ReadonlySet<string>
+  readonly allowedPackageFamilyNames?: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
   /** `client` for a Host-owned pipe; `server` for a Desktop-owned client connection. */
   readonly peerProcessRole?: 'client' | 'server'
@@ -79,6 +80,7 @@ export async function loadWindowsPeerAttestor(
     : createWindowsPeerProcessBindings(native)
   return createWindowsPeerAttestor({
     allowedPublisherThumbprints: options.allowedPublisherThumbprints,
+    allowedPackageFamilyNames: options.allowedPackageFamilyNames ?? new Set(),
     allowedExecutableDigests: options.allowedExecutableDigests,
     bindings,
   })
