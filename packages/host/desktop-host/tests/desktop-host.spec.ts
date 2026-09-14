@@ -900,6 +900,77 @@ describe('single Host ownership', () => {
 })
 
 describe('session, approval, and context authority', () => {
+  it('fails closed on malformed journals and preserves every recovered terminal outcome', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const path = join(root, 'nested', 'journal.jsonl')
+    const journal = new FileHostJournal(path)
+    expect(journal.read()).toEqual([])
+    writeFileSync(path, '')
+    expect(journal.read()).toEqual([])
+    writeFileSync(path, '{}')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    writeFileSync(path, '{}\n')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    writeFileSync(path, 'not-json\n')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    expect(() => new FileHostJournal(root).read()).toThrow()
+
+    expect(() => {
+      journal.append({
+        kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'invalid',
+        payloadHash: 'a'.repeat(64), outcome: undefined, at: 1,
+      })
+    }).toThrow(HostAuthorityError)
+    expect(() => {
+      journal.append({
+        kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'large',
+        payloadHash: 'a'.repeat(64), outcome: 'x'.repeat(1024 * 1024), at: 1,
+      })
+    }).toThrow(HostAuthorityError)
+
+    writeFileSync(path, [
+      { kind: 'command_started', profileId: 'p', sessionId: 's', commandId: 'started', payloadHash: 'a'.repeat(64), at: 1 },
+      { kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'committed', payloadHash: 'b'.repeat(64), outcome: 42, at: 2 },
+      { kind: 'command_failed', profileId: 'p', sessionId: 's', commandId: 'failed', payloadHash: 'c'.repeat(64), at: 3 },
+    ].map(event => JSON.stringify(event)).join('\n') + '\n')
+    const authority = new SessionCommandAuthority(journal, clock)
+    expect(authority.outcome('p', 'started')).toEqual({ status: 'unknown' })
+    expect(authority.outcome('p', 'committed')).toEqual({ status: 'committed', value: 42 })
+    expect(authority.outcome('p', 'failed')).toEqual({ status: 'failed' })
+    expect(authority.outcome('p', 'missing')).toBeNull()
+    let executed = false
+    await expect(authority.run({ profileId: 'p', sessionId: 's', commandId: 'committed', payloadHash: 'b'.repeat(64) }, async () => {
+      executed = true
+    })).resolves.toEqual({ status: 'committed', value: 42 })
+    expect(executed).toBe(false)
+    await expect(authority.run({ profileId: 'p', sessionId: 's', commandId: 'failed', payloadHash: 'd'.repeat(64) }, async () => {}))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+  })
+
+  it('deduplicates active commands and records execution failure before admitting the next write', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const journal = new FileHostJournal(join(root, 'journal.jsonl'))
+    const authority = new SessionCommandAuthority(journal, clock)
+    const input = { profileId: 'p', sessionId: 's', commandId: 'active', payloadHash: 'a'.repeat(64) }
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const active = authority.run(input, async () => { await blocked; throw new Error('execution failed') })
+    expect(authority.run(input, async () => 'duplicate')).toBe(active)
+    await expect(authority.run({ ...input, payloadHash: 'b'.repeat(64) }, async () => 'conflict'))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+    await expect(authority.run({ ...input, commandId: 'invalid', payloadHash: 'A'.repeat(64) }, async () => 'invalid'))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    const next = authority.run({ ...input, commandId: 'next', payloadHash: 'c'.repeat(64) }, async () => 'next')
+    release()
+    await expect(active).rejects.toThrow('execution failed')
+    await expect(next).resolves.toEqual({ status: 'committed', value: 'next' })
+    expect(authority.outcome('p', 'active')).toEqual({ status: 'failed' })
+    await expect(authority.run(input, async () => 'must not run')).resolves.toEqual({ status: 'failed' })
+    await new Promise<void>(resolve => setImmediate(resolve))
+  })
+
   it('serializes the same profile/session, permits other sessions, and recovers started commands as unknown', async () => {
     const journal = new FileHostJournal(join(dir(), 'journal.jsonl'))
     const authority = new SessionCommandAuthority(journal, clock)
