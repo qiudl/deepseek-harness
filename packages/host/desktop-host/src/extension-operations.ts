@@ -101,7 +101,12 @@ export function validateExtensionReceipt(input: unknown): asserts input is Exten
   const value = input as Record<string, unknown>
   uuid(value.operationId); uuid(value.profileId); uuid(value.planId)
   const keys = ['version', 'operationId', 'profileId', 'planId', 'kind', 'digest', 'state', 'cancellationRequested', 'createdAt', 'updatedAt', 'reason', 'skillSource', 'skillRemoval', 'mcpRecovery', 'pluginToggleRecovery', 'pluginPackage', 'recoveryMode', 'restores']
-  if (value.restores !== undefined) { uuid(value.restores); if (!kinds.includes(String(value.kind)) || value.restores === value.operationId) throw Error('invalid_receipt') }
+  if (value.restores !== undefined) {
+    uuid(value.restores)
+    if (typeof value.kind !== 'string' || !kinds.includes(value.kind) || value.restores === value.operationId) {
+      throw Error('invalid_receipt')
+    }
+  }
   if (value.pluginPackage !== undefined && (value.kind !== 'plugin' || !validPluginPackageRecovery(value.pluginPackage))) throw Error('invalid_receipt')
   if (value.recoveryMode !== undefined && (value.recoveryMode !== 'complete' || value.kind !== 'plugin' || !value.restores)) throw Error('invalid_receipt')
   if (value.pluginToggleRecovery !== undefined) {

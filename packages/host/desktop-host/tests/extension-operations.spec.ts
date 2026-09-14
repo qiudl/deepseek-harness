@@ -5,9 +5,53 @@ import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
-import { FileExtensionReceipts, ProfileExtensionOperations } from '../src/extension-operations.ts'
+import { FileExtensionReceipts, ProfileExtensionOperations, validateExtensionReceipt } from '../src/extension-operations.ts'
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex')
+const receiptRecord = (): Record<string, unknown> => ({
+  version: 1,
+  operationId: randomUUID(),
+  profileId: randomUUID(),
+  planId: randomUUID(),
+  kind: 'plugin',
+  digest: hash('payload'),
+  state: 'running',
+  cancellationRequested: false,
+  createdAt: 1,
+  updatedAt: 2,
+})
+
+it.each([
+  ['self restoration', (receipt: Record<string, unknown>) => { receipt.restores = receipt.operationId }],
+  ['recovery mode without a restoration', (receipt: Record<string, unknown>) => { receipt.recoveryMode = 'complete' }],
+  ['plugin evidence on an MCP receipt', (receipt: Record<string, unknown>) => {
+    receipt.kind = 'mcp'
+    receipt.pluginToggleRecovery = {
+      packageName: 'fixture', backupDigest: hash('backup'), beforeRevision: hash('before'),
+      afterRevision: hash('after'), stage: 'prepared',
+    }
+  }],
+  ['duplicate MCP ids', (receipt: Record<string, unknown>) => {
+    receipt.kind = 'mcp'
+    receipt.mcpRecovery = {
+      beforeRevision: hash('before'), afterRevision: hash('after'), originalPresent: true,
+      introducedIds: ['mcp-demo', 'mcp-demo'], stage: 'prepared',
+    }
+  }],
+  ['invalid Skill evidence', (receipt: Record<string, unknown>) => {
+    receipt.kind = 'skill'
+    receipt.skillRemoval = {
+      entryId: 'flat-demo', originalDigest: hash('original'), beforeRevision: hash('before'),
+      removedRevision: hash('removed'), stage: ['prepared'],
+    }
+  }],
+  ['unexpected metadata', (receipt: Record<string, unknown>) => { receipt.secret = 'must-not-persist' }],
+] as const)('rejects malformed receipt metadata: %s', (_label, mutate) => {
+  const receipt = receiptRecord()
+  mutate(receipt)
+  expect(() => { validateExtensionReceipt(receipt) }).toThrow('invalid_receipt')
+})
+
 it.each(['action', 'stage'])('refuses persisted plugin recovery with an array-valued %s', (field) => {
   const f = setup()
   onTestFinished(() => f.operations.dispose())
@@ -25,6 +69,34 @@ it.each(['action', 'stage'])('refuses persisted plugin recovery with an array-va
   const malformed = JSON.stringify(receipt)
   writeFileSync(file, malformed)
   expect(() => f.store.read(id)).toThrow('invalid_receipt')
+  expect(readFileSync(file, 'utf8')).toBe(malformed)
+  expect(f.executions()).toBe(0)
+})
+
+it('refuses an array-valued kind on a persisted restoration receipt', () => {
+  const f = setup()
+  onTestFinished(() => f.operations.dispose())
+  const operationId = randomUUID()
+  f.store.write({
+    version: 1,
+    operationId,
+    profileId: f.profileId,
+    planId: randomUUID(),
+    kind: 'plugin',
+    digest: hash('payload'),
+    state: 'running',
+    cancellationRequested: false,
+    createdAt: 1,
+    updatedAt: 2,
+    restores: randomUUID(),
+  })
+  const file = join(f.root, 'receipts', `${operationId}.json`)
+  const receipt = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  receipt.kind = ['plugin']
+  const malformed = JSON.stringify(receipt)
+  writeFileSync(file, malformed)
+
+  expect(() => f.store.read(operationId)).toThrow('invalid_receipt')
   expect(readFileSync(file, 'utf8')).toBe(malformed)
   expect(f.executions()).toBe(0)
 })
