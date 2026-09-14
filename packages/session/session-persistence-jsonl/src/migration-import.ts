@@ -68,7 +68,7 @@ export class FileOwnerMigrationTransferStore {
     validateBundle(bundle)
     await this.ensureRoot()
     const bytes = Buffer.from(JSON.stringify(bundle))
-    if (bytes.byteLength < 1 || bytes.byteLength > MAX_TRANSFER_BYTES) {
+    if (bytes.byteLength > MAX_TRANSFER_BYTES) {
       throw new Error('migration_transfer_too_large')
     }
     const transferId = randomBytes(24).toString('hex')
@@ -141,9 +141,7 @@ export class FileOwnerMigrationTransferStore {
   }
 
   private file(transferId: string): string {
-    const file = join(this.root, `${transferId}.json`)
-    if (dirname(file) !== this.root) throw new Error('migration_transfer_invalid')
-    return file
+    return join(this.root, `${transferId}.json`)
   }
 
   private async ensureRoot(): Promise<void> {
@@ -215,11 +213,7 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
   async activePersistenceConfig(): Promise<{ root: string; compression: 'none'; generation: number }> {
     const generation = await this.activeGeneration()
     const root = this.generationRoot(generation)
-    try {
-      await this.ensureOwnedDirectory(root, true)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
+    await this.ensureOwnedDirectory(root, true)
     return { root: await this.checkedGenerationRoot(generation), compression: 'none', generation }
   }
 
@@ -375,8 +369,6 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     this.validateGeneration(generation)
     if (await this.activeGeneration() === generation) throw new Error('migration_import_already_committed')
     const directory = this.generationRoot(generation)
-    const within = relative(join(this.root, 'generations'), directory)
-    if (!within || within.startsWith(`..${sep}`)) throw new Error('migration_generation_invalid')
     await rm(directory, { recursive: true, force: true })
     await syncDirectory(join(this.root, 'generations'))
   }

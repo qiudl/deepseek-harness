@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { access, chmod, link, mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SESSION_FORMAT_VERSION, SessionId, SessionSeq, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
 import {
@@ -261,6 +261,13 @@ describe('owner-only migration import', () => {
     await writeFile(join(mixedCompression.session, 'session.jsonl.zstd'), 'unsafe', { mode: 0o600 })
     await expect(mixedCompression.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
 
+    const legacyCompression = await fixture('dsh-owner-generation-legacy-compression-')
+    await unlink(join(legacyCompression.session, `session.v${SESSION_FORMAT_VERSION}.jsonl`))
+    await writeFile(join(legacyCompression.session, 'session.jsonl.zstd'), 'legacy', { mode: 0o600 })
+    await expect(legacyCompression.target.inspectExistingPersistence()).resolves.toMatchObject({ sessionCount: 1 })
+    await writeFile(join(legacyCompression.session, 'session.v1.jsonl.zstd'), 'duplicate', { mode: 0o600 })
+    await expect(legacyCompression.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+
     const unsafeLog = await fixture('dsh-owner-generation-log-mode-')
     await chmod(join(unsafeLog.session, `session.v${SESSION_FORMAT_VERSION}.jsonl`), 0o644)
     await expect(unsafeLog.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
@@ -317,6 +324,14 @@ describe('owner-only migration import', () => {
     await target.abortGeneration(5)
     await expect(access(target.generationRoot(5))).rejects.toMatchObject({ code: 'ENOENT' })
 
+    const generations = join(root, 'generations')
+    await chmod(generations, 0o500)
+    try {
+      await expect(target.prepareEmptyGeneration(6)).rejects.toMatchObject({ code: 'EACCES' })
+    } finally {
+      await chmod(generations, 0o700)
+    }
+
     const concurrentRoot = await mkdtemp(join(tmpdir(), 'dsh-owner-generation-initialize-cas-'))
     const left = new FileOwnerJsonlMigrationGenerationTarget(concurrentRoot, uid, 4)
     const right = new FileOwnerJsonlMigrationGenerationTarget(concurrentRoot, uid, 4)
@@ -352,6 +367,14 @@ describe('owner-only migration import', () => {
       { ...valid, semanticDigest: '0'.repeat(64) },
     ]
     for (const candidate of malformed) await expect(store.stage(candidate)).rejects.toThrow(/invalid|mismatch/u)
+    const oversized = Buffer.alloc(1)
+    Object.defineProperty(oversized, 'byteLength', { value: 256 * 1024 * 1024 + 1 })
+    const from = vi.spyOn(Buffer, 'from').mockReturnValueOnce(oversized)
+    try {
+      await expect(store.stage(valid)).rejects.toThrow(/too_large/u)
+    } finally {
+      from.mockRestore()
+    }
     await expect(access(join(root, `${'0'.repeat(48)}.json`))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -383,6 +406,12 @@ describe('owner-only migration import', () => {
     await chmod(root, 0o700)
     await store.remove(transfer.transferId)
     await expect(store.remove(transfer.transferId)).resolves.toBeUndefined()
+
+    const invalidParent = await mkdtemp(join(tmpdir(), 'dsh-owner-transfer-not-directory-'))
+    const notDirectory = join(invalidParent, 'transfer-root')
+    await writeFile(notDirectory, 'not a directory', { mode: 0o600 })
+    await expect(new FileOwnerMigrationTransferStore(notDirectory, uid).remove('0'.repeat(48)))
+      .rejects.toMatchObject({ code: 'ENOTDIR' })
   })
 
   it('validates journal payloads, file ownership shape, and append-only CAS', async () => {
@@ -411,6 +440,7 @@ describe('owner-only migration import', () => {
     await expect(journal.load('invalid')).rejects.toThrow(/journal_invalid/u)
     await expect(journal.load(valid.importId)).resolves.toBeUndefined()
     await journal.create(valid)
+    await expect(journal.create(valid)).rejects.toThrow(/stale/u)
     const file = join(root, `${valid.importId}.1.json`)
     await chmod(file, 0o644)
     await expect(journal.load(valid.importId)).rejects.toThrow(/journal_unsafe/u)
