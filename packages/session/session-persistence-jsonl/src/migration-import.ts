@@ -426,12 +426,13 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     await this.writeExclusive(temporary, `${JSON.stringify(value)}\n`)
     try {
       await link(temporary, file)
+      await unlink(temporary)
       await syncDirectory(directory)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('migration_generation_stale')
       throw error
     } finally {
-      await unlink(temporary)
+      await rm(temporary, { force: true })
     }
   }
 
@@ -608,12 +609,13 @@ export class FileOwnerMigrationImportJournal {
     }
     try {
       await link(temporary, file)
+      await unlink(temporary)
       await syncDirectory(this.root)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('migration_import_stale')
       throw error
     } finally {
-      await unlink(temporary)
+      await rm(temporary, { force: true })
     }
   }
 
