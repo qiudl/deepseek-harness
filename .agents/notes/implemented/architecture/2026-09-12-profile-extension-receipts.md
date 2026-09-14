@@ -101,3 +101,5 @@ Profile Skill inspection and catalog reads share one default-preset registry res
 Plugin inventory and Skill reads share bounded worker-response decoding. Their 512 KiB and 256 KiB limits remain endpoint-owned; RPC identity and payload checks remain in each caller. The shared reader cancels rejected HTTP bodies and rejects oversized streams before JSON parsing.
 
 MCP patches and Plugin dependency state share POSIX file reads with endpoint-owned size limits and error identities. Recovery backups share the stricter private-file mode and presence-marker size bounds. Missing state remains distinct from an unreadable, linked, foreign-owned or oversized file; backup absence remains an error.
+
+Persisted Plugin package intents require string-valued action and stage fields. Coercing these fields allowed single-element JSON arrays to pass the receipt validator while later dispatch still compared their original values. Parser and real-file receipt regressions now reject that evidence before recovery execution.

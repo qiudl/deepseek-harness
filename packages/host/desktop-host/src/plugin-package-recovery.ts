@@ -15,7 +15,7 @@ export function validPluginPackageRecovery(input: unknown): input is PluginPacka
   if (!input || typeof input !== 'object' || Array.isArray(input)) return false
   const row = input as Record<string, unknown>
   return !Object.keys(row).some(key => !['action', 'packageName', 'spec', 'originalSpecDigest', 'scopeDigest', 'removedIds', 'stage'].includes(key))
-    && ['install', 'update', 'remove'].includes(String(row.action))
+    && typeof row.action === 'string' && ['install', 'update', 'remove'].includes(row.action)
     && typeof row.packageName === 'string' && row.packageName.length <= 214
     && /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(row.packageName)
     && (row.action === 'remove' ? row.spec === undefined : typeof row.spec === 'string' && isPinnedPluginSpec(row.spec)
@@ -25,5 +25,5 @@ export function validPluginPackageRecovery(input: unknown): input is PluginPacka
     && Array.isArray(row.removedIds) && row.removedIds.length <= 128 && new Set(row.removedIds).size === row.removedIds.length
     && row.removedIds.every(id => typeof id === 'string' && id.startsWith('include:') && id.length > 8 && Buffer.byteLength(JSON.stringify(id)) <= 258 && !/[\x00-\x1f\x7f]/u.test(id))
     && (row.action === 'remove' || row.removedIds.length === 0)
-    && ['prepared', 'command_completed', 'verified'].includes(String(row.stage))
+    && typeof row.stage === 'string' && ['prepared', 'command_completed', 'verified'].includes(row.stage)
 }

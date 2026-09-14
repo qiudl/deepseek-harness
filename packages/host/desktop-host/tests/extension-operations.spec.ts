@@ -8,6 +8,23 @@ import { ProfileRegistry } from '../src/profile-registry.ts'
 import { FileExtensionReceipts, ProfileExtensionOperations } from '../src/extension-operations.ts'
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex')
+it.each(['action', 'stage'])('refuses persisted plugin recovery with an array-valued %s', (field) => {
+  const f = setup()
+  onTestFinished(() => f.operations.dispose())
+  const id = randomUUID()
+  const intent = { action: 'install' as const, packageName: 'fixture', spec: 'fixture@1.0.0',
+    originalSpecDigest: hash('original'), scopeDigest: hash('scope'), removedIds: [], stage: 'prepared' as const }
+  f.store.write({ version: 1, operationId: id, profileId: f.profileId, planId: randomUUID(), kind: 'plugin',
+    digest: hash('payload'), state: 'running', cancellationRequested: false, createdAt: 1, updatedAt: 2, pluginPackage: intent })
+  const file = join(f.root, 'receipts', `${id}.json`)
+  const receipt = JSON.parse(readFileSync(file, 'utf8'))
+  receipt.pluginPackage[field] = [receipt.pluginPackage[field]]
+  const malformed = JSON.stringify(receipt)
+  writeFileSync(file, malformed)
+  expect(() => f.store.read(id)).toThrow('invalid_receipt')
+  expect(readFileSync(file, 'utf8')).toBe(malformed)
+  expect(f.executions()).toBe(0)
+})
 function setup() {
   const root = mkdtempSync(join(tmpdir(), 'dsh-extension-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
