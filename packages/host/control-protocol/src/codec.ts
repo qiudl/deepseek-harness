@@ -462,7 +462,7 @@ function extensionResponse(result: Record<string, unknown>): HostExtensionRespon
     if (result.outcome !== 'unknown') reject()
     const intent = record(result.plugin_complete)
     exactKeys(intent, ['action', 'package_name', ...('spec' in intent ? ['spec'] : [])])
-    if (!['install', 'update', 'remove'].includes(String(intent.action)) || typeof intent.package_name !== 'string'
+    if (typeof intent.action !== 'string' || !['install', 'update', 'remove'].includes(intent.action) || typeof intent.package_name !== 'string'
       || intent.package_name.length > 214 || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(intent.package_name)
       || (intent.action === 'remove' ? 'spec' in intent : typeof intent.spec !== 'string' || intent.spec.length > 256 || !/^[A-Za-z0-9@/._+#:-]+$/u.test(intent.spec))) reject()
     completion = { action: intent.action as 'install' | 'update' | 'remove', package_name: intent.package_name,

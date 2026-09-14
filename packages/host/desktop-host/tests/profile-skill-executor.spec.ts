@@ -15,6 +15,55 @@ function fixture() {
   onTestFinished(() =>{  rmSync(root, { recursive: true, force: true }) })
   return root
 }
+it.each([
+  ['null', null], ['array', []], ['string', 'skill'],
+  ['remove traversal', { action: 'remove', id: '../outside' }],
+  ['remove extra field', { action: 'remove', id: 'flat-demo', extra: true }],
+  ['remove overlong identity', { action: 'remove', id: `flat-${'a'.repeat(72)}` }],
+  ['routing metadata type', { ...JSON.parse(payload), whenToUse: 7 }],
+  ['routing metadata size', { ...JSON.parse(payload), whenToUse: 'a'.repeat(1025) }],
+  ['routing metadata NUL', { ...JSON.parse(payload), whenToUse: 'use\0this' }],
+  ['multibyte body size', { ...JSON.parse(payload), body: '界'.repeat(8193) }],
+  ['Markdown routing type', { name: 'host-demo', markdown: '---\nname: host-demo\ndescription: Test\nwhenToUse: [wrong]\n---\nBody.\n' }],
+  ['Markdown routing size', { name: 'host-demo', markdown: `---\nname: host-demo\ndescription: Test\nwhenToUse: ${'a'.repeat(1025)}\n---\nBody.\n` }],
+])('rejects invalid Skill input before publication: %s', async (_label, value) => {
+  const root = fixture()
+  const acknowledge = vi.fn(async () => undefined)
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge })
+  const request = JSON.stringify(value)
+  expect(() => executor.validate('a', 'skill', request)).toThrow('invalid_input')
+  await expect(executor.execute('a', request, { kind: 'skill', signal: new AbortController().signal, guard() {} }))
+    .rejects.toThrow('invalid_input')
+  expect(readdirSync(join(root, 'a'))).toEqual([])
+  expect(acknowledge).not.toHaveBeenCalled()
+})
+it('publishes routing guidance and requires the worker definition to retain it', async () => {
+  const root = fixture()
+  const whenToUse = 'Use for a Profile-local test.'
+  const file = join(root, 'a/skills/host-demo/SKILL.md')
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id),
+    acknowledge: async () => ({ name: 'host-demo', description: 'Profile-local test', content: 'Use the profile fixture.',
+      whenToUse, path: file, source: 'user-dsh', invocation: { modelInvocable: true, userInvocable: false } }) })
+  expect(await executor.execute('a', JSON.stringify({ ...JSON.parse(payload), whenToUse }),
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).toEqual({ state: 'succeeded' })
+  expect(parseSkillFile(readFileSync(file, 'utf8')).meta.whenToUse).toBe(whenToUse)
+})
+it.each([{ kind: ['model'] }, { kind: ['user'] }])('rejects an array-valued invocation selector before changing a skill: %j', async ({ kind }) => {
+  const root = fixture()
+  const directory = join(root, 'a/skills/host-demo')
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const file = join(directory, 'SKILL.md')
+  const original = '---\nname: host-demo\ndescription: Test\n---\nKeep this skill.\n'
+  writeFileSync(file, original, { mode: 0o600 })
+  const acknowledge = vi.fn(async () => undefined)
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge })
+  const request = JSON.stringify({ action: 'invocation', id: 'bundle-host-demo', kind, value: false })
+  expect(() => executor.validate('a', 'skill', request)).toThrow('invalid_input')
+  await expect(executor.execute('a', request, { kind: 'skill', signal: new AbortController().signal, guard() {} }))
+    .rejects.toThrow('invalid_input')
+  expect(readFileSync(file, 'utf8')).toBe(original)
+  expect(acknowledge).not.toHaveBeenCalled()
+})
 it('refuses a new skill at capacity while keeping existing skills manageable', async () => {
   const root = fixture()
   const skills = join(root, 'a/skills')

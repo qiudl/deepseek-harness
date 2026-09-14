@@ -69,7 +69,7 @@ MCP 删除只接受针对一个现有本地 MCP 行的 `{ "action": "remove", "i
 
 内部 [Skill 执行器](src/profile-skill-executor.ts) 复用 Hub 固定版本的 Markdown 生成逻辑，在 Host 解析出的 Profile 下创建一个新的 `skills/<name>/SKILL.md`。它拒绝已有同名技能、不安全文件系统条目和并发发布，使用私有权限并同步到磁盘。调用方的运行时生效确认必须返回所选预设作用域内、不按调用权限过滤的技能定义。执行器将其 Profile 路径、来源、名称、描述、路由提示、正文和调用标记与发布的 Markdown 比较；空确认不能代表成功。启动组合在同一 Profile 队列中注册两种安装器。技能发布后重启 worker，使用 Host 持有的 Cookie 读取 `skills/inspectProfile`；接口挂载默认预设的 standing scope，不启动 Session，也不传项目 cwd。确认仅证明默认预设可见性，不代表所有自定义预设或项目都可见。部分发布后的核对仍不属于此组件。
 
-技能调用开关复用 Hub 的 AST 更新方法，生成的辅助函数移除了文件系统副作用。Host 只接受现有本地条目 ID、模型/用户选项及布尔值；原子替换 Markdown，保留其他元数据和资源，并在重启后核验默认预设。生效确认失败时，仅在修订和授权仍有效的情况下恢复原字节并核验恢复结果。清单只返回从文件读取的 `model_invocable` 和 `user_invocable` 标记，不含指令正文；这些标记描述本地配置，不代表所有预设均可见。Desktop 根据 `skill_invocation` 能力启用开关。
+技能调用开关复用 Hub 的 AST 更新方法，生成的辅助函数移除了文件系统副作用。Host 只接受现有本地条目 ID、字面字符串 `model`/`user` 选项及布尔值；原子替换 Markdown，保留其他元数据和资源，并在重启后核验默认预设。生效确认失败时，仅在修订和授权仍有效的情况下恢复原字节并核验恢复结果。清单只返回从文件读取的 `model_invocable` 和 `user_invocable` 标记，不含指令正文；这些标记描述本地配置，不代表所有预设均可见。Desktop 根据 `skill_invocation` 能力启用开关。
 
 Markdown 文件导入接受 `{ name, markdown }`，保留原始字节、元数据和调用标记。声明名称必须与有效 frontmatter 一致；确认前检查描述、正文、调用字段类型和载荷大小。完整 JSON 计划不超过 32,768 个 UTF-8 字节，正文不超过 24,576 字节。拒绝已有同名技能。`skill_files` 声明此新文件导入能力，不允许 ZIP 上传，也不读取调用方提供的本地路径。
 

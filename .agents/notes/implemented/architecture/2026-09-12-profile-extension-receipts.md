@@ -103,3 +103,5 @@ Plugin inventory and Skill reads share bounded worker-response decoding. Their 5
 MCP patches and Plugin dependency state share POSIX file reads with endpoint-owned size limits and error identities. Recovery backups share the stricter private-file mode and presence-marker size bounds. Missing state remains distinct from an unreadable, linked, foreign-owned or oversized file; backup absence remains an error.
 
 Persisted Plugin package intents require string-valued action and stage fields. Coercing these fields allowed single-element JSON arrays to pass the receipt validator while later dispatch still compared their original values. Parser and real-file receipt regressions now reject that evidence before recovery execution.
+
+The same strict-string rule applies to Skill invocation selectors and wire-level Plugin completion actions. Regression fixtures reject single-element arrays at validation and execution, preserve the original Skill bytes, and confirm that no worker acknowledgement runs for rejected input.

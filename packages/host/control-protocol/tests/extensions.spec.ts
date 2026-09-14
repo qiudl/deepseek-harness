@@ -168,6 +168,7 @@ it('round-trips completion intents and keeps completion distinct from restoratio
     const value = frame(fields); expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
   }
   for (const fields of [{ plugin_complete: true }, { plugin_complete: { action: 'install', package_name: 'plugin' } },
+    { plugin_complete: { action: ['install'], package_name: 'plugin', spec: 'plugin@1.0.0' } },
     { plugin_complete: { action: 'remove', package_name: 'plugin', spec: 'plugin@1.0.0' } },
     { plugin_complete: { action: 'remove', package_name: '../escape' } }, { completed_by: operation },
     { completed_by: completed, restored_by: completed }, { completes_operation: completed, restores_operation: completed },

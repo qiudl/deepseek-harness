@@ -45,8 +45,8 @@ function input(payload: string): SkillRequest {
   }
   if (v.action === 'invocation') {
     if (Object.keys(v).length !== 4 || typeof v.id !== 'string' || !/^(bundle|flat)-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(v.id)
-      || v.id.length > 71 || !['model', 'user'].includes(String(v.kind)) || typeof v.value !== 'boolean') throw Error('invalid_input')
-    return { action: 'invocation', id: v.id, kind: v.kind as 'model' | 'user', value: v.value }
+      || v.id.length > 71 || (v.kind !== 'model' && v.kind !== 'user') || typeof v.value !== 'boolean') throw Error('invalid_input')
+    return { action: 'invocation', id: v.id, kind: v.kind, value: v.value }
   }
   if (Object.hasOwn(v, 'markdown')) {
     if (Object.keys(v).length !== 2 || typeof v.name !== 'string' || v.name.length > 64 || !skillName.test(v.name)
