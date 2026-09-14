@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, linkSync, chmodSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, linkSync, chmodSync, unlinkSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -243,6 +243,24 @@ describe('Profile extension operations', () => {
     symlinkSync(f.file, join(f.root, 'receipts', `${id}.json`))
     expect(() => f.store.read(id)).toThrow()
     expect(readFileSync(f.file, 'utf8')).toBe('before')
+  })
+  it('accepts a safe existing receipt directory and rejects permission drift and identity substitution', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-existing-receipts-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const receipts = join(root, 'receipts')
+    mkdirSync(receipts, { mode: 0o700 })
+    const store = new FileExtensionReceipts(receipts, process.getuid!())
+    const profileId = randomUUID()
+
+    chmodSync(receipts, 0o755)
+    expect(() => store.list(profileId)).toThrow('unsafe_receipts')
+    chmodSync(receipts, 0o700)
+
+    const requestedId = randomUUID()
+    const substituted = receiptRecord()
+    writeFileSync(join(receipts, `${requestedId}.json`), JSON.stringify(substituted), { mode: 0o600 })
+    expect(substituted.operationId).not.toBe(requestedId)
+    expect(() => store.read(requestedId)).toThrow('invalid_receipt')
   })
   it('rejects expired plans and duplicate confirmation under a different operation id', async () => {
     const f = setup(); let now = 1000
