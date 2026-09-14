@@ -355,6 +355,16 @@ describe('CI workflow', () => {
         expect(evaluate(job['runs-on'] as string, { DSH_CI_FAILOVER_LINUX: 'github' }, login)).toBe('ubuntu-24.04')
       }
     }
+    const coverageEnv = node24Coverage.env
+    if (!isRecord(coverageEnv)) throw new TypeError('node-24-coverage must define environment bounds')
+    for (const [name, hosted, standard] of [
+      ['DSH_COVERAGE_MAX_WORKERS', '3', '6'],
+      ['DSH_COVERAGE_PARTITIONS', '2', '4'],
+      ['DSH_GATE_CONCURRENCY', '2', '3'],
+    ] as const) {
+      expect(evaluate(coverageEnv[name] as string, { DSH_CI_FAILOVER_LINUX: 'github' }), `${name} coverage hosted failover`).toBe(hosted)
+      expect(evaluate(coverageEnv[name] as string, { DSH_CI_FAILOVER_LINUX: '' }), `${name} coverage primary runner`).toBe(standard)
+    }
     const consumerEnv = node24Consumers.env
     if (!isRecord(consumerEnv)) throw new TypeError('node-24-consumers must define environment bounds')
     for (const [name, hosted, standard] of [
