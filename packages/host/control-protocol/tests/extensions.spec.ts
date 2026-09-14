@@ -34,6 +34,30 @@ describe('Profile extension wire commands', () => {
     expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
     expect(() => decode({ ...value, result: { ...value.result, payload: 'secret' } })).toThrow()
   })
+
+  it('round-trips prepared plans and rejects malformed receipt fundamentals', () => {
+    const prepared = { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.extensions', result: {
+      state: 'prepared', plan_id: randomUUID(), kind: 'skill', digest: 'a'.repeat(64), expires_at: 2000,
+    } }
+    expect(encodeHostControlFrame(decode(prepared))).toBe(`${JSON.stringify(prepared)}\n`)
+    for (const result of [
+      { ...prepared.result, kind: ['skill'] },
+      { ...prepared.result, digest: 'not-a-digest' },
+      { ...prepared.result, expires_at: -1 },
+      { state: 'unknown' },
+    ]) expect(() => decode({ ...prepared, result })).toThrow()
+
+    const receipt = { state: 'receipt', operation_id: randomUUID(), outcome: 'failed', cancellation_requested: false,
+      created_at: 1000, updated_at: 2000, reason: 'executor_failed' }
+    const receiptFrame = { ...prepared, result: receipt }
+    for (const result of [
+      { ...receipt, outcome: ['failed'] },
+      { ...receipt, cancellation_requested: 'false' },
+      { ...receipt, updated_at: 999 },
+      { ...receipt, reason: ['executor_failed'] },
+      { ...receipt, reason: 'private_detail' },
+    ]) expect(() => decode({ ...receiptFrame, result })).toThrow()
+  })
 })
 
 it('round-trips optional archive support while accepting legacy inventory', () => {
@@ -141,8 +165,11 @@ it('round-trips Skill sources while rejecting incomplete status pairs and leaked
     result: { state: 'inventory', kind, entries: [row] } })
   expect(decode(value(entry))).toMatchObject({ result: { entries: [entry] } })
   for (const row of [{ ...entry, skill_source: '/private' }, { ...entry, skill_status: 'effective' }, { ...entry, path: '/private' },
-    { id: 'demo', name: 'demo', transport: 'markdown', skill_status: 'effective' }]) expect(() => decode(value(row))).toThrow()
+    { id: 'demo', name: 'demo', transport: 'markdown', skill_status: 'effective' },
+    { id: entry.id, name: entry.name, transport: entry.transport, model_invocable: true, user_invocable: false,
+      skill_source: 'user-dsh', skill_status: 'shadowed' }]) expect(() => decode(value(row))).toThrow()
   expect(() => decode(value(entry, 'mcp'))).toThrow()
+  expect(() => decode({ ...value(entry), result: { state: 'inventory', kind: 'skill', entries: Array(129).fill(entry) } })).toThrow()
 })
 
 it('keeps eligible recovery targets and restoration links bounded and mutually consistent', () => {
@@ -172,6 +199,8 @@ it('round-trips completion intents and keeps completion distinct from restoratio
     { plugin_complete: { action: 'remove', package_name: 'plugin', spec: 'plugin@1.0.0' } },
     { plugin_complete: { action: 'remove', package_name: '../escape' } }, { completed_by: operation },
     { completed_by: completed, restored_by: completed }, { completes_operation: completed, restores_operation: completed },
-    { completed_by: completed, plugin_restore: 'plugin' },
+    { completes_operation: operation },
+    { plugin_restore: 'plugin', completed_by: completed },
+    { outcome: 'succeeded', plugin_complete: { action: 'remove', package_name: 'plugin' } },
     { plugin_complete: { action: 'remove', package_name: 'plugin' }, mcp_restore: true }]) expect(() => decode(frame(fields))).toThrow()
 })

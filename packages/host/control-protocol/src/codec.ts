@@ -264,7 +264,11 @@ function bootstrapCookie(value: unknown): { readonly name: string; readonly valu
 function capabilities(value: unknown): readonly HostControlCapability[] {
   if (!Array.isArray(value)) reject()
   const parsed = value.map(capability)
-  if (parsed.some((entry, index) => index > 0 && entry <= (parsed[index - 1] ?? ''))) reject()
+  let previous: HostControlCapability | undefined
+  for (const entry of parsed) {
+    if (previous !== undefined && entry <= previous) reject()
+    previous = entry
+  }
   if (!parsed.includes('host.inspect' as HostControlCapability)) reject()
   return parsed
 }
@@ -721,7 +725,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
       ])
       if ((candidate.state !== 'recoverable' && candidate.state !== 'compatibility_blocked')
         || candidate.profile_kind !== 'account'
-        || !['current', 'legacy_runtime_required', 'read_only_export_only'].includes(String(candidate.compatibility))) reject()
+        || typeof candidate.compatibility !== 'string'
+        || !['current', 'legacy_runtime_required', 'read_only_export_only'].includes(candidate.compatibility)) reject()
       const state: 'recoverable' | 'compatibility_blocked' = candidate.state === 'recoverable'
         ? 'recoverable'
         : 'compatibility_blocked'
@@ -777,7 +782,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
       }
     }
     exactKeys(result, ['state'])
-    if (!['recovering', 'offline_ready', 'unknown'].includes(String(result.state))) reject()
+    if (typeof result.state !== 'string'
+      || !['recovering', 'offline_ready', 'unknown'].includes(result.state)) reject()
     return {
       version: 1, type: 'result', request_id, method: 'profile.recovery_status',
       result: { state: result.state as 'recovering' | 'offline_ready' | 'unknown' },
@@ -998,7 +1004,8 @@ function migrationRecord(value: unknown): MigrationExportRecord {
   const row = record(value)
   if (row.collection === 'sessions') exactKeys(row, ['collection', 'id', 'sequence', 'payload_digest'])
   else if (row.collection === 'session_events') exactKeys(row, ['collection', 'id', 'session_id', 'sequence', 'payload_digest'])
-  else if (['owner_settings', 'owner_credentials', 'owner_workspace', 'owner_profile'].includes(String(row.collection))) {
+  else if (typeof row.collection === 'string'
+    && ['owner_settings', 'owner_credentials', 'owner_workspace', 'owner_profile'].includes(row.collection)) {
     exactKeys(row, ['collection', 'id', 'sequence', 'payload_digest'])
   }
   else reject()
