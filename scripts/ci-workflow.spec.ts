@@ -604,6 +604,7 @@ describe('CI workflow', () => {
       'packages/session/session-persistence-jsonl/tests/migration-import.spec.ts',
       'packages/host/desktop-host/src/macos-peer-attestor.ts',
       'packages/host/desktop-host/src/posix-extension-files.ts',
+      'packages/host/desktop-host/src/session-command.ts',
       'packages/session/session-persistence-jsonl/src/migration-import.ts',
     ]) {
       expect(config).toContain(`'${path}'`)

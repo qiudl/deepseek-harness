@@ -139,7 +139,9 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       // The Linux lane holds these uid/mode-bit, Unix-socket, migration, and
       // macOS implementations at the same per-file 100% threshold. Windows
       // composes their stable-handle and ACL counterparts instead.
+      'packages/host/desktop-host/src/approval.ts',
       'packages/host/desktop-host/src/desktop-host.ts',
+      'packages/host/desktop-host/src/dsh-web-profile-worker.ts',
       'packages/host/desktop-host/src/extension-operations.ts',
       'packages/host/desktop-host/src/host-control-session.ts',
       'packages/host/desktop-host/src/legacy-migration-source.ts',
@@ -154,6 +156,9 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       'packages/host/desktop-host/src/profile-plugin-executor.ts',
       'packages/host/desktop-host/src/profile-registry.ts',
       'packages/host/desktop-host/src/profile-skill-executor.ts',
+      'packages/host/desktop-host/src/profile-worker-process.ts',
+      'packages/host/desktop-host/src/restarting-migration-target.ts',
+      'packages/host/desktop-host/src/session-command.ts',
       'packages/host/desktop-host/src/single-instance.ts',
       'packages/host/desktop-host/src/startup.ts',
       'packages/host/desktop-host/src/unix-transport.ts',
