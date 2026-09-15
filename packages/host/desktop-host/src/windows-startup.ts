@@ -35,6 +35,11 @@ import {
 import { loadWindowsWorkerIoCancellation } from './windows-worker-io-cancellation.ts'
 import { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 
+export {
+  loadWindowsLegacySourceProbe,
+  loadWindowsLocalProfileStorage,
+} from './windows-local-profile-storage-native.ts'
+
 const PUBLIC_KEY = /^[A-Za-z0-9_-]{43}$/u
 const SHA256 = /^[0-9a-f]{64}$/u
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u

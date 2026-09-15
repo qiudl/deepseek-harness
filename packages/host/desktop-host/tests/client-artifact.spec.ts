@@ -50,6 +50,8 @@ describe('desktop Host startup artifact', () => {
         const loaded = await import('data:text/javascript;base64,' + bytes.toString('base64'))
         assert.equal(typeof loaded.startWindowsDesktopHostApplicationFromPrivateFiles, 'function')
         assert.equal(typeof loaded.startWindowsDesktopHostApplication, 'function')
+        assert.equal(typeof loaded.loadWindowsLocalProfileStorage, 'function')
+        assert.equal(typeof loaded.loadWindowsLegacySourceProbe, 'function')
         for (const config of [{ platform: 'darwin', arch: 'arm64' }, { platform: 'win32', arch: 'arm64' }]) {
           await assert.rejects(loaded.startWindowsDesktopHostApplicationFromPrivateFiles(config), {
             name: 'HostAuthorityError', code: 'invalid_input',
