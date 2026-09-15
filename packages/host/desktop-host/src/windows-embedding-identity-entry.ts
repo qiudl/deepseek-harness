@@ -1,5 +1,8 @@
 import { readSync } from 'node:fs'
+import { loadWindowsCurrentUserSid } from './windows-current-user-native.ts'
 import { prepareWindowsDesktopHostEmbeddingIdentity } from './windows-embedding-identity.ts'
+import { loadWindowsHostRegistrationFileBindings } from './windows-host-registration-native.ts'
+import { loadPinnedWindowsVaultNativeModule } from './windows-pinned-vault-native.ts'
 
 const MAX_KEYRING_BYTES = 16 * 1024
 
@@ -31,6 +34,14 @@ async function main(): Promise<void> {
     throw new Error('invalid Windows identity bootstrap input')
   }
   const accountAccessKeyring = new TextDecoder('utf-8', { fatal: true }).decode(source)
+  const nativeModule = {
+    path: required('DSH_HOST_VAULT_NATIVE_MODULE_PATH'),
+    sha256: required('DSH_HOST_VAULT_NATIVE_MODULE_SHA256'),
+  }
+  let native: ReturnType<typeof loadPinnedWindowsVaultNativeModule> | undefined
+  const loadKoffi = () => Promise.resolve(
+    native ??= loadPinnedWindowsVaultNativeModule(nativeModule),
+  )
   const identity = await prepareWindowsDesktopHostEmbeddingIdentity({
     storageRoot: required('DSH_HOST_STORAGE_ROOT'),
     root: required('DSH_HOST_ROOT'),
@@ -38,6 +49,9 @@ async function main(): Promise<void> {
     accountKeyringSha256: required('DSH_HOST_ACCOUNT_KEYRING_SHA256'),
     runtimeGeneration: positive('DSH_HOST_RUNTIME_GENERATION'),
     schemaGeneration: positive('DSH_HOST_SCHEMA_GENERATION'),
+  }, {
+    loadCurrentUserSid: () => loadWindowsCurrentUserSid({ loadKoffi }),
+    loadRegistrationFileBindings: () => loadWindowsHostRegistrationFileBindings({ loadKoffi }),
   })
   process.stdout.write(`${JSON.stringify(identity)}\n`)
 }

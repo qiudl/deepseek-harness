@@ -40,6 +40,13 @@ describe('Windows Host Worker package artifact', () => {
     expect(bundleConfig).toContain(
       "entry: { 'windows-embedding-identity-entry': 'lib/types/windows-embedding-identity-entry.js' }",
     )
+    const bootstrap = readFileSync(
+      new URL('src/windows-embedding-identity-entry.ts', packageRoot),
+      'utf8',
+    )
+    expect(bootstrap).toContain("required('DSH_HOST_VAULT_NATIVE_MODULE_PATH')")
+    expect(bootstrap).toContain("required('DSH_HOST_VAULT_NATIVE_MODULE_SHA256')")
+    expect(bootstrap).toContain('loadPinnedWindowsVaultNativeModule(nativeModule)')
   })
 
   it('ships the private attested client Worker without exposing a public package entry', () => {
