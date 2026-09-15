@@ -371,12 +371,16 @@ export class ProfileRegistry {
    * @param keyHandle - Keychain handle already selected by trusted Desktop Main.
    * @returns the unique account Profile; missing and ambiguous handles fail closed.
    */
-  resolveUniqueAccountByKeyHandle(keyHandle: string): PersonProfileRecord {
+  resolveUniqueAccountByKeyHandle(keyHandle: string): PersonProfileRecord & {
+    readonly accountBindings: NonNullable<PersonProfileRecord['accountBindings']>
+  } {
     const normalized = handle(keyHandle)
     const matches = this.profiles.filter(profile => profile.kind === 'account' && profile.keyHandle === normalized)
     if (matches.length === 0) throw new HostAuthorityError('profile_not_found')
     if (matches.length !== 1) throw new HostAuthorityError('profile_ambiguous')
-    return matches[0] as PersonProfileRecord
+    return matches[0] as PersonProfileRecord & {
+      readonly accountBindings: NonNullable<PersonProfileRecord['accountBindings']>
+    }
   }
 
   /**

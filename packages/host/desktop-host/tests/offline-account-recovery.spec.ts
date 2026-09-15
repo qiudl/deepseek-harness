@@ -50,6 +50,23 @@ describe('offline Account Profile recovery', () => {
       .toThrow(expect.objectContaining({ code: 'profile_ambiguous' }))
   })
 
+  it('reports zero bindings for an unbound historical Account Profile', async () => {
+    const clock = { now: () => 1_000 }
+    const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
+    await account(registry, { subject: 'unbound', keyHandle: 'keychain:unbound' })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      inspectOfflineAccountProfile: async () => ({
+        state: 'recoverable', compatibility: 'current', persistenceGeneration: 11,
+        sessionCount: 0, pluginCount: 0, preflightDigest,
+      }),
+    })
+    await expect(host.inspectOfflineAccountProfiles({
+      keyHandles: ['keychain:unbound'], expectedRuntimeGeneration: 5,
+      expectedSchemaGeneration: 3, ownerId: 'connection-1',
+    })).resolves.toEqual({ candidates: [expect.objectContaining({ bindingCount: 0 })] })
+  })
+
   it('inspects without starting plugins, then grants only offline_local after proof and worker readiness', async () => {
     const clock = { now: () => 1_000 }
     const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })

@@ -124,6 +124,29 @@ it('enforces managed bundle uniqueness and required action capabilities', () => 
     action({ action: 'update', spec: 'fixture@2.0.0' })) }).toThrow('plugin_update_requires_enabled')
 })
 
+it('rejects malformed removal evidence returned by the toggle planner', async () => {
+  const f = fixture()
+  writeFileSync(f.manifest, JSON.stringify({
+    dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } },
+  }))
+  const executor = new ProfilePluginExecutor({
+    resolve: () => f.root,
+    uid: process.getuid!(),
+    install: async () => {},
+    acknowledge: async () => {},
+    togglePlan: () => ({
+      patch: '', expected: [], disabled: [], previousDisabled: [],
+      previousExpected: [{ entryId: 'malformed', moduleName: 'fixture' }],
+    }),
+    acknowledgeToggle: async () => {},
+    remove: async () => {},
+    acknowledgeRemoval: async () => {},
+  })
+  await expect(executor.execute(f.authority(), JSON.stringify({ action: 'remove', packageName: 'fixture' }), {
+    kind: 'plugin', signal: new AbortController().signal, guard() {},
+  })).rejects.toThrow('invalid_package_intent')
+})
+
 it('rejects malformed bundle declarations and duplicate registrations before installation', () => {
   const f = fixture()
   for (const bundles of [{}, [7]]) {

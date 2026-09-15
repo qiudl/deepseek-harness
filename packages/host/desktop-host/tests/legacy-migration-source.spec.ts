@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { compressZstdFrame } from '@deepseek-ai/dsh-session-persistence-jsonl/src/zstd.ts'
 import { createLegacyMigrationExportService } from '../src/legacy-migration-source.ts'
 
@@ -10,6 +10,7 @@ const uid = process.getuid?.() ?? 0
 
 async function fixture(): Promise<{ home: string; source: string }> {
   const home = await mkdtemp(join(tmpdir(), 'dsh-legacy-source-'))
+  onTestFinished(async () => { await rm(home, { recursive: true, force: true }) })
   const source = join(home, '.dsh')
   const session = join(source, 'sessions', '_no-cwd', 'session-1')
   await mkdir(session, { recursive: true, mode: 0o700 })
@@ -216,6 +217,60 @@ describe('fixed owner legacy migration source', () => {
     ])
 
     await expect(service(home).inventory()).resolves.toMatchObject({ requiredMaxRecords: 6 })
+  })
+
+  it('accepts released layouts with absent optional directories and empty defaults', async () => {
+    const mutations: Array<(source: string) => Promise<unknown>> = [
+      source => rm(join(source, 'profiles'), { recursive: true }),
+      source => unlink(join(source, 'storages', 'session_projcache.json')),
+      source => unlink(join(source, 'storages', 'workspace.json')),
+      source => rm(join(source, 'storages'), { recursive: true }),
+      source => writeFile(join(source, 'profiles', 'web', 'package.json'), JSON.stringify({
+        dsh: { profile: { patchReload: 'live', bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
+      }), { mode: 0o644 }),
+      source => writeFile(join(source, 'settings.yaml'), '', { mode: 0o600 }),
+      source => writeFile(join(source, 'storages', 'workspace.json'), JSON.stringify({
+        unit: { name: 'workspace', version: 2 }, tables: {},
+      }), { mode: 0o600 }),
+    ]
+
+    for (const mutate of mutations) {
+      const { home, source } = await fixture()
+      await mutate(source)
+      await expect(service(home).inventory()).resolves.toMatchObject({ requiredMaxRecords: 6 })
+    }
+  })
+
+  it('uses the owner home and injected clock when production defaults are selected', async () => {
+    const { home } = await fixture()
+    vi.stubEnv('HOME', home)
+    onTestFinished(() => { vi.unstubAllEnvs() })
+    const source = createLegacyMigrationExportService({
+      expectedUid: uid,
+      now: () => 123,
+      assertSourceQuiescent: async () => undefined,
+      stageOwnerTransfer: async () => { throw new Error('unexpected_transfer') },
+    })
+    await expect(source.inventory()).resolves.toMatchObject({ requiredMaxRecords: 6 })
+  })
+
+  it('rejects an owner document whose metadata changes during its bounded read', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), JSON.stringify({ padding: 'x'.repeat(15 * 1024 * 1024) }), { mode: 0o600 })
+    let touching = true
+    let tick = 0
+    const changes = (async () => {
+      while (touching) {
+        const changed = new Date(1_700_000_000_000 + tick++ * 1_000)
+        await utimes(join(source, 'settings.yaml'), changed, changed)
+      }
+    })()
+    try {
+      await expect(service(home).inventory()).rejects.toThrow(/source_changed/u)
+    } finally {
+      touching = false
+      await changes
+    }
   })
 
   it('rejects custom profile layouts and manifests', async () => {

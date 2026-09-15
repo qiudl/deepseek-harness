@@ -36,8 +36,7 @@ function input(payload: string): PluginInput | PluginToggleInput | PluginUpdateI
   if (row.action === 'update') {
     if (Object.keys(row).length !== 3) throw Error('invalid_plugin_input')
     const parsed = input(JSON.stringify({ packageName: row.packageName, spec: row.spec }))
-    if (!('spec' in parsed)) throw Error('invalid_plugin_input')
-    return { action: 'update', packageName: parsed.packageName, spec: parsed.spec }
+    return { action: 'update', packageName: parsed.packageName, spec: (parsed as PluginInput).spec }
   }
   if (row.action === 'toggle') {
     if (Object.keys(row).length !== 3 || typeof row.packageName !== 'string' || row.packageName.length > 214
@@ -219,26 +218,32 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     const parent = openSync(join(this.root(profileId), 'profiles/web'), constants.O_RDONLY | constants.O_NOFOLLOW)
     try { fsyncSync(parent) } finally { closeSync(parent) }
   }
-  private readToggleBackup(profileId: string, receipt: ExtensionReceipt): string | null {
+  private toggleCapabilities(): Pick<Required<ProfilePluginExecutorOptions>, 'togglePlan' | 'acknowledgeToggle'> {
+    const { togglePlan, acknowledgeToggle } = this.options
+    if (!togglePlan || !acknowledgeToggle) throw Error('upgrade_required')
+    return { togglePlan, acknowledgeToggle }
+  }
+  private readToggleBackup(profileId: string, receipt: ExtensionReceipt): {
+    patch: string | null
+    evidence: PluginToggleRecovery
+  } {
     const evidence = receipt.pluginToggleRecovery
     if (receipt.profileId !== profileId || receipt.kind !== 'plugin' || !evidence) throw Error('invalid_recovery')
     const text = readExtensionBackupFile(this.backupPath(profileId, receipt.operationId), this.options.uid)
     if (text !== '0' && !text.startsWith('1')) throw Error('invalid_backup')
     const patch = text === '0' ? null : text.slice(1)
     if (this.patchDigest(patch) !== evidence.backupDigest) throw Error('invalid_backup')
-    return patch
+    return { patch, evidence }
   }
   /** @param profileId Authorized Profile. @param receipt Original toggle receipt. @returns Backup and dependency-state validation. */
   validatePluginRestore(profileId: string, receipt: ExtensionReceipt): Promise<void> {
     return Promise.resolve().then(() => {
-      const patch = this.readToggleBackup(profileId, receipt)
-      const evidence = receipt.pluginToggleRecovery
-      if (!evidence) throw Error('invalid_recovery')
-      if (!this.options.togglePlan || !this.options.acknowledgeToggle) throw Error('upgrade_required')
+      const { patch, evidence } = this.readToggleBackup(profileId, receipt)
+      const { togglePlan } = this.toggleCapabilities()
       const revision = this.stateRevision(profileId)
       if (revision !== evidence.beforeRevision && revision !== evidence.afterRevision) throw Error('plugin_state_changed')
       if (this.stateRevision(profileId, { patch }) !== evidence.beforeRevision) throw Error('plugin_state_changed')
-      this.options.togglePlan(profileId, evidence.packageName, true, patch ?? '')
+      togglePlan(profileId, evidence.packageName, true, patch ?? '')
     })
   }
   /**
@@ -250,10 +255,8 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   async restorePluginToggle(profileId: string, receipt: ExtensionReceipt, context: Lifetime): Promise<{ state: 'succeeded' }> {
     const guard = () => { context.signal.throwIfAborted(); context.guard() }
     guard(); await this.validatePluginRestore(profileId, receipt); guard()
-    const patch = this.readToggleBackup(profileId, receipt)
-    const evidence = receipt.pluginToggleRecovery
-    const { togglePlan, acknowledgeToggle } = this.options
-    if (!evidence || !togglePlan || !acknowledgeToggle) throw Error('invalid_recovery')
+    const { patch, evidence } = this.readToggleBackup(profileId, receipt)
+    const { togglePlan, acknowledgeToggle } = this.toggleCapabilities()
     const revision = this.stateRevision(profileId)
     if (revision !== evidence.beforeRevision && revision !== evidence.afterRevision) throw Error('plugin_state_changed')
     const plan = togglePlan(profileId, evidence.packageName, true, patch ?? '')
@@ -294,7 +297,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
       return manifest
     }
     const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable)
-      : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, stable(item)])) : value
+      : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)])) : value
     const values: unknown[] = []
     for (const prefix of ['', 'profiles/web/']) {
       values.push(normalize(this.read(root, `${prefix}package.json`), !!prefix))

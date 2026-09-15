@@ -3,7 +3,7 @@ import { parseSkillFile } from '#hub-skills'
 import { createHash, randomUUID } from 'node:crypto'
 import { FileExtensionReceipts, ProfileExtensionOperations, type ExtensionReceipt } from '../src/extension-operations.ts'
 import type {} from '@deepseek-ai/dsh-skill'
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -270,7 +270,9 @@ it('publishes the exact confirmed GitHub bundle with scripts and attachments, an
   const root = fixture(); const archive = new AdmZip()
   const markdown = '---\nname: host-demo\ndescription: Archive test\nlicense: MIT\n---\nUse scripts/run.sh.\n'
   archive.addFile('repo-main/demo/SKILL.md', Buffer.from(markdown))
-  archive.addFile('repo-main/demo/scripts/run.sh', Buffer.from('echo demo'), '', 0o100700 << 16 >>> 0)
+  archive.addFile('repo-main/demo/scripts/run.sh', Buffer.from('echo demo'))
+  archive.getEntry('repo-main/demo/scripts/run.sh')!.attr = 0o100700 << 16 >>> 0
+  archive.addFile('repo-main/demo/scripts/helper.sh', Buffer.from('echo helper'))
   archive.addFile('repo-main/demo/references/guide.md', Buffer.from('Original guide'))
   const data = archive.toBuffer()
   vi.stubGlobal('fetch', async () => new Response(new Uint8Array(data))); onTestFinished(() => { vi.unstubAllGlobals() })
@@ -283,6 +285,7 @@ it('publishes the exact confirmed GitHub bundle with scripts and attachments, an
   await expect(executor.execute('a', input, { kind: 'skill', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'succeeded' })
   expect(readFileSync(join(root, 'a/skills/host-demo/SKILL.md'), 'utf8')).toBe(markdown)
   expect(readFileSync(join(root, 'a/skills/host-demo/scripts/run.sh'), 'utf8')).toBe('echo demo')
+  expect(statSync(join(root, 'a/skills/host-demo/scripts/run.sh')).mode & 0o111).toBe(0o100)
   const before = await executor.revision('a')
   writeFileSync(join(root, 'a/skills/host-demo/references/guide.md'), 'Changed guide')
   expect(await executor.revision('a')).not.toBe(before)
@@ -712,6 +715,31 @@ it('restores a bundled Skill from operation-owned evidence and rejects a stale r
     { kind: 'skill', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'succeeded' })
   expect(readFileSync(file, 'utf8')).toBe(markdown)
   expect(readFileSync(join(directory, 'resource.txt'), 'utf8')).toBe('resource')
+})
+
+it('rejects recovery when the Profile revision changes immediately after restoring the backup', async () => {
+  const root = fixture(); const directory = join(root, 'a/skills')
+  mkdirSync(directory, { mode: 0o700 })
+  const file = join(directory, 'host-demo.md'); const markdown = '---\nname: host-demo\ndescription: Original\n---\nBody.\n'
+  writeFileSync(file, markdown, { mode: 0o600 })
+  const operationId = randomUUID(); const controller = new AbortController()
+  let evidence: NonNullable<ExtensionReceipt['skillRemoval']> | undefined
+  const executor = new ProfileSkillExecutor({ uid: process.getuid!(), profileRoot: id => join(root, id), acknowledge: async () => {
+    controller.abort()
+    throw Error('interrupted')
+  } })
+  await expect(executor.execute('a', JSON.stringify({ action: 'remove', id: 'flat-host-demo' }), {
+    kind: 'skill', operationId, signal: controller.signal, guard() {}, checkpointSkillRemoval(next) { evidence = { ...next } },
+  })).rejects.toThrow()
+  const revision = executor.revision.bind(executor)
+  let revisionCalls = 0
+  vi.spyOn(executor, 'revision').mockImplementation(async (profileId) => {
+    revisionCalls++
+    return revisionCalls === 2 ? '0'.repeat(64) : revision(profileId)
+  })
+  await expect(executor.restoreSkillRemoval('a', { profileId: 'a', operationId, skillRemoval: evidence } as ExtensionReceipt,
+    { kind: 'skill', signal: new AbortController().signal, guard() {} })).rejects.toThrow('recovery_conflict')
+  expect(readFileSync(file, 'utf8')).toBe(markdown)
 })
 
 it('does not overwrite a concurrent replacement while restoring an unconfirmed Skill removal', async () => {
