@@ -69,31 +69,34 @@ describe('dsh web Profile worker', () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
     const executable = fixture(`#!${process.execPath}
       import { createServer } from 'node:http'
-      if (process.env.DSH_TEST_SECRET || process.env.DSH_TEST_CONFIGURATION !== 'carried') process.exit(91)
-      const cookieName = 'dsh-auth-${'a'.repeat(43)}'
-      const cookieValue = 'v1.${'b'.repeat(8)}.${'c'.repeat(43)}'
-      const server = createServer((request, response) => {
-        const url = new URL(request.url, 'http://127.0.0.1')
-        if (url.searchParams.get('token') === 'must-stay-owner-only') {
-          response.writeHead(303, {
-            location: '/',
-            'set-cookie': cookieName + '=' + cookieValue + '; Max-Age=60; Path=/; Expires=Wed, 01 Jan 2031 00:00:00 GMT; HttpOnly; SameSite=Strict',
-          })
-          response.end()
-          return
-        }
-        if (request.headers.cookie === cookieName + '=' + cookieValue) {
-          response.end(process.env.DSH_PROFILE_ID)
-          return
-        }
-        response.writeHead(401)
-        response.end('unauthorized')
-      })
-      server.listen(0, '127.0.0.1', () => {
-        const { port } = server.address()
-        console.log('dsh web: http://127.0.0.1:' + port + '/?token=must-stay-owner-only')
-      })
-      process.on('SIGTERM', () => server.close(() => process.exit(0)))
+      export async function runCli() {
+        if (process.env.DSH_TEST_SECRET || process.env.DSH_TEST_CONFIGURATION !== 'carried') process.exit(91)
+        const cookieName = 'dsh-auth-${'a'.repeat(43)}'
+        const cookieValue = 'v1.${'b'.repeat(8)}.${'c'.repeat(43)}'
+        const server = createServer((request, response) => {
+          const url = new URL(request.url, 'http://127.0.0.1')
+          if (url.searchParams.get('token') === 'must-stay-owner-only') {
+            response.writeHead(303, {
+              location: '/',
+              'set-cookie': cookieName + '=' + cookieValue + '; Max-Age=60; Path=/; Expires=Wed, 01 Jan 2031 00:00:00 GMT; HttpOnly; SameSite=Strict',
+            })
+            response.end()
+            return
+          }
+          if (request.headers.cookie === cookieName + '=' + cookieValue) {
+            response.end(process.env.DSH_PROFILE_ID)
+            return
+          }
+          response.writeHead(401)
+          response.end('unauthorized')
+        })
+        server.listen(0, '127.0.0.1', () => {
+          const { port } = server.address()
+          console.log('dsh web: http://127.0.0.1:' + port + '/?token=must-stay-owner-only')
+        })
+        process.on('SIGTERM', () => server.close(() => process.exit(0)))
+      }
+      if (import.meta.main) await runCli()
     `)
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath,
@@ -134,7 +137,7 @@ describe('dsh web Profile worker', () => {
       nodeExecutablePath: process.execPath,
       dshEntrypointPath: process.execPath,
       platform: 'win32',
-      spawnProcess: (() => { spawns += 1; throw new Error('must not spawn') }) as typeof import('node:child_process').spawn,
+      spawnProcess: () => { spawns += 1; throw new Error('must not spawn') },
     })
     await expect(factory.create({ ...spec(root), env: { LARGE: 'x'.repeat(64 * 1024) } }))
       .rejects.toMatchObject({ code: 'invalid_input' })

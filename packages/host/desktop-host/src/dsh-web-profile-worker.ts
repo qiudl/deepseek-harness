@@ -29,7 +29,9 @@ for (const key of Object.keys(process.env)) delete process.env[key];
 Object.assign(process.env, input.environment);
 const entry = process.argv[1];
 if (typeof entry !== 'string' || entry.length === 0) throw Error('profile_entry_invalid');
-await import(pathToFileURL(entry, { windows: true }).href);
+const dsh = await import(pathToFileURL(entry, { windows: true }).href);
+if (typeof dsh.runCli !== 'function') throw Error('profile_entry_invalid');
+await dsh.runCli();
 `
 
 /** Verifies that a child PID, rather than another local process, owns a loopback listener. */
