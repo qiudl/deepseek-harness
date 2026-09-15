@@ -135,6 +135,8 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
 
 it.skipIf(process.platform === 'win32')('wires profile, extension, and migration owners into one disposable application', async () => {
   const { config, root, accountPrivateKey } = fixture()
+  mkdirSync(join(root, '.dsh/sessions'), { recursive: true, mode: 0o700 })
+  vi.stubEnv('HOME', root)
   let serverOptions: UnixHostServerOptions | undefined
   const workerSpecs: ProfileWorkerSpec[] = []
   const workerEvents: string[] = []
@@ -177,6 +179,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   })
   onTestFinished(async () => {
     await application.close()
+    vi.unstubAllEnvs()
     rmSync(root, { recursive: true, force: true })
   })
   expect(serverStart).toHaveBeenCalledOnce()
@@ -288,7 +291,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const legacy = await serverOptions.createLegacyMigrationExport?.('owner', profile.profileId)
   if (!legacy) throw new Error('missing legacy exporter')
   const legacyInventory = await legacy.inventory()
-  expect(legacyInventory.schemaVersion).toBe(3)
+  expect(legacyInventory.schemaVersion).toBe(0)
   const legacyReceipt = await legacy.begin({
     expectedInventoryDigest: legacyInventory.inventoryDigest,
     maxRecords: legacyInventory.requiredMaxRecords,
