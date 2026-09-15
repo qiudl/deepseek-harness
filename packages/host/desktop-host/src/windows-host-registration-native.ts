@@ -132,6 +132,7 @@ function decodeEvidenceSddl(sddl: string): Pick<WindowsHostPrivatePathEvidence, 
   const access: WindowsHostPathAccessEntry[] = []
   for (const match of encodedAces.matchAll(/\(([^()]*)\)/gu)) {
     const encodedAce = match[1]
+    /* v8 ignore next -- this regular expression has one unconditional capture group. */
     if (encodedAce === undefined) {
       throw new WindowsHostRegistrationNativeError('ConvertSecurityDescriptorToStringSecurityDescriptorW', ERROR_INVALID_DATA)
     }
@@ -139,14 +140,17 @@ function decodeEvidenceSddl(sddl: string): Pick<WindowsHostPrivatePathEvidence, 
     if ((type !== 'A' && type !== 'D') || sid === undefined || objectGuid !== '' || inheritGuid !== '') {
       throw new WindowsHostRegistrationNativeError('ConvertSecurityDescriptorToStringSecurityDescriptorW', ERROR_INVALID_DATA)
     }
-    const mask = decodeFileRights(rights ?? '')
+    // A defined sixth field proves every semicolon-delimited field before it is a string.
+    const decodedRights = rights as string
+    const decodedAceFlags = aceFlags as string
+    const mask = decodeFileRights(decodedRights)
     access.push({
       sid: normalizedSid(sid),
       type: type === 'A' ? 'allow' : 'deny',
       mask,
-      inherited: (aceFlags ?? '').includes('ID'),
-      objectInherit: (aceFlags ?? '').includes('OI'),
-      containerInherit: (aceFlags ?? '').includes('CI'),
+      inherited: decodedAceFlags.includes('ID'),
+      objectInherit: decodedAceFlags.includes('OI'),
+      containerInherit: decodedAceFlags.includes('CI'),
     })
   }
   return { ownerSid: normalizedSid(owner), daclProtected: flags.includes('P'), access }
@@ -286,6 +290,7 @@ export async function loadWindowsHostRegistrationFileBindings(
     try { checkedFree(descriptor, 'LocalFree') } catch (error) { failure ??= error }
     if (failure !== undefined) throwFailure(failure)
     const security = decoded
+    /* v8 ignore next -- successful string decoding assigns decoded; every other path records failure above. */
     if (security === undefined) {
       throw new WindowsHostRegistrationNativeError(
         'ConvertSecurityDescriptorToStringSecurityDescriptorW',
@@ -402,6 +407,7 @@ export async function loadWindowsHostRegistrationFileBindings(
           return { state: 'created' as const, evidence }
         } finally {
           if (!published) {
+            /* v8 ignore next -- every throwable operation before publication precedes clearing this handle. */
             if (handle !== undefined) {
               try { checkedClose(handle) } catch { /* the create failure remains authoritative */ }
               handle = undefined
@@ -466,6 +472,7 @@ export async function loadWindowsHostRegistrationFileBindings(
           handle = created as bigint
         })
         const outputHandle = handle
+        /* v8 ignore next -- a successful securityDescriptor callback always assigns the validated handle. */
         if (outputHandle === undefined) {
           throw new WindowsHostRegistrationNativeError('CreateFileW', ERROR_INVALID_DATA)
         }
@@ -509,6 +516,7 @@ export async function loadWindowsHostRegistrationFileBindings(
           handle = opened
         })
         const leaseHandle = handle
+        /* v8 ignore next -- a successful securityDescriptor callback always assigns the validated handle. */
         if (leaseHandle === undefined) throw new WindowsHostRegistrationNativeError('CreateFileW', ERROR_INVALID_DATA)
         const evidence = inspect(leaseHandle, path)
         let released = false
