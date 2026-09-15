@@ -212,13 +212,7 @@ export async function startWindowsHostCarrier(
     if (!workerIsReady(worker)) throw new HostAuthorityError('unavailable')
     return carrier
   } catch (error) {
-    try { await carrier.close() } catch (cleanupError) {
-      if (cleanupError instanceof WindowsHostProcessFallbackRequiredError) throw cleanupError
-      return await requireProcessFallback(options.processFallback, {
-        reason: 'worker_stop_failed',
-        cause: asError(cleanupError),
-      }, error)
-    }
+    await carrier.close()
     throw error
   }
 }

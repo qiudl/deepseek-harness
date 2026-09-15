@@ -1,4 +1,5 @@
 import { win32 } from 'node:path'
+import { parseCommandJournalEvent } from './command-journal-event.ts'
 import type { HostJournal, JournalEvent } from './session-command.ts'
 import {
   assertWindowsHostPrivatePathEvidence,
@@ -9,34 +10,7 @@ import { HostAuthorityError } from './types.ts'
 
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
-const SHA256 = /^[0-9a-f]{64}$/u
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
-
-function exactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(record).sort()
-  const sorted = [...expected].sort()
-  return actual.length === sorted.length && actual.every((key, index) => key === sorted[index])
-}
-
-function boundedText(value: unknown): value is string {
-  return typeof value === 'string' && value.length >= 1 && value.length <= 512 && !CONTROL_CHARACTER.test(value)
-}
-
-function journalEvent(value: unknown): JournalEvent {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HostAuthorityError('unavailable')
-  const record = value as Record<string, unknown>
-  const committed = record.kind === 'command_committed'
-  if (!['command_started', 'command_committed', 'command_failed'].includes(String(record.kind))
-    || !exactKeys(record, [
-      'kind', 'profileId', 'sessionId', 'commandId', 'payloadHash', ...(committed ? ['outcome'] : []), 'at',
-    ])
-    || !boundedText(record.profileId) || !boundedText(record.sessionId) || !boundedText(record.commandId)
-    || typeof record.payloadHash !== 'string' || !SHA256.test(record.payloadHash)
-    || !Number.isSafeInteger(record.at) || (record.at as number) < 0) {
-    throw new HostAuthorityError('unavailable')
-  }
-  return record as unknown as JournalEvent
-}
 
 /** Atomic Windows command journal owned by the already-held single Host lease. */
 export class WindowsHostJournal implements HostJournal {
@@ -60,11 +34,11 @@ export class WindowsHostJournal implements HostJournal {
   }
 
   append(event: JournalEvent): void {
-    journalEvent(event)
+    parseCommandJournalEvent(event)
     let encoded: Buffer
     try {
       const line = JSON.stringify(event)
-      journalEvent(JSON.parse(line) as unknown)
+      parseCommandJournalEvent(JSON.parse(line) as unknown)
       encoded = Buffer.from(`${line}\n`)
     } catch { throw new HostAuthorityError('invalid_input') }
     const existing = this.readSource()
@@ -88,7 +62,7 @@ export class WindowsHostJournal implements HostJournal {
     let text: string
     try { text = UTF8.decode(source) } catch { throw new HostAuthorityError('unavailable') }
     if (!text.endsWith('\n')) throw new HostAuthorityError('unavailable')
-    try { return text.slice(0, -1).split('\n').map(line => journalEvent(JSON.parse(line) as unknown)) } catch {
+    try { return text.slice(0, -1).split('\n').map(line => parseCommandJournalEvent(JSON.parse(line) as unknown)) } catch {
       throw new HostAuthorityError('unavailable')
     }
   }

@@ -44,6 +44,9 @@ it('does not treat redirection, foreign ownership, or arbitrary error objects as
       inspectExistingDirectory: (path) => { if (path === root) throw error; return evidence },
     } })).toEqual({ observedState: 'unknown', migrationAdmitted: false })
   }
+  expect(probeWindowsLegacySourcePresence({ userProfile, userSid, bindings: {
+    inspectExistingDirectory: path => path === root ? { ...evidence, reparsePoint: true } : evidence,
+  } })).toEqual({ observedState: 'unknown', migrationAdmitted: false })
 })
 
 it('rejects noncanonical roots and missing bindings before native inspection', () => {

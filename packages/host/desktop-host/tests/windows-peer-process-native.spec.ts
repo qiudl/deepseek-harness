@@ -14,6 +14,15 @@ interface FakeWorldOptions {
   readonly tokenBytes?: number
   readonly returnedTokenBytes?: number
   readonly sidText?: unknown
+  readonly tokenPointer?: bigint
+  readonly sidPointer?: bigint
+  readonly textPointer?: bigint
+  readonly tokenReadFailure?: number
+  readonly localFreeResult?: unknown
+  readonly queryCharacters?: number
+  readonly finalCharacters?: number
+  readonly decodeError?: unknown
+  readonly tokenSizingStatus?: number
 }
 
 function fakeWorld(options: FakeWorldOptions = {}) {
@@ -36,7 +45,7 @@ function fakeWorld(options: FakeWorldOptions = {}) {
     OpenProcess: (_access, _inherit, pid) => succeed('OpenProcess', () => BigInt(Number(pid) + 100)),
     OpenProcessToken: (_process, _access, token) => succeed('OpenProcessToken', () => {
       if (!Buffer.isBuffer(token)) throw new Error('expected token buffer')
-      token.writeBigUInt64LE(nextToken++)
+      token.writeBigUInt64LE(options.tokenPointer ?? nextToken++)
       return 1
     }),
     GetTokenInformation: (_token, _class, info, length, needed) => {
@@ -46,34 +55,35 @@ function fakeWorld(options: FakeWorldOptions = {}) {
       const failure = options.failures?.GetTokenInformation
       if (failure !== undefined) { lastError = failure; return 0 }
       needed.writeUInt32LE(options.tokenBytes ?? 32)
-      if (info === null) { lastError = 122; return 0 }
+      if (info === null) { lastError = 122; return options.tokenSizingStatus ?? 0 }
+      if (options.tokenReadFailure !== undefined) { lastError = options.tokenReadFailure; return 0 }
       needed.writeUInt32LE(options.returnedTokenBytes ?? options.tokenBytes ?? 32)
-      info.writeBigUInt64LE(900n)
+      info.writeBigUInt64LE(options.sidPointer ?? 900n)
       return 1
     },
     ConvertSidToStringSidW: (_sid, output) => succeed('ConvertSidToStringSidW', () => {
       if (!Buffer.isBuffer(output)) throw new Error('expected SID output buffer')
-      output.writeBigUInt64LE(901n)
+      output.writeBigUInt64LE(options.textPointer ?? 901n)
       return 1
     }),
     LocalFree: (pointer) => {
       calls.push({ name: 'LocalFree', args: [pointer] })
       freed.push(pointer as bigint)
-      return 0n
+      return options.localFreeResult ?? 0n
     },
     QueryFullProcessImageNameW: (_process, _flags, output, length) =>
       succeed('QueryFullProcessImageNameW', () => {
         if (!Buffer.isBuffer(output) || !Buffer.isBuffer(length)) throw new Error('expected image path buffers')
         const encoded = Buffer.from(executablePath, 'utf16le')
         encoded.copy(output)
-        length.writeUInt32LE(executablePath.length)
+        length.writeUInt32LE(options.queryCharacters ?? executablePath.length)
         return 1
       }),
     CreateFileW: () => succeed('CreateFileW', () => 802n),
     GetFinalPathNameByHandleW: (_handle, output) => succeed('GetFinalPathNameByHandleW', () => {
       if (!Buffer.isBuffer(output)) throw new Error('expected final path buffer')
       Buffer.from(finalExecutablePath, 'utf16le').copy(output)
-      return finalExecutablePath.length
+      return options.finalCharacters ?? finalExecutablePath.length
     }),
     CompareStringOrdinal: () => succeed('CompareStringOrdinal', () => options.compareResult ?? 2),
     CloseHandle: handle => succeed('CloseHandle', () => {
@@ -109,6 +119,7 @@ function fakeWorld(options: FakeWorldOptions = {}) {
       }),
     })),
     decode: vi.fn((value: unknown, offsetOrType: unknown, type?: unknown) => {
+      if (options.decodeError !== undefined) throw options.decodeError
       const decodedType = type ?? offsetOrType
       const offset = type === undefined ? 0 : Number(offsetOrType)
       if (decodedType === 'str16') return options.sidText ?? userSid
@@ -220,5 +231,88 @@ describe('Windows peer-process Koffi ABI', () => {
     expect(() => api.processOwnerSid(142n)).toThrow(WindowsPeerProcessNativeError)
     expect(world.calls.filter(call => call.name === 'ConvertSidToStringSidW')).toEqual([])
     expect(world.closed).toEqual([700n])
+  })
+
+  it('requires complete executable trust operations', async () => {
+    for (const incomplete of [{ digestExecutable: undefined }, { verifyAuthenticodePublisher: undefined }]) {
+      await expect(loadWindowsPeerProcessNativeApi({ ...trust, ...incomplete } as never, {
+        platform: 'win32', arch: 'x64', isMainThread: false, loadKoffi: vi.fn(),
+      })).rejects.toThrow('complete executable trust operations')
+    }
+  })
+
+  it('uses omitted runtime facts from the active worker runtime', async () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    const arch = vi.spyOn(process, 'arch', 'get').mockReturnValue('x64')
+    try {
+      await expect(loadWindowsPeerProcessNativeApi(trust, {
+        isMainThread: false, loadKoffi: async () => fakeWorld().koffi,
+      })).resolves.toBeDefined()
+    } finally {
+      platform.mockRestore()
+      arch.mockRestore()
+    }
+  })
+
+  it('preserves failures from each direct Win32 operation', async () => {
+    const cases: Array<[string, (api: Awaited<ReturnType<typeof load>>['api']) => unknown]> = [
+      ['GetNamedPipeClientProcessId', api => api.getNamedPipeClientProcessId(91n)],
+      ['GetNamedPipeServerProcessId', api => api.getNamedPipeServerProcessId(91n)],
+      ['OpenProcess', api => api.openProcess(42)],
+      ['OpenProcessToken', api => api.processOwnerSid(142n)],
+      ['QueryFullProcessImageNameW', api => api.queryProcessImagePath(142n)],
+      ['CreateFileW', api => api.openExecutableForVerification(executablePath)],
+      ['GetFinalPathNameByHandleW', api => api.finalExecutablePath(802n)],
+      ['CompareStringOrdinal', api => api.equalWindowsPath(executablePath, executablePath)],
+      ['CloseHandle', (api) => { api.closeHandle(142n) }],
+    ]
+    for (const [name, invoke] of cases) {
+      const state = await load(fakeWorld({ failures: { [name]: 5 } }))
+      expect(() => invoke(state.api)).toThrow(WindowsPeerProcessNativeError)
+    }
+  })
+
+  it('rejects malformed token handles, record sizes, SID pointers, and conversion output', async () => {
+    for (const malformed of [
+      { tokenPointer: 0n },
+      { tokenSizingStatus: 1 },
+      { tokenBytes: 8 },
+      { tokenReadFailure: 5 },
+      { returnedTokenBytes: 8 },
+      { sidPointer: 0n },
+      { failures: { ConvertSidToStringSidW: 5 } },
+      { textPointer: 0n },
+      { sidText: '' },
+      { localFreeResult: 901n },
+    ]) {
+      const state = await load(fakeWorld(malformed))
+      expect(() => state.api.processOwnerSid(142n)).toThrow(WindowsPeerProcessNativeError)
+    }
+  })
+
+  it('rejects failure to open the current process for SID inspection', async () => {
+    const state = await load(fakeWorld({ failures: { OpenProcess: 5 } }))
+    expect(() => state.api.currentUserSid()).toThrow(WindowsPeerProcessNativeError)
+  })
+
+  it('rejects invalid path lengths and preserves primitive decoding failures', async () => {
+    for (const malformed of [
+      { queryCharacters: 0 },
+      { queryCharacters: 32_768 },
+      { finalCharacters: 32_768 },
+    ]) {
+      const state = await load(fakeWorld(malformed))
+      const invoke = malformed.finalCharacters === undefined
+        ? () => state.api.queryProcessImagePath(142n)
+        : () => state.api.finalExecutablePath(802n)
+      expect(invoke).toThrow(WindowsPeerProcessNativeError)
+    }
+    const primitive = await load(fakeWorld({ decodeError: 'decode failure' }))
+    expect(() => primitive.api.processOwnerSid(142n)).toThrow('Unknown Windows peer-process failure')
+  })
+
+  it('still fails closed when cleanup fails after an operation failure', async () => {
+    const state = await load(fakeWorld({ sidText: '', localFreeResult: 901n, failures: { CloseHandle: 5 } }))
+    expect(() => state.api.processOwnerSid(142n)).toThrow(WindowsPeerProcessNativeError)
   })
 })

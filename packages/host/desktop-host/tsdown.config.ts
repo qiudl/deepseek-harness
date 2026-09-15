@@ -1,5 +1,17 @@
 import { defineConfig } from 'tsdown'
-import { typertPlugin } from '../../typert/generator/lib/types/tsdown-plugin.js'
+import { fileURLToPath } from 'node:url'
+// Static package inspection imports this config before generated JS exists.
+// Load the compiled generator only when the bundler actually invokes its hooks.
+function deferredTypertPlugin() {
+  let plugin: Promise<ReturnType<typeof import('../../typert/generator/src/tsdown-plugin.ts').typertPlugin>> | undefined
+  const load = () => plugin ??= import('../../typert/generator/lib/types/tsdown-plugin.js')
+    .then(({ typertPlugin }) => typertPlugin({ mode: 'package', faces: ['host'] }))
+  return {
+    name: 'dsh-typert-generator',
+    async transform(code: string, id: string) { return (await load()).transform(code, id) },
+    async writeBundle(options: { dir?: string }) { (await load()).writeBundle(options) },
+  }
+}
 
 /** Build Host authority entries plus the standalone Main-only client artifact. */
 export default defineConfig([
@@ -14,18 +26,7 @@ export default defineConfig([
     clean: false,
     codeSplitting: false,
     noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
-    plugins: [typertPlugin({ mode: 'package', faces: ['host'] })],
-  },
-  {
-    entry: { invariant: 'lib/types/invariant.js' },
-    outDir: 'lib',
-    format: ['esm'],
-    platform: 'node',
-    target: 'es2024',
-    fixedExtension: false,
-    dts: false,
-    clean: false,
-    codeSplitting: false,
+    plugins: [deferredTypertPlugin()],
   },
   {
     entry: { startup: 'lib/types/startup.js' },
@@ -38,10 +39,12 @@ export default defineConfig([
     clean: false,
     codeSplitting: false,
     noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
-    plugins: [typertPlugin({ mode: 'package', faces: ['host'] })],
+    plugins: [deferredTypertPlugin()],
   },
   {
     entry: { 'windows-startup': 'lib/types/windows-startup.js' },
+    // The verified startup loads from a data URL; YAML's default ESM export avoids createRequire(import.meta.url).
+    alias: { yaml: fileURLToPath(new URL('./node_modules/yaml/browser/index.js', import.meta.url)) },
     outDir: 'lib',
     format: ['esm'],
     platform: 'node',
@@ -50,7 +53,7 @@ export default defineConfig([
     dts: false,
     clean: false,
     codeSplitting: false,
-    noExternal: [/^@deepseek-ai\//u],
+    noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
   },
   {
     entry: { 'windows-host-pipe-worker-entry': 'lib/types/windows-host-pipe-worker-entry.js' },

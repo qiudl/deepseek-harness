@@ -134,6 +134,7 @@ async function runAcceptedWindowsNamedPipe<Evidence, Result>(
   }
   if (failure !== undefined) throw authorityError(failure)
   if (stopped) return { state: 'stopped' }
+  /* v8 ignore next -- a non-failed, non-stopped transaction sets completed with its result. */
   if (!completed) throw new HostAuthorityError('unavailable')
   return { state: 'served', result: result as Result }
 }
@@ -142,6 +143,7 @@ export async function withAcceptedWindowsNamedPipe<Evidence, Result>(
   options: AcceptedWindowsNamedPipeOptions<Evidence, Result>,
 ): Promise<Result> {
   const outcome = await runAcceptedWindowsNamedPipe(options, () => false)
+  /* v8 ignore next -- the fixed false stop observer cannot produce the stopped outcome. */
   if (outcome.state !== 'served') throw new HostAuthorityError('unavailable')
   return outcome.result
 }

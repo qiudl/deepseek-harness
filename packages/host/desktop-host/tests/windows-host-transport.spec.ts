@@ -4,12 +4,23 @@ import {
   type StartWindowsHostTransportDependencies,
 } from '../src/windows-host-transport.ts'
 import type { WindowsHostCarrierWorker } from '../src/windows-host-carrier.ts'
+import { WindowsHostProcessFallbackRequiredError } from '../src/windows-host-carrier.ts'
 import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-registration.ts'
 import { WindowsHostWorkerParentSupervisor } from '../src/windows-host-worker-parent-supervisor.ts'
 import { createWindowsWorkerStopFlag } from '../src/windows-worker-io-cancellation.ts'
 
 const installationId = 'slark-dsh-d3a7a33ed99e8ce5b4d3522d96336dffa8da2820'
 const endpointRegistrationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3126'
+
+async function captureFallback(promise: Promise<unknown>): Promise<WindowsHostProcessFallbackRequiredError> {
+  try {
+    await promise
+    throw new Error('expected process fallback')
+  } catch (error) {
+    if (!(error instanceof WindowsHostProcessFallbackRequiredError)) throw error
+    return error
+  }
+}
 
 function fixture() {
   const stop = vi.fn<WindowsHostCarrierWorker['stop']>(async () => ({
@@ -173,7 +184,11 @@ describe('Windows Host production transport composition', () => {
     expect(state.replacePrivateFile).toHaveBeenCalledOnce()
     expect(state.startupOrder).toEqual(['ownership', 'initialize', 'worker'])
 
-    await carrier.close()
+    expect(() => { carrier.assertHealthy() }).not.toThrow()
+
+    const closing = carrier.close()
+    expect(carrier.close()).toBe(closing)
+    await closing
     expect(state.stop).toHaveBeenCalledOnce()
     expect(state.quiesceOwnedResources).toHaveBeenCalledOnce()
     expect(state.releaseLease).toHaveBeenCalledOnce()
@@ -244,5 +259,82 @@ describe('Windows Host production transport composition', () => {
       reason: 'owned_resources_stop_failed',
     }))
     expect(state.releaseLease).not.toHaveBeenCalled()
+  })
+
+  it('normalizes non-Error quiescence failures and preserves a rejected fallback', async () => {
+    for (const fallbackFails of [false, true]) {
+      const state = fixture()
+      state.quiesceOwnedResources.mockRejectedValueOnce('profiles stuck')
+      if (fallbackFails) state.processFallback.mockRejectedValueOnce(new Error('fallback failed'))
+      const transport = await startWindowsHostTransport(state.options, state.dependencies)
+      const error = await captureFallback(transport.close())
+      expect(error.request.reason).toBe('owned_resources_stop_failed')
+      expect(error.request.cause?.message).toBe('Unknown Windows Host owned-resource shutdown failure')
+      if (fallbackFails) expect(error.cause).toMatchObject({ message: 'fallback failed' })
+      expect(state.releaseLease).not.toHaveBeenCalled()
+    }
+  })
+
+  it('escalates Error and non-Error ownership release failures after quiescence', async () => {
+    for (const failure of [new Error('release failed'), 'release failed']) {
+      for (const fallbackFails of [false, true]) {
+        const state = fixture()
+        state.releaseLease.mockImplementationOnce(() => { throw failure })
+        if (fallbackFails) state.processFallback.mockRejectedValueOnce(new Error('fallback failed'))
+        const transport = await startWindowsHostTransport(state.options, state.dependencies)
+        const error = await captureFallback(transport.close())
+        expect(error.request.reason).toBe('ownership_release_failed')
+        if (fallbackFails) expect(error.cause).toMatchObject({ message: 'fallback failed' })
+      }
+    }
+  })
+
+  it('does not clean up ownership a second time after startup already required fallback', async () => {
+    const state = fixture()
+    const request = { reason: 'worker_stop_failed' as const, cause: new Error('worker live') }
+    state.initializeOwnedResources.mockRejectedValueOnce(
+      new WindowsHostProcessFallbackRequiredError(request, request.cause),
+    )
+    await expect(startWindowsHostTransport(state.options, state.dependencies))
+      .rejects.toBeInstanceOf(WindowsHostProcessFallbackRequiredError)
+    expect(state.quiesceOwnedResources).not.toHaveBeenCalled()
+    expect(state.releaseLease).not.toHaveBeenCalled()
+  })
+
+  it('escalates startup cleanup failure before releasing ownership', async () => {
+    for (const failure of [new Error('profiles stuck'), 'profiles stuck']) {
+      for (const fallbackFails of [false, true]) {
+        const state = fixture()
+        state.initializeOwnedResources.mockRejectedValueOnce(new Error('startup failed'))
+        state.quiesceOwnedResources.mockRejectedValueOnce(failure)
+        if (fallbackFails) state.processFallback.mockRejectedValueOnce(new Error('fallback failed'))
+        const error = await captureFallback(startWindowsHostTransport(state.options, state.dependencies))
+        expect(error.request.reason).toBe('owned_resources_stop_failed')
+        if (fallbackFails) expect(error.cause).toMatchObject({ message: 'fallback failed' })
+        expect(state.releaseLease).not.toHaveBeenCalled()
+      }
+    }
+  })
+
+  it('escalates startup ownership-release failure after successful quiescence', async () => {
+    for (const failure of [new Error('release failed'), 'release failed']) {
+      for (const fallbackFails of [false, true]) {
+        const state = fixture()
+        state.initializeOwnedResources.mockRejectedValueOnce(new Error('startup failed'))
+        state.releaseLease.mockImplementationOnce(() => { throw failure })
+        if (fallbackFails) state.processFallback.mockRejectedValueOnce(new Error('fallback failed'))
+        const error = await captureFallback(startWindowsHostTransport(state.options, state.dependencies))
+        expect(error.request.reason).toBe('ownership_release_failed')
+        if (fallbackFails) expect(error.cause).toMatchObject({ message: 'fallback failed' })
+      }
+    }
+  })
+
+  it('rejects a non-file Worker entry before acquiring native ownership', async () => {
+    const state = fixture()
+    await expect(startWindowsHostTransport({
+      ...state.options, workerEntry: new URL('https://example.com/worker.js'),
+    }, state.dependencies)).rejects.toThrow('file URL')
+    expect(state.loadCancellation).not.toHaveBeenCalled()
   })
 })

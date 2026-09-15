@@ -43,6 +43,7 @@ export interface WindowsHostClientWorkerMainDependencies {
   ) => Promise<WindowsHostClientWorkerRunResult>
 }
 
+/* v8 ignore start -- these production native factories execute only inside the signed Windows Worker. */
 const nativeDependencies: WindowsHostClientWorkerMainDependencies = {
   loadCancellation: () => loadWindowsWorkerIoCancellation(),
   loadClient: options => loadWindowsNamedPipeClientBindings(options),
@@ -50,6 +51,7 @@ const nativeDependencies: WindowsHostClientWorkerMainDependencies = {
   loadAttestor: options => loadWindowsPeerAttestor(options),
   runWorker: options => runWindowsHostClientWorker(options),
 }
+/* v8 ignore stop */
 
 function discoveryFailure(error: unknown): 'trusted_host_not_running' | 'host_unverified' {
   return error instanceof WindowsNamedPipeClientNativeError

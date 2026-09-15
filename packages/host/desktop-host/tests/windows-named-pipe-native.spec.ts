@@ -90,6 +90,12 @@ describe('Windows named-pipe Win32 result adapter', () => {
     }
   })
 
+  it('normalizes primitive synchronous native exceptions', async () => {
+    const fixture = api({ convertSecurityDescriptor: vi.fn(() => { throw 'native failure' }) })
+    await expect(createWindowsNamedPipeLifecycleBindings(fixture.native)
+      .createSecurityDescriptor(policy.securityDescriptor)).rejects.toThrow('Unknown Win32 named-pipe failure')
+  })
+
   it('refuses to load blocking native calls outside a Windows x64 worker', async () => {
     const loadKoffi = vi.fn()
     for (const runtime of [
@@ -139,6 +145,10 @@ describe('Windows named-pipe Win32 result adapter', () => {
     })
     await expect(bindings.createSecurityDescriptor(policy.securityDescriptor)).resolves.toBe(11n)
     await expect(bindings.createNamedPipe(policy, 11n)).resolves.toBe(91n)
+    await expect(bindings.connectNamedPipe(91n)).resolves.toBe('connected')
+    await expect(bindings.disconnectNamedPipe(91n)).resolves.toBeUndefined()
+    await expect(bindings.closeHandle(91n)).resolves.toBeUndefined()
+    await expect(bindings.freeSecurityDescriptor(11n)).resolves.toBeUndefined()
     expect(loaded).toEqual(['kernel32.dll', 'advapi32.dll'])
     expect(convert).toHaveBeenCalledWith(policy.securityDescriptor, 1, 77n, null)
     expect(create).toHaveBeenCalledWith(
@@ -151,5 +161,29 @@ describe('Windows named-pipe Win32 result adapter', () => {
       0,
       { nLength: 24, lpSecurityDescriptor: 11n, bInheritHandle: 0 },
     )
+  })
+
+  it('propagates conversion failure through the loaded ABI adapter', async () => {
+    const functions: Record<string, (...args: unknown[]) => unknown> = {
+      ConvertStringSecurityDescriptorToSecurityDescriptorW: () => 0,
+      LocalFree: () => 0n,
+      CreateNamedPipeW: () => 91n,
+      ConnectNamedPipe: () => 1,
+      DisconnectNamedPipe: () => 1,
+      CloseHandle: () => 1,
+      GetLastError: () => 5,
+    }
+    const koffi = {
+      pointer: vi.fn((value: unknown) => ({ pointer: value })),
+      struct: vi.fn(() => ({ size: 24 })),
+      alloc: vi.fn(() => 77n),
+      decode: vi.fn(() => 11n),
+      load: vi.fn(() => ({ func: vi.fn((_convention: string, name: string) => functions[name]!) })),
+    }
+    const bindings = await loadWindowsNamedPipeLifecycleBindings({
+      platform: 'win32', arch: 'x64', isMainThread: false, loadKoffi: async () => koffi,
+    })
+    await expect(bindings.createSecurityDescriptor(policy.securityDescriptor))
+      .rejects.toMatchObject({ api: 'ConvertStringSecurityDescriptorToSecurityDescriptorW', win32Code: 5 })
   })
 })

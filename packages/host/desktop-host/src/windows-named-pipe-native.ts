@@ -1,6 +1,17 @@
 import { isMainThread } from 'node:worker_threads'
 import type { WindowsNamedPipeLifecycleBindings } from './windows-named-pipe-lifecycle.ts'
 import type { WindowsNamedPipePolicy } from './windows-named-pipe-policy.ts'
+import {
+  assertWindowsSecurityAttributesSize,
+  assertWindowsX64Worker,
+  bindWindowsLibrary,
+  loadWindowsKoffi,
+  windowsSecurityAttributeFields,
+  windowsSecurityContext,
+  type WindowsKoffiFunction,
+  type WindowsKoffiLibrary,
+  type WindowsKoffiModule,
+} from './windows-koffi.ts'
 
 const ERROR_PIPE_NOT_CONNECTED = 233
 const ERROR_PIPE_CONNECTED = 535
@@ -21,16 +32,10 @@ export interface WindowsNamedPipeNativeApi {
   getLastError(): number
 }
 
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
+interface NamedPipeKoffiModule extends WindowsKoffiModule {
   struct(name: string, fields: Record<string, unknown>): { readonly size: number }
   alloc(type: unknown, count: number): unknown
   decode(pointer: unknown, type: unknown): unknown
-  load(library: string): KoffiLibrary
 }
 
 /** Test seam and runtime guards for the blocking-worker-only Koffi loader. */
@@ -38,7 +43,7 @@ export interface WindowsNamedPipeKoffiOptions {
   readonly platform?: string
   readonly arch?: string
   readonly isMainThread?: boolean
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<NamedPipeKoffiModule>
 }
 
 /** Exact Win32 failure retained inside diagnostics before public error redaction. */
@@ -123,28 +128,23 @@ export function createWindowsNamedPipeLifecycleBindings(
 export async function loadWindowsNamedPipeLifecycleBindings(
   options: WindowsNamedPipeKoffiOptions = {},
 ): Promise<WindowsNamedPipeLifecycleBindings> {
+  /* v8 ignore next -- omitted runtime facts are exercised only by the signed Windows Worker entry. */
   const platform = options.platform ?? process.platform
+  /* v8 ignore next -- omitted runtime facts are exercised only by the signed Windows Worker entry. */
   const arch = options.arch ?? process.arch
+  /* v8 ignore next -- omitted runtime facts are exercised only by the signed Windows Worker entry. */
   const mainThread = options.isMainThread ?? isMainThread
-  if (platform !== 'win32' || arch !== 'x64' || mainThread) {
-    throw new Error('Blocking named-pipe bindings require a Windows x64 worker')
-  }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
-  const pointer = koffi.pointer('void')
-  const pointerPointer = koffi.pointer(pointer)
-  const securityAttributes = koffi.struct('DSH_WINDOWS_PIPE_SECURITY_ATTRIBUTES', {
-    nLength: 'uint32',
-    lpSecurityDescriptor: pointer,
-    bInheritHandle: 'int',
-  })
-  if (securityAttributes.size !== 24) throw new Error('SECURITY_ATTRIBUTES x64 ABI size mismatch')
+  assertWindowsX64Worker(platform, arch, mainThread, 'Blocking named-pipe bindings require a Windows x64 worker')
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
+  const { pointer, pointerPointer, kernel32, advapi32 } = windowsSecurityContext(koffi)
+  const securityAttributes = koffi.struct(
+    'DSH_WINDOWS_PIPE_SECURITY_ATTRIBUTES',
+    windowsSecurityAttributeFields(pointer),
+  )
+  assertWindowsSecurityAttributesSize(securityAttributes.size)
 
-  const kernel32 = koffi.load('kernel32.dll')
-  const advapi32 = koffi.load('advapi32.dll')
-  const bind = (library: KoffiLibrary, name: string, result: unknown, args: unknown[]): KoffiFunction =>
-    library.func('__stdcall', name, result, args)
+  const bind = (library: WindowsKoffiLibrary, name: string, result: unknown, args: unknown[]): WindowsKoffiFunction =>
+    bindWindowsLibrary(library)(name, result, args)
   const convert = bind(advapi32, 'ConvertStringSecurityDescriptorToSecurityDescriptorW', 'int', [
     'str16', 'uint32', pointerPointer, pointer,
   ])

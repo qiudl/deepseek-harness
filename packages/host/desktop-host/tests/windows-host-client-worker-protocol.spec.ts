@@ -30,8 +30,14 @@ describe('Windows Host client Worker protocol', () => {
       version: 1, type: 'failed', generation: 4, code: 'trusted_host_not_running',
     }, 4)).toMatchObject({ type: 'failed', code: 'trusted_host_not_running' })
     expect(decodeWindowsHostClientWorkerMessage({
+      version: 1, type: 'failed', generation: 4, code: 'host_unverified',
+    }, 4)).toMatchObject({ type: 'failed', code: 'host_unverified' })
+    expect(decodeWindowsHostClientWorkerMessage({
       version: 1, type: 'stop', generation: 4,
     }, 4)).toMatchObject({ type: 'stop' })
+    expect(decodeWindowsHostClientWorkerMessage({
+      version: 1, type: 'stopped', generation: 4,
+    }, 4)).toMatchObject({ type: 'stopped' })
   })
 
   it('accepts complete immutable server evidence only', () => {
@@ -58,8 +64,11 @@ describe('Windows Host client Worker protocol', () => {
       { version: 1, type: 'stop', generation: 4, extra: true },
       { version: 1, type: 'starting', generation: 4, threadHandle: 0n },
       { version: 1, type: 'request', generation: 4, sequence: 0, frame: encodeHostControlFrame(request) },
+      { version: 1, type: 'request', generation: 4, sequence: 1, frame: 42 },
+      { version: 1, type: 'request', generation: 4, sequence: 1, frame: 'not-json\n' },
       { version: 1, type: 'response', generation: 4, sequence: 1, frame: encodeHostControlFrame(request) },
       { version: 1, type: 'failed', generation: 4, code: 'ENOENT' },
+      { version: 1, type: 'unknown', generation: 4 },
       {
         version: 1, type: 'ready', generation: 4,
         evidence: {

@@ -4,7 +4,13 @@
   "mode": "mild",
   "format": ["typescript", "tsx"],
   "pattern": "**/*.{ts,tsx}",
-  "ignore": ["**/tests/**", "**/tsdown.config.ts"],
+  "ignore": [
+    "**/tests/**",
+    "**/tsdown.config.ts",
+    "**/desktop-host/hub-upstream/mcp.ts",
+    "**/desktop-host/hub-upstream/plugins.ts",
+    "**/desktop-host/hub-upstream/skills.ts"
+  ],
   "ignorePattern": [
     "(?s)/\\* jscpd:ignore-start \\*/.*?/\\* jscpd:ignore-end \\*/"
   ],

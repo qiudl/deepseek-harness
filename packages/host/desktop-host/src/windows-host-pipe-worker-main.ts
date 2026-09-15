@@ -44,6 +44,7 @@ export interface WindowsHostPipeWorkerMainDependencies {
   ) => Promise<WindowsHostPipeWorkerRunResult>
 }
 
+/* v8 ignore start -- the pinned native chain executes only inside the signed Windows Worker. */
 function pinnedNativeDependencies(
   nativeModule: ReturnType<typeof decodeWindowsHostPipeWorkerBootData>['nativeModule'],
 ): WindowsHostPipeWorkerMainDependencies {
@@ -83,6 +84,7 @@ function pinnedNativeDependencies(
     runWorker: options => runWindowsHostPipeWorker(options),
   }
 }
+/* v8 ignore stop */
 
 /** Decode boot state, load the all-or-nothing native chain, and enter the pipe Worker runner. */
 export async function runWindowsHostPipeWorkerMain(
@@ -91,6 +93,7 @@ export async function runWindowsHostPipeWorkerMain(
   dependencies?: WindowsHostPipeWorkerMainDependencies,
 ): Promise<WindowsHostPipeWorkerRunResult> {
   const boot = decodeWindowsHostPipeWorkerBootData(rawBootData)
+  /* v8 ignore next -- the production default is exercised only by signed Windows Worker lanes. */
   const resolvedDependencies = dependencies ?? pinnedNativeDependencies(boot.nativeModule)
   const stopFlag = createWindowsWorkerStopFlag(boot.stopFlagBuffer)
   if (stopFlag.requested()) {

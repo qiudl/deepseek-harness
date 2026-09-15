@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
+import { HostAuthorityError } from '../src/index.ts'
 import type { WindowsHostRegistration } from '../src/windows-host-carrier.ts'
 import {
+  assertWindowsHostPrivatePathEvidence,
   WindowsHostRegistrationPublisher,
+  WindowsHostPrivateLeaseConflictError,
+  windowsHostPrivateSecurityDescriptor,
   type WindowsHostPrivatePathEvidence,
   type WindowsHostRegistrationFileBindings,
 } from '../src/windows-host-registration.ts'
@@ -63,6 +67,18 @@ function fixture(existing?: { readonly contents: Buffer; readonly evidence: Wind
 }
 
 describe('Windows Host registration authority', () => {
+  it('rejects malformed roots and owner SIDs and exposes a stable lease conflict error', () => {
+    for (const malformed of [String.raw`relative\root`, String.raw`C:\root\..\host`, 'C:\\root\u0000']) {
+      expect(() => new WindowsHostRegistrationPublisher({ root: malformed, userSid, bindings: fixture().bindings }))
+        .toThrow(HostAuthorityError)
+    }
+    expect(() => windowsHostPrivateSecurityDescriptor('S-1-5-18')).toThrow(HostAuthorityError)
+    expect(new WindowsHostPrivateLeaseConflictError()).toMatchObject({
+      name: 'WindowsHostPrivateLeaseConflictError',
+      message: 'Windows Host private file lease is already held',
+    })
+  })
+
   it('creates an owner-scoped root and publishes one exact atomic registration', () => {
     const state = fixture()
     state.publisher.publish(registration)
@@ -118,6 +134,46 @@ describe('Windows Host registration authority', () => {
       expect(() => { state.publisher.publish(registration) }).toThrow()
       expect(state.replacePrivateFile).not.toHaveBeenCalled()
     }
+  })
+
+  it('rejects every malformed private-path security fact', () => {
+    const malformed: WindowsHostPrivatePathEvidence[] = [
+      evidence('file', { access: evidence('file').access.slice(0, 2) }),
+      evidence('file', { access: evidence('file').access.map((entry, index) => index === 0 ? { ...entry, type: 'deny' } : entry) }),
+      evidence('file', { access: evidence('file').access.map((entry, index) => index === 0 ? { ...entry, mask: 1 } : entry) }),
+      evidence('file', { access: evidence('file').access.map((entry, index) => index === 0 ? { ...entry, inherited: true } : entry) }),
+      evidence('file', { access: evidence('file').access.map((entry, index) => index === 0 ? { ...entry, objectInherit: false } : entry) }),
+      evidence('file', { access: evidence('file').access.map((entry, index) => index === 0 ? { ...entry, containerInherit: false } : entry) }),
+      evidence('file', { access: [evidence('file').access[0]!, evidence('file').access[0]!, evidence('file').access[2]!] }),
+    ]
+    for (const item of malformed) {
+      expect(() => { assertWindowsHostPrivatePathEvidence(item, 'file', userSid) }).toThrow(HostAuthorityError)
+    }
+  })
+
+  it('rejects invalid new records, invalid JSON, and oversized serialization', () => {
+    const invalidRecords = [
+      null,
+      [],
+      { ...registration, schema_version: 2 },
+      { ...registration, endpoint_registration_id: 7 },
+      { ...registration, socket_path: 7 },
+      { ...registration, installation_id: 7 },
+      { ...registration, installation_public_key: 7 },
+      { ...registration, installation_public_key: 'short' },
+      { ...registration, executable_signature_digest: 7 },
+    ]
+    for (const invalid of invalidRecords) {
+      const state = fixture()
+      expect(() => { state.publisher.publish(invalid as never) }).toThrow(HostAuthorityError)
+      expect(state.ensurePrivateDirectory).not.toHaveBeenCalled()
+    }
+
+    const malformedExisting = fixture({ contents: Buffer.from('{'), evidence: evidence('file') })
+    expect(() => { malformedExisting.publisher.publish(registration) }).toThrow(HostAuthorityError)
+
+    const oversized = { ...registration, socket_path: 'x'.repeat(16 * 1024) }
+    expect(() => { fixture().publisher.publish(oversized) }).toThrow(HostAuthorityError)
   })
 
   it('validates the replacement result instead of trusting a successful rename', () => {

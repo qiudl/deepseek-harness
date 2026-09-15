@@ -33,6 +33,21 @@ function fixture() {
 }
 
 describe('Windows Main local Profile ciphertext storage', () => {
+  it('rejects non-canonical or control-bearing authority roots before native access', () => {
+    const state = fixture()
+    for (const unsafeRoot of [
+      String.raw`authority`,
+      'C:\\authority\u0000',
+      String.raw`C:\authority:alternate`,
+      String.raw`C:\authority\..\other`,
+    ]) {
+      expect(() => createWindowsLocalProfileStorage({
+        root: unsafeRoot, userSid, bindings: state.bindings,
+      })).toThrow('invalid_input')
+    }
+    expect(state.bindings.ensurePrivateDirectory).not.toHaveBeenCalled()
+  })
+
   it('loads the legacy probe without touching a source and exposes no writer', async () => {
     const state = fixture()
     const inspectExistingDirectory = vi.fn(() => ({ ...state.evidence, kind: 'directory' as const }))
@@ -91,6 +106,30 @@ describe('Windows Main local Profile ciphertext storage', () => {
       await expect(loadWindowsLocalProfileStorage({ root, platform, arch }, { loadCurrentUserSid })).rejects.toThrow()
     }
     expect(loadCurrentUserSid).not.toHaveBeenCalled()
+  })
+
+  it('uses process platform defaults without bypassing Windows x64 or native binding gates', async () => {
+    const state = fixture()
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    const arch = vi.spyOn(process, 'arch', 'get').mockReturnValue('x64')
+    try {
+      await expect(loadWindowsLocalProfileStorage({ root }, {
+        loadCurrentUserSid: async () => () => userSid,
+        loadRegistrationFileBindings: async () => state.bindings,
+      })).resolves.toBeDefined()
+    } finally {
+      platform.mockRestore()
+      arch.mockRestore()
+    }
+    const processDefaultGate = process.platform === 'win32' && process.arch === 'x64'
+      ? 'release pin is invalid'
+      : 'Windows x64'
+    await expect(loadWindowsLocalProfileStorage({ root })).rejects.toThrow(processDefaultGate)
+    const defaultArchGate = process.arch === 'x64' ? 'release pin is invalid' : 'Windows x64'
+    await expect(loadWindowsLocalProfileStorage({ root, platform: 'win32' })).rejects.toThrow(defaultArchGate)
+    await expect(loadWindowsLocalProfileStorage({ root, platform: 'win32', arch: 'x64' }, {
+      loadCurrentUserSid: async () => () => userSid,
+    })).rejects.toThrow('release pin is invalid')
   })
 
   it('does not expose a partial store when native identity or file loading fails', async () => {

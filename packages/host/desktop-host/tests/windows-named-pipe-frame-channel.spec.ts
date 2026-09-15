@@ -1,6 +1,7 @@
 import {
   HOST_CONTROL_MAX_FRAME_BYTES,
   decodeHostControlFrame,
+  type HostControlFrame,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { describe, expect, it, vi } from 'vitest'
 import { WindowsNamedPipeFrameChannel } from '../src/windows-named-pipe-frame-channel.ts'
@@ -84,6 +85,40 @@ describe('Windows named-pipe protocol frame channel', () => {
     releaseFirst?.()
     await expect(Promise.all([one, two])).resolves.toEqual([undefined, undefined])
     expect(writes).toEqual([inspectSource, inspectSource])
+  })
+
+  it('latches the first native write failure and normalizes hostile thrown values', async () => {
+    const nativeFailure = new Error('WriteFile failed')
+    const failed = io([])
+    failed.bindings.writeFrame.mockRejectedValueOnce(nativeFailure)
+    const channel = new WindowsNamedPipeFrameChannel(91n, failed.bindings)
+    await expect(channel.send(inspectFrame)).rejects.toBe(nativeFailure)
+    await expect(channel.send(inspectFrame)).rejects.toBe(nativeFailure)
+    expect(failed.bindings.writeFrame).toHaveBeenCalledOnce()
+
+    const hostile = io([])
+    hostile.bindings.writeFrame.mockRejectedValueOnce('native bridge failure')
+    await expect(new WindowsNamedPipeFrameChannel(91n, hostile.bindings).send(inspectFrame))
+      .rejects.toThrow('unknown Windows named-pipe write failure')
+    await expect(channel.send({} as HostControlFrame)).rejects.toThrow('Host control protocol')
+  })
+
+  it('normalizes a hostile non-Error codec failure', async () => {
+    vi.resetModules()
+    vi.doMock('@deepseek-ai/dsh-host-control-protocol', async () => ({
+      ...await vi.importActual('@deepseek-ai/dsh-host-control-protocol'),
+      encodeHostControlFrame: () => { throw 'codec bridge failure' },
+    }))
+    try {
+      const { WindowsNamedPipeFrameChannel: HostileCodecChannel } = await import(
+        '../src/windows-named-pipe-frame-channel.ts',
+      )
+      await expect(new HostileCodecChannel(91n, io([]).bindings).send(inspectFrame))
+        .rejects.toThrow('invalid Windows named-pipe frame')
+    } finally {
+      vi.doUnmock('@deepseek-ai/dsh-host-control-protocol')
+      vi.resetModules()
+    }
   })
 
   it('rejects concurrent reads so two consumers cannot reorder one connection', async () => {

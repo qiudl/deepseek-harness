@@ -1,4 +1,5 @@
 import { HostAuthorityError } from './types.ts'
+import { assertWindowsWorkerKeys, windowsWorkerRecord } from './windows-host-client-worker-validation.ts'
 import type { WindowsWorkerStopFlag } from './windows-worker-io-cancellation.ts'
 
 const PIPE_PATH = /^\\\\\.\\pipe\\slark-dsh-host-v1-[0-9a-f]{64}$/u
@@ -27,17 +28,6 @@ export interface CreateWindowsHostClientWorkerBootDataOptions {
 
 function invalid(): never { throw new Error('Invalid Windows Host client Worker boot data') }
 
-function record(input: unknown): Record<string, unknown> {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) return invalid()
-  return input as Record<string, unknown>
-}
-
-function exactKeys(input: Record<string, unknown>, expected: readonly string[]): void {
-  const actual = Object.keys(input).sort()
-  const canonical = [...expected].sort()
-  if (actual.length !== canonical.length || actual.some((key, index) => key !== canonical[index])) invalid()
-}
-
 function anchors(input: unknown, pattern: RegExp): readonly string[] {
   if (!Array.isArray(input) || input.length === 0
     || input.some(value => typeof value !== 'string' || !pattern.test(value))) invalid()
@@ -50,8 +40,8 @@ function anchors(input: unknown, pattern: RegExp): readonly string[] {
 
 /** Strictly decode the trust roots accepted by one native client Worker generation. */
 export function decodeWindowsHostClientWorkerBootData(input: unknown): WindowsHostClientWorkerBootData {
-  const value = record(input)
-  exactKeys(value, [
+  const value = windowsWorkerRecord(input, invalid)
+  assertWindowsWorkerKeys(value, [
     'version',
     'generation',
     'pipePath',
@@ -59,7 +49,7 @@ export function decodeWindowsHostClientWorkerBootData(input: unknown): WindowsHo
     'connectTimeoutMs',
     'allowedPublisherThumbprints',
     'allowedExecutableDigests',
-  ])
+  ], invalid)
   if (value.version !== 1 || !Number.isSafeInteger(value.generation) || (value.generation as number) < 1
     || typeof value.pipePath !== 'string' || !PIPE_PATH.test(value.pipePath)
     || !(value.stopFlagBuffer instanceof SharedArrayBuffer) || value.stopFlagBuffer.byteLength !== 4

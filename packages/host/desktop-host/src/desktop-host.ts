@@ -50,6 +50,8 @@ interface ViewLease {
   activating?: boolean
 }
 
+type AccountProfileRecord = ReturnType<ProfileRegistry['resolveUniqueAccountByKeyHandle']>
+
 interface ProfileAccessGrant {
   readonly scope: ProfileAccessScope
   readonly operationId?: OfflineProfileRecoveryOperationId
@@ -58,12 +60,13 @@ interface ProfileAccessGrant {
 
 interface RecoveryCandidateState {
   readonly ownerId: string
-  readonly profile: PersonProfileRecord
+  readonly profile: AccountProfileRecord
   readonly keyHandle: string
   readonly preflight: OfflineProfileRecoveryPreflight
   readonly expectedRuntimeGeneration: number
   readonly expectedSchemaGeneration: number
   readonly expiresAt: number
+  readonly inspect: NonNullable<DesktopHostOptions['inspectOfflineAccountProfile']>
 }
 
 type RecoveryOperationState = {
@@ -76,6 +79,9 @@ type RecoveryOperationState = {
   result?: OfflineProfileRecoveryResult
   errorCode?: 'recovery_worker_failed'
   revoked?: boolean
+}
+type StoredRecoveryOperationState = RecoveryOperationState & {
+  readonly promise: Promise<OfflineProfileRecoveryResult>
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
@@ -99,7 +105,7 @@ export class DesktopHost {
   private readonly generations = new Map<PersonProfileId, number>()
   private readonly ownerGrants = new Map<string, Map<PersonProfileId, ProfileAccessGrant>>()
   private readonly recoveryCandidates = new Map<OfflineProfileRecoveryCandidateId, RecoveryCandidateState>()
-  private readonly recoveryOperations = new Map<OfflineProfileRecoveryOperationId, RecoveryOperationState>()
+  private readonly recoveryOperations = new Map<OfflineProfileRecoveryOperationId, StoredRecoveryOperationState>()
   private readonly profileRecoveries = new Map<PersonProfileId, OfflineProfileRecoveryOperationId>()
   constructor(private readonly options: DesktopHostOptions) {
     if (!Number.isSafeInteger(options.runtimeGeneration) || options.runtimeGeneration <= 0) {
@@ -107,7 +113,10 @@ export class DesktopHost {
     }
   }
 
-  /** Return whether this Host can inspect and prepare existing offline Account Profiles. */
+  /**
+   * Report whether offline Account recovery has both required providers.
+   * @returns Whether this Host can inspect and prepare existing offline Account Profiles.
+   */
   supportsOfflineAccountRecovery(): boolean {
     return this.options.inspectOfflineAccountProfile !== undefined
       && this.options.ensureRecoveredProfileWorker !== undefined
@@ -308,7 +317,7 @@ export class DesktopHost {
     }
     const candidates: OfflineProfileRecoveryCandidate[] = []
     for (const keyHandle of input.keyHandles) {
-      let profile: PersonProfileRecord
+      let profile: AccountProfileRecord
       try { profile = this.options.registry.resolveUniqueAccountByKeyHandle(keyHandle) } catch (error) {
         if (error instanceof HostAuthorityError && error.code === 'profile_not_found') continue
         throw error
@@ -322,12 +331,12 @@ export class DesktopHost {
       this.recoveryCandidates.set(candidateId, {
         ownerId: input.ownerId, profile, keyHandle, preflight,
         expectedRuntimeGeneration: input.expectedRuntimeGeneration,
-        expectedSchemaGeneration: input.expectedSchemaGeneration,
+        expectedSchemaGeneration: input.expectedSchemaGeneration, inspect,
         expiresAt: this.options.clock.now() + RECOVERY_CANDIDATE_TTL_MS,
       })
       candidates.push({
         ...preflight, candidateId, profileKind: 'account',
-        bindingCount: profile.accountBindings?.length ?? 0,
+        bindingCount: profile.accountBindings.length,
       })
     }
     if (candidates.length === 0) throw new HostAuthorityError('profile_not_found')
@@ -358,7 +367,6 @@ export class DesktopHost {
         || existing.keyHandle !== input.keyHandle || existing.preflightDigest !== input.preflightDigest) {
         throw new HostAuthorityError('idempotency_conflict')
       }
-      if (!existing.promise) throw new HostAuthorityError('unavailable')
       return await existing.promise
     }
     const candidate = this.recoveryCandidates.get(input.candidateId)
@@ -374,8 +382,7 @@ export class DesktopHost {
       if (error instanceof HostAuthorityError && error.code === 'invalid_input') throw error
       throw new HostAuthorityError('recovery_proof_mismatch')
     }
-    const inspect = this.options.inspectOfflineAccountProfile
-    if (!inspect) throw new HostAuthorityError('unavailable')
+    const inspect = candidate.inspect
     if (candidate.preflight.state !== 'recoverable') throw new HostAuthorityError('runtime_incompatible')
     const ensureWorker = this.options.ensureRecoveredProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
@@ -429,7 +436,7 @@ export class DesktopHost {
       }
     })()
     operation.promise = promise
-    this.recoveryOperations.set(operationId, operation)
+    this.recoveryOperations.set(operationId, operation as StoredRecoveryOperationState)
     this.profileRecoveries.set(current.profileId, operationId)
     return await promise
   }
@@ -578,6 +585,26 @@ export class DesktopHost {
       throw new HostAuthorityError('stale')
     }
     return lease.profileId
+  }
+
+  /**
+   * Resolve an extension target exclusively from a live, writable view lease.
+   * Offline recovery access cannot install extensions. Call again before each effect.
+   * @param input - Main-held lease and runtime generation, bound to the authenticated broker.
+   * @returns the currently authorized Profile id; throws for expired or revoked access.
+   */
+  authorizeExtensionView(input: {
+    readonly viewLeaseId: ProfileViewLeaseId
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly ownerId: string
+  }): PersonProfileId {
+    if (input.runtimeGeneration !== this.options.runtimeGeneration) throw new HostAuthorityError('stale')
+    const profileId = this.validateViewLease(input)
+    const profile = this.options.registry.resolveProfile(profileId)
+    if (!profile || (!this.hasGrant(input.ownerId, profileId, 'connected')
+      && !this.hasGrant(input.ownerId, profileId, 'local_profile'))) throw new HostAuthorityError('unauthorized')
+    return profileId
   }
 
   /**

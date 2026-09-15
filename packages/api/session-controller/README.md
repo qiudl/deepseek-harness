@@ -37,6 +37,8 @@ The Session object also carries local submission echoes: `session.beginSubmissio
 
 The user-invocable `skills/list` metadata includes the winning provider’s optional instruction-file `path`. The composer can preview that file without loading every skill body or activating a cold Agent.
 
+`skills/inspectProfile` accepts a skill name and returns an invocation-neutral definition from the default standing preset, including the body and provider path. It mounts no Session, supplies no project cwd, and refuses a missing or unusable preset instead of falling back to the global catalog. Desktop Host uses this authenticated Remote to acknowledge Profile-local Skill publication; project overrides and other presets are outside that acknowledgement.
+
 <a id="session-media-references"></a>
 ## Session media references
 
@@ -86,3 +88,5 @@ None.
 </details>
 
 **Runtime invariant:** No companion is published. Every page and frame is checked against the addressed durable Session.
+
+`skills/profileCatalog` reads invocation-neutral winning summaries from the same default standing preset. It returns names, sources, optional Host-private paths, invocation flags, and the registry snapshot’s completeness marker; it never loads instruction bodies. Desktop Host rejects incomplete snapshots when composing the management inventory.

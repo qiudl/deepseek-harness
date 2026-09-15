@@ -37,6 +37,7 @@ function correlated(response: HostControlFrame, request: HostControlFrame): bool
 }
 
 function stopSentinel(request: HostControlFrame): HostControlFrame {
+  /* v8 ignore next -- pending responses are created only after handleRequest's request-type guard. */
   if (request.type !== 'request') throw protocolError()
   return {
     version: 1,

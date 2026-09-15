@@ -8,6 +8,9 @@ import {
 import type { WindowsHostWorkerMessage } from '../src/windows-host-worker-bridge.ts'
 import { createWindowsWorkerStopFlag } from '../src/windows-worker-io-cancellation.ts'
 
+const workerConstructor = vi.hoisted(() => vi.fn())
+vi.mock('node:worker_threads', () => ({ Worker: workerConstructor }))
+
 type EventName = 'message' | 'error' | 'exit'
 
 class FakeWorker implements WindowsHostWorkerThreadLike {
@@ -30,6 +33,9 @@ class FakeWorker implements WindowsHostWorkerThreadLike {
     for (const listener of this.listeners.get(event) ?? []) listener(value)
   }
   listenerCount(event: EventName): number { return this.listeners.get(event)?.size ?? 0 }
+  listenersFor(event: EventName): Array<(value: unknown) => void> {
+    return [...(this.listeners.get(event) ?? [])]
+  }
 }
 
 function deferred() {
@@ -131,6 +137,37 @@ describe('Windows Host Worker thread adapter', () => {
     expect(state.worker.listenerCount('exit')).toBe(0)
   })
 
+  it('normalizes non-Error Worker failures and retains the first terminal error', async () => {
+    const state = fixture()
+    const waiting = state.supervisor.waitUntilReady()
+    state.worker.emit('error', 'native loader failed')
+    state.worker.emit('error', new Error('later error'))
+    state.worker.emit('exit', 1)
+    await expect(waiting).rejects.toMatchObject({
+      reason: 'runtime_failure',
+      cause: { message: 'Windows Host Worker failed' },
+    })
+  })
+
+  it('ignores a duplicate terminal callback after the Worker completion fence', async () => {
+    const state = fixture()
+    const [onExit] = state.worker.listenersFor('exit')
+    expect(onExit).toBeTypeOf('function')
+    onExit?.(0)
+    onExit?.(0)
+    await expect(state.supervisor.waitUntilReady()).rejects.toMatchObject({ reason: 'exited_before_ready' })
+  })
+
+  it('maps a nonzero exit without a prior Worker error onto an unexpected exit', async () => {
+    const state = fixture()
+    const waiting = state.supervisor.waitUntilReady()
+    state.worker.emit('exit', 7)
+    await expect(waiting).rejects.toMatchObject({
+      reason: 'exited_before_ready',
+      cause: { message: 'Windows Host Worker exited unexpectedly' },
+    })
+  })
+
   it('starts native cancellation immediately after a post-ready Worker error', async () => {
     const state = fixture()
     const waiting = state.supervisor.waitUntilReady()
@@ -160,6 +197,42 @@ describe('Windows Host Worker thread adapter', () => {
       ...fixtureOptionsForInvalidEntry(),
       workerEntry: new URL('data:text/javascript,export default 1'),
     })).toThrow('Windows Host Worker entry must be a file URL')
+  })
+
+  it('uses the fixed native Worker constructor when no test factory is supplied', async () => {
+    const worker = new FakeWorker()
+    workerConstructor.mockImplementationOnce(function createWorker() { return worker })
+    const supervisor = startWindowsHostWorkerThread({
+      ...fixtureOptionsForInvalidEntry(),
+      workerEntry: new URL('file:///opt/slark/windows-host-pipe-worker.js'),
+    })
+    expect(workerConstructor).toHaveBeenCalledWith(
+      new URL('file:///opt/slark/windows-host-pipe-worker.js'),
+      expect.objectContaining({ name: 'dsh-windows-host-pipe', execArgv: [] }),
+    )
+    const waiting = supervisor.waitUntilReady()
+    worker.emit('exit', 0)
+    await expect(waiting).rejects.toMatchObject({ reason: 'exited_before_ready' })
+  })
+
+  it('forwards a failure raised synchronously while terminal listeners are installed', async () => {
+    const worker = new FakeWorker()
+    const originalOn = worker.on.bind(worker)
+    worker.on = (event: EventName, listener: (value: unknown) => void) => {
+      originalOn(event, listener)
+      if (event === 'error') listener('synchronous worker failure')
+      return worker
+    }
+    const onFailure = vi.fn()
+    const supervisor = startWindowsHostWorkerThread({
+      ...fixtureOptionsForInvalidEntry(),
+      workerEntry: new URL('file:///opt/slark/windows-host-pipe-worker.js'),
+      onFailure,
+      createWorker: () => worker,
+    })
+    await expect(supervisor.waitUntilReady()).rejects.toMatchObject({ reason: 'runtime_failure' })
+    expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ reason: 'runtime_failure' }))
+    worker.emit('exit', 1)
   })
 })
 

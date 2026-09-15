@@ -1,4 +1,6 @@
 import type {
+  HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
+  ProfileExtensionsRequest, ProfileExtensionsResult,
   HostControlCapability,
   HostAccountBindingHandle,
   HostAuthorityEnvironmentId,
@@ -262,7 +264,11 @@ function bootstrapCookie(value: unknown): { readonly name: string; readonly valu
 function capabilities(value: unknown): readonly HostControlCapability[] {
   if (!Array.isArray(value)) reject()
   const parsed = value.map(capability)
-  if (parsed.some((entry, index) => index > 0 && entry <= (parsed[index - 1] ?? ''))) reject()
+  let previous: HostControlCapability | undefined
+  for (const entry of parsed) {
+    if (previous !== undefined && entry <= previous) reject()
+    previous = entry
+  }
   if (!parsed.includes('host.inspect' as HostControlCapability)) reject()
   return parsed
 }
@@ -369,15 +375,146 @@ function authorized(params: Record<string, unknown>): {
   }
 }
 
+function extensionKind(value: unknown): HostExtensionKind {
+  if (value !== 'plugin' && value !== 'mcp' && value !== 'skill') reject()
+  return value
+}
+function extensionCommand(value: unknown): HostExtensionCommand {
+  const command = record(value)
+  if (command.action === 'inventory') {
+    exactKeys(command, ['action', 'kind'])
+    return { action: 'inventory', kind: extensionKind(command.kind) }
+  }
+  if (command.action === 'prepare') {
+    exactKeys(command, ['action', 'kind', 'payload'])
+    if (typeof command.payload !== 'string' || !command.payload || new TextEncoder().encode(command.payload).byteLength > 32_768) reject()
+    return { action: 'prepare', kind: extensionKind(command.kind), payload: command.payload }
+  }
+  if (command.action === 'commit') {
+    exactKeys(command, ['action', 'plan_id', 'operation_id'])
+    return { action: 'commit', plan_id: uuid(command.plan_id) as HostExtensionPlanId,
+      operation_id: uuid(command.operation_id) as HostExtensionOperationId }
+  }
+  if (command.action === 'status' || command.action === 'cancel') {
+    exactKeys(command, ['action', 'operation_id'])
+    return { action: command.action, operation_id: uuid(command.operation_id) as HostExtensionOperationId }
+  }
+  return reject()
+}
+function extensionResponse(result: Record<string, unknown>): HostExtensionResponse {
+  if (result.state === 'prepared') {
+    exactKeys(result, ['state', 'plan_id', 'kind', 'digest', 'expires_at'])
+    return { state: 'prepared', plan_id: uuid(result.plan_id) as HostExtensionPlanId, kind: extensionKind(result.kind),
+      digest: digest(result.digest), expires_at: timestamp(result.expires_at) }
+  }
+  if (result.state === 'inventory') {
+    exactKeys(result, ['state', 'kind', 'entries', ...('plugin_remove' in result ? ['plugin_remove'] : []), ...('plugin_update' in result ? ['plugin_update'] : []), ...('plugin_toggle' in result ? ['plugin_toggle'] : []), ...('skill_archives' in result ? ['skill_archives'] : []), ...('skill_remove' in result ? ['skill_remove'] : []), ...('skill_replace' in result ? ['skill_replace'] : []), ...('skill_files' in result ? ['skill_files'] : []), ...('skill_invocation' in result ? ['skill_invocation'] : []), ...('mcp_remove' in result ? ['mcp_remove'] : []), ...('mcp_update' in result ? ['mcp_update'] : [])])
+    if ('mcp_update' in result && (result.kind !== 'mcp' || typeof result.mcp_update !== 'boolean')) reject()
+    if ('mcp_remove' in result && (result.kind !== 'mcp' || typeof result.mcp_remove !== 'boolean')) reject()
+    if ('skill_invocation' in result && (result.kind !== 'skill' || typeof result.skill_invocation !== 'boolean')) reject()
+    if ('plugin_remove' in result && (result.kind !== 'plugin' || typeof result.plugin_remove !== 'boolean')) reject()
+    if ('plugin_update' in result && (result.kind !== 'plugin' || typeof result.plugin_update !== 'boolean')) reject()
+    if ('plugin_toggle' in result && (result.kind !== 'plugin' || typeof result.plugin_toggle !== 'boolean')) reject()
+    if ('skill_remove' in result && (result.kind !== 'skill' || typeof result.skill_remove !== 'boolean')) reject()
+    if ('skill_replace' in result && (result.kind !== 'skill' || typeof result.skill_replace !== 'boolean')) reject()
+    if ('skill_files' in result && (result.kind !== 'skill' || typeof result.skill_files !== 'boolean')) reject()
+    if ('skill_archives' in result && typeof result.skill_archives !== 'boolean') reject()
+    if (!Array.isArray(result.entries) || result.entries.length > 128) reject()
+    const entries = result.entries.map((value: unknown) => {
+      const entry = record(value)
+      const invocation = 'model_invocable' in entry || 'user_invocable' in entry
+      exactKeys(entry, ['id', 'name', 'transport', ...(invocation ? ['model_invocable', 'user_invocable'] : []), ...('plugin_state' in entry ? ['plugin_state'] : []), ...('skill_source' in entry ? ['skill_source', 'skill_status'] : []), ...('effective_source' in entry ? ['effective_source'] : [])])
+      if ('skill_source' in entry && (result.kind !== 'skill' || !invocation
+        || typeof entry.skill_source !== 'string' || !['user-dsh', 'user-agents', 'custom', 'bundled', 'runtime', 'other'].includes(entry.skill_source)
+        || typeof entry.skill_status !== 'string' || !['effective', 'shadowed', 'not_visible'].includes(entry.skill_status))) reject()
+      if ('effective_source' in entry && (entry.skill_status !== 'shadowed' || typeof entry.effective_source !== 'string'
+        || !['user-dsh', 'user-agents', 'custom', 'bundled', 'runtime', 'other'].includes(entry.effective_source))) reject()
+      if (entry.skill_status === 'shadowed' && !('effective_source' in entry)) reject()
+      if ('plugin_state' in entry && (result.kind !== 'plugin' || typeof entry.plugin_state !== 'string'
+        || !['enabled', 'disabled', 'mixed', 'unsupported'].includes(entry.plugin_state))) reject()
+      if (invocation && (result.kind !== 'skill' || typeof entry.model_invocable !== 'boolean' || typeof entry.user_invocable !== 'boolean')) reject()
+      for (const key of ['id', 'name', 'transport']) {
+        const pattern = result.kind === 'plugin' && key === 'name'
+          ? /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u : /^[A-Za-z0-9_-]{1,128}$/u
+        if (typeof entry[key] !== 'string' || entry[key].length > 214 || !pattern.test(entry[key])) reject()
+      }
+      return { id: entry.id as string, name: entry.name as string, transport: entry.transport as string,
+        ...(invocation ? { model_invocable: entry.model_invocable as boolean, user_invocable: entry.user_invocable as boolean } : {}),
+        ...('plugin_state' in entry ? { plugin_state: entry.plugin_state as 'enabled' | 'disabled' | 'mixed' | 'unsupported' } : {}),
+        ...('skill_source' in entry ? { skill_source: entry.skill_source as 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other', skill_status: entry.skill_status as 'effective' | 'shadowed' | 'not_visible' } : {}),
+        ...('effective_source' in entry ? { effective_source: entry.effective_source as 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other' } : {}) }
+    })
+    return { state: 'inventory', kind: extensionKind(result.kind), entries, ...('plugin_remove' in result ? { plugin_remove: result.plugin_remove as boolean } : {}), ...('plugin_update' in result ? { plugin_update: result.plugin_update as boolean } : {}), ...('plugin_toggle' in result ? { plugin_toggle: result.plugin_toggle as boolean } : {}), ...('skill_archives' in result ? { skill_archives: result.skill_archives as boolean } : {}), ...('skill_remove' in result ? { skill_remove: result.skill_remove as boolean } : {}), ...('skill_replace' in result ? { skill_replace: result.skill_replace as boolean } : {}), ...('skill_files' in result ? { skill_files: result.skill_files as boolean } : {}), ...('skill_invocation' in result ? { skill_invocation: result.skill_invocation as boolean } : {}), ...('mcp_remove' in result ? { mcp_remove: result.mcp_remove as boolean } : {}), ...('mcp_update' in result ? { mcp_update: result.mcp_update as boolean } : {}) }
+  }
+  if (result.state !== 'receipt') reject()
+  exactKeys(result, ['state', 'operation_id', 'outcome', 'cancellation_requested', 'created_at', 'updated_at',
+    ...(result.reason === undefined ? [] : ['reason']), ...(result.skill_source === undefined ? [] : ['skill_source']),
+    ...('skill_restore' in result ? ['skill_restore'] : []), ...('mcp_restore' in result ? ['mcp_restore'] : []), ...('plugin_restore' in result ? ['plugin_restore'] : []), ...('plugin_complete' in result ? ['plugin_complete'] : []), ...('restored_by' in result ? ['restored_by'] : []),
+    ...('restores_operation' in result ? ['restores_operation'] : []), ...('completed_by' in result ? ['completed_by'] : []),
+    ...('completes_operation' in result ? ['completes_operation'] : [])])
+  if (typeof result.outcome !== 'string' || !['queued', 'running', 'succeeded', 'failed', 'cancelled', 'unknown'].includes(result.outcome)
+    || typeof result.cancellation_requested !== 'boolean') reject()
+  if (result.skill_source !== undefined && (result.outcome !== 'succeeded' || typeof result.skill_source !== 'string'
+    || !['absent', 'user-dsh', 'user-agents', 'custom', 'bundled', 'runtime', 'other'].includes(result.skill_source))) reject()
+  if ('skill_restore' in result && (result.outcome !== 'unknown' || typeof result.skill_restore !== 'string' || result.skill_restore.length > 71 || !/^(bundle|flat)-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(result.skill_restore) || 'restored_by' in result || 'mcp_restore' in result || 'plugin_restore' in result)) reject()
+  if ('mcp_restore' in result && (result.outcome !== 'unknown' || result.mcp_restore !== true || 'restored_by' in result || 'skill_restore' in result || 'plugin_restore' in result)) reject()
+  if ('plugin_restore' in result && (result.outcome !== 'unknown' || typeof result.plugin_restore !== 'string'
+    || result.plugin_restore.length > 214 || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(result.plugin_restore)
+    || 'restored_by' in result || 'skill_restore' in result || 'mcp_restore' in result)) reject()
+  let completion: Extract<HostExtensionResponse, { state: 'receipt' }>['plugin_complete']
+  if ('plugin_complete' in result) {
+    if (result.outcome !== 'unknown') reject()
+    const intent = record(result.plugin_complete)
+    exactKeys(intent, ['action', 'package_name', ...('spec' in intent ? ['spec'] : [])])
+    if (typeof intent.action !== 'string' || !['install', 'update', 'remove'].includes(intent.action) || typeof intent.package_name !== 'string'
+      || intent.package_name.length > 214 || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(intent.package_name)
+      || (intent.action === 'remove' ? 'spec' in intent : typeof intent.spec !== 'string' || intent.spec.length > 256 || !/^[A-Za-z0-9@/._+#:-]+$/u.test(intent.spec))) reject()
+    completion = { action: intent.action as 'install' | 'update' | 'remove', package_name: intent.package_name,
+      ...('spec' in intent ? { spec: intent.spec as string } : {}) }
+  }
+  const capabilities = ['skill_restore', 'mcp_restore', 'plugin_restore', 'plugin_complete'].filter(key => key in result)
+  if (capabilities.length > 1 || capabilities.length && ('restored_by' in result || 'completed_by' in result)) reject()
+  if ('completed_by' in result && (result.outcome !== 'unknown' || uuid(result.completed_by) === result.operation_id || 'restored_by' in result)) reject()
+  if ('completes_operation' in result && (uuid(result.completes_operation) === result.operation_id || 'restores_operation' in result)) reject()
+  if ('restored_by' in result && (result.outcome !== 'unknown' || uuid(result.restored_by) === result.operation_id)) reject()
+  if ('restores_operation' in result && uuid(result.restores_operation) === result.operation_id) reject()
+  const created = timestamp(result.created_at); const updated = timestamp(result.updated_at)
+  if (updated < created) reject()
+  if (result.reason !== undefined && (typeof result.reason !== 'string'
+    || !['revision_conflict', 'authority_revoked', 'expired', 'interrupted', 'executor_failed'].includes(result.reason))) reject()
+  return { state: 'receipt', operation_id: uuid(result.operation_id) as HostExtensionOperationId,
+    outcome: result.outcome as Extract<HostExtensionResponse, { state: 'receipt' }>['outcome'],
+    cancellation_requested: result.cancellation_requested, created_at: created, updated_at: updated,
+    ...(result.reason === undefined ? {} : { reason: result.reason as NonNullable<Extract<HostExtensionResponse, { state: 'receipt' }>['reason']> }),
+    ...(result.skill_source === undefined ? {} : { skill_source: result.skill_source as NonNullable<Extract<HostExtensionResponse, { state: 'receipt' }>['skill_source']> }),
+    ...('skill_restore' in result ? { skill_restore: result.skill_restore as string } : {}),
+    ...('mcp_restore' in result ? { mcp_restore: true as const } : {}),
+    ...('plugin_restore' in result ? { plugin_restore: result.plugin_restore as string } : {}),
+    ...(completion ? { plugin_complete: completion } : {}),
+    ...('restored_by' in result ? { restored_by: uuid(result.restored_by) as HostExtensionOperationId } : {}),
+    ...('restores_operation' in result ? { restores_operation: uuid(result.restores_operation) as HostExtensionOperationId } : {}),
+    ...('completed_by' in result ? { completed_by: uuid(result.completed_by) as HostExtensionOperationId } : {}),
+    ...('completes_operation' in result ? { completes_operation: uuid(result.completes_operation) as HostExtensionOperationId } : {}),
+  }
+}
+
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileLeaseCloseRequest {
+  | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
   const requestId = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.extensions') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: 'profile.extensions', params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+      command: extensionCommand(params.command),
+    } }
+  }
   if (frame.method === 'profile.status' || frame.method === 'profile.open') {
     exactKeys(params, [
       ...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
@@ -552,10 +689,13 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileLeaseCloseResult {
+  | ProfileViewActivateResult | ProfileLeaseCloseResult | ProfileExtensionsResult {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
   const request_id = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.extensions') {
+    return { version: 1, type: 'result', request_id, method: 'profile.extensions', result: extensionResponse(result) }
+  }
   if (frame.method === 'profile.status') {
     if (result.state === 'ready') {
       exactKeys(result, ['state', 'profile_id', 'persistence_generation'])
@@ -568,51 +708,9 @@ function decodeProfileResult(frame: Record<string, unknown>):
     if (result.state !== 'unbound' && result.state !== 'locked') reject()
     return { version: 1, type: 'result', request_id, method: 'profile.status', result: { state: result.state } }
   }
-  if (frame.method === 'profile.ensure') {
-    exactKeys(result, ['state', 'profile_id', 'profile_selector'])
-    if (result.state !== 'ready') reject()
-    return {
-      version: 1, type: 'result', request_id, method: frame.method,
-      result: {
-        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
-        profile_selector: profileSelector(result.profile_selector),
-      },
-    }
-  }
-  if (frame.method === 'profile.bootstrap_local') {
-    exactKeys(result, ['state', 'profile_id', 'profile_selector', 'persistence_generation'])
-    if (result.state !== 'ready') reject()
-    return {
-      version: 1, type: 'result', request_id, method: frame.method,
-      result: {
-        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
-        profile_selector: profileSelector(result.profile_selector),
-        persistence_generation: generation(result.persistence_generation),
-      },
-    }
-  }
-  if (frame.method === 'profile.restore') {
-    exactKeys(result, ['state', 'profile_id', 'profile_selector'])
-    if (result.state !== 'ready') reject()
-    return {
-      version: 1, type: 'result', request_id, method: frame.method,
-      result: {
-        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
-        profile_selector: profileSelector(result.profile_selector),
-      },
-    }
-  }
-  if (frame.method === 'profile.restore_local') {
-    exactKeys(result, ['state', 'profile_id', 'profile_selector', 'persistence_generation'])
-    if (result.state !== 'ready') reject()
-    return {
-      version: 1, type: 'result', request_id, method: frame.method,
-      result: {
-        state: 'ready', profile_id: uuid(result.profile_id) as HostProfileId,
-        profile_selector: profileSelector(result.profile_selector),
-        persistence_generation: generation(result.persistence_generation),
-      },
-    }
+  if (frame.method === 'profile.ensure' || frame.method === 'profile.restore'
+    || frame.method === 'profile.bootstrap_local' || frame.method === 'profile.restore_local') {
+    return profileReadyResult(request_id, frame.method, result)
   }
   if (frame.method === 'profile.recovery_inspect') {
     exactKeys(result, ['candidates'])
@@ -627,7 +725,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
       ])
       if ((candidate.state !== 'recoverable' && candidate.state !== 'compatibility_blocked')
         || candidate.profile_kind !== 'account'
-        || !['current', 'legacy_runtime_required', 'read_only_export_only'].includes(String(candidate.compatibility))) reject()
+        || typeof candidate.compatibility !== 'string'
+        || !['current', 'legacy_runtime_required', 'read_only_export_only'].includes(candidate.compatibility)) reject()
       const state: 'recoverable' | 'compatibility_blocked' = candidate.state === 'recoverable'
         ? 'recoverable'
         : 'compatibility_blocked'
@@ -669,11 +768,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
     return {
       version: 1, type: 'result', request_id, method: 'profile.open_offline_account',
       result: {
-        profile_id: uuid(result.profile_id) as HostProfileId,
-        view_lease_id: uuid(result.view_lease_id) as HostViewLeaseId,
-        view_activation_handle: activationHandle(result.view_activation_handle),
-        lease_generation: generation(result.lease_generation), expires_at: timestamp(result.expires_at),
-        runtime_generation: generation(result.runtime_generation), access_scope: 'offline_local',
+        ...profileLeaseFields(result), access_scope: 'offline_local',
       },
     }
   }
@@ -687,7 +782,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
       }
     }
     exactKeys(result, ['state'])
-    if (!['recovering', 'offline_ready', 'unknown'].includes(String(result.state))) reject()
+    if (typeof result.state !== 'string'
+      || !['recovering', 'offline_ready', 'unknown'].includes(result.state)) reject()
     return {
       version: 1, type: 'result', request_id, method: 'profile.recovery_status',
       result: { state: result.state as 'recovering' | 'offline_ready' | 'unknown' },
@@ -700,14 +796,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
       type: 'result',
       request_id,
       method: frame.method,
-      result: {
-        profile_id: uuid(result.profile_id) as HostProfileId,
-        view_lease_id: uuid(result.view_lease_id) as HostViewLeaseId,
-        view_activation_handle: activationHandle(result.view_activation_handle),
-        lease_generation: generation(result.lease_generation),
-        expires_at: timestamp(result.expires_at),
-        runtime_generation: generation(result.runtime_generation),
-      },
+      result: profileLeaseFields(result),
     }
   }
   if (frame.method === 'profile.view_activate') {
@@ -728,6 +817,39 @@ function decodeProfileResult(frame: Record<string, unknown>):
     return { version: 1, type: 'result', request_id, method: 'profile.lease_close', result: { closed: true } }
   }
   return reject('unknown_method')
+}
+
+function profileReadyResult(
+  request_id: HostControlRequestId,
+  method: 'profile.ensure' | 'profile.restore' | 'profile.bootstrap_local' | 'profile.restore_local',
+  result: Record<string, unknown>,
+): ProfileEnsureResult | ProfileRestoreResult | ProfileBootstrapLocalResult | ProfileRestoreLocalResult {
+  const local = method === 'profile.bootstrap_local' || method === 'profile.restore_local'
+  exactKeys(result, ['state', 'profile_id', 'profile_selector', ...(local ? ['persistence_generation'] : [])])
+  if (result.state !== 'ready') reject()
+  const common = {
+    state: 'ready' as const,
+    profile_id: uuid(result.profile_id) as HostProfileId,
+    profile_selector: profileSelector(result.profile_selector),
+  }
+  if (method === 'profile.ensure') return { version: 1, type: 'result', request_id, method, result: common }
+  if (method === 'profile.restore') return { version: 1, type: 'result', request_id, method, result: common }
+  const localResult = { ...common, persistence_generation: generation(result.persistence_generation) }
+  if (method === 'profile.bootstrap_local') {
+    return { version: 1, type: 'result', request_id, method, result: localResult }
+  }
+  return { version: 1, type: 'result', request_id, method, result: localResult }
+}
+
+function profileLeaseFields(result: Record<string, unknown>): ProfileOpenResult['result'] {
+  return {
+    profile_id: uuid(result.profile_id) as HostProfileId,
+    view_lease_id: uuid(result.view_lease_id) as HostViewLeaseId,
+    view_activation_handle: activationHandle(result.view_activation_handle),
+    lease_generation: generation(result.lease_generation),
+    expires_at: timestamp(result.expires_at),
+    runtime_generation: generation(result.runtime_generation),
+  }
 }
 
 function decodeMigrationRequest(frame: Record<string, unknown>):
@@ -882,7 +1004,8 @@ function migrationRecord(value: unknown): MigrationExportRecord {
   const row = record(value)
   if (row.collection === 'sessions') exactKeys(row, ['collection', 'id', 'sequence', 'payload_digest'])
   else if (row.collection === 'session_events') exactKeys(row, ['collection', 'id', 'session_id', 'sequence', 'payload_digest'])
-  else if (['owner_settings', 'owner_credentials', 'owner_workspace', 'owner_profile'].includes(String(row.collection))) {
+  else if (typeof row.collection === 'string'
+    && ['owner_settings', 'owner_credentials', 'owner_workspace', 'owner_profile'].includes(row.collection)) {
     exactKeys(row, ['collection', 'id', 'sequence', 'payload_digest'])
   }
   else reject()

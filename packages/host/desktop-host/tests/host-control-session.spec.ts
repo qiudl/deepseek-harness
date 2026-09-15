@@ -73,7 +73,7 @@ function statusRequest(jti = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190'): HostContro
   }
 }
 
-function fixture(signal?: AbortSignal) {
+function fixture(signal?: AbortSignal, overrides: Partial<HostControlServerSessionOptions> = {}) {
   const revokeOwner = vi.fn()
   const dispatch = vi.fn<HostControlServerSessionOptions['dispatchAuthorized']>(async (request, context, respond) => {
     expect(context.ownerId).toBe('connection-1')
@@ -104,6 +104,7 @@ function fixture(signal?: AbortSignal) {
       },
     })}\n`),
     revokeOwner,
+    ...overrides,
   })
   const workerSession: WindowsHostWorkerSession = session
   return { session: workerSession, dispatch, revokeOwner }
@@ -175,5 +176,70 @@ describe('Host control server session', () => {
     await session.handleRequest(inspectRequest())
     await expect(session.handleRequest(statusRequest())).rejects.toBeInstanceOf(HostAuthorityError)
     expect(errorResponse).not.toHaveBeenCalled()
+  })
+
+  it('rejects non-request frames, pre-aborted transports, and uncorrelated inspection results', async () => {
+    const ordinary = fixture()
+    await expect(ordinary.session.handleRequest(
+      inspectResult(inspectRequest()) as HostControlFrame,
+      new AbortController().signal,
+    ))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+
+    const transport = new AbortController()
+    transport.abort()
+    const closed = fixture(transport.signal)
+    expect(closed.revokeOwner).toHaveBeenCalledOnce()
+    await expect(closed.session.handleRequest(inspectRequest(), new AbortController().signal))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+
+    const uncorrelated = fixture(undefined, {
+      inspect: request => ({
+        ...inspectResult(request),
+        request_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3199' as never,
+      }),
+    })
+    await expect(uncorrelated.session.handleRequest(inspectRequest(), new AbortController().signal))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('rejects duplicate or missing dispatcher responses and closure during dispatch', async () => {
+    const duplicate = fixture(undefined, {
+      dispatchAuthorized: (request, _context, respond) => {
+        const response = {
+          version: 1,
+          type: 'result',
+          request_id: request.request_id,
+          method: request.method,
+          result: { state: 'unbound' },
+        } as HostControlFrame
+        respond(response)
+        respond(response)
+      },
+    })
+    await duplicate.session.handleRequest(inspectRequest(), new AbortController().signal)
+    await expect(duplicate.session.handleRequest(statusRequest(), new AbortController().signal))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+
+    const missing = fixture(undefined, { dispatchAuthorized: () => undefined })
+    await missing.session.handleRequest(inspectRequest(), new AbortController().signal)
+    await expect(missing.session.handleRequest(statusRequest(), new AbortController().signal))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+
+    const requestAbort = new AbortController()
+    const closing = fixture(undefined, {
+      dispatchAuthorized: (request, _context, respond) => {
+        respond({
+          version: 1,
+          type: 'result',
+          request_id: request.request_id,
+          method: request.method,
+          result: { state: 'unbound' },
+        } as HostControlFrame)
+        requestAbort.abort()
+      },
+    })
+    await closing.session.handleRequest(inspectRequest(), new AbortController().signal)
+    await expect(closing.session.handleRequest(statusRequest(), requestAbort.signal)).rejects.toBeInstanceOf(HostAuthorityError)
   })
 })

@@ -54,8 +54,7 @@ export class ProfileWorkerProcessFactory {
   }
 
   private async readyHandle(child: ChildProcess): Promise<ProfileWorkerHandle> {
-    const stderr = child.stderr
-    if (!stderr) { child.kill('SIGKILL'); throw new HostAuthorityError('unavailable') }
+    const stderr = child.stderr as NonNullable<ChildProcess['stderr']>
     let requestedStop = false
     let settled = false
     let resolveDone!: () => void
@@ -78,7 +77,7 @@ export class ProfileWorkerProcessFactory {
     }
     child.on('message', onMessage)
     void done.catch((error: unknown) => {
-      readyReject(error instanceof Error ? error : new HostAuthorityError('unavailable'))
+      readyReject(error as Error)
     })
     const timeout = setTimeout(() => { readyReject(new HostAuthorityError('unavailable')) }, this.options.readyTimeoutMs ?? 15_000)
     try { await ready } catch (error) {
@@ -95,7 +94,7 @@ export class ProfileWorkerProcessFactory {
         child.send({ type: 'shutdown' }, (error) => {
           if (error && !settled) child.kill('SIGTERM')
         })
-        const killTimer = setTimeout(() => { if (!settled) child.kill('SIGKILL') }, this.options.abortTimeoutMs ?? 5_000)
+        const killTimer = setTimeout(() => { child.kill('SIGKILL') }, this.options.abortTimeoutMs ?? 5_000)
         void done.finally(() => { clearTimeout(killTimer) })
       },
       done,

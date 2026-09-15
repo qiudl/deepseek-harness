@@ -329,7 +329,12 @@ interface SessionLogScan {
   committedBytes: number
 }
 
-/** Derive and validate a fork cut from the last lineage-tagged seed marker. */
+/**
+ * Derive and validate a fork cut from the last lineage-tagged seed marker.
+ * @param meta Session header whose seeded state must agree with the marker.
+ * @param events Ordered events to inspect for an inherited end-seed marker.
+ * @returns Last inherited marker offset, or zero for an unseeded log without a marker.
+ */
 export function sessionInheritedEventCount(
   meta: SessionHeader,
   events: readonly SessionEvent[],

@@ -140,6 +140,54 @@ describe('Windows Host registration native filesystem', () => {
     }).toThrow()
     observedSddl = sddl
 
+    // Removal must inspect and compare the same exclusive handle it marks for deletion.
+    const originalInfo = functions.GetFileInformationByHandle!
+    let attributes = 0
+    let links = 1
+    functions.GetFileInformationByHandle = (_handle, output) => {
+      if (!Buffer.isBuffer(output)) throw Error('expected file information')
+      output.writeUInt32LE(attributes, 0); output.writeUInt32LE(links, 40); return 1
+    }
+    functions.GetFileSizeEx = (_handle, output) => {
+      if (!Buffer.isBuffer(output)) throw Error('expected file size')
+      output.writeBigInt64LE(3n); return 1
+    }
+    functions.ReadFile = (_handle, output, _size, count) => {
+      if (!Buffer.isBuffer(output) || !Buffer.isBuffer(count)) throw Error('expected read buffers')
+      Buffer.from('old').copy(output); count.writeUInt32LE(3); return 1
+    }
+    functions.SetFileInformationByHandle = () => 1
+    const guard = vi.fn(() => { calls.push({ name: 'guard', args: [] }) })
+    calls.length = 0
+    bindings.removePrivateFile!(root, Buffer.from('old'), userSid, guard)
+    expect(calls.find(call => call.name === 'CreateFileW')?.args.slice(0, 6)).toEqual([
+      root, (0x80000000 | 0x20000 | 0x80 | 0x10000) >>> 0, 0, null, 3, 0x00200000,
+    ])
+    expect(calls.slice(-3)).toEqual([
+      { name: 'guard', args: [] },
+      { name: 'SetFileInformationByHandle', args: [91n, 4, Buffer.from([1]), 1] },
+      { name: 'CloseHandle', args: [91n] },
+    ])
+    expect(calls.some(call => call.name === 'DeleteFileW')).toBe(false)
+    for (const fault of ['changed', 'reparse', 'hardlink', 'owner', 'dacl', 'guard', 'oversize']) {
+      attributes = fault === 'reparse' ? 0x400 : 0
+      links = fault === 'hardlink' ? 2 : 1
+      observedSddl = fault === 'owner' ? sddl.replace(userSid, 'S-1-5-21-1-2-3-4')
+        : fault === 'dacl' ? sddl.replace('D:P', 'D:') : sddl
+      calls.length = 0
+      expect(() => { bindings.removePrivateFile!(root, Buffer.from(fault === 'changed' ? 'new' : fault === 'oversize' ? '' : 'old'), userSid,
+        () => { if (fault === 'guard') throw Error('lease_lost') }) }).toThrow()
+      expect(calls.filter(call => call.name === 'SetFileInformationByHandle' || call.name === 'DeleteFileW')).toEqual([])
+      expect(calls.filter(call => call.name === 'CloseHandle')).toHaveLength(1)
+    }
+    attributes = 0; links = 1; observedSddl = sddl
+    functions.SetFileInformationByHandle = () => 0
+    functions.GetLastError = () => 5
+    calls.length = 0
+    expect(() => { bindings.removePrivateFile!(root, Buffer.from('old'), userSid, guard) }).toThrow('SetFileInformationByHandle')
+    expect(calls.filter(call => call.name === 'CloseHandle')).toHaveLength(1)
+    functions.GetFileInformationByHandle = originalInfo
+
     for (const error of [2, 3, 5, 32]) {
       calls.length = 0
       functions.CreateFileW = () => -1n

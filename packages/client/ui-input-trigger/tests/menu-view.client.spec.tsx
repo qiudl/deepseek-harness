@@ -152,6 +152,18 @@ describe('MenuView', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 
+  it('exposes pending refinement through the listbox busy state', () => {
+    const { menu } = mount(openState({
+      groups: [{ source: 'command', status: 'pending', items: [{ name: 'goal' }] }],
+    }))
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true')
+
+    act(() => { menu.set(openState({
+      groups: [{ source: 'command', status: 'ready', items: [{ name: 'goal' }] }],
+    })) })
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBeNull()
+  })
+
   it('titles each group with the localized source name, raw name for unknown sources, none for empty ready groups', () => {
     const { view } = mount(openState({
       groups: [

@@ -10,7 +10,9 @@ interface StartProfileWorkerInput {
 
 /** Owns one isolated child per unlocked Profile and awaits quiescence on disposal. */
 export class ProfileWorkerSupervisor {
+  private closed = false
   private readonly workers = new Map<string, ProfileWorkerHandle>()
+  private readonly pending = new Map<string, Promise<void>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
   /**
@@ -18,6 +20,11 @@ export class ProfileWorkerSupervisor {
    * @param input - Profile root, credential handle, and allowed plugin roots.
    */
   async start(input: StartProfileWorkerInput): Promise<void> {
+    if (this.closed) throw new HostAuthorityError('unavailable')
+    return this.serial(input.profileId, () => this.startOwned(input))
+  }
+
+  private async startOwned(input: StartProfileWorkerInput): Promise<void> {
     if (this.workers.has(input.profileId)) throw new HostAuthorityError('conflict')
     const spec: ProfileWorkerSpec = {
       ...input,
@@ -32,8 +39,10 @@ export class ProfileWorkerSupervisor {
    * @param input - Profile-owned runtime inputs.
    */
   async ensure(input: StartProfileWorkerInput): Promise<void> {
-    if (this.workers.has(input.profileId)) return
-    await this.start(input)
+    if (this.closed) throw new HostAuthorityError('unavailable')
+    await this.serial(input.profileId, async () => {
+      if (!this.workers.has(input.profileId)) await this.startOwned(input)
+    })
   }
 
   /**
@@ -59,6 +68,10 @@ export class ProfileWorkerSupervisor {
    * @param profileId - worker owner to dispose.
    */
   async dispose(profileId: string): Promise<void> {
+    return this.serial(profileId, () => this.disposeOwned(profileId))
+  }
+
+  private async disposeOwned(profileId: string): Promise<void> {
     const worker = this.workers.get(profileId)
     if (!worker) return
     this.workers.delete(profileId)
@@ -67,9 +80,22 @@ export class ProfileWorkerSupervisor {
     await worker.done
   }
 
-  /** Dispose all children without allowing one failure to skip another child. */
+  private serial(profileId: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.pending.get(profileId) ?? Promise.resolve()
+    const current = previous.then(operation)
+    // A failed start has no retained worker. Later cleanup must still run and await the same owner.
+    const settled = current.catch(() => {}).finally(() => {
+      if (this.pending.get(profileId) === settled) this.pending.delete(profileId)
+    })
+    this.pending.set(profileId, settled)
+    return current
+  }
+
+  /** Permanently refuse new starts and dispose all children, including pending starts, despite individual failures. */
   async disposeAll(): Promise<void> {
-    const results = await Promise.allSettled([...this.workers.keys()].map(profileId => this.dispose(profileId)))
+    this.closed = true
+    const ids = new Set([...this.workers.keys(), ...this.pending.keys()])
+    const results = await Promise.allSettled([...ids].map(profileId => this.dispose(profileId)))
     const failed = results.find(result => result.status === 'rejected')
     if (failed?.status === 'rejected') throw failed.reason
   }
