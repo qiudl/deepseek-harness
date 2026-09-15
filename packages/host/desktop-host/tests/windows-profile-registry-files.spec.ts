@@ -38,7 +38,7 @@ function fixture(existing?: Buffer) {
     maximumSnapshotBytes: 1024,
     bindings,
   })
-  return { authority, ensurePrivateDirectory, readPrivateFile, replacePrivateFile, evidence }
+  return { authority, bindings, ensurePrivateDirectory, readPrivateFile, replacePrivateFile, evidence }
 }
 
 describe('Windows Profile registry file authority', () => {
@@ -66,5 +66,24 @@ describe('Windows Profile registry file authority', () => {
     })
     expect(() => { unsafe.authority.loadSnapshot(path) }).toThrow()
     expect(() => { unsafe.authority.persistSnapshot(path, root, { value: 'x'.repeat(2048) }) }).toThrow()
+  })
+
+  it('rejects invalid limits, paths, JSON and replacement evidence', () => {
+    for (const maximumSnapshotBytes of [0, Number.POSITIVE_INFINITY]) {
+      expect(() => createWindowsProfileRegistryFileAuthority({
+        root, userSid, maximumSnapshotBytes, bindings: fixture().bindings,
+      })).toThrow('invalid_input')
+    }
+
+    const malformed = fixture(Buffer.from('{'))
+    expect(() => { malformed.authority.prepareRoot(`${root}\\other`) }).toThrow('invalid_input')
+    expect(() => malformed.authority.loadSnapshot(`${path}.other`)).toThrow('invalid_input')
+    expect(() => malformed.authority.loadSnapshot(path)).toThrow('unavailable')
+    expect(() => { malformed.authority.persistSnapshot(`${path}.other`, root, {}) }).toThrow('invalid_input')
+    expect(() => { malformed.authority.persistSnapshot(path, `${root}\\other`, {}) }).toThrow('invalid_input')
+
+    const unsafe = fixture()
+    unsafe.replacePrivateFile.mockReturnValueOnce({ ...unsafe.evidence, reparsePoint: true })
+    expect(() => { unsafe.authority.persistSnapshot(path, root, {}) }).toThrow()
   })
 })

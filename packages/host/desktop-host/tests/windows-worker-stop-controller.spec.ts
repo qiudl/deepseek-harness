@@ -91,4 +91,80 @@ describe('Windows blocking Worker stop controller', () => {
       expect(flag.requested()).toBe(false)
     }
   })
+
+  it.each([
+    [new Error('cancel failed'), 'cancel failed'],
+    ['cancel failed', 'Unknown Windows Worker cancellation failure'],
+  ] as const)('retains a bounded cancellation failure: %s', async (failure, message) => {
+    const cancellation = {
+      cancel: vi.fn(() => { throw failure }),
+      close: vi.fn(),
+      openCurrentThreadHandle: vi.fn(() => 0n),
+      abandonUnhandedThreadHandle: vi.fn(),
+    }
+    await expect(stopWindowsBlockingWorker({
+      flag: createWindowsWorkerStopFlag(),
+      threadHandle: 901n,
+      cancellation,
+      workerDone: new Promise<void>(() => undefined),
+      maxCancelAttempts: 1,
+      waitForRetry: async () => undefined,
+    })).resolves.toMatchObject({ state: 'still_running', cancelAttempts: 1, lastCancellationError: { message } })
+    expect(cancellation.close).not.toHaveBeenCalled()
+  })
+
+  it('clears a transient cancellation error after a successful retry', async () => {
+    let finish!: () => void
+    const workerDone = new Promise<void>((resolve) => { finish = resolve })
+    let attempt = 0
+    const cancellation = {
+      cancel: vi.fn(() => {
+        attempt += 1
+        if (attempt === 1) throw new Error('transient')
+        finish()
+        return 'cancelled' as const
+      }),
+      close: vi.fn(),
+      openCurrentThreadHandle: vi.fn(() => 0n),
+      abandonUnhandedThreadHandle: vi.fn(),
+    }
+    await expect(stopWindowsBlockingWorker({
+      flag: createWindowsWorkerStopFlag(), threadHandle: 901n, cancellation, workerDone,
+      maxCancelAttempts: 2, waitForRetry: async () => undefined,
+    })).resolves.toEqual({ state: 'stopped', cancelAttempts: 2 })
+  })
+
+  it.each([
+    [new Error('close failed'), 'close failed'],
+    ['close failed', 'Unknown Windows Worker cancellation-handle cleanup failure'],
+  ] as const)('reports cancellation-handle cleanup failure: %s', async (failure, message) => {
+    await expect(stopWindowsBlockingWorker({
+      flag: createWindowsWorkerStopFlag(),
+      threadHandle: 901n,
+      cancellation: {
+        cancel: vi.fn(() => 'cancelled' as const),
+        close: vi.fn(() => { throw failure }),
+        openCurrentThreadHandle: vi.fn(() => 0n),
+        abandonUnhandedThreadHandle: vi.fn(),
+      },
+      workerDone: Promise.resolve(),
+      maxCancelAttempts: 1,
+      waitForRetry: async () => undefined,
+    })).rejects.toThrow(message)
+  })
+
+  it('normalizes a non-Error Worker shutdown rejection after closing the handle', async () => {
+    const workerDone = vi.fn<() => Promise<void>>().mockRejectedValue('worker failed')()
+    await expect(stopWindowsBlockingWorker({
+      flag: createWindowsWorkerStopFlag(),
+      threadHandle: 901n,
+      cancellation: {
+        cancel: vi.fn(() => 'cancelled' as const), close: vi.fn(),
+        openCurrentThreadHandle: vi.fn(() => 0n), abandonUnhandedThreadHandle: vi.fn(),
+      },
+      workerDone,
+      maxCancelAttempts: 1,
+      waitForRetry: async () => undefined,
+    })).rejects.toThrow('Unknown Windows Worker shutdown failure')
+  })
 })

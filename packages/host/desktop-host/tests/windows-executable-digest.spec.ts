@@ -9,6 +9,9 @@ interface FakeOptions {
   readonly maxReadBytes?: number
   readonly readFailure?: number
   readonly zeroProgress?: boolean
+  readonly oversizedRead?: boolean
+  readonly getSizeFailure?: number
+  readonly setPointerFailure?: number
 }
 
 function fakeWorld(options: FakeOptions = {}) {
@@ -25,15 +28,20 @@ function fakeWorld(options: FakeOptions = {}) {
     GetFileSizeEx: (_handle, output) => {
       if (!Buffer.isBuffer(output)) throw new Error('expected file size buffer')
       output.writeBigInt64LE(options.declaredSize ?? BigInt(data.length))
+      if (options.getSizeFailure !== undefined) { lastError = options.getSizeFailure; return 0 }
       return 1
     },
-    SetFilePointerEx: setPointer,
+    SetFilePointerEx: options.setPointerFailure === undefined ? setPointer : () => {
+      lastError = options.setPointerFailure ?? 0
+      return 0
+    },
     ReadFile: (_handle, output, requested, read) => {
       if (!Buffer.isBuffer(output) || !Buffer.isBuffer(read)) throw new Error('expected file read buffers')
       const bytesRequested = Number(requested)
       readSizes.push(bytesRequested)
       if (options.readFailure !== undefined) { lastError = options.readFailure; return 0 }
       if (options.zeroProgress) { read.writeUInt32LE(0); return 1 }
+      if (options.oversizedRead) { read.writeUInt32LE(bytesRequested + 1); return 1 }
       const count = Math.min(bytesRequested, options.maxReadBytes ?? bytesRequested, data.length - offset)
       data.copy(output, 0, offset, offset + count)
       offset += count
@@ -70,6 +78,15 @@ describe('Windows stable executable digest', () => {
       platform: 'win32', arch: 'x64', isMainThread: true, loadKoffi,
     })).rejects.toThrow('Windows x64 worker')
     expect(loadKoffi).not.toHaveBeenCalled()
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    try {
+      await expect(loadWindowsExecutableDigest({ arch: 'x64', isMainThread: false })).rejects.toThrow('Windows x64 worker')
+    } finally { platform.mockRestore() }
+    const arch = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64')
+    try {
+      await expect(loadWindowsExecutableDigest({ platform: 'win32', isMainThread: false })).rejects.toThrow('Windows x64 worker')
+    } finally { arch.mockRestore() }
+    await expect(loadWindowsExecutableDigest({ platform: 'win32', arch: 'x64' })).rejects.toThrow('Windows x64 worker')
   })
 
   it('rewinds and streams SHA-256 from the caller-owned stable handle', async () => {
@@ -92,7 +109,9 @@ describe('Windows stable executable digest', () => {
       expect(world.readSizes).toEqual([])
     }
     const { digest } = await load()
-    expect(() => digest(0n)).toThrow(WindowsPeerProcessNativeError)
+    for (const handle of [0n, -1n, 0xFFFF_FFFF_FFFF_FFFFn]) {
+      expect(() => digest(handle)).toThrow(WindowsPeerProcessNativeError)
+    }
   })
 
   it('rejects successful zero-progress reads and premature EOF', async () => {
@@ -101,6 +120,9 @@ describe('Windows stable executable digest', () => {
 
     const truncated = await load(fakeWorld({ data: Buffer.from('short'), declaredSize: 20n }))
     expect(() => truncated.digest(802n)).toThrow(WindowsPeerProcessNativeError)
+
+    const oversized = await load(fakeWorld({ oversizedRead: true }))
+    expect(() => oversized.digest(802n)).toThrow(WindowsPeerProcessNativeError)
   })
 
   it('retains the exact ReadFile error code', async () => {
@@ -108,5 +130,14 @@ describe('Windows stable executable digest', () => {
     const error = (() => { try { digest(802n) } catch (caught) { return caught } })()
     expect(error).toBeInstanceOf(WindowsPeerProcessNativeError)
     expect(error).toMatchObject({ api: 'ReadFile', win32Code: 5 })
+  })
+
+  it.each([
+    ['GetFileSizeEx', { getSizeFailure: 5 }],
+    ['SetFilePointerEx', { setPointerFailure: 6 }],
+  ] as const)('retains the exact %s error code', async (api, options) => {
+    const { digest } = await load(fakeWorld(options))
+    const error = (() => { try { digest(802n) } catch (caught) { return caught } })()
+    expect(error).toMatchObject({ api, win32Code: api === 'GetFileSizeEx' ? 5 : 6 })
   })
 })

@@ -114,3 +114,36 @@ it('rejects unsafe paths, directory evidence, invalid UTF-8 and invalid YAML bef
   const unsafe = new WindowsMcpStorage({ profileRoot: () => `${root}\\..\\other`, userSid: sid, bindings: f.bindings })
   expect(() => unsafe.snapshot(f.profileId)).toThrow()
 })
+
+it('rejects incomplete bindings and every untrusted persistence representation', () => {
+  const f = fixture('[]')
+  for (const missing of ['inspectExistingDirectory', 'createPrivateFile', 'removePrivateFile'] as const) {
+    const bindings = { ...f.bindings, [missing]: undefined }
+    expect(() => new WindowsMcpStorage({ profileRoot: () => root, userSid: sid, bindings })).toThrow('upgrade_required')
+  }
+
+  for (const unsafeRoot of [
+    String.raw`\\server\share`,
+    'C:\\unsafe\u0000path',
+    String.raw`C:\safe:alternate`,
+    String.raw`C:\safe\..\other`,
+  ]) {
+    const storage = new WindowsMcpStorage({ profileRoot: () => unsafeRoot, userSid: sid, bindings: f.bindings })
+    expect(() => storage.snapshot(f.profileId)).toThrow('unsafe_profile')
+  }
+
+  f.bindings.readPrivateFile.mockReturnValueOnce({
+    contents: Buffer.alloc(1_048_577),
+    evidence: evidence('file'),
+  })
+  expect(() => f.storage.snapshot(f.profileId)).toThrow('unsafe_patch')
+  expect(() => { f.storage.backup(f.profileId, randomUUID(), 'x'.repeat(1_048_577)) }).toThrow('unsafe_backup')
+  expect(() => f.storage.readBackup(f.profileId, randomUUID())).toThrow('unsafe_backup')
+  const emptyBackup = randomUUID()
+  f.storage.backup(f.profileId, emptyBackup, '')
+  f.files.set(`${root}\\profiles\\web\\.mcp-before-${emptyBackup}`, Buffer.alloc(0))
+  expect(() => f.storage.readBackup(f.profileId, emptyBackup)).toThrow('unsafe_backup')
+  expect(() => { f.storage.publish(f.profileId, 'x'.repeat(1_048_577), '[]', () => {}) }).toThrow('unsafe_patch')
+  f.files.delete(patch)
+  expect(() => { f.storage.publish(f.profileId, null, null, () => {}) }).not.toThrow()
+})
