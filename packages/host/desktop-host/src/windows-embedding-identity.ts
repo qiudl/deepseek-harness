@@ -7,6 +7,7 @@ import {
   randomUUID,
   type KeyObject,
 } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
 import { win32 } from 'node:path'
 import { loadWindowsCurrentUserSid } from './windows-current-user-native.ts'
 import { loadWindowsHostRegistrationFileBindings } from './windows-host-registration-native.ts'
@@ -54,6 +55,7 @@ export interface PrepareWindowsDesktopHostEmbeddingIdentityDependencies {
   readonly randomBytes?: typeof randomBytes
   readonly randomUUID?: typeof randomUUID
   readonly generateKeyPair?: () => { readonly privateKey: KeyObject; readonly publicKey: KeyObject }
+  readonly ensureStorageParent?: (path: string) => void
 }
 
 function positive(value: number): boolean {
@@ -140,7 +142,10 @@ function installationPublicKey(privateKey: Buffer): string {
  * Create or load the durable Windows installation identity with SID/ACL/reparse checks.
  * Existing identity files are retained; successful preparation replaces the pinned account keyring.
  * Failure can leave newly created private files for a later retry and does not authorize their deletion.
- * @param input - Canonical private root, release-pinned keyring, and required identity generations.
+ * The ordinary parent of the private storage root is created first. The storage root, environment
+ * namespace, selected environment, and identity directory are then created and verified with the
+ * current-user private ACL in that order.
+ * @param input - Canonical private storage/environment roots, release-pinned keyring, and identity generations.
  * @param dependencies - Optional native operations and entropy providers.
  * @returns Verified identity and file locations; rejects invalid evidence or conflicting generations.
  */
@@ -148,6 +153,7 @@ export async function prepareWindowsDesktopHostEmbeddingIdentity(
   input: {
     readonly platform?: string
     readonly arch?: string
+    readonly storageRoot: string
     readonly root: string
     readonly accountAccessKeyring: string
     readonly accountKeyringSha256: string
@@ -156,21 +162,30 @@ export async function prepareWindowsDesktopHostEmbeddingIdentity(
   },
   dependencies: PrepareWindowsDesktopHostEmbeddingIdentityDependencies = {},
 ): Promise<WindowsDesktopHostEmbeddingIdentity> {
+  const environmentsRoot = win32.join(input.storageRoot, 'environments')
   if ((input.platform ?? process.platform) !== 'win32' || (input.arch ?? process.arch) !== 'x64'
-    || !windowsRoot(input.root) || !SHA256.test(input.accountKeyringSha256)
+    || !windowsRoot(input.storageRoot) || !windowsRoot(input.root)
+    || !SHA256.test(win32.basename(input.root))
+    || win32.dirname(input.root) !== environmentsRoot
+    || !SHA256.test(input.accountKeyringSha256)
     || createHash('sha256').update(input.accountAccessKeyring).digest('hex') !== input.accountKeyringSha256
     || !positive(input.runtimeGeneration) || !positive(input.schemaGeneration)) {
     throw new HostAuthorityError('invalid_input')
   }
+  const ensureStorageParent = dependencies.ensureStorageParent
+    ?? ((path: string) => mkdirSync(path, { recursive: true }))
+  ensureStorageParent(win32.dirname(input.storageRoot))
   const resolveCurrentUserSid = await (dependencies.loadCurrentUserSid ?? loadWindowsCurrentUserSid)()
   const userSid = resolveCurrentUserSid()
   const bindings = await (
     dependencies.loadRegistrationFileBindings ?? loadWindowsHostRegistrationFileBindings
   )()
   const securityDescriptor = windowsHostPrivateSecurityDescriptor(userSid)
-  assertWindowsHostPrivatePathEvidence(
-    bindings.ensurePrivateDirectory(input.root, securityDescriptor), 'directory', userSid,
-  )
+  for (const path of [input.storageRoot, environmentsRoot, input.root]) {
+    assertWindowsHostPrivatePathEvidence(
+      bindings.ensurePrivateDirectory(path, securityDescriptor), 'directory', userSid,
+    )
+  }
   const identityRoot = win32.join(input.root, 'identity')
   assertWindowsHostPrivatePathEvidence(
     bindings.ensurePrivateDirectory(identityRoot, securityDescriptor), 'directory', userSid,

@@ -6,7 +6,9 @@ import type {
   WindowsHostRegistrationFileBindings,
 } from '../src/windows-host-registration.ts'
 
-const root = String.raw`C:\Users\alice\AppData\Local\Slark\DSH\environments\production`
+const storageRoot = String.raw`C:\Users\alice\AppData\Local\Slark\DSH`
+const environmentId = 'a'.repeat(64)
+const root = `${storageRoot}\\environments\\${environmentId}`
 const userSid = 'S-1-5-21-1000-2000-3000-1001'
 
 function fixture() {
@@ -49,6 +51,7 @@ function fixture() {
   const input = {
     platform: 'win32',
     arch: 'x64',
+    storageRoot,
     root,
     accountAccessKeyring,
     accountKeyringSha256: createHash('sha256').update(accountAccessKeyring).digest('hex'),
@@ -63,6 +66,7 @@ function fixture() {
       .mockReturnValueOnce('11111111-1111-4111-8111-111111111111')
       .mockReturnValueOnce('22222222-2222-4222-8222-222222222222'),
     generateKeyPair: vi.fn(() => generateKeyPairSync('ed25519')),
+    ensureStorageParent: vi.fn(),
   }
   return { files, bindings, input, dependencies, evidence }
 }
@@ -84,6 +88,31 @@ describe('Windows embedding identity', () => {
     expect(state.dependencies.generateKeyPair).toHaveBeenCalledOnce()
     expect(state.dependencies.randomUUID).toHaveBeenCalledTimes(2)
     expect(state.files.size).toBe(4)
+    expect(state.dependencies.ensureStorageParent).toHaveBeenCalledTimes(2)
+    expect(state.dependencies.ensureStorageParent).toHaveBeenCalledWith(
+      String.raw`C:\Users\alice\AppData\Local\Slark`,
+    )
+    expect(state.bindings.ensurePrivateDirectory).toHaveBeenNthCalledWith(1, storageRoot, expect.any(String))
+    expect(state.bindings.ensurePrivateDirectory).toHaveBeenNthCalledWith(
+      2,
+      `${storageRoot}\\environments`,
+      expect.any(String),
+    )
+    expect(state.bindings.ensurePrivateDirectory).toHaveBeenNthCalledWith(3, root, expect.any(String))
+    expect(state.bindings.ensurePrivateDirectory).toHaveBeenNthCalledWith(
+      4,
+      `${root}\\identity`,
+      expect.any(String),
+    )
+  })
+
+  it('rejects an environment root outside the private storage hierarchy', async () => {
+    const state = fixture()
+    await expect(prepareWindowsDesktopHostEmbeddingIdentity({
+      ...state.input,
+      root: String.raw`C:\Users\alice\AppData\Local\Slark\other`,
+    }, state.dependencies)).rejects.toMatchObject({ code: 'invalid_input' })
+    expect(state.bindings.ensurePrivateDirectory).not.toHaveBeenCalled()
   })
 
   it('recovers a create race by reading the winning stable private file', async () => {

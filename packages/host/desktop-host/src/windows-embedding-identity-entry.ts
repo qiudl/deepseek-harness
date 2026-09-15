@@ -32,6 +32,7 @@ async function main(): Promise<void> {
   }
   const accountAccessKeyring = new TextDecoder('utf-8', { fatal: true }).decode(source)
   const identity = await prepareWindowsDesktopHostEmbeddingIdentity({
+    storageRoot: required('DSH_HOST_STORAGE_ROOT'),
     root: required('DSH_HOST_ROOT'),
     accountAccessKeyring,
     accountKeyringSha256: required('DSH_HOST_ACCOUNT_KEYRING_SHA256'),
