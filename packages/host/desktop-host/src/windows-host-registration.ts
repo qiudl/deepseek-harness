@@ -121,6 +121,7 @@ export function assertWindowsHostPrivatePathEvidence(
       throw unavailable()
     }
   }
+  /* v8 ignore next -- three validated unique ACE deletions exhaust the three-entry expected set. */
   if (expected.size !== 0) throw unavailable()
 }
 

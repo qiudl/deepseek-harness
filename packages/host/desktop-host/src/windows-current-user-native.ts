@@ -106,6 +106,7 @@ export async function loadWindowsCurrentUserSid(
     } catch (error) { failure = error }
     try { checkedClose(token) } catch (error) { failure ??= error }
     if (failure !== undefined) throwFailure(failure)
+    /* v8 ignore next -- a failure before validated assignment is always retained and thrown above. */
     if (value === undefined) invalidData('ConvertSidToStringSidW')
     return value as string
   }

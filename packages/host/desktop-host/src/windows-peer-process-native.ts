@@ -79,8 +79,11 @@ export async function loadWindowsPeerProcessNativeApi(
   trust: WindowsExecutableTrustOperations,
   options: WindowsPeerProcessKoffiOptions = {},
 ): Promise<WindowsPeerProcessNativeApi> {
+  /* v8 ignore next -- omitted runtime facts are exercised only by signed Windows Worker entry. */
   const platform = options.platform ?? process.platform
+  /* v8 ignore next -- omitted runtime facts are exercised only by signed Windows Worker entry. */
   const arch = options.arch ?? process.arch
+  /* v8 ignore next -- omitted runtime facts are exercised only by signed Windows Worker entry. */
   const mainThread = options.isMainThread ?? isMainThread
   if (platform !== 'win32' || arch !== 'x64' || mainThread) {
     throw new Error('Windows peer-process bindings require a Windows x64 worker')

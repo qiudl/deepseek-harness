@@ -128,8 +128,11 @@ export function createWindowsNamedPipeLifecycleBindings(
 export async function loadWindowsNamedPipeLifecycleBindings(
   options: WindowsNamedPipeKoffiOptions = {},
 ): Promise<WindowsNamedPipeLifecycleBindings> {
+  /* v8 ignore next -- omitted runtime facts are exercised only by the signed Windows Worker entry. */
   const platform = options.platform ?? process.platform
+  /* v8 ignore next -- omitted runtime facts are exercised only by the signed Windows Worker entry. */
   const arch = options.arch ?? process.arch
+  /* v8 ignore next -- omitted runtime facts are exercised only by the signed Windows Worker entry. */
   const mainThread = options.isMainThread ?? isMainThread
   assertWindowsX64Worker(platform, arch, mainThread, 'Blocking named-pipe bindings require a Windows x64 worker')
   const koffi = await loadWindowsKoffi(options.loadKoffi)

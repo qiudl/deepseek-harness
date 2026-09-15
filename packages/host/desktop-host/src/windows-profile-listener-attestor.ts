@@ -32,6 +32,7 @@ function listenerPort(origin: string): number {
   if (parsed.origin !== origin || parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1'
     || parsed.username || parsed.password || parsed.port === '') throw new HostAuthorityError('invalid_input')
   const port = Number(parsed.port)
+  /* v8 ignore next -- WHATWG URL accepts only normalized TCP ports in this numeric range. */
   if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) throw new HostAuthorityError('invalid_input')
   return port
 }

@@ -150,6 +150,19 @@ describe('Windows named-pipe native lifecycle', () => {
     expect(fixture.native.createSecurityDescriptor).not.toHaveBeenCalled()
   })
 
+  it('frees a valid descriptor when stop wins before pipe creation', async () => {
+    let stopped = false
+    const fixture = bindings({
+      createSecurityDescriptor: vi.fn(() => { stopped = true; return 11n }),
+    })
+    await expect(withCancellableAcceptedWindowsNamedPipe({
+      policy, bindings: fixture.native, stopRequested: () => stopped,
+      attest: async () => ({ pid: 42 }), serve: async () => 'unreachable',
+    })).resolves.toEqual({ state: 'stopped' })
+    expect(fixture.native.freeSecurityDescriptor).toHaveBeenCalledWith(11n)
+    expect(fixture.native.createNamedPipe).not.toHaveBeenCalled()
+  })
+
   it('closes a prepared pipe without accepting when stop wins before the blocking connect', async () => {
     let stopped = false
     const fixture = bindings({
@@ -165,6 +178,52 @@ describe('Windows named-pipe native lifecycle', () => {
     expect(fixture.native.connectNamedPipe).not.toHaveBeenCalled()
     expect(fixture.native.closeHandle).toHaveBeenCalledWith(91n)
     expect(fixture.native.disconnectNamedPipe).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when pre-connect stop cleanup fails', async () => {
+    let stopped = false
+    const fixture = bindings({
+      createNamedPipe: vi.fn(() => { stopped = true; return 91n }),
+      closeHandle: vi.fn(() => { throw new Error('CloseHandle failed') }),
+    })
+    await expect(withCancellableAcceptedWindowsNamedPipe({
+      policy, bindings: fixture.native, stopRequested: () => stopped,
+      attest: async () => ({ pid: 42 }), serve: async () => 'unreachable',
+    })).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('rejects undocumented connect results', async () => {
+    const fixture = bindings({ connectNamedPipe: vi.fn(async () => 'unexpected') })
+    await expect(withAcceptedWindowsNamedPipe({
+      policy, bindings: fixture.native,
+      attest: async () => ({ pid: 42 }), serve: async () => 'unreachable',
+    })).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('stops after connect or attestation without serving', async () => {
+    for (const stopAt of ['connect', 'attest'] as const) {
+      let stopped = false
+      const fixture = bindings(stopAt === 'connect' ? {
+        connectNamedPipe: vi.fn(async () => { stopped = true; return 'connected' as const }),
+      } : {})
+      const serve = vi.fn(async () => 'unreachable')
+      await expect(withCancellableAcceptedWindowsNamedPipe({
+        policy, bindings: fixture.native, stopRequested: () => stopped,
+        attest: async () => { if (stopAt === 'attest') stopped = true; return { pid: 42 } }, serve,
+      })).resolves.toEqual({ state: 'stopped' })
+      expect(serve).not.toHaveBeenCalled()
+    }
+  })
+
+  it('normalizes only object-shaped cancellation errors', async () => {
+    let stopped = false
+    const fixture = bindings({
+      connectNamedPipe: vi.fn(async () => { stopped = true; throw 'cancelled' }),
+    })
+    await expect(withCancellableAcceptedWindowsNamedPipe({
+      policy, bindings: fixture.native, stopRequested: () => stopped,
+      attest: async () => ({ pid: 42 }), serve: async () => 'unreachable',
+    })).rejects.toBeInstanceOf(HostAuthorityError)
   })
 
   it('normalizes a cancelled blocking connect only after stop is visible', async () => {

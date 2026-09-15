@@ -171,4 +171,66 @@ describe('Windows peer process stable-image bindings', () => {
     await bindings.closeHandle(202n)
     await expect(bindings.digestExecutable(202n)).rejects.toBeInstanceOf(HostAuthorityError)
   })
+
+  it('forwards SID queries through the worker boundary', async () => {
+    const fixture = api()
+    const bindings = createWindowsPeerProcessBindings(fixture.native)
+    expect(bindings.currentUserSid()).toBe('S-1-5-21-1000-2000-3000-1001')
+    expect(bindings.processOwnerSid(101n)).toBe('S-1-5-21-1000-2000-3000-1001')
+    expect(fixture.native.processOwnerSid).toHaveBeenCalledWith(101n)
+  })
+
+  it('rejects invalid and aliased handles at every ownership boundary', async () => {
+    for (const pipe of [0n, -1n, 0xFFFF_FFFF_FFFF_FFFFn]) {
+      const fixture = api()
+      await expect(createWindowsPeerProcessBindings(fixture.native).openClientProcess(pipe))
+        .rejects.toBeInstanceOf(HostAuthorityError)
+      expect(fixture.native.getNamedPipeClientProcessId).not.toHaveBeenCalled()
+    }
+
+    const aliasedProcess = api({ openProcess: vi.fn(() => 91n) })
+    await expect(createWindowsPeerProcessBindings(aliasedProcess.native).openClientProcess(91n))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+
+    const invalidProcess = api()
+    await expect(createWindowsPeerProcessBindings(invalidProcess.native).openProcessExecutable(0n))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+
+    const aliasedImage = api({ openExecutableForVerification: vi.fn(() => 101n) })
+    await expect(createWindowsPeerProcessBindings(aliasedImage.native).openProcessExecutable(101n))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('fails closed even when rollback close throws', async () => {
+    const processFixture = api({
+      getNamedPipeClientProcessId: vi.fn().mockReturnValueOnce(42).mockReturnValueOnce(43),
+      closeHandle: vi.fn(() => { throw new Error('close failed') }),
+    })
+    await expect(createWindowsPeerProcessBindings(processFixture.native).openClientProcess(91n))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+
+    const imageFixture = api({
+      finalExecutablePath: vi.fn(() => ''),
+      closeHandle: vi.fn(() => { throw new Error('close failed') }),
+    })
+    await expect(createWindowsPeerProcessBindings(imageFixture.native).openProcessExecutable(101n))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('normalizes synchronous signature and digest failures', async () => {
+    const fixture = api({
+      verifyAuthenticodePublisher: vi.fn(() => { throw new Error('signature failed') }),
+      digestExecutable: vi.fn(() => { throw new Error('digest failed') }),
+    })
+    const bindings = createWindowsPeerProcessBindings(fixture.native)
+    await bindings.openProcessExecutable(101n)
+    await expect(bindings.verifyAuthenticodePublisher(202n)).rejects.toBeInstanceOf(HostAuthorityError)
+    await expect(bindings.digestExecutable(202n)).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('rejects non-string native image paths', async () => {
+    const fixture = api({ queryProcessImagePath: vi.fn(() => 7) })
+    await expect(createWindowsPeerProcessBindings(fixture.native as never).openProcessExecutable(101n))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+  })
 })
