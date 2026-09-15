@@ -12,15 +12,18 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
   let lastError = 0
   let firstCreate = true
   const written: Buffer[] = []
+  const createdPaths: string[] = []
   const closeHandle = vi.fn(() => 1)
   const deleteFile = vi.fn(() => 1)
+  const moveFile = vi.fn(() => 1)
   const functions: Record<string, (...args: unknown[]) => unknown> = {
     ConvertStringSecurityDescriptorToSecurityDescriptorW: (_text, _revision, output) => {
       if (!Buffer.isBuffer(output)) throw new Error('expected security descriptor buffer')
       output.writeBigUInt64LE(11n); return 1
     },
     CreateDirectoryW: () => 1,
-    CreateFileW: () => {
+    CreateFileW: (candidate) => {
+      createdPaths.push(String(candidate))
       if (options.existing && firstCreate) { firstCreate = false; lastError = 80; return 0n }
       return 91n
     },
@@ -58,7 +61,7 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
     },
     FlushFileBuffers: () => 1,
     SetEndOfFile: () => 1,
-    MoveFileExW: () => 1,
+    MoveFileExW: moveFile,
     DeleteFileW: deleteFile,
   }
   const koffi = {
@@ -75,7 +78,7 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
       }),
     })),
   }
-  return { koffi, written, closeHandle, deleteFile }
+  return { koffi, written, createdPaths, closeHandle, deleteFile, moveFile }
 }
 
 describe('Windows private create-new native file operation', () => {
@@ -111,5 +114,17 @@ describe('Windows private create-new native file operation', () => {
       .toThrow(WindowsHostRegistrationNativeError)
     expect(state.closeHandle).toHaveBeenCalledOnce()
     expect(state.deleteFile).toHaveBeenCalledWith(path)
+  })
+
+  it('keeps the atomic replacement suffix below the UUID-form path boundary', async () => {
+    const state = world()
+    const bindings = await loadWindowsHostRegistrationFileBindings({
+      platform: 'win32', arch: 'x64', loadKoffi: async () => state.koffi,
+    })
+    bindings.replacePrivateFile(path, Buffer.from('content\n'), sddl)
+    const temporary = state.createdPaths[0]
+    expect(temporary).toMatch(/\.([0-9a-f]{32})\.tmp$/u)
+    expect(temporary?.length).toBe(path.length + 37)
+    expect(state.moveFile).toHaveBeenCalledWith(temporary, path, 0x1 | 0x8)
   })
 })

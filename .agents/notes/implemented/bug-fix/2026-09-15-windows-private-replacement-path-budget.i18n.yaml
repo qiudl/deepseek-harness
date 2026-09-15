@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-15-windows-private-replacement-path-budget.md
+2026-09-15-windows-private-replacement-path-budget.md: 5794fe63fd4b694dd45a2779c81de9a37f55ef35
+2026-09-15-windows-private-replacement-path-budget.zh.md: 828d6b03674f4d78a57dbb674628fc328ea582e4

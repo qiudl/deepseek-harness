@@ -435,7 +435,9 @@ export async function loadWindowsHostRegistrationFileBindings(
       return value
     },
     replacePrivateFile(path, contents, sddl) {
-      const temporary = `${path}.${randomUUID()}.tmp`
+      // Keep the 128-bit nonce while avoiding UUID separators. Store package LocalCache paths can
+      // otherwise cross the legacy Win32 260-character boundary only for the replacement file.
+      const temporary = `${path}.${randomUUID().replaceAll('-', '')}.tmp`
       let handle: bigint | undefined
       let moved = false
       try {
