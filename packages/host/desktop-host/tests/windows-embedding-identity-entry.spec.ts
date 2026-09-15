@@ -50,7 +50,7 @@ afterEach(() => {
   process.exitCode = undefined
 })
 
-describe.sequential('Windows embedding identity entry', () => {
+describe('Windows embedding identity entry', { concurrent: false }, () => {
   it('reads stdin to EOF, validates bootstrap input, and emits one identity', async () => {
     const state = await runEntry({ reads: [Buffer.from('{"keys":'), Buffer.from('[]}')] })
     expect(state.prepare).toHaveBeenCalledWith({
