@@ -595,6 +595,22 @@ describe('CI workflow', () => {
     expect(config).not.toContain('packages/lsp/lsp-stdio/src/instance.ts')
   })
 
+  it('keeps POSIX owner planes out of the native Windows inventory', () => {
+    const config = readFileSync(resolve(root, 'vitest.config.ts'), 'utf8')
+
+    for (const path of [
+      'packages/host/desktop-host/tests/macos-peer-attestor.spec.ts',
+      'packages/host/desktop-host/tests/profile-skill-executor.spec.ts',
+      'packages/session/session-persistence-jsonl/tests/migration-import.spec.ts',
+      'packages/host/desktop-host/src/macos-peer-attestor.ts',
+      'packages/host/desktop-host/src/posix-extension-files.ts',
+      'packages/session/session-persistence-jsonl/src/migration-import.ts',
+    ]) {
+      expect(config).toContain(`'${path}'`)
+    }
+    expect(config).toContain('windowsUnsupportedOwnerTests')
+  })
+
   it('requires release-shaped Python runtime validation on Linux and Windows x64', () => {
     const workflow = loadWorkflow('.github/workflows/ci.yml')
     const pythonRuntime = workflowJob(workflow, 'python-runtime')

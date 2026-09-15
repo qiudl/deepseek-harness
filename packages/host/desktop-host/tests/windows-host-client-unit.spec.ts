@@ -150,6 +150,7 @@ describe('Windows Host client discovery unit boundaries', () => {
   })
 
   it('supports the legacy protocol-test connector without spawning a Worker', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     const client = { inspection: { pid: 42 } }
     const connectSocket = vi.fn()
     mocks.connectNamedPipe.mockResolvedValueOnce(client)
