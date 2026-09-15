@@ -1134,7 +1134,7 @@ export class UnixHostServer {
     this.options.ownership.assertOwner()
     try {
       const stat = lstatSync(this.options.socketPath)
-      if (!stat.isSocket() || stat.isSymbolicLink() || stat.uid !== this.options.expectedUid) throw new HostAuthorityError('conflict')
+      if (!stat.isSocket() || stat.uid !== this.options.expectedUid) throw new HostAuthorityError('conflict')
       this.options.ownership.assertOwner()
       unlinkSync(this.options.socketPath)
     } catch (error) {
@@ -1156,6 +1156,7 @@ export class UnixHostServer {
       this.socketIdentity = { dev: stat.dev, ino: stat.ino }
     } catch (error) {
       this.server = undefined
+      /* v8 ignore next 1 -- reaching cleanup requires a filesystem race after the listener has bound successfully. */
       if (server.listening) await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
       throw error
     }
@@ -1347,13 +1348,16 @@ export class UnixHostClient {
     }
     if (frame.result.installation_id !== options.trustedInstallationId
       || frame.result.installation_public_key !== options.trustedInstallationPublicKey
-      || frame.result.executable_signature_digest !== options.trustedExecutableSignatureDigest
-      || !verify(
-        null,
-        encodeHostInspectSignaturePayload(request, frame),
-        publicKeyObject(options.trustedInstallationPublicKey),
-        Buffer.from(frame.result.challenge_signature, 'base64url'),
-      )) {
+      || frame.result.executable_signature_digest !== options.trustedExecutableSignatureDigest) {
+      channel.close(); throw new HostAuthorityError('unavailable')
+    }
+    const trustedPublicKey = publicKeyObject(options.trustedInstallationPublicKey)
+    if (!verify(
+      null,
+      encodeHostInspectSignaturePayload(request, frame),
+      trustedPublicKey,
+      Buffer.from(frame.result.challenge_signature, 'base64url'),
+    )) {
       channel.close(); throw new HostAuthorityError('unavailable')
     }
     return new UnixHostClient(channel, {
