@@ -10,7 +10,7 @@ Status: implemented
 
 ## 决策
 
-三个主要 Linux 作业（`node-24`、`node-24-coverage`、`node-24-consumers`）、三个 `node-compat` 矩阵条目和 `all-checks-passed` 通过 `DSH_CI_FAILOVER_LINUX` 解析；原生 Windows 作业通过 `DSH_CI_FAILOVER_WINDOWS` 解析。一个平台的开关不会重定向另一个平台。仓库写者将变量设为 `selfhosted` 时，适用的可信作业选择 `vm-backup` 或 `dsh-win-ci`；`blacksmith` 取值按 [blacksmith 故障切换支路笔记](2026-09-09-blacksmith-failover-leg.zh.md) 路由参与切换的作业；未设置或任何其它值保留工作流定义的托管回退。Node 兼容性作业要求同仓库且非 fork 的头部以及非 Dependabot 作者，使用隔离运行时设置，并在未设置与非特殊值下保留 `ubuntu-latest` 回退；blacksmith 分支不带上述任何条件。在 `selfhosted` 取值下，Linux 故障切换会限制快照并发，并跳过托管软件包缓存恢复。判定作业跟随工作作业，避免继续在不可用的托管池排队。每个开关都是写者可管理的仓库状态而非一次合并，因此在检查失败时仍然有效。`serial / linux (self-hosted standby)` 与 `serial / windows (self-hosted standby)` 通道在 master 推送上重新验证完整的未分片聚合流程。
+三个主要 Linux 作业（`node-24`、`node-24-coverage`、`node-24-consumers`）、三个 `node-compat` 矩阵条目和 `all-checks-passed` 通过 `DSH_CI_FAILOVER_LINUX` 解析；原生 Windows 作业通过 `DSH_CI_FAILOVER_WINDOWS` 解析。一个平台的开关不会重定向另一个平台。仓库写者将变量设为 `selfhosted` 时，适用的可信作业选择 `vm-backup` 或 `dsh-win-ci`；`blacksmith` 取值按 [blacksmith 故障切换支路笔记](2026-09-09-blacksmith-failover-leg.zh.md) 路由参与切换的作业；`github` 取值将适用 fork 的作业路由到 GitHub 标准托管运行器；未设置或任何其它值保留工作流定义的托管回退。Node 兼容性作业要求同仓库且非 fork 的头部以及非 Dependabot 作者，使用隔离运行时设置，并在未设置与非特殊值下保留 `ubuntu-latest` 回退；blacksmith 分支不带上述任何条件。在 `selfhosted` 取值下，Linux 故障切换会限制快照并发，并跳过托管软件包缓存恢复。判定作业跟随工作作业，避免继续在不可用的托管池排队。每个开关都是写者可管理的仓库状态而非一次合并，因此在检查失败时仍然有效。`serial / linux (self-hosted standby)` 与 `serial / windows (self-hosted standby)` 通道在 master 推送上重新验证完整的未分片聚合流程。
 
 [被取代 CI 的取消策略](2026-09-09-cancel-superseded-ci.zh.md) 管理同一工作流/引用组内的 master 推送和手动运行，包括热备演练。master 快速更新可能让演练因反复被取消而始终无法得出结论。判断就绪状态时，使用最近一次已完成的热备结论，并核对其时间和提交；已取消或仅被调度的运行不构成就绪证据。
 
@@ -40,7 +40,7 @@ Status: implemented
 
 ## 无企业运行器的 fork
 
-`DSH_CI_FAILOVER_LINUX=github` 仅将 `ci.yml` 中三个企业 Linux worker 路由到 GitHub 标准 `ubuntu-24.04` 镜像。这个由写者显式选择的取值使 fork 无需上游私有 runner 标签也能执行静态、覆盖率及快照/产物检查。命令、阈值、超时与依赖汇总结论保持原样；基准作业保留既有主机，不借此重新定义性能基线。Windows 路由独立。标准机器可能耗时更长或资源不足，这些仍然是失败，调整调度预算前必须有证据。删除变量即可恢复默认企业标签；已排队作业需要新运行。
+`DSH_CI_FAILOVER_LINUX=github` 将 `ci.yml` 中三个企业 Linux worker 路由到 GitHub 标准 `ubuntu-24.04` 镜像，`DSH_CI_FAILOVER_WINDOWS=github` 则将四个原生 Windows 作业路由到 `windows-2025`。这两个由写者显式选择的取值使 fork 无需上游私有 runner 标签也能执行必需的平台检查。命令、阈值、超时与依赖汇总结论保持原样；Windows 覆盖率作业会降低 worker、分区和门禁并发度以适配标准运行器，基准作业保留既有主机，不借此重新定义性能基线。两个平台开关仍彼此独立。标准机器可能耗时更长或资源不足，这些仍然是失败，调整调度预算前必须有证据。删除变量即可恢复默认企业标签；已排队作业需要新运行。
 
 ## 切换期间的容量
 
@@ -49,7 +49,7 @@ Linux 开关启用期间，容量需覆盖 master 热备、主 CI 作业，以�
 
 ### 切回
 
-删除 `DSH_CI_FAILOVER_LINUX` 或 `DSH_CI_FAILOVER_WINDOWS` 变量（或改为 `selfhosted`、`blacksmith` 及仅 Linux 支持的 `github` 之外的任何值），新的运行即解析回各自的托管池。设为 `blacksmith` 会让作业留在 Blacksmith，直到该值改变。若故障期间追加注册过实例，将其移除。
+删除 `DSH_CI_FAILOVER_LINUX` 或 `DSH_CI_FAILOVER_WINDOWS` 变量（或改为 `selfhosted`、`blacksmith` 及 `github` 之外的任何值），新的运行即解析回各自的托管池。设为 `blacksmith` 会让作业留在 Blacksmith，直到该值改变。若故障期间追加注册过实例，将其移除。
 
 ### 信任边界
 

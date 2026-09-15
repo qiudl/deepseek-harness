@@ -174,6 +174,7 @@ describe('CI workflow', () => {
       expect(job['runs-on']).toContain('dsh-win-ci')
       expect(job['runs-on']).toContain('dsh-windows-2025-16core')
       expect(job['runs-on']).toContain('blacksmith-16vcpu-windows-2025')
+      expect(job['runs-on']).toContain('windows-2025')
       expect(job.if).toBe("github.event_name == 'pull_request'")
     }
 
@@ -214,9 +215,9 @@ describe('CI workflow', () => {
       expect(install!.run).not.toContain('$cloneFlag')
     }
 
-    // windows-coverage uses the lower 4-partition profile.
+    // windows-coverage owns the native coverage command; its runner-specific
+    // concurrency profile is evaluated with the failover selectors below.
     expect(windowsCoverage.name).toBe('windows node 24 / coverage')
-    expect(windowsCoverage.env).toMatchObject({ DSH_COVERAGE_PARTITIONS: '4' })
     const coverageSteps = windowsCoverage.steps as unknown[]
     const coverageCommands = coverageSteps.filter((step): step is Record<string, unknown> & { run: string } => (
       isRecord(step) && typeof step.run === 'string'
@@ -354,6 +355,21 @@ describe('CI workflow', () => {
       for (const login of ['maintainer', 'dependabot[bot]']) {
         expect(evaluate(job['runs-on'] as string, { DSH_CI_FAILOVER_LINUX: 'github' }, login)).toBe('ubuntu-24.04')
       }
+    }
+    for (const job of [windowsBuild, windowsCoverage, windowsNativeTests, windowsObservational]) {
+      for (const login of ['maintainer', 'dependabot[bot]']) {
+        expect(evaluate(job['runs-on'] as string, { DSH_CI_FAILOVER_WINDOWS: 'github' }, login)).toBe('windows-2025')
+      }
+    }
+    const windowsCoverageEnv = windowsCoverage.env
+    if (!isRecord(windowsCoverageEnv)) throw new TypeError('windows-coverage must define environment bounds')
+    for (const [name, hosted, standard] of [
+      ['DSH_COVERAGE_MAX_WORKERS', '2', '6'],
+      ['DSH_COVERAGE_PARTITIONS', '2', '4'],
+      ['DSH_GATE_CONCURRENCY', '1', '3'],
+    ] as const) {
+      expect(evaluate(windowsCoverageEnv[name] as string, { DSH_CI_FAILOVER_WINDOWS: 'github' }), `${name} Windows hosted failover`).toBe(hosted)
+      expect(evaluate(windowsCoverageEnv[name] as string, { DSH_CI_FAILOVER_WINDOWS: '' }), `${name} Windows primary runner`).toBe(standard)
     }
     const coverageEnv = node24Coverage.env
     if (!isRecord(coverageEnv)) throw new TypeError('node-24-coverage must define environment bounds')
