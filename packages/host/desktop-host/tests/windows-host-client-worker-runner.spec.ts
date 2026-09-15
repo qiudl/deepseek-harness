@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   encodeHostControlFrame,
   decodeHostControlFrame,
+  type HostControlFrame,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import {
   runWindowsHostClientWorker,
@@ -158,5 +159,183 @@ describe('Windows Host client Worker runner', () => {
     await expect(runWindowsHostClientWorker(state.options)).resolves.toEqual({ requestsHandled: 0 })
     expect(state.channel.send).not.toHaveBeenCalled()
     expect(state.channel.readFrame).not.toHaveBeenCalled()
+  })
+
+  it.each(['before-connect', 'after-connect', 'after-attestation'] as const)(
+    'observes stop %s without starting the next native phase',
+    async (phase) => {
+      const state = fixture()
+      if (phase === 'before-connect') {
+        state.options.port.send = vi.fn((message: unknown) => {
+          state.sent.push(message)
+          if ((message as { type?: string }).type === 'starting') state.stopFlag.request()
+        })
+      } else if (phase === 'after-connect') {
+        state.options.client.connect.mockImplementationOnce(async () => {
+          state.stopFlag.request()
+          return 91n
+        })
+      } else {
+        state.options.attestServer.mockImplementationOnce(async () => {
+          state.stopFlag.request()
+          return evidence
+        })
+      }
+      await expect(runWindowsHostClientWorker(state.options)).resolves.toEqual({ requestsHandled: 0 })
+      expect(state.options.attestServer).toHaveBeenCalledTimes(phase === 'after-attestation' ? 1 : 0)
+      expect(state.sent).toContainEqual(expect.objectContaining({ type: 'stopped' }))
+    },
+  )
+
+  it('rejects a stop command until the shared stop flag is visible', async () => {
+    const state = fixture()
+    state.options.port.send = vi.fn((message: unknown) => {
+      state.sent.push(message)
+      if ((message as { type?: string }).type === 'ready') {
+        queueMicrotask(() => state.emit({ version: 1, type: 'stop', generation: 4 }))
+      }
+    })
+    await expect(runWindowsHostClientWorker(state.options)).rejects.toThrow('stop flag missing')
+    expect(state.options.client.close).toHaveBeenCalledWith(91n)
+  })
+
+  it.each([null, request])('rejects an absent or uncorrelated Host response', async (reply) => {
+    const state = fixture()
+    state.channel.readFrame.mockResolvedValueOnce(reply as HostControlFrame)
+    state.options.port.send = vi.fn((message: unknown) => {
+      state.sent.push(message)
+      if ((message as { type?: string }).type === 'ready') queueMicrotask(() => state.emit({
+        version: 1, type: 'request', generation: 4, sequence: 1,
+        frame: encodeHostControlFrame(request),
+      }))
+    })
+    await expect(runWindowsHostClientWorker(state.options)).rejects.toThrow('Uncorrelated')
+    expect(state.options.client.close).toHaveBeenCalledWith(91n)
+  })
+
+  it('prefers a concurrent control failure after native response completion', async () => {
+    const state = fixture()
+    state.channel.readFrame.mockImplementationOnce(async () => {
+      state.emit({ type: 'malformed' })
+      return response
+    })
+    state.options.port.send = vi.fn((message: unknown) => {
+      state.sent.push(message)
+      if ((message as { type?: string }).type === 'ready') queueMicrotask(() => state.emit({
+        version: 1, type: 'request', generation: 4, sequence: 1,
+        frame: encodeHostControlFrame(request),
+      }))
+    })
+    await expect(runWindowsHostClientWorker(state.options)).rejects.toThrow()
+    expect(state.options.client.close).toHaveBeenCalledWith(91n)
+  })
+
+  it('queues one early command and fails closed on a second concurrent command', async () => {
+    const state = fixture()
+    state.options.port.send = vi.fn((message: unknown) => {
+      state.sent.push(message)
+      if ((message as { type?: string }).type === 'ready') {
+        const command = {
+          version: 1, type: 'request', generation: 4, sequence: 1,
+          frame: encodeHostControlFrame(request),
+        }
+        state.emit(command)
+        state.emit({ ...command, sequence: 2 })
+      }
+    })
+    await expect(runWindowsHostClientWorker(state.options)).rejects
+      .toThrow('Concurrent Windows Host client Worker command')
+  })
+
+  it('delivers a request directly to the waiting command consumer', async () => {
+    const state = fixture()
+    const running = runWindowsHostClientWorker(state.options)
+    await vi.waitFor(() => { expect(state.options.createChannel).toHaveBeenCalledWith(91n) })
+    state.emit({
+      version: 1, type: 'request', generation: 4, sequence: 1,
+      frame: encodeHostControlFrame(request),
+    })
+    await vi.waitFor(() => {
+      expect(state.sent).toContainEqual(expect.objectContaining({ type: 'response' }))
+    })
+    state.stopFlag.request()
+    state.emit({ version: 1, type: 'stop', generation: 4 })
+    await expect(running).resolves.toEqual({ requestsHandled: 1 })
+  })
+
+  it('consumes a stop command already awaited when the shared flag becomes visible', async () => {
+    const state = fixture()
+    const running = runWindowsHostClientWorker(state.options)
+    await vi.waitFor(() => { expect(state.options.createChannel).toHaveBeenCalledWith(91n) })
+    state.stopFlag.request()
+    state.emit({ version: 1, type: 'stop', generation: 4 })
+    await expect(running).resolves.toEqual({ requestsHandled: 0 })
+  })
+
+  it('does not start I/O when stop wins after satisfying a waiting request command', async () => {
+    const state = fixture()
+    const running = runWindowsHostClientWorker(state.options)
+    await vi.waitFor(() => { expect(state.options.createChannel).toHaveBeenCalledWith(91n) })
+    state.emit({
+      version: 1, type: 'request', generation: 4, sequence: 1,
+      frame: encodeHostControlFrame(request),
+    })
+    state.stopFlag.request()
+    await expect(running).resolves.toEqual({ requestsHandled: 0 })
+    expect(state.channel.send).not.toHaveBeenCalled()
+  })
+
+  it('retains the first invalid command failure for every later parent message', async () => {
+    const state = fixture()
+    state.options.port.send = vi.fn((message: unknown) => {
+      state.sent.push(message)
+      if ((message as { type?: string }).type === 'ready') {
+        const invalid = {
+          version: 1, type: 'response', generation: 4, sequence: 1,
+          frame: encodeHostControlFrame(response),
+        }
+        state.emit(invalid)
+        state.emit(invalid)
+      }
+    })
+    await expect(runWindowsHostClientWorker(state.options)).rejects
+      .toThrow('Invalid Windows Host client Worker command')
+  })
+
+  it('normalizes a non-Error control decoder failure', async () => {
+    const state = fixture()
+    state.options.port.send = vi.fn((message: unknown) => {
+      state.sent.push(message)
+      if ((message as { type?: string }).type === 'ready') {
+        state.emit(new Proxy({}, { get: () => { throw 'parent failed' } }))
+      }
+    })
+    await expect(runWindowsHostClientWorker(state.options)).rejects
+      .toThrow('Windows Host client Worker failed')
+  })
+
+  it('propagates response publication and explicit pipe cleanup failures', async () => {
+    const publication = fixture()
+    publication.options.port.send = vi.fn((message: unknown) => {
+      publication.sent.push(message)
+      const type = (message as { type?: string }).type
+      if (type === 'ready') queueMicrotask(() => publication.emit({
+        version: 1, type: 'request', generation: 4, sequence: 1,
+        frame: encodeHostControlFrame(request),
+      }))
+      if (type === 'response') throw new Error('parent unavailable')
+    })
+    await expect(runWindowsHostClientWorker(publication.options)).rejects.toThrow('parent unavailable')
+
+    const cleanup = fixture()
+    cleanup.options.port.send = vi.fn((message: unknown) => {
+      cleanup.sent.push(message)
+      if ((message as { type?: string }).type === 'ready') queueMicrotask(() => {
+        cleanup.stopFlag.request()
+        cleanup.emit({ version: 1, type: 'stop', generation: 4 })
+      })
+    })
+    cleanup.options.client.close.mockRejectedValueOnce(new Error('CloseHandle failed'))
+    await expect(runWindowsHostClientWorker(cleanup.options)).rejects.toThrow('CloseHandle failed')
   })
 })

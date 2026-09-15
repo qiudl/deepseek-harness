@@ -106,6 +106,7 @@ function canonicalFrame(value: unknown): HostControlFrame {
   if (typeof value !== 'string') return reject()
   let frame: HostControlFrame
   try { frame = decodeHostControlFrame(value) } catch { return reject() }
+  /* v8 ignore next -- the shared decoder already rejects every non-canonical serialization. */
   if (encodeHostControlFrame(frame) !== value) return reject()
   return frame
 }
@@ -200,9 +201,13 @@ export class WindowsHostWorkerBridge {
     } catch (error) { delivery = Promise.reject(errorReason(error)) }
     this.cleanup = active === undefined ? Promise.resolve() : this.beginCleanup(active)
     const [delivered, closed] = await Promise.allSettled([delivery, this.cleanup])
-    if (delivered.status === 'rejected' || closed.status === 'rejected') {
+    if (delivered.status === 'rejected') {
       this.bridgeState = 'failed'
-      throw errorReason(delivered.status === 'rejected' ? delivered.reason : closed.status === 'rejected' ? closed.reason : reject())
+      throw errorReason(delivered.reason)
+    }
+    if (closed.status === 'rejected') {
+      this.bridgeState = 'failed'
+      throw errorReason(closed.reason)
     }
   }
 
@@ -297,6 +302,7 @@ export class WindowsHostWorkerBridge {
   }
 
   private async closeActive(active: ActiveSession): Promise<void> {
+    /* v8 ignore next -- callers pass the current active session without awaiting before this guard. */
     if (this.active !== active) reject()
     this.active = undefined
     this.bridgeState = 'ready'
