@@ -59,7 +59,8 @@ function sameExecutable(
     && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs
 }
 
-function readExecutable(fd: number, size: number): Buffer {
+/** @internal Read exactly one executable snapshot and reject size drift. */
+export function readExecutable(fd: number, size: number): Buffer {
   if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_TRUSTED_EXECUTABLE_BYTES) {
     throw new HostAuthorityError('unauthorized')
   }

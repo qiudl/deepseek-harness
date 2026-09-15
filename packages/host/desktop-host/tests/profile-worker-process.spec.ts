@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory } from '../src/index.ts'
 import type { ChildProcess } from 'node:child_process'
 import type { ProfileWorkerHandle } from '../src/types.ts'
@@ -253,6 +253,7 @@ describe('dsh web Profile worker', () => {
     const clean = child()
     const completed = handle(clean as unknown as ChildProcess, 'http://127.0.0.1:3', cookie, 3)
     clean.emit('exit', 0, null)
+    clean.emit('error', new Error('late error'))
     await expect(completed.done).resolves.toBeUndefined()
     completed.abort()
 
@@ -266,6 +267,27 @@ describe('dsh web Profile worker', () => {
     expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
     stubborn.emit('exit', null, 'SIGKILL')
     await expect(stopped.done).resolves.toBeUndefined()
+
+    let forceKill!: () => void
+    const setTimer = vi.spyOn(globalThis, 'setTimeout').mockImplementationOnce((callback) => {
+      forceKill = callback
+      return 1 as unknown as NodeJS.Timeout
+    })
+    const clearTimer = vi.spyOn(globalThis, 'clearTimeout').mockImplementationOnce(() => undefined)
+    try {
+      const raceSignals: (string | number | undefined)[] = []
+      const raced = child()
+      raced.kill = (signal) => { raceSignals.push(signal); return true }
+      const racedStop = handle(raced as unknown as ChildProcess, 'http://127.0.0.1:5', cookie, 5)
+      racedStop.abort()
+      raced.emit('exit', 0, null)
+      await expect(racedStop.done).resolves.toBeUndefined()
+      forceKill()
+      expect(raceSignals).toEqual(['SIGTERM'])
+    } finally {
+      setTimer.mockRestore()
+      clearTimer.mockRestore()
+    }
   })
 
   it.runIf(process.platform !== 'darwin')('fails closed when the default macOS listener attestor is unavailable', async () => {
