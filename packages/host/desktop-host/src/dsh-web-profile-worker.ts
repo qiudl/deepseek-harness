@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
+import type { Writable } from 'node:stream'
 import { promisify } from 'node:util'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
@@ -10,6 +11,26 @@ const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
 ])
+const WINDOWS_BOOTSTRAP_INPUT_LIMIT = 64 * 1024
+const windowsProfileBootstrap = `
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const bytes = readFileSync(3);
+if (bytes.length < 2 || bytes.length > 65536) throw Error('profile_config_size');
+const input = JSON.parse(bytes.toString('utf8'));
+if (!input || typeof input !== 'object' || Array.isArray(input)
+  || Object.keys(input).sort().join(',') !== 'environment,version' || input.version !== 1
+  || !input.environment || typeof input.environment !== 'object' || Array.isArray(input.environment)
+  || Object.entries(input.environment).some(([key, value]) => !key || key.includes('=')
+    || /[\\u0000]/u.test(key) || typeof value !== 'string' || /[\\u0000]/u.test(value))) {
+  throw Error('profile_config_invalid');
+}
+for (const key of Object.keys(process.env)) delete process.env[key];
+Object.assign(process.env, input.environment);
+const entry = process.argv[1];
+if (typeof entry !== 'string' || entry.length === 0) throw Error('profile_entry_invalid');
+await import(pathToFileURL(entry, { windows: true }).href);
+`
 
 /** Verifies that a child PID, rather than another local process, owns a loopback listener. */
 export type ProfileListenerAttestor = (pid: number, origin: string) => Promise<void>
@@ -21,6 +42,8 @@ export interface DshWebProfileWorkerFactoryOptions {
   readonly attestListener?: ProfileListenerAttestor
   readonly readyTimeoutMs?: number
   readonly abortTimeoutMs?: number
+  readonly platform?: NodeJS.Platform
+  readonly spawnProcess?: typeof spawn
 }
 
 async function attestMacOSListener(pid: number, origin: string): Promise<void> {
@@ -78,22 +101,45 @@ export class DshWebProfileWorkerFactory {
   async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
-    const child = spawn(this.options.nodeExecutablePath, [
-      this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
+    const environment = {
+      ...spec.env,
+      DSH_HOME: root,
+      DSH_PROFILE_ID: spec.profileId,
+      DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
+      DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
+    }
+    const windows = process.platform === 'win32' || this.options.platform === 'win32'
+    const configurationInput = windows
+      ? `${JSON.stringify({ version: 1, environment })}\n`
+      : undefined
+    if (configurationInput !== undefined
+      && Buffer.byteLength(configurationInput, 'utf8') > WINDOWS_BOOTSTRAP_INPUT_LIMIT) {
+      throw new HostAuthorityError('invalid_input')
+    }
+    const child = (this.options.spawnProcess ?? spawn)(this.options.nodeExecutablePath, [
+      ...(windows
+        ? ['--input-type=module', '--eval', windowsProfileBootstrap, this.options.dshEntrypointPath]
+        : [this.options.dshEntrypointPath]),
+      '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
     ], {
       cwd: root,
-      env: {
-        ...spec.env,
-        DSH_HOME: root,
-        DSH_PROFILE_ID: spec.profileId,
-        DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
-        DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      env: windows ? {} : environment,
+      stdio: windows ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
     })
+    if (configurationInput !== undefined) this.sendWindowsConfiguration(child, configurationInput)
     const activated = await this.waitForOrigin(child)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation)
+  }
+
+  private sendWindowsConfiguration(child: ChildProcess, input: string): void {
+    const configurationInput = child.stdio[3] as Writable | null | undefined
+    if (!configurationInput) {
+      child.kill('SIGKILL')
+      throw new HostAuthorityError('unavailable')
+    }
+    configurationInput.once('error', () => { child.kill('SIGKILL') })
+    configurationInput.end(input)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{

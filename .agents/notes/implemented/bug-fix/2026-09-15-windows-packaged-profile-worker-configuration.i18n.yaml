@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-15-windows-packaged-profile-worker-configuration.md
+2026-09-15-windows-packaged-profile-worker-configuration.md: e5890418e8ef4fe3f0041555988c2b2a9d8648e5
+2026-09-15-windows-packaged-profile-worker-configuration.zh.md: d3cceb4c1276806d7c6ba855c5125bb7098f7b7f

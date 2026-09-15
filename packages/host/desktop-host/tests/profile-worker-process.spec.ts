@@ -1,6 +1,8 @@
+import { EventEmitter } from 'node:events'
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory } from '../src/index.ts'
 
@@ -60,10 +62,14 @@ describe('profile worker child process', () => {
 })
 
 describe('dsh web Profile worker', () => {
-  it('returns only an attested origin from a real child and discards its access token', async () => {
+  it.each([
+    { name: 'direct process environment', platform: 'darwin' as const },
+    { name: 'Windows private configuration pipe', platform: 'win32' as const },
+  ])('returns only an attested origin through $name and discards its access token', async ({ platform }) => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
     const executable = fixture(`#!${process.execPath}
       import { createServer } from 'node:http'
+      if (process.env.DSH_TEST_SECRET || process.env.DSH_TEST_CONFIGURATION !== 'carried') process.exit(91)
       const cookieName = 'dsh-auth-${'a'.repeat(43)}'
       const cookieValue = 'v1.${'b'.repeat(8)}.${'c'.repeat(43)}'
       const server = createServer((request, response) => {
@@ -92,12 +98,16 @@ describe('dsh web Profile worker', () => {
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath,
       dshEntrypointPath: executable,
+      platform,
       attestListener: async (pid, origin) => {
         expect(pid).toBeGreaterThan(0)
         await expect(fetch(origin).then(response => response.status)).resolves.toBe(401)
       },
     })
-    const worker = await factory.create(spec(root))
+    process.env.DSH_TEST_SECRET = 'must-not-leak'
+    const worker = await factory.create({
+      ...spec(root), env: { DSH_TEST_CONFIGURATION: 'carried' },
+    }).finally(() => { delete process.env.DSH_TEST_SECRET })
     expect(worker.viewOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u)
     expect(worker.viewOrigin).not.toContain('access_key')
     expect(JSON.stringify(worker)).not.toContain('must-stay-owner-only')
@@ -115,6 +125,81 @@ describe('dsh web Profile worker', () => {
     })
     await expect(factory.create({ ...spec(root), env: { DSH_HOME: '/tmp/attacker' } }))
       .rejects.toMatchObject({ code: 'invalid_input' })
+  })
+
+  it('rejects oversized Windows configuration before starting a child', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
+    let spawns = 0
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath,
+      platform: 'win32',
+      spawnProcess: (() => { spawns += 1; throw new Error('must not spawn') }) as typeof import('node:child_process').spawn,
+    })
+    await expect(factory.create({ ...spec(root), env: { LARGE: 'x'.repeat(64 * 1024) } }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    expect(spawns).toBe(0)
+  })
+
+  it('terminates and rejects a Windows child without its private configuration descriptor', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number
+      killed: boolean
+      stdout: PassThrough
+      stderr: PassThrough
+      stdio: [null, PassThrough, PassThrough]
+      kill(): boolean
+    }
+    child.pid = 123
+    child.killed = false
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    child.stdio = [null, child.stdout, child.stderr]
+    child.kill = () => { child.killed = true; return true }
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath,
+      platform: 'win32',
+      spawnProcess: (() => child) as unknown as typeof import('node:child_process').spawn,
+    })
+    await expect(factory.create(spec(root))).rejects.toMatchObject({ code: 'unavailable' })
+    expect(child.killed).toBe(true)
+  })
+
+  it('terminates a Windows child that rejects its private configuration input', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number
+      killed: boolean
+      stdout: PassThrough
+      stderr: PassThrough
+      stdio: Array<null | PassThrough | Writable>
+      kill(): boolean
+    }
+    child.pid = 124
+    child.killed = false
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    child.stdio = [
+      null,
+      child.stdout,
+      child.stderr,
+      new Writable({ write: (_chunk, _encoding, callback) => { callback(new Error('closed')) } }),
+    ]
+    child.kill = () => {
+      child.killed = true
+      queueMicrotask(() => { child.emit('exit', null, 'SIGKILL') })
+      return true
+    }
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath,
+      platform: 'win32',
+      spawnProcess: (() => child) as unknown as typeof import('node:child_process').spawn,
+    })
+    await expect(factory.create(spec(root))).rejects.toMatchObject({ code: 'unavailable' })
+    expect(child.killed).toBe(true)
   })
 
   it('aborts a child whose loopback bootstrap exchange never responds', async () => {
