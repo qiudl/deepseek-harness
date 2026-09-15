@@ -6,6 +6,7 @@ interface StartProfileWorkerInput {
   readonly profileRoot: string
   readonly credentialHandle: string
   readonly pluginRoots: readonly string[]
+  readonly env?: Readonly<Record<string, string>>
 }
 
 /** Owns one isolated child per unlocked Profile and awaits quiescence on disposal. */
@@ -22,7 +23,7 @@ export class ProfileWorkerSupervisor {
     const spec: ProfileWorkerSpec = {
       ...input,
       pluginRoots: [...input.pluginRoots],
-      env: {},
+      env: { ...input.env },
     }
     this.workers.set(input.profileId, await this.factory(spec))
   }

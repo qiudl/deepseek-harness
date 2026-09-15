@@ -120,7 +120,7 @@ export class DshWebProfileWorkerFactory {
     }
     const child = (this.options.spawnProcess ?? spawn)(this.options.nodeExecutablePath, [
       ...(windows
-        ? ['--input-type=module', '--eval', windowsProfileBootstrap, this.options.dshEntrypointPath]
+        ? ['--expose-internals', '--input-type=module', '--eval', windowsProfileBootstrap, this.options.dshEntrypointPath]
         : [this.options.dshEntrypointPath]),
       '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
     ], {

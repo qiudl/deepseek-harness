@@ -351,6 +351,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           profileRoot: prepared.profileRoot,
           credentialHandle: profile.keyHandle,
           pluginRoots: prepared.pluginRoots,
+          env: { TEMP: prepared.tempRoot, TMP: prepared.tempRoot },
         })
       }
       const host = new DesktopHost({

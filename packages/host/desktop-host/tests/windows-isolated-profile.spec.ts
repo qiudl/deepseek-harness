@@ -61,6 +61,7 @@ describe('Windows isolated Profile preparation', () => {
     expect(result).toEqual({
       profileRoot: `${root}\\profiles\\${profileId}`,
       persistenceRoot: `${root}\\profiles\\${profileId}\\persistence`,
+      tempRoot: `${root}\\profiles\\${profileId}\\temp`,
       pluginRoots: [`${root}\\profiles\\${profileId}\\plugins`],
       persistenceGeneration: 1,
     })
@@ -69,6 +70,7 @@ describe('Windows isolated Profile preparation', () => {
       `${root}\\profiles`,
       `${root}\\profiles\\${profileId}`,
       `${root}\\profiles\\${profileId}\\persistence`,
+      `${root}\\profiles\\${profileId}\\temp`,
       `${root}\\profiles\\${profileId}\\plugins`,
       `${root}\\profiles\\${profileId}\\owner-state`,
       `${root}\\profiles\\${profileId}\\owner-state\\storages`,

@@ -176,6 +176,10 @@ describe('Windows Desktop Host startup', () => {
       profileId: local.profileId,
       profileRoot: `${root}\\profiles\\${local.profileId}`,
       pluginRoots: [`${root}\\profiles\\${local.profileId}\\plugins`],
+      env: {
+        TEMP: `${root}\\profiles\\${local.profileId}\\temp`,
+        TMP: `${root}\\profiles\\${local.profileId}\\temp`,
+      },
     }))
     const inspectionAbort = new AbortController()
     expect(state.transportOptions()?.openSession('11111111-1111-4111-8111-111111111112', inspectionAbort.signal)).toBeDefined()

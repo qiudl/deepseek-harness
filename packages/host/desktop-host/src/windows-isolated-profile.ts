@@ -14,6 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 export interface WindowsIsolatedProfile {
   readonly profileRoot: string
   readonly persistenceRoot: string
+  readonly tempRoot: string
   readonly pluginRoots: readonly string[]
   readonly persistenceGeneration: 1
 }
@@ -47,6 +48,7 @@ export function prepareWindowsIsolatedProfile(options: {
   const securityDescriptor = windowsHostPrivateSecurityDescriptor(options.userSid)
   const profileRoot = win32.join(root, 'profiles', options.profileId)
   const persistenceRoot = win32.join(profileRoot, 'persistence')
+  const tempRoot = win32.join(profileRoot, 'temp')
   const pluginsRoot = win32.join(profileRoot, 'plugins')
   const ownerStateRoot = win32.join(profileRoot, 'owner-state')
   const storageRoot = win32.join(ownerStateRoot, 'storages')
@@ -55,6 +57,7 @@ export function prepareWindowsIsolatedProfile(options: {
     win32.join(root, 'profiles'),
     profileRoot,
     persistenceRoot,
+    tempRoot,
     pluginsRoot,
     ownerStateRoot,
     storageRoot,
@@ -115,5 +118,5 @@ export function prepareWindowsIsolatedProfile(options: {
     assertWindowsHostPrivatePathEvidence(existing.evidence, 'file', options.userSid)
     if (!file.mutable && !existing.contents.equals(file.contents)) throw new HostAuthorityError('conflict')
   }
-  return { profileRoot, persistenceRoot, pluginRoots: [pluginsRoot], persistenceGeneration: 1 }
+  return { profileRoot, persistenceRoot, tempRoot, pluginRoots: [pluginsRoot], persistenceGeneration: 1 }
 }

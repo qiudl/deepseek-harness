@@ -71,6 +71,7 @@ describe('dsh web Profile worker', () => {
       import { createServer } from 'node:http'
       export async function runCli() {
         if (process.env.DSH_TEST_SECRET || process.env.DSH_TEST_CONFIGURATION !== 'carried') process.exit(91)
+        if (process.execArgv.includes('--expose-internals') !== (process.env.DSH_EXPECT_EXPOSE === 'true')) process.exit(92)
         const cookieName = 'dsh-auth-${'a'.repeat(43)}'
         const cookieValue = 'v1.${'b'.repeat(8)}.${'c'.repeat(43)}'
         const server = createServer((request, response) => {
@@ -109,7 +110,7 @@ describe('dsh web Profile worker', () => {
     })
     process.env.DSH_TEST_SECRET = 'must-not-leak'
     const worker = await factory.create({
-      ...spec(root), env: { DSH_TEST_CONFIGURATION: 'carried' },
+      ...spec(root), env: { DSH_TEST_CONFIGURATION: 'carried', DSH_EXPECT_EXPOSE: String(platform === 'win32') },
     }).finally(() => { delete process.env.DSH_TEST_SECRET })
     expect(worker.viewOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u)
     expect(worker.viewOrigin).not.toContain('access_key')
