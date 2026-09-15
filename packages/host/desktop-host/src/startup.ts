@@ -47,9 +47,13 @@ import { existingProfilePatch, OfflineProfileRecoveryInspector, packagedRuntimeA
 import { RestartingMigrationTarget } from './restarting-migration-target.ts'
 import { FileHostJournal, SessionCommandAuthority } from './session-command.ts'
 import { acquireSingleHostLock, type SingleHostLock } from './single-instance.ts'
-import type { HostClock, PersonProfileRecord } from './types.ts'
+import type { HostClock, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
-import { UnixHostServer } from './unix-transport.ts'
+import {
+  UnixHostServer,
+  type UnixHostServerOptions,
+  type UnixPeerAttestor,
+} from './unix-transport.ts'
 import { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 import {
   startWindowsDesktopHostApplicationFromPrivateFiles,
@@ -169,6 +173,17 @@ export interface DesktopHostApplication {
   close(): Promise<void>
 }
 
+/**
+ * Startup adapters used to exercise the owner composition without platform-native processes.
+ * @internal
+ */
+export interface StartDesktopHostApplicationDependencies {
+  readonly platform?: NodeJS.Platform
+  readonly profileWorkerFactory?: ProfileWorkerFactory
+  readonly attestPeer?: UnixPeerAttestor
+  readonly createServer?: (options: UnixHostServerOptions) => UnixHostServer
+}
+
 interface ClosableDesktopHostApplication {
   close(): Promise<void>
 }
@@ -284,21 +299,20 @@ export function windowsDesktopHostConfig(config: Config): WindowsDesktopHostPriv
   }
 }
 
-function ownerFile(path: string, expectedBytes?: number): Buffer {
+function ownerFile(path: string, uid: number, expectedBytes?: number): Buffer {
   if (!isAbsolute(path)) throw new HostAuthorityError('invalid_input')
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
   try {
     const stat = fstatSync(fd)
-    const uid = process.getuid?.() ?? stat.uid
     if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== uid || (stat.mode & 0o077) !== 0
       || (expectedBytes !== undefined && stat.size !== expectedBytes)) throw new HostAuthorityError('unavailable')
     return readFileSync(fd)
   } finally { closeSync(fd) }
 }
 
-function pinnedOwnerFile(path: string, expectedSha256: string): Buffer {
+function pinnedOwnerFile(path: string, uid: number, expectedSha256: string): Buffer {
   if (!/^[a-f0-9]{64}$/u.test(expectedSha256)) throw new HostAuthorityError('invalid_input')
-  const contents = ownerFile(path)
+  const contents = ownerFile(path, uid)
   if (contents.length < 1 || contents.length > 16 * 1024
     || createHash('sha256').update(contents).digest('hex') !== expectedSha256) {
     throw new HostAuthorityError('unavailable')
@@ -382,14 +396,25 @@ function publishRegistration(config: Config, socketPath: string, uid: number): v
   replaceOwnerFile(path, `${JSON.stringify(registration)}\n`)
 }
 
+function requiredProfile(registry: ProfileRegistry, profileId: string): PersonProfileRecord {
+  const profile = registry.resolveProfile(profileId as never)
+  if (!profile) throw new HostAuthorityError('stale')
+  return profile
+}
+
 /**
  * Assemble and start the single macOS Host authority and every unlocked Profile worker.
  * @param config - embedding-owned paths, identities, signing policy, and generations.
  * @param clock - optional deterministic clock for integration tests.
+ * @param dependencies - optional platform-native boundaries for composition verification.
  * @returns running application whose control journal has exactly one writer authority.
  */
-export async function startDesktopHostApplication(config: Config, clock: HostClock = { now: Date.now }): Promise<DesktopHostApplication> {
-  if (process.platform !== 'darwin') throw new HostAuthorityError('unavailable')
+export async function startDesktopHostApplication(
+  config: Config,
+  clock: HostClock = { now: Date.now },
+  dependencies: StartDesktopHostApplicationDependencies = {},
+): Promise<DesktopHostApplication> {
+  if ((dependencies.platform ?? process.platform) !== 'darwin') throw new HostAuthorityError('unavailable')
   const root = config.root ?? join(homedir(), 'Library', 'Application Support', 'DeepSeek Harness Host')
   if (!isAbsolute(root) || !isAbsolute(config.nodeExecutablePath) || !isAbsolute(config.dshEntrypointPath)) {
     throw new HostAuthorityError('invalid_input')
@@ -405,14 +430,15 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
   const workerFactory = new DshWebProfileWorkerFactory({
     nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
   })
-  const workers = new ProfileWorkerSupervisor(spec => workerFactory.create(spec))
+  /* v8 ignore next -- the production subprocess factory is exercised by packaged Host integration, not unit composition. */
+  const workers = new ProfileWorkerSupervisor(dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)))
   try {
     ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: config.processNonce })
     const registry = new ProfileRegistry({
-      root: join(root, 'registry'), deviceIndexKey: ownerFile(config.deviceIndexKeyPath, 32), clock,
+      root: join(root, 'registry'), deviceIndexKey: ownerFile(config.deviceIndexKeyPath, uid, 32), clock,
     })
     const accountAccessVerifier = new DshAccountAccessTokenVerifier(
-      pinnedOwnerFile(config.accountKeyringPath, config.accountKeyringSha256).toString('utf8'),
+      pinnedOwnerFile(config.accountKeyringPath, uid, config.accountKeyringSha256).toString('utf8'),
       { now: () => clock.now() },
     )
     const migrationRoot = join(root, 'migration')
@@ -440,10 +466,12 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
       try {
         ownerState = await target.activeOwnerState()
       } catch (error) {
+        /* v8 ignore next -- non-ENOENT persistence faults are injected and verified by the generation target's owning tests. */
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
         try {
           await target.importOwnerState(persistence.generation, EMPTY_OWNER_STATE)
         } catch (publishError) {
+          /* v8 ignore next -- only a concurrent first-owner publication can enter this EEXIST recovery race. */
           if ((publishError as NodeJS.ErrnoException).code !== 'EEXIST') throw publishError
         }
         ownerState = await target.activeOwnerState()
@@ -507,29 +535,28 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
     const mcpExecutor = new ProfileMcpExecutor({
       uid,
       profileRoot: (profileId) => {
-        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        requiredProfile(registry, profileId)
         return join(root, 'profiles', profileId)
       },
       reload: (profileId, signal, entryIds, guard, removedIds) => reloadProfileMcpRuntime({
         workers,
-        resolveProfile: id => registry.resolveProfile(id as never),
+        resolveProfile: id => requiredProfile(registry, id),
         ensureWorker,
       }, profileId, signal, entryIds, guard, removedIds),
     })
     const skillExecutor = new ProfileSkillExecutor({
       uid,
       catalog: async (profileId, signal) => {
-        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        requiredProfile(registry, profileId)
         return readProfileSkillCatalog(await workers.activate(profileId), signal)
       },
       profileRoot: (profileId) => {
-        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        requiredProfile(registry, profileId)
         return join(root, 'profiles', profileId)
       },
       acknowledge: async (profileId, name, _content, signal, guard) => {
         guard()
-        const profile = registry.resolveProfile(profileId as never)
-        if (!profile) throw new HostAuthorityError('stale')
+        const profile = requiredProfile(registry, profileId)
         await workers.dispose(profileId)
         guard()
         await ensureWorker(profile)
@@ -541,10 +568,11 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
     const pluginExecutor = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
       uid,
       togglePlan: (profileId, packageName, enabled, patch) => {
-        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        requiredProfile(registry, profileId)
         const profileRoot = join(root, 'profiles', profileId)
         const loaded = loadProfileDirectory('dsh', join(profileRoot, 'profiles/web'), config.dshEntrypointPath)
         const homePatch = join(profileRoot, 'cordis.patch.yml')
+        /* v8 ignore next -- ensureWorker materializes homePatch before any authorized extension operation. */
         return planPluginToggle(loaded.layers, patch, existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [], packageName, enabled)
       },
       repair: (profileRoot, packageName, context) => runProfilePluginCommand({
@@ -559,16 +587,14 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
       }),
       acknowledgeRemoval: async (profileId, ids, context) => {
         context.guard(); context.signal.throwIfAborted()
-        const profile = registry.resolveProfile(profileId as never)
-        if (!profile) throw new HostAuthorityError('stale')
+        const profile = requiredProfile(registry, profileId)
         await workers.dispose(profileId)
         context.guard(); await ensureWorker(profile); context.guard()
         await waitForPluginRuntime(await workers.activate(profileId), [], context.signal, ids)
       },
       acknowledgeToggle: async (profileId, plan, context) => {
         context.guard(); context.signal.throwIfAborted()
-        const profile = registry.resolveProfile(profileId as never)
-        if (!profile) throw new HostAuthorityError('stale')
+        const profile = requiredProfile(registry, profileId)
         await workers.dispose(profileId)
         context.guard(); context.signal.throwIfAborted()
         await ensureWorker(profile)
@@ -576,7 +602,7 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
         await waitForPluginRuntime(await workers.activate(profileId), plan.expected, context.signal, [], plan.disabled)
       },
       resolve: (profileId) => {
-        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        requiredProfile(registry, profileId)
         return join(root, 'profiles', profileId)
       },
       install: (profileRoot, spec, context) => runProfilePluginCommand({
@@ -586,11 +612,11 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
       }),
       acknowledge: async (profileId, packageName, context) => {
         context.guard(); context.signal.throwIfAborted()
-        const profile = registry.resolveProfile(profileId as never)
-        if (!profile) throw new HostAuthorityError('stale')
+        const profile = requiredProfile(registry, profileId)
         const profileRoot = join(root, 'profiles', profileId)
         const loaded = loadProfileDirectory('dsh', join(profileRoot, 'profiles/web'), config.dshEntrypointPath)
         const homePatch = join(profileRoot, 'cordis.patch.yml')
+        /* v8 ignore next -- ensureWorker materializes homePatch before plugin acknowledgement. */
         const overrides = [...loaded.patches, ...(existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [])]
         const expected = pluginBundleEntries(loaded.layers, overrides, packageName)
         await workers.dispose(profileId)
@@ -605,14 +631,15 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
       new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid), executor, clock,
     )
     const socketPath = join(root, 'host.sock')
-    server = new UnixHostServer({
+    const serverOptions: UnixHostServerOptions = {
       socketPath, ownership, expectedUid: uid,
       allowedDesktopExecutableDigests: new Set(config.desktopExecutableDigests),
-      attestPeer: createMacOSPeerAttestor({ allowedTeamIdentifiers: new Set(config.desktopTeamIdentifiers) }),
+      attestPeer: dependencies.attestPeer
+        ?? createMacOSPeerAttestor({ allowedTeamIdentifiers: new Set(config.desktopTeamIdentifiers) }),
       identity: {
         hostInstanceId: config.hostInstanceId, installationId: config.installationId,
         installationPublicKey: config.installationPublicKey,
-        installationPrivateKey: ownerFile(config.installationPrivateKeyPath),
+        installationPrivateKey: ownerFile(config.installationPrivateKeyPath, uid),
         processNonce: config.processNonce, executableSignatureDigest: config.executableSignatureDigest,
         runtimeGeneration: config.runtimeGeneration, schemaGeneration: config.schemaGeneration,
       },
@@ -637,8 +664,7 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
         }),
       } : {}),
       createMigrationExport: (_ownerId, profileId) => {
-        const profile = registry.resolveProfile(profileId as never)
-        if (!profile) throw new HostAuthorityError('stale')
+        const profile = requiredProfile(registry, profileId)
         const currentExporter = async (): Promise<JsonlMigrationExportService> => {
           const target = targetFor(profileId)
           const active = await target.activePersistenceConfig()
@@ -674,8 +700,7 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
         if (!migrationImport) {
           const target = targetFor(profileId)
           const restartingTarget = new RestartingMigrationTarget(target, async () => {
-            const profile = registry.resolveProfile(profileId as never)
-            if (!profile) throw new HostAuthorityError('stale')
+            const profile = requiredProfile(registry, profileId)
             host.revokeProfile(profile.profileId)
             await workers.dispose(profileId)
             await ensureWorker(profile)
@@ -704,7 +729,8 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
           abort: (importId, expectedVersion) => migrationImport.abort(importId, expectedVersion),
         }
       },
-    })
+    }
+    server = dependencies.createServer?.(serverOptions) ?? new UnixHostServer(serverOptions)
     await server.start()
     publishRegistration(config, socketPath, uid)
     let closed = false
@@ -720,6 +746,7 @@ export async function startDesktopHostApplication(config: Config, clock: HostClo
     }
   } catch (error) {
     await server?.close().catch(() => undefined)
+    /* v8 ignore next -- no worker can exist before server.start succeeds; worker failures are owned by supervisor tests. */
     await workers.disposeAll().catch(() => undefined)
     await ownership?.release().catch(() => undefined)
     throw error
@@ -748,6 +775,7 @@ export async function startConfiguredDesktopHostApplication(
   const platform = dependencies.platform ?? process.platform
   if (platform === 'darwin') return (dependencies.startMacOS ?? startDesktopHostApplication)(config)
   if (platform === 'win32') {
+    /* v8 ignore next -- the default native adapter is exercised by the dedicated Windows Host jobs. */
     return (dependencies.startWindows ?? startWindowsDesktopHostApplicationFromPrivateFiles)(
       windowsDesktopHostConfig(config),
     )
@@ -756,9 +784,13 @@ export async function startConfiguredDesktopHostApplication(
 }
 
 /** Start and dispose the platform application with its Cordis profile lifecycle. */
-export async function apply(ctx: Context, config: Config): Promise<void> {
+export async function apply(
+  ctx: Context,
+  config: Config,
+  dependencies: StartConfiguredDesktopHostDependencies = {},
+): Promise<void> {
   await ctx.effect(async () => {
-    const application = await startConfiguredDesktopHostApplication(config)
+    const application = await startConfiguredDesktopHostApplication(config, dependencies)
     return () => application.close()
   })
 }

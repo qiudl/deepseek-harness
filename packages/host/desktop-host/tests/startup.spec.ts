@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { startDesktopHostApplication, type Config } from '../src/startup.ts'
 
+const start = (config: Config) => startDesktopHostApplication(config, { now: Date.now }, { platform: 'darwin' })
+
 function accountKeyring(root: string): { path: string; sha256: string } {
   const keys = generateKeyPairSync('ec', { namedCurve: 'P-256' })
   const raw = `${JSON.stringify({
@@ -17,7 +19,7 @@ function accountKeyring(root: string): { path: string; sha256: string } {
   return { path, sha256: createHash('sha256').update(raw).digest('hex') }
 }
 
-describe.runIf(process.platform === 'darwin')('desktop Host application composition', () => {
+describe.skipIf(process.platform === 'win32')('desktop Host application composition', () => {
   it('starts the supported owner app, refuses a second instance, and reaches quiescence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-host-app-'))
     const deviceKey = join(root, 'device-index.key')
@@ -42,8 +44,8 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
       executableSignatureDigest: '1'.repeat(64), desktopTeamIdentifiers: ['TEAM123'],
       desktopExecutableDigests: ['2'.repeat(64)], runtimeGeneration: 1, schemaGeneration: 1,
     }
-    await expect(startDesktopHostApplication(Object.assign({}, config, { pnpmEntrypointPath: 'relative/pnpm.mjs' }))).rejects.toMatchObject({ code: 'invalid_input' })
-    const app = await startDesktopHostApplication(Object.assign({}, config, { pnpmEntrypointPath: privateKey }))
+    await expect(start(Object.assign({}, config, { pnpmEntrypointPath: 'relative/pnpm.mjs' }))).rejects.toMatchObject({ code: 'invalid_input' })
+    const app = await start(Object.assign({}, config, { pnpmEntrypointPath: privateKey }))
     expect(existsSync(join(root, 'host.sock'))).toBe(true)
     expect(JSON.parse(readFileSync(join(legacyDshRoot, 'host', 'registration.v1.json'), 'utf8'))).toEqual({
       schema_version: 1,
@@ -53,12 +55,12 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
       installation_public_key: config.installationPublicKey,
       executable_signature_digest: config.executableSignatureDigest,
     })
-    await expect(startDesktopHostApplication(config)).rejects.toMatchObject({ code: 'conflict' })
+    await expect(start(config)).rejects.toMatchObject({ code: 'conflict' })
     await app.close()
     expect(existsSync(join(root, 'host.sock'))).toBe(false)
     expect(existsSync(join(root, 'host.lock'))).toBe(false)
     const registration = join(legacyDshRoot, 'host', 'registration.v1.json')
-    const restarted = await startDesktopHostApplication(config)
+    const restarted = await start(config)
     await restarted.close()
     writeFileSync(registration, `${JSON.stringify({
       schema_version: 1, endpoint_registration_id: config.endpointRegistrationId,
@@ -66,7 +68,7 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
       installation_public_key: config.installationPublicKey,
       executable_signature_digest: '3'.repeat(64),
     })}\n`, { mode: 0o600 })
-    const upgraded = await startDesktopHostApplication(config)
+    const upgraded = await start(config)
     expect(JSON.parse(readFileSync(registration, 'utf8'))).toMatchObject({
       executable_signature_digest: config.executableSignatureDigest,
     })
@@ -78,7 +80,7 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
       installation_public_key: config.installationPublicKey,
       executable_signature_digest: config.executableSignatureDigest,
     })}\n`, { mode: 0o600 })
-    await expect(startDesktopHostApplication(config)).rejects.toMatchObject({ code: 'conflict' })
+    await expect(start(config)).rejects.toMatchObject({ code: 'conflict' })
     expect(readFileSync(registration, 'utf8')).toContain(externalInstallationId)
     for (const invalidDigest of [7, 'z'.repeat(64)]) {
       writeFileSync(registration, `${JSON.stringify({
@@ -87,11 +89,11 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
         installation_public_key: config.installationPublicKey,
         executable_signature_digest: invalidDigest,
       })}\n`, { mode: 0o600 })
-      await expect(startDesktopHostApplication(config)).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(start(config)).rejects.toMatchObject({ code: 'unavailable' })
     }
     unlinkSync(registration)
     symlinkSync(deviceKey, registration)
-    await expect(startDesktopHostApplication(config)).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(start(config)).rejects.toMatchObject({ code: 'unavailable' })
     expect(existsSync(join(root, 'host.sock'))).toBe(false)
   })
 
@@ -119,7 +121,7 @@ describe.runIf(process.platform === 'darwin')('desktop Host application composit
       executableSignatureDigest: '1'.repeat(64), desktopTeamIdentifiers: ['TEAM123'],
       desktopExecutableDigests: ['2'.repeat(64)], runtimeGeneration: 1, schemaGeneration: 1,
     }
-    await expect(startDesktopHostApplication(config)).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(start(config)).rejects.toMatchObject({ code: 'unavailable' })
     expect(existsSync(join(target, 'host.lock'))).toBe(false)
   })
 })
