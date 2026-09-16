@@ -57,7 +57,13 @@ export interface DshWebProfileWorkerFactoryOptions {
 /** Longest worker diagnostic the launcher accepts, so one failure cannot flood its log. */
 const MAX_DIAGNOSTIC_BYTES = 2048
 
-/** Reduce untrusted worker output to one bounded single-line, token-free diagnostic. */
+/**
+ * Reduce untrusted worker output to one bounded, single-line diagnostic.
+ * The readiness bearer token this package itself prints is removed; the rest is worker
+ * output the launcher must still treat as untrusted, not as redacted text.
+ * @param detail - failure summary plus the worker's own stderr tail.
+ * @returns one line, at most {@link MAX_DIAGNOSTIC_BYTES} characters, without the view token.
+ */
 export function redactWorkerDiagnostic(detail: string): string {
   return detail
     // The readiness line and its retries carry a bearer token for the Profile view.
@@ -137,6 +143,7 @@ export class DshWebProfileWorkerFactory {
       && Buffer.byteLength(configurationInput, 'utf8') > WINDOWS_BOOTSTRAP_INPUT_LIMIT) {
       throw new HostAuthorityError('invalid_input')
     }
+    const spawnedAt = performance.now()
     const child = (this.options.spawnProcess ?? spawn)(this.options.nodeExecutablePath, [
       ...(windows
         ? ['--expose-internals', '--input-type=module', '--eval', windowsProfileBootstrap, this.options.dshEntrypointPath]
@@ -148,7 +155,7 @@ export class DshWebProfileWorkerFactory {
       stdio: windows ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
     })
     if (configurationInput !== undefined) this.sendWindowsConfiguration(child, configurationInput)
-    const activated = await this.waitForOrigin(child)
+    const activated = await this.waitForOrigin(child, spawnedAt)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation)
   }
@@ -164,7 +171,7 @@ export class DshWebProfileWorkerFactory {
     configurationInput.end(input)
   }
 
-  private async waitForOrigin(child: ChildProcess): Promise<{
+  private async waitForOrigin(child: ChildProcess, spawnedAt: number): Promise<{
     readonly origin: string
     readonly bootstrapCookie: { readonly name: string; readonly value: string }
   }> {
@@ -206,7 +213,6 @@ export class DshWebProfileWorkerFactory {
     const timer = setTimeout(() => {
       timedOut = true; deadline.abort(); rejectReady(new HostAuthorityError('unavailable'))
     }, readyTimeoutMs)
-    const startedAt = Date.now()
     try {
       const { authenticatedUrl, origin } = await ready
       await (this.options.attestListener ?? attestMacOSListener)(pid, origin)
@@ -215,7 +221,7 @@ export class DshWebProfileWorkerFactory {
     } catch (error) {
       child.kill('SIGKILL')
       this.options.onDiagnostic?.(redactWorkerDiagnostic(
-        `profile worker failed after ${String(Date.now() - startedAt)}ms`
+        `profile worker failed ${String(Math.round(performance.now() - spawnedAt))}ms after spawn`
         + `${timedOut ? ` (readiness timeout ${String(readyTimeoutMs)}ms)` : ''}`
         + `: ${error instanceof Error ? error.message : 'unknown error'}`
         + `${errorTail === '' ? '' : `; worker stderr: ${errorTail}`}`,

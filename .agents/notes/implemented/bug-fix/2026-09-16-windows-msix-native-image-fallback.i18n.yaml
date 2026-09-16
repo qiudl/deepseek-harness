@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-16-windows-msix-native-image-fallback.md
+2026-09-16-windows-msix-native-image-fallback.md: 74d179b62937929a5608173b67a413c2aa3b0c24
+2026-09-16-windows-msix-native-image-fallback.zh.md: 6918e3430a5fb88b5374df5d9fcb9a90cc1bd1a4

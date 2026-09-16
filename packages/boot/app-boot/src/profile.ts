@@ -505,10 +505,13 @@ function ensureMaterializedPackage(entry: {
     if (packageTreeDigest(staging) !== entry.digest) {
       throw new Error(`dsh: Windows native module package changed while materializing ${entry.packageName}`)
     }
-    rmSync(entry.targetDir, { recursive: true, force: true })
+    // The target is content-addressed, so only a damaged or partial generation is ever
+    // removed. Another worker may hold a loaded image inside a healthy one.
+    if (existsSync(entry.targetDir)) rmSync(entry.targetDir, { recursive: true, force: true })
     renameSync(staging, entry.targetDir)
   } catch (cause) {
-    // A concurrent launcher may publish the same content-addressed generation first.
+    // A concurrent launcher may publish the same content-addressed generation first, and a
+    // worker holding a loaded image can refuse the removal of a damaged one.
     if (!isMaterializedPackageCurrent(entry.targetDir, entry.digest)) throw cause
   } finally {
     rmSync(staging, { recursive: true, force: true })
@@ -547,6 +550,9 @@ function nativeModulePackageRoot(
 function withoutExtendedLengthPrefix(file: string): string {
   return file.startsWith('\\\\?\\') ? file.slice(4) : file
 }
+
+/** Disposer of the process-wide native redirect, so repeated launches cannot stack wrappers. */
+let installedRedirect: (() => void) | undefined
 
 /** Inputs for {@link installWindowsNativeModuleRedirect}. */
 export interface WindowsNativeModuleRedirectOptions {
@@ -593,10 +599,12 @@ export function resolveWindowsNativeModuleRedirect(
 }
 
 /**
- * Redirect native images that Windows refuses to load from the signed installation.
+ * Load native images that Windows refuses to load from the signed installation.
  * An MSIX installation grants read access to its `.node` files but refuses `LoadLibrary`
- * on them, so every plugin that loads one must load a verified copy outside the package.
- * Installing the redirect once per worker keeps ordinary module resolution untouched.
+ * on them. The installed path is always tried first, so an ordinary installation — where
+ * the load succeeds — pays nothing and copies nothing; only a refused load falls back to a
+ * verified copy outside the installation, and a failed copy fails the load with both causes
+ * rather than silently restoring the original error.
  * @param options - installation root, cache root, and injectable platform.
  * @returns a disposer that restores the previous `process.dlopen`.
  */
@@ -604,21 +612,44 @@ export function installWindowsNativeModuleRedirect(
   options: WindowsNativeModuleRedirectOptions,
 ): () => void {
   if ((options.platform ?? process.platform) !== 'win32') return () => undefined
+  // A profile launch may heal its fallback more than once; stacking wrappers would leave
+  // every layer with its own memo and no way to restore the original loader.
+  if (installedRedirect !== undefined) return installedRedirect
   const previous = process.dlopen
+  // One memo per installed redirect: a materialized generation is content-addressed and the
+  // installation is read-only, so a package is verified once per worker rather than per load.
   const resolved = new Map<string, string>()
-  process.dlopen = function redirectingDlopen(
+  process.dlopen = function loadingNativeImage(
     this: unknown, module: { exports: unknown }, filename: string, flags?: number,
   ): void {
-    let redirected = filename
-    try {
-      redirected = resolveWindowsNativeModuleRedirect(filename, options, resolved)
-    } catch {
-      // A failed copy must not hide the loader's own error for the installed image.
+    const load = (path: string): void => {
+      if (flags === undefined) previous.call(process, module, path)
+      else previous.call(process, module, path, flags)
     }
-    if (flags === undefined) previous.call(process, module, redirected)
-    else previous.call(process, module, redirected, flags)
+    try {
+      load(filename)
+      return
+    } catch (refused) {
+      let redirected: string
+      try {
+        redirected = resolveWindowsNativeModuleRedirect(filename, options, resolved)
+      } catch (cause) {
+        throw new Error(
+          `dsh: cannot publish a loadable copy of ${basename(filename)}: ${String(cause)}`,
+          { cause: refused },
+        )
+      }
+      if (redirected === filename) throw refused
+      load(redirected)
+    }
   }
-  return () => { process.dlopen = previous }
+  const dispose = (): void => {
+    if (installedRedirect !== dispose) return
+    process.dlopen = previous
+    installedRedirect = undefined
+  }
+  installedRedirect = dispose
+  return dispose
 }
 
 /** Read one package manifest used while traversing a module-fallback dependency graph. */
@@ -722,8 +753,9 @@ export async function healProfilesModuleFallback(options: ProfileModuleFallbackO
   const profilesDir = join(home, PROFILES_DIR)
   const modulesDir = join(profilesDir, 'node_modules')
   mkdirSync(modulesDir, { recursive: true })
-  // Windows refuses LoadLibrary on an MSIX installation's own `.node` images, so redirect
-  // every native load to a verified copy before the loader mounts the plugin tree.
+  // Windows refuses LoadLibrary on an MSIX installation's own `.node` images. The fallback
+  // is armed before the loader mounts the plugin tree; an installation whose images load
+  // normally never reaches it.
   installWindowsNativeModuleRedirect({
     installRoot: dirname(installAnchor),
     cacheRoot: join(profilesDir, WINDOWS_NATIVE_MODULE_FALLBACK_DIR),

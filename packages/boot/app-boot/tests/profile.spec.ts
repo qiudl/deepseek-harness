@@ -418,32 +418,123 @@ describe('installWindowsNativeModuleRedirect', () => {
     expect(process.dlopen).toBe(original)
   })
 
-  it('redirects one dlopen call and restores the previous loader on disposal', () => {
+  function stageRefusingLoader(installRoot: string): {
+    seen: string[]
+    restore: () => void
+    installed: typeof process.dlopen
+  } {
     const original = process.dlopen
     const seen: string[] = []
-    // A stand-in loader keeps the assertion on the redirect rather than on a real image.
+    // A stand-in loader reproduces exactly what MSIX does: reads are fine, LoadLibrary is not.
     process.dlopen = ((_module: { exports: unknown }, filename: string) => {
       seen.push(filename)
+      if (filename.startsWith(installRoot)) {
+        throw Object.assign(new Error('Access is denied.'), { code: 'ERR_DLOPEN_FAILED' })
+      }
     }) as typeof process.dlopen
-    const patched = process.dlopen
+    return { seen, restore: () => { process.dlopen = original }, installed: process.dlopen }
+  }
+
+  function stageNativePackage(): { root: string; installRoot: string; image: string } {
     const root = tmp()
     const installRoot = join(root, 'install')
     const packageDir = join(installRoot, 'node_modules', 'node-pty')
     mkdirSync(packageDir, { recursive: true })
     writeFileSync(join(packageDir, 'pty.node'), 'signed-native-image')
+    return { root, installRoot, image: join(packageDir, 'pty.node') }
+  }
+
+  it('loads the installed image in place and copies nothing when it is loadable', () => {
+    const { root, installRoot, image } = stageNativePackage()
+    const original = process.dlopen
+    const seen: string[] = []
+    process.dlopen = ((_module: { exports: unknown }, filename: string) => {
+      seen.push(filename)
+    }) as typeof process.dlopen
+    const cacheRoot = join(root, 'cache')
+    const dispose = installWindowsNativeModuleRedirect({
+      installRoot, cacheRoot, platform: 'win32', separator: sep,
+    })
+    try {
+      process.dlopen({ exports: {} }, image)
+      expect(seen).toEqual([image])
+      // An ordinary installation must not pay for a copy it never needs.
+      expect(existsSync(cacheRoot)).toBe(false)
+    } finally {
+      dispose()
+      process.dlopen = original
+    }
+  })
+
+  it('falls back to a copy when the installed image refuses to load', () => {
+    const { root, installRoot, image } = stageNativePackage()
+    const loader = stageRefusingLoader(installRoot)
     const dispose = installWindowsNativeModuleRedirect({
       installRoot, cacheRoot: join(root, 'cache'), platform: 'win32', separator: sep,
     })
     try {
-      expect(process.dlopen).not.toBe(patched)
-      process.dlopen({ exports: {} }, join(packageDir, 'pty.node'))
-      expect(seen).toHaveLength(1)
-      expect(seen[0]?.startsWith(join(root, 'cache'))).toBe(true)
-      expect(readFileSync(seen[0] as string, 'utf8')).toBe('signed-native-image')
+      expect(process.dlopen).not.toBe(loader.installed)
+      process.dlopen({ exports: {} }, image)
+      expect(loader.seen).toHaveLength(2)
+      expect(loader.seen[0]).toBe(image)
+      expect(loader.seen[1]?.startsWith(join(root, 'cache'))).toBe(true)
+      expect(readFileSync(loader.seen[1] as string, 'utf8')).toBe('signed-native-image')
     } finally {
       dispose()
-      expect(process.dlopen).toBe(patched)
-      process.dlopen = original
+      expect(process.dlopen).toBe(loader.installed)
+      loader.restore()
+    }
+  })
+
+  it('reports the refusal and the failed copy together instead of either alone', () => {
+    const { root, installRoot, image } = stageNativePackage()
+    const loader = stageRefusingLoader(installRoot)
+    // A file where the cache root must be makes publishing the copy impossible.
+    const cacheRoot = join(root, 'cache')
+    writeFileSync(cacheRoot, 'not-a-directory')
+    const dispose = installWindowsNativeModuleRedirect({
+      installRoot, cacheRoot, platform: 'win32', separator: sep,
+    })
+    try {
+      expect(() => process.dlopen({ exports: {} }, image))
+        .toThrow(/cannot publish a loadable copy of pty\.node/u)
+    } finally {
+      dispose()
+      loader.restore()
+    }
+  })
+
+  it('rethrows the original refusal for an image it cannot redirect', () => {
+    const { root, installRoot } = stageNativePackage()
+    const loader = stageRefusingLoader(installRoot)
+    const dispose = installWindowsNativeModuleRedirect({
+      installRoot, cacheRoot: join(root, 'cache'), platform: 'win32', separator: sep,
+    })
+    try {
+      // Outside any package there is nothing to copy, so the loader's own error must stand.
+      expect(() => process.dlopen({ exports: {} }, join(installRoot, 'app', 'stray.node')))
+        .toThrow('Access is denied.')
+    } finally {
+      dispose()
+      loader.restore()
+    }
+  })
+
+  it('installs once, so repeated profile launches cannot stack loaders', () => {
+    const { root, installRoot } = stageNativePackage()
+    const loader = stageRefusingLoader(installRoot)
+    const options = {
+      installRoot, cacheRoot: join(root, 'cache'), platform: 'win32' as const, separator: sep,
+    }
+    const dispose = installWindowsNativeModuleRedirect(options)
+    try {
+      const first = process.dlopen
+      expect(installWindowsNativeModuleRedirect(options)).toBe(dispose)
+      expect(process.dlopen).toBe(first)
+    } finally {
+      dispose()
+      expect(process.dlopen).toBe(loader.installed)
+      loader.restore()
     }
   })
 })
