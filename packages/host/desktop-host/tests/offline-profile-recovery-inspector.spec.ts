@@ -252,13 +252,20 @@ describe('offline Profile existing-only inspector', () => {
       .rejects.toMatchObject({ code: 'runtime_incompatible' })
   })
 
-  it('counts a Profile-contained plugin without treating it as an external runtime', async () => {
+  it('blocks a Profile-contained dependency whose runtime compatibility cannot be proven', async () => {
     const value = await fixture()
+    await unlink(join(value.web, 'node_modules', 'fixture-plugin'))
+    await mkdir(join(value.web, 'node_modules', 'fixture-plugin'))
     const containedPlugin = join(value.web, 'contained-plugin')
     await mkdir(containedPlugin)
     await symlink(containedPlugin, join(value.web, 'node_modules', 'contained-plugin'))
     await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
-      .resolves.toMatchObject({ compatibility: 'current' })
+      .resolves.toMatchObject({
+        state: 'compatibility_blocked',
+        compatibility: 'read_only_export_only',
+        pluginCount: 1,
+        reasonCode: 'dsh_recovery_runtime_incompatible',
+      })
   })
 
   it('rejects a published closure whose directory name does not match its content digest', async () => {

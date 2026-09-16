@@ -59,6 +59,8 @@ Profile registry 为每个 Profile 保存 opaque Profile id、opaque Keychain ha
 
 macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启动一个 Host，分别检查 Node executable 与固定 DSH entrypoint，按照嵌入应用发布版本提供的 SHA-256 pin 校验 Account 公钥环，执行原生 peer PID／executable／code-signature attestation，并发布不含秘密的精确 `~/.dsh/host/registration.v1.json` discovery 记录。取得 Host 独占所有权后，Runtime 升级只能原子刷新该记录的 executable signature digest；installation、key、endpoint 和 socket 字段必须全部保持一致。Profile worker 不继承 ambient environment。Host 校验子进程确实拥有其报告的 loopback listener，自行把一次性启动 token 兑换为签名 Cookie，确认未认证 `/` 为 401、携 Cookie 的 `/` 为 200，然后立即丢弃 token。
 
+离线 Account 恢复只有在每个顶层依赖都通过当前打包 runtime 或摘要已验证的 Profile 兼容闭包解析时，才会启动声明的插件。Profile 内扁平化的依赖树会被报告为 runtime 不兼容并保留只读导出能力；Host 不会根据文件可读或存在锁文件来推断兼容。
+
 命令写入按 Profile 与 Session 串行，不同 Session 可并发。fsync 日志在执行前记录 `started`，随后记录 committed outcome；两者之间崩溃恢复为 `unknown`，绝不推断成功。审批决策同时比较 payload hash、decision version、window generation 与过期时间。环境上下文只附着到 Session lease，不形成 Profile 全局状态。
 
 扩展操作所有者生成短期有效、绑定 Profile 的计划，并在执行器产生副作用前持久化仅含元数据的回执。`DesktopHost.authorizeExtensionView` 根据有效的窗口租约和可写 Profile 授权解析目标；调用方必须在每次修改前重新验证授权。同一 Profile 的写入串行执行，重复确认不能创建另一项操作；取消在执行器结束前仅表示请求。未完成回执恢复为 `unknown`，阻止该 Profile 的后续写入，绝不自动重放。执行器必须等待其子进程和写入停止后才结束；扩展操作完成资源释放前，必须继续持有 Host 进程锁。

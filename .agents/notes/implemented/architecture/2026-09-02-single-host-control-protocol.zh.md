@@ -28,6 +28,8 @@ REQ-20260909-0002 为 selector 缓存缺失的已有 Account Profile 增加第�
 
 升级替换应用后，Host 不会静默继续依赖旧应用中的插件链接。确认后，它把完整 legacy runtime 复制进 owner-private、按内容寻址的 Profile 闭包，只重写预检计划证明过的链接，校验复制树摘要，并记录 prepared/committed journal。该路径不合并 Profile 目录、不创建空 owner state、不修改账号 binding，也不要求邮箱登录。Desktop 使用独立加密缓存保存 recovery selector；持久恢复权威仍是 Keychain proof 与 Host verifier。
 
+Profile 内自包含的插件安装不能证明 runtime 兼容。只有顶层模块链接解析到当前打包 runtime，或解析到完整摘要已验证的按内容寻址闭包时，恢复才允许该声明依赖；扁平化或复制得到的 `node_modules` 树会进入 `compatibility_blocked`，保留只读导出能力，而不会在不同 runtime 下启动。
+
 `profile.open` 也是同一 authenticated connection 与 Profile 所拥有未过期 lease 的续期操作。续期保留 lease id 和 generation，按照 Host 时钟延后 expiry，并在上一个 handle 已消费后签发新的单次 activation handle。Desktop 刷新 HttpOnly bootstrap cookie 时无需替换活跃 renderer；disconnect、显式 close、Profile generation 变化和 expiry 仍会撤销 lease。
 
 ## 缺陷分析迭代
@@ -78,4 +80,4 @@ Decoder 接收完整字符串，因此能拒绝超限帧，却不能阻止 trans
 
 聚焦套件从已提交的 request、result、error 和签名原文向量开始，逐字节 round-trip。负向覆盖未知／缺失字段、空白、多帧、超限、伪造出站值、非规范 base64url、缺失基线 capability、身份复用、未来客户端降级协商、畸形或过期 Account token，以及 registry mutation 前的已验证 Account 不匹配。Host 生命周期覆盖证明：再次打开已激活 lease 会保留 id 和 generation，同时延后 expiry 并轮换单次 activation handle；本地 Profile 可以在没有 Account 凭据时 bootstrap、重连、restore 和 open。
 
-离线恢复覆盖 scope 分离、唯一 handle 解析、缺失 root 的只读行为、二次预检 stale、operation 幂等、断线撤销、条件 capability 发布、多 vault 选择、映射后 not-found 继续、不可读 vault 报告和超时状态映射。Runtime fixture 覆盖 legacy closure 复制、内容摘要校验、最终根绝对链接重写、原子发布、recovery journal 完成，以及断链、逃逸、特殊 inode 或不安全依赖拒绝。聚焦 recovery inspector 保持 statements、branches、functions、lines 四项 100%；任何用户批准的 materialization 前，真实 legacy Profile 只做只读检查。
+离线恢复覆盖 scope 分离、唯一 handle 解析、缺失 root 的只读行为、二次预检 stale、operation 幂等、断线撤销、条件 capability 发布、多 vault 选择、映射后 not-found 继续、不可读 vault 报告和超时状态映射。Runtime fixture 覆盖 legacy closure 复制、内容摘要校验、最终根绝对链接重写、原子发布、recovery journal 完成，以及扁平化、断链、逃逸、特殊 inode 或不安全依赖拒绝。聚焦 recovery inspector 保持 statements、branches、functions、lines 四项 100%；任何用户批准的 materialization 前，真实 legacy Profile 只做只读检查。
