@@ -358,6 +358,25 @@ describe('healProfilesModuleFallback', () => {
     expect(before).toContain('dep-of-a')
   })
 
+  it('materializes and repairs Windows native packages outside the signed installation', async () => {
+    const packageName = '@img/sharp-win32-x64'
+    const anchor = stageInstallation({ [packageName]: {} })
+    const source = join(anchor, '..', 'node_modules', packageName)
+    mkdirSync(join(source, 'lib'), { recursive: true })
+    writeFileSync(join(source, 'lib', 'sharp.node'), 'signed-native-image')
+    const home = tmp()
+
+    await healProfilesModuleFallback({ installAnchor: anchor, home, platform: 'win32' })
+    const link = join(home, 'profiles', 'node_modules', packageName)
+    const materialized = readlinkSync(link)
+    expect(materialized).not.toBe(realpathSync.native(source))
+    expect(readFileSync(join(materialized, 'lib', 'sharp.node'), 'utf8')).toBe('signed-native-image')
+
+    writeFileSync(join(materialized, 'lib', 'sharp.node'), 'tampered')
+    await healProfilesModuleFallback({ installAnchor: anchor, home, platform: 'win32' })
+    expect(readFileSync(join(materialized, 'lib', 'sharp.node'), 'utf8')).toBe('signed-native-image')
+  })
+
   it('throws when a fallback entry is a foreign file or directory', async () => {
     const anchor = stageInstallation({})
     for (const kind of ['file', 'directory']) {

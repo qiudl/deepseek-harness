@@ -23,10 +23,11 @@
  * @module @deepseek-ai/dsh-app-boot/profile
  */
 
+import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import {
-  existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync,
-  symlinkSync, unlinkSync, writeFileSync,
+  cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync,
+  rmSync, statSync, symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -46,6 +47,17 @@ export const PROFILE_PATCH_FILENAME = 'cordis.patch.yml'
 
 /** Profile-private package links projected into its pnpm-managed node_modules. */
 const PROFILE_MODULE_FALLBACK_DIR = '.dsh-module-fallback'
+
+/** Packages whose Windows native images cannot be loaded directly from an MSIX WindowsApps path. */
+const WINDOWS_NATIVE_MODULE_PACKAGES = new Set([
+  '@img/sharp-win32-x64',
+  '@koromix/koffi-win32-x64',
+  'node-addon-require-builtin-win32-x64-msvc',
+  'node-pty',
+])
+
+/** Content-addressed, launcher-owned native package copies below the shared profile root. */
+const WINDOWS_NATIVE_MODULE_FALLBACK_DIR = '.dsh-windows-native-modules'
 
 /** Installation-owned defaults used when a shipped profile is first opened. */
 export interface ProfileTemplate {
@@ -457,7 +469,52 @@ function ensureModuleProxy(
 
 type ModuleFallbackEntry =
   | { kind: 'symlink'; packageName: string; packageDir: string }
+  | { kind: 'materialized'; packageName: string; packageDir: string; sourceDir: string; digest: string }
   | { kind: 'proxy'; packageName: string; version: string; targets: Record<string, string> }
+
+/** Hash one canonical package tree, including relative names and file bytes. */
+function packageTreeDigest(root: string): string {
+  const hash = createHash('sha256')
+  const visit = (dir: string, prefix: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const relativeName = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        hash.update(`d\0${relativeName}\0`)
+        visit(path, relativeName)
+      } else if (entry.isFile()) {
+        hash.update(`f\0${relativeName}\0`)
+        hash.update(readFileSync(path))
+        hash.update('\0')
+      } else {
+        throw new Error(`dsh: Windows native module package contains an unsupported entry: ${path}`)
+      }
+    }
+  }
+  visit(root, '')
+  return hash.digest('hex')
+}
+
+/** Publish a verified writable copy of one signed-installation native package. */
+function ensureMaterializedPackage(entry: Extract<ModuleFallbackEntry, { kind: 'materialized' }>): void {
+  try {
+    if (statSync(entry.packageDir).isDirectory() && packageTreeDigest(entry.packageDir) === entry.digest) return
+  } catch {
+    // Missing or damaged cache generations are replaced below while the fallback lock is held.
+  }
+  rmSync(entry.packageDir, { recursive: true, force: true })
+  mkdirSync(dirname(entry.packageDir), { recursive: true })
+  const staging = `${entry.packageDir}.${randomUUID()}.staging`
+  try {
+    cpSync(entry.sourceDir, staging, { recursive: true, errorOnExist: true, force: false })
+    if (packageTreeDigest(staging) !== entry.digest) {
+      throw new Error(`dsh: Windows native module package changed while materializing ${entry.packageName}`)
+    }
+    renameSync(staging, entry.packageDir)
+  } finally {
+    rmSync(staging, { recursive: true, force: true })
+  }
+}
 
 /** Read one package manifest used while traversing a module-fallback dependency graph. */
 function readModuleFallbackManifest(anchor: string): ProfileManifest {
@@ -472,6 +529,8 @@ function profileDependencyNames(manifest: ProfileManifest): string[] {
 /** Resolve the installation generation that every profile must find through the fallback directory. */
 function resolveModuleFallbackEntries(
   installAnchor: string,
+  profilesDir: string,
+  platform: NodeJS.Platform,
 ): { entries: ModuleFallbackEntry[]; packageNames: ReadonlySet<string> } {
   const appManifest = readModuleFallbackManifest(installAnchor)
   const links = new Map<string, string>()
@@ -497,7 +556,19 @@ function resolveModuleFallbackEntries(
     }
   }
   const entries = !isPackagedExecutable()
-    ? [...links].map(([packageName, packageDir]) => ({ kind: 'symlink' as const, packageName, packageDir }))
+    ? [...links].map(([packageName, packageDir]): ModuleFallbackEntry => {
+      if (platform !== 'win32' || !WINDOWS_NATIVE_MODULE_PACKAGES.has(packageName)) {
+        return { kind: 'symlink', packageName, packageDir }
+      }
+      const digest = packageTreeDigest(packageDir)
+      return {
+        kind: 'materialized',
+        packageName,
+        sourceDir: packageDir,
+        digest,
+        packageDir: join(profilesDir, WINDOWS_NATIVE_MODULE_FALLBACK_DIR, digest, packageName),
+      }
+    })
     : [...links].flatMap(([packageName, packageDir]) => {
       const source = packageProxySource(packageName, packageDir)
       return Object.keys(source.targets).length === 0
@@ -512,8 +583,9 @@ function moduleFallbackEntryCurrent(modulesDir: string, entry: ModuleFallbackEnt
   const link = join(modulesDir, entry.packageName)
   try {
     const stat = lstatSync(link)
-    if (entry.kind === 'symlink') {
+    if (entry.kind === 'symlink' || entry.kind === 'materialized') {
       return stat.isSymbolicLink() && readlinkSync(link) === entry.packageDir
+        && (entry.kind !== 'materialized' || packageTreeDigest(entry.packageDir) === entry.digest)
     }
     if (!stat.isDirectory()) return false
     const existing = readModuleProxyRecord(link)
@@ -538,6 +610,8 @@ export interface ProfileModuleFallbackOptions {
   profile?: Profile
   /** Harness home; defaults to {@link resolveDshHome}. */
   home?: string
+  /** Host platform; injectable only for deterministic cross-platform tests. */
+  platform?: NodeJS.Platform
 }
 
 /**
@@ -553,11 +627,11 @@ export interface ProfileModuleFallbackOptions {
  * @returns settlement after the shared fallback and profile-local links are current.
  */
 export async function healProfilesModuleFallback(options: ProfileModuleFallbackOptions): Promise<void> {
-  const { installAnchor, profile, home = resolveDshHome() } = options
+  const { installAnchor, profile, home = resolveDshHome(), platform = process.platform } = options
   const profilesDir = join(home, PROFILES_DIR)
   const modulesDir = join(profilesDir, 'node_modules')
   mkdirSync(modulesDir, { recursive: true })
-  const { entries, packageNames } = resolveModuleFallbackEntries(installAnchor)
+  const { entries, packageNames } = resolveModuleFallbackEntries(installAnchor, profilesDir, platform)
   if (!moduleFallbackCurrent(modulesDir, entries)) {
     await withFileLock(modulesDir, () => {
       if (!moduleFallbackCurrent(modulesDir, entries)) healProfilesModuleFallbackLocked(entries, modulesDir)
@@ -575,6 +649,7 @@ function healProfilesModuleFallbackLocked(entries: readonly ModuleFallbackEntry[
     if (entry.kind === 'proxy') {
       ensureModuleProxy(link, entry.packageName, entry.version, entry.targets)
     } else {
+      if (entry.kind === 'materialized') ensureMaterializedPackage(entry)
       ensureSymlink(link, entry.packageDir)
     }
   }
