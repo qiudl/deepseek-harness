@@ -46,6 +46,25 @@ export interface DshWebProfileWorkerFactoryOptions {
   readonly abortTimeoutMs?: number
   readonly platform?: NodeJS.Platform
   readonly spawnProcess?: typeof spawn
+  /**
+   * Receives one bounded, redacted line whenever a worker fails to reach readiness.
+   * The Host authority vocabulary collapses every such failure onto `unavailable`,
+   * which cannot be diagnosed from the launcher; this is the only channel that says why.
+   */
+  readonly onDiagnostic?: (detail: string) => void
+}
+
+/** Longest worker diagnostic the launcher accepts, so one failure cannot flood its log. */
+const MAX_DIAGNOSTIC_BYTES = 2048
+
+/** Reduce untrusted worker output to one bounded single-line, token-free diagnostic. */
+export function redactWorkerDiagnostic(detail: string): string {
+  return detail
+    // The readiness line and its retries carry a bearer token for the Profile view.
+    .replace(/(\?|&)token=[^\s&]*/gu, '$1token=<redacted>')
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .trim()
+    .slice(0, MAX_DIAGNOSTIC_BYTES)
 }
 
 async function attestMacOSListener(pid: number, origin: string): Promise<void> {
@@ -137,6 +156,7 @@ export class DshWebProfileWorkerFactory {
   private sendWindowsConfiguration(child: ChildProcess, input: string): void {
     const configurationInput = child.stdio[3] as Writable | null | undefined
     if (!configurationInput) {
+      this.options.onDiagnostic?.('profile worker started without its private configuration channel')
       child.kill('SIGKILL')
       throw new HostAuthorityError('unavailable')
     }
@@ -151,7 +171,15 @@ export class DshWebProfileWorkerFactory {
     const pid = child.pid
     if (!pid || !child.stdout) { child.kill('SIGKILL'); throw new HostAuthorityError('unavailable') }
     child.stdout.setEncoding('utf8')
+    // An unread pipe fills and then blocks the worker mid-boot, so its stderr is always
+    // drained; only a bounded tail is kept, and only for a readiness failure.
+    let errorTail = ''
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', (chunk: string) => {
+      errorTail = (errorTail + chunk).slice(-MAX_DIAGNOSTIC_BYTES * 2)
+    })
     let buffer = ''
+    let timedOut = false
     const deadline = new AbortController()
     let resolveReady!: (view: { readonly origin: string; readonly authenticatedUrl: string }) => void
     let rejectReady!: (error: Error) => void
@@ -174,9 +202,11 @@ export class DshWebProfileWorkerFactory {
       deadline.abort()
       rejectReady(new Error(`Profile Web worker exited before readiness with code ${String(code)} and signal ${String(exitSignal)}`))
     })
+    const readyTimeoutMs = this.options.readyTimeoutMs ?? 30_000
     const timer = setTimeout(() => {
-      deadline.abort(); rejectReady(new HostAuthorityError('unavailable'))
-    }, this.options.readyTimeoutMs ?? 30_000)
+      timedOut = true; deadline.abort(); rejectReady(new HostAuthorityError('unavailable'))
+    }, readyTimeoutMs)
+    const startedAt = Date.now()
     try {
       const { authenticatedUrl, origin } = await ready
       await (this.options.attestListener ?? attestMacOSListener)(pid, origin)
@@ -184,7 +214,15 @@ export class DshWebProfileWorkerFactory {
       return { origin, bootstrapCookie }
     } catch (error) {
       child.kill('SIGKILL')
-      if (deadline.signal.aborted) throw new HostAuthorityError('unavailable')
+      this.options.onDiagnostic?.(redactWorkerDiagnostic(
+        `profile worker failed after ${String(Date.now() - startedAt)}ms`
+        + `${timedOut ? ` (readiness timeout ${String(readyTimeoutMs)}ms)` : ''}`
+        + `: ${error instanceof Error ? error.message : 'unknown error'}`
+        + `${errorTail === '' ? '' : `; worker stderr: ${errorTail}`}`,
+      ))
+      // An exit before readiness already aborts the deadline, so the timeout flag, not the
+      // signal, decides whether the child's own failure survives into the thrown error.
+      if (timedOut) throw new HostAuthorityError('unavailable')
       throw error
     } finally {
       clearTimeout(timer)
@@ -198,6 +236,10 @@ export class DshWebProfileWorkerFactory {
     bootstrapCookie: { readonly name: string; readonly value: string },
     generation: number,
   ): ProfileWorkerHandle {
+    // Readiness removed the only reader of these pipes; a full pipe would block the
+    // running worker, so both are drained for the rest of its life.
+    child.stdout?.resume()
+    child.stderr?.resume()
     let requestedStop = false
     let settled = false
     let resolveDone!: () => void

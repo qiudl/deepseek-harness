@@ -48,14 +48,6 @@ export const PROFILE_PATCH_FILENAME = 'cordis.patch.yml'
 /** Profile-private package links projected into its pnpm-managed node_modules. */
 const PROFILE_MODULE_FALLBACK_DIR = '.dsh-module-fallback'
 
-/** Packages whose Windows native images cannot be loaded directly from an MSIX WindowsApps path. */
-const WINDOWS_NATIVE_MODULE_PACKAGES = new Set([
-  '@img/sharp-win32-x64',
-  '@koromix/koffi-win32-x64',
-  'node-addon-require-builtin-win32-x64-msvc',
-  'node-pty',
-])
-
 /** Content-addressed, launcher-owned native package copies below the shared profile root. */
 const WINDOWS_NATIVE_MODULE_FALLBACK_DIR = '.dsh-windows-native-modules'
 
@@ -469,7 +461,6 @@ function ensureModuleProxy(
 
 type ModuleFallbackEntry =
   | { kind: 'symlink'; packageName: string; packageDir: string }
-  | { kind: 'materialized'; packageName: string; packageDir: string; sourceDir: string; digest: string }
   | { kind: 'proxy'; packageName: string; version: string; targets: Record<string, string> }
 
 /** Hash one canonical package tree, including relative names and file bytes. */
@@ -496,24 +487,138 @@ function packageTreeDigest(root: string): string {
 }
 
 /** Publish a verified writable copy of one signed-installation native package. */
-function ensureMaterializedPackage(entry: Extract<ModuleFallbackEntry, { kind: 'materialized' }>): void {
+function ensureMaterializedPackage(entry: {
+  readonly packageName: string
+  readonly sourceDir: string
+  readonly targetDir: string
+  readonly digest: string
+}): void {
   try {
-    if (statSync(entry.packageDir).isDirectory() && packageTreeDigest(entry.packageDir) === entry.digest) return
+    if (statSync(entry.targetDir).isDirectory() && packageTreeDigest(entry.targetDir) === entry.digest) return
   } catch {
-    // Missing or damaged cache generations are replaced below while the fallback lock is held.
+    // Missing or damaged cache generations are replaced below.
   }
-  rmSync(entry.packageDir, { recursive: true, force: true })
-  mkdirSync(dirname(entry.packageDir), { recursive: true })
-  const staging = `${entry.packageDir}.${randomUUID()}.staging`
+  mkdirSync(dirname(entry.targetDir), { recursive: true })
+  const staging = `${entry.targetDir}.${randomUUID()}.staging`
   try {
     cpSync(entry.sourceDir, staging, { recursive: true, errorOnExist: true, force: false })
     if (packageTreeDigest(staging) !== entry.digest) {
       throw new Error(`dsh: Windows native module package changed while materializing ${entry.packageName}`)
     }
-    renameSync(staging, entry.packageDir)
+    rmSync(entry.targetDir, { recursive: true, force: true })
+    renameSync(staging, entry.targetDir)
+  } catch (cause) {
+    // A concurrent launcher may publish the same content-addressed generation first.
+    if (!isMaterializedPackageCurrent(entry.targetDir, entry.digest)) throw cause
   } finally {
     rmSync(staging, { recursive: true, force: true })
   }
+}
+
+/** Return whether one cache generation already holds the exact expected package tree. */
+function isMaterializedPackageCurrent(targetDir: string, digest: string): boolean {
+  try {
+    return statSync(targetDir).isDirectory() && packageTreeDigest(targetDir) === digest
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Resolve the package directory that owns one file inside an installation `node_modules` tree.
+ * @param file - absolute path of a file below a `node_modules` directory.
+ * @param separator - path separator of the host platform.
+ * @returns the owning package directory and its name, or undefined when the file owns no package.
+ */
+function nativeModulePackageRoot(
+  file: string, separator: string,
+): { readonly dir: string; readonly name: string } | undefined {
+  const parts = file.split(separator)
+  const index = parts.lastIndexOf('node_modules')
+  if (index < 0) return undefined
+  const first = parts[index + 1]
+  if (first === undefined || first.length === 0) return undefined
+  const end = index + (first.startsWith('@') ? 3 : 2)
+  if (end > parts.length - 1) return undefined
+  return { dir: parts.slice(0, end).join(separator), name: parts.slice(index + 1, end).join('/') }
+}
+
+/** Strip the Windows extended-length prefix that `node:module` adds before `process.dlopen`. */
+function withoutExtendedLengthPrefix(file: string): string {
+  return file.startsWith('\\\\?\\') ? file.slice(4) : file
+}
+
+/** Inputs for {@link installWindowsNativeModuleRedirect}. */
+export interface WindowsNativeModuleRedirectOptions {
+  /** Absolute root of the signed installation whose native images cannot be loaded in place. */
+  installRoot: string
+  /** Absolute root holding content-addressed copies of those native packages. */
+  cacheRoot: string
+  /** Host platform; injectable only for deterministic cross-platform tests. */
+  platform?: NodeJS.Platform
+  /** Path separator; injectable only for deterministic cross-platform tests. */
+  separator?: string
+}
+
+/**
+ * Resolve the native image one `process.dlopen` call must load instead of the installed copy.
+ * Files outside the installation, or outside any package, are returned unchanged.
+ * @param file - native image path exactly as `process.dlopen` received it.
+ * @param options - installation root, cache root, and injectable platform separator.
+ * @param resolved - per-process memo of already materialized package directories.
+ * @returns the path that is safe to load on this platform.
+ */
+export function resolveWindowsNativeModuleRedirect(
+  file: string,
+  options: WindowsNativeModuleRedirectOptions,
+  resolved: Map<string, string> = new Map(),
+): string {
+  const separator = options.separator ?? '\\'
+  const normalized = withoutExtendedLengthPrefix(file)
+  const installRoot = withoutExtendedLengthPrefix(options.installRoot)
+  // MSIX package paths are case-insensitive; a case-only mismatch must still redirect.
+  if (!normalized.toLowerCase().startsWith(`${installRoot.toLowerCase()}${separator}`)) return file
+  const owner = nativeModulePackageRoot(normalized, separator)
+  if (owner === undefined) return file
+  let target = resolved.get(owner.dir)
+  if (target === undefined) {
+    const digest = packageTreeDigest(owner.dir)
+    target = [options.cacheRoot, digest, ...owner.name.split('/')].join(separator)
+    ensureMaterializedPackage({
+      packageName: owner.name, sourceDir: owner.dir, targetDir: target, digest,
+    })
+    resolved.set(owner.dir, target)
+  }
+  return target + normalized.slice(owner.dir.length)
+}
+
+/**
+ * Redirect native images that Windows refuses to load from the signed installation.
+ * An MSIX installation grants read access to its `.node` files but refuses `LoadLibrary`
+ * on them, so every plugin that loads one must load a verified copy outside the package.
+ * Installing the redirect once per worker keeps ordinary module resolution untouched.
+ * @param options - installation root, cache root, and injectable platform.
+ * @returns a disposer that restores the previous `process.dlopen`.
+ */
+export function installWindowsNativeModuleRedirect(
+  options: WindowsNativeModuleRedirectOptions,
+): () => void {
+  if ((options.platform ?? process.platform) !== 'win32') return () => undefined
+  const previous = process.dlopen
+  const resolved = new Map<string, string>()
+  process.dlopen = function redirectingDlopen(
+    this: unknown, module: { exports: unknown }, filename: string, flags?: number,
+  ): void {
+    let redirected = filename
+    try {
+      redirected = resolveWindowsNativeModuleRedirect(filename, options, resolved)
+    } catch {
+      // A failed copy must not hide the loader's own error for the installed image.
+    }
+    if (flags === undefined) previous.call(process, module, redirected)
+    else previous.call(process, module, redirected, flags)
+  }
+  return () => { process.dlopen = previous }
 }
 
 /** Read one package manifest used while traversing a module-fallback dependency graph. */
@@ -529,8 +634,6 @@ function profileDependencyNames(manifest: ProfileManifest): string[] {
 /** Resolve the installation generation that every profile must find through the fallback directory. */
 function resolveModuleFallbackEntries(
   installAnchor: string,
-  profilesDir: string,
-  platform: NodeJS.Platform,
 ): { entries: ModuleFallbackEntry[]; packageNames: ReadonlySet<string> } {
   const appManifest = readModuleFallbackManifest(installAnchor)
   const links = new Map<string, string>()
@@ -556,19 +659,8 @@ function resolveModuleFallbackEntries(
     }
   }
   const entries = !isPackagedExecutable()
-    ? [...links].map(([packageName, packageDir]): ModuleFallbackEntry => {
-      if (platform !== 'win32' || !WINDOWS_NATIVE_MODULE_PACKAGES.has(packageName)) {
-        return { kind: 'symlink', packageName, packageDir }
-      }
-      const digest = packageTreeDigest(packageDir)
-      return {
-        kind: 'materialized',
-        packageName,
-        sourceDir: packageDir,
-        digest,
-        packageDir: join(profilesDir, WINDOWS_NATIVE_MODULE_FALLBACK_DIR, digest, packageName),
-      }
-    })
+    ? [...links].map(([packageName, packageDir]): ModuleFallbackEntry =>
+      ({ kind: 'symlink', packageName, packageDir }))
     : [...links].flatMap(([packageName, packageDir]) => {
       const source = packageProxySource(packageName, packageDir)
       return Object.keys(source.targets).length === 0
@@ -583,9 +675,8 @@ function moduleFallbackEntryCurrent(modulesDir: string, entry: ModuleFallbackEnt
   const link = join(modulesDir, entry.packageName)
   try {
     const stat = lstatSync(link)
-    if (entry.kind === 'symlink' || entry.kind === 'materialized') {
+    if (entry.kind === 'symlink') {
       return stat.isSymbolicLink() && readlinkSync(link) === entry.packageDir
-        && (entry.kind !== 'materialized' || packageTreeDigest(entry.packageDir) === entry.digest)
     }
     if (!stat.isDirectory()) return false
     const existing = readModuleProxyRecord(link)
@@ -631,7 +722,14 @@ export async function healProfilesModuleFallback(options: ProfileModuleFallbackO
   const profilesDir = join(home, PROFILES_DIR)
   const modulesDir = join(profilesDir, 'node_modules')
   mkdirSync(modulesDir, { recursive: true })
-  const { entries, packageNames } = resolveModuleFallbackEntries(installAnchor, profilesDir, platform)
+  // Windows refuses LoadLibrary on an MSIX installation's own `.node` images, so redirect
+  // every native load to a verified copy before the loader mounts the plugin tree.
+  installWindowsNativeModuleRedirect({
+    installRoot: dirname(installAnchor),
+    cacheRoot: join(profilesDir, WINDOWS_NATIVE_MODULE_FALLBACK_DIR),
+    platform,
+  })
+  const { entries, packageNames } = resolveModuleFallbackEntries(installAnchor)
   if (!moduleFallbackCurrent(modulesDir, entries)) {
     await withFileLock(modulesDir, () => {
       if (!moduleFallbackCurrent(modulesDir, entries)) healProfilesModuleFallbackLocked(entries, modulesDir)
@@ -649,7 +747,6 @@ function healProfilesModuleFallbackLocked(entries: readonly ModuleFallbackEntry[
     if (entry.kind === 'proxy') {
       ensureModuleProxy(link, entry.packageName, entry.version, entry.targets)
     } else {
-      if (entry.kind === 'materialized') ensureMaterializedPackage(entry)
       ensureSymlink(link, entry.packageDir)
     }
   }

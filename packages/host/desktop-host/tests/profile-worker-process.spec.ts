@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory } from '../src/index.ts'
+import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory, redactWorkerDiagnostic } from '../src/index.ts'
 
 function fixture(source: string): string {
   const path = join(mkdtempSync(join(tmpdir(), 'dsh-worker-')), 'worker.mjs')
@@ -161,14 +161,17 @@ describe('dsh web Profile worker', () => {
     child.stderr = new PassThrough()
     child.stdio = [null, child.stdout, child.stderr]
     child.kill = () => { child.killed = true; return true }
+    const diagnostics: string[] = []
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath,
       dshEntrypointPath: process.execPath,
       platform: 'win32',
       spawnProcess: (() => child) as unknown as typeof import('node:child_process').spawn,
+      onDiagnostic: (detail) => { diagnostics.push(detail) },
     })
     await expect(factory.create(spec(root))).rejects.toMatchObject({ code: 'unavailable' })
     expect(child.killed).toBe(true)
+    expect(diagnostics).toEqual(['profile worker started without its private configuration channel'])
   })
 
   it('terminates a Windows child that rejects its private configuration input', async () => {
@@ -196,14 +199,47 @@ describe('dsh web Profile worker', () => {
       queueMicrotask(() => { child.emit('exit', null, 'SIGKILL') })
       return true
     }
+    const diagnostics: string[] = []
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath,
       dshEntrypointPath: process.execPath,
       platform: 'win32',
       spawnProcess: (() => child) as unknown as typeof import('node:child_process').spawn,
+      onDiagnostic: (detail) => { diagnostics.push(detail) },
     })
-    await expect(factory.create(spec(root))).rejects.toMatchObject({ code: 'unavailable' })
+    // The closed Host vocabulary still reports `unavailable` on the wire; the child's own
+    // failure has to survive here, or a dead worker is indistinguishable from a timeout.
+    await expect(factory.create(spec(root))).rejects.toThrow('exited before readiness')
     expect(child.killed).toBe(true)
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]).toContain('exited before readiness')
+    expect(diagnostics[0]).not.toContain('readiness timeout')
+  })
+
+  it('reports a worker that never prints readiness, with its own stderr', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
+    const executable = fixture(`#!${process.execPath}
+      process.stderr.write('plugin tree failed to load: ERR_DLOPEN_FAILED\\n')
+      setTimeout(() => {}, 60_000)
+    `)
+    const diagnostics: string[] = []
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath,
+      dshEntrypointPath: executable,
+      readyTimeoutMs: 150,
+      onDiagnostic: (detail) => { diagnostics.push(detail) },
+    })
+
+    await expect(factory.create(spec(root))).rejects.toMatchObject({ code: 'unavailable' })
+
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]).toContain('readiness timeout 150ms')
+    expect(diagnostics[0]).toContain('ERR_DLOPEN_FAILED')
+  })
+
+  it('keeps the readiness token out of a worker diagnostic', () => {
+    expect(redactWorkerDiagnostic('dsh web: http://127.0.0.1:41/?token=secret-value\nnext line'))
+      .toBe('dsh web: http://127.0.0.1:41/?token=<redacted> next line')
   })
 
   it('aborts a child whose loopback bootstrap exchange never responds', async () => {

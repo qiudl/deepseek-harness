@@ -9,13 +9,14 @@ import {
   unlinkSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
   composeEntries,
   healProfilesModuleFallback,
   initProfile,
+  installWindowsNativeModuleRedirect,
   loadProfile,
   loadProfileDirectory,
   PROFILE_PATCH_FILENAME,
@@ -23,6 +24,7 @@ import {
   readProfileManifest,
   resolveBundleDir,
   resolveProfileDir,
+  resolveWindowsNativeModuleRedirect,
   writeProfileManifest,
   type Profile,
 } from '../src/index.ts'
@@ -330,6 +332,122 @@ describe('composeEntries', () => {
   })
 })
 
+describe('resolveWindowsNativeModuleRedirect', () => {
+  // The resolver takes its path separator by injection, so the MSIX redirect is
+  // reproducible on every development platform against real staged directories.
+  function stageNativeInstallation(): { installRoot: string; cacheRoot: string; packageDir: string } {
+    const root = tmp()
+    const installRoot = join(root, 'install')
+    const packageDir = join(installRoot, 'node_modules', '@img', 'sharp-win32-x64')
+    mkdirSync(join(packageDir, 'lib'), { recursive: true })
+    writeFileSync(join(packageDir, 'lib', 'sharp.node'), 'signed-native-image')
+    writeFileSync(join(packageDir, 'lib', 'libvips.dll'), 'sibling-runtime')
+    return { installRoot, cacheRoot: join(root, 'cache'), packageDir }
+  }
+
+  it('materializes the whole owning package and redirects to the copy', () => {
+    const { installRoot, cacheRoot, packageDir } = stageNativeInstallation()
+    const image = join(packageDir, 'lib', 'sharp.node')
+
+    const redirected = resolveWindowsNativeModuleRedirect(image, { installRoot, cacheRoot, separator: sep })
+
+    expect(redirected).not.toBe(image)
+    expect(redirected.startsWith(cacheRoot)).toBe(true)
+    expect(readFileSync(redirected, 'utf8')).toBe('signed-native-image')
+    // Native images load their siblings by relative path, so the copy must carry them.
+    expect(readFileSync(join(dirname(redirected), 'libvips.dll'), 'utf8')).toBe('sibling-runtime')
+  })
+
+  it('accepts the extended-length prefix the module loader adds', () => {
+    const { installRoot, cacheRoot, packageDir } = stageNativeInstallation()
+    const image = join(packageDir, 'lib', 'sharp.node')
+
+    const redirected = resolveWindowsNativeModuleRedirect(
+      `\\\\?\\${image}`, { installRoot, cacheRoot, separator: sep },
+    )
+
+    expect(readFileSync(redirected, 'utf8')).toBe('signed-native-image')
+  })
+
+  it('matches the installation root case-insensitively, as MSIX paths are', () => {
+    const { installRoot, cacheRoot, packageDir } = stageNativeInstallation()
+    const image = join(packageDir, 'lib', 'sharp.node')
+
+    const redirected = resolveWindowsNativeModuleRedirect(
+      image, { installRoot: installRoot.toUpperCase(), cacheRoot, separator: sep },
+    )
+
+    expect(redirected.startsWith(cacheRoot)).toBe(true)
+  })
+
+  it('reuses one cache generation and repairs a tampered copy', () => {
+    const { installRoot, cacheRoot, packageDir } = stageNativeInstallation()
+    const options = { installRoot, cacheRoot, separator: sep }
+    const image = join(packageDir, 'lib', 'sharp.node')
+    const first = resolveWindowsNativeModuleRedirect(image, options)
+
+    // A fresh memo must land on the same content-addressed generation.
+    expect(resolveWindowsNativeModuleRedirect(image, options)).toBe(first)
+
+    writeFileSync(first, 'tampered')
+    expect(resolveWindowsNativeModuleRedirect(image, options)).toBe(first)
+    expect(readFileSync(first, 'utf8')).toBe('signed-native-image')
+  })
+
+  it('leaves images outside the installation and outside any package untouched', () => {
+    const { installRoot, cacheRoot } = stageNativeInstallation()
+    const options = { installRoot, cacheRoot, separator: sep }
+    const foreign = join(tmp(), 'node_modules', 'pkg', 'a.node')
+    const unowned = join(installRoot, 'app', 'a.node')
+    const sibling = join(`${installRoot}-other`, 'node_modules', 'pkg', 'a.node')
+
+    expect(resolveWindowsNativeModuleRedirect(foreign, options)).toBe(foreign)
+    expect(resolveWindowsNativeModuleRedirect(unowned, options)).toBe(unowned)
+    expect(resolveWindowsNativeModuleRedirect(sibling, options)).toBe(sibling)
+  })
+})
+
+describe('installWindowsNativeModuleRedirect', () => {
+  it('does nothing off Windows', () => {
+    const original = process.dlopen
+    const dispose = installWindowsNativeModuleRedirect({
+      installRoot: tmp(), cacheRoot: tmp(), platform: 'darwin',
+    })
+    expect(process.dlopen).toBe(original)
+    dispose()
+    expect(process.dlopen).toBe(original)
+  })
+
+  it('redirects one dlopen call and restores the previous loader on disposal', () => {
+    const original = process.dlopen
+    const seen: string[] = []
+    // A stand-in loader keeps the assertion on the redirect rather than on a real image.
+    process.dlopen = ((_module: { exports: unknown }, filename: string) => {
+      seen.push(filename)
+    }) as typeof process.dlopen
+    const patched = process.dlopen
+    const root = tmp()
+    const installRoot = join(root, 'install')
+    const packageDir = join(installRoot, 'node_modules', 'node-pty')
+    mkdirSync(packageDir, { recursive: true })
+    writeFileSync(join(packageDir, 'pty.node'), 'signed-native-image')
+    const dispose = installWindowsNativeModuleRedirect({
+      installRoot, cacheRoot: join(root, 'cache'), platform: 'win32', separator: sep,
+    })
+    try {
+      expect(process.dlopen).not.toBe(patched)
+      process.dlopen({ exports: {} }, join(packageDir, 'pty.node'))
+      expect(seen).toHaveLength(1)
+      expect(seen[0]?.startsWith(join(root, 'cache'))).toBe(true)
+      expect(readFileSync(seen[0] as string, 'utf8')).toBe('signed-native-image')
+    } finally {
+      dispose()
+      expect(process.dlopen).toBe(patched)
+      process.dlopen = original
+    }
+  })
+})
+
 describe('healProfilesModuleFallback', () => {
   it('links the app and bundle dependency surface flat under profiles/node_modules', async () => {
     const anchor = stageInstallation({
@@ -356,25 +474,6 @@ describe('healProfilesModuleFallback', () => {
     await healProfilesModuleFallback({ installAnchor: anchor, home })
     const before = readlinkSync(join(fallback, 'dep-of-a'))
     expect(before).toContain('dep-of-a')
-  })
-
-  it('materializes and repairs Windows native packages outside the signed installation', async () => {
-    const packageName = '@img/sharp-win32-x64'
-    const anchor = stageInstallation({ [packageName]: {} })
-    const source = join(anchor, '..', 'node_modules', packageName)
-    mkdirSync(join(source, 'lib'), { recursive: true })
-    writeFileSync(join(source, 'lib', 'sharp.node'), 'signed-native-image')
-    const home = tmp()
-
-    await healProfilesModuleFallback({ installAnchor: anchor, home, platform: 'win32' })
-    const link = join(home, 'profiles', 'node_modules', packageName)
-    const materialized = readlinkSync(link)
-    expect(materialized).not.toBe(realpathSync.native(source))
-    expect(readFileSync(join(materialized, 'lib', 'sharp.node'), 'utf8')).toBe('signed-native-image')
-
-    writeFileSync(join(materialized, 'lib', 'sharp.node'), 'tampered')
-    await healProfilesModuleFallback({ installAnchor: anchor, home, platform: 'win32' })
-    expect(readFileSync(join(materialized, 'lib', 'sharp.node'), 'utf8')).toBe('signed-native-image')
   })
 
   it('throws when a fallback entry is a foreign file or directory', async () => {

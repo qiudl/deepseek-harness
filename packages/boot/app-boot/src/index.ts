@@ -33,6 +33,7 @@ export {
   DEFAULT_PROFILE_PATCH_RELOAD,
   healProfilesModuleFallback,
   initProfile,
+  installWindowsNativeModuleRedirect,
   loadProfile,
   loadProfileDirectory,
   PROFILE_PATCH_FILENAME,
@@ -41,12 +42,14 @@ export {
   readProfileManifest,
   resolveBundleDir,
   resolveProfileDir,
+  resolveWindowsNativeModuleRedirect,
   writeProfileManifest,
   type Profile,
   type ProfileLayer,
   type ProfileManifest,
   type ProfileModuleFallbackOptions,
   type ProfileTemplate,
+  type WindowsNativeModuleRedirectOptions,
 } from './profile.ts'
 
 /**

@@ -64,6 +64,11 @@ export interface WindowsDesktopHostBaseConfig extends Omit<
   readonly maximumJournalBytes: number
   readonly profileReadyTimeoutMs: number
   readonly profileAbortTimeoutMs: number
+  /**
+   * Receives one bounded, redacted line whenever a Profile worker fails to reach readiness.
+   * Every such failure reaches the launcher as `unavailable`; without this it cannot be diagnosed.
+   */
+  readonly onProfileWorkerDiagnostic?: (detail: string) => void
 }
 
 /** Trusted in-memory inputs used by embedders and deterministic tests. */
@@ -282,6 +287,9 @@ async function startWindowsDesktopHostApplicationWithTrust(
     attestListener,
     readyTimeoutMs: config.profileReadyTimeoutMs,
     abortTimeoutMs: config.profileAbortTimeoutMs,
+    ...(config.onProfileWorkerDiagnostic === undefined
+      ? {}
+      : { onDiagnostic: config.onProfileWorkerDiagnostic }),
   }
   const defaultProfileWorkerFactory = dependencies.createProfileWorkerFactory === undefined
     ? new DshWebProfileWorkerFactory(profileWorkerOptions)
