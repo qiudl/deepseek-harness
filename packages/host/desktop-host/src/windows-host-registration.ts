@@ -80,8 +80,15 @@ function invalidInput(): HostAuthorityError {
   return new HostAuthorityError('invalid_input')
 }
 
-function unavailable(): HostAuthorityError {
-  return new HostAuthorityError('unavailable')
+/**
+ * @param reason - which check rejected; the code is a category and names nothing on its own.
+ * @returns the authority error carrying that reason as its cause.
+ */
+function unavailable(reason?: string): HostAuthorityError {
+  return new HostAuthorityError(
+    'unavailable',
+    reason === undefined ? undefined : { cause: new Error(reason) },
+  )
 }
 
 function canonicalRoot(path: string): string {
@@ -102,16 +109,29 @@ export function assertWindowsHostPrivatePathEvidence(
 ): void {
   if (evidence.kind !== expectedKind || evidence.reparsePoint || evidence.linkCount !== 1
     || evidence.ownerSid !== userSid || !evidence.daclProtected || evidence.access.length !== 3) {
-    throw unavailable()
+    // Six independent facts share one code; without naming them a rejected path says nothing.
+    throw unavailable(
+      `private path evidence rejected: kind=${evidence.kind} expected=${expectedKind}`
+      + ` reparsePoint=${String(evidence.reparsePoint)} linkCount=${String(evidence.linkCount)}`
+      + ` ownerMatches=${String(evidence.ownerSid === userSid)}`
+      + ` daclProtected=${String(evidence.daclProtected)}`
+      + ` aceCount=${String(evidence.access.length)}`,
+    )
   }
   const expected = new Set([userSid, LOCAL_SYSTEM_SID, BUILTIN_ADMINISTRATORS_SID])
   for (const entry of evidence.access) {
     if (entry.type !== 'allow' || entry.mask !== FULL_CONTROL || entry.inherited
       || !entry.objectInherit || !entry.containerInherit || !expected.delete(entry.sid)) {
-      throw unavailable()
+      throw unavailable(
+        `private path ACE rejected: type=${entry.type} fullControl=${String(entry.mask === FULL_CONTROL)}`
+        + ` inherited=${String(entry.inherited)} objectInherit=${String(entry.objectInherit)}`
+        + ` containerInherit=${String(entry.containerInherit)} sidExpected=${String(expected.has(entry.sid))}`,
+      )
     }
   }
-  if (expected.size !== 0) throw unavailable()
+  if (expected.size !== 0) {
+    throw unavailable(`private path is missing ${String(expected.size)} required access entries`)
+  }
 }
 
 function validateRegistrationShape(value: unknown): value is WindowsHostRegistration {
@@ -140,7 +160,7 @@ function assertCompatibleExisting(
   existing: unknown,
   next: WindowsHostRegistration,
 ): void {
-  if (!validateRegistrationShape(existing)) throw unavailable()
+  if (!validateRegistrationShape(existing)) throw unavailable('registration file shape is invalid')
   for (const key of [
     'schema_version',
     'endpoint_registration_id',
@@ -180,7 +200,7 @@ export class WindowsHostRegistrationPublisher {
     if (existing !== undefined) {
       assertWindowsHostPrivatePathEvidence(existing.evidence, 'file', this.options.userSid)
       let decoded: unknown
-      try { decoded = JSON.parse(existing.contents.toString('utf8')) } catch { throw unavailable() }
+      try { decoded = JSON.parse(existing.contents.toString('utf8')) } catch { throw unavailable('registration file is not valid JSON') }
       assertCompatibleExisting(decoded, registration)
     }
     const contents = Buffer.from(`${JSON.stringify(registration)}\n`)
