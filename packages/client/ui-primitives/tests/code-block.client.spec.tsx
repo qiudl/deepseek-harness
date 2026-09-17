@@ -7,7 +7,7 @@ import { CodeBlock as LocalizedCodeBlock } from '../src/markdown/CodeBlock.tsx'
 import { highlightToHtml, subscribeGrammarLoaded } from '../src/markdown/highlight.ts'
 import { markdownLabels } from './labels.client.ts'
 
-function CodeBlock(props: Omit<ComponentProps<typeof LocalizedCodeBlock>, 'copyLabel' | 'copiedLabel'>) {
+function CodeBlock(props: Omit<ComponentProps<typeof LocalizedCodeBlock>, 'copyLabel' | 'copiedLabel' | 'copyFailedLabel'>) {
   return <LocalizedCodeBlock {...props} {...markdownLabels.code} />
 }
 
@@ -156,7 +156,8 @@ describe('CodeBlock', () => {
     expect(screen.getByRole('button', { name: '复制' })).toBeTruthy()
   })
 
-  it('does not claim success when clipboard.writeText rejects', async () => {
+  it('reports a refused clipboard write and then permits retry', async () => {
+    vi.useFakeTimers()
     const writeText = vi.fn().mockRejectedValue(new Error('denied'))
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -167,8 +168,25 @@ describe('CodeBlock', () => {
     await act(async () => {
       await Promise.resolve()
     })
-    expect(screen.getByRole('button', { name: '复制' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '复制失败' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '复制成功' })).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(screen.getByRole('button', { name: '复制' })).toBeTruthy()
+  })
+
+  it('coalesces repeated clicks while a clipboard write is pending', async () => {
+    const pending = Promise.withResolvers<undefined>()
+    const writeText = vi.fn().mockReturnValue(pending.promise)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    render(<CodeBlock code="plain body" />)
+    const button = screen.getByRole('button', { name: '复制' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(writeText).toHaveBeenCalledTimes(1)
+    await act(async () => { pending.resolve(undefined); await pending.promise })
   })
 
   it('falls back to execCommand when clipboard.writeText is unavailable', async () => {

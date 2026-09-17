@@ -33,6 +33,8 @@ export interface CodeBlockProps {
   copyLabel: string
   /** Copy-button label during the post-copy confirmation window. */
   copiedLabel: string
+  /** Copy-button label when the host refuses a clipboard write. */
+  copyFailedLabel: string
 }
 
 /**
@@ -61,7 +63,10 @@ function renderLine(line: readonly HighlightSpan[], index: number): ReactNode {
   )
 }
 
-export function CodeBlock({ code, lang, streaming, className, contentRef, lineNumbers = false, copyLabel, copiedLabel }: CodeBlockProps) {
+export function CodeBlock({
+  code, lang, streaming, className, contentRef, lineNumbers = false,
+  copyLabel, copiedLabel, copyFailedLabel,
+}: CodeBlockProps) {
   const trimmed = code.endsWith('\n') ? code.slice(0, -1) : code
   const sourceLines = lineNumbers ? trimmed.split('\n') : undefined
   const rootRef = useRef<HTMLDivElement>(null)
@@ -144,19 +149,21 @@ export function CodeBlock({ code, lang, streaming, className, contentRef, lineNu
       : undefined),
     [streaming, highlighting, streamedBody, trimmed, lang, loaded],
   )
-  const [copied, setCopied] = useState(false)
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const copyPending = useRef(false)
 
   const onCopy = useCallback(() => {
-    if (copied) return
+    if (copyState !== 'idle' || copyPending.current) return
     /* v8 ignore next -- both arms always mount a <pre>; trimmed is the
        typed fallback if the DOM shape ever diverges. */
     const text = rootRef.current?.querySelector('pre')?.textContent ?? trimmed
-    void writeClipboard(text).then((ok) => {
-      if (!ok) return
-      setCopied(true)
-      window.setTimeout(() => { setCopied(false) }, 1000)
+    copyPending.current = true
+    void writeClipboard(text).catch(() => false).then((ok) => {
+      copyPending.current = false
+      setCopyState(ok ? 'copied' : 'failed')
+      window.setTimeout(() => { setCopyState('idle') }, 1000)
     })
-  }, [copied, trimmed])
+  }, [copyState, trimmed])
 
   // shiki's HTML output is a static span tree it generated from `code` (no
   // user HTML passes through), the sanctioned innerHTML consumption path per
@@ -185,7 +192,7 @@ export function CodeBlock({ code, lang, streaming, className, contentRef, lineNu
           <div className={css.infostring}>{lang ?? ''}</div>
           <div className={css.action}>
             <button type="button" className={css.copyButton} onClick={onCopy}>
-              {copied ? copiedLabel : copyLabel}
+              {copyState === 'copied' ? copiedLabel : copyState === 'failed' ? copyFailedLabel : copyLabel}
             </button>
           </div>
         </div>

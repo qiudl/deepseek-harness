@@ -34,6 +34,8 @@ export interface MarkdownCodeLabels {
   copyLabel: string
   /** Copy-button label during the post-copy confirmation window. */
   copiedLabel: string
+  /** Copy-button label when the host refuses a clipboard write. */
+  copyFailedLabel: string
 }
 
 /** Localized chrome for a Markdown document. */
@@ -394,6 +396,7 @@ function renderCode(node: Md.Code, key: Key, context: MarkdownRenderContext): Re
       streaming={context.streaming}
       copyLabel={context.labels.code.copyLabel}
       copiedLabel={context.labels.code.copiedLabel}
+      copyFailedLabel={context.labels.code.copyFailedLabel}
     />
   )
 }

@@ -146,6 +146,7 @@ export function CordisDefineRow({
                   lang="javascript"
                   copyLabel={t('body.copy')}
                   copiedLabel={t('body.copied')}
+                  copyFailedLabel={t('copy.failed')}
                   className={css.sourceCode}
                 />
               </div>
