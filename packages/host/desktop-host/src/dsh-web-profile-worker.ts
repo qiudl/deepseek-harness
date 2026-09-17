@@ -11,7 +11,22 @@ const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
 ])
+// The Profile's environment is whatever the Host hands over on fd 3, never the ambient one.
+// SystemRoot and its siblings are the exception: libuv injects them into every child it spawns
+// and takes their values from the spawning process, so a Profile that drops them leaves every
+// node child it later starts unable to seed its CSPRNG, which aborts before any script runs.
+// They name the OS install, not the host context, so preserving them leaks nothing; the Host's
+// own values still win because input.environment is assigned last.
 const WINDOWS_BOOTSTRAP_INPUT_LIMIT = 64 * 1024
+/**
+ * The Profile bootstrap's environment handoff, exported so tests execute this exact source
+ * instead of a copy that could drift from what the child actually runs.
+ */
+export const PROFILE_ENVIRONMENT_HANDOFF = `const platformRequired = Object.fromEntries(Object.entries(process.env)
+  .filter(([key]) => /^(?:SystemRoot|windir|SystemDrive)$/iu.test(key)));
+for (const key of Object.keys(process.env)) delete process.env[key];
+Object.assign(process.env, platformRequired, input.environment);`
+
 const windowsProfileBootstrap = `
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -25,8 +40,7 @@ if (!input || typeof input !== 'object' || Array.isArray(input)
     || /[\\u0000]/u.test(key) || typeof value !== 'string' || /[\\u0000]/u.test(value))) {
   throw Error('profile_config_invalid');
 }
-for (const key of Object.keys(process.env)) delete process.env[key];
-Object.assign(process.env, input.environment);
+${PROFILE_ENVIRONMENT_HANDOFF}
 const entry = process.argv[1];
 if (typeof entry !== 'string' || entry.length === 0) throw Error('profile_entry_invalid');
 const dsh = await import(pathToFileURL(entry, { windows: true }).href);
