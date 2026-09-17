@@ -50,7 +50,10 @@ export interface WindowsHostProcessFallbackRequest {
     | 'owned_resources_stop_failed'
     | 'ownership_release_failed'
   readonly stopResult?: WindowsHostWorkerSupervisorStopResult
+  /** Why the stop itself failed. */
   readonly cause?: Error
+  /** The failure that required stopping; a cleanup failure alone names the symptom, not the cause. */
+  readonly originatingCause?: Error
 }
 
 /** Stable signal that the embedding must terminate this Host process to reach quiescence. */
@@ -138,10 +141,16 @@ async function requireProcessFallback(
   request: WindowsHostProcessFallbackRequest,
   cause?: unknown,
 ): Promise<never> {
+  // The request is the only channel the embedding can read, so the originating failure
+  // travels with it; otherwise the process dies reporting only how cleanup failed.
+  const reported: WindowsHostProcessFallbackRequest =
+    cause === undefined || request.originatingCause !== undefined
+      ? request
+      : { ...request, originatingCause: asError(cause) }
   let notificationFailure: unknown
-  try { await processFallback(request) } catch (error) { notificationFailure = error }
+  try { await processFallback(reported) } catch (error) { notificationFailure = error }
   throw new WindowsHostProcessFallbackRequiredError(
-    request,
+    reported,
     notificationFailure === undefined ? cause : notificationFailure,
   )
 }

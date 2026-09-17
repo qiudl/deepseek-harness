@@ -152,6 +152,19 @@ describe('Windows Host carrier startup', () => {
     })
   })
 
+  it('names the Worker failure that required stopping, not only how cleanup failed', async () => {
+    const workerFailure = new Error('pipe worker failed')
+    const stopFailure = new Error('stop failed')
+    const state = fixture({ stop: vi.fn(async () => { throw stopFailure }) })
+    const carrier = await startWindowsHostCarrier(state.options)
+    carrier.notifyWorkerFailure(workerFailure)
+    await expect(carrier.close()).rejects.toBeInstanceOf(WindowsHostProcessFallbackRequiredError)
+    expect(state.processFallback).toHaveBeenCalledOnce()
+    expect(state.processFallback.mock.calls[0]?.[0]).toMatchObject({
+      reason: 'worker_stop_failed', cause: stopFailure, originatingCause: workerFailure,
+    })
+  })
+
   it('owns runtime Worker failure and escalates an unconfirmed stop to the process', async () => {
     let reportWorkerFailure: ((error: Error) => void) | undefined
     const state = fixture({
