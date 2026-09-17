@@ -1,9 +1,34 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cancelDesktopAttachmentSave, saveDesktopAttachment } from '../src/attachment-save.ts'
+import {
+  cancelDesktopAttachmentSave, presentDesktopAttachmentSave, saveDesktopAttachment,
+} from '../src/attachment-save.ts'
 
 afterEach(() => { Reflect.deleteProperty(globalThis, '__DSH_DESKTOP_HOST__') })
 
 describe('Desktop attachment Save As facade', () => {
+  it('normalizes progress and terminal presentation across attachment surfaces', async () => {
+    const presentations: unknown[] = []
+    await presentDesktopAttachmentSave(async (onProgress) => {
+      onProgress({ receivedBytes: 7, totalBytes: 10 })
+      onProgress({ receivedBytes: 2, totalBytes: 0 })
+      return 'cancelled'
+    }, presentation => presentations.push(presentation))
+    expect(presentations).toEqual([
+      { state: 'saving', percent: null },
+      { state: 'saving', percent: 70 },
+      { state: 'saving', percent: 100 },
+      { state: 'idle', percent: null },
+    ])
+  })
+
+  it('normalizes rejected Save As operations as failed', async () => {
+    const presentations: unknown[] = []
+    await presentDesktopAttachmentSave(async () => {
+      throw new Error('receiver closed')
+    }, presentation => presentations.push(presentation))
+    expect(presentations.at(-1)).toEqual({ state: 'failed', percent: null })
+  })
+
   it('is unavailable without broadening browser download behavior', async () => {
     await expect(saveDesktopAttachment({
       sessionId: 's', refType: 'file', attachmentId: `sha256:${'a'.repeat(64)}`, name: 'a.pdf',

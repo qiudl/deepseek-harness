@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  cancelDesktopAttachmentSave, IconCloseOutline16, IconDownloadOutline16,
+  cancelDesktopAttachmentSave, IconCloseOutline16, IconDownloadOutline16, presentDesktopAttachmentSave,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import css from './ImageLightbox.module.css'
 
@@ -176,14 +176,10 @@ export function ImageLightbox({ src, alt, labels, onClose, onSave }: {
                 void cancelDesktopAttachmentSave()
                 return
               }
-              setSaveState('saving')
-              setSavePercent(null)
-              void onSave(({ receivedBytes, totalBytes }) => {
-                setSavePercent(totalBytes === 0 ? 100 : Math.min(100, Math.floor(receivedBytes * 100 / totalBytes)))
-              }).then((outcome) => {
-                setSavePercent(null)
-                setSaveState(outcome === 'saved' ? 'saved' : outcome === 'cancelled' ? 'idle' : 'failed')
-              }, () => { setSavePercent(null); setSaveState('failed') })
+              void presentDesktopAttachmentSave(onSave, ({ state, percent }) => {
+                setSaveState(state)
+                setSavePercent(percent)
+              })
             }}
           >
             <IconDownloadOutline16 size={16} />

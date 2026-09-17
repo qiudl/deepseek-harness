@@ -19,6 +19,39 @@ export interface DesktopAttachmentSaveProgress {
   readonly totalBytes: number
 }
 
+/** Renderer-facing state shared by image and file Save As controls. */
+export interface DesktopAttachmentSavePresentation {
+  readonly state: 'idle' | 'saving' | 'saved' | 'failed'
+  readonly percent: number | null
+}
+
+/**
+ * Normalize one Save As operation into the presentation states used by every attachment surface.
+ * @param operation - Save operation that accepts the shared progress observer.
+ * @param onPresentation - Observer receiving bounded progress and one normalized terminal state.
+ * @returns A promise that settles after the terminal presentation was reported.
+ */
+export async function presentDesktopAttachmentSave(
+  operation: (
+    onProgress: (progress: DesktopAttachmentSaveProgress) => void,
+  ) => Promise<DesktopAttachmentSaveOutcome>,
+  onPresentation: (presentation: DesktopAttachmentSavePresentation) => void,
+): Promise<void> {
+  onPresentation({ state: 'saving', percent: null })
+  try {
+    const outcome = await operation(({ receivedBytes, totalBytes }) => {
+      const percent = totalBytes === 0 ? 100 : Math.min(100, Math.floor(receivedBytes * 100 / totalBytes))
+      onPresentation({ state: 'saving', percent })
+    })
+    onPresentation({
+      state: outcome === 'saved' ? 'saved' : outcome === 'cancelled' ? 'idle' : 'failed',
+      percent: null,
+    })
+  } catch {
+    onPresentation({ state: 'failed', percent: null })
+  }
+}
+
 /**
  * Whether the isolated page received the narrow Desktop attachment capability.
  * @returns True only when every required broker method is present.

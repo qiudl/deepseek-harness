@@ -47,8 +47,10 @@ export {
   saveDesktopAttachment,
   cancelDesktopAttachmentSave,
   desktopAttachmentSaveAvailable,
+  presentDesktopAttachmentSave,
   type DesktopAttachmentSaveInput,
   type DesktopAttachmentSaveOutcome,
+  type DesktopAttachmentSavePresentation,
 } from './attachment-save.ts'
 export { relativeTime } from './relative-time.ts'
 export { rankByName } from './rank-by-name.ts'

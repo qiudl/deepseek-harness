@@ -5,7 +5,7 @@ import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/
 import type { MessageImageSource } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   cancelDesktopAttachmentSave, desktopAttachmentSaveAvailable, fileExtension, FileTypeIcon, fileSizeText, JsonBlock,
-  projectUserText, saveDesktopAttachment, StateDot,
+  presentDesktopAttachmentSave, projectUserText, saveDesktopAttachment, StateDot,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
 import type { ModelRetryNode, TurnErrorNode, UserMessageNode } from '../contract/snapshot.ts'
@@ -60,19 +60,13 @@ function MessageFile({ file, sessionId, t }: {
           void cancelDesktopAttachmentSave()
           return
         }
-        setSaveState('saving')
-        setSavePercent(null)
-        void saveDesktopAttachment({
-          sessionId: String(sessionId),
-          refType: 'file',
-          attachmentId: String(file.attachmentId),
-          name: file.name,
-        }, ({ receivedBytes, totalBytes }) => {
-          setSavePercent(totalBytes === 0 ? 100 : Math.min(100, Math.floor(receivedBytes * 100 / totalBytes)))
-        }).then((outcome) => {
-          setSavePercent(null)
-          setSaveState(outcome === 'saved' ? 'saved' : outcome === 'cancelled' ? 'idle' : 'failed')
-        }, () => { setSavePercent(null); setSaveState('failed') })
+        void presentDesktopAttachmentSave(onProgress => saveDesktopAttachment({
+          sessionId: String(sessionId), refType: 'file',
+          attachmentId: String(file.attachmentId), name: file.name,
+        }, onProgress), ({ state, percent }) => {
+          setSaveState(state)
+          setSavePercent(percent)
+        })
       }}
     >
       {body}
