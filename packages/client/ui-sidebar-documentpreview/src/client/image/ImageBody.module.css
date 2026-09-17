@@ -1,5 +1,7 @@
 .frame {
-  display: block;
+  display: grid;
+  grid-template-areas: 'preview';
+  place-items: center;
   box-sizing: border-box;
   width: max-content;
   min-width: 100%;
@@ -16,13 +18,14 @@
 }
 
 .toolbar {
+  grid-area: preview;
+  place-self: start;
   position: sticky;
   z-index: 1;
   top: 8px;
   left: 8px;
   display: flex;
   width: max-content;
-  margin-bottom: 8px;
   overflow: hidden;
   border: 0.5px solid var(--dsw-alias-border-secondary);
   border-radius: 6px;
@@ -51,6 +54,7 @@
 }
 
 .image {
+  grid-area: preview;
   display: block;
   flex: none;
   width: auto;
@@ -66,6 +70,7 @@
 }
 
 .status {
+  grid-area: preview;
   display: flex;
   align-items: center;
   justify-content: center;
