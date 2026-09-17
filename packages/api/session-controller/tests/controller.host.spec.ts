@@ -1,6 +1,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
+import type { BrowserAuth } from '@deepseek-ai/dsh-client-connection/src/browser-auth.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
@@ -24,6 +26,7 @@ describe('SessionController facade', () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     await ctx.plugin(AgentRegistry)
+    new HostConnectionService(ctx, [], {} as BrowserAuth)
     const sessionId = SessionId('controller-session')
     const header: SessionHeader = {
       version: SESSION_FORMAT_VERSION,

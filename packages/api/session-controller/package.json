@@ -60,6 +60,7 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "protocol/dsh-host-actions-v1.schema.json",
     "lib/types/**/*.js",
     "lib/types/**/*.d.ts",
     "lib/typert.host.js",

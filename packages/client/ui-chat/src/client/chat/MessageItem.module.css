@@ -315,6 +315,21 @@
   box-sizing: border-box;
 }
 
+.fileSave {
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fileSave:disabled {
+  cursor: wait;
+}
+
+.fileSave:hover:not(:disabled) {
+  background: var(--dsw-alias-bg-hover, rgba(0, 0, 0, 0.04));
+}
+
 .fileIcon {
   flex: none;
   width: 28px;

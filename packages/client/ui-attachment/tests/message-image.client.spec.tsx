@@ -4,6 +4,7 @@ import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { EMPTY_CHAT_SNAPSHOT, type MessageImagesProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { EMPTY_CONVERSATION_SNAPSHOT } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { ImageGallery, MessageImage } from '../src/MessageImage.tsx'
@@ -14,7 +15,10 @@ import { MessageImages } from '../src/client/MessageImages.tsx'
 const useResource = (() => ({ status: 'none' as const, value: undefined, failure: undefined, reload: () => {} })) as GlobalStandardProps['useResource']
 const usePanelInfo: GlobalStandardProps['usePanelInfo'] = selector => selector({ activePanelId: null })
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  Reflect.deleteProperty(globalThis, '__DSH_DESKTOP_HOST__')
+})
 
 const labels: MessageImageLabels = {
   image: '图片',
@@ -22,7 +26,12 @@ const labels: MessageImageLabels = {
   openNamed: label => `${label}，点击查看原图`,
   loading: '图片加载中…',
   loadFailed: '图片加载失败，点击重试',
-  lightbox: { dialog: '原图预览', close: '关闭原图预览' },
+  lightbox: {
+    dialog: '原图预览', close: '关闭原图预览',
+    zoomOut: '缩小图片', zoomIn: '放大图片', resetZoom: '恢复适应窗口',
+    save: '另存附件', saving: '正在保存…', saved: '附件已保存', saveFailed: '保存失败，请重试',
+    cancelSave: '取消保存',
+  },
 }
 
 const attachment = {
@@ -33,6 +42,7 @@ const attachment = {
   height: 320,
   name: 'history.png',
 }
+const { name: _attachmentName, ...unnamedAttachment } = attachment
 
 type AttentionSnapshot = Parameters<Parameters<MessageImagesProps['useSessionPendingInteraction']>[0]>[0]
 type TrajectorySnapshot = Parameters<Parameters<MessageImagesProps['useTrajectory']>[0]>[0]
@@ -75,6 +85,43 @@ describe('MessageImage', () => {
     expect(view.getByRole('dialog', { name: '原图预览' })).toBeTruthy()
     fireEvent.click(view.getByRole('button', { name: '关闭原图预览' }))
     expect(view.queryByRole('dialog', { name: '原图预览' })).toBeNull()
+  })
+
+  it('does not offer native Save As when a session has no Desktop capability', async () => {
+    const load = vi.fn().mockResolvedValue('blob:history')
+    const view = render(
+      <MessageImage image={{ attachment }} load={load} variant="single" labels={labels} sessionId={'s' as SessionId} />,
+    )
+    await waitFor(() => { expect(view.getByAltText('history.png')).toBeTruthy() })
+    fireEvent.click(view.getByRole('button', { name: 'history.png，点击查看原图' }))
+    expect(view.queryByRole('button', { name: '另存附件' })).toBeNull()
+  })
+
+  it.each([
+    [attachment, 'history.png'],
+    [{ ...unnamedAttachment, mediaType: 'image/jpeg' as const }, 'image.jpeg'],
+    [{ ...unnamedAttachment, mediaType: 'image' as 'image/png' }, 'image.bin'],
+  ])('offers identity-bound native Save As with fallback name %#', async (candidate, expectedName) => {
+    const saveAttachment = vi.fn(async (_input: unknown, _onProgress?: unknown) => (
+      { protocol: 1, ok: true, outcome: 'saved' as const }
+    ))
+    Reflect.set(globalThis, '__DSH_DESKTOP_HOST__', {
+      hello: async () => ({ protocol: 1, ok: true, features: ['attachment-save-v1'] }),
+      saveAttachment,
+      cancelAttachmentSave: vi.fn(async () => ({ protocol: 1, ok: true })),
+    })
+    const load = vi.fn().mockResolvedValue('blob:history')
+    const view = render(
+      <MessageImage image={{ attachment: candidate }} load={load} variant="single" labels={labels} sessionId={'s' as SessionId} />,
+    )
+    await waitFor(() => { expect(view.getByRole('img')).toBeTruthy() })
+    const candidateName = 'name' in candidate ? candidate.name : undefined
+    fireEvent.click(view.getByRole('button', { name: labels.openNamed(candidateName ?? labels.image) }))
+    fireEvent.click(view.getByRole('button', { name: '另存附件' }))
+    await waitFor(() => { expect(saveAttachment).toHaveBeenCalledOnce() })
+    expect(saveAttachment.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: 's', refType: 'image', attachmentId: String(candidate.attachmentId), name: expectedName,
+    })
   })
 
   it('ignores a click while the thumbnail is still loading', () => {

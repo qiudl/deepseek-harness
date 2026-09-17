@@ -150,6 +150,9 @@ function workspaceManifests(): WorkspaceManifest[] {
 }
 
 const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
+  // Desktop and the Session controller pin their independently implemented
+  // host-action constants to this reviewed, versioned wire contract.
+  '@deepseek-ai/dsh-api-session-controller': ['protocol/dsh-host-actions-v1.schema.json'],
   // Desktop broker and worker entrypoints, plus the pinned Hub code and license.
   '@deepseek-ai/dsh-slark-desktop-host': [
     'lib/windows-startup.js',

@@ -1,5 +1,5 @@
 /** Complete image bytes rendered at their intrinsic CSS-pixel dimensions. */
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { pathPartsOf } from '@deepseek-ai/dsh-util-workspace-path'
 import type { DocumentPreviewProps } from '../document/contract.ts'
@@ -88,9 +88,36 @@ function LoadedImage({ url, name, t }: {
   readonly t: ImageBodyProps['t']
 }): ReactNode {
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
-  return <div className={css.frame} data-image-preview>
+  const [zoom, setZoom] = useState(1)
+  const [dimensions, setDimensions] = useState<{ width: number; height: number }>()
+  const changeZoom = useCallback((next: number): void => {
+    setZoom(Math.min(4, Math.max(0.25, next)))
+  }, [])
+  return <div
+    className={css.frame}
+    data-image-preview
+    tabIndex={0}
+    aria-label={t('preview', { name })}
+    onKeyDown={(event) => {
+      if (event.key === '+' || event.key === '=') changeZoom(zoom + 0.25)
+      else if (event.key === '-') changeZoom(zoom - 0.25)
+      else if (event.key === '0') changeZoom(1)
+      else return
+      event.preventDefault()
+    }}
+    onWheel={(event) => {
+      if (!event.ctrlKey && !event.metaKey) return
+      event.preventDefault()
+      changeZoom(zoom + (event.deltaY < 0 ? 0.25 : -0.25))
+    }}
+  >
     {state === 'loading' && <LoadingIndicator className={css.status} label={t('loading')} />}
     {state === 'failed' && <p className={css.status} role="alert">{t('failed')}</p>}
+    {state === 'ready' && <div className={css.toolbar}>
+      <button type="button" aria-label={t('zoomOut')} disabled={zoom <= 0.25} onClick={() => { changeZoom(zoom - 0.25) }}>−</button>
+      <button type="button" aria-label={t('resetZoom')} onClick={() => { changeZoom(1) }}>{Math.round(zoom * 100)}%</button>
+      <button type="button" aria-label={t('zoomIn')} disabled={zoom >= 4} onClick={() => { changeZoom(zoom + 0.25) }}>+</button>
+    </div>}
     <img
       className={css.image}
       src={url}
@@ -99,7 +126,17 @@ function LoadedImage({ url, name, t }: {
       draggable={false}
       referrerPolicy="no-referrer"
       hidden={state !== 'ready'}
-      onLoad={() => { setState('ready') }}
+      style={dimensions === undefined ? undefined : {
+        width: dimensions.width * zoom,
+        height: dimensions.height * zoom,
+      }}
+      onLoad={(event) => {
+        setDimensions({
+          width: event.currentTarget.naturalWidth,
+          height: event.currentTarget.naturalHeight,
+        })
+        setState('ready')
+      }}
       onError={() => { setState('failed') }}
     />
   </div>
