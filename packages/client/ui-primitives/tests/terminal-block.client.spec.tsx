@@ -364,6 +364,53 @@ describe('TerminalBlock copy', () => {
 })
 
 describe('writeClipboard', () => {
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, '__DSH_DESKTOP_HOST__')
+  })
+
+  it('uses the negotiated Desktop capability without touching the denied Web API', async () => {
+    const webWrite = vi.fn()
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: webWrite },
+    })
+    const hostWrite = vi.fn().mockResolvedValue({ ok: true, protocol: 1 })
+    Reflect.set(globalThis, '__DSH_DESKTOP_HOST__', {
+      hello: vi.fn().mockResolvedValue({
+        ok: true,
+        protocol: 1,
+        features: ['clipboard-write-v1'],
+      }),
+      writeClipboard: hostWrite,
+    })
+
+    await expect(writeClipboard('payload')).resolves.toBe(true)
+    expect(hostWrite).toHaveBeenCalledWith('payload')
+    expect(webWrite).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the Desktop capability is absent or refuses the action', async () => {
+    const webWrite = vi.fn()
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: webWrite },
+    })
+    Reflect.set(globalThis, '__DSH_DESKTOP_HOST__', {
+      hello: vi.fn().mockResolvedValue({ ok: true, protocol: 1, features: [] }),
+      writeClipboard: vi.fn(),
+    })
+    await expect(writeClipboard('payload')).resolves.toBe(false)
+
+    Reflect.set(globalThis, '__DSH_DESKTOP_HOST__', {
+      hello: vi.fn().mockResolvedValue({
+        ok: true, protocol: 1, features: ['clipboard-write-v1'],
+      }),
+      writeClipboard: vi.fn().mockResolvedValue({ ok: false, protocol: 1 }),
+    })
+    await expect(writeClipboard('payload')).resolves.toBe(false)
+    expect(webWrite).not.toHaveBeenCalled()
+  })
+
   it('reports true after the async Clipboard API accepts the exact text', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })

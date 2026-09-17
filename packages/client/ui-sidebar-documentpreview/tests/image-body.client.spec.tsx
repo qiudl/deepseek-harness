@@ -77,6 +77,39 @@ describe('ImageBody', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 
+  it('provides bounded keyboard, modifier-wheel, and reset zoom without consuming ordinary scrolling', async () => {
+    render(<ImageBody {...props('photo.png')} />)
+    const image = await screen.findByRole('img', { hidden: true })
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 800 },
+      naturalHeight: { configurable: true, value: 600 },
+    })
+    fireEvent.load(image)
+    const frame = image.closest('[data-image-preview]') as HTMLElement
+    const zoomIn = screen.getByRole('button', { name: en.zoomIn })
+    const zoomOut = screen.getByRole('button', { name: en.zoomOut })
+    const reset = screen.getByRole('button', { name: en.resetZoom })
+
+    fireEvent.click(zoomIn)
+    expect(reset.textContent).toBe('125%')
+    expect(image.getAttribute('style')).toContain('width: 1000px')
+    fireEvent.keyDown(frame, { key: '0' })
+    expect(reset.textContent).toBe('100%')
+
+    const ordinaryWheel = new WheelEvent('wheel', { deltaY: -1, cancelable: true })
+    frame.dispatchEvent(ordinaryWheel)
+    expect(ordinaryWheel.defaultPrevented).toBe(false)
+    fireEvent.wheel(frame, { deltaY: -1, ctrlKey: true })
+    expect(reset.textContent).toBe('125%')
+
+    for (let index = 0; index < 20; index += 1) fireEvent.click(zoomOut)
+    expect(reset.textContent).toBe('25%')
+    expect(zoomOut.hasAttribute('disabled')).toBe(true)
+    for (let index = 0; index < 20; index += 1) fireEvent.click(zoomIn)
+    expect(reset.textContent).toBe('400%')
+    expect(zoomIn.hasAttribute('disabled')).toBe(true)
+  })
+
   it('revokes replaced bytes and reports image decode and Blob creation failures', async () => {
     const initial = props()
     const view = render(<ImageBody {...initial} />)

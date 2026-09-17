@@ -14,6 +14,7 @@ kind: "package-reference"
 
 - [使用本包](#use-this-package)
 - [会话媒体引用](#session-media-references)
+- [Desktop 附件导出](#desktop-attachment-export)
 - [配置](#configuration)
 - [模型体验](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
@@ -43,6 +44,13 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 ## 会话媒体引用
 
 当 `connection`、`fs` 与 `attachments` 均被组合时，`SessionMediaReferences` 在鉴权 `connection.fetch` 通道上挂载 `GET|HEAD /api/file?path=<绝对路径>`。它通过 `ctx.fs` 读取普通文件，包括已注册工作区之外的临时路径与远程提供方中的文件。目录包含关系与 MIME 类别均不限制访问；`mime-types` 提供响应类型，未知扩展名使用 `application/octet-stream`。GET 复用 `readBytes` 执行读取前及读取中的字节限制；HEAD 只读取元数据。所有文件均使用 `ctx.attachments.imageLimits.maxImageBytes`（通常为 20 MiB）；超过此上限返回 413。响应包含完整文件，忽略 Range，并携带 `private, no-store`、`nosniff` 与沙箱 CSP，使直接打开的 HTML/SVG 无法以 API 源身份执行脚本。客户端重写位于 `ui-chat`（`AssistantMarkdown`）；音视频文件响应已可用，Markdown 音视频播放器节点仍是独立工作。
+
+-----
+
+<a id="desktop-attachment-export"></a>
+## Desktop 附件导出
+
+`GET|HEAD /api/session.attachment-export` 只提供目标 Session 日志中已有的图片或文件引用。该精确路由同时要求经过认证的 Connection 请求和 `Sec-Slark-Desktop-Action: attachment-save-v1`；浏览器 JavaScript 不能设置这个保留 header，因此嵌入式 renderer 不能绕过 Desktop 用户手势与另存为流程。HEAD 返回有界的 base64url 文件名元数据，但不读取存储字节。GET 对已有大小上限的规范化图片使用内存字节，对逐字节保存的文件采用支持取消及存储完整性校验的流。响应不可缓存，拒绝 Range 和额外查询字段，且从不接收文件系统路径或来源 URL。与 Desktop 共用的版本一常量由 [`protocol/dsh-host-actions-v1.schema.json`](protocol/dsh-host-actions-v1.schema.json) 固定。
 
 -----
 

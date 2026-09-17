@@ -1,5 +1,5 @@
 .frame {
-  display: flex;
+  display: block;
   box-sizing: border-box;
   width: max-content;
   min-width: 100%;
@@ -8,6 +8,46 @@
   padding: 8px;
   font-family: var(--dsw-font, sans-serif);
   white-space: normal;
+  outline: none;
+}
+
+.frame:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-focus-ring, #4c8bf5);
+}
+
+.toolbar {
+  position: sticky;
+  z-index: 1;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  width: max-content;
+  margin-bottom: 8px;
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 6px;
+  background: var(--dsw-alias-background-primary);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+
+.toolbar button {
+  min-width: 32px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--dsw-alias-border-secondary);
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.toolbar button:last-child {
+  border-right: 0;
+}
+
+.toolbar button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .image {

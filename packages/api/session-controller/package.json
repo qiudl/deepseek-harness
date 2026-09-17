@@ -58,6 +58,7 @@
     "watch": "tsdown --watch"
   },
   "files": [
+    "protocol/**/*.json",
     "lib/index.js",
     "lib/client.js",
     "lib/types/**/*.js",

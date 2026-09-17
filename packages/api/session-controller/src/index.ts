@@ -23,6 +23,7 @@ import { ApiSessionList } from './list.ts'
 import { buildModelCatalog } from './catalog.ts'
 import { installModelSelectionProjection } from './model-selection-projection.ts'
 import { SessionSkillCatalog } from './skill-catalog.ts'
+import { installAttachmentExport } from './attachment-export.ts'
 import { SessionMediaReferences } from './media-references.ts'
 import type {
   ModelCatalog,
@@ -89,6 +90,7 @@ export class SessionController extends TypertRemoteService {
     'agentDefaultModel',
     'agents',
     'attachments',
+    'connection',
     'fileUploads',
     'llm',
     'sessions',
@@ -139,6 +141,7 @@ export class SessionController extends TypertRemoteService {
     this.revealPath = internals.revealPath ?? revealNativePath
     this.canOpenPath = internals.canOpenPath
       ?? (() => config.nativeOpen ?? (internals.openPath !== undefined || canOpenNativePath()))
+    if (ctx.get('connection') !== undefined) installAttachmentExport(ctx)
     ctx.plugin(SessionFileReferences)
     ctx.plugin(SessionMediaReferences)
     ctx.plugin(SessionSkillCatalog)

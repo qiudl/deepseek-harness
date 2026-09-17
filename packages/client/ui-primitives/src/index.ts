@@ -43,6 +43,13 @@ export type { TooltipSide } from './Tooltip.tsx'
 export { Toast } from './Toast.tsx'
 export { fileSizeText } from './file-size.ts'
 export { writeClipboard } from './clipboard.ts'
+export {
+  saveDesktopAttachment,
+  cancelDesktopAttachmentSave,
+  desktopAttachmentSaveAvailable,
+  type DesktopAttachmentSaveInput,
+  type DesktopAttachmentSaveOutcome,
+} from './attachment-save.ts'
 export { relativeTime } from './relative-time.ts'
 export { rankByName } from './rank-by-name.ts'
 export type { RelativeTime, RelativeTimeUnit } from './relative-time.ts'

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepseek.com/dsh/protocol/dsh-host-actions-v1.schema.json",
+  "title": "DSH Host Actions Protocol v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "attachmentExport", "definitions"],
+  "properties": {
+    "protocol": { "const": 1 },
+    "attachmentExport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "methods", "actionHeader", "actionValue", "query", "responseHeaders"],
+      "properties": {
+        "path": { "const": "/api/session.attachment-export" },
+        "methods": { "const": ["GET", "HEAD"] },
+        "actionHeader": { "const": "Sec-Slark-Desktop-Action" },
+        "actionValue": { "const": "attachment-save-v1" },
+        "query": { "const": ["sessionId", "attachmentId", "refType", "nameB64"] },
+        "responseHeaders": {
+          "const": [
+            "Content-Length",
+            "Content-Type",
+            "X-DSH-Attachment-Bytes",
+            "X-DSH-Attachment-Id",
+            "X-DSH-Attachment-Name-B64",
+            "X-DSH-Attachment-Protocol",
+            "X-DSH-Attachment-Type"
+          ]
+        }
+      }
+    },
+    "definitions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clientHelloFeatures",
+        "hostActionErrors",
+        "saveOperationStages",
+        "refTypes",
+        "clipboardMaxUtf8Bytes"
+      ],
+      "properties": {
+        "clientHelloFeatures": {
+          "const": ["clipboard-write-v1", "attachment-save-v1", "native-edit-command-v1"]
+        },
+        "hostActionErrors": {
+          "const": [
+            "unsupported",
+            "gesture-required",
+            "inactive-surface",
+            "stale-surface",
+            "invalid-request",
+            "too-large",
+            "busy",
+            "cancelled",
+            "unauthorized",
+            "source-unavailable",
+            "integrity-failed",
+            "write-failed"
+          ]
+        },
+        "saveOperationStages": {
+          "const": [
+            "preparing",
+            "dialog",
+            "downloading",
+            "verifying",
+            "saved",
+            "cancelled",
+            "failed"
+          ]
+        },
+        "refTypes": { "const": ["image", "file"] },
+        "clipboardMaxUtf8Bytes": { "const": 8388608 }
+      }
+    }
+  }
+}
