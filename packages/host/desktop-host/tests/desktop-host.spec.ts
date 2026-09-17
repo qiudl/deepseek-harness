@@ -70,6 +70,27 @@ describe('person profile registry', () => {
       .rejects.toMatchObject({ code: 'profile_mismatch' })
   })
 
+  it('names the worker preparation failure the control vocabulary would erase', async () => {
+    // Callers see only `unavailable`; without this line the cause of a failed bootstrap is lost.
+    const diagnostics: string[] = []
+    const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 10), clock })
+    const host = new DesktopHost({
+      registry,
+      clock,
+      runtimeGeneration: 5,
+      onDiagnostic: (detail) => { diagnostics.push(detail) },
+      ensureProfileWorker: async () => {
+        throw new Error('supervisor failed: runtime_failure', { cause: new Error('koffi load rejected') })
+      },
+    })
+    await expect(host.bootstrapLocalProfile({ keyHandle: 'keychain:local', unlockMaterial, ownerId: 'owner-1' }))
+      .rejects.toThrow('supervisor failed: runtime_failure')
+    expect(diagnostics).toEqual([
+      'bootstrap-local profile worker preparation failed:'
+      + ' supervisor failed: runtime_failure <- koffi load rejected',
+    ])
+  })
+
   it('bootstraps, restores, and opens a local Profile without an Account token', async () => {
     const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 10), clock })
     const host = new DesktopHost({ registry, clock, runtimeGeneration: 5, ensureProfileWorker: async () => undefined })

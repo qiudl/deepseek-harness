@@ -39,6 +39,28 @@ interface DesktopHostOptions {
     profile: PersonProfileRecord,
     preflight: OfflineProfileRecoveryPreflight,
   ) => Promise<void>
+  /**
+   * Receives one bounded, secret-free line whenever preparing a Profile's worker fails. The
+   * control vocabulary reports every such failure as `unavailable`, which names no cause.
+   */
+  readonly onDiagnostic?: (detail: string) => void
+}
+
+/** Longest wrapper chain one diagnostic line walks before the remaining causes are dropped. */
+const MAX_DIAGNOSTIC_CAUSES = 6
+/** Longest diagnostic line the Host emits, so one failure cannot flood its embedding's log. */
+const MAX_DIAGNOSTIC_BYTES = 2048
+
+/** Join an error with the causes it wraps; a stable category alone hides what actually failed. */
+function describeFailure(error: unknown): string {
+  const messages: string[] = []
+  let current: unknown = error
+  for (let depth = 0; depth < MAX_DIAGNOSTIC_CAUSES && current instanceof Error; depth += 1) {
+    if (current.message.length > 0) messages.push(current.message)
+    current = current.cause
+  }
+  if (messages.length === 0) messages.push(String(error))
+  return messages.join(' <- ').replace(/[\u0000-\u001f\u007f]+/gu, ' ').slice(0, MAX_DIAGNOSTIC_BYTES)
 }
 
 interface ViewLease {
@@ -198,9 +220,28 @@ export class DesktopHost {
     if (bindingProfile?.profileId !== profile.profileId) throw new HostAuthorityError('stale')
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
-    await ensureWorker(profile)
+    await this.prepareWorker(ensureWorker, profile, 'account')
     this.grant(input.ownerId, profile.profileId, 'connected')
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
+  }
+
+  /**
+   * Prepare one Profile's worker, naming the failure before the control vocabulary erases it.
+   * @param ensureWorker - the embedding's worker preparation step.
+   * @param profile - the Profile whose worker must be ready.
+   * @param stage - which caller is preparing it, for the diagnostic line.
+   */
+  private async prepareWorker(
+    ensureWorker: (profile: PersonProfileRecord) => Promise<void>,
+    profile: PersonProfileRecord,
+    stage: string,
+  ): Promise<void> {
+    try {
+      await ensureWorker(profile)
+    } catch (error) {
+      this.options.onDiagnostic?.(`${stage} profile worker preparation failed: ${describeFailure(error)}`)
+      throw error
+    }
   }
 
   /**
@@ -216,7 +257,7 @@ export class DesktopHost {
     const profile = await this.options.registry.createLocalAnonymous(input)
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
-    await ensureWorker(profile)
+    await this.prepareWorker(ensureWorker, profile, 'bootstrap-local')
     this.grant(input.ownerId, profile.profileId, 'local_profile')
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
@@ -240,7 +281,7 @@ export class DesktopHost {
     this.options.registry.verifyUnlock(profile, input.keyHandle, input.unlockMaterial)
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
-    await ensureWorker(profile)
+    await this.prepareWorker(ensureWorker, profile, 'restore-local')
     this.grant(input.ownerId, profile.profileId, 'local_profile')
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }

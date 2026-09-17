@@ -369,6 +369,9 @@ async function startWindowsDesktopHostApplicationWithTrust(
         verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
         activateProfileView: profileId => workers.activate(profileId),
         ensureProfileWorker: ensureWorker,
+        ...(config.onProfileWorkerDiagnostic === undefined
+          ? {}
+          : { onDiagnostic: config.onProfileWorkerDiagnostic }),
       })
       const commandAuthority = new SessionCommandAuthority(new WindowsHostJournal({
         root: win32.join(config.root, 'control'),
