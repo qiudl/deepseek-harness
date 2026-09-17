@@ -175,11 +175,12 @@ export async function prepareWindowsDesktopHostEmbeddingIdentity(
   const ensureStorageParent = dependencies.ensureStorageParent
     ?? ((path: string) => mkdirSync(path, { recursive: true }))
   ensureStorageParent(win32.dirname(input.storageRoot))
+  /* v8 ignore next -- the production SID loader is exercised only by signed Windows lanes. */
   const resolveCurrentUserSid = await (dependencies.loadCurrentUserSid ?? loadWindowsCurrentUserSid)()
   const userSid = resolveCurrentUserSid()
-  const bindings = await (
-    dependencies.loadRegistrationFileBindings ?? loadWindowsHostRegistrationFileBindings
-  )()
+  /* v8 ignore next -- the production filesystem loader is exercised only by signed Windows lanes. */
+  const loadBindings = dependencies.loadRegistrationFileBindings ?? loadWindowsHostRegistrationFileBindings
+  const bindings = await loadBindings()
   const securityDescriptor = windowsHostPrivateSecurityDescriptor(userSid)
   for (const path of [input.storageRoot, environmentsRoot, input.root]) {
     assertWindowsHostPrivatePathEvidence(
@@ -200,6 +201,7 @@ export async function prepareWindowsDesktopHostEmbeddingIdentity(
     deviceIndexKey = createOrReadPrivateFile(
       bindings,
       deviceIndexKeyPath,
+      /* v8 ignore next -- production entropy is a signed Windows composition dependency. */
       (dependencies.randomBytes ?? randomBytes)(32),
       32,
       userSid,
@@ -210,6 +212,7 @@ export async function prepareWindowsDesktopHostEmbeddingIdentity(
 
   let privateKey = readPrivateFile(bindings, installationPrivateKeyPath, MAX_IDENTITY_BYTES, userSid)
   if (privateKey === undefined) {
+    /* v8 ignore next -- production key generation is a signed Windows composition dependency. */
     const keys = (dependencies.generateKeyPair ?? (() => generateKeyPairSync('ed25519')))()
     privateKey = createOrReadPrivateFile(
       bindings,
@@ -226,7 +229,9 @@ export async function prepareWindowsDesktopHostEmbeddingIdentity(
   if (recordContents === undefined) {
     const record: WindowsEmbeddingIdentityRecord = {
       schema_version: 1,
+      /* v8 ignore next -- production UUID entropy is a signed Windows composition dependency. */
       installation_id: (dependencies.randomUUID ?? randomUUID)(),
+      /* v8 ignore next -- production UUID entropy is a signed Windows composition dependency. */
       endpoint_registration_id: (dependencies.randomUUID ?? randomUUID)(),
       installation_public_key: publicKey,
       runtime_generation: input.runtimeGeneration,

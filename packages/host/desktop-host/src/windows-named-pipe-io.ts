@@ -1,6 +1,13 @@
 import { HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import { isMainThread } from 'node:worker_threads'
 import { WindowsNamedPipeNativeError } from './windows-named-pipe-native.ts'
+import {
+  assertWindowsX64Worker,
+  loadWindowsKoffi,
+  windowsKernel32Context,
+  type WindowsKoffiFunction,
+  type WindowsKoffiModule,
+} from './windows-koffi.ts'
 
 const ERROR_BROKEN_PIPE = 109
 const ERROR_NO_DATA = 232
@@ -29,30 +36,24 @@ export interface WindowsNamedPipeIoBindings {
   writeFrame(handle: bigint, frame: Buffer): Promise<void>
 }
 
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
+interface NamedPipeIoKoffiModule extends WindowsKoffiModule {
   alloc(type: unknown, count: number): unknown
   decode(pointer: unknown, type: unknown): unknown
-  load(library: string): KoffiLibrary
 }
 
 export interface WindowsNamedPipeIoKoffiOptions {
   readonly platform?: string
   readonly arch?: string
   readonly isMainThread?: boolean
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<NamedPipeIoKoffiModule>
 }
 
 function validHandle(handle: unknown): handle is bigint {
   return typeof handle === 'bigint' && handle > 0n && handle !== INVALID_HANDLE_VALUE
 }
 
-function validCount(value: number, maximum: number, allowZero: boolean): boolean {
-  return Number.isSafeInteger(value) && value <= maximum && (allowZero ? value >= 0 : value > 0)
+function validCount(value: number, maximum: number): boolean {
+  return Number.isSafeInteger(value) && value <= maximum && value > 0
 }
 
 function workerCall<Result>(operation: () => Result): Promise<Result> {
@@ -85,7 +86,7 @@ export function createWindowsNamedPipeIoBindings(
         throw new WindowsNamedPipeNativeError('ReadFile', outcome.win32Code)
       }
       if (outcome.result !== 1 || outcome.win32Code !== 0
-        || !validCount(outcome.byteCount, maxBytes, false)) {
+        || !validCount(outcome.byteCount, maxBytes)) {
         throw new WindowsNamedPipeNativeError('ReadFile', ERROR_INVALID_PARAMETER)
       }
       return buffer.subarray(0, outcome.byteCount)
@@ -105,7 +106,7 @@ export function createWindowsNamedPipeIoBindings(
           throw new WindowsNamedPipeNativeError('WriteFile', outcome.win32Code)
         }
         if (outcome.result !== 1 || outcome.win32Code !== 0
-          || !validCount(outcome.byteCount, remaining.byteLength, false)) {
+          || !validCount(outcome.byteCount, remaining.byteLength)) {
           throw new WindowsNamedPipeNativeError('WriteFile', ERROR_INVALID_PARAMETER)
         }
         offset += outcome.byteCount
@@ -126,22 +127,15 @@ export async function loadWindowsNamedPipeIoBindings(
   const platform = options.platform ?? process.platform
   const arch = options.arch ?? process.arch
   const mainThread = options.isMainThread ?? isMainThread
-  if (platform !== 'win32' || arch !== 'x64' || mainThread) {
-    throw new Error('Blocking named-pipe bindings require a Windows x64 worker')
-  }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
-  const pointer = koffi.pointer('void')
-  const kernel32 = koffi.load('kernel32.dll')
-  const bind = (name: string, result: unknown, args: unknown[]): KoffiFunction =>
-    kernel32.func('__stdcall', name, result, args)
+  assertWindowsX64Worker(platform, arch, mainThread, 'Blocking named-pipe bindings require a Windows x64 worker')
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
+  const { pointer, bindKernel32: bind } = windowsKernel32Context(koffi)
   const readFile = bind('ReadFile', 'int', [pointer, pointer, 'uint32', koffi.pointer('uint32'), pointer])
   const writeFile = bind('WriteFile', 'int', [pointer, pointer, 'uint32', koffi.pointer('uint32'), pointer])
   const getLastError = bind('GetLastError', 'uint32', [])
   const byteCount = koffi.alloc('uint32', 1)
 
-  const call = (operation: KoffiFunction, handle: bigint, buffer: Buffer): WindowsNamedPipeIoResult => {
+  const call = (operation: WindowsKoffiFunction, handle: bigint, buffer: Buffer): WindowsNamedPipeIoResult => {
     const result = Number(operation(handle, buffer, buffer.byteLength, byteCount, null))
     const win32Code = result === 0 ? Number(getLastError()) : 0
     return {

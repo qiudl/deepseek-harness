@@ -10,7 +10,7 @@ Status: implemented
 
 ## 决策
 
-三个主要 Linux 作业（`node-24`、`node-24-coverage`、`node-24-consumers`）、三个 `node-compat` 矩阵条目和 `all-checks-passed` 通过 `DSH_CI_FAILOVER_LINUX` 解析；原生 Windows 作业通过 `DSH_CI_FAILOVER_WINDOWS` 解析。一个平台的开关不会重定向另一个平台。仓库写者将变量设为 `selfhosted` 时，适用的可信作业选择 `vm-backup` 或 `dsh-win-ci`；`blacksmith` 取值按 [blacksmith 故障切换支路笔记](2026-09-09-blacksmith-failover-leg.zh.md) 路由参与切换的作业；未设置或任何其它值保留工作流定义的托管回退。Node 兼容性作业要求同仓库且非 fork 的头部以及非 Dependabot 作者，使用隔离运行时设置，并在未设置与非特殊值下保留 `ubuntu-latest` 回退；blacksmith 分支不带上述任何条件。在 `selfhosted` 取值下，Linux 故障切换会限制快照并发，并跳过托管软件包缓存恢复。判定作业跟随工作作业，避免继续在不可用的托管池排队。每个开关都是写者可管理的仓库状态而非一次合并，因此在检查失败时仍然有效。`serial / linux (self-hosted standby)` 与 `serial / windows (self-hosted standby)` 通道在 master 推送上重新验证完整的未分片聚合流程。
+三个主要 Linux 作业（`node-24`、`node-24-coverage`、`node-24-consumers`）、三个 `node-compat` 矩阵条目和 `all-checks-passed` 通过 `DSH_CI_FAILOVER_LINUX` 解析；原生 Windows 作业通过 `DSH_CI_FAILOVER_WINDOWS` 解析。一个平台的开关不会重定向另一个平台。仓库写者将变量设为 `selfhosted` 时，适用的可信作业选择 `vm-backup` 或 `dsh-win-ci`；`blacksmith` 取值按 [blacksmith 故障切换支路笔记](2026-09-09-blacksmith-failover-leg.zh.md) 路由参与切换的作业；`github` 取值将适用 fork 的作业路由到 GitHub 标准托管运行器；未设置或任何其它值保留工作流定义的托管回退。Node 兼容性作业要求同仓库且非 fork 的头部以及非 Dependabot 作者，使用隔离运行时设置，并在未设置与非特殊值下保留 `ubuntu-latest` 回退；blacksmith 分支不带上述任何条件。在 `selfhosted` 取值下，Linux 故障切换会限制快照并发，并跳过托管软件包缓存恢复。判定作业跟随工作作业，避免继续在不可用的托管池排队。每个开关都是写者可管理的仓库状态而非一次合并，因此在检查失败时仍然有效。`serial / linux (self-hosted standby)` 与 `serial / windows (self-hosted standby)` 通道在 master 推送上重新验证完整的未分片聚合流程。
 
 [被取代 CI 的取消策略](2026-09-09-cancel-superseded-ci.zh.md) 管理同一工作流/引用组内的 master 推送和手动运行，包括热备演练。master 快速更新可能让演练因反复被取消而始终无法得出结论。判断就绪状态时，使用最近一次已完成的热备结论，并核对其时间和提交；已取消或仅被调度的运行不构成就绪证据。
 
@@ -38,6 +38,10 @@ Status: implemented
 
 **谁能扳动这个变量。**GitHub 的 API 允许任何具有写权限的协作者管理仓库变量，因此每个开关实际是写者级而非严格的管理员级。在本仓库的信任模型下这并不构成升权：runner group 接纳本私有、禁 fork 仓库的全部工作流（这是让 PR 引用的故障切换得以成立的刻意取舍），因此任何写者本就可以通过推送分支工作流触达这台虚拟机。抵御不可信代码的边界是仓库成员资格；变量只是为成员路由工作。
 
+## 无企业运行器的 fork
+
+`DSH_CI_FAILOVER_LINUX=github` 将 `ci.yml` 中三个企业 Linux worker 路由到 GitHub 标准 `ubuntu-24.04` 镜像，`DSH_CI_FAILOVER_WINDOWS=github` 则将四个原生 Windows 作业路由到 `windows-2025`。这两个由写者显式选择的取值使 fork 无需上游私有 runner 标签也能执行必需的平台检查。命令、阈值、超时与依赖汇总结论保持原样；Windows 覆盖率作业会降低 worker、分区和门禁并发度以适配标准运行器，基准作业保留既有主机，不借此重新定义性能基线。两个平台开关仍彼此独立。标准机器可能耗时更长或资源不足，这些仍然是失败，调整调度预算前必须有证据。删除变量即可恢复默认企业标签；已排队作业需要新运行。
+
 ## 切换期间的容量
 
 Linux 开关启用期间，容量需覆盖 master 热备、主 CI 作业，以及每个符合条件的 PR 或 master 推送的三个发布演练作业。每个可信 PR 还会增加三个门禁并发度为一的 Node 兼容性作业，包括需要构建的 Node 22 条目和冷临时运行时下载。发布演练工作流依据[取消策略](2026-09-09-cancel-superseded-ci.zh.md)取消各工作流/引用组内被取代的运行；不同引用仍可能增加并发构建、打包和安装负载。延长自托管运行前，检查当前 CPU、内存、磁盘和队列压力；同一虚拟机上新增注册只增加调度槽位，不增加机器资源。不能只依据热备负载推断空闲容量。主机资源允许增加注册实例时，使用组织级注册 token（组织 Settings → Actions → Runners → New runner）。复制现有 runner 目录时**必须排除身份文件**——`rsync -a --exclude '.runner*' --exclude '.credentials*' --exclude '_diag' --exclude '_work' <src>/ <dst>/`（通配同时排除 `.runner_migrated`/`.credentials_migrated`——GitHub 会在迁移过的运行器上写入这些文件，它们同样会触发 already-configured 拒绝）——再跑 `config.sh`（原样拷贝 `.runner`/`.credentials` 会使其以 "already configured" 拒绝），然后**启动监听器**：`sudo ./svc.sh install ubuntu && sudo ./svc.sh start`。仅注册不会上线；启动服务增加的是调度槽位，而非 CPU 或内存。
@@ -45,7 +49,7 @@ Linux 开关启用期间，容量需覆盖 master 热备、主 CI 作业，以�
 
 ### 切回
 
-删除 `DSH_CI_FAILOVER_LINUX` 或 `DSH_CI_FAILOVER_WINDOWS` 变量（或改为 `selfhosted` 与 `blacksmith` 之外的任何值），新的运行即解析回各自的托管池。设为 `blacksmith` 会让作业留在 Blacksmith，直到该值改变。若故障期间追加注册过实例，将其移除。
+删除 `DSH_CI_FAILOVER_LINUX` 或 `DSH_CI_FAILOVER_WINDOWS` 变量（或改为 `selfhosted`、`blacksmith` 及 `github` 之外的任何值），新的运行即解析回各自的托管池。设为 `blacksmith` 会让作业留在 Blacksmith，直到该值改变。若故障期间追加注册过实例，将其移除。
 
 ### 信任边界
 
@@ -60,3 +64,7 @@ Linux 开关启用期间，容量需覆盖 master 热备、主 CI 作业，以�
 ## 后果
 
 从托管池故障中恢复只需切换受影响平台的变量（任何写者可设）加一次重跑，关键路径上没有合并。代价是每个平台都要维护第二套运行器拓扑：master 推送会调度热备通道，但依据[取消策略](2026-09-09-cancel-superseded-ci.zh.md)，只有已完成的结论才能证明就绪状态；而 `ci.yml` 中的快照并发与缓存恢复分支带有一条 `selfhosted` 支路（仅 Linux），必须与托管支路保持同步。按平台拆分开关多了一个需要管理的变量，但把每个开关的影响范围限定在单个平台的作业上。
+
+成功分配 runner 不代表 fork 门禁通过。Desktop Host 包发布契约明确列出 broker、worker 入口及固定版本 Hub 的许可与运行时文件；新增发布文件须登记到 `packageFileExtras`，并保持清单的规范顺序。删除仅用于 invariant 的依赖关系后须重新生成模块图，不能跳过时效检查。
+
+包级 tsdown 配置会在首次构建前被检查。Desktop Host 延后至 bundler 调用插件钩子时才加载编译后的 Typert 插件，因此配置检查无需生成入口，原生构建仍消费已生成的 JavaScript。移开生成入口的对照验证应在修复前失败、修复后通过；仅在已有构建产物的本地通过，不能证明干净检出的就绪状态。

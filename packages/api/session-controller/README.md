@@ -14,6 +14,7 @@ English | [中文](README.zh.md)
 
 - [Use this package](#use-this-package)
 - [Session media references](#session-media-references)
+- [Desktop attachment export](#desktop-attachment-export)
 - [Configuration](#configuration)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
@@ -37,10 +38,19 @@ The Session object also carries local submission echoes: `session.beginSubmissio
 
 The user-invocable `skills/list` metadata includes the winning provider’s optional instruction-file `path`. The composer can preview that file without loading every skill body or activating a cold Agent.
 
+`skills/inspectProfile` accepts a skill name and returns an invocation-neutral definition from the default standing preset, including the body and provider path. It mounts no Session, supplies no project cwd, and refuses a missing or unusable preset instead of falling back to the global catalog. Desktop Host uses this authenticated Remote to acknowledge Profile-local Skill publication; project overrides and other presets are outside that acknowledgement.
+
 <a id="session-media-references"></a>
 ## Session media references
 
 `SessionMediaReferences` mounts `GET|HEAD /api/file?path=<absolute path>` on the authenticated `connection.fetch` channel when `connection`, `fs`, and `attachments` are composed. It reads ordinary files through `ctx.fs`, including temporary paths outside registered workspaces and files in remote providers. Neither directory containment nor MIME categories restrict access; `mime-types` supplies the response type, with `application/octet-stream` for unknown extensions. GET reuses `readBytes` for preflight and ongoing byte limits; HEAD reads metadata only. All files use `ctx.attachments.imageLimits.maxImageBytes` (normally 20 MiB); exceeding this limit returns 413. Responses contain the complete file, ignore Range, and carry `private, no-store`, `nosniff`, and a sandbox CSP so directly opened HTML/SVG cannot execute with the API origin. The Client rewrite lives in `ui-chat` (`AssistantMarkdown`); audio/video responses are available, while Markdown audio/video player nodes remain separate work.
+
+-----
+
+<a id="desktop-attachment-export"></a>
+## Desktop attachment export
+
+`GET|HEAD /api/session.attachment-export` serves only image or file references present in the addressed Session log. The exact route requires the authenticated Connection request plus `Sec-Slark-Desktop-Action: attachment-save-v1`; browser JavaScript cannot set that reserved header, so an embedded renderer cannot bypass the Desktop gesture and Save As flow. HEAD returns bounded base64url filename metadata without reading stored bytes. GET buffers the already-bounded normalized image path and streams verbatim files with cancellation and storage integrity verification. The response is non-cacheable, rejects Range and extra query fields, and never accepts a filesystem path or source URL. The version-one constants shared with Desktop are pinned by [`protocol/dsh-host-actions-v1.schema.json`](protocol/dsh-host-actions-v1.schema.json).
 
 -----
 
@@ -86,3 +96,5 @@ None.
 </details>
 
 **Runtime invariant:** No companion is published. Every page and frame is checked against the addressed durable Session.
+
+`skills/profileCatalog` reads invocation-neutral winning summaries from the same default standing preset. It returns names, sources, optional Host-private paths, invocation flags, and the registry snapshot’s completeness marker; it never loads instruction bodies. Desktop Host rejects incomplete snapshots when composing the management inventory.

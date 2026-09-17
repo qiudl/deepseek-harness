@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { WindowsNamedPipeClientNativeError } from '../src/windows-named-pipe-client-native.ts'
+import { WindowsNamedPipeFrameChannel } from '../src/windows-named-pipe-frame-channel.ts'
 import { runWindowsHostClientWorkerMain, type WindowsHostClientWorkerMainDependencies } from '../src/windows-host-client-worker-main.ts'
 
 const boot = {
@@ -51,6 +52,8 @@ describe('Windows Host client Worker main composition', () => {
       generation: 4,
       pipePath: boot.pipePath,
     })
+    expect(state.dependencies.runWorker.mock.calls[0]?.[0].createChannel(91n))
+      .toBeInstanceOf(WindowsNamedPipeFrameChannel)
   })
 
   it('maps only a missing fixed pipe to stopped and redacts every other native failure', async () => {

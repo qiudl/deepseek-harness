@@ -46,6 +46,11 @@ const headlessSessionExpected = join(goldensDir, 'headless-profile', 'session.ex
 const headlessReasoningExpected = join(goldensDir, 'headless-profile', 'reasoning.stderr.expected.txt')
 const headlessFailureExpected = join(goldensDir, 'headless-profile', 'stderr.expected.txt')
 const refreshing = process.env.DSH_SNAPSHOT === 'refresh'
+// The consumers lane assembles and boots several release-shaped apps in
+// parallel. Preserve a bounded failure diagnostic while allowing that cold
+// start to cross the shared helper's ordinary 30-second deadline.
+const PROFILE_FAILURE_PROCESS_TIMEOUT_MS = 60_000
+const PROFILE_FAILURE_TEST_TIMEOUT_MS = PROFILE_FAILURE_PROCESS_TIMEOUT_MS + 15_000
 
 interface JsonObject {
   [key: string]: unknown
@@ -81,7 +86,11 @@ async function expectHeadlessStream(normalized: string, expectedPath: string): P
 }
 
 /** Serve one deterministic DeepSeek-compatible response while retaining its request body. */
-async function deepseekDefaultsServer(options: { waitForTitleRequest?: boolean } = {}): Promise<DeepSeekDefaultsServer> {
+async function deepseekDefaultsServer(options: {
+  waitForTitleRequest?: boolean
+  keepAliveCount?: number
+  keepAliveIntervalMs?: number
+} = {}): Promise<DeepSeekDefaultsServer> {
   const requests: JsonObject[] = []
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     let body = ''
@@ -90,13 +99,14 @@ async function deepseekDefaultsServer(options: { waitForTitleRequest?: boolean }
     request.on('end', () => {
       requests.push(JSON.parse(body) as JsonObject)
       response.writeHead(200, { 'content-type': 'text/event-stream' })
-      let keepAlives = 3
+      let keepAlives = options.keepAliveCount ?? 3
+      const keepAliveIntervalMs = options.keepAliveIntervalMs ?? 60
       const write = (): void => {
         // One-shot teardown may cancel background title work after the main response.
         if (keepAlives-- > 0
           || (options.waitForTitleRequest === true && !requests.some(request => request.max_tokens === 64))) {
           response.write(': keep-alive\n\n')
-          timer = setTimeout(write, 60)
+          timer = setTimeout(write, keepAliveIntervalMs)
           return
         }
         response.end([
@@ -106,7 +116,7 @@ async function deepseekDefaultsServer(options: { waitForTitleRequest?: boolean }
           '',
         ].join('\n\n'))
       }
-      let timer = setTimeout(write, 60)
+      let timer = setTimeout(write, keepAliveIntervalMs)
       response.once('close', () => { clearTimeout(timer) })
     })
   })
@@ -260,6 +270,7 @@ describe('headless stream-json snapshots', () => {
       binArgs: ['--profile', 'headless', '--patch', headlessOverlayPath, 'Trigger the keyless model failure.'],
       tsconfigPath,
       expectedExitCode: 1,
+      processTimeoutMs: PROFILE_FAILURE_PROCESS_TIMEOUT_MS,
       env: {
         DSH_CLI_MOCK_FAILURE: '1',
         DSH_TELEMETRY_DISABLED: '1',
@@ -269,7 +280,7 @@ describe('headless stream-json snapshots', () => {
 
     expect(result.stdout).toBe('\n')
     await expect(result.stderr).toMatchFileSnapshot(headlessFailureExpected)
-  }, LOADER_SMOKE_TEST_TIMEOUT_MS)
+  }, PROFILE_FAILURE_TEST_TIMEOUT_MS)
 
   it('prints the original Loader activation error through the assembled one-shot app', async () => {
     const result = await runLoaderSmoke({
@@ -445,7 +456,14 @@ describe('headless stream-json snapshots', () => {
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
   it('keeps provider comments alive and sends DeepSeek defaults through the one-shot app', async () => {
-    const server = await deepseekDefaultsServer()
+    // Keep both concurrent streams open beyond the fixture's idle deadline,
+    // with enough heartbeat margin for a loaded hosted runner. This still
+    // rejects any hidden retry: the exact request-token multiset is asserted.
+    const server = await deepseekDefaultsServer({
+      waitForTitleRequest: true,
+      keepAliveCount: 25,
+      keepAliveIntervalMs: 50,
+    })
     try {
       const result = await runLoaderSmoke({
         label: 'DeepSeek adapter defaults headless stream-json snapshot',
@@ -468,7 +486,9 @@ describe('headless stream-json snapshots', () => {
       })
 
       expect(result.stderr).toBe('')
-      expect(server.requests).toHaveLength(2)
+      expect(server.requests.map(request => request.max_tokens).sort((left, right) => (
+        Number(left) - Number(right)
+      ))).toEqual([64, 256_000])
       const agentRequest = server.requests.find(request => request.max_tokens === 256_000)
       const titleRequest = server.requests.find(request => request.max_tokens === 64)
       expect(agentRequest?.reasoning_effort).toBe('low')

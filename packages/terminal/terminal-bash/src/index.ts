@@ -95,7 +95,9 @@ function childEnvironment(spec: TerminalBackendSpawnSpec, dialect: ShellDialect)
  * input are unreliable under PSReadLine.
  */
 export const PWSH_PROMPT_SETUP =
-  "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); '" + CONTROLLED_PROMPT + "' }"
+  "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); -join [char[]](100,115,104,62,32) }"
+const PWSH_READY_MARKER = 'DSH_PWSH_READY'
+const PWSH_READY_SIGNAL = '[Console]::WriteLine((-join [char[]](68,83,72,95,80,87,83,72,95,82,69,65,68,89)))'
 
 function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxExecutionPolicy): string[] {
   const argv = [config.shellPath, ...config.shellArgs]
@@ -123,26 +125,35 @@ async function startupSession(
       await session.initialize(signal)
       return
     }
-    // pwsh cannot install its prompt from the environment. Write the prompt
-    // function through the session, pin UTF-8 output before user input, and
-    // accept only backend stdin_read evidence; echoed setup source containing
-    // the printable prompt is not readiness. Follow-up sends bridge silence
-    // settlements during startup, while one absolute deadline bounds them.
-    let viewport = ''
-    for (;;) {
-      const first = viewport.length === 0
-      startupOperation = session.startSend({
-        text: first ? ENCODING_PREAMBLE + PWSH_PROMPT_SETUP : '',
-        submit: first,
-        ...signal !== undefined ? { signal } : {},
-      })
-      const result = await startupOperation.done
-      if (result.waitReason === 'session_exit') throw new Error('PTY shell exited during startup')
-      if (result.waitReason === 'timeout') throw new Error('PTY shell did not reach readiness before startup timeout')
-      viewport = result.viewport
-      if (result.waitReason === 'stdin_read') break
+    // pwsh cannot install its prompt from the environment. First let its own
+    // interactive startup settle so PSReadLine is accepting input; writing the
+    // long bootstrap immediately after spawn can race and lose part of it.
+    await session.initialize(signal)
+    startupOperation = session.startSend({
+      text: `${ENCODING_PREAMBLE}${PWSH_PROMPT_SETUP}; ${PWSH_READY_SIGNAL}`,
+      submit: true,
+      ...signal !== undefined ? { signal } : {},
+    })
+    const result = await startupOperation.done
+    if (result.waitReason === 'session_exit') throw new Error('PTY shell exited during startup')
+    if (result.waitReason === 'timeout') throw new Error('PTY shell did not reach readiness before startup timeout')
+    // The setup deliberately constructs the printable marker from character
+    // codes, so an observed marker proves the bootstrap executed rather than
+    // merely being echoed by PSReadLine. Do not issue an empty follow-up send:
+    // it cannot create a new foreground leave/return transition and can wait
+    // forever after a premature readiness settlement.
+    const scrollback = session.read({}).text
+    const viewport = scrollback.length > 0 ? scrollback : result.viewport
+    if (!viewport.includes(PWSH_READY_MARKER)) {
+      throw new Error('PTY shell did not confirm pwsh bootstrap execution')
     }
-    session.motd = viewport
+    const visibleViewport = viewport
+      .replaceAll(`${PWSH_READY_MARKER}\r\n`, '')
+      .replaceAll(`${PWSH_READY_MARKER}\n`, '')
+      .replaceAll(PWSH_READY_MARKER, '')
+    session.motd = visibleViewport.includes(CONTROLLED_PROMPT)
+      ? visibleViewport
+      : `${visibleViewport}${visibleViewport.length > 0 && !visibleViewport.endsWith('\n') ? '\n' : ''}${CONTROLLED_PROMPT}`
   }
   const races: Promise<void>[] = []
   let onAbort: (() => void) | undefined

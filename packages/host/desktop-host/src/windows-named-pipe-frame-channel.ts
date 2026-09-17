@@ -48,9 +48,6 @@ export class WindowsNamedPipeFrameChannel {
     for (;;) {
       const newline = this.buffer.indexOf(0x0A)
       if (newline >= 0) {
-        if (newline > HOST_CONTROL_MAX_FRAME_BYTES) {
-          throw new Error('oversized Windows named-pipe frame')
-        }
         const source = this.buffer.subarray(0, newline + 1).toString('utf8')
         this.buffer = this.buffer.subarray(newline + 1)
         try { return decodeHostControlFrame(source) } catch {

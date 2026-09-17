@@ -10,7 +10,7 @@ import {
   type MigrationOwnerStateBundle,
   type MigrationOwnerTransferBundle,
   type MigrationSemanticRecord,
-} from './migration-export.ts'
+} from './migration-export.js'
 import {
   eventLines,
   generationLogFilename,
@@ -18,8 +18,8 @@ import {
   parseGenerationLogFilename,
   sessionInheritedEventCount,
   toHeaderLine,
-} from './format.ts'
-import { LEASE_FILENAME } from './lease-filename.ts'
+} from './format.js'
+import { LEASE_FILENAME } from './lease-filename.js'
 
 const HEX_256 = /^[a-f0-9]{64}$/u
 const OPAQUE_ID = /^[a-f0-9]{32,64}$/u
@@ -68,7 +68,7 @@ export class FileOwnerMigrationTransferStore {
     validateBundle(bundle)
     await this.ensureRoot()
     const bytes = Buffer.from(JSON.stringify(bundle))
-    if (bytes.byteLength < 1 || bytes.byteLength > MAX_TRANSFER_BYTES) {
+    if (bytes.byteLength > MAX_TRANSFER_BYTES) {
       throw new Error('migration_transfer_too_large')
     }
     const transferId = randomBytes(24).toString('hex')
@@ -141,18 +141,11 @@ export class FileOwnerMigrationTransferStore {
   }
 
   private file(transferId: string): string {
-    const file = join(this.root, `${transferId}.json`)
-    if (dirname(file) !== this.root) throw new Error('migration_transfer_invalid')
-    return file
+    return join(this.root, `${transferId}.json`)
   }
 
   private async ensureRoot(): Promise<void> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const metadata = await lstat(this.root)
-    if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
-      || (metadata.mode & 0o077) !== 0) {
-      throw new Error('migration_transfer_root_unsafe')
-    }
+    await ensurePrivateRoot(this.root, this.expectedUid, 'migration_transfer_root_unsafe')
   }
 }
 
@@ -168,6 +161,13 @@ export interface MigrationImportTarget {
 }
 
 type ActiveGenerationRecord = Readonly<{ version: number; generation: number }>
+
+async function ensurePrivateRoot(root: string, expectedUid: number, unsafeCode: string): Promise<void> {
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  const metadata = await lstat(root)
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== expectedUid
+    || (metadata.mode & 0o077) !== 0) throw new Error(unsafeCode)
+}
 
 /** Read-only facts for one already-materialized persistence generation. */
 export interface ExistingPersistenceInspection {
@@ -213,11 +213,7 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
   async activePersistenceConfig(): Promise<{ root: string; compression: 'none'; generation: number }> {
     const generation = await this.activeGeneration()
     const root = this.generationRoot(generation)
-    try {
-      await this.ensureOwnedDirectory(root, true)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
+    await this.ensureOwnedDirectory(root, true)
     return { root: await this.checkedGenerationRoot(generation), compression: 'none', generation }
   }
 
@@ -373,8 +369,6 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     this.validateGeneration(generation)
     if (await this.activeGeneration() === generation) throw new Error('migration_import_already_committed')
     const directory = this.generationRoot(generation)
-    const within = relative(join(this.root, 'generations'), directory)
-    if (!within || within.startsWith(`..${sep}`)) throw new Error('migration_generation_invalid')
     await rm(directory, { recursive: true, force: true })
     await syncDirectory(join(this.root, 'generations'))
   }
@@ -424,12 +418,13 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     await this.writeExclusive(temporary, `${JSON.stringify(value)}\n`)
     try {
       await link(temporary, file)
+      await unlink(temporary)
       await syncDirectory(directory)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('migration_generation_stale')
       throw error
     } finally {
-      await unlink(temporary)
+      await rm(temporary, { force: true })
     }
   }
 
@@ -606,22 +601,18 @@ export class FileOwnerMigrationImportJournal {
     }
     try {
       await link(temporary, file)
+      await unlink(temporary)
       await syncDirectory(this.root)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('migration_import_stale')
       throw error
     } finally {
-      await unlink(temporary)
+      await rm(temporary, { force: true })
     }
   }
 
   private async ensureRoot(): Promise<void> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const metadata = await lstat(this.root)
-    if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
-      || (metadata.mode & 0o077) !== 0) {
-      throw new Error('migration_import_journal_unsafe')
-    }
+    await ensurePrivateRoot(this.root, this.expectedUid, 'migration_import_journal_unsafe')
   }
 }
 

@@ -36,9 +36,44 @@ const windowsUnsupportedPackages = process.platform === 'win32'
     ]
   : []
 
+// The POSIX owner plane proves uid/mode-bit, Unix-socket, and macOS signing
+// boundaries. Windows composes the separately covered stable-handle, ACL,
+// named-pipe, registry, and storage owners instead of executing these suites.
+const windowsUnsupportedOwnerTests = process.platform === 'win32'
+  ? [
+      'packages/host/desktop-host/tests/desktop-host-lease-fences.spec.ts',
+      'packages/host/desktop-host/tests/desktop-host.spec.ts',
+      'packages/host/desktop-host/tests/extension-operations.spec.ts',
+      'packages/host/desktop-host/tests/extensions-wire.spec.ts',
+      'packages/host/desktop-host/tests/host-control-authority.spec.ts',
+      'packages/host/desktop-host/tests/legacy-migration-source.spec.ts',
+      'packages/host/desktop-host/tests/macos-default-bindings.spec.ts',
+      'packages/host/desktop-host/tests/macos-peer-attestor.spec.ts',
+      'packages/host/desktop-host/tests/mcp-loader-composition.spec.ts',
+      'packages/host/desktop-host/tests/migration-owner-state-applicator-faults.spec.ts',
+      'packages/host/desktop-host/tests/migration-owner-state-applicator.spec.ts',
+      'packages/host/desktop-host/tests/offline-account-recovery.spec.ts',
+      'packages/host/desktop-host/tests/offline-profile-recovery-inspector.spec.ts',
+      'packages/host/desktop-host/tests/plugin-command.spec.ts',
+      'packages/host/desktop-host/tests/profile-mcp-executor.spec.ts',
+      'packages/host/desktop-host/tests/profile-plugin-executor-faults.spec.ts',
+      'packages/host/desktop-host/tests/profile-plugin-executor.spec.ts',
+      'packages/host/desktop-host/tests/profile-registry-validation.spec.ts',
+      'packages/host/desktop-host/tests/profile-skill-executor-faults.spec.ts',
+      'packages/host/desktop-host/tests/profile-skill-executor.spec.ts',
+      'packages/host/desktop-host/tests/profile-worker-process.spec.ts',
+      'packages/host/desktop-host/tests/unix-transport-server-faults.spec.ts',
+      'packages/session/session-persistence-jsonl/tests/migration-export-source-faults.spec.ts',
+      'packages/session/session-persistence-jsonl/tests/migration-export-source.spec.ts',
+      'packages/session/session-persistence-jsonl/tests/migration-import-faults.spec.ts',
+      'packages/session/session-persistence-jsonl/tests/migration-import.spec.ts',
+    ]
+  : []
+
 const windowsUnsupportedTests = process.platform === 'win32'
   ? [
       ...windowsUnsupportedPackages.map(path => `${path}/tests/**/*.spec.ts`),
+      ...windowsUnsupportedOwnerTests,
       'packages/subprocess/subprocess/tests/**/*.spec.ts',
       'packages/subprocess/subprocess-local/tests/local.spec.ts',
       'packages/subprocess/subprocess-local/tests/process-inspector.spec.ts',
@@ -101,6 +136,36 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       // win32.spec's injected bindings and exercised natively by every
       // Windows suite through the real backend.
       'packages/session/session-persistence-jsonl/src/lease.ts',
+      // The Linux lane holds these uid/mode-bit, Unix-socket, migration, and
+      // macOS implementations at the same per-file 100% threshold. Windows
+      // composes their stable-handle and ACL counterparts instead.
+      'packages/host/desktop-host/src/approval.ts',
+      'packages/host/desktop-host/src/desktop-host.ts',
+      'packages/host/desktop-host/src/dsh-web-profile-worker.ts',
+      'packages/host/desktop-host/src/extension-operations.ts',
+      'packages/host/desktop-host/src/host-control-session.ts',
+      'packages/host/desktop-host/src/legacy-migration-source.ts',
+      'packages/host/desktop-host/src/macos-peer-attestor.ts',
+      'packages/host/desktop-host/src/materialized-migration-owner-state-source.ts',
+      'packages/host/desktop-host/src/migration-owner-state-applicator.ts',
+      'packages/host/desktop-host/src/offline-profile-recovery.ts',
+      'packages/host/desktop-host/src/plugin-command.ts',
+      'packages/host/desktop-host/src/posix-extension-files.ts',
+      'packages/host/desktop-host/src/profile-mcp-executor.ts',
+      'packages/host/desktop-host/src/profile-mcp-storage.ts',
+      'packages/host/desktop-host/src/profile-plugin-executor.ts',
+      'packages/host/desktop-host/src/profile-registry.ts',
+      'packages/host/desktop-host/src/profile-skill-executor.ts',
+      'packages/host/desktop-host/src/profile-worker-process.ts',
+      'packages/host/desktop-host/src/restarting-migration-target.ts',
+      'packages/host/desktop-host/src/session-command.ts',
+      'packages/host/desktop-host/src/single-instance.ts',
+      'packages/host/desktop-host/src/startup.ts',
+      'packages/host/desktop-host/src/unix-transport.ts',
+      'packages/session/session-persistence-jsonl/src/format.ts',
+      'packages/session/session-persistence-jsonl/src/migration-export-source.ts',
+      'packages/session/session-persistence-jsonl/src/migration-export.ts',
+      'packages/session/session-persistence-jsonl/src/migration-import.ts',
     ]
   : []
 

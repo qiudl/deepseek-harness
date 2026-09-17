@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi, type MockInstance } from 'vitest'
 import {
   cliGateOptions,
+  collectDescendants,
   defaultConcurrency,
   formatGateResultReason,
   gatesForMode,
@@ -588,6 +589,7 @@ describe('Node 24 lane ownership', () => {
         'packages/subagent/subagent-codex/tests/loader-composition.e2e.ts',
         'packages/subagent/subagent-claude-code/tests/loader-composition.e2e.ts',
         'packages/experimental/agent-team/tests/built-lib.e2e.ts',
+        'packages/host/desktop-host/tests/skills-wire.e2e.ts',
       ]),
     )
     expect(subject.find(item => item.id === 'web-snapshot')).toMatchObject({
@@ -927,6 +929,22 @@ describe('process-table parsing', () => {
 
   it('drops blank and malformed lines', () => {
     expect(parsePidPpidLines('  123   1\n\ncommand not found\n999 abc\n')).toEqual([[123, 1]])
+  })
+
+  it('collects descendants breadth-first', () => {
+    expect(collectDescendants(100, [[301, 201], [201, 100], [202, 100], [302, 202]])).toEqual([201, 202, 301, 302])
+  })
+
+  it('deduplicates malformed cyclic process-table rows', () => {
+    expect(collectDescendants(100, [[100, 100], [201, 100], [201, 100], [202, 201], [100, 202], [203, 202]])).toEqual([201, 202, 203])
+  })
+
+  it('handles a high-fanout process table without spreading it onto the argument stack', () => {
+    const rows = Array.from({ length: 100_000 }, (_, index): [number, number] => [index + 1_000, 100])
+    const descendants = collectDescendants(100, rows)
+    expect(descendants).toHaveLength(rows.length)
+    expect(descendants[0]).toBe(1_000)
+    expect(descendants.at(-1)).toBe(100_999)
   })
 })
 

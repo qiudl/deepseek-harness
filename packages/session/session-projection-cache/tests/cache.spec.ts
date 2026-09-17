@@ -148,6 +148,18 @@ const mark = (session: Session, marks: string[]): SessionEvent =>
 const endTurn = (session: Session): SessionEvent =>
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
 
+/** Resolve after this Session's next durable cache replacement. */
+function whenWritten(ctx: Context, id: SessionId): Promise<void> {
+  return new Promise((resolve) => {
+    const dispose = ctx.on('domain/changed', (change) => {
+      if (change.domain !== projectionCacheDomainSpec.name
+        || change.table !== 'sessions' || change.key !== id || change.operation !== 'put') return
+      dispose()
+      resolve()
+    })
+  })
+}
+
 /** The stored record for one session id (undefined = absent or unreadable). */
 async function storedRecord(root: string, id: Session['id']): Promise<CheckpointRecord | undefined> {
   try {
@@ -219,18 +231,21 @@ describe('SessionProjectionCache write policy', () => {
 
   it('writes at session disposal (detach, the live-to-cold moment)', async () => {
     const { ctx, root } = await harness()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const id = SessionId('detach')
+    const created = whenWritten(ctx, id)
     // Sessions dispose with their owning fiber: create in a child plugin.
     let session: Session | undefined
     const owner = await ctx.plugin(Object.assign((inner: Context) => {
-      session = inner.sessions.create(SessionId('detach'))
+      session = inner.sessions.create(id)
     }, { inject: ['sessions'] }))
     if (session === undefined) throw new Error('session was not created')
+    await created
     mark(session, ['live'])
+    const written = whenWritten(ctx, id)
     await owner.dispose()
-    const detached = session
-    await vi.waitFor(async () => {
-      expect((await storedRows(root, detached.id))?.['cache-test/marks']?.val).toEqual({ marks: ['live'] })
-    }, { timeout: 5_000 })
+    await written
+    expect((await storedRows(root, id))?.['cache-test/marks']?.val).toEqual({ marks: ['live'] })
   })
 
   it('flushes when the in-turn event count reaches the configured threshold', async () => {

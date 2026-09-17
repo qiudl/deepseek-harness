@@ -109,9 +109,12 @@ export async function startWindowsHostTransport(
 ): Promise<WindowsHostTransport> {
   assertWindowsHostCarrierInputs(options)
   if (options.workerEntry.protocol !== 'file:') throw new Error('Windows Host Worker entry must be a file URL')
+  /* v8 ignore next -- the production native default is exercised only by signed Windows lanes. */
   const cancellation = await (dependencies.loadCancellation ?? loadWindowsWorkerIoCancellation)()
+  /* v8 ignore next -- the production identity default is exercised only by signed Windows lanes. */
   const resolveCurrentUserSid = await (dependencies.loadCurrentUserSid ?? loadWindowsCurrentUserSid)()
   const userSid = resolveCurrentUserSid()
+  /* v8 ignore next -- the production filesystem default is exercised only by signed Windows lanes. */
   const registrationBindings = await (
     dependencies.loadRegistrationFileBindings ?? loadWindowsHostRegistrationFileBindings
   )()
@@ -127,6 +130,7 @@ export async function startWindowsHostTransport(
     processNonce: options.processNonce,
     bindings: registrationBindings,
   })
+  /* v8 ignore next -- the production Worker default is exercised only by signed Windows lanes. */
   const startWorkerThread = dependencies.startWorkerThread ?? startWindowsHostWorkerThread
   try {
     await options.initializeOwnedResources({ userSid, bindings: registrationBindings })

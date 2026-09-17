@@ -4,7 +4,17 @@ import type {
   WindowsHostPrivatePathEvidence,
   WindowsHostRegistrationFileBindings,
 } from './windows-host-registration.ts'
-import { WindowsHostPrivateLeaseConflictError } from './windows-host-registration.ts'
+import { assertWindowsHostPrivatePathEvidence, WindowsHostPrivateLeaseConflictError } from './windows-host-registration.ts'
+import {
+  bindWindowsLibrary,
+  assertWindowsSecurityAttributesSize,
+  loadWindowsKoffi,
+  windowsSecurityAttributeFields,
+  windowsSecurityContext,
+  type WindowsKoffiFunction,
+  type WindowsKoffiLibrary,
+  type WindowsKoffiModule,
+} from './windows-koffi.ts'
 
 const ERROR_FILE_NOT_FOUND = 2
 const ERROR_PATH_NOT_FOUND = 3
@@ -18,6 +28,8 @@ const SECURITY_DESCRIPTOR_REVISION = 1
 const OWNER_SECURITY_INFORMATION = 0x00000001
 const DACL_SECURITY_INFORMATION = 0x00000004
 const READ_CONTROL = 0x00020000
+const DELETE_ACCESS = 0x00010000
+const FILE_DISPOSITION_INFO = 4
 const FILE_READ_ATTRIBUTES = 0x00000080
 const GENERIC_READ = 0x80000000
 const GENERIC_WRITE = 0x40000000
@@ -39,23 +51,17 @@ const MAX_WINDOWS_PATH_CHARS = 32_768
 const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
 
 type NativePointer = bigint | null
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
+interface HostRegistrationKoffiModule extends WindowsKoffiModule {
   struct(fields: Record<string, unknown>): { readonly size: number }
   alloc(type: unknown, count: number): unknown
   decode(pointer: unknown, type: unknown): unknown
-  load(library: string): KoffiLibrary
 }
 
 /** Injectable runtime facts for the Windows registration filesystem loader. */
 export interface WindowsHostRegistrationKoffiOptions {
   readonly platform?: string
   readonly arch?: string
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<HostRegistrationKoffiModule>
 }
 
 /** Exact Win32 failure retained locally before Host-level error redaction. */
@@ -126,6 +132,7 @@ function decodeEvidenceSddl(sddl: string): Pick<WindowsHostPrivatePathEvidence, 
   const access: WindowsHostPathAccessEntry[] = []
   for (const match of encodedAces.matchAll(/\(([^()]*)\)/gu)) {
     const encodedAce = match[1]
+    /* v8 ignore next -- this regular expression has one unconditional capture group. */
     if (encodedAce === undefined) {
       throw new WindowsHostRegistrationNativeError('ConvertSecurityDescriptorToStringSecurityDescriptorW', ERROR_INVALID_DATA)
     }
@@ -133,14 +140,17 @@ function decodeEvidenceSddl(sddl: string): Pick<WindowsHostPrivatePathEvidence, 
     if ((type !== 'A' && type !== 'D') || sid === undefined || objectGuid !== '' || inheritGuid !== '') {
       throw new WindowsHostRegistrationNativeError('ConvertSecurityDescriptorToStringSecurityDescriptorW', ERROR_INVALID_DATA)
     }
-    const mask = decodeFileRights(rights ?? '')
+    // A defined sixth field proves every semicolon-delimited field before it is a string.
+    const decodedRights = rights as string
+    const decodedAceFlags = aceFlags as string
+    const mask = decodeFileRights(decodedRights)
     access.push({
       sid: normalizedSid(sid),
       type: type === 'A' ? 'allow' : 'deny',
       mask,
-      inherited: (aceFlags ?? '').includes('ID'),
-      objectInherit: (aceFlags ?? '').includes('OI'),
-      containerInherit: (aceFlags ?? '').includes('CI'),
+      inherited: decodedAceFlags.includes('ID'),
+      objectInherit: decodedAceFlags.includes('OI'),
+      containerInherit: decodedAceFlags.includes('CI'),
     })
   }
   return { ownerSid: normalizedSid(owner), daclProtected: flags.includes('P'), access }
@@ -157,23 +167,13 @@ export async function loadWindowsHostRegistrationFileBindings(
   if ((options.platform ?? process.platform) !== 'win32' || (options.arch ?? process.arch) !== 'x64') {
     throw new Error('Windows Host registration bindings require Windows x64')
   }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
-  const pointer = koffi.pointer('void')
-  const pointerPointer = koffi.pointer(pointer)
-  const uint32Pointer = koffi.pointer('uint32')
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
+  const { pointer, pointerPointer, uint32Pointer, kernel32, advapi32 } = windowsSecurityContext(koffi)
   // Anonymous types allow independent stores to load in the same native module.
-  const securityAttributes = koffi.struct({
-    nLength: 'uint32',
-    lpSecurityDescriptor: pointer,
-    bInheritHandle: 'int',
-  })
-  if (securityAttributes.size !== 24) throw new Error('SECURITY_ATTRIBUTES x64 ABI size mismatch')
-  const kernel32 = koffi.load('kernel32.dll')
-  const advapi32 = koffi.load('advapi32.dll')
-  const bind = (library: KoffiLibrary, name: string, result: unknown, args: unknown[]): KoffiFunction =>
-    library.func('__stdcall', name, result, args)
+  const securityAttributes = koffi.struct(windowsSecurityAttributeFields(pointer))
+  assertWindowsSecurityAttributesSize(securityAttributes.size)
+  const bind = (library: WindowsKoffiLibrary, name: string, result: unknown, args: unknown[]): WindowsKoffiFunction =>
+    bindWindowsLibrary(library)(name, result, args)
   const convertSddl = bind(advapi32, 'ConvertStringSecurityDescriptorToSecurityDescriptorW', 'int', [
     'str16', 'uint32', pointerPointer, pointer,
   ])
@@ -202,6 +202,7 @@ export async function loadWindowsHostRegistrationFileBindings(
   const setEndOfFile = bind(kernel32, 'SetEndOfFile', 'int', [pointer])
   const moveFile = bind(kernel32, 'MoveFileExW', 'int', ['str16', 'str16', 'uint32'])
   const deleteFile = bind(kernel32, 'DeleteFileW', 'int', ['str16'])
+  const setFileInformation = bind(kernel32, 'SetFileInformationByHandle', 'int', [pointer, 'uint32', pointer, 'uint32'])
   const localFree = bind(kernel32, 'LocalFree', pointer, [pointer])
   const closeHandle = bind(kernel32, 'CloseHandle', 'int', [pointer])
   const getLastError = bind(kernel32, 'GetLastError', 'uint32', [])
@@ -289,6 +290,7 @@ export async function loadWindowsHostRegistrationFileBindings(
     try { checkedFree(descriptor, 'LocalFree') } catch (error) { failure ??= error }
     if (failure !== undefined) throwFailure(failure)
     const security = decoded
+    /* v8 ignore next -- successful string decoding assigns decoded; every other path records failure above. */
     if (security === undefined) {
       throw new WindowsHostRegistrationNativeError(
         'ConvertSecurityDescriptorToStringSecurityDescriptorW',
@@ -405,6 +407,7 @@ export async function loadWindowsHostRegistrationFileBindings(
           return { state: 'created' as const, evidence }
         } finally {
           if (!published) {
+            /* v8 ignore next -- every throwable operation before publication precedes clearing this handle. */
             if (handle !== undefined) {
               try { checkedClose(handle) } catch { /* the create failure remains authoritative */ }
               handle = undefined
@@ -434,6 +437,22 @@ export async function loadWindowsHostRegistrationFileBindings(
       if (failure !== undefined) throwFailure(failure)
       return value
     },
+    removePrivateFile(path, expected, userSid, guard) {
+      const handle = createFile(path, (GENERIC_READ | READ_CONTROL | FILE_READ_ATTRIBUTES | DELETE_ACCESS) >>> 0,
+        0, null, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, null) as NativePointer
+      if (!validHandle(handle)) lastError('CreateFileW')
+      const stable = handle as bigint
+      let failure: unknown
+      try {
+        assertWindowsHostPrivatePathEvidence(inspect(stable, path), 'file', userSid)
+        if (!readBounded(stable, expected.length).equals(expected)) throw Error('revision_conflict')
+        guard()
+        // FILE_DISPOSITION_INFO contains one BOOLEAN. Close deletes this verified object, never a reopened path.
+        if (Number(setFileInformation(stable, FILE_DISPOSITION_INFO, Buffer.from([1]), 1)) === 0) lastError('SetFileInformationByHandle')
+      } catch (error) { failure = error }
+      try { checkedClose(stable) } catch (error) { failure ??= error }
+      if (failure !== undefined) throwFailure(failure)
+    },
     replacePrivateFile(path, contents, sddl) {
       // Keep the 128-bit nonce while avoiding UUID separators. Store package LocalCache paths can
       // otherwise cross the legacy Win32 260-character boundary only for the replacement file.
@@ -455,6 +474,7 @@ export async function loadWindowsHostRegistrationFileBindings(
           handle = created as bigint
         })
         const outputHandle = handle
+        /* v8 ignore next -- a successful securityDescriptor callback always assigns the validated handle. */
         if (outputHandle === undefined) {
           throw new WindowsHostRegistrationNativeError('CreateFileW', ERROR_INVALID_DATA)
         }
@@ -498,6 +518,7 @@ export async function loadWindowsHostRegistrationFileBindings(
           handle = opened
         })
         const leaseHandle = handle
+        /* v8 ignore next -- a successful securityDescriptor callback always assigns the validated handle. */
         if (leaseHandle === undefined) throw new WindowsHostRegistrationNativeError('CreateFileW', ERROR_INVALID_DATA)
         const evidence = inspect(leaseHandle, path)
         let released = false

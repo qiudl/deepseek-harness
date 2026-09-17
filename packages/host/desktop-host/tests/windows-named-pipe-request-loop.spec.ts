@@ -76,9 +76,12 @@ describe('Windows named-pipe request loop', () => {
       readFrame: vi.fn(async () => { throw new WindowsNamedPipeNativeError('ReadFile', 995) }),
       send: vi.fn(),
     }
+    const requestedDuringRead = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
     await expect(runWindowsNamedPipeRequestLoop({
       channel: cancelled,
-      stopRequested: () => true,
+      stopRequested: requestedDuringRead,
       handleRequest: async request => resultFor(request),
     })).resolves.toEqual({ requestsHandled: 0, stopped: true })
     await expect(runWindowsNamedPipeRequestLoop({
@@ -86,6 +89,36 @@ describe('Windows named-pipe request loop', () => {
       stopRequested: () => false,
       handleRequest: async request => resultFor(request),
     })).rejects.toMatchObject({ api: 'ReadFile', win32Code: 995 })
+  })
+
+  it('stops cleanly when shutdown becomes visible at each completed I/O boundary', async () => {
+    const eofStop = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true)
+    await expect(runWindowsNamedPipeRequestLoop({
+      channel: channel([null]).duplex,
+      stopRequested: eofStop,
+      handleRequest: async request => resultFor(request),
+    })).resolves.toEqual({ requestsHandled: 0, stopped: true })
+
+    const afterReadStop = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true)
+    const unread = channel([first])
+    await expect(runWindowsNamedPipeRequestLoop({
+      channel: unread.duplex,
+      stopRequested: afterReadStop,
+      handleRequest: async request => resultFor(request),
+    })).resolves.toEqual({ requestsHandled: 0, stopped: true })
+    expect(unread.duplex.send).not.toHaveBeenCalled()
+
+    const afterHandlerStop = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+    const unsent = channel([first])
+    await expect(runWindowsNamedPipeRequestLoop({
+      channel: unsent.duplex,
+      stopRequested: afterHandlerStop,
+      handleRequest: async request => resultFor(request),
+    })).resolves.toEqual({ requestsHandled: 0, stopped: true })
+    expect(unsent.duplex.send).not.toHaveBeenCalled()
   })
 
   it('rejects non-request input and mismatched handler responses', async () => {

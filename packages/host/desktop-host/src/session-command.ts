@@ -1,12 +1,10 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { parseCommandJournalEvent, type JournalEvent } from './command-journal-event.ts'
 import type { HostClock } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
-export type JournalEvent =
-  | { readonly kind: 'command_started'; readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string; readonly at: number }
-  | { readonly kind: 'command_committed'; readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string; readonly outcome: unknown; readonly at: number }
-  | { readonly kind: 'command_failed'; readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string; readonly at: number }
+export type { JournalEvent } from './command-journal-event.ts'
 
 /** Fsync-backed append-only command journal. */
 export class FileHostJournal {
@@ -17,7 +15,12 @@ export class FileHostJournal {
    * @param event - command lifecycle fact to persist.
    */
   append(event: JournalEvent): void {
-    const line = `${JSON.stringify(event)}\n`
+    let line: string
+    try {
+      const encoded = JSON.stringify(event)
+      parseCommandJournalEvent(JSON.parse(encoded) as unknown)
+      line = `${encoded}\n`
+    } catch { throw new HostAuthorityError('invalid_input') }
     if (Buffer.byteLength(line) > 1024 * 1024) throw new HostAuthorityError('invalid_input')
     const fd = openSync(this.path, 'a', 0o600)
     try { writeSync(fd, line); fsyncSync(fd) } finally { closeSync(fd) }
@@ -34,7 +37,9 @@ export class FileHostJournal {
       throw error
     }
     if (source !== '' && !source.endsWith('\n')) throw new HostAuthorityError('unavailable')
-    return source.split('\n').filter(Boolean).map(line => JSON.parse(line) as JournalEvent)
+    try {
+      return source.split('\n').filter(Boolean).map(line => parseCommandJournalEvent(JSON.parse(line) as unknown))
+    } catch { throw new HostAuthorityError('unavailable') }
   }
 }
 
@@ -93,7 +98,7 @@ export class SessionCommandAuthority {
     }
     const sessionKey = `${input.profileId}\0${input.sessionId}`
     const predecessor = this.tails.get(sessionKey) ?? Promise.resolve()
-    const promise = predecessor.catch(() => undefined).then(async () => {
+    const promise = predecessor.then(async () => {
       this.journal.append({ kind: 'command_started', ...input, at: this.clock.now() })
       try {
         const value = await execute()
@@ -111,7 +116,7 @@ export class SessionCommandAuthority {
     const tail = promise.then(() => undefined, () => undefined)
     this.tails.set(sessionKey, tail)
     void tail.finally(() => {
-      if (this.pending.get(commandKey)?.promise === promise) this.pending.delete(commandKey)
+      this.pending.delete(commandKey)
       if (this.tails.get(sessionKey) === tail) this.tails.delete(sessionKey)
     })
     return promise

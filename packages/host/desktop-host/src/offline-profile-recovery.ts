@@ -285,24 +285,35 @@ export class OfflineProfileRecoveryInspector {
       }
       const pluginCount = Object.keys(dependencies).length
       const links = await linkFacts(profileComposition, this.options.expectedUid)
+      const verifiedDependencies = new Set<string>()
       const sourceRuntimeRoots = new Set<string>()
       const legacyRuntimeRoots = new Set<string>()
       const runtimeRoots = new Set<string>()
       const publishedClosures = new Map<string, string>()
       for (const link of links) {
+        const dependency = Object.keys(dependencies).find(name => link.path === join('web', 'node_modules', name))
         if (contained(profileRoot, link.resolved)) {
           const closure = /^(.+\/runtime-compat\/closures\/([a-f0-9]{64})\/app)(?:\/|$)/u.exec(link.resolved)
-          if (closure?.[1] && closure[2]) publishedClosures.set(closure[1], closure[2])
+          if (closure?.[1] && closure[2]) {
+            publishedClosures.set(closure[1], closure[2])
+            if (dependency !== undefined) verifiedDependencies.add(dependency)
+          }
           continue
         }
         const runtimeRoot = runtimeRootFor(link.resolved)
         if (!runtimeRoot) throw new HostAuthorityError('runtime_incompatible')
+        if (dependency !== undefined) verifiedDependencies.add(dependency)
         runtimeRoots.add(runtimeRoot)
         sourceRuntimeRoots.add(runtimeRoot)
         if (runtimeRoot !== this.options.currentRuntimeAppRoot) legacyRuntimeRoots.add(runtimeRoot)
       }
       if (sourceRuntimeRoots.size > 1) throw new HostAuthorityError('runtime_incompatible')
-      const compatibility = legacyRuntimeRoots.size === 0 ? 'current' : 'legacy_runtime_required'
+      const hasUnverifiedDependencies = Object.keys(dependencies)
+        .some(dependency => !verifiedDependencies.has(dependency))
+      const compatibility = hasUnverifiedDependencies
+        ? 'read_only_export_only'
+        : legacyRuntimeRoots.size === 0 ? 'current' : 'legacy_runtime_required'
+      const state = hasUnverifiedDependencies ? 'compatibility_blocked' : 'recoverable'
       const runtimeClosures: Array<Readonly<{ kind: 'current' | 'legacy' | 'published'; digest: string; bytes: number }>> = []
       let sourceRuntimeDigest: string | undefined
       for (const runtimeRoot of [...runtimeRoots].sort()) {
@@ -335,6 +346,7 @@ export class OfflineProfileRecoveryInspector {
           path: link.path, target: link.target, kind: link.kind, size: link.size,
         })),
         runtimeClosures,
+        state,
         compatibility,
       }))
       this.plans.delete(this.planDigestByProfile.get(profile.profileId) as string)
@@ -347,8 +359,9 @@ export class OfflineProfileRecoveryInspector {
       })
       this.planDigestByProfile.set(profile.profileId, preflightDigest)
       return {
-        state: 'recoverable', persistenceGeneration: persistence.generation,
+        state, persistenceGeneration: persistence.generation,
         sessionCount, pluginCount, compatibility, preflightDigest,
+        ...(hasUnverifiedDependencies ? { reasonCode: 'dsh_recovery_runtime_incompatible' } : {}),
       }
     } catch (error) {
       if (error instanceof HostAuthorityError) throw error

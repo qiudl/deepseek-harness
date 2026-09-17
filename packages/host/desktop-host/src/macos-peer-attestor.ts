@@ -1,13 +1,28 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, realpathSync } from 'node:fs'
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdtempSync,
+  openSync,
+  readSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import type { Stats } from 'node:fs'
 import type { Socket } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { UnixPeerAttestor } from './unix-transport.ts'
 import { HostAuthorityError } from './types.ts'
 
 const execFileAsync = promisify(execFile)
 const TEAM_IDENTIFIER = /^[A-Z0-9][A-Z0-9.-]{0,127}$/u
+const MAX_TRUSTED_EXECUTABLE_BYTES = 512 * 1024 * 1024
 
 /** Native facts and signature verification used by the macOS peer attestor. */
 export interface MacOSPeerBindings {
@@ -34,6 +49,46 @@ interface PeerCredentialFunctions {
 }
 
 type ProcPidPath = (pid: number, buffer: Buffer, size: number) => unknown
+
+function sameExecutable(
+  left: Stats,
+  right: Stats,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size
+    && left.mode === right.mode && left.uid === right.uid && left.nlink === right.nlink
+    && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs
+}
+
+/** @internal Read exactly one executable snapshot and reject size drift. */
+export function readExecutable(fd: number, size: number): Buffer {
+  if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_TRUSTED_EXECUTABLE_BYTES) {
+    throw new HostAuthorityError('unauthorized')
+  }
+  const bytes = Buffer.alloc(size)
+  let offset = 0
+  while (offset < bytes.length) {
+    const count = readSync(fd, bytes, offset, bytes.length - offset, offset)
+    if (count <= 0) throw new HostAuthorityError('unauthorized')
+    offset += count
+  }
+  const extra = Buffer.alloc(1)
+  if (readSync(fd, extra, 0, 1, size) !== 0) throw new HostAuthorityError('unauthorized')
+  return bytes
+}
+
+async function verifyExecutableSnapshot(
+  bytes: Buffer,
+  verify: (path: string) => string | Promise<string>,
+): Promise<string> {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-peer-signature-'))
+  const path = join(root, 'executable')
+  try {
+    writeFileSync(path, bytes, { flag: 'wx', mode: 0o500 })
+    return await verify(path)
+  } finally {
+    rmSync(root, { recursive: true })
+  }
+}
 
 /** @internal Parse the primary executable mapping reported by `lsof -d txt -Fn`. */
 export function parseMacOSProcessExecutable(stdout: string, expectedPid: number): string {
@@ -139,15 +194,32 @@ export function createMacOSPeerAttestor(options: MacOSPeerAttestorOptions): Unix
       const reported = await bindings.executablePath(peer.pid)
       if (!reported.startsWith('/')) throw new HostAuthorityError('unauthorized')
       const path = realpathSync(reported)
-      const stat = lstatSync(path)
-      if (!stat.isFile() || stat.nlink < 1 || (stat.uid !== 0 && stat.uid !== peer.uid) || (stat.mode & 0o022) !== 0) {
-        throw new HostAuthorityError('unauthorized')
-      }
-      const team = await bindings.verifyCodeSignature(path)
-      if (!options.allowedTeamIdentifiers.has(team)) throw new HostAuthorityError('unauthorized')
-      return {
-        uid: peer.uid,
-        executableSignatureDigest: createHash('sha256').update(readFileSync(path)).digest('hex'),
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+      try {
+        const before = fstatSync(fd)
+        const namedBefore = lstatSync(path)
+        if (!before.isFile() || before.nlink < 1 || (before.uid !== 0 && before.uid !== peer.uid)
+          || (before.mode & 0o022) !== 0 || !sameExecutable(before, namedBefore)) {
+          throw new HostAuthorityError('unauthorized')
+        }
+        const bytesBefore = readExecutable(fd, before.size)
+        // `codesign` accepts paths rather than descriptors. Verify a private
+        // snapshot made from this already-open descriptor so a rename race
+        // cannot pair one file's signature with another file's digest.
+        const team = await verifyExecutableSnapshot(bytesBefore, candidate => bindings.verifyCodeSignature(candidate))
+        if (!options.allowedTeamIdentifiers.has(team)) throw new HostAuthorityError('unauthorized')
+        const after = fstatSync(fd)
+        const namedAfter = lstatSync(path)
+        const bytesAfter = readExecutable(fd, after.size)
+        if (!sameExecutable(before, after) || !sameExecutable(after, namedAfter) || !bytesBefore.equals(bytesAfter)) {
+          throw new HostAuthorityError('unauthorized')
+        }
+        return {
+          uid: peer.uid,
+          executableSignatureDigest: createHash('sha256').update(bytesAfter).digest('hex'),
+        }
+      } finally {
+        closeSync(fd)
       }
     } catch (error) {
       if (error instanceof HostAuthorityError) throw error

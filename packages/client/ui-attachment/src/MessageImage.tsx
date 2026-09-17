@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import {
+  desktopAttachmentSaveAvailable,
+  saveDesktopAttachment,
+} from '@deepseek-ai/dsh-client-ui-primitives'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { ImageLightbox } from './ImageLightbox.tsx'
 import type { ImageLightboxLabels } from './ImageLightbox.tsx'
 import css from './MessageImage.module.css'
@@ -76,11 +81,12 @@ function dimensionsOf(image: MessageImageSpec): { readonly width: number; readon
  * @param props.labels - resolved strings (tooltip, loading, retry, lightbox).
  * @returns the bounded thumbnail button, or the retry control on failure.
  */
-export function MessageImage({ image, load, variant, labels }: {
+export function MessageImage({ image, load, variant, labels, sessionId }: {
   image: MessageImageSpec
   load: ImageLoader
   variant: 'single' | 'tile'
   labels: MessageImageLabels
+  sessionId?: SessionId
 }) {
   const preview = 'preview' in image ? image.preview : undefined
   const attachment = 'attachment' in image ? image.attachment : undefined
@@ -133,19 +139,37 @@ export function MessageImage({ image, load, variant, labels }: {
           ? <span className={css.loading}>{labels.loading}</span>
           : <img src={src} alt={label} style={fit === undefined ? undefined : { objectPosition: fit.objectPosition }} />}
       </button>
-      {open && src !== null && <ImageLightbox src={src} alt={label} labels={labels.lightbox} onClose={close} />}
+      {open && src !== null && (
+        <ImageLightbox
+          src={src}
+          alt={label}
+          labels={labels.lightbox}
+          onClose={close}
+          {...attachment !== undefined && sessionId !== undefined && desktopAttachmentSaveAvailable()
+            ? {
+              onSave: onProgress => saveDesktopAttachment({
+                sessionId: String(sessionId),
+                refType: 'image',
+                attachmentId: String(attachment.attachmentId),
+                name: attachment.name ?? `image.${attachment.mediaType.split('/')[1] ?? 'bin'}`,
+              }, onProgress),
+            }
+            : {}}
+        />
+      )}
     </>
   )
 }
 
 /** Wrapping image group shared by user and assistant history: a lone image
  * renders large unless its owning mixed-attachment row requests compact tiles. */
-export function ImageGallery({ images, load, align, compact = false, labels }: {
+export function ImageGallery({ images, load, align, compact = false, labels, sessionId }: {
   images: readonly MessageImageSpec[]
   load: ImageLoader
   align: 'start' | 'end'
   compact?: boolean
   labels: MessageImageLabels
+  sessionId?: SessionId
 }) {
   if (images.length === 0) return null
   const variant = compact || images.length > 1 ? 'tile' : 'single'
@@ -158,6 +182,7 @@ export function ImageGallery({ images, load, align, compact = false, labels }: {
           load={load}
           variant={variant}
           labels={labels}
+          {...sessionId === undefined ? {} : { sessionId }}
         />
       ))}
     </div>

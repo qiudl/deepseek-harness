@@ -132,6 +132,16 @@ describe('dsh family version coherence', () => {
 })
 
 describe('package payload constraints', () => {
+  it('publishes the pinned desktop host-action contract with the Session controller', () => {
+    expect(expectedDshPackageFiles({
+      name: '@deepseek-ai/dsh-api-session-controller',
+    })).toEqual([
+      'lib/index.js',
+      'protocol/dsh-host-actions-v1.schema.json',
+      'lib/types/**/*.d.ts',
+    ])
+  })
+
   it('includes a declared profile patch without a package-name allowlist', () => {
     expect(expectedDshPackageFiles({
       name: '@deepseek-ai/dsh-private-profile',

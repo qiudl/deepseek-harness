@@ -1,9 +1,9 @@
-import { generateKeyPairSync, randomUUID } from 'node:crypto'
-import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   ApprovalAuthority,
   ContextLeaseAuthority,
@@ -15,6 +15,7 @@ import {
   RestartingMigrationTarget,
   ProfileWorkerSupervisor,
   SessionCommandAuthority,
+  SingleHostLock,
   UnixHostClient,
   UnixHostServer,
   acquireSingleHostLock,
@@ -232,6 +233,17 @@ describe('authenticated Unix transport', () => {
     schemaGeneration: 1,
   }
 
+  function signedSelector(domain: string, payload: unknown): string {
+    const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
+    const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), identity.installationPrivateKey).toString('base64url')
+    return `${encoded}.${signature}`
+  }
+
+  function signedEncodedSelector(domain: string, encoded: string): string {
+    const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), identity.installationPrivateKey).toString('base64url')
+    return `${encoded}.${signature}`
+  }
+
   async function fixture(
     createMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationExport']>,
     createMigrationImport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationImport']>,
@@ -276,6 +288,24 @@ describe('authenticated Unix transport', () => {
     return { server, host, socketPath }
   }
 
+  it('can retry the same server after its socket parent appears', async () => {
+    const root = dir()
+    const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: identity.processNonce })
+    const parent = join(root, 'late')
+    const socketPath = join(parent, 'host.sock')
+    const server = new UnixHostServer({
+      socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
+      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity,
+      host: {} as never, profilePersistenceGeneration: () => 1,
+    })
+    await expect(server.start()).rejects.toSatisfy((error: unknown) => error instanceof Error
+      && 'code' in error && typeof error.code === 'string' && /^(?:EACCES|ENOENT)$/u.test(error.code))
+    mkdirSync(parent)
+    await expect(server.start()).resolves.toBeUndefined()
+    await server.close()
+    await ownership.release()
+  })
+
   it('advertises offline recovery only when both recovery adapters are installed', async () => {
     const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, false)
     const client = await UnixHostClient.connect({
@@ -287,6 +317,9 @@ describe('authenticated Unix transport', () => {
     expect(client.inspection.capabilities).not.toContain('profile.recover_offline_account')
     expect(client.inspection.capabilities).not.toContain('profile.open_offline_account')
     expect(client.inspection.capabilities).not.toContain('profile.recovery_status')
+    await expect(client.extensions({ viewLeaseId: randomUUID(), leaseGeneration: 1, runtimeGeneration: 5,
+      command: { action: 'inventory', kind: 'mcp' } })).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(client.isConnected()).toBe(true)
     client.close()
     await server.close()
   })
@@ -586,6 +619,52 @@ describe('authenticated Unix transport', () => {
     client.close(); await server.close()
   })
 
+  it('rejects validly signed Profile selectors with malformed semantic payloads', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const valid = {
+      version: 1,
+      installation_id: identity.installationId,
+      profile_id: randomUUID(),
+      binding_generation: 1,
+      runtime_generation: identity.runtimeGeneration,
+      schema_generation: identity.schemaGeneration,
+    }
+    const malformed = [
+      { ...valid, extra: true },
+      { ...valid, version: 2 },
+      { ...valid, installation_id: randomUUID() },
+      { ...valid, profile_id: 1 },
+      { ...valid, binding_generation: 0 },
+      { ...valid, binding_generation: 1.5 },
+      { ...valid, runtime_generation: identity.runtimeGeneration + 1 },
+      { ...valid, schema_generation: identity.schemaGeneration + 1 },
+    ]
+    for (const payload of malformed) {
+      await expect(client.openLocalProfile({
+        profileSelector: signedSelector('dsh-profile-selector/v1', payload),
+      })).rejects.toMatchObject({ code: 'stale' })
+    }
+    for (const payload of ['null', '[]']) {
+      const encoded = Buffer.from(payload.padEnd(24)).toString('base64url')
+      await expect(client.openLocalProfile({
+        profileSelector: signedEncodedSelector('dsh-profile-selector/v1', encoded),
+      })).rejects.toMatchObject({ code: 'unauthorized' })
+    }
+    const encoded = Buffer.from('{'.padEnd(24)).toString('base64url')
+    await expect(client.openLocalProfile({
+      profileSelector: signedEncodedSelector('dsh-profile-selector/v1', encoded),
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(client.openOfflineAccountProfile({
+      profileSelector: signedSelector('dsh-profile-offline-selector/v1', { ...valid, access_scope: 'connected' }),
+    })).rejects.toMatchObject({ code: 'stale' })
+    client.close(); await server.close()
+  })
+
   it('revokes only the disconnected connection unlock while another environment remains unlocked', async () => {
     const { server, socketPath } = await fixture()
     const connect = () => UnixHostClient.connect({
@@ -748,11 +827,94 @@ describe('authenticated Unix transport', () => {
       importId, expectedStageVersion: 2, targetProfileSelector: profile.profileSelector,
     }))
       .resolves.toEqual({ stageVersion: 3, semanticDigest })
+    await expect(client.abortMigrationImport({
+      importId, expectedStageVersion: 3, targetProfileSelector: profile.profileSelector,
+    }))
+      .resolves.toEqual({ stageVersion: 4 })
     await expect(client.commitMigrationImport({
       importId, expectedStageVersion: 3, expectedCurrentGeneration: 1,
       targetProfileSelector: profile.profileSelector,
     }))
       .resolves.toEqual({ stageVersion: 4, activeGeneration: 2 })
+    client.close(); await server.close()
+  })
+
+  it('maps migration export failures to bounded public authority codes', async () => {
+    const exportId = 'a'.repeat(48)
+    let failure: unknown = new Error('migration_export_busy')
+    const migrationExport = {
+      async inventory() { throw failure },
+      async begin() {
+        return { exportId, transferId: 'b'.repeat(48), transferDigest: 'c'.repeat(64), schemaVersion: 1,
+          sourceGeneration: 'd'.repeat(64), recordCount: 1, firstEventSequence: 0, lastEventSequence: 0,
+          semanticDigest: 'e'.repeat(64), chunkCount: 1 }
+      },
+      read() { return { exportId, chunkIndex: 0, records: [], chunkDigest: 'f'.repeat(64), final: true } },
+    }
+    const { server, socketPath } = await fixture(() => migrationExport)
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const profile = await client.bootstrapLocalProfile({ keyHandle: 'keychain:export-errors', unlockMaterial })
+    const cases: Array<[unknown, string]> = [
+      [new HostAuthorityError('busy'), 'busy'],
+      ['non-error', 'unavailable'],
+      [new Error('migration_export_busy'), 'busy'],
+      [new Error('migration_export_not_found'), 'stale'],
+      [new Error('migration_export_bounds_invalid'), 'unavailable'],
+      [new Error('migration_export_request_invalid'), 'unavailable'],
+      [new Error('migration_inventory_changed'), 'conflict'],
+      [new Error('migration_source_changed'), 'conflict'],
+      [new Error('migration_export_too_large'), 'conflict'],
+      [new Error('unexpected'), 'unavailable'],
+    ]
+    for (const [reason, code] of cases) {
+      failure = reason
+      await expect(client.getMigrationExportInventory({ sourceProfileSelector: profile.profileSelector }))
+        .rejects.toMatchObject({ code })
+    }
+    client.close(); await server.close()
+  })
+
+  it('maps migration import failures to bounded public authority codes', async () => {
+    const importId = 'a'.repeat(48)
+    const semanticDigest = 'b'.repeat(64)
+    let failure: unknown = new Error('migration_import_invalid')
+    const { server, socketPath } = await fixture(undefined, () => ({
+      async stage() { return { importId, version: 2, targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async status() { return { importId, version: 2, state: 'staged' as const, targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async verify() { return { importId, version: 3, semanticDigest } },
+      async commit() { return { importId, version: 4, targetGeneration: 2 } },
+      async abort() { throw failure },
+    }))
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const profile = await client.bootstrapLocalProfile({ keyHandle: 'keychain:import-errors', unlockMaterial })
+    const cases: Array<[unknown, string]> = [
+      ['non-error', 'unavailable'],
+      [new Error('migration_import_invalid'), 'unavailable'],
+      [new Error('migration_import_not_found'), 'stale'],
+      [new Error('migration_import_stale'), 'stale'],
+      [new Error('migration_import_conflict'), 'conflict'],
+      [new Error('migration_import_state'), 'conflict'],
+      [new Error('migration_import_generation_changed'), 'conflict'],
+      [new Error('migration_import_already_committed'), 'conflict'],
+      [new Error('migration_import_not_abortable'), 'conflict'],
+      [new Error('migration_import_mismatch'), 'unauthorized'],
+      [new Error('migration_import_unsafe'), 'unauthorized'],
+      [new Error('unexpected'), 'unavailable'],
+    ]
+    for (const [reason, code] of cases) {
+      failure = reason
+      await expect(client.abortMigrationImport({
+        importId, expectedStageVersion: 3, targetProfileSelector: profile.profileSelector,
+      })).rejects.toMatchObject({ code })
+    }
     client.close(); await server.close()
   })
 
@@ -766,8 +928,28 @@ describe('authenticated Unix transport', () => {
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     }
     expect(await discoverUnixHost(base)).toEqual({ state: 'stopped', code: 'trusted_host_not_running' })
+    expect(await discoverUnixHost({ ...base, endpointRegistrationId: 'invalid' }))
+      .toEqual({ state: 'unknown', code: 'transport_unavailable' })
     symlinkSync(join(root, 'target'), base.socketPath)
     expect(await discoverUnixHost(base)).toEqual({ state: 'unknown', code: 'host_unverified' })
+  })
+
+  it('discovers a running Unix Host and fails closed on protocol trust mismatch', async () => {
+    const { server, socketPath } = await fixture()
+    const base = {
+      socketPath, expectedUid: uid, trustedEndpoint: true as const,
+      endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180',
+      trustedInstallationId: identity.installationId, trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    }
+
+    const running = await discoverUnixHost(base)
+    expect(running.state).toBe('running')
+    if (running.state === 'running') running.client.close()
+    await expect(discoverUnixHost({ ...base, trustedInstallationId: randomUUID() }))
+      .resolves.toEqual({ state: 'unknown', code: 'host_unverified' })
+    await server.close()
   })
 
   it('discovers a Windows named-pipe Host through the same signed challenge protocol', async () => {
@@ -880,36 +1062,181 @@ describe('authenticated Unix transport', () => {
 })
 
 describe('single Host ownership', () => {
+  it('rejects forged leases and validates every caller-owned identity field', async () => {
+    expect(() => { new SingleHostLock('/tmp/forged', {
+      pid: 1, uid: 1, processNonce: 'forged-0123456789', ownerId: 'forged',
+    }, Symbol('forged')) }).toThrow(HostAuthorityError)
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const base = { root, pid: 1, uid: statSync(root).uid, processNonce: 'nonce-0123456789abcdef' }
+    for (const options of [
+      { ...base, pid: 1.5 },
+      { ...base, uid: -1 },
+      { ...base, processNonce: 'short' },
+      { ...base, processNonce: 'x'.repeat(257) },
+      { ...base, processNonce: 'nonce-0123456789\n' },
+    ]) {
+      await expect(acquireSingleHostLock(options)).rejects.toMatchObject({ code: 'invalid_input' })
+    }
+  })
+
+  it('fails closed on malformed, shared, and permission-open lock records', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const path = join(root, 'host.lock')
+    writeFileSync(path, '{}\n', { mode: 0o600 })
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    writeFileSync(path, JSON.stringify({ pid: 1, uid, processNonce: 'old', ownerId: 'owner' }), { mode: 0o600 })
+    chmodSync(path, 0o666)
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    chmodSync(path, 0o600)
+    linkSync(path, join(root, 'shared.lock'))
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('uses the real liveness probe and makes release idempotent while fencing stale calls', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const owner = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: 'owner-0123456789abcdef' })
+    await expect(acquireSingleHostLock({ root, pid: process.pid + 1, uid, processNonce: 'other-0123456789abcdef' }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    await owner.release()
+    await expect(owner.release()).resolves.toBeUndefined()
+    expect(() => { owner.assertOwner() }).toThrow(HostAuthorityError)
+
+    const permission = Object.assign(new Error('not permitted'), { code: 'EPERM' })
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw permission })
+    onTestFinished(() => { kill.mockRestore() })
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 123, uid, processNonce: 'old', ownerId: 'old' }), { mode: 0o600 })
+    await expect(acquireSingleHostLock({ root, pid: 456, uid, processNonce: 'new-owner-0123456789' }))
+      .rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('fences a lock whose process nonce changes without relying on owner-id mismatch', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const owner = await acquireSingleHostLock({ root, pid: 1, uid, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
+    const path = join(root, 'host.lock')
+    const record = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    writeFileSync(path, JSON.stringify({ ...record, processNonce: 'changed-0123456789abcdef' }), { mode: 0o600 })
+    expect(() => { owner.assertOwner() }).toThrow(HostAuthorityError)
+  })
+
   it('admits one owner and refuses a live competing owner', async () => {
     const root = dir()
-    const first = await acquireSingleHostLock({ root, pid: 111, uid: 501, processNonce: 'nonce-a-0123456789', isProcessAlive: pid => pid === 111 })
-    await expect(acquireSingleHostLock({ root, pid: 222, uid: 501, processNonce: 'nonce-b-0123456789', isProcessAlive: pid => pid === 111 }))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const first = await acquireSingleHostLock({ root, pid: 111, uid, processNonce: 'nonce-a-0123456789', isProcessAlive: pid => pid === 111 })
+    await expect(acquireSingleHostLock({ root, pid: 222, uid, processNonce: 'nonce-b-0123456789', isProcessAlive: pid => pid === 111 }))
       .rejects.toMatchObject({ code: 'conflict' })
     await first.release()
   })
 
   it('recovers a stale regular lock but refuses a symlink-shaped lock', async () => {
     const root = dir()
-    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 111, uid: 501, processNonce: 'old', ownerId: 'stale-owner' }), { mode: 0o600 })
-    const owner = await acquireSingleHostLock({ root, pid: 222, uid: 501, processNonce: 'new-0123456789abcdef', isProcessAlive: () => false })
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 111, uid, processNonce: 'old', ownerId: 'stale-owner' }), { mode: 0o600 })
+    const owner = await acquireSingleHostLock({ root, pid: 222, uid, processNonce: 'new-0123456789abcdef', isProcessAlive: () => false })
     await owner.release()
     symlinkSync(join(root, 'missing-target'), join(root, 'host.lock'))
-    await expect(acquireSingleHostLock({ root, pid: 333, uid: 501, processNonce: 'newer-0123456789abcdef', isProcessAlive: () => false }))
+    await expect(acquireSingleHostLock({ root, pid: 333, uid, processNonce: 'newer-0123456789abcdef', isProcessAlive: () => false }))
       .rejects.toMatchObject({ code: 'conflict' })
   })
 
   it('rejects unsafe process ids and refuses to unlink a swapped owner record', async () => {
     const root = dir()
-    await expect(acquireSingleHostLock({ root, pid: -1, uid: 501, processNonce: 'nonce-0123456789abcdef' }))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    await expect(acquireSingleHostLock({ root, pid: -1, uid, processNonce: 'nonce-0123456789abcdef' }))
       .rejects.toMatchObject({ code: 'invalid_input' })
-    const owner = await acquireSingleHostLock({ root, pid: 123, uid: 501, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
+    const owner = await acquireSingleHostLock({ root, pid: 123, uid, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
     unlinkSync(join(root, 'host.lock'))
-    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid: 501, processNonce: 'attacker-0123456789', ownerId: 'attacker' }), { mode: 0o600 })
-    await expect(owner.release()).rejects.toBeInstanceOf(HostAuthorityError)
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid, processNonce: 'attacker-0123456789', ownerId: 'attacker' }), { mode: 0o600 })
+    await expect(owner.release()).rejects.toMatchObject({ code: 'stale' })
+    const replacedOwner: unknown = JSON.parse(readFileSync(join(root, 'host.lock'), 'utf8'))
+    expect(replacedOwner).toMatchObject({ ownerId: 'attacker' })
   })
 })
 
 describe('session, approval, and context authority', () => {
+  it('fails closed on malformed journals and preserves every recovered terminal outcome', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const path = join(root, 'nested', 'journal.jsonl')
+    const journal = new FileHostJournal(path)
+    expect(journal.read()).toEqual([])
+    writeFileSync(path, '')
+    expect(journal.read()).toEqual([])
+    writeFileSync(path, '{}')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    writeFileSync(path, '{}\n')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    writeFileSync(path, 'not-json\n')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    expect(() => new FileHostJournal(root).read()).toThrow()
+
+    expect(() => {
+      journal.append({
+        kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'invalid',
+        payloadHash: 'a'.repeat(64), outcome: undefined, at: 1,
+      })
+    }).toThrow(HostAuthorityError)
+    expect(() => {
+      journal.append({
+        kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'large',
+        payloadHash: 'a'.repeat(64), outcome: 'x'.repeat(1024 * 1024), at: 1,
+      })
+    }).toThrow(HostAuthorityError)
+
+    writeFileSync(path, [
+      { kind: 'command_started', profileId: 'p', sessionId: 's', commandId: 'started', payloadHash: 'a'.repeat(64), at: 1 },
+      { kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'committed', payloadHash: 'b'.repeat(64), outcome: 42, at: 2 },
+      { kind: 'command_failed', profileId: 'p', sessionId: 's', commandId: 'failed', payloadHash: 'c'.repeat(64), at: 3 },
+    ].map(event => JSON.stringify(event)).join('\n') + '\n')
+    const authority = new SessionCommandAuthority(journal, clock)
+    expect(authority.outcome('p', 'started')).toEqual({ status: 'unknown' })
+    expect(authority.outcome('p', 'committed')).toEqual({ status: 'committed', value: 42 })
+    expect(authority.outcome('p', 'failed')).toEqual({ status: 'failed' })
+    expect(authority.outcome('p', 'missing')).toBeNull()
+    let executed = false
+    await expect(authority.run({ profileId: 'p', sessionId: 's', commandId: 'committed', payloadHash: 'b'.repeat(64) }, async () => {
+      executed = true
+    })).resolves.toEqual({ status: 'committed', value: 42 })
+    expect(executed).toBe(false)
+    await expect(authority.run({ profileId: 'p', sessionId: 's', commandId: 'failed', payloadHash: 'd'.repeat(64) }, async () => {}))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+  })
+
+  it('deduplicates active commands and records execution failure before admitting the next write', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const journal = new FileHostJournal(join(root, 'journal.jsonl'))
+    const authority = new SessionCommandAuthority(journal, clock)
+    const input = { profileId: 'p', sessionId: 's', commandId: 'active', payloadHash: 'a'.repeat(64) }
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const active = authority.run(input, async () => { await blocked; throw new Error('execution failed') })
+    expect(authority.run(input, async () => 'duplicate')).toBe(active)
+    await expect(authority.run({ ...input, payloadHash: 'b'.repeat(64) }, async () => 'conflict'))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+    await expect(authority.run({ ...input, commandId: 'invalid', payloadHash: 'A'.repeat(64) }, async () => 'invalid'))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    const next = authority.run({ ...input, commandId: 'next', payloadHash: 'c'.repeat(64) }, async () => 'next')
+    release()
+    await expect(active).rejects.toThrow('execution failed')
+    await expect(next).resolves.toEqual({ status: 'committed', value: 'next' })
+    expect(authority.outcome('p', 'active')).toEqual({ status: 'failed' })
+    await expect(authority.run(input, async () => 'must not run')).resolves.toEqual({ status: 'failed' })
+    await new Promise<void>(resolve => setImmediate(resolve))
+  })
+
   it('serializes the same profile/session, permits other sessions, and recovers started commands as unknown', async () => {
     const journal = new FileHostJournal(join(dir(), 'journal.jsonl'))
     const authority = new SessionCommandAuthority(journal, clock)
@@ -950,6 +1277,34 @@ describe('session, approval, and context authority', () => {
 })
 
 describe('worker and Desktop-only bundle', () => {
+  it('delegates migration staging and activates a committed generation', async () => {
+    const calls: string[] = []
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async (generation) => { calls.push(`prepare:${generation}`) },
+      importOwnerState: async (generation) => { calls.push(`owner:${generation}`) },
+      importSession: async (generation, header, events) => {
+        calls.push(`session:${generation}:${String(header.id)}:${String(events.length)}`)
+      },
+      semanticRecords: async (generation) => { calls.push(`records:${generation}`); return [] },
+      activeGeneration: async () => { calls.push('active'); return 4 },
+      commitGeneration: async (expected, next) => { calls.push(`commit:${expected}->${next}`) },
+      abortGeneration: async (generation) => { calls.push(`abort:${generation}`) },
+    }, async (generation) => { calls.push(`activate:${generation}`) })
+
+    await target.prepareEmptyGeneration(5)
+    await target.importOwnerState(5, { version: 1, documents: [] })
+    await target.importSession(5, { id: 'migrated' } as never, [])
+    expect(await target.semanticRecords(5)).toEqual([])
+    expect(await target.activeGeneration()).toBe(4)
+    await target.abortGeneration(5)
+    await target.commitGeneration(4, 5)
+
+    expect(calls).toEqual([
+      'prepare:5', 'owner:5', 'session:5:migrated:0', 'records:5', 'active',
+      'abort:5', 'commit:4->5', 'activate:5',
+    ])
+  })
+
   it('rolls the active persistence pointer back when the replacement worker cannot start', async () => {
     let active = 4
     const commits: string[] = []
@@ -970,6 +1325,27 @@ describe('worker and Desktop-only bundle', () => {
     await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement worker failed')
     expect(active).toBe(4)
     expect(commits).toEqual(['4->5', '5->4'])
+  })
+
+  it('preserves the replacement activation error when rollback activation also fails', async () => {
+    let active = 4
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async () => undefined,
+      importOwnerState: async () => undefined,
+      importSession: async () => undefined,
+      semanticRecords: async () => [],
+      activeGeneration: async () => active,
+      commitGeneration: async (expected, next) => {
+        expect(active).toBe(expected)
+        active = next
+      },
+      abortGeneration: async () => undefined,
+    }, async (generation) => {
+      throw new Error(generation === 5 ? 'replacement worker failed' : 'rollback worker failed')
+    })
+
+    await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement worker failed')
+    expect(active).toBe(4)
   })
 
   it('isolates worker inputs and waits for quiescence after closing notifications', async () => {

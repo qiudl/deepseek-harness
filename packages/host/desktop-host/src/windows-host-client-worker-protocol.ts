@@ -5,6 +5,7 @@ import {
   type HostControlFrame,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { isWindowsDshUserSid } from './windows-named-pipe-policy.ts'
+import { assertWindowsWorkerKeys, windowsWorkerRecord } from './windows-host-client-worker-validation.ts'
 import type { WindowsPeerEvidence } from './windows-peer-attestor.ts'
 
 const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
@@ -34,17 +35,6 @@ export class WindowsHostClientWorkerProtocolError extends Error {
 
 function reject(): never { throw new WindowsHostClientWorkerProtocolError() }
 
-function record(input: unknown): Record<string, unknown> {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) return reject()
-  return input as Record<string, unknown>
-}
-
-function exactKeys(input: Record<string, unknown>, expected: readonly string[]): void {
-  const actual = Object.keys(input).sort()
-  const canonical = [...expected].sort()
-  if (actual.length !== canonical.length || actual.some((key, index) => key !== canonical[index])) reject()
-}
-
 function validHandle(value: unknown): value is bigint {
   return typeof value === 'bigint' && value > 0n && value < INVALID_HANDLE_VALUE
 }
@@ -64,19 +54,21 @@ function frame(input: unknown, direction: 'request' | 'response'): string {
 }
 
 function evidence(input: unknown): WindowsPeerEvidence {
-  const value = record(input)
+  const value = windowsWorkerRecord(input, reject)
   const baseKeys = [
     'pid',
     'userSid',
     'executablePath',
     'executableSignatureDigest',
   ]
+  // Exactly one peer anchor: NSIS installs carry a publisher thumbprint, Store packages a family
+  // name. Accepting both, or neither, would leave the attestation without a single trust anchor.
   const authenticode = Object.hasOwn(value, 'authenticodePublisherThumbprint')
   const packaged = Object.hasOwn(value, 'packageFamilyName')
   if (authenticode === packaged) return reject()
-  exactKeys(value, [...baseKeys, authenticode
+  assertWindowsWorkerKeys(value, [...baseKeys, authenticode
     ? 'authenticodePublisherThumbprint'
-    : 'packageFamilyName'])
+    : 'packageFamilyName'], reject)
   if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0
     || typeof value.userSid !== 'string' || !isWindowsDshUserSid(value.userSid)
     || typeof value.executablePath !== 'string' || !DRIVE_ROOTED_PATH.test(value.executablePath)
@@ -104,22 +96,22 @@ export function decodeWindowsHostClientWorkerMessage(
   input: unknown,
   expectedGeneration: number,
 ): WindowsHostClientWorkerMessage {
-  const value = record(input)
+  const value = windowsWorkerRecord(input, reject)
   if (value.version !== 1 || value.generation !== expectedGeneration
     || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 1
     || typeof value.type !== 'string') return reject()
   const base = { version: 1 as const, generation: expectedGeneration }
   if (value.type === 'starting') {
-    exactKeys(value, ['version', 'type', 'generation', 'threadHandle'])
+    assertWindowsWorkerKeys(value, ['version', 'type', 'generation', 'threadHandle'], reject)
     if (!validHandle(value.threadHandle)) return reject()
     return Object.freeze({ ...base, type: 'starting', threadHandle: value.threadHandle })
   }
   if (value.type === 'ready') {
-    exactKeys(value, ['version', 'type', 'generation', 'evidence'])
+    assertWindowsWorkerKeys(value, ['version', 'type', 'generation', 'evidence'], reject)
     return Object.freeze({ ...base, type: 'ready', evidence: evidence(value.evidence) })
   }
   if (value.type === 'request' || value.type === 'response') {
-    exactKeys(value, ['version', 'type', 'generation', 'sequence', 'frame'])
+    assertWindowsWorkerKeys(value, ['version', 'type', 'generation', 'sequence', 'frame'], reject)
     if (!validSequence(value.sequence)) return reject()
     return Object.freeze({
       ...base,
@@ -129,12 +121,12 @@ export function decodeWindowsHostClientWorkerMessage(
     })
   }
   if (value.type === 'failed') {
-    exactKeys(value, ['version', 'type', 'generation', 'code'])
+    assertWindowsWorkerKeys(value, ['version', 'type', 'generation', 'code'], reject)
     if (value.code !== 'trusted_host_not_running' && value.code !== 'host_unverified') return reject()
     return Object.freeze({ ...base, type: 'failed', code: value.code })
   }
   if (value.type === 'stop' || value.type === 'stopped') {
-    exactKeys(value, ['version', 'type', 'generation'])
+    assertWindowsWorkerKeys(value, ['version', 'type', 'generation'], reject)
     return Object.freeze({ ...base, type: value.type })
   }
   return reject()

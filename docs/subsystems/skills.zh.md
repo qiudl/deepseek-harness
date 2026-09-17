@@ -236,6 +236,8 @@ interface Config {
 
 `SkillListRequest` 通过 `sessionId` 指定一个 Session；`SkillListValue` 返回允许用户调用的条目，其中包含名称、描述、可选使用提示与模型调用可用性。`SessionSkillCatalog` 在不激活 Agent 的前提下读取 Session cwd 与记录的 preset。live Agent 可以提供其作用域 registry，冷 Session 则使用 preset 的 standing scope。
 
+`ProfileSkillInspectionRequest` 在默认预设 standing scope 中按名称选择技能，不指定 Session 或项目 cwd。`ProfileSkillInspectionValue` 携带可为空、与调用权限无关的定义，包括正文、来源、提供方、可选路径和提示，以及两类调用标记。默认预设不可用时拒绝读取，不回退全局；该读取不证明项目专用或其他预设作用域的可见性。
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -251,6 +253,23 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 Host service backing `ctx.remote.skills` without activating a cold Agent.
 
 ```ts cordis-catalog
+/**
+ * Read a Profile skill through the default standing preset without starting a Session.
+ * @param request Skill name; no caller-controlled filesystem path or project context.
+ * @param signal Lookup lifetime propagated into the registry.
+ * @returns The invocation-neutral winning definition, or null when absent.
+ * @throws RemoteError when the name is invalid or the preset or registry is unavailable; never falls back to a global catalog.
+ */
+@Remote async inspectProfile(request: ProfileSkillInspectionRequest, signal: AbortSignal): Promise<ProfileSkillInspectionValue>
+
+/**
+ * List winning Profile skill summaries without loading instruction bodies or starting a Session.
+ * @param signal Lookup lifetime propagated into the default standing preset registry.
+ * @returns Invocation-neutral summaries and whether every provider was observed successfully.
+ * @throws RemoteError when the preset or registry is unavailable; never falls back to a global catalog.
+ */
+@Remote async profileCatalog(signal: AbortSignal): Promise<ProfileSkillCatalogValue>
+
 /**
  * List the user-invocable skills visible to one Session composition.
  * @param request - Session identity whose cwd and preset select the catalog view.
@@ -350,3 +369,5 @@ A skill provider, runtime contribution, or provider-backed catalog may have chan
 
 Source: [`packages/skill/skill/src/index.ts`](../../packages/skill/skill/src/index.ts)
 <!-- END GENERATED cordis-surface -->
+
+`ProfileSkillCatalogValue` 携带默认预设中不按调用权限过滤的胜出摘要和快照完整性标记。`skills/profileCatalog` 不接受 Session 或 cwd 参数，不加载正文。Desktop 将此观察结果与自有文件合并展示来源和同名覆盖；提供方读取不完整时不能断言技能不存在。

@@ -50,6 +50,11 @@ describe('Windows named-pipe checked byte I/O', () => {
       }))
       await expect(malformed.read(91n, 32)).rejects.toBeInstanceOf(WindowsNamedPipeNativeError)
     }
+
+    const hostile = createWindowsNamedPipeIoBindings(api({
+      readFile: vi.fn(() => { throw 'native bridge failure' }),
+    }))
+    await expect(hostile.read(91n, 32)).rejects.toThrow('Unknown Win32 named-pipe I/O failure')
   })
 
   it('finishes partial writes without silently truncating a protocol frame', async () => {
@@ -68,6 +73,8 @@ describe('Windows named-pipe checked byte I/O', () => {
 
   it('rejects empty, oversized, zero-progress, and impossible writes', async () => {
     const bindings = createWindowsNamedPipeIoBindings(api())
+    await expect(bindings.writeFrame(0n, Buffer.from('frame\n')))
+      .rejects.toThrow('invalid Windows named-pipe handle')
     await expect(bindings.writeFrame(91n, Buffer.alloc(0)))
       .rejects.toThrow('invalid Windows named-pipe frame size')
     await expect(bindings.writeFrame(91n, Buffer.alloc(WINDOWS_NAMED_PIPE_MAX_FRAME_BYTES + 1)))
@@ -97,6 +104,7 @@ describe('Windows named-pipe checked byte I/O', () => {
 
   it('loads only in a Windows x64 worker and captures GetLastError inside each raw call', async () => {
     const loadKoffi = vi.fn()
+    await expect(loadWindowsNamedPipeIoBindings()).rejects.toThrow('Windows x64 worker')
     await expect(loadWindowsNamedPipeIoBindings({
       platform: 'win32', arch: 'x64', isMainThread: true, loadKoffi,
     })).rejects.toThrow('Windows x64 worker')

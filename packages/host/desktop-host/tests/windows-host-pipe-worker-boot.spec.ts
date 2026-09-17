@@ -3,6 +3,7 @@ import {
   createWindowsHostPipeWorkerBootData,
   decodeWindowsHostPipeWorkerBootData,
 } from '../src/windows-host-pipe-worker-boot.ts'
+import { HostAuthorityError } from '../src/types.ts'
 import { resolveWindowsNamedPipePolicy } from '../src/windows-named-pipe-policy.ts'
 import { createWindowsWorkerStopFlag } from '../src/windows-worker-io-cancellation.ts'
 
@@ -50,19 +51,40 @@ describe('Windows Host pipe Worker boot data', () => {
       nativeModule,
     })
     for (const invalid of [
+      null,
+      [],
       { ...valid, extra: true },
+      {
+        ...valid,
+        allowedExecutableDigests: undefined,
+        unexpectedDigestField: valid.allowedExecutableDigests,
+      },
       { ...valid, generation: 0 },
       { ...valid, stopFlagBuffer: new SharedArrayBuffer(8) },
       { ...valid, allowedPublisherThumbprints: [] },
       { ...valid, allowedPublisherThumbprints: [publisher.toLowerCase()] },
+      { ...valid, allowedPublisherThumbprints: [publisher, publisher] },
+      { ...valid, allowedPublisherThumbprints: ['B'.repeat(64), publisher] },
       { ...valid, allowedExecutableDigests: [digest.toUpperCase()] },
       { ...valid, nativeModule: { ...nativeModule, path: 'koffi.node' } },
       { ...valid, nativeModule: { ...nativeModule, sha256: 'C'.repeat(64) } },
       { ...valid, policy: { ...policy, maxInstances: 2 } },
       { ...valid, policy: { ...policy, path: String.raw`\\.\pipe\other` } },
       { ...valid, policy: { ...policy, securityDescriptor: 'D:(A;;GA;;;WD)' } },
+      { ...valid, policy: { ...policy, securityDescriptor: 42 } },
     ]) {
       expect(() => decodeWindowsHostPipeWorkerBootData(invalid)).toThrow('Invalid Windows Host Worker boot data')
     }
+  })
+
+  it('maps invalid caller options onto the public authority error', () => {
+    expect(() => createWindowsHostPipeWorkerBootData({
+      generation: 0,
+      policy,
+      stopFlag: createWindowsWorkerStopFlag(),
+      allowedPublisherThumbprints: new Set([publisher]),
+      allowedExecutableDigests: new Set([digest]),
+      nativeModule,
+    })).toThrow(HostAuthorityError)
   })
 })

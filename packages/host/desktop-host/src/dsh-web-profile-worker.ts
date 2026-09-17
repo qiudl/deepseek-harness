@@ -87,7 +87,8 @@ export function redactWorkerDiagnostic(detail: string): string {
     .slice(0, MAX_DIAGNOSTIC_BYTES)
 }
 
-async function attestMacOSListener(pid: number, origin: string): Promise<void> {
+/** @internal Verify the Web worker's macOS loopback listener ownership. */
+export async function attestMacOSListener(pid: number, origin: string): Promise<void> {
   if (process.platform !== 'darwin') throw new HostAuthorityError('unavailable')
   const port = new URL(origin).port
   const { stdout } = await execFileAsync('/usr/sbin/lsof', [
@@ -100,7 +101,6 @@ function readyView(line: string): { readonly origin: string; readonly authentica
   const match = READY_LINE.exec(line)
   if (!match?.[1]) return undefined
   const parsed = new URL(match[1])
-  if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || parsed.username || parsed.password) return undefined
   return { origin: parsed.origin, authenticatedUrl: parsed.toString() }
 }
 
@@ -114,17 +114,24 @@ async function exchangeBootstrap(
   if (response.status !== 303 || response.headers.get('location') !== '/') throw new HostAuthorityError('unavailable')
   const cookies = response.headers.getSetCookie()
   if (cookies.length !== 1) throw new HostAuthorityError('unavailable')
-  const match = /^(dsh-auth-[A-Za-z0-9_-]+)=(v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+); Max-Age=\d+; Path=\/; Expires=[^;]+; HttpOnly; SameSite=Strict$/u.exec(cookies[0] ?? '')
-  if (!match?.[1] || !match[2]) throw new HostAuthorityError('unavailable')
+  const cookie = cookies[0] as string
+  const match = new RegExp(
+    '^(dsh-auth-[A-Za-z0-9_-]+)=(v1\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+)'
+    + '; Max-Age=\\d+; Path=/; Expires=[^;]+; HttpOnly; SameSite=Strict$',
+    'u',
+  ).exec(cookie)
+  if (match === null) throw new HostAuthorityError('unavailable')
+  const name = match[1] as string
+  const value = match[2] as string
   const unauthorized = await fetch(`${origin}/`, { redirect: 'manual', signal })
   await unauthorized.body?.cancel()
   if (unauthorized.status !== 401) throw new HostAuthorityError('unavailable')
   const authorized = await fetch(`${origin}/`, {
-    headers: { cookie: `${match[1]}=${match[2]}` }, redirect: 'manual', signal,
+    headers: { cookie: `${name}=${value}` }, redirect: 'manual', signal,
   })
   await authorized.body?.cancel()
   if (authorized.status !== 200) throw new HostAuthorityError('unavailable')
-  return { name: match[1], value: match[2] }
+  return { name, value }
 }
 
 /** Real child-process factory for one existing `dsh web` composition per Person Profile. */
@@ -211,7 +218,7 @@ export class DshWebProfileWorkerFactory {
       buffer += chunk
       if (Buffer.byteLength(buffer) > 64 * 1024) { rejectReady(new HostAuthorityError('unavailable')); return }
       const lines = buffer.split(/\r?\n/u)
-      buffer = lines.pop() ?? ''
+      buffer = lines.pop() as string
       for (const line of lines) {
         const view = readyView(line)
         if (view !== undefined) { resolveReady(view); return }

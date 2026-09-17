@@ -1929,6 +1929,20 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Host service backing `ctx.remote.skills` without activating a cold Agent.',
     methods: [
       {
+        signature: '@Remote async inspectProfile(request: ProfileSkillInspectionRequest, signal: AbortSignal): Promise<ProfileSkillInspectionValue>',
+        description: 'Read a Profile skill through the default standing preset without starting a Session.',
+        parameters: [{ name: 'request', description: 'Skill name; no caller-controlled filesystem path or project context.' }, { name: 'signal', description: 'Lookup lifetime propagated into the registry.' }],
+        returns: 'The invocation-neutral winning definition, or null when absent.',
+        throws: ['RemoteError when the name is invalid or the preset or registry is unavailable; never falls back to a global catalog.'],
+      },
+      {
+        signature: '@Remote async profileCatalog(signal: AbortSignal): Promise<ProfileSkillCatalogValue>',
+        description: 'List winning Profile skill summaries without loading instruction bodies or starting a Session.',
+        parameters: [{ name: 'signal', description: 'Lookup lifetime propagated into the default standing preset registry.' }],
+        returns: 'Invocation-neutral summaries and whether every provider was observed successfully.',
+        throws: ['RemoteError when the preset or registry is unavailable; never falls back to a global catalog.'],
+      },
+      {
         signature: '@Remote async list(request: SkillListRequest, signal: AbortSignal): Promise<SkillListValue>',
         description: 'List the user-invocable skills visible to one Session composition.',
         parameters: [{ name: 'request', description: 'Session identity whose cwd and preset select the catalog view.' }, { name: 'signal', description: 'caller lifetime carried by the Remote transport; admitted catalog reads retain their existing completion semantics.' }],
@@ -4801,6 +4815,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PreToolDecision',
     declaration: 'export type PreToolDecision = {\n    kind: \'allow\';\n} | {\n    kind: \'deny\';\n    reason: string;\n} | {\n    kind: \'ask\';\n    reason?: string;\n};',
+  },
+  {
+    name: 'ProfileSkillCatalogValue',
+    declaration: 'export interface ProfileSkillCatalogValue {\n    readonly complete: boolean;\n    readonly skills: readonly {\n        readonly name: string;\n        readonly source: string;\n        readonly path?: string;\n        readonly invocation: {\n            readonly modelInvocable: boolean;\n            readonly userInvocable: boolean;\n        };\n    }[];\n}',
+  },
+  {
+    name: 'ProfileSkillInspectionRequest',
+    declaration: 'export interface ProfileSkillInspectionRequest {\n    readonly name: string;\n}',
+  },
+  {
+    name: 'ProfileSkillInspectionValue',
+    declaration: 'export interface ProfileSkillInspectionValue {\n    readonly skill: {\n        readonly name: string;\n        readonly description: string;\n        readonly whenToUse?: string;\n        readonly content: string;\n        readonly source: string;\n        readonly provider: string;\n        readonly path?: string;\n        readonly invocation: {\n            readonly modelInvocable: boolean;\n            readonly userInvocable: boolean;\n        };\n    } | null;\n}',
   },
   {
     name: 'ProjectionChangeListener',

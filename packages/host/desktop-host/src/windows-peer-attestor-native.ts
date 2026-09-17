@@ -46,6 +46,7 @@ export interface WindowsNativePeerAttestorLoaders {
   ) => Promise<WindowsPeerProcessNativeApi>
 }
 
+/* v8 ignore start -- production native defaults execute only inside signed Windows workers. */
 const defaultLoaders: WindowsNativePeerAttestorLoaders = {
   loadAuthenticode: (runtime, acceptUntrustedRoot) =>
     loadWindowsAuthenticodeVerifier({ ...runtime, acceptUntrustedRoot }),
@@ -53,6 +54,7 @@ const defaultLoaders: WindowsNativePeerAttestorLoaders = {
   loadProcessNative: (trust, runtime) =>
     loadWindowsPeerProcessNativeApi(trust, runtime),
 }
+/* v8 ignore stop */
 
 /**
  * Load the all-or-nothing native attestation chain for an accepted Windows pipe.

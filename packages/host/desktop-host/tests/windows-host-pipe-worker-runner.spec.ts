@@ -92,6 +92,37 @@ describe('Windows Host pipe Worker runner', () => {
     expect(state.options.lifecycleBindings.createNamedPipe).not.toHaveBeenCalled()
   })
 
+  it('aggregates ready handoff and unhanded-handle cleanup failures', async () => {
+    const state = fixture([])
+    state.options.port.send.mockRejectedValueOnce('message port closed')
+    state.options.cancellation.abandonUnhandedThreadHandle.mockImplementationOnce(() => {
+      throw 'CloseHandle failed'
+    })
+    const failure = runWindowsHostPipeWorker(state.options).catch((error: unknown) => error)
+    await expect(failure).resolves.toMatchObject({
+      message: 'Windows Host Worker ready handoff and handle cleanup failed',
+      errors: [
+        { message: 'Windows Host pipe Worker failed' },
+        { message: 'Windows Host pipe Worker failed' },
+      ],
+    })
+    expect(state.options.lifecycleBindings.createNamedPipe).not.toHaveBeenCalled()
+  })
+
+  it('stops after descriptor allocation when cancellation wins before pipe creation', async () => {
+    const state = fixture([])
+    state.options.lifecycleBindings.createSecurityDescriptor.mockImplementationOnce(() => {
+      state.flag.request()
+      return 11n
+    })
+    await expect(runWindowsHostPipeWorker(state.options)).resolves.toEqual({
+      connectionsServed: 0,
+      requestsHandled: 0,
+    })
+    expect(state.options.lifecycleBindings.freeSecurityDescriptor).toHaveBeenCalledWith(11n)
+    expect(state.options.lifecycleBindings.createNamedPipe).not.toHaveBeenCalled()
+  })
+
   it('routes an attested pipe request through the parent and stops without writing a late frame', async () => {
     const state = fixture([request, null])
     let readCount = 0
@@ -137,5 +168,27 @@ describe('Windows Host pipe Worker runner', () => {
     await expect(runWindowsHostPipeWorker(state.options)).rejects.toBeInstanceOf(Error)
     expect(state.flag.requested()).toBe(true)
     expect(state.options.port.subscribe).toHaveBeenCalledOnce()
+  })
+
+  it('reports a malformed control message received during a cancellable accept', async () => {
+    const state = fixture([])
+    let releaseAttestation!: (evidence: { pid: number }) => void
+    state.options.attest.mockImplementationOnce(() => {
+      return new Promise<{ pid: number }>((resolve) => { releaseAttestation = resolve })
+    })
+    const running = runWindowsHostPipeWorker(state.options)
+    await vi.waitFor(() => {
+      expect(state.options.attest).toHaveBeenCalledOnce()
+    })
+    state.deliver({ type: 'response' })
+    releaseAttestation({ pid: 42 })
+    await expect(running).rejects.toBeInstanceOf(Error)
+    expect(state.options.lifecycleBindings.closeHandle).toHaveBeenCalledWith(81n)
+  })
+
+  it('preserves a native lifecycle error when no control failure exists', async () => {
+    const state = fixture([])
+    state.options.lifecycleBindings.createSecurityDescriptor.mockRejectedValueOnce(new Error('LocalAlloc failed'))
+    await expect(runWindowsHostPipeWorker(state.options)).rejects.toMatchObject({ code: 'unavailable' })
   })
 })

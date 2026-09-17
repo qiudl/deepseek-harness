@@ -1,20 +1,12 @@
 import { isMainThread } from 'node:worker_threads'
 import { WindowsNamedPipeNativeError } from './windows-named-pipe-native.ts'
+import { loadWindowsKoffi, windowsKernel32Context, type WindowsKoffiModule } from './windows-koffi.ts'
 
 const THREAD_TERMINATE = 0x0001
 const ERROR_INVALID_DATA = 13
 const ERROR_NOT_FOUND = 1168
 const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
 const STOP_FLAG_BYTES = 4
-
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
-  load(library: string): KoffiLibrary
-}
 
 /** Persistent shared stop state paired with CancelSynchronousIo wake-up. */
 export interface WindowsWorkerStopFlag {
@@ -36,7 +28,7 @@ export interface WindowsWorkerIoCancellationOptions {
   readonly platform?: string
   readonly arch?: string
   readonly isMainThread?: boolean
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<WindowsKoffiModule>
 }
 
 function validHandle(value: unknown): value is bigint {
@@ -79,13 +71,8 @@ export async function loadWindowsWorkerIoCancellation(
   if (platform !== 'win32' || arch !== 'x64') {
     throw new Error('Windows Worker I/O cancellation requires Windows x64')
   }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
-  const pointer = koffi.pointer('void')
-  const kernel32 = koffi.load('kernel32.dll')
-  const bind = (name: string, result: unknown, args: unknown[]): KoffiFunction =>
-    kernel32.func('__stdcall', name, result, args)
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
+  const { pointer, bindKernel32: bind } = windowsKernel32Context(koffi)
   const getCurrentThreadId = bind('GetCurrentThreadId', 'uint32', [])
   const openThread = bind('OpenThread', pointer, ['uint32', 'int', 'uint32'])
   const cancelSynchronousIo = bind('CancelSynchronousIo', 'int', [pointer])

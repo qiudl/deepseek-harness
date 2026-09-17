@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
-import { access, mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
+import { access, chmod, link, mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SESSION_FORMAT_VERSION, SessionId, SessionSeq, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
 import {
@@ -11,6 +11,7 @@ import {
   FileOwnerJsonlMigrationGenerationTarget,
   MigrationImportCrashFault,
   OwnerMigrationImportService,
+  type MigrationImportStage,
   type MigrationImportTarget,
 } from '../src/migration-import.ts'
 import { FileJsonlMigrationExportSource } from '../src/migration-export-source.ts'
@@ -56,12 +57,32 @@ function bundle(): MigrationOwnerTransferBundle {
   }
 }
 
+function journalStage(overrides: Partial<MigrationImportStage> = {}): MigrationImportStage {
+  return {
+    importId: '1'.repeat(48),
+    version: 1,
+    state: 'preparing',
+    transferId: '2'.repeat(48),
+    transferDigest: '3'.repeat(64),
+    sourceInstallationId,
+    sourceInventoryDigest,
+    sourceGeneration: '4'.repeat(64),
+    sourceSchemaVersion: 0,
+    targetProfileSelectorHash,
+    targetGeneration: 5,
+    recordCount: 0,
+    semanticDigest: '5'.repeat(64),
+    ...overrides,
+  }
+}
+
 class Target implements MigrationImportTarget {
   active = 4
   records = new Map<number, MigrationSemanticRecord[]>()
   aborts: number[] = []
   failAfterImport = false
   failAfterSwitch = false
+  corruptSemanticDigest = false
 
   async importOwnerState(generation: number, imported: MigrationOwnerStateBundle): Promise<void> {
     this.records.set(generation, migrationOwnerStateRecords(imported))
@@ -80,7 +101,10 @@ class Target implements MigrationImportTarget {
   }
 
   async semanticRecords(generation: number): Promise<readonly MigrationSemanticRecord[]> {
-    return this.records.get(generation) ?? []
+    const records = this.records.get(generation) ?? []
+    return this.corruptSemanticDigest
+      ? records.map((record, index) => index === 0 ? { ...record, payloadDigest: '0'.repeat(64) } : record)
+      : records
   }
 
   async activeGeneration(): Promise<number> { return this.active }
@@ -201,6 +225,314 @@ describe('owner-only migration import', () => {
     await expect(target.importSession(5, header, events)).rejects.toThrow(/unsafe/u)
   })
 
+  it('fails closed on unsafe active-generation directory and file shapes', async () => {
+    const fixture = async (prefix: string) => {
+      const root = await mkdtemp(join(tmpdir(), prefix))
+      const target = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 4)
+      const active = await target.activePersistenceConfig()
+      await target.importOwnerState(4, ownerState)
+      await target.importSession(4, header, events)
+      return {
+        root,
+        target,
+        generation: active.root,
+        project: join(active.root, '_no-cwd'),
+        session: join(active.root, '_no-cwd', 'session-1'),
+      }
+    }
+
+    const topLevel = await fixture('dsh-owner-generation-top-file-')
+    await writeFile(join(topLevel.generation, 'rogue'), 'unsafe', { mode: 0o600 })
+    await expect(topLevel.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+    await expect(topLevel.target.semanticRecords(4)).rejects.toThrow(/unsafe/u)
+
+    const projectEntry = await fixture('dsh-owner-generation-project-file-')
+    await writeFile(join(projectEntry.project, 'rogue'), 'unsafe', { mode: 0o600 })
+    await expect(projectEntry.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+    await expect(projectEntry.target.semanticRecords(4)).rejects.toThrow(/unsafe/u)
+
+    const emptySession = await fixture('dsh-owner-generation-empty-session-')
+    await mkdir(join(emptySession.project, 'preset-user-default'), { mode: 0o700 })
+    await expect(emptySession.target.inspectExistingPersistence()).resolves.toMatchObject({ sessionCount: 1 })
+    await mkdir(join(emptySession.project, 'empty'), { mode: 0o700 })
+    await expect(emptySession.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+
+    const mixedCompression = await fixture('dsh-owner-generation-mixed-compression-')
+    await writeFile(join(mixedCompression.session, 'session.jsonl.zstd'), 'unsafe', { mode: 0o600 })
+    await expect(mixedCompression.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+
+    const legacyCompression = await fixture('dsh-owner-generation-legacy-compression-')
+    await unlink(join(legacyCompression.session, `session.v${SESSION_FORMAT_VERSION}.jsonl`))
+    await writeFile(join(legacyCompression.session, 'session.jsonl.zstd'), 'legacy', { mode: 0o600 })
+    await expect(legacyCompression.target.inspectExistingPersistence()).resolves.toMatchObject({ sessionCount: 1 })
+    await writeFile(join(legacyCompression.session, 'session.v1.jsonl.zstd'), 'duplicate', { mode: 0o600 })
+    await expect(legacyCompression.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+
+    const unsafeLog = await fixture('dsh-owner-generation-log-mode-')
+    await chmod(join(unsafeLog.session, `session.v${SESSION_FORMAT_VERSION}.jsonl`), 0o644)
+    await expect(unsafeLog.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+
+    const unsafeRecords = await fixture('dsh-owner-generation-record-mode-')
+    await writeFile(join(unsafeRecords.session, 'extra'), 'unsafe', { mode: 0o600 })
+    await expect(unsafeRecords.target.semanticRecords(4)).rejects.toThrow(/unsafe/u)
+    await unlink(join(unsafeRecords.session, 'extra'))
+    await chmod(join(unsafeRecords.session, 'migration-records.json'), 0o644)
+    await expect(unsafeRecords.target.semanticRecords(4)).rejects.toThrow(/unsafe/u)
+
+    const unsafeOwner = await fixture('dsh-owner-generation-owner-mode-')
+    await chmod(join(unsafeOwner.generation, 'owner-state.json'), 0o644)
+    await expect(unsafeOwner.target.activeOwnerState()).rejects.toThrow(/unsafe/u)
+
+    const unsafeActive = await fixture('dsh-owner-generation-active-mode-')
+    const activeFile = join(unsafeActive.root, 'active', 'active.1.json')
+    await chmod(activeFile, 0o644)
+    await expect(unsafeActive.target.activeGeneration()).rejects.toThrow(/unsafe/u)
+    await chmod(activeFile, 0o600)
+    await writeFile(activeFile, '{"version":2,"generation":4}\n')
+    await expect(unsafeActive.target.activeGeneration()).rejects.toThrow(/generation_invalid/u)
+
+    const unsafeExistingDirectory = await fixture('dsh-owner-generation-existing-dir-mode-')
+    await chmod(join(unsafeExistingDirectory.root, 'active'), 0o755)
+    await expect(unsafeExistingDirectory.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+
+    const unsafeCheckedGeneration = await fixture('dsh-owner-generation-checked-mode-')
+    await chmod(unsafeCheckedGeneration.generation, 0o755)
+    await expect(unsafeCheckedGeneration.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+
+    const generationMode = await fixture('dsh-owner-generation-root-mode-')
+    await chmod(join(generationMode.root, 'generations'), 0o755)
+    await expect(generationMode.target.activeGeneration()).rejects.toThrow(/unsafe/u)
+
+    const unsafeRoot = await mkdtemp(join(tmpdir(), 'dsh-owner-generation-unsafe-root-'))
+    await chmod(unsafeRoot, 0o755)
+    await expect(new FileOwnerJsonlMigrationGenerationTarget(unsafeRoot, uid).activeGeneration())
+      .rejects.toThrow(/unsafe/u)
+  })
+
+  it('rejects duplicate and invalid generations while aborting an inactive generation durably', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-generation-lifecycle-'))
+    const target = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 4)
+    await target.activeGeneration()
+    expect(() => target.generationRoot(0)).toThrow(/generation_invalid/u)
+    await expect(target.commitGeneration(0, 4)).rejects.toThrow(/generation_invalid/u)
+    await expect(target.abortGeneration(0)).rejects.toThrow(/generation_invalid/u)
+    await target.prepareEmptyGeneration(5)
+    await expect(target.prepareEmptyGeneration(5)).rejects.toThrow(/generation_exists/u)
+    await target.importOwnerState(5, ownerState)
+    await target.importSession(5, header, events)
+    await expect(target.importSession(5, header, events)).rejects.toMatchObject({ code: 'EEXIST' })
+    await target.abortGeneration(5)
+    await expect(access(target.generationRoot(5))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const generations = join(root, 'generations')
+    await chmod(generations, 0o500)
+    try {
+      await expect(target.prepareEmptyGeneration(6)).rejects.toMatchObject({ code: 'EACCES' })
+    } finally {
+      await chmod(generations, 0o700)
+    }
+
+    const concurrentRoot = await mkdtemp(join(tmpdir(), 'dsh-owner-generation-initialize-cas-'))
+    const left = new FileOwnerJsonlMigrationGenerationTarget(concurrentRoot, uid, 4)
+    const right = new FileOwnerJsonlMigrationGenerationTarget(concurrentRoot, uid, 4)
+    await expect(Promise.all([left.activeGeneration(), right.activeGeneration()])).resolves.toEqual([4, 4])
+  })
+
+  it('sorts multiple existing sessions into a stable inventory digest', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-generation-sort-'))
+    const target = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 4)
+    await target.activePersistenceConfig()
+    await target.importOwnerState(4, ownerState)
+    await target.importSession(4, { ...header, id: SessionId('session-z') }, events)
+    await target.importSession(4, { ...header, id: SessionId('session-a') }, events)
+    await target.importSession(4, { ...header, id: SessionId('session-empty') }, [])
+    expect(await target.inspectExistingPersistence()).toMatchObject({ sessionCount: 3 })
+  })
+
+  it('rejects malformed transfer metadata before publishing owner files', async () => {
+    expect(() => new FileOwnerMigrationTransferStore('/unused', -1)).toThrow(/owner_invalid/u)
+    expect(() => new FileOwnerJsonlMigrationGenerationTarget('/unused', -1)).toThrow(/generation_invalid/u)
+    expect(() => new FileOwnerJsonlMigrationGenerationTarget('/unused', uid, 0)).toThrow(/generation_invalid/u)
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-transfer-invalid-'))
+    const store = new FileOwnerMigrationTransferStore(root, uid)
+    const valid = bundle()
+    const malformed: MigrationOwnerTransferBundle[] = [
+      { ...valid, schemaVersion: -1 },
+      { ...valid, sourceInventoryDigest: 'invalid' },
+      { ...valid, sourceGeneration: 'invalid' },
+      { ...valid, recordCount: -1 },
+      { ...valid, semanticDigest: 'invalid' },
+      { ...valid, sessions: null as never },
+      { ...valid, recordCount: valid.recordCount + 1 },
+      { ...valid, semanticDigest: '0'.repeat(64) },
+    ]
+    for (const candidate of malformed) await expect(store.stage(candidate)).rejects.toThrow(/invalid|mismatch/u)
+    const oversized = Buffer.alloc(1)
+    Object.defineProperty(oversized, 'byteLength', { value: 256 * 1024 * 1024 + 1 })
+    const from = vi.spyOn(Buffer, 'from').mockReturnValueOnce(oversized)
+    try {
+      await expect(store.stage(valid)).rejects.toThrow(/too_large/u)
+    } finally {
+      from.mockRestore()
+    }
+    await expect(access(join(root, `${'0'.repeat(48)}.json`))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('fails closed when transfer files or their owner-only root drift', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-transfer-safety-'))
+    const store = new FileOwnerMigrationTransferStore(root, uid)
+    await expect(store.resolve('invalid', '0'.repeat(64))).rejects.toThrow(/invalid/u)
+    await expect(store.resolve('0'.repeat(48), 'invalid')).rejects.toThrow(/invalid/u)
+    await expect(store.remove('invalid')).rejects.toThrow(/invalid/u)
+    await expect(store.remove('0'.repeat(48))).resolves.toBeUndefined()
+
+    const transfer = await store.stage(bundle())
+    const file = join(root, `${transfer.transferId}.json`)
+    await chmod(file, 0o644)
+    await expect(store.resolve(transfer.transferId, transfer.transferDigest)).rejects.toThrow(/unsafe/u)
+    await chmod(file, 0o600)
+    const alias = join(root, 'alias.json')
+    await link(file, alias)
+    await expect(store.resolve(transfer.transferId, transfer.transferDigest)).rejects.toThrow(/unsafe/u)
+    await expect(store.remove(transfer.transferId)).rejects.toThrow(/unsafe/u)
+    await unlink(alias)
+
+    const bytes = await readFile(file)
+    await writeFile(file, Buffer.concat([bytes, Buffer.from('\n')]))
+    await expect(store.resolve(transfer.transferId, transfer.transferDigest)).rejects.toThrow(/digest_mismatch/u)
+    await writeFile(file, bytes)
+    await chmod(root, 0o755)
+    await expect(store.resolve(transfer.transferId, transfer.transferDigest)).rejects.toThrow(/root_unsafe/u)
+    await chmod(root, 0o700)
+    await store.remove(transfer.transferId)
+    await expect(store.remove(transfer.transferId)).resolves.toBeUndefined()
+
+    const invalidParent = await mkdtemp(join(tmpdir(), 'dsh-owner-transfer-not-directory-'))
+    const notDirectory = join(invalidParent, 'transfer-root')
+    await writeFile(notDirectory, 'not a directory', { mode: 0o600 })
+    await expect(new FileOwnerMigrationTransferStore(notDirectory, uid).remove('0'.repeat(48)))
+      .rejects.toMatchObject({ code: 'ENOTDIR' })
+  })
+
+  it('validates journal payloads, file ownership shape, and append-only CAS', async () => {
+    expect(() => new FileOwnerMigrationImportJournal('/unused', -1)).toThrow(/journal_invalid/u)
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-journal-'))
+    const journal = new FileOwnerMigrationImportJournal(root, uid)
+    const valid = journalStage()
+    const malformed: MigrationImportStage[] = [
+      { ...valid, importId: 'invalid' },
+      { ...valid, version: 0 },
+      { ...valid, state: 'unknown' as never },
+      { ...valid, transferId: 'invalid' },
+      { ...valid, transferDigest: 'invalid' },
+      { ...valid, sourceInstallationId: 'invalid' },
+      { ...valid, targetProfileSelectorHash: 'invalid' },
+      { ...valid, sourceInventoryDigest: 'invalid' },
+      { ...valid, sourceGeneration: 'invalid' },
+      { ...valid, sourceSchemaVersion: -1 },
+      { ...valid, targetGeneration: 0 },
+      { ...valid, recordCount: -1 },
+      { ...valid, semanticDigest: 'invalid' },
+      { ...valid, version: 2 },
+      { ...valid, state: 'staged' },
+    ]
+    for (const stage of malformed) await expect(journal.create(stage)).rejects.toThrow(/journal_invalid/u)
+    await expect(journal.load('invalid')).rejects.toThrow(/journal_invalid/u)
+    await expect(journal.load(valid.importId)).resolves.toBeUndefined()
+    await journal.create(valid)
+    await expect(journal.create(valid)).rejects.toThrow(/stale/u)
+    const file = join(root, `${valid.importId}.1.json`)
+    await chmod(file, 0o644)
+    await expect(journal.load(valid.importId)).rejects.toThrow(/journal_unsafe/u)
+    await chmod(file, 0o600)
+    await expect(journal.compareAndSwap({ ...valid, state: 'staged' }, 'verified')).rejects.toThrow(/stale/u)
+    const staged = await journal.compareAndSwap(valid, 'staged')
+    await expect(journal.compareAndSwap(valid, 'staged')).rejects.toThrow(/stale/u)
+    expect(await journal.load(valid.importId)).toEqual(staged)
+
+    const malformedRoot = await mkdtemp(join(tmpdir(), 'dsh-owner-journal-malformed-'))
+    const malformedJournal = new FileOwnerMigrationImportJournal(malformedRoot, uid)
+    await malformedJournal.create(valid)
+    await writeFile(join(malformedRoot, `${valid.importId}.1.json`), JSON.stringify({ ...valid, version: 2 }))
+    await expect(malformedJournal.load(valid.importId)).rejects.toThrow(/journal_invalid/u)
+  })
+
+  it('rejects invalid import contracts, transfer mismatches, and unsafe lifecycle transitions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-import-contract-'))
+    const store = new FileOwnerMigrationTransferStore(root, uid)
+    const journal = new FileOwnerMigrationImportJournal(join(root, 'journal'), uid)
+    const transfer = await store.stage(bundle())
+    const target = new Target()
+    const service = new OwnerMigrationImportService(store, target, journal)
+    const input = {
+      ...transfer,
+      sourceGeneration: 'a'.repeat(64),
+      sourceInventoryDigest,
+      sourceInstallationId,
+      targetProfileSelectorHash,
+      sourceSchemaVersion: 0,
+      targetGeneration: 5,
+      recordCount: bundle().recordCount,
+      semanticDigest: bundle().semanticDigest,
+    }
+    const invalidStatus = [
+      { transferId: 'invalid', targetGeneration: 5, sourceInstallationId, targetProfileSelectorHash },
+      { transferId: transfer.transferId, targetGeneration: 0, sourceInstallationId, targetProfileSelectorHash },
+      { transferId: transfer.transferId, targetGeneration: 5, sourceInstallationId: 'invalid', targetProfileSelectorHash },
+      { transferId: transfer.transferId, targetGeneration: 5, sourceInstallationId, targetProfileSelectorHash: 'invalid' },
+    ]
+    for (const candidate of invalidStatus) await expect(service.status(candidate)).rejects.toThrow(/import_invalid/u)
+
+    const invalidStage = [
+      { ...input, transferId: 'invalid' },
+      { ...input, transferDigest: 'invalid' },
+      { ...input, sourceGeneration: 'invalid' },
+      { ...input, sourceInventoryDigest: 'invalid' },
+      { ...input, semanticDigest: 'invalid' },
+      { ...input, sourceInstallationId: 'invalid' },
+      { ...input, targetProfileSelectorHash: 'invalid' },
+      { ...input, sourceSchemaVersion: -1 },
+      { ...input, targetGeneration: 0 },
+      { ...input, recordCount: -1 },
+    ]
+    for (const candidate of invalidStage) await expect(service.stage(candidate)).rejects.toThrow(/import_invalid/u)
+    const mismatched = [
+      { ...input, sourceInventoryDigest: 'b'.repeat(64) },
+      { ...input, sourceGeneration: 'b'.repeat(64) },
+      { ...input, sourceSchemaVersion: 1 },
+      { ...input, recordCount: input.recordCount + 1 },
+      { ...input, semanticDigest: 'b'.repeat(64) },
+    ]
+    for (const candidate of mismatched) await expect(service.stage(candidate)).rejects.toThrow(/transfer_mismatch/u)
+
+    target.corruptSemanticDigest = true
+    await expect(service.stage(input)).rejects.toThrow(/semantic_mismatch/u)
+    target.corruptSemanticDigest = false
+    const staged = await service.stage(input)
+    await expect(service.stage(input)).rejects.toThrow(/conflict/u)
+    await expect(service.verify('f'.repeat(48), 1)).rejects.toThrow(/not_found/u)
+    await expect(service.verify(staged.importId, staged.version + 1)).rejects.toThrow(/stale/u)
+    target.records.set(staged.targetGeneration, [])
+    await expect(service.verify(staged.importId, staged.version)).rejects.toThrow(/semantic_mismatch/u)
+    const records = [
+      ...migrationOwnerStateRecords(ownerState),
+      ...migrationSemanticRecords([{ header, events }]),
+    ]
+    target.records.set(staged.targetGeneration, records.map((record, index) => index === 0
+      ? { ...record, payloadDigest: '0'.repeat(64) }
+      : record))
+    await expect(service.verify(staged.importId, staged.version)).rejects.toThrow(/semantic_mismatch/u)
+    target.records.set(staged.targetGeneration, records)
+    await expect(service.commit(staged.importId, staged.version, target.active)).rejects.toThrow(/import_state/u)
+    target.active = staged.targetGeneration
+    await expect(service.abort(staged.importId, staged.version)).rejects.toThrow(/already_committed/u)
+    target.active = 4
+    const aborted = await service.abort(staged.importId, staged.version)
+    await expect(service.abort(aborted.importId, aborted.version)).resolves.toEqual(aborted)
+    await expect(service.verify(aborted.importId, aborted.version)).rejects.toThrow(/import_state/u)
+    await expect(service.commit(aborted.importId, aborted.version, target.active)).rejects.toThrow(/import_state/u)
+  })
+
   it('stages payload outside Desktop, verifies it, and CAS switches generations', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-owner-transfer-'))
     const store = new FileOwnerMigrationTransferStore(root, uid)
@@ -231,6 +563,8 @@ describe('owner-only migration import', () => {
     const committed = await service.commit(verified.importId, verified.version, 4)
     expect(committed.state).toBe('committed')
     expect(target.active).toBe(5)
+    await expect(service.commit(committed.importId, committed.version, 5)).resolves.toEqual(committed)
+    await expect(service.abort(committed.importId, committed.version)).rejects.toThrow(/not_abortable/u)
     await expect(store.resolve(transfer.transferId, transfer.transferDigest)).rejects.toThrow()
   })
 

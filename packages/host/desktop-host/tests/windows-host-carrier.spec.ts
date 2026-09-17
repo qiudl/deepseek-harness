@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  WindowsHostCarrier,
   WindowsHostProcessFallbackRequiredError,
+  assertWindowsHostCarrierInputs,
   startWindowsHostCarrier,
   type WindowsHostCarrierWorker,
   type WindowsHostProcessFallbackRequest,
@@ -46,6 +48,19 @@ function fixture(workerOverrides: Partial<WindowsHostCarrierWorker> = {}) {
 }
 
 describe('Windows Host carrier startup', () => {
+  it('rejects invalid release identities and exercises process runtime defaults', () => {
+    const state = fixture()
+    expect(() => { assertWindowsHostCarrierInputs({ ...state.options, installationPublicKey: 'bad' }) }).toThrow()
+    expect(() => { assertWindowsHostCarrierInputs({ ...state.options, executableSignatureDigest: 'bad' }) }).toThrow()
+    const { platform: _platform, arch: _arch, ...runtimeDefaults } = state.options
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
+    expect(() => { assertWindowsHostCarrierInputs(runtimeDefaults) }).toThrow()
+    platform.mockRestore()
+    const arch = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64')
+    expect(() => { assertWindowsHostCarrierInputs({ ...runtimeDefaults, platform: 'win32' }) }).toThrow()
+    arch.mockRestore()
+  })
+
   it('publishes the exact registration only after Worker readiness and closes once', async () => {
     const state = fixture()
     const carrier = await startWindowsHostCarrier(state.options)
@@ -163,6 +178,46 @@ describe('Windows Host carrier startup', () => {
     expect(state.processFallback.mock.calls[0]?.[0]).toMatchObject({
       reason: 'worker_stop_failed', cause: stopFailure, originatingCause: workerFailure,
     })
+  })
+
+  it('normalizes a non-Error stop failure before requiring process fallback', async () => {
+    const state = fixture({ stop: vi.fn(async () => { throw 'stop failed' }) })
+    const carrier = await startWindowsHostCarrier(state.options)
+    await expect(carrier.close()).rejects.toBeInstanceOf(WindowsHostProcessFallbackRequiredError)
+    expect(state.processFallback.mock.calls[0]?.[0].cause).toEqual(new Error('Unknown Windows Host carrier failure'))
+  })
+
+  it('retains fallback notification failure as the terminal process-fallback cause', async () => {
+    const notificationFailure = new Error('fallback notifier failed')
+    const state = fixture({
+      stop: vi.fn<WindowsHostCarrierWorker['stop']>(async () => ({ state: 'still_running', cancelAttempts: 3, sessionCleanup: 'still_closing' })),
+    })
+    state.processFallback.mockRejectedValueOnce(notificationFailure)
+    const carrier = await startWindowsHostCarrier(state.options)
+    const close = carrier.close()
+    await expect(close).rejects.toBeInstanceOf(WindowsHostProcessFallbackRequiredError)
+    await expect(close).rejects.toMatchObject({ cause: notificationFailure })
+  })
+
+  it('reports only the first Worker failure even when reporting itself throws', async () => {
+    const stop = vi.fn<WindowsHostCarrierWorker['stop']>(async () => ({ state: 'stopped', cancelAttempts: 1, sessionCleanup: 'closed' }))
+    const worker: WindowsHostCarrierWorker = { state: 'ready', waitUntilReady: async () => {}, stop }
+    const onFailure = vi.fn(() => { throw new Error('report failed') })
+    const carrier = new WindowsHostCarrier(worker, () => {}, onFailure)
+    const first = new Error('first')
+    carrier.notifyWorkerFailure(first)
+    carrier.notifyWorkerFailure(new Error('second'))
+    expect(onFailure).toHaveBeenCalledOnce()
+    expect(() => { carrier.assertHealthy() }).toThrow(first)
+    await expect(carrier.close()).resolves.toBeUndefined()
+  })
+
+  it('propagates process fallback when startup cleanup cannot confirm Worker exit', async () => {
+    const state = fixture({
+      waitUntilReady: vi.fn(async () => { throw new Error('ready failed') }),
+      stop: vi.fn<WindowsHostCarrierWorker['stop']>(async () => ({ state: 'still_running', cancelAttempts: 3, sessionCleanup: 'still_closing' })),
+    })
+    await expect(startWindowsHostCarrier(state.options)).rejects.toBeInstanceOf(WindowsHostProcessFallbackRequiredError)
   })
 
   it('owns runtime Worker failure and escalates an unconfirmed stop to the process', async () => {

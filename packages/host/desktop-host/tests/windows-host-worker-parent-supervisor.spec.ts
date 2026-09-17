@@ -5,12 +5,13 @@ import {
   type WindowsHostWorkerMessage,
 } from '../src/windows-host-worker-parent-supervisor.ts'
 import { createWindowsWorkerStopFlag } from '../src/windows-worker-io-cancellation.ts'
+import type { WindowsWorkerStopFlag } from '../src/windows-worker-io-cancellation.ts'
 
 const connectionId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3122'
 
 function deferred() {
   let resolve!: () => void
-  let reject!: (error: Error) => void
+  let reject!: (error: unknown) => void
   const promise = new Promise<void>((accept, decline) => { resolve = accept; reject = decline })
   return { promise, resolve, reject }
 }
@@ -21,8 +22,9 @@ function fixture(options: {
     close: () => void | Promise<void>
   }
   onFailure?: (error: Error) => void
+  stopFlag?: WindowsWorkerStopFlag
 } = {}) {
-  const flag = createWindowsWorkerStopFlag()
+  const flag = options.stopFlag ?? createWindowsWorkerStopFlag()
   const worker = deferred()
   const startup = deferred()
   const exit = deferred()
@@ -131,6 +133,25 @@ describe('Windows Host Worker parent supervisor', () => {
     })
   })
 
+  it('normalizes a rejected Worker before and after ready', async () => {
+    const before = fixture()
+    const beforeReady = before.supervisor.waitUntilReady()
+    before.worker.reject('worker failed')
+    await expect(beforeReady).rejects.toMatchObject({
+      reason: 'exited_before_ready',
+      cause: 'worker failed',
+    })
+
+    const failures: Error[] = []
+    const after = fixture({ onFailure: (error) => { failures.push(error) } })
+    const afterReady = after.supervisor.waitUntilReady()
+    after.deliver(ready())
+    await afterReady
+    after.worker.reject('worker failed after ready')
+    await vi.waitFor(() => { expect(after.cancellation.close).toHaveBeenCalledWith(91n) })
+    expect(failures[0]).toMatchObject({ message: 'Unknown Windows Host Worker failure' })
+  })
+
   it('continues native cancellation while session cleanup is still blocked', async () => {
     let releaseClose: (() => void) | undefined
     const closing = new Promise<void>((resolve) => { releaseClose = resolve })
@@ -193,6 +214,39 @@ describe('Windows Host Worker parent supervisor', () => {
     })
   })
 
+  it('releases a retained handle after a late rejected Worker completion', async () => {
+    const failures: Error[] = []
+    const state = fixture({ onFailure: (error) => { failures.push(error) } })
+    const waiting = state.supervisor.waitUntilReady()
+    state.deliver(ready())
+    await waiting
+    state.cleanup.resolve()
+    await expect(state.supervisor.stop()).resolves.toMatchObject({ state: 'still_running' })
+    state.worker.reject('late worker failure')
+    await vi.waitFor(() => { expect(state.cancellation.close).toHaveBeenCalledWith(91n) })
+    expect(failures).toContainEqual(expect.objectContaining({
+      message: 'Unknown Windows Host Worker failure',
+    }))
+  })
+
+  it('reports a retained-handle close failure after a late Worker exit', async () => {
+    const failures: Error[] = []
+    const state = fixture({ onFailure: (error) => { failures.push(error) } })
+    state.cancellation.close.mockImplementation(() => { throw 'CloseHandle failed' })
+    const waiting = state.supervisor.waitUntilReady()
+    state.deliver(ready())
+    await waiting
+    state.cleanup.resolve()
+    await expect(state.supervisor.stop()).resolves.toMatchObject({ state: 'still_running' })
+    state.worker.resolve()
+    await vi.waitFor(() => {
+      expect(failures).toContainEqual(expect.objectContaining({
+        message: 'Unknown Windows Host Worker failure',
+      }))
+    })
+    expect(state.supervisor.stopResult?.state).toBe('still_running')
+  })
+
   it('fails readiness after malformed Worker input and reports only one supervisor failure', async () => {
     const failures: Error[] = []
     const state = fixture({ onFailure: (error) => { failures.push(error) } })
@@ -218,6 +272,71 @@ describe('Windows Host Worker parent supervisor', () => {
       cancelAttempts: 0,
       sessionCleanup: 'closed',
     })
+    state.worker.resolve()
+  })
+
+  it('handles stopped-before-ready without inventing a cancellation handle', async () => {
+    const state = fixture()
+    const waiting = state.supervisor.waitUntilReady()
+    state.deliver({ version: 1, type: 'stopped', generation: 7 })
+    await Promise.resolve()
+    await Promise.resolve()
+    state.worker.resolve()
+    await expect(waiting).rejects.toMatchObject({ reason: 'exited_before_ready' })
+    expect(state.cancellation.cancel).not.toHaveBeenCalled()
+  })
+
+  it('accepts explicit runtime failures before and after readiness', async () => {
+    const before = fixture()
+    const waiting = before.supervisor.waitUntilReady()
+    before.supervisor.notifyWorkerFailure('native loader failed')
+    before.exit.resolve()
+    await expect(waiting).rejects.toMatchObject({ reason: 'runtime_failure' })
+    before.worker.resolve()
+
+    const after = fixture()
+    const readyWait = after.supervisor.waitUntilReady()
+    after.deliver(ready())
+    await readyWait
+    after.supervisor.notifyWorkerFailure(new Error('native read failed'))
+    await vi.waitFor(() => { expect(after.cancellation.cancel).toHaveBeenCalledWith(91n) })
+    after.worker.resolve()
+  })
+
+  it('reports shutdown rejection from a normal post-ready Worker exit', async () => {
+    const failures: Error[] = []
+    const state = fixture({ onFailure: (error) => { failures.push(error) } })
+    state.cancellation.close.mockImplementation(() => { throw new Error('CloseHandle failed') })
+    const waiting = state.supervisor.waitUntilReady()
+    state.deliver(ready())
+    await waiting
+    state.worker.resolve()
+    await vi.waitFor(() => {
+      expect(failures).toContainEqual(expect.objectContaining({ message: 'CloseHandle failed' }))
+    })
+  })
+
+  it('reports shutdown rejection started by a post-ready runtime failure', async () => {
+    const failures: Error[] = []
+    const state = fixture({ onFailure: (error) => { failures.push(error) } })
+    state.cancellation.cancel.mockImplementation(() => {
+      state.worker.resolve()
+      return 'cancelled'
+    })
+    state.cancellation.close.mockImplementation(() => { throw new Error('CloseHandle failed') })
+    const waiting = state.supervisor.waitUntilReady()
+    state.deliver(ready())
+    await waiting
+    state.supervisor.notifyWorkerFailure(new Error('native read failed'))
+    await vi.waitFor(() => { expect(state.cancellation.close).toHaveBeenCalledWith(91n) })
+    expect(failures).toHaveLength(1)
+  })
+
+  it('contains shutdown rejection after an initial pre-ready protocol failure', async () => {
+    const state = fixture()
+    state.exit.reject(new Error('deadline failed'))
+    state.deliver({ type: 'malformed' })
+    await expect(state.supervisor.waitUntilReady()).rejects.toMatchObject({ reason: 'protocol_failure' })
     state.worker.resolve()
   })
 
@@ -251,6 +370,45 @@ describe('Windows Host Worker parent supervisor', () => {
     })
     expect(failures).toHaveLength(1)
     releaseClose?.()
+  })
+
+  it('reports failed session cleanup while still proving Worker exit', async () => {
+    const state = fixture({ openSession: () => ({
+      handleRequest: () => { throw new Error('unused') },
+      close: async () => { throw new Error('close failed') },
+    }) })
+    const waiting = state.supervisor.waitUntilReady()
+    state.deliver(ready())
+    await waiting
+    state.deliver({ version: 1, type: 'connected', generation: 7, connectionId })
+    await Promise.resolve()
+    state.cancellation.cancel.mockImplementation(() => {
+      state.worker.resolve()
+      return 'cancelled'
+    })
+    await expect(state.supervisor.stop()).resolves.toEqual({
+      state: 'stopped',
+      cancelAttempts: 1,
+      sessionCleanup: 'failed',
+    })
+  })
+
+  it('contains stop-flag and failure-telemetry exceptions during bounded shutdown', async () => {
+    const rawFlag = createWindowsWorkerStopFlag()
+    const flag: WindowsWorkerStopFlag = {
+      buffer: rawFlag.buffer,
+      requested: () => rawFlag.requested(),
+      request: () => { throw 'stop flag failed' },
+    }
+    const onFailure = vi.fn(() => { throw new Error('telemetry failed') })
+    const state = fixture({ stopFlag: flag, onFailure })
+    state.exit.resolve()
+    await expect(state.supervisor.stop()).resolves.toMatchObject({
+      state: 'still_running',
+      sessionCleanup: 'failed',
+    })
+    expect(onFailure).toHaveBeenCalledOnce()
+    state.worker.resolve()
   })
 
   it('closes the transferred cancellation handle after a ready Worker exits', async () => {

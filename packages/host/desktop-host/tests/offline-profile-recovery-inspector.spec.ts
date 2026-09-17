@@ -80,6 +80,20 @@ describe('offline Profile existing-only inspector', () => {
     expect(dependency).toContain(`${join(profileRoot, 'runtime-compat', 'closures')}/`)
   })
 
+  it('needs no compatibility materialization when the Profile has no runtime dependencies', async () => {
+    const value = await fixture()
+    await unlink(join(value.web, 'node_modules', 'fixture-plugin'))
+    await writeFile(join(value.web, 'package.json'), `${JSON.stringify({ dependencies: {} })}\n`)
+    const inspected = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(inspected).toMatchObject({
+      state: 'recoverable', compatibility: 'current', persistenceGeneration: 1,
+      sessionCount: 0, pluginCount: 0,
+    })
+    await expect(value.inspector.prepareConfirmedProfile(profile(), inspected)).resolves.toBeUndefined()
+    await expect(readFile(join(value.profileRoot, 'runtime-compat', 'journals', `${inspected.preflightDigest}.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('detects an intact dependency closure owned by a different packaged runtime', async () => {
     const { profileRoot, inspector } = await fixture(true)
     const inspected = await inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
@@ -238,13 +252,20 @@ describe('offline Profile existing-only inspector', () => {
       .rejects.toMatchObject({ code: 'runtime_incompatible' })
   })
 
-  it('counts a Profile-contained plugin without treating it as an external runtime', async () => {
+  it('blocks a Profile-contained dependency whose runtime compatibility cannot be proven', async () => {
     const value = await fixture()
+    await unlink(join(value.web, 'node_modules', 'fixture-plugin'))
+    await mkdir(join(value.web, 'node_modules', 'fixture-plugin'))
     const containedPlugin = join(value.web, 'contained-plugin')
     await mkdir(containedPlugin)
     await symlink(containedPlugin, join(value.web, 'node_modules', 'contained-plugin'))
     await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
-      .resolves.toMatchObject({ compatibility: 'current' })
+      .resolves.toMatchObject({
+        state: 'compatibility_blocked',
+        compatibility: 'read_only_export_only',
+        pluginCount: 1,
+        reasonCode: 'dsh_recovery_runtime_incompatible',
+      })
   })
 
   it('rejects a published closure whose directory name does not match its content digest', async () => {

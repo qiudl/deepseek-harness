@@ -38,6 +38,8 @@ export function prepareWindowsIsolatedProfile(options: {
   readonly profileId: string
   readonly userSid: string
   readonly maximumManagedFileBytes: number
+  /** Prepare private web patch storage before CLI initialization when MCP execution is enabled. */
+  readonly prepareMcpStorage?: boolean
   readonly bindings: WindowsHostRegistrationFileBindings
 }): WindowsIsolatedProfile {
   const root = checkedRoot(options.root)
@@ -54,6 +56,7 @@ export function prepareWindowsIsolatedProfile(options: {
   const pluginsRoot = win32.join(profileRoot, 'plugins')
   const ownerStateRoot = win32.join(profileRoot, 'owner-state')
   const storageRoot = win32.join(ownerStateRoot, 'storages')
+  const webRoot = win32.join(profileRoot, 'profiles', 'web')
   for (const path of [
     root,
     win32.join(root, 'profiles'),
@@ -63,6 +66,7 @@ export function prepareWindowsIsolatedProfile(options: {
     pluginsRoot,
     ownerStateRoot,
     storageRoot,
+    ...(options.prepareMcpStorage ? [win32.join(profileRoot, 'profiles'), webRoot] : []),
   ]) {
     assertWindowsHostPrivatePathEvidence(
       options.bindings.ensurePrivateDirectory(path, securityDescriptor),
@@ -109,9 +113,12 @@ export function prepareWindowsIsolatedProfile(options: {
       mutable: true,
     },
     { path: win32.join(profileRoot, 'cordis.patch.yml'), contents: Buffer.from(patch), mutable: false },
+    ...(options.prepareMcpStorage ? [{ path: win32.join(webRoot, 'cordis.patch.yml'),
+      contents: Buffer.from('[]\n'), mutable: true, maximumBytes: 1_048_576 }] : []),
   ]
   for (const file of files) {
-    if (file.contents.length > options.maximumManagedFileBytes) {
+    const maximumBytes = file.maximumBytes ?? options.maximumManagedFileBytes
+    if (file.contents.length > maximumBytes) {
       throw new HostAuthorityError('unavailable',
         { cause: new Error(`managed file exceeds the size limit: ${file.path}`) })
     }
@@ -120,10 +127,14 @@ export function prepareWindowsIsolatedProfile(options: {
       assertWindowsHostPrivatePathEvidence(result.evidence, 'file', options.userSid)
       continue
     }
-    const existing = options.bindings.readPrivateFile(file.path, options.maximumManagedFileBytes)
+    const existing = options.bindings.readPrivateFile(file.path, maximumBytes)
     if (existing === undefined) {
       throw new HostAuthorityError('unavailable',
         { cause: new Error(`an existing managed file could not be read back: ${file.path}`) })
+    }
+    if (existing.contents.length > maximumBytes) {
+      throw new HostAuthorityError('unavailable',
+        { cause: new Error(`an existing managed file exceeds the size limit: ${file.path}`) })
     }
     // A Profile writer replaces these files through its own rename, so the replacement carries
     // inherited entries under its own token's default owner. Windows keeps a creation-time

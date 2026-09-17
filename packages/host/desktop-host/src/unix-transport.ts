@@ -2,6 +2,7 @@ import { createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, verif
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import type {
+  HostExtensionCommand, HostExtensionResponse, HostExtensionKind, ProfileExtensionsRequest,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlErrorCode,
@@ -56,6 +57,7 @@ import type {
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import type { DesktopHost } from './desktop-host.ts'
+import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
 import type { SingleHostLock } from './single-instance.ts'
 
@@ -84,6 +86,22 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  readonly extensions?: {
+    readonly operations: ProfileExtensionOperations
+    readonly kinds: readonly HostExtensionKind[]
+    readonly skillArchives?: boolean
+    readonly pluginRemove?: boolean
+    readonly pluginUpdate?: boolean
+    readonly pluginToggle?: boolean
+    readonly skillRemove?: boolean
+    readonly skillReplace?: boolean
+    readonly skillFiles?: boolean
+    readonly skillInvocation?: boolean
+    readonly mcpRemove?: boolean
+    readonly mcpUpdate?: boolean
+    inventory(profileId: string, kind: HostExtensionKind, signal?: AbortSignal):
+    Promise<readonly { id: string; name: string; transport: string }[]>
+  }
   readonly createMigrationExport?: (
     ownerId: string,
     profileId: string,
@@ -203,7 +221,7 @@ interface MigrationExportChunk {
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'createMigrationExport' | 'createLegacyMigrationExport'
-    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now'
+    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -279,29 +297,151 @@ interface OfflineProfileSelectorPayload extends ProfileSelectorPayload {
   readonly access_scope: 'offline_local'
 }
 
+function migrationInventoryFields(proof: MigrationExportInventoryProof): {
+  inventory_digest: never
+  source_generation: never
+  schema_version: number
+  required_max_records: number
+  required_max_bytes: number
+} {
+  return {
+    inventory_digest: proof.inventoryDigest as never,
+    source_generation: proof.sourceGeneration as never,
+    schema_version: proof.schemaVersion,
+    required_max_records: proof.requiredMaxRecords,
+    required_max_bytes: proof.requiredMaxBytes,
+  }
+}
+
+interface ReadyProfileIdentity {
+  readonly profileId: string
+  readonly bindingGeneration: number
+}
+function readyProfileFields(identity: HostIdentity, profile: ReadyProfileIdentity): {
+  state: 'ready'
+  profile_id: never
+  profile_selector: string
+} {
+  return {
+    state: 'ready', profile_id: profile.profileId as never,
+    profile_selector: mintProfileSelector(identity, profile.profileId, profile.bindingGeneration),
+  }
+}
+
+function localReadyProfileFields(
+  identity: HostIdentity, profile: ReadyProfileIdentity, persistenceGeneration: number,
+): ReturnType<typeof readyProfileFields> & { persistence_generation: number } {
+  return { ...readyProfileFields(identity, profile), persistence_generation: persistenceGeneration }
+}
+
+interface OpenedProfileLease {
+  readonly profileId: string
+  readonly viewLeaseId: string
+  readonly viewActivationHandle: string
+  readonly leaseGeneration: number
+  readonly expiresAt: number
+  readonly runtimeGeneration: number
+}
+
+interface ProfileUnlockInput {
+  readonly keyHandle: string
+  readonly unlockMaterial: string
+  readonly signal?: AbortSignal
+}
+
+interface AccountBindingInput {
+  readonly authorityEnvironmentId: string
+  readonly accountBindingHandle: string
+  readonly authorityBindingVersion: number
+}
+function openProfileWireFields(opened: OpenedProfileLease): {
+  profile_id: never
+  view_lease_id: never
+  view_activation_handle: never
+  lease_generation: number
+  expires_at: number
+  runtime_generation: number
+} {
+  return {
+    profile_id: opened.profileId as never, view_lease_id: opened.viewLeaseId as never,
+    view_activation_handle: opened.viewActivationHandle as never,
+    lease_generation: opened.leaseGeneration, expires_at: opened.expiresAt,
+    runtime_generation: opened.runtimeGeneration,
+  }
+}
+
+function openProfileResult(result: {
+  readonly profile_id: string
+  readonly view_lease_id: string
+  readonly view_activation_handle: string
+  readonly lease_generation: number
+  readonly expires_at: number
+  readonly runtime_generation: number
+}): ProfileOpenResult {
+  return {
+    profileId: result.profile_id as never, viewLeaseId: result.view_lease_id as never,
+    viewActivationHandle: result.view_activation_handle as never,
+    leaseGeneration: result.lease_generation, expiresAt: result.expires_at,
+    runtimeGeneration: result.runtime_generation,
+  }
+}
+
+function readyProfileResult(result: { readonly profile_id: string; readonly profile_selector: string }): {
+  readonly profileId: string
+  readonly profileSelector: string
+} {
+  return { profileId: result.profile_id, profileSelector: result.profile_selector }
+}
+
+function localReadyProfileResult(result: {
+  readonly profile_id: string
+  readonly profile_selector: string
+  readonly persistence_generation: number
+}): { readonly profileId: string; readonly profileSelector: string; readonly persistenceGeneration: number } {
+  return { ...readyProfileResult(result), persistenceGeneration: result.persistence_generation }
+}
+
+function profileUnlockFields(params: {
+  readonly profile_key_handle: string
+  readonly profile_unlock_material: string
+}, ownerId: string): {
+  keyHandle: string
+  unlockMaterial: string
+  ownerId: string
+} {
+  return {
+    keyHandle: params.profile_key_handle,
+    unlockMaterial: params.profile_unlock_material,
+    ownerId,
+  }
+}
+
+function accountBindingFields(params: {
+  readonly authority_environment_id: string
+  readonly account_binding_handle: string
+  readonly authority_binding_version: number
+}): {
+  authorityEnvironmentId: string
+  accountBindingHandle: string
+  authorityBindingVersion: number
+} {
+  return {
+    authorityEnvironmentId: params.authority_environment_id,
+    accountBindingHandle: params.account_binding_handle,
+    authorityBindingVersion: params.authority_binding_version,
+  }
+}
+
 function mintProfileSelector(identity: HostIdentity, profileId: string, bindingGeneration: number): string {
   const payload: ProfileSelectorPayload = {
     version: 1, installation_id: identity.installationId, profile_id: profileId, binding_generation: bindingGeneration,
     runtime_generation: identity.runtimeGeneration, schema_generation: identity.schemaGeneration,
   }
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
-  const signature = sign(null, Buffer.from(`dsh-profile-selector/v1\0${encoded}`), privateKeyObject(identity.installationPrivateKey))
-    .toString('base64url')
-  return `${encoded}.${signature}`
+  return mintSignedSelector(identity, 'dsh-profile-selector/v1', payload)
 }
 
 function verifyProfileSelector(identity: HostIdentity, selector: string): ProfileSelectorPayload {
-  const [encoded, signature, extra] = selector.split('.')
-  if (!encoded || !signature || extra !== undefined || !verify(
-    null, Buffer.from(`dsh-profile-selector/v1\0${encoded}`), publicKeyObject(identity.installationPublicKey),
-    Buffer.from(signature, 'base64url'),
-  )) throw new HostAuthorityError('unauthorized')
-  let payload: unknown
-  try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as unknown } catch {
-    throw new HostAuthorityError('unauthorized')
-  }
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) throw new HostAuthorityError('unauthorized')
-  const value = payload as Partial<ProfileSelectorPayload>
+  const value = verifySignedSelector(identity, selector, 'dsh-profile-selector/v1') as Partial<ProfileSelectorPayload>
   if (Object.keys(value).join(',') !== 'version,installation_id,profile_id,binding_generation,runtime_generation,schema_generation'
     || value.version !== 1 || value.installation_id !== identity.installationId
     || typeof value.profile_id !== 'string' || !Number.isSafeInteger(value.binding_generation) || (value.binding_generation ?? 0) < 1
@@ -317,18 +457,32 @@ function mintOfflineProfileSelector(identity: HostIdentity, profileId: string, b
     runtime_generation: identity.runtimeGeneration, schema_generation: identity.schemaGeneration,
     access_scope: 'offline_local',
   }
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
-  const signature = sign(
-    null, Buffer.from(`dsh-profile-offline-selector/v1\0${encoded}`),
-    privateKeyObject(identity.installationPrivateKey),
-  ).toString('base64url')
-  return `${encoded}.${signature}`
+  return mintSignedSelector(identity, 'dsh-profile-offline-selector/v1', payload)
 }
 
 function verifyOfflineProfileSelector(identity: HostIdentity, selector: string): OfflineProfileSelectorPayload {
+  const value = verifySignedSelector(
+    identity, selector, 'dsh-profile-offline-selector/v1',
+  ) as Partial<OfflineProfileSelectorPayload>
+  if (Object.keys(value).join(',') !== 'version,installation_id,profile_id,binding_generation,runtime_generation,schema_generation,access_scope'
+    || value.version !== 1 || value.installation_id !== identity.installationId
+    || typeof value.profile_id !== 'string' || !Number.isSafeInteger(value.binding_generation) || (value.binding_generation ?? -1) < 0
+    || value.runtime_generation !== identity.runtimeGeneration || value.schema_generation !== identity.schemaGeneration
+    || value.access_scope !== 'offline_local') throw new HostAuthorityError('stale')
+  return value as OfflineProfileSelectorPayload
+}
+
+function mintSignedSelector(identity: HostIdentity, domain: string, payload: object): string {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), privateKeyObject(identity.installationPrivateKey))
+    .toString('base64url')
+  return `${encoded}.${signature}`
+}
+
+function verifySignedSelector(identity: HostIdentity, selector: string, domain: string): Record<string, unknown> {
   const [encoded, signature, extra] = selector.split('.')
   if (!encoded || !signature || extra !== undefined || !verify(
-    null, Buffer.from(`dsh-profile-offline-selector/v1\0${encoded}`), publicKeyObject(identity.installationPublicKey),
+    null, Buffer.from(`${domain}\0${encoded}`), publicKeyObject(identity.installationPublicKey),
     Buffer.from(signature, 'base64url'),
   )) throw new HostAuthorityError('unauthorized')
   let payload: unknown
@@ -336,13 +490,7 @@ function verifyOfflineProfileSelector(identity: HostIdentity, selector: string):
     throw new HostAuthorityError('unauthorized')
   }
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) throw new HostAuthorityError('unauthorized')
-  const value = payload as Partial<OfflineProfileSelectorPayload>
-  if (Object.keys(value).join(',') !== 'version,installation_id,profile_id,binding_generation,runtime_generation,schema_generation,access_scope'
-    || value.version !== 1 || value.installation_id !== identity.installationId
-    || typeof value.profile_id !== 'string' || !Number.isSafeInteger(value.binding_generation) || (value.binding_generation ?? -1) < 0
-    || value.runtime_generation !== identity.runtimeGeneration || value.schema_generation !== identity.schemaGeneration
-    || value.access_scope !== 'offline_local') throw new HostAuthorityError('stale')
-  return value as OfflineProfileSelectorPayload
+  return payload as Record<string, unknown>
 }
 
 function safeError(
@@ -584,11 +732,7 @@ export class HostControlAuthority {
               source_inventory_authority: authority as never,
               source_installation_id: this.options.identity.installationId as never,
               expires_at: expiresAt,
-              inventory_digest: proof.inventoryDigest as never,
-              source_generation: proof.sourceGeneration as never,
-              schema_version: proof.schemaVersion,
-              required_max_records: proof.requiredMaxRecords,
-              required_max_bytes: proof.requiredMaxBytes,
+              ...migrationInventoryFields(proof),
             } })
           } catch (error) { channel.send(safeError(migrationCode(error), frame)) }
         } else if (frame.method === 'migration.export_snapshot.inventory') {
@@ -597,13 +741,8 @@ export class HostControlAuthority {
               frame.params.source_profile_selector, frame.params.source_inventory_authority,
             )
             const proof = await migrationExport.inventory(context.signal)
-            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result: {
-              inventory_digest: proof.inventoryDigest as never,
-              source_generation: proof.sourceGeneration as never,
-              schema_version: proof.schemaVersion,
-              required_max_records: proof.requiredMaxRecords,
-              required_max_bytes: proof.requiredMaxBytes,
-            } })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: migrationInventoryFields(proof) })
           } catch (error) { channel.send(safeError(migrationCode(error), frame)) }
         } else if (frame.method === 'migration.export_snapshot.begin') {
           try {
@@ -759,12 +898,7 @@ export class HostControlAuthority {
           })
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: {
-              profile_id: opened.profileId as never, view_lease_id: opened.viewLeaseId as never,
-              view_activation_handle: opened.viewActivationHandle as never,
-              lease_generation: opened.leaseGeneration, expires_at: opened.expiresAt,
-              runtime_generation: opened.runtimeGeneration, access_scope: 'offline_local',
-            },
+            result: { ...openProfileWireFields(opened), access_scope: 'offline_local' },
           })
         } else if (frame.method === 'profile.recovery_status') {
           const status = this.options.host.getOfflineAccountRecoveryStatus({
@@ -776,75 +910,46 @@ export class HostControlAuthority {
               ? { state: 'failed', reason_code: status.reasonCode }
               : { state: status.state },
           })
-        } else if (frame.method === 'profile.ensure') {
-          if (!frame.params.account_access_token) throw new HostAuthorityError('upgrade_required')
-          const profile = await this.options.host.ensureAccountProfile({
-            accountAccessToken: frame.params.account_access_token,
-            issuer: frame.params.account_issuer, subject: frame.params.account_subject,
-            authorityEnvironmentId: frame.params.authority_environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
-            keyHandle: frame.params.profile_key_handle,
-            unlockMaterial: frame.params.profile_unlock_material,
-            ownerId,
-          })
+        } else if (frame.method === 'profile.ensure' || frame.method === 'profile.restore') {
+          let profile: ReadyProfileIdentity
+          if (frame.method === 'profile.ensure') {
+            if (!frame.params.account_access_token) throw new HostAuthorityError('upgrade_required')
+            profile = await this.options.host.ensureAccountProfile({
+              accountAccessToken: frame.params.account_access_token,
+              issuer: frame.params.account_issuer,
+              subject: frame.params.account_subject,
+              ...accountBindingFields(frame.params),
+              ...profileUnlockFields(frame.params, ownerId),
+            })
+          } else {
+            const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+            profile = await this.options.host.restoreProfile({
+              profileId: selector.profile_id as never,
+              bindingGeneration: selector.binding_generation,
+              ...accountBindingFields(frame.params),
+              ...profileUnlockFields(frame.params, ownerId),
+            })
+          }
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: {
-              state: 'ready', profile_id: profile.profileId as never,
-              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
-            },
+            result: readyProfileFields(this.options.identity, profile),
           })
-        } else if (frame.method === 'profile.restore') {
-          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
-          const profile = await this.options.host.restoreProfile({
-            profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation,
-            authorityEnvironmentId: frame.params.authority_environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
-            keyHandle: frame.params.profile_key_handle,
-            unlockMaterial: frame.params.profile_unlock_material,
-            ownerId,
-          })
-          channel.send({
-            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: {
-              state: 'ready', profile_id: profile.profileId as never,
-              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
-            },
-          })
-        } else if (frame.method === 'profile.bootstrap_local') {
-          const profile = await this.options.host.bootstrapLocalProfile({
-            keyHandle: frame.params.profile_key_handle,
-            unlockMaterial: frame.params.profile_unlock_material,
-            ownerId,
-          })
+        } else if (frame.method === 'profile.bootstrap_local' || frame.method === 'profile.restore_local') {
+          let profile: ReadyProfileIdentity
+          if (frame.method === 'profile.bootstrap_local') {
+            profile = await this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId))
+          } else {
+            const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+            profile = await this.options.host.restoreLocalProfile({
+              profileId: selector.profile_id as never,
+              bindingGeneration: selector.binding_generation,
+              ...profileUnlockFields(frame.params, ownerId),
+            })
+          }
           const persistenceGeneration = await this.options.profilePersistenceGeneration(profile.profileId)
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: {
-              state: 'ready', profile_id: profile.profileId as never,
-              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
-              persistence_generation: persistenceGeneration,
-            },
-          })
-        } else if (frame.method === 'profile.restore_local') {
-          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
-          const profile = await this.options.host.restoreLocalProfile({
-            profileId: selector.profile_id as never,
-            bindingGeneration: selector.binding_generation,
-            keyHandle: frame.params.profile_key_handle,
-            unlockMaterial: frame.params.profile_unlock_material,
-            ownerId,
-          })
-          const persistenceGeneration = await this.options.profilePersistenceGeneration(profile.profileId)
-          channel.send({
-            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: {
-              state: 'ready', profile_id: profile.profileId as never,
-              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
-              persistence_generation: persistenceGeneration,
-            },
+            result: localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
           })
         } else if (frame.method === 'profile.status') {
           const status = this.options.host.getProfileStatus({
@@ -870,29 +975,66 @@ export class HostControlAuthority {
           })
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: 'profile.open',
-            result: {
-              profile_id: opened.profileId as never,
-              view_lease_id: opened.viewLeaseId as never,
-              view_activation_handle: opened.viewActivationHandle as never,
-              lease_generation: opened.leaseGeneration,
-              expires_at: opened.expiresAt,
-              runtime_generation: opened.runtimeGeneration,
-            },
+            result: openProfileWireFields(opened),
           })
         } else if (frame.method === 'profile.open_local') {
           const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
           const opened = await this.options.host.openLocalProfile({ profileId: selector.profile_id as never, ownerId })
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: {
-              profile_id: opened.profileId as never,
-              view_lease_id: opened.viewLeaseId as never,
-              view_activation_handle: opened.viewActivationHandle as never,
-              lease_generation: opened.leaseGeneration,
-              expires_at: opened.expiresAt,
-              runtime_generation: opened.runtimeGeneration,
-            },
+            result: openProfileWireFields(opened),
           })
+        } else if (frame.method === 'profile.extensions') {
+          const extension = this.options.extensions
+          if (!extension) throw new HostAuthorityError('upgrade_required')
+          const authority = () => {
+            if (signal.aborted) throw new HostAuthorityError('stale')
+            return this.options.host.authorizeExtensionView({ viewLeaseId: frame.params.view_lease_id as never,
+              leaseGeneration: frame.params.lease_generation, runtimeGeneration: frame.params.runtime_generation, ownerId })
+          }
+          const profileId = authority()
+          const command = frame.params.command
+          if ('kind' in command && !extension.kinds.includes(command.kind)) throw new HostAuthorityError('upgrade_required')
+          let result: HostExtensionResponse
+          try {
+            if (command.action === 'inventory') {
+              const entries = await extension.inventory(profileId, command.kind, signal)
+              authority()
+              result = { state: 'inventory', kind: command.kind, entries, ...(command.kind === 'plugin' && extension.pluginRemove ? { plugin_remove: true } : {}), ...(command.kind === 'plugin' && extension.pluginUpdate ? { plugin_update: true } : {}), ...(command.kind === 'plugin' && extension.pluginToggle ? { plugin_toggle: true } : {}), ...(command.kind === 'skill' && extension.skillArchives ? { skill_archives: true } : {}), ...(command.kind === 'skill' && extension.skillRemove ? { skill_remove: true } : {}), ...(command.kind === 'skill' && extension.skillReplace ? { skill_replace: true } : {}), ...(command.kind === 'skill' && extension.skillFiles ? { skill_files: true } : {}), ...(command.kind === 'skill' && extension.skillInvocation ? { skill_invocation: true } : {}), ...(command.kind === 'mcp' && extension.mcpRemove ? { mcp_remove: true } : {}), ...(command.kind === 'mcp' && extension.mcpUpdate ? { mcp_update: true } : {}) }
+            } else if (command.action === 'prepare') {
+              const plan = await extension.operations.prepare(authority, command.kind, command.payload)
+              result = { state: 'prepared', plan_id: plan.planId as never, kind: plan.kind, digest: plan.digest as never, expires_at: plan.expiresAt }
+            } else {
+              const receipt = command.action === 'commit'
+                ? extension.operations.commit(authority, command.plan_id, command.operation_id, signal)
+                : command.action === 'cancel'
+                  ? extension.operations.cancel(authority, command.operation_id)
+                  : extension.operations.status(authority, command.operation_id)
+              result = { state: 'receipt', operation_id: receipt.operationId as never, outcome: receipt.state,
+                cancellation_requested: receipt.cancellationRequested, created_at: receipt.createdAt, updated_at: receipt.updatedAt,
+                ...(receipt.reason === undefined ? {} : { reason: receipt.reason }),
+                ...(receipt.skillSource === undefined ? {} : { skill_source: receipt.skillSource }),
+                ...(receipt.canRestore && receipt.skillRemoval ? { skill_restore: receipt.skillRemoval.entryId } : {}),
+                ...(receipt.canRestore && receipt.mcpRecovery ? { mcp_restore: true as const } : {}),
+                ...(receipt.canRestore && receipt.pluginToggleRecovery ? { plugin_restore: receipt.pluginToggleRecovery.packageName } : {}),
+                ...(receipt.canComplete && receipt.pluginPackage ? { plugin_complete: { action: receipt.pluginPackage.action,
+                  package_name: receipt.pluginPackage.packageName,
+                  ...(receipt.pluginPackage.spec ? { spec: receipt.pluginPackage.spec } : {}) } } : {}),
+                ...(receipt.restoredBy ? { restored_by: receipt.restoredBy as never } : {}),
+                ...(receipt.restores && receipt.recoveryMode !== 'complete' ? { restores_operation: receipt.restores as never } : {}),
+                ...(receipt.completedBy ? { completed_by: receipt.completedBy as never } : {}),
+                ...(receipt.restores && receipt.recoveryMode === 'complete' ? { completes_operation: receipt.restores as never } : {}) }
+            }
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            const code = error instanceof Error ? error.message : ''
+            if (code === 'expired') throw new HostAuthorityError('stale')
+            if (code === 'busy' || code === 'idempotency_conflict' || code === 'unauthorized' || code === 'upgrade_required') {
+              throw new HostAuthorityError(code)
+            }
+            throw new HostAuthorityError('invalid_input')
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.view_activate') {
           const activated = await this.options.host.activateView({
             profileId: frame.params.profile_id as never,
@@ -951,6 +1093,7 @@ export class HostControlAuthority {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
+          ...(this.options.extensions ? ['profile.extensions'] : []),
           ...(offlineAccountRecovery ? recoveryCapabilities : []),
           ...(migrationExport ? [
             'migration.export_snapshot.inventory', 'migration.export_snapshot.begin', 'migration.export_snapshot.read',
@@ -991,24 +1134,32 @@ export class UnixHostServer {
     this.options.ownership.assertOwner()
     try {
       const stat = lstatSync(this.options.socketPath)
-      if (!stat.isSocket() || stat.isSymbolicLink() || stat.uid !== this.options.expectedUid) throw new HostAuthorityError('conflict')
+      if (!stat.isSocket() || stat.uid !== this.options.expectedUid) throw new HostAuthorityError('conflict')
       this.options.ownership.assertOwner()
       unlinkSync(this.options.socketPath)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     const server = createServer((socket) => { void this.accept(socket) })
+    delete this.socketIdentity
     this.server = server
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(this.options.socketPath, () => {
-        server.off('error', reject)
-        resolve()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(this.options.socketPath, () => {
+          server.off('error', reject)
+          resolve()
+        })
       })
-    })
-    chmodSync(this.options.socketPath, 0o600)
-    const stat = lstatSync(this.options.socketPath)
-    this.socketIdentity = { dev: stat.dev, ino: stat.ino }
+      chmodSync(this.options.socketPath, 0o600)
+      const stat = lstatSync(this.options.socketPath)
+      this.socketIdentity = { dev: stat.dev, ino: stat.ino }
+    } catch (error) {
+      this.server = undefined
+      /* v8 ignore next 1 -- reaching cleanup requires a filesystem race after the listener has bound successfully. */
+      if (server.listening) await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
+      throw error
+    }
   }
 
   /** Close connections and remove only the socket inode this server created. */
@@ -1016,6 +1167,7 @@ export class UnixHostServer {
     const server = this.server
     this.server = undefined
     for (const socket of this.connections) socket.destroy()
+    await this.options.extensions?.operations.dispose()
     if (server) {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -1196,13 +1348,16 @@ export class UnixHostClient {
     }
     if (frame.result.installation_id !== options.trustedInstallationId
       || frame.result.installation_public_key !== options.trustedInstallationPublicKey
-      || frame.result.executable_signature_digest !== options.trustedExecutableSignatureDigest
-      || !verify(
-        null,
-        encodeHostInspectSignaturePayload(request, frame),
-        publicKeyObject(options.trustedInstallationPublicKey),
-        Buffer.from(frame.result.challenge_signature, 'base64url'),
-      )) {
+      || frame.result.executable_signature_digest !== options.trustedExecutableSignatureDigest) {
+      channel.close(); throw new HostAuthorityError('unavailable')
+    }
+    const trustedPublicKey = publicKeyObject(options.trustedInstallationPublicKey)
+    if (!verify(
+      null,
+      encodeHostInspectSignaturePayload(request, frame),
+      trustedPublicKey,
+      Buffer.from(frame.result.challenge_signature, 'base64url'),
+    )) {
       channel.close(); throw new HostAuthorityError('unavailable')
     }
     return new UnixHostClient(channel, {
@@ -1223,10 +1378,7 @@ export class UnixHostClient {
    * @param input - opaque binding plus optional cancellation.
    * @returns Profile availability without secrets.
    */
-  async getProfileStatus(input: {
-    readonly authorityEnvironmentId: string
-    readonly accountBindingHandle: string
-    readonly authorityBindingVersion: number
+  async getProfileStatus(input: AccountBindingInput & {
     readonly signal?: AbortSignal
   }): Promise<{ state: 'ready' | 'unbound' | 'locked'; profileId?: string; persistenceGeneration?: number }> {
     const request: ProfileStatusRequest = {
@@ -1234,11 +1386,7 @@ export class UnixHostClient {
       type: 'request',
       request_id: requestId(),
       method: 'profile.status',
-      params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
-      },
+      params: this.accountBindingParams(input),
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== 'profile.status') throw new HostAuthorityError('unavailable')
@@ -1375,12 +1523,7 @@ export class UnixHostClient {
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return {
-      profileId: frame.result.profile_id as never, viewLeaseId: frame.result.view_lease_id as never,
-      viewActivationHandle: frame.result.view_activation_handle as never,
-      leaseGeneration: frame.result.lease_generation, expiresAt: frame.result.expires_at,
-      runtimeGeneration: frame.result.runtime_generation, accessScope: frame.result.access_scope,
-    }
+    return { ...openProfileResult(frame.result), accessScope: frame.result.access_scope }
   }
 
   /**
@@ -1388,12 +1531,9 @@ export class UnixHostClient {
    * @param input - Account token and identity, binding, Keychain handle, and optional cancellation.
    * @returns ready opaque Profile id.
    */
-  async ensureAccountProfile(input: {
+  async ensureAccountProfile(input: AccountBindingInput & {
     readonly issuer: string
     readonly subject: string
-    readonly authorityEnvironmentId: string
-    readonly accountBindingHandle: string
-    readonly authorityBindingVersion: number
     readonly accountAccessToken: string
     readonly keyHandle: string
     readonly unlockMaterial: string
@@ -1405,17 +1545,13 @@ export class UnixHostClient {
     const request: ProfileEnsureRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
       params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
+        ...this.accountBindingParams(input),
         account_access_token: input.accountAccessToken,
         account_issuer: input.issuer, account_subject: input.subject, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
+    return this.callReadyProfile(request, input.signal)
   }
 
   /**
@@ -1423,11 +1559,8 @@ export class UnixHostClient {
    * @param input - selector, key handle, unlock material, and cancellation signal.
    * @returns restored Profile id and refreshed selector.
    */
-  async restoreProfile(input: {
+  async restoreProfile(input: AccountBindingInput & {
     readonly profileSelector: string
-    readonly authorityEnvironmentId: string
-    readonly accountBindingHandle: string
-    readonly authorityBindingVersion: number
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly signal?: AbortSignal
@@ -1435,16 +1568,12 @@ export class UnixHostClient {
     const request: ProfileRestoreRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.restore',
       params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
+        ...this.accountBindingParams(input),
         profile_selector: input.profileSelector, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
+    return this.callReadyProfile(request, input.signal)
   }
 
   /**
@@ -1452,25 +1581,19 @@ export class UnixHostClient {
    * @param input - Opaque vault handle, unlock material, and optional connection cancellation.
    * @returns Profile selector and persistence generation; rejects absent Host capability before sending.
    */
-  async bootstrapLocalProfile(input: {
-    readonly keyHandle: string
-    readonly unlockMaterial: string
-    readonly signal?: AbortSignal
-  }): Promise<{ readonly profileId: string; readonly profileSelector: string; readonly persistenceGeneration: number }> {
+  async bootstrapLocalProfile(input: ProfileUnlockInput): Promise<{
+    readonly profileId: string
+    readonly profileSelector: string
+    readonly persistenceGeneration: number
+  }> {
     if (!this.inspection.capabilities.includes('profile.bootstrap_local' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
     const request: ProfileBootstrapLocalRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.bootstrap_local',
-      params: { ...this.auth(), profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial },
+      params: this.profileUnlockParams(input),
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return {
-      profileId: frame.result.profile_id,
-      profileSelector: frame.result.profile_selector,
-      persistenceGeneration: frame.result.persistence_generation,
-    }
+    return this.callLocalReadyProfile(request, input.signal)
   }
 
   /**
@@ -1478,26 +1601,17 @@ export class UnixHostClient {
    * @param input - Signed selector, matching vault proof, and optional connection cancellation.
    * @returns Restored Profile selector and persistence generation; Host rejection is propagated.
    */
-  async restoreLocalProfile(input: {
+  async restoreLocalProfile(input: ProfileUnlockInput & {
     readonly profileSelector: string
-    readonly keyHandle: string
-    readonly unlockMaterial: string
-    readonly signal?: AbortSignal
   }): Promise<{ readonly profileId: string; readonly profileSelector: string; readonly persistenceGeneration: number }> {
     const request: ProfileRestoreLocalRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.restore_local',
       params: {
-        ...this.auth(), profile_selector: input.profileSelector, profile_key_handle: input.keyHandle,
-        profile_unlock_material: input.unlockMaterial,
+        ...this.auth(), profile_selector: input.profileSelector,
+        profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return {
-      profileId: frame.result.profile_id,
-      profileSelector: frame.result.profile_selector,
-      persistenceGeneration: frame.result.persistence_generation,
-    }
+    return this.callLocalReadyProfile(request, input.signal)
   }
 
   /**
@@ -1505,10 +1619,7 @@ export class UnixHostClient {
    * @param input - opaque binding plus optional cancellation.
    * @returns generation-fenced Profile lease.
    */
-  async openProfile(input: {
-    readonly authorityEnvironmentId: string
-    readonly accountBindingHandle: string
-    readonly authorityBindingVersion: number
+  async openProfile(input: AccountBindingInput & {
     readonly signal?: AbortSignal
   }): Promise<ProfileOpenResult> {
     const request: ProfileOpenRequest = {
@@ -1516,22 +1627,11 @@ export class UnixHostClient {
       type: 'request',
       request_id: requestId(),
       method: 'profile.open',
-      params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
-      },
+      params: this.accountBindingParams(input),
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== 'profile.open') throw new HostAuthorityError('unavailable')
-    return {
-      profileId: frame.result.profile_id as never,
-      viewLeaseId: frame.result.view_lease_id as never,
-      viewActivationHandle: frame.result.view_activation_handle as never,
-      leaseGeneration: frame.result.lease_generation,
-      expiresAt: frame.result.expires_at,
-      runtimeGeneration: frame.result.runtime_generation,
-    }
+    return openProfileResult(frame.result)
   }
 
   /**
@@ -1546,14 +1646,7 @@ export class UnixHostClient {
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return {
-      profileId: frame.result.profile_id as never,
-      viewLeaseId: frame.result.view_lease_id as never,
-      viewActivationHandle: frame.result.view_activation_handle as never,
-      leaseGeneration: frame.result.lease_generation,
-      expiresAt: frame.result.expires_at,
-      runtimeGeneration: frame.result.runtime_generation,
-    }
+    return openProfileResult(frame.result)
   }
 
   /**
@@ -1590,6 +1683,32 @@ export class UnixHostClient {
       expiresAt: frame.result.expires_at,
       bootstrapCookie: frame.result.bootstrap_cookie,
     }
+  }
+
+  /**
+   * Execute a negotiated extension command using a Main-held lease; no target paths cross the socket.
+   * @param input - lease, runtime generation, bounded command and optional cancellation.
+   * @returns a prepared plan, sanitized inventory or durable receipt; old Hosts reject before mutation.
+   */
+  async extensions(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: HostExtensionCommand
+    readonly signal?: AbortSignal
+  }): Promise<HostExtensionResponse> {
+    if (!this.inspection.capabilities.includes('profile.extensions' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileExtensionsRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.extensions', params: {
+        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+        runtime_generation: input.runtimeGeneration, command: input.command,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== 'profile.extensions') throw new HostAuthorityError('unavailable')
+    return frame.result
   }
 
   /**
@@ -1842,10 +1961,7 @@ export class UnixHostClient {
   }): Promise<{ readonly stageVersion: number; readonly semanticDigest: string }> {
     const request: MigrationImportVerifyRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'migration.import_snapshot.verify',
-      params: {
-        ...this.auth(), import_id: input.importId as never, expected_stage_version: input.expectedStageVersion,
-        target_profile_selector: input.targetProfileSelector,
-      },
+      params: this.migrationImportCasParams(input),
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
@@ -1890,10 +2006,7 @@ export class UnixHostClient {
   }): Promise<{ readonly stageVersion: number }> {
     const request: MigrationImportAbortRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'migration.import_snapshot.abort',
-      params: {
-        ...this.auth(), import_id: input.importId as never, expected_stage_version: input.expectedStageVersion,
-        target_profile_selector: input.targetProfileSelector,
-      },
+      params: this.migrationImportCasParams(input),
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
@@ -1902,6 +2015,52 @@ export class UnixHostClient {
 
   /** Close the local connection; Host revokes every lease it minted. */
   close(): void { this.channel.close() }
+
+  private async callReadyProfile(
+    request: ProfileEnsureRequest | ProfileRestoreRequest, signal?: AbortSignal,
+  ): Promise<{ readonly profileId: string; readonly profileSelector: string }> {
+    return this.call(request, signal).then((frame) => {
+      if (frame.type !== 'result' || (frame.method !== 'profile.ensure' && frame.method !== 'profile.restore')
+        || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+      return readyProfileResult(frame.result)
+    })
+  }
+
+  private callLocalReadyProfile(
+    request: ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest, signal?: AbortSignal,
+  ): Promise<{ readonly profileId: string; readonly profileSelector: string; readonly persistenceGeneration: number }> {
+    return this.call(request, signal).then((frame) => {
+      if (frame.type !== 'result' || (frame.method !== 'profile.bootstrap_local' && frame.method !== 'profile.restore_local')
+        || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+      return localReadyProfileResult(frame.result)
+    })
+  }
+
+  private profileUnlockParams(input: ProfileUnlockInput): ProfileBootstrapLocalRequest['params'] {
+    return { ...this.auth(), profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial }
+  }
+
+  private migrationImportCasParams(input: {
+    readonly importId: string
+    readonly expectedStageVersion: number
+    readonly targetProfileSelector: string
+  }): MigrationImportVerifyRequest['params'] {
+    return {
+      ...this.auth(),
+      import_id: input.importId as never,
+      expected_stage_version: input.expectedStageVersion,
+      target_profile_selector: input.targetProfileSelector,
+    }
+  }
+
+  private accountBindingParams(input: AccountBindingInput): ProfileStatusRequest['params'] {
+    return {
+      ...this.auth(),
+      authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never,
+      authority_binding_version: input.authorityBindingVersion,
+    }
+  }
 
   private auth(): Pick<
     ProfileStatusRequest['params'],
@@ -1919,7 +2078,7 @@ export class UnixHostClient {
   }
 
   private async call(
-    request: ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
+    request: ProfileExtensionsRequest | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest

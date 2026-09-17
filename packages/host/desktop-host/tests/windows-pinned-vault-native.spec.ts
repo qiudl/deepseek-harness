@@ -5,6 +5,15 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { loadPinnedWindowsVaultNativeModule } from '../src/windows-pinned-vault-native.ts'
 
+const readFailure = vi.hoisted(() => ({ incomplete: false }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    readSync: (...args: Parameters<typeof actual.readSync>) => readFailure.incomplete ? 0 : actual.readSync(...args),
+  }
+})
+
 describe('release-pinned Windows vault native module', () => {
   it('rejects malformed pins, missing files and directories before native loading', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-pinned-native-')))
@@ -81,6 +90,23 @@ describe('release-pinned Windows vault native module', () => {
       }, load)).toThrow('native loader failure')
       expect(load).toHaveBeenCalledExactlyOnceWith(path)
     } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a short native read and defaults only to the exact-file Node loader', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-pinned-native-')))
+    try {
+      const path = join(root, 'koffi.node')
+      const bytes = Buffer.from('native-fixture')
+      const pin = { path, sha256: createHash('sha256').update(bytes).digest('hex') }
+      writeFileSync(path, bytes)
+      readFailure.incomplete = true
+      expect(() => loadPinnedWindowsVaultNativeModule(pin, vi.fn())).toThrow('read was incomplete')
+      readFailure.incomplete = false
+      expect(() => loadPinnedWindowsVaultNativeModule(pin)).toThrow()
+    } finally {
+      readFailure.incomplete = false
       rmSync(root, { recursive: true, force: true })
     }
   })

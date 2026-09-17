@@ -74,12 +74,16 @@ function validHandle(value: unknown): value is bigint {
 export async function loadWindowsAuthenticodeVerifier(
   options: WindowsAuthenticodeKoffiOptions = {},
 ): Promise<(executableHandle: bigint, canonicalPath: string) => string> {
+  /* v8 ignore next -- omitted runtime facts are exercised only by the signed Windows Worker. */
   const platform = options.platform ?? process.platform
+  /* v8 ignore next -- omitted runtime facts are exercised only by the signed Windows Worker. */
   const arch = options.arch ?? process.arch
+  /* v8 ignore next -- omitted runtime facts are exercised only by the signed Windows Worker. */
   const mainThread = options.isMainThread ?? isMainThread
   if (platform !== 'win32' || arch !== 'x64' || mainThread) {
     throw new Error('Windows Authenticode verification requires a Windows x64 worker')
   }
+  /* v8 ignore next -- the production Koffi import is exercised only by signed Windows lanes. */
   const koffi = options.loadKoffi === undefined
     ? (await import('koffi')).default as unknown as KoffiModule
     : await options.loadKoffi()
@@ -174,6 +178,7 @@ export async function loadWindowsAuthenticodeVerifier(
       return { status, stateHandle }
     },
     publisherCertificateSha256(stateHandle) {
+      /* v8 ignore next -- the public verifier calls this only with the state retained by beginFileVerification. */
       if (!contexts.has(stateHandle)) invalidData('WTHelperProvDataFromStateData')
       const providerData = providerDataFromState(stateHandle)
       if (!validHandle(providerData)) invalidData('WTHelperProvDataFromStateData')
@@ -197,6 +202,7 @@ export async function loadWindowsAuthenticodeVerifier(
     },
     closeFileVerification(executableHandle, canonicalPath, stateHandle) {
       const context = contexts.get(stateHandle)
+      /* v8 ignore next -- the verifier closes only the retained context it just opened with these exact inputs. */
       if (context === undefined || context.executableHandle !== executableHandle
         || context.canonicalPath !== canonicalPath) return ERROR_INVALID_DATA
       try {

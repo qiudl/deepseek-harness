@@ -144,4 +144,110 @@ describe('Windows embedding identity', () => {
       runtimeGeneration: 2,
     }, state.dependencies)).rejects.toMatchObject({ code: 'conflict' })
   })
+
+  it('rejects malformed runtime, root, keyring, digest, and generations', async () => {
+    const state = fixture()
+    const malformed = [
+      { platform: 'linux' }, { arch: 'arm64' }, { root: 'relative' },
+      { root: String.raw`C:\root\..\escape` }, { accountKeyringSha256: 'bad' },
+      { accountAccessKeyring: 'different' }, { runtimeGeneration: 0 }, { schemaGeneration: 0 },
+    ]
+    for (const overrides of malformed) {
+      await expect(prepareWindowsDesktopHostEmbeddingIdentity({ ...state.input, ...overrides }, state.dependencies))
+        .rejects.toMatchObject({ code: 'invalid_input' })
+    }
+  })
+
+  it('rejects every malformed existing identity record shape', async () => {
+    const invalidRecords = [
+      null,
+      [],
+      { unexpected: true },
+      { schema_version: 2 },
+      { installation_id: 7 },
+      { installation_id: 'bad' },
+      { endpoint_registration_id: 7 },
+      { endpoint_registration_id: 'bad' },
+      { installation_public_key: 7 },
+      { installation_public_key: 'bad' },
+      { runtime_generation: '1' },
+      { runtime_generation: 0 },
+      { schema_generation: '1' },
+      { schema_generation: 0 },
+    ]
+    for (const invalid of invalidRecords) {
+      const state = fixture()
+      await prepareWindowsDesktopHostEmbeddingIdentity(state.input, state.dependencies)
+      const recordPath = `${root}\\identity\\installation.v1.json`
+      const current = JSON.parse(state.files.get(recordPath)!.toString()) as Record<string, unknown>
+      const replacement = invalid !== null && !Array.isArray(invalid)
+        ? { ...current, ...invalid }
+        : invalid
+      state.files.set(recordPath, Buffer.from(JSON.stringify(replacement)))
+      await expect(prepareWindowsDesktopHostEmbeddingIdentity(state.input, state.dependencies))
+        .rejects.toMatchObject({ code: 'unavailable' })
+    }
+  })
+
+  it('requires create support and a stable winning file after creation', async () => {
+    const missingCreate = fixture()
+    delete missingCreate.bindings.createPrivateFile
+    await expect(prepareWindowsDesktopHostEmbeddingIdentity(missingCreate.input, missingCreate.dependencies))
+      .rejects.toMatchObject({ code: 'unavailable' })
+
+    const missingWinner = fixture()
+    missingWinner.bindings.createPrivateFile = vi.fn<NonNullable<
+      WindowsHostRegistrationFileBindings['createPrivateFile']
+    >>(() => ({
+      state: 'created', evidence: missingWinner.evidence('file'),
+    }))
+    await expect(prepareWindowsDesktopHostEmbeddingIdentity(missingWinner.input, missingWinner.dependencies))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('rejects empty, oversized, and incorrectly sized private files', async () => {
+    for (const contents of [Buffer.alloc(0), Buffer.alloc(31), Buffer.alloc(33)]) {
+      const state = fixture()
+      state.files.set(`${root}\\identity\\device-index-key.v1`, contents)
+      await expect(prepareWindowsDesktopHostEmbeddingIdentity(state.input, state.dependencies))
+        .rejects.toMatchObject({ code: 'unavailable' })
+    }
+  })
+
+  it('rejects invalid and non-Ed25519 installation private keys', async () => {
+    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey
+    for (const contents of [
+      Buffer.from('not a private key'),
+      Buffer.from(rsa.export({ format: 'pem', type: 'pkcs8' })),
+    ]) {
+      const state = fixture()
+      state.files.set(`${root}\\identity\\device-index-key.v1`, Buffer.alloc(32, 1))
+      state.files.set(`${root}\\identity\\installation-private-key.pem`, contents)
+      await expect(prepareWindowsDesktopHostEmbeddingIdentity(state.input, state.dependencies))
+        .rejects.toMatchObject({ code: 'unavailable' })
+    }
+  })
+
+  it('rejects malformed record encoding and unstable account keyring publication', async () => {
+    for (const record of [Buffer.from('{'), Buffer.from([0xFF])]) {
+      const state = fixture()
+      await prepareWindowsDesktopHostEmbeddingIdentity(state.input, state.dependencies)
+      state.files.set(`${root}\\identity\\installation.v1.json`, record)
+      await expect(prepareWindowsDesktopHostEmbeddingIdentity(state.input, state.dependencies))
+        .rejects.toMatchObject({ code: 'unavailable' })
+    }
+
+    const missing = fixture()
+    missing.bindings.replacePrivateFile = vi.fn(() => missing.evidence('file'))
+    await expect(prepareWindowsDesktopHostEmbeddingIdentity(missing.input, missing.dependencies))
+      .rejects.toMatchObject({ code: 'unavailable' })
+
+    const changed = fixture()
+    changed.bindings.replacePrivateFile = vi.fn((path: string) => {
+      changed.files.set(path, Buffer.from('changed'))
+      return changed.evidence('file')
+    })
+    await expect(prepareWindowsDesktopHostEmbeddingIdentity(changed.input, changed.dependencies))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
 })

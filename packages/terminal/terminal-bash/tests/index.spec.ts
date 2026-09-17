@@ -23,6 +23,8 @@ import type {
   SubprocessTerminalHandle,
   SubprocessTerminalSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
+
+const PWSH_READY_MARKER = 'DSH_PWSH_READY'
 import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 
 class EmptySandbox extends SandboxProvider {
@@ -363,11 +365,12 @@ describe('BashTerminalBackend startup rollback', () => {
     let sent: TerminalSendRequest | undefined
     const session = {
       motd: '',
+      initialize: () => Promise.resolve(),
       startSend: (request: TerminalSendRequest) => {
         sent = request
         return {
           done: Promise.resolve({
-            viewport: 'setup-echo dsh> ', waitReason: 'stdin_read' as const,
+            viewport: `startup\n${PWSH_READY_MARKER}\ndsh> `, waitReason: 'stdin_read' as const,
             sessionStatus: { kind: 'running' as const }, truncated: false,
           }),
           readOutput: () => ({ delta: '', truncated: false }),
@@ -383,8 +386,11 @@ describe('BashTerminalBackend startup rollback', () => {
       () => session,
     )
     expect(await backend.spawn(spec(agent(ctx)))).toBe(session)
-    expect(sent).toMatchObject({ text: ENCODING_PREAMBLE + PWSH_PROMPT_SETUP, submit: true })
-    expect(session.motd).toBe('setup-echo dsh> ')
+    expect(PWSH_PROMPT_SETUP).not.toContain('dsh> ')
+    expect(sent?.text).toContain(ENCODING_PREAMBLE + PWSH_PROMPT_SETUP)
+    expect(sent?.text).not.toContain(PWSH_READY_MARKER)
+    expect(sent).toMatchObject({ submit: true })
+    expect(session.motd).toBe('startup\ndsh> ')
     expect(spawned?.env).toMatchObject({
       TERM: 'dumb', NO_COLOR: '1', DSH_SHELL: '1', DSH_SESSION_ID: 'agent', DSH_PTY_SESSION_ID: 'pty-1',
     })
@@ -392,7 +398,10 @@ describe('BashTerminalBackend startup rollback', () => {
     expect(spawned?.env?.PROMPT_COMMAND).toBeUndefined()
   })
 
-  it('keeps waiting for stdin_read when the first settled output only echoes the prompt literal', async () => {
+  it.each([
+    [PWSH_READY_MARKER, 'dsh> '],
+    [`startup${PWSH_READY_MARKER}`, 'startup\ndsh> '],
+  ])('accepts an executed readiness marker after an inferred-idle settlement', async (viewport, expectedMotd) => {
     const ctx = new Context()
     await ctx.plugin(EmptySandbox)
     await ctx.plugin(SessionProjectionRegistry)
@@ -400,13 +409,13 @@ describe('BashTerminalBackend startup rollback', () => {
     const sends: TerminalSendRequest[] = []
     const session = {
       motd: '',
+      initialize: () => Promise.resolve(),
       startSend: (request: TerminalSendRequest) => {
         sends.push(request)
-        const second = sends.length > 1
         return {
           done: Promise.resolve({
-            viewport: second ? 'dsh> ' : "function prompt { 'dsh> ' }\n",
-            waitReason: second ? 'stdin_read' as const : 'inferred_idle' as const,
+            viewport,
+            waitReason: 'inferred_idle' as const,
             sessionStatus: { kind: 'running' as const }, truncated: false,
           }),
           readOutput: () => ({ delta: '', truncated: false }),
@@ -422,9 +431,48 @@ describe('BashTerminalBackend startup rollback', () => {
       () => session,
     )
     await backend.spawn(spec(agent(ctx)))
-    expect(sends).toHaveLength(2)
-    expect(sends[1]).toMatchObject({ text: '', submit: false })
-    expect(session.motd).toBe('dsh> ')
+    expect(sends).toHaveLength(1)
+    expect(session.motd).toBe(expectedMotd)
+  })
+
+  it('rejects premature pwsh stdin readiness without an executed marker', async () => {
+    const ctx = new Context()
+    await ctx.plugin(EmptySandbox)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: '/workspace' })
+    const sends: TerminalSendRequest[] = []
+    const session = {
+      motd: '',
+      initialize: () => Promise.resolve(),
+      startSend: (request: TerminalSendRequest) => {
+        sends.push(request)
+        return {
+          done: Promise.resolve({
+            viewport: 'partial bootstrap echo',
+            waitReason: 'stdin_read' as const,
+            sessionStatus: { kind: 'running' as const }, truncated: false,
+          }),
+          readOutput: () => ({ delta: '', truncated: false }),
+          cancel: () => false,
+        }
+      },
+      read: () => ({
+        text: 'partial bootstrap echo',
+        totalLines: 1, lineBegin: 0, lineEnd: 1, truncated: false,
+      }),
+      close: () => Promise.resolve(),
+    } as unknown as LocalPtySession
+    const backend = new BashTerminalBackend(
+      ctx,
+      { ...config(), shellDialect: 'pwsh', shellPath: 'pwsh' },
+      async () => terminalHandle(),
+      () => session,
+    )
+    await expect(backend.spawn(spec(agent(ctx)))).rejects.toThrow('did not confirm pwsh bootstrap execution')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.text).toContain(ENCODING_PREAMBLE + PWSH_PROMPT_SETUP)
+    expect(sends[0]?.text).not.toContain(PWSH_READY_MARKER)
+    expect(sends[0]).toMatchObject({ submit: true })
   })
 
   it('rejects a pwsh bootstrap whose shell exits or times out', async () => {
@@ -433,6 +481,7 @@ describe('BashTerminalBackend startup rollback', () => {
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: '/workspace' })
     const sessionFor = (waitReason: TerminalWaitReason): LocalPtySession => ({
+      initialize: () => Promise.resolve(),
       startSend: () => ({
         done: Promise.resolve({
           viewport: 'no-prompt', waitReason,
@@ -468,15 +517,11 @@ describe('BashTerminalBackend startup rollback', () => {
       let closes = 0
       const session = {
         motd: '',
+        initialize: () => Promise.resolve(),
         startSend: () => {
           sends += 1
           return {
-            done: sends === 1
-              ? Promise.resolve({
-                viewport: 'setup echo', waitReason: 'inferred_idle' as const,
-                sessionStatus: { kind: 'running' as const }, truncated: false,
-              })
-              : pending.promise,
+            done: pending.promise,
             readOutput: () => ({ delta: '', truncated: false }),
             cancel: () => { cancellations += 1; return true },
           }
@@ -493,7 +538,7 @@ describe('BashTerminalBackend startup rollback', () => {
 
       const spawning = backend.spawn(spec(agent(ctx)))
       await vi.advanceTimersByTimeAsync(0)
-      expect(sends).toBe(2)
+      expect(sends).toBe(1)
       const rejected = expect(spawning).rejects.toThrow('did not reach readiness before startup timeout')
       await vi.advanceTimersByTimeAsync(100)
 
@@ -513,11 +558,12 @@ describe('BashTerminalBackend startup rollback', () => {
     const sends: TerminalSendRequest[] = []
     const session = {
       motd: '',
+      initialize: () => Promise.resolve(),
       startSend: (request: TerminalSendRequest) => {
         sends.push(request)
         return {
           done: Promise.resolve({
-            viewport: 'dsh> ', waitReason: 'stdin_read' as const,
+            viewport: `${PWSH_READY_MARKER}\ndsh> `, waitReason: 'stdin_read' as const,
             sessionStatus: { kind: 'running' as const }, truncated: false,
           }),
           readOutput: () => ({ delta: '', truncated: false }),

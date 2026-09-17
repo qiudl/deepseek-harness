@@ -94,4 +94,16 @@ describe('Windows Authenticode stable-handle verifier', () => {
     })()
     expect(error).toMatchObject({ api: 'WinVerifyTrust(WTD_STATEACTION_CLOSE)', trustStatus: -1 })
   })
+
+  it('normalizes non-Error native failures and a missing normalized result', () => {
+    for (const api of [
+      native({ publisherCertificateSha256: vi.fn(() => { throw 'native publisher failure' }) }),
+      native({ closeFileVerification: vi.fn(() => { throw 'native close failure' }) }),
+      native({ publisherCertificateSha256: vi.fn(() => ({
+        toString: () => 'ab'.repeat(32),
+        toUpperCase: () => undefined,
+      })) }),
+    ]) expect(() => createWindowsAuthenticodeVerifier(api as never)(802n, path))
+      .toThrow(WindowsAuthenticodeError)
+  })
 })

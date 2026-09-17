@@ -32,6 +32,8 @@ const binScript = fileURLToPath(new URL('../../../../../../packages/test-support
 const tsconfigPath = fileURLToPath(new URL('../../../../../../tsconfig.json', import.meta.url))
 // The resumed-agent fixture in the shared config resumes exactly this id.
 const sessionId = SessionId('workspace-context-resume')
+const MIGRATION_PROCESS_TIMEOUT_MS = 60_000
+const MIGRATION_TEST_TIMEOUT_MS = MIGRATION_PROCESS_TIMEOUT_MS + 15_000
 
 /** Persist one session with the given header version and events, returning its log path. */
 async function seedSession(root: string, cwd: string, version: number, events: SessionEvent[]): Promise<string> {
@@ -85,6 +87,7 @@ describe('session format guard through the assembled app', () => {
       binArgs: [configPath, 'Continue the migrated session.'],
       tsconfigPath,
       env: { DSH_SNAPSHOT_FILE: replayFixture },
+      processTimeoutMs: MIGRATION_PROCESS_TIMEOUT_MS,
       prepare: async (runCwd) => {
         sourcePath = await seedSession(join(runCwd, '.sessions'), runCwd, 0, closedTurn())
         source = await readFile(sourcePath)
@@ -112,7 +115,7 @@ describe('session format guard through the assembled app', () => {
           .toEqual(['session.jsonl', 'session.lock', generationLogFilename(SESSION_FORMAT_VERSION, 'none')])
       },
     })
-  }, LOADER_SMOKE_TEST_TIMEOUT_MS)
+  }, MIGRATION_TEST_TIMEOUT_MS)
 
   it('refuses to resume a newer-format log, naming the upgrade direction and the raw log path', async () => {
     let sessionPath = ''

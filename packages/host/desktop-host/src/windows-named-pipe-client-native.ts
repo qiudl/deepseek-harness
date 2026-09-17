@@ -1,4 +1,5 @@
 import { isMainThread } from 'node:worker_threads'
+import { loadWindowsKoffi, windowsKernel32Context, type WindowsKoffiModule } from './windows-koffi.ts'
 
 const PIPE_PATH = /^\\\\\.\\pipe\\slark-dsh-host-v1-[0-9a-f]{64}$/u
 const GENERIC_READ_WRITE = 0xC000_0000
@@ -7,15 +8,6 @@ const SECURITY_SQOS_PRESENT = 0x0010_0000
 const SECURITY_IDENTIFICATION = 0x0001_0000
 const MAX_CONNECT_TIMEOUT_MS = 30_000
 const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
-
-interface KoffiFunction { (...args: unknown[]): unknown }
-interface KoffiLibrary {
-  func(convention: string, name: string, result: unknown, args: unknown[]): KoffiFunction
-}
-interface KoffiModule {
-  pointer(type: unknown): unknown
-  load(library: string): KoffiLibrary
-}
 
 export interface WindowsNamedPipeClientBindings {
   connect(path: string): Promise<bigint>
@@ -27,7 +19,7 @@ export interface WindowsNamedPipeClientKoffiOptions {
   readonly arch?: string
   readonly isMainThread?: boolean
   readonly connectTimeoutMs: number
-  readonly loadKoffi?: () => Promise<KoffiModule>
+  readonly loadKoffi?: () => Promise<WindowsKoffiModule>
 }
 
 /** Exact local Win32 failure retained only inside the client Worker boundary. */
@@ -45,7 +37,7 @@ export class WindowsNamedPipeClientNativeError extends Error {
 
 function validHandle(value: unknown): value is bigint {
   return typeof value === 'bigint' && value > 0n
-    && value !== -1n && value !== INVALID_HANDLE_VALUE
+    && value !== INVALID_HANDLE_VALUE
 }
 
 function callWorker<Result>(operation: () => Result): Promise<Result> {
@@ -68,13 +60,8 @@ export async function loadWindowsNamedPipeClientBindings(
     || options.connectTimeoutMs > MAX_CONNECT_TIMEOUT_MS) {
     throw new Error('invalid Windows named-pipe connect timeout')
   }
-  const koffi = options.loadKoffi === undefined
-    ? (await import('koffi')).default as unknown as KoffiModule
-    : await options.loadKoffi()
-  const pointer = koffi.pointer('void')
-  const kernel32 = koffi.load('kernel32.dll')
-  const bind = (name: string, result: unknown, args: unknown[]): KoffiFunction =>
-    kernel32.func('__stdcall', name, result, args)
+  const koffi = await loadWindowsKoffi(options.loadKoffi)
+  const { pointer, bindKernel32: bind } = windowsKernel32Context(koffi)
   const waitNamedPipe = bind('WaitNamedPipeW', 'int', ['str16', 'uint32'])
   const createFile = bind('CreateFileW', pointer, [
     'str16', 'uint32', 'uint32', pointer, 'uint32', 'uint32', pointer,

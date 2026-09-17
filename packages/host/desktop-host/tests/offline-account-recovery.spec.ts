@@ -50,6 +50,23 @@ describe('offline Account Profile recovery', () => {
       .toThrow(expect.objectContaining({ code: 'profile_ambiguous' }))
   })
 
+  it('reports zero bindings for an unbound historical Account Profile', async () => {
+    const clock = { now: () => 1_000 }
+    const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
+    await account(registry, { subject: 'unbound', keyHandle: 'keychain:unbound' })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      inspectOfflineAccountProfile: async () => ({
+        state: 'recoverable', compatibility: 'current', persistenceGeneration: 11,
+        sessionCount: 0, pluginCount: 0, preflightDigest,
+      }),
+    })
+    await expect(host.inspectOfflineAccountProfiles({
+      keyHandles: ['keychain:unbound'], expectedRuntimeGeneration: 5,
+      expectedSchemaGeneration: 3, ownerId: 'connection-1',
+    })).resolves.toEqual({ candidates: [expect.objectContaining({ bindingCount: 0 })] })
+  })
+
   it('inspects without starting plugins, then grants only offline_local after proof and worker readiness', async () => {
     const clock = { now: () => 1_000 }
     const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
@@ -102,10 +119,14 @@ describe('offline Account Profile recovery', () => {
     })
     expect(workerStarts).toBe(1)
 
-    await expect(host.openOfflineAccountProfile({
+    const opened = await host.openOfflineAccountProfile({
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
-    }))
-      .resolves.toMatchObject({ profileId: original.profileId, accessScope: 'offline_local' })
+    })
+    expect(opened).toMatchObject({ profileId: original.profileId, accessScope: 'offline_local' })
+    expect(() => host.authorizeExtensionView({
+      viewLeaseId: opened.viewLeaseId, leaseGeneration: opened.leaseGeneration,
+      runtimeGeneration: 5, ownerId: 'connection-1',
+    })).toThrow(expect.objectContaining({ code: 'unauthorized' }))
     await expect(host.openProfile({
       authorityEnvironmentId: environmentId, accountBindingHandle: 'binding:original',
       authorityBindingVersion: 1, ownerId: 'connection-1',
@@ -156,6 +177,84 @@ describe('offline Account Profile recovery', () => {
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
     }))
       .rejects.toMatchObject({ code: 'profile_locked' })
+  })
+
+  it('rejects invalid, unavailable, missing, ambiguous, and expired inspection candidates', async () => {
+    let now = 1_000
+    const clock = { now: () => now }
+    const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
+    await account(registry, { subject: 'original', keyHandle: 'keychain:original' })
+    await account(registry, { subject: 'duplicate-a', keyHandle: 'keychain:duplicate' })
+    await account(registry, { subject: 'duplicate-b', keyHandle: 'keychain:duplicate' })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      inspectOfflineAccountProfile: async () => ({
+        state: 'recoverable', compatibility: 'current', persistenceGeneration: 11,
+        sessionCount: 86, pluginCount: 6, preflightDigest,
+      }),
+      ensureRecoveredProfileWorker: async () => undefined,
+    })
+    const inspect = (overrides: Partial<Parameters<typeof host.inspectOfflineAccountProfiles>[0]> = {}) =>
+      host.inspectOfflineAccountProfiles({
+        keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
+        expectedSchemaGeneration: 3, ownerId: 'connection-1', ...overrides,
+      })
+
+    await expect(inspect({ keyHandles: [] })).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(inspect({ keyHandles: Array.from({ length: 129 }, (_, index) => `keychain:${index}`) }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(inspect({ keyHandles: ['keychain:original', 'keychain:original'] }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(inspect({ expectedRuntimeGeneration: 4 })).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(inspect({ expectedSchemaGeneration: 0 })).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(inspect({ keyHandles: ['keychain:missing'] })).rejects.toMatchObject({ code: 'profile_not_found' })
+    await expect(inspect({ keyHandles: ['keychain:duplicate'] })).rejects.toMatchObject({ code: 'profile_ambiguous' })
+
+    const candidate = (await inspect()).candidates[0]!
+    now += 5 * 60_000
+    await inspect()
+    await expect(host.recoverOfflineAccountProfile({
+      candidateId: candidate.candidateId, preflightDigest,
+      keyHandle: 'keychain:original', unlockMaterial,
+      operationId: randomUUID(), ownerId: 'connection-1',
+    })).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+
+    const unavailable = new DesktopHost({ registry, clock, runtimeGeneration: 5 })
+    await expect(unavailable.inspectOfflineAccountProfiles({
+      keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
+      expectedSchemaGeneration: 3, ownerId: 'connection-1',
+    })).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('validates every recovery preflight field before publishing a candidate', async () => {
+    const clock = { now: () => 1_000 }
+    const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
+    await account(registry, { subject: 'original', keyHandle: 'keychain:original' })
+    const base = {
+      state: 'recoverable', compatibility: 'current', persistenceGeneration: 11,
+      sessionCount: 86, pluginCount: 6, preflightDigest,
+    } as const
+    const invalid = [
+      { ...base, state: 'unknown' },
+      { ...base, compatibility: 'unknown' },
+      { ...base, persistenceGeneration: -1 },
+      { ...base, sessionCount: -1 },
+      { ...base, pluginCount: -1 },
+      { ...base, preflightDigest: 'invalid' },
+      { ...base, reasonCode: '' },
+      { ...base, reasonCode: 'x'.repeat(129) },
+    ]
+    for (const preflight of invalid) {
+      const host = new DesktopHost({
+        registry, clock, runtimeGeneration: 5,
+        inspectOfflineAccountProfile: async () => preflight as never,
+        ensureRecoveredProfileWorker: async () => undefined,
+      })
+      await expect(host.inspectOfflineAccountProfiles({
+        keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
+        expectedSchemaGeneration: 3, ownerId: 'connection-1',
+      })).rejects.toMatchObject({ code: 'profile_integrity_failed' })
+    }
   })
 
   it('returns preflight stale when runtime inventory changes after confirmation is displayed', async () => {
@@ -262,6 +361,106 @@ describe('offline Account Profile recovery', () => {
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
     }))
       .rejects.toMatchObject({ code: 'profile_locked' })
+  })
+
+  it('rejects malformed, stale, incompatible, conflicting, and unsupported recovery requests', async () => {
+    const clock = { now: () => 1_000 }
+    const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
+    const original = await account(registry, {
+      subject: 'original', keyHandle: 'keychain:original', bindingHandle: 'binding:original',
+    })
+    let finishWorker!: () => void
+    const workerReady = new Promise<void>((resolve) => { finishWorker = resolve })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      ensureProfileWorker: async () => undefined,
+      inspectOfflineAccountProfile: async () => ({
+        state: 'recoverable', compatibility: 'current', persistenceGeneration: 11,
+        sessionCount: 86, pluginCount: 6, preflightDigest,
+      }),
+      ensureRecoveredProfileWorker: async () => { await workerReady },
+    })
+    const candidate = (await host.inspectOfflineAccountProfiles({
+      keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
+      expectedSchemaGeneration: 3, ownerId: 'connection-1',
+    })).candidates[0]!
+    const operationId = randomUUID()
+    const input = {
+      candidateId: candidate.candidateId, preflightDigest, keyHandle: 'keychain:original',
+      unlockMaterial, operationId, ownerId: 'connection-1',
+    }
+
+    await expect(host.recoverOfflineAccountProfile({ ...input, operationId: 'invalid' }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(host.recoverOfflineAccountProfile({ ...input, preflightDigest: 'invalid' }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(host.recoverOfflineAccountProfile({ ...input, ownerId: 'connection-2' }))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    await expect(host.recoverOfflineAccountProfile({ ...input, keyHandle: 'keychain:other' }))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    await expect(host.recoverOfflineAccountProfile({ ...input, unlockMaterial: 'invalid' }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    expect(() => host.getOfflineAccountRecoveryStatus({ operationId: 'invalid', ownerId: 'connection-1' }))
+      .toThrow(expect.objectContaining({ code: 'invalid_input' }))
+
+    const first = host.recoverOfflineAccountProfile(input)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    await expect(host.recoverOfflineAccountProfile({ ...input, keyHandle: 'keychain:other' }))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+    host.revokeOwner('other-connection')
+    host.revokeOwner('connection-1')
+    finishWorker()
+    await expect(first).rejects.toMatchObject({ code: 'recovery_worker_failed' })
+    expect(host.getOfflineAccountRecoveryStatus({ operationId, ownerId: 'connection-1' }))
+      .toEqual({ state: 'unknown' })
+
+    const incompatible = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      inspectOfflineAccountProfile: async () => ({
+        state: 'compatibility_blocked', compatibility: 'legacy_runtime_required', persistenceGeneration: 11,
+        sessionCount: 86, pluginCount: 6, preflightDigest, reasonCode: 'runtime_upgrade_required',
+      }),
+      ensureRecoveredProfileWorker: async () => undefined,
+    })
+    const blocked = (await incompatible.inspectOfflineAccountProfiles({
+      keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
+      expectedSchemaGeneration: 3, ownerId: 'connection-1',
+    })).candidates[0]!
+    await expect(incompatible.recoverOfflineAccountProfile({
+      candidateId: blocked.candidateId, preflightDigest, keyHandle: 'keychain:original',
+      unlockMaterial, operationId: randomUUID(), ownerId: 'connection-1',
+    })).rejects.toMatchObject({ code: 'runtime_incompatible' })
+
+    const unsupported = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      inspectOfflineAccountProfile: async () => ({
+        state: 'recoverable', compatibility: 'current', persistenceGeneration: 11,
+        sessionCount: 86, pluginCount: 6, preflightDigest,
+      }),
+    })
+    const unsupportedCandidate = (await unsupported.inspectOfflineAccountProfiles({
+      keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
+      expectedSchemaGeneration: 3, ownerId: 'connection-1',
+    })).candidates[0]!
+    await expect(unsupported.recoverOfflineAccountProfile({
+      candidateId: unsupportedCandidate.candidateId, preflightDigest, keyHandle: 'keychain:original',
+      unlockMaterial, operationId: randomUUID(), ownerId: 'connection-1',
+    })).rejects.toMatchObject({ code: 'unavailable' })
+
+    await host.restoreProfile({
+      profileId: original.profileId, bindingGeneration: original.bindingGeneration,
+      authorityEnvironmentId: environmentId, accountBindingHandle: 'binding:original',
+      authorityBindingVersion: 1, keyHandle: 'keychain:original', unlockMaterial,
+      ownerId: 'connected-owner',
+    })
+    const connectedCandidate = (await host.inspectOfflineAccountProfiles({
+      keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
+      expectedSchemaGeneration: 3, ownerId: 'connected-owner',
+    })).candidates[0]!
+    await expect(host.recoverOfflineAccountProfile({
+      candidateId: connectedCandidate.candidateId, preflightDigest, keyHandle: 'keychain:original',
+      unlockMaterial, operationId: randomUUID(), ownerId: 'connected-owner',
+    })).rejects.toMatchObject({ code: 'scope_mismatch' })
   })
 
   it('redacts worker failures, records a stable failed status, and never grants access', async () => {

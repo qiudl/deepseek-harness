@@ -742,8 +742,97 @@ export interface HostControlErrorFrame {
   }
 }
 
+/** Opaque confirmation plan identifier. */
+export type HostExtensionPlanId = Branded<'HostExtensionPlanId'>
+/** Durable extension operation identifier used for retry and recovery. */
+export type HostExtensionOperationId = Branded<'HostExtensionOperationId'>
+/** Wire market kinds; installation availability is determined by the negotiated Host provider. */
+export type HostExtensionKind = 'plugin' | 'mcp' | 'skill'
+/** Paths and executable arguments are never accepted as operation selectors. */
+export type HostExtensionCommand =
+  | { readonly action: 'inventory'; readonly kind: HostExtensionKind }
+  | { readonly action: 'prepare'; readonly kind: HostExtensionKind; readonly payload: string }
+  | { readonly action: 'commit'; readonly plan_id: HostExtensionPlanId; readonly operation_id: HostExtensionOperationId }
+  | { readonly action: 'status' | 'cancel'; readonly operation_id: HostExtensionOperationId }
+/** Secret-free extension metadata returned to the trusted broker. */
+export type HostExtensionResponse =
+  | {
+    readonly state: 'prepared'
+    readonly plan_id: HostExtensionPlanId
+    readonly kind: HostExtensionKind
+    readonly digest: HostControlSha256
+    readonly expires_at: number
+  }
+  | {
+    readonly state: 'inventory'
+    /** Explicit support for confirmed GitHub directory archives; absent means unsupported. */
+    readonly plugin_remove?: boolean
+    readonly plugin_update?: boolean
+    readonly plugin_toggle?: boolean
+    readonly skill_archives?: boolean
+    readonly skill_remove?: boolean
+    readonly skill_replace?: boolean
+    readonly skill_files?: boolean
+    readonly skill_invocation?: boolean
+    readonly mcp_remove?: boolean
+    readonly mcp_update?: boolean
+    readonly kind: HostExtensionKind
+    readonly entries: readonly {
+      readonly id: string
+      readonly name: string
+      readonly transport: string
+      readonly model_invocable?: boolean
+      readonly user_invocable?: boolean
+      readonly skill_source?: 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other'
+      readonly skill_status?: 'effective' | 'shadowed' | 'not_visible'
+      readonly effective_source?: 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other'
+      readonly plugin_state?: 'enabled' | 'disabled' | 'mixed' | 'unsupported'
+    }[]
+  }
+  | {
+    readonly state: 'receipt'
+    readonly skill_restore?: string
+    readonly mcp_restore?: true
+    readonly plugin_restore?: string
+    readonly plugin_complete?: { readonly action: 'install' | 'update' | 'remove'; readonly package_name: string; readonly spec?: string }
+    readonly completed_by?: HostExtensionOperationId
+    readonly completes_operation?: HostExtensionOperationId
+    readonly restored_by?: HostExtensionOperationId
+    readonly restores_operation?: HostExtensionOperationId
+    readonly operation_id: HostExtensionOperationId
+    readonly outcome: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown'
+    readonly cancellation_requested: boolean
+    readonly created_at: number
+    readonly updated_at: number
+    readonly skill_source?: 'absent' | 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other'
+    readonly reason?: 'revision_conflict' | 'authority_revoked' | 'expired' | 'interrupted' | 'executor_failed'
+  }
+/** Extension commands bind only to a Main-held view lease. */
+export interface ProfileExtensionsRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.extensions'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly command: HostExtensionCommand
+  }
+}
+/** Bounded metadata; payloads, credentials and filesystem paths are excluded. */
+export interface ProfileExtensionsResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.extensions'
+  readonly result: HostExtensionResponse
+}
+
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
+  | ProfileExtensionsRequest
+  | ProfileExtensionsResult
   | HostInspectRequest
   | HostInspectResult
   | ProfileStatusRequest

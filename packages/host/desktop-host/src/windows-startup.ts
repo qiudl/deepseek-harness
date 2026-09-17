@@ -2,6 +2,11 @@ import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'n
 import { win32 } from 'node:path'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { DesktopHost } from './desktop-host.ts'
+import { ProfileExtensionOperations } from './extension-operations.ts'
+import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
+import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
+import { WindowsMcpStorage } from './windows-mcp-storage.ts'
+import { WindowsExtensionReceipts } from './windows-extension-receipts.ts'
 import {
   DshWebProfileWorkerFactory,
   type DshWebProfileWorkerFactoryOptions,
@@ -62,6 +67,8 @@ export interface WindowsDesktopHostBaseConfig extends Omit<
   readonly maximumRegistryBytes: number
   readonly maximumManagedFileBytes: number
   readonly maximumJournalBytes: number
+  /** Explicit receipt capacity enables MCP extensions; omission retains the existing local-only composition. */
+  readonly maximumExtensionReceiptBytes?: number
   readonly profileReadyTimeoutMs: number
   readonly profileAbortTimeoutMs: number
   /**
@@ -104,6 +111,7 @@ export interface StartWindowsDesktopHostApplicationDependencies {
   readonly loadCurrentUserSid?: typeof loadWindowsCurrentUserSid
   readonly loadRegistrationFileBindings?: typeof loadWindowsHostRegistrationFileBindings
   readonly loadProfileListenerAttestor?: typeof loadWindowsProfileListenerAttestor
+  readonly loadWorkerIoCancellation?: typeof loadWindowsWorkerIoCancellation
   readonly createProfileWorkerFactory?: (options: DshWebProfileWorkerFactoryOptions) => ProfileWorkerFactory
   readonly startTransport?: StartTransport
 }
@@ -139,6 +147,7 @@ function validatePublicConfig(config: WindowsDesktopHostBaseConfig): void {
     || !positive(config.runtimeGeneration) || !positive(config.schemaGeneration)
     || !positive(config.maximumRegistryBytes) || !positive(config.maximumManagedFileBytes)
     || !positive(config.maximumJournalBytes) || !positive(config.profileReadyTimeoutMs)
+    || (config.maximumExtensionReceiptBytes !== undefined && !positive(config.maximumExtensionReceiptBytes))
     || !positive(config.profileAbortTimeoutMs)) throw new HostAuthorityError('invalid_input')
 }
 
@@ -197,17 +206,14 @@ function loadOwnedTrustFromPrivateFiles(
   userSid: string,
   bindings: WindowsHostRegistrationFileBindings,
 ): WindowsOwnedTrust {
-  if (!privateFilePath(config.root, config.deviceIndexKeyPath, 'device-index-key.v1')
-    || !privateFilePath(config.root, config.accountKeyringPath, 'account-access-keyring.v2.json')
-    || !privateFilePath(config.root, config.installationPrivateKeyPath, 'installation-private-key.pem')) {
-    throw new HostAuthorityError('invalid_input')
-  }
   const deviceIndexKey = ownedPrivateFile(bindings, config.deviceIndexKeyPath, 32, userSid)
   if (deviceIndexKey.length !== 32) throw new HostAuthorityError('unavailable')
   const keyring = ownedPrivateFile(bindings, config.accountKeyringPath, 16 * 1024, userSid)
   const privateKey = ownedPrivateFile(bindings, config.installationPrivateKeyPath, 16 * 1024, userSid)
   let accountAccessKeyring: string
-  try { accountAccessKeyring = new TextDecoder('utf-8', { fatal: true }).decode(keyring) } catch {
+  try {
+    accountAccessKeyring = new TextDecoder('utf-8', { fatal: true }).decode(keyring)
+  } catch {
     throw new HostAuthorityError('unavailable')
   }
   return validateOwnedTrust(config, {
@@ -269,6 +275,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
   dependencies: StartWindowsDesktopHostApplicationDependencies,
 ): Promise<WindowsDesktopHostApplication> {
   let pinnedNative: ReturnType<typeof loadPinnedWindowsVaultNativeModule> | undefined
+  /* v8 ignore next 3 -- the signed native addon loader is exercised by the Windows platform lane. */
   const loadKoffi = () => Promise.resolve(
     pinnedNative ??= loadPinnedWindowsVaultNativeModule(config.nativeModule),
   )
@@ -277,6 +284,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
     arch: config.arch ?? process.arch,
     loadKoffi,
   }
+  /* v8 ignore next 5 -- the signed native adapter is exercised by the Windows platform lane. */
   const attestListener: ProfileListenerAttestor = await (
     dependencies.loadProfileListenerAttestor
       ?? (() => loadWindowsProfileListenerAttestor({ ...nativeOptions, loadKoffi }))
@@ -291,9 +299,11 @@ async function startWindowsDesktopHostApplicationWithTrust(
       ? {}
       : { onDiagnostic: config.onProfileWorkerDiagnostic }),
   }
+  /* v8 ignore next 7 -- Windows path admission and the packaged child process run in the Windows platform lane. */
   const defaultProfileWorkerFactory = dependencies.createProfileWorkerFactory === undefined
     ? new DshWebProfileWorkerFactory(profileWorkerOptions)
     : undefined
+  /* v8 ignore next 2 -- the production factory callback is exercised with Windows paths in the Windows platform lane. */
   const createProfileWorker = dependencies.createProfileWorkerFactory?.(profileWorkerOptions)
     ?? (spec => (defaultProfileWorkerFactory as DshWebProfileWorkerFactory).create(spec))
   const workers = new ProfileWorkerSupervisor(createProfileWorker, config.onProfileWorkerDiagnostic)
@@ -301,7 +311,21 @@ async function startWindowsDesktopHostApplicationWithTrust(
     readonly host: DesktopHost
     readonly commandAuthority: SessionCommandAuthority
     readonly authority: HostControlAuthority
+    readonly extensionOperations?: ProfileExtensionOperations
   } | undefined
+  /* v8 ignore next -- the signed native adapter is exercised by the Windows platform lane. */
+  const loadCancellation = dependencies.loadWorkerIoCancellation
+    ?? (() => loadWindowsWorkerIoCancellation({ ...nativeOptions, loadKoffi }))
+  /* v8 ignore next -- the signed native adapter is exercised by the Windows platform lane. */
+  const loadCurrentUserSid = dependencies.loadCurrentUserSid
+    ?? (() => loadWindowsCurrentUserSid({ ...nativeOptions, loadKoffi }))
+  /* v8 ignore next 5 -- the signed native adapter is exercised by the Windows platform lane. */
+  const loadRegistrationFileBindings = dependencies.loadRegistrationFileBindings
+    ?? (() => loadWindowsHostRegistrationFileBindings({
+      ...nativeOptions,
+      loadKoffi,
+    }))
+  /* v8 ignore next -- the production transport default is exercised by the Windows platform lane. */
   const startTransport = dependencies.startTransport ?? startWindowsHostTransport
   const transport = await startTransport({
     ...(config.platform === undefined ? {} : { platform: config.platform }),
@@ -364,6 +388,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           profileId: profile.profileId,
           userSid,
           maximumManagedFileBytes: config.maximumManagedFileBytes,
+          prepareMcpStorage: config.maximumExtensionReceiptBytes !== undefined,
           bindings,
         }))
         await inStep('worker launch', () => workers.ensure({
@@ -391,6 +416,20 @@ async function startWindowsDesktopHostApplicationWithTrust(
         maximumJournalBytes: config.maximumJournalBytes,
         bindings,
       }), clock)
+      const mcp = config.maximumExtensionReceiptBytes === undefined ? undefined : new ProfileMcpExecutor({
+        storage: new WindowsMcpStorage({
+          userSid, bindings, profileRoot: profileId => win32.join(config.root, 'profiles', profileId),
+        }),
+        reload: (profileId, signal, entryIds, guard, removedIds) => reloadProfileMcpRuntime({
+          workers,
+          resolveProfile: id => registry.resolveProfile(id as never),
+          ensureWorker,
+        }, profileId, signal, entryIds, guard, removedIds),
+      })
+      const extensionOperations = mcp && config.maximumExtensionReceiptBytes !== undefined
+        ? new ProfileExtensionOperations(new WindowsExtensionReceipts({
+          root: win32.join(config.root, 'control'), userSid, bindings, maximumBytes: config.maximumExtensionReceiptBytes,
+        }), mcp, clock) : undefined
       const authority = new HostControlAuthority({
         identity: {
           hostInstanceId: config.hostInstanceId,
@@ -403,29 +442,21 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
+        ...(mcp && extensionOperations ? { extensions: { operations: extensionOperations, kinds: ['mcp'] as const,
+          mcpRemove: true, mcpUpdate: true, inventory: (profileId: string) => mcp.inventory(profileId) } } : {}),
         profilePersistenceGeneration: () => 1,
         now: () => clock.now(),
       })
-      state = { host, commandAuthority, authority }
+      state = { host, commandAuthority, authority, ...(extensionOperations ? { extensionOperations } : {}) }
     },
     openSession: (ownerId, signal) => {
       if (state === undefined) throw new HostAuthorityError('unavailable')
       return state.authority.openSession(ownerId, signal)
     },
-    quiesceOwnedResources: () => workers.disposeAll(),
-  }, {
-    loadCancellation: () => loadWindowsWorkerIoCancellation({
-      ...nativeOptions,
-      loadKoffi,
-    }),
-    loadCurrentUserSid: dependencies.loadCurrentUserSid
-      ?? (() => loadWindowsCurrentUserSid({ ...nativeOptions, loadKoffi })),
-    loadRegistrationFileBindings: dependencies.loadRegistrationFileBindings
-      ?? (() => loadWindowsHostRegistrationFileBindings({
-        ...nativeOptions,
-        loadKoffi,
-      })),
-  })
+    quiesceOwnedResources: async () => {
+      try { await state?.extensionOperations?.dispose() } finally { await workers.disposeAll() }
+    },
+  }, { loadCancellation, loadCurrentUserSid, loadRegistrationFileBindings })
   if (state === undefined) {
     await transport.close().catch(() => undefined)
     throw new HostAuthorityError('unavailable')

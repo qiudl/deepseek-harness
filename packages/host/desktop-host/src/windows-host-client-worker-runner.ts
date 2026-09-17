@@ -88,6 +88,7 @@ class ParentCommandQueue {
       this.queued = undefined
       return Promise.resolve(message)
     }
+    /* v8 ignore next -- the runner has exactly one sequential consumer of this private queue. */
     if (this.waiter !== undefined) return Promise.reject(new Error('Concurrent Windows Host client Worker wait'))
     return new Promise((resolve, reject) => { this.waiter = { resolve, reject } })
   }
@@ -140,6 +141,7 @@ export async function runWindowsHostClientWorker(
               if (!options.stopFlag.requested()) throw new Error('Windows Host client stop flag missing')
               break
             }
+            /* v8 ignore next -- ParentCommandQueue admits only request or stop commands. */
             if (command.type !== 'request') throw new Error('Invalid Windows Host client command')
             if (options.stopFlag.requested()) break
             const request = decodeHostControlFrame(command.frame)

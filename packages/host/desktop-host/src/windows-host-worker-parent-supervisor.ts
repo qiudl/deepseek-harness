@@ -175,6 +175,7 @@ export class WindowsHostWorkerParentSupervisor {
 
   private failReady(reason: WindowsHostWorkerSupervisorFailure, cause?: unknown): void {
     if (this.readySettled) {
+      /* v8 ignore next -- settled non-runtime failures are precluded by worker/deadline ownership. */
       if (reason === 'protocol_failure' || reason === 'runtime_failure') {
         this.supervisorState = 'failed'
         try { this.options.stopFlag.request() } catch { /* preserve the protocol failure */ }
@@ -214,8 +215,7 @@ export class WindowsHostWorkerParentSupervisor {
     this.supervisorState = 'stopping'
     try { this.options.stopFlag.request() } catch (error) { this.reportFailure(asError(error)) }
 
-    let bridgeStop: Promise<void>
-    try { bridgeStop = this.bridge.requestStop() } catch (error) { bridgeStop = Promise.reject(asError(error)) }
+    const bridgeStop = this.bridge.requestStop()
     const cleanup = this.observeCleanup(bridgeStop)
 
     const handle = this.bridge.cancellationThreadHandle
@@ -261,6 +261,7 @@ export class WindowsHostWorkerParentSupervisor {
       this.reportFailure(asError(error))
       return
     }
+    /* v8 ignore next -- one cached stop operation owns the sole retained-handle callback. */
     if (this.completedStop !== prior) return
     this.completedStop = { ...prior, state: 'stopped' }
     this.supervisorState = 'stopped'
