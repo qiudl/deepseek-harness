@@ -96,11 +96,11 @@ describe('incremental streaming rendering', () => {
   it('drops the streaming cache when the copy labels change identity', () => {
     const doc = ['```ts', 'const a = 1', '```', '', 'p1', '', 'p2', '', 'p3'].join('\n')
     const live = render(
-      <MarkdownText text={doc} streaming codeLabels={{ copyLabel: 'Copy', copiedLabel: 'Copied' }} />,
+      <MarkdownText text={doc} streaming codeLabels={{ copyLabel: 'Copy', copiedLabel: 'Copied', copyFailedLabel: 'Copy failed' }} />,
     )
     expect([...live.container.querySelectorAll('button')].map(b => b.textContent)).toEqual(['Copy'])
     live.rerender(
-      <MarkdownText text={doc} streaming codeLabels={{ copyLabel: 'Kopieren', copiedLabel: 'Kopiert' }} />,
+      <MarkdownText text={doc} streaming codeLabels={{ copyLabel: 'Kopieren', copiedLabel: 'Kopiert', copyFailedLabel: 'Fehlgeschlagen' }} />,
     )
     expect([...live.container.querySelectorAll('button')].map(b => b.textContent)).toEqual(['Kopieren'])
     live.unmount()

@@ -240,7 +240,7 @@ function jsonTreeLabels(t: TrajectoryTranslate): JsonTreeLabels {
 
 function markdownLabels(t: TrajectoryTranslate): MarkdownLabels {
   return {
-    code: { copyLabel: t('copy'), copiedLabel: t('copied') },
+    code: { copyLabel: t('copy'), copiedLabel: t('copied'), copyFailedLabel: t('copy.failed') },
     footnotes: t('markdown.footnotes'),
   }
 }
