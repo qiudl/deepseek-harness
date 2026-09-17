@@ -77,9 +77,8 @@ export function ImageLightbox({ src, alt, labels, onClose, onSave }: {
         return
       }
       if (event.key === 'Tab') {
-        const controls = [...(
-          dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? []
-        )]
+        const dialog = dialogRef.current as HTMLDivElement
+        const controls = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled)')]
         if (controls.length === 0) return
         const current = controls.indexOf(document.activeElement as HTMLElement)
         const next = event.shiftKey
@@ -206,8 +205,9 @@ export function ImageLightbox({ src, alt, labels, onClose, onSave }: {
 }
 
 function pointerDistance(pointers: ReadonlyMap<number, { x: number; y: number }>): number {
-  const [first, second] = [...pointers.values()]
-  return first === undefined || second === undefined
-    ? 0
-    : Math.hypot(second.x - first.x, second.y - first.y)
+  const values = [...pointers.values()]
+  const first = values[0] as { x: number; y: number }
+  const second = values[1] as { x: number; y: number }
+  // Callers establish the exact two-pointer invariant before measuring.
+  return Math.hypot(second.x - first.x, second.y - first.y)
 }

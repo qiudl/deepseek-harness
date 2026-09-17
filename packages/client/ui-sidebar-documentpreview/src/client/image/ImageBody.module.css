@@ -24,7 +24,7 @@
   width: max-content;
   margin-bottom: 8px;
   overflow: hidden;
-  border: 1px solid var(--dsw-alias-border-secondary);
+  border: 0.5px solid var(--dsw-alias-border-secondary);
   border-radius: 6px;
   background: var(--dsw-alias-background-primary);
   box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
@@ -35,7 +35,7 @@
   height: 28px;
   padding: 0 8px;
   border: 0;
-  border-right: 1px solid var(--dsw-alias-border-secondary);
+  border-right: 0.5px solid var(--dsw-alias-border-secondary);
   color: var(--dsw-alias-label-primary);
   background: transparent;
   cursor: pointer;

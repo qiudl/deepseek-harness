@@ -411,6 +411,23 @@ describe('writeClipboard', () => {
     expect(webWrite).not.toHaveBeenCalled()
   })
 
+  it('fails closed when the Desktop clipboard bridge rejects', async () => {
+    Reflect.set(globalThis, '__DSH_DESKTOP_HOST__', {
+      hello: vi.fn().mockRejectedValue(new Error('bridge closed')),
+      writeClipboard: vi.fn(),
+    })
+    await expect(writeClipboard('payload')).resolves.toBe(false)
+  })
+
+  it('ignores non-object and partial Desktop clipboard candidates', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: undefined })
+    for (const candidate of [false, {}, { hello() {} }]) {
+      Reflect.set(globalThis, '__DSH_DESKTOP_HOST__', candidate)
+      await expect(writeClipboard('payload')).resolves.toBe(false)
+    }
+  })
+
   it('reports true after the async Clipboard API accepts the exact text', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })

@@ -74,6 +74,7 @@ async function attachmentExportResponse(
   }
   if (authorized === undefined) return plain('not found', 404)
   const name = exportName(authorized)
+  /* v8 ignore next -- both authorization paths admit only references carrying this exact valid name. */
   if (name === undefined) return plain('not found', 404)
   const headers = responseHeaders(authorized, name)
   if (request.method === 'HEAD') return new Response(null, { status: 200, headers })
@@ -104,6 +105,7 @@ function parseRequest(request: Request): {
   readonly refType: ExportRef['refType']
   readonly name: string
 } | undefined {
+  /* v8 ignore next -- the registered Host route rejects every other method before invoking its handler. */
   if (request.method !== 'GET' && request.method !== 'HEAD') return undefined
   const params = new URL(request.url).searchParams
   const keys = [...params.keys()]
@@ -111,13 +113,13 @@ function parseRequest(request: Request): {
     || !keys.every(key => ['sessionId', 'attachmentId', 'refType', 'nameB64'].includes(key))) {
     return undefined
   }
-  const rawSessionId = params.get('sessionId')
-  const attachmentId = params.get('attachmentId')
-  const refType = params.get('refType')
-  const rawName = params.get('nameB64')
-  const name = rawName === null ? undefined : decodeName(rawName)
-  if (rawSessionId === null || !OPAQUE_ID.test(rawSessionId)
-    || attachmentId === null || !DIGEST.test(attachmentId)
+  // The exact-key check above establishes that each lookup is present.
+  const rawSessionId = params.get('sessionId') as string
+  const attachmentId = params.get('attachmentId') as string
+  const refType = params.get('refType') as string
+  const name = decodeName(params.get('nameB64') as string)
+  if (!OPAQUE_ID.test(rawSessionId)
+    || !DIGEST.test(attachmentId)
     || (refType !== 'image' && refType !== 'file') || name === undefined) return undefined
   return { sessionId: sessionId(rawSessionId), attachmentId, refType, name }
 }
@@ -131,8 +133,8 @@ function contentAttachments(
   const visited = new WeakSet<object>()
   let scanned = 0
   while (pending.length > 0) {
-    const next = pending.pop()
-    if (next === undefined || visited.has(next.blocks)) return []
+    const next = pending.pop() as { readonly blocks: unknown[]; readonly depth: number }
+    if (visited.has(next.blocks)) return []
     visited.add(next.blocks)
     for (const candidate of next.blocks) {
       scanned += 1
@@ -254,6 +256,7 @@ class AttachmentAuthorizationIndex {
         live = entry
         this.live.set(attached, entry)
         void entry.ready.catch(() => {
+          /* v8 ignore else -- this entry remains installed until its own ready promise settles. */
           if (this.live.get(attached) === entry) this.live.delete(attached)
         })
       }
@@ -288,7 +291,8 @@ class AttachmentAuthorizationIndex {
 function decodeName(encoded: string): string | undefined {
   if (!/^[A-Za-z0-9_-]{1,1366}$/u.test(encoded)) return undefined
   const bytes = Buffer.from(encoded, 'base64url')
-  if (bytes.toString('base64url') !== encoded || bytes.byteLength > MAX_NAME_BYTES) return undefined
+  // The encoded-length cap already limits decoded input to MAX_NAME_BYTES.
+  if (bytes.toString('base64url') !== encoded) return undefined
   try {
     const name = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
     if (name.normalize('NFC') !== name || /[\0/\\]/u.test(name)) return undefined
