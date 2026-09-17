@@ -296,7 +296,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
     : undefined
   const createProfileWorker = dependencies.createProfileWorkerFactory?.(profileWorkerOptions)
     ?? (spec => (defaultProfileWorkerFactory as DshWebProfileWorkerFactory).create(spec))
-  const workers = new ProfileWorkerSupervisor(createProfileWorker)
+  const workers = new ProfileWorkerSupervisor(createProfileWorker, config.onProfileWorkerDiagnostic)
   let state: {
     readonly host: DesktopHost
     readonly commandAuthority: SessionCommandAuthority

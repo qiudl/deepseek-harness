@@ -12,7 +12,14 @@ interface StartProfileWorkerInput {
 /** Owns one isolated child per unlocked Profile and awaits quiescence on disposal. */
 export class ProfileWorkerSupervisor {
   private readonly workers = new Map<string, ProfileWorkerHandle>()
-  constructor(private readonly factory: ProfileWorkerFactory) {}
+  /**
+   * @param factory - creates one worker per Profile.
+   * @param onDiagnostic - receives one bounded line when an activation finds no usable worker.
+   */
+  constructor(
+    private readonly factory: ProfileWorkerFactory,
+    private readonly onDiagnostic?: (detail: string) => void,
+  ) {}
 
   /**
    * Start one Profile worker with an explicit, non-ambient environment.
@@ -50,6 +57,15 @@ export class ProfileWorkerSupervisor {
     await Promise.resolve()
     const worker = this.workers.get(profileId)
     if (!worker || worker.viewOrigin === undefined || worker.generation === undefined || worker.bootstrapCookie === undefined) {
+      // `unavailable` cannot distinguish a Profile with no worker from a worker that never
+      // published its view, and the two have unrelated causes.
+      this.onDiagnostic?.(
+        `profile view activation found no usable worker: profile=${profileId}`
+        + ` known=${String(this.workers.size)} present=${String(worker !== undefined)}`
+        + ` origin=${String(worker?.viewOrigin !== undefined)}`
+        + ` generation=${String(worker?.generation !== undefined)}`
+        + ` cookie=${String(worker?.bootstrapCookie !== undefined)}`,
+      )
       throw new HostAuthorityError('unavailable')
     }
     return { origin: worker.viewOrigin, generation: worker.generation, bootstrapCookie: worker.bootstrapCookie }
