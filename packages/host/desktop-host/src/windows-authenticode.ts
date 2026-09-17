@@ -4,6 +4,13 @@ const SHA256_CERTIFICATE_THUMBPRINT = /^[0-9a-f]{64}$/iu
 const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
+/**
+ * `CERT_E_UNTRUSTEDROOT`. WinVerifyTrust reports it only after the file digest and the
+ * signature itself verified; it means no installed root vouches for the signer's name.
+ * Every other nonzero status — a tampered file, an expired certificate, a malformed
+ * signature — stays fatal.
+ */
+const CERT_E_UNTRUSTEDROOT = 0x800B_0109 | 0
 
 /** WinTrust verification result retaining the state handle needed for mandatory cleanup. */
 export interface WindowsAuthenticodeBeginResult {
@@ -43,16 +50,29 @@ function validCanonicalPath(path: string): boolean {
     && win32.normalize(path) === path
 }
 
+/** Caller-supplied relaxation for an installation whose signer is pinned rather than chained. */
+export interface WindowsAuthenticodeVerifierOptions {
+  /**
+   * Accept a signature whose chain reaches no installed root. Callers set this only when the
+   * returned thumbprint is checked against a pinned allowlist, which then carries the whole
+   * trust decision; a signature that fails for any other reason is still rejected.
+   */
+  readonly acceptUntrustedRoot?: boolean
+}
+
 /**
  * Build the strict stable-handle Authenticode verifier.
- * Only WinVerifyTrust status zero is accepted; every returned state handle is closed,
- * and cleanup failure rejects an otherwise successful verification.
+ * WinVerifyTrust status zero is accepted, and `CERT_E_UNTRUSTEDROOT` as well when the caller
+ * pins the signer; every returned state handle is closed, and cleanup failure rejects an
+ * otherwise successful verification.
  * @param api - worker-local WinTrust and certificate-chain operations.
  * @returns a publisher certificate SHA-256 verifier for the already-open executable.
  */
 export function createWindowsAuthenticodeVerifier(
   api: WindowsAuthenticodeNativeApi,
+  options: WindowsAuthenticodeVerifierOptions = {},
 ): (executableHandle: bigint, canonicalPath: string) => string {
+  const acceptUntrustedRoot = options.acceptUntrustedRoot === true
   return (executableHandle, canonicalPath) => {
     if (!validHandle(executableHandle) || !validCanonicalPath(canonicalPath)) {
       throw new WindowsAuthenticodeError('WinVerifyTrust', 13)
@@ -61,7 +81,9 @@ export function createWindowsAuthenticodeVerifier(
     const stateHandle = begun.stateHandle
     let result: string | undefined
     let failure: Error | undefined
-    if (begun.status !== 0) {
+    const trusted = begun.status === 0
+      || (acceptUntrustedRoot && (begun.status | 0) === CERT_E_UNTRUSTEDROOT)
+    if (!trusted) {
       failure = new WindowsAuthenticodeError('WinVerifyTrust', begun.status)
     } else if (!validHandle(stateHandle)) {
       failure = new WindowsAuthenticodeError('WinVerifyTrust', 13)

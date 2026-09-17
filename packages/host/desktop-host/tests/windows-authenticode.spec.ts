@@ -36,6 +36,30 @@ describe('Windows Authenticode stable-handle verifier', () => {
     expect(api.closeFileVerification).toHaveBeenCalledWith(802n, path, 901n)
   })
 
+  it('accepts an unchained signer only when the caller pins it, and only for that status', () => {
+    const untrustedRoot = 0x800B_0109 | 0
+    const badDigest = 0x8009_6010 | 0
+
+    // Pinned: the thumbprint the caller is about to match carries the trust decision.
+    const pinned = native({ beginFileVerification: vi.fn(() => ({ status: untrustedRoot, stateHandle: 901n })) })
+    expect(createWindowsAuthenticodeVerifier(pinned, { acceptUntrustedRoot: true })(802n, path))
+      .toBe('AB'.repeat(32))
+    expect(pinned.closeFileVerification).toHaveBeenCalledWith(802n, path, 901n)
+
+    // Unpinned: chain trust remains the only accepted evidence.
+    const unpinned = native({ beginFileVerification: vi.fn(() => ({ status: untrustedRoot, stateHandle: 901n })) })
+    expect(() => createWindowsAuthenticodeVerifier(unpinned)(802n, path))
+      .toThrow(WindowsAuthenticodeError)
+    expect(unpinned.publisherCertificateSha256).not.toHaveBeenCalled()
+
+    // A tampered file stays fatal even for a pinned signer.
+    const tampered = native({ beginFileVerification: vi.fn(() => ({ status: badDigest, stateHandle: 901n })) })
+    expect(() => createWindowsAuthenticodeVerifier(tampered, { acceptUntrustedRoot: true })(802n, path))
+      .toThrow(WindowsAuthenticodeError)
+    expect(tampered.publisherCertificateSha256).not.toHaveBeenCalled()
+    expect(tampered.closeFileVerification).toHaveBeenCalledWith(802n, path, 901n)
+  })
+
   it('rejects missing state, malformed thumbprints, and invalid caller handles', () => {
     for (const api of [
       native({ beginFileVerification: vi.fn(() => ({ status: 0, stateHandle: null })) }),

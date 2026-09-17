@@ -38,6 +38,8 @@ export interface WindowsAuthenticodeKoffiOptions {
   readonly arch?: string
   readonly isMainThread?: boolean
   readonly loadKoffi?: () => Promise<KoffiModule>
+  /** Forwarded to {@link createWindowsAuthenticodeVerifier} for a pinned, unchained signer. */
+  readonly acceptUntrustedRoot?: boolean
 }
 
 interface VerificationContext {
@@ -210,5 +212,9 @@ export async function loadWindowsAuthenticodeVerifier(
       }
     },
   }
-  return createWindowsAuthenticodeVerifier(native)
+  return createWindowsAuthenticodeVerifier(native, {
+    ...(options.acceptUntrustedRoot === undefined
+      ? {}
+      : { acceptUntrustedRoot: options.acceptUntrustedRoot }),
+  })
 }

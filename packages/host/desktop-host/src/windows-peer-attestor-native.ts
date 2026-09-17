@@ -37,6 +37,7 @@ export interface WindowsNativePeerAttestorOptions {
 export interface WindowsNativePeerAttestorLoaders {
   readonly loadAuthenticode: (
     runtime: WindowsNativeWorkerRuntime,
+    acceptUntrustedRoot: boolean,
   ) => Promise<(handle: bigint, path: string) => string>
   readonly loadDigest: (runtime: WindowsNativeWorkerRuntime) => Promise<(handle: bigint) => string>
   readonly loadProcessNative: (
@@ -46,7 +47,8 @@ export interface WindowsNativePeerAttestorLoaders {
 }
 
 const defaultLoaders: WindowsNativePeerAttestorLoaders = {
-  loadAuthenticode: runtime => loadWindowsAuthenticodeVerifier(runtime),
+  loadAuthenticode: (runtime, acceptUntrustedRoot) =>
+    loadWindowsAuthenticodeVerifier({ ...runtime, acceptUntrustedRoot }),
   loadDigest: runtime => loadWindowsExecutableDigest(runtime),
   loadProcessNative: (trust, runtime) =>
     loadWindowsPeerProcessNativeApi(trust, runtime),
@@ -69,7 +71,12 @@ export async function loadWindowsPeerAttestor(
     arch: options.arch ?? process.arch,
     isMainThread: options.isMainThread ?? isMainThread,
   }
-  const verifyAuthenticodePublisher = await loaders.loadAuthenticode(runtime)
+  // A pinned publisher thumbprint is the whole trust decision for an installation that
+  // chains to no installed root, so chain trust is only required when nothing is pinned.
+  const verifyAuthenticodePublisher = await loaders.loadAuthenticode(
+    runtime,
+    options.allowedPublisherThumbprints.size > 0,
+  )
   const digestExecutable = await loaders.loadDigest(runtime)
   const native = await loaders.loadProcessNative({
     verifyAuthenticodePublisher,
