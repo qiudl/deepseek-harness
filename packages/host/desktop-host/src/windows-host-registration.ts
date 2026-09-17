@@ -102,36 +102,89 @@ export function windowsHostPrivateSecurityDescriptor(userSid: string): string {
   return `O:${userSid}D:P(A;OICI;FA;;;${userSid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`
 }
 
+/**
+ * Report why a path can never be a private path, or undefined when only its ACL shape may differ.
+ * These facts identify the object itself and its effective access, so a rejection here is a
+ * fail-closed verdict: republishing cannot turn a reparse point, a hard link or a path carrying
+ * foreign access into a trustworthy one.
+ * @param evidence - handle-derived facts for the path under test.
+ * @param expectedKind - the object kind the caller requires.
+ * @param userSid - the only non-system principal allowed access.
+ * @returns the rejection reason, or undefined when the object and its access set are sound.
+ */
+export function describeWindowsHostPrivatePathObjectRejection(
+  evidence: WindowsHostPrivatePathEvidence,
+  expectedKind: WindowsHostPrivatePathEvidence['kind'],
+  userSid: string,
+): string | undefined {
+  if (evidence.kind !== expectedKind || evidence.reparsePoint || evidence.linkCount !== 1
+    || evidence.access.length !== 3) {
+    // Four independent facts share one code; without naming them a rejected path says nothing.
+    return `private path evidence rejected: kind=${evidence.kind} expected=${expectedKind}`
+      + ` reparsePoint=${String(evidence.reparsePoint)} linkCount=${String(evidence.linkCount)}`
+      + ` aceCount=${String(evidence.access.length)}`
+  }
+  const expected = new Set([userSid, LOCAL_SYSTEM_SID, BUILTIN_ADMINISTRATORS_SID])
+  for (const entry of evidence.access) {
+    if (entry.type !== 'allow' || entry.mask !== FULL_CONTROL || !expected.delete(entry.sid)) {
+      return `private path ACE rejected: type=${entry.type} fullControl=${String(entry.mask === FULL_CONTROL)}`
+        + ` sidExpected=${String(expected.has(entry.sid))}`
+    }
+  }
+  if (expected.size !== 0) {
+    return `private path is missing ${String(expected.size)} required access entries`
+  }
+  return undefined
+}
+
+/**
+ * Report why a sound path does not carry the private descriptor this Host writes.
+ * Windows preserves a creation-time descriptor only for CreateFileW and normalizes inheritance
+ * flags away on every later SetSecurityInfo, so a file another writer replaced carries inherited
+ * entries under whichever owner that writer's token defaulted to. Callers holding a verified
+ * private parent may republish such a path instead of failing.
+ * @param evidence - handle-derived facts for a path that passed the object check.
+ * @param userSid - the owner every private path must carry.
+ * @returns the rejection reason, or undefined when the descriptor is already private.
+ */
+export function describeWindowsHostPrivatePathShapeRejection(
+  evidence: WindowsHostPrivatePathEvidence,
+  userSid: string,
+): string | undefined {
+  const inheritable = evidence.access.every(entry => entry.objectInherit && entry.containerInherit)
+  if (evidence.ownerSid !== userSid || !evidence.daclProtected
+    || evidence.access.some(entry => entry.inherited) || !inheritable) {
+    return `private path security shape rejected: ownerMatches=${String(evidence.ownerSid === userSid)}`
+      + ` daclProtected=${String(evidence.daclProtected)}`
+      + ` inheritedAces=${String(evidence.access.filter(entry => entry.inherited).length)}`
+      + ` inheritableAces=${String(inheritable)}`
+  }
+  return undefined
+}
+
+/**
+ * Report why one path fails the private-path contract, or undefined when it holds.
+ * @param evidence - handle-derived facts for the path under test.
+ * @param expectedKind - the object kind the caller requires.
+ * @param userSid - the owner every private path must carry.
+ * @returns the rejection reason, or undefined when the path is private.
+ */
+export function describeWindowsHostPrivatePathRejection(
+  evidence: WindowsHostPrivatePathEvidence,
+  expectedKind: WindowsHostPrivatePathEvidence['kind'],
+  userSid: string,
+): string | undefined {
+  return describeWindowsHostPrivatePathObjectRejection(evidence, expectedKind, userSid)
+    ?? describeWindowsHostPrivatePathShapeRejection(evidence, userSid)
+}
+
 export function assertWindowsHostPrivatePathEvidence(
   evidence: WindowsHostPrivatePathEvidence,
   expectedKind: WindowsHostPrivatePathEvidence['kind'],
   userSid: string,
 ): void {
-  if (evidence.kind !== expectedKind || evidence.reparsePoint || evidence.linkCount !== 1
-    || evidence.ownerSid !== userSid || !evidence.daclProtected || evidence.access.length !== 3) {
-    // Six independent facts share one code; without naming them a rejected path says nothing.
-    throw unavailable(
-      `private path evidence rejected: kind=${evidence.kind} expected=${expectedKind}`
-      + ` reparsePoint=${String(evidence.reparsePoint)} linkCount=${String(evidence.linkCount)}`
-      + ` ownerMatches=${String(evidence.ownerSid === userSid)}`
-      + ` daclProtected=${String(evidence.daclProtected)}`
-      + ` aceCount=${String(evidence.access.length)}`,
-    )
-  }
-  const expected = new Set([userSid, LOCAL_SYSTEM_SID, BUILTIN_ADMINISTRATORS_SID])
-  for (const entry of evidence.access) {
-    if (entry.type !== 'allow' || entry.mask !== FULL_CONTROL || entry.inherited
-      || !entry.objectInherit || !entry.containerInherit || !expected.delete(entry.sid)) {
-      throw unavailable(
-        `private path ACE rejected: type=${entry.type} fullControl=${String(entry.mask === FULL_CONTROL)}`
-        + ` inherited=${String(entry.inherited)} objectInherit=${String(entry.objectInherit)}`
-        + ` containerInherit=${String(entry.containerInherit)} sidExpected=${String(expected.has(entry.sid))}`,
-      )
-    }
-  }
-  if (expected.size !== 0) {
-    throw unavailable(`private path is missing ${String(expected.size)} required access entries`)
-  }
+  const rejection = describeWindowsHostPrivatePathRejection(evidence, expectedKind, userSid)
+  if (rejection !== undefined) throw unavailable(rejection)
 }
 
 function validateRegistrationShape(value: unknown): value is WindowsHostRegistration {

@@ -1,6 +1,8 @@
 import { win32 } from 'node:path'
 import {
   assertWindowsHostPrivatePathEvidence,
+  describeWindowsHostPrivatePathObjectRejection,
+  describeWindowsHostPrivatePathShapeRejection,
   windowsHostPrivateSecurityDescriptor,
   type WindowsHostRegistrationFileBindings,
 } from './windows-host-registration.ts'
@@ -114,14 +116,31 @@ export function prepareWindowsIsolatedProfile(options: {
         { cause: new Error(`managed file exceeds the size limit: ${file.path}`) })
     }
     const result = options.bindings.createPrivateFile(file.path, file.contents, securityDescriptor)
-    assertWindowsHostPrivatePathEvidence(result.evidence, 'file', options.userSid)
-    if (result.state === 'created') continue
+    if (result.state === 'created') {
+      assertWindowsHostPrivatePathEvidence(result.evidence, 'file', options.userSid)
+      continue
+    }
     const existing = options.bindings.readPrivateFile(file.path, options.maximumManagedFileBytes)
     if (existing === undefined) {
       throw new HostAuthorityError('unavailable',
         { cause: new Error(`an existing managed file could not be read back: ${file.path}`) })
     }
-    assertWindowsHostPrivatePathEvidence(existing.evidence, 'file', options.userSid)
+    // A Profile writer replaces these files through its own rename, so the replacement carries
+    // inherited entries under its own token's default owner. Windows keeps a creation-time
+    // descriptor only for CreateFileW and normalizes inheritance flags away on every later
+    // SetSecurityInfo, so such a file can never be repaired in place; republishing it through the
+    // same write-through path is the only way back. Only the descriptor shape is recoverable: a
+    // reparse point, a hard link or any foreign access still fails closed, because republishing
+    // would launder an object this Host never created into a trusted one.
+    const objectRejection = describeWindowsHostPrivatePathObjectRejection(
+      existing.evidence, 'file', options.userSid)
+    if (objectRejection !== undefined) {
+      throw new HostAuthorityError('unavailable', { cause: new Error(objectRejection) })
+    }
+    const evidence = describeWindowsHostPrivatePathShapeRejection(existing.evidence, options.userSid) === undefined
+      ? existing.evidence
+      : options.bindings.replacePrivateFile(file.path, existing.contents, securityDescriptor)
+    assertWindowsHostPrivatePathEvidence(evidence, 'file', options.userSid)
     if (!file.mutable && !existing.contents.equals(file.contents)) throw new HostAuthorityError('conflict')
   }
   return { profileRoot, persistenceRoot, tempRoot, pluginRoots: [pluginsRoot], persistenceGeneration: 1 }

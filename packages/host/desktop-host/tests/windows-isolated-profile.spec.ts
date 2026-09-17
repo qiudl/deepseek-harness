@@ -52,6 +52,62 @@ function fixture(existing = new Map<string, Buffer>()) {
 }
 
 describe('Windows isolated Profile preparation', () => {
+  /** The shape a Profile writer leaves behind: inherited ACEs under an administrator owner. */
+  function rewrittenEvidence(): WindowsHostPrivatePathEvidence {
+    return {
+      kind: 'file',
+      reparsePoint: false,
+      linkCount: 1,
+      ownerSid: 'S-1-5-32-544',
+      daclProtected: false,
+      access: [
+        { sid: userSid, type: 'allow', mask: 0x1F01FF, inherited: true, objectInherit: false, containerInherit: false },
+        { sid: 'S-1-5-18', type: 'allow', mask: 0x1F01FF, inherited: true, objectInherit: false, containerInherit: false },
+        { sid: 'S-1-5-32-544', type: 'allow', mask: 0x1F01FF, inherited: true, objectInherit: false, containerInherit: false },
+      ],
+    }
+  }
+
+  it('republishes a managed file the Profile rewrote, preserving its contents', () => {
+    const credentials = `${root}\\profiles\\${profileId}\\owner-state\\.credentials.yaml`
+    const saved = Buffer.from('{"version":1,"refs":{"deepseek":"k"},"records":{}}\n')
+    const existing = new Map<string, Buffer>([[credentials, saved]])
+    const state = fixture(existing)
+    const rewritten = rewrittenEvidence()
+    state.readPrivateFile.mockImplementation((path) => {
+      const contents = existing.get(path)
+      if (contents === undefined) return undefined
+      return { contents, evidence: path === credentials ? rewritten : evidence('file') }
+    })
+    state.createPrivateFile.mockImplementation((path, contents) => {
+      if (existing.has(path)) {
+        return { state: 'exists', evidence: path === credentials ? rewritten : evidence('file') }
+      }
+      existing.set(path, Buffer.from(contents))
+      return { state: 'created', evidence: evidence('file') }
+    })
+
+    expect(() => prepareWindowsIsolatedProfile({
+      root, profileId, userSid, maximumManagedFileBytes: 64 * 1024, bindings: state.bindings,
+    })).not.toThrow()
+
+    const replace = state.bindings.replacePrivateFile as ReturnType<typeof vi.fn>
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(replace.mock.calls[0]?.[0]).toBe(credentials)
+    expect(replace.mock.calls[0]?.[1]).toEqual(saved)
+  })
+
+  it('leaves an already private managed file untouched', () => {
+    const credentials = `${root}\\profiles\\${profileId}\\owner-state\\.credentials.yaml`
+    const state = fixture(new Map([[credentials, Buffer.from('{"version":1,"refs":{},"records":{}}\n')]]))
+
+    prepareWindowsIsolatedProfile({
+      root, profileId, userSid, maximumManagedFileBytes: 64 * 1024, bindings: state.bindings,
+    })
+
+    expect(state.bindings.replacePrivateFile).not.toHaveBeenCalled()
+  })
+
   it('creates a complete local-only Profile without touching a legacy source', () => {
     const state = fixture()
     const result = prepareWindowsIsolatedProfile({
