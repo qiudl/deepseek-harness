@@ -109,12 +109,18 @@ export function prepareWindowsIsolatedProfile(options: {
     { path: win32.join(profileRoot, 'cordis.patch.yml'), contents: Buffer.from(patch), mutable: false },
   ]
   for (const file of files) {
-    if (file.contents.length > options.maximumManagedFileBytes) throw new HostAuthorityError('unavailable')
+    if (file.contents.length > options.maximumManagedFileBytes) {
+      throw new HostAuthorityError('unavailable',
+        { cause: new Error(`managed file exceeds the size limit: ${file.path}`) })
+    }
     const result = options.bindings.createPrivateFile(file.path, file.contents, securityDescriptor)
     assertWindowsHostPrivatePathEvidence(result.evidence, 'file', options.userSid)
     if (result.state === 'created') continue
     const existing = options.bindings.readPrivateFile(file.path, options.maximumManagedFileBytes)
-    if (existing === undefined) throw new HostAuthorityError('unavailable')
+    if (existing === undefined) {
+      throw new HostAuthorityError('unavailable',
+        { cause: new Error(`an existing managed file could not be read back: ${file.path}`) })
+    }
     assertWindowsHostPrivatePathEvidence(existing.evidence, 'file', options.userSid)
     if (!file.mutable && !existing.contents.equals(file.contents)) throw new HostAuthorityError('conflict')
   }

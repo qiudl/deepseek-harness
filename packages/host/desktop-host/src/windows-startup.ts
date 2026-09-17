@@ -346,21 +346,33 @@ async function startWindowsDesktopHostApplicationWithTrust(
         loadSnapshot: path => registryFiles.loadSnapshot(path),
         persistSnapshot: (path, root, snapshot) => { registryFiles.persistSnapshot(path, root, snapshot) },
       })
+      // Both steps fail as the same stable category, so the step itself is the only thing that
+      // tells an operator whether the isolated profile or the worker launch was the problem.
+      const inStep = async <Result>(step: string, run: () => Result | Promise<Result>): Promise<Result> => {
+        try {
+          return await run()
+        } catch (error) {
+          config.onProfileWorkerDiagnostic?.(
+            `${step} failed: ${error instanceof Error ? error.message : String(error)}`,
+          )
+          throw error
+        }
+      }
       const ensureWorker = async (profile: PersonProfileRecord): Promise<void> => {
-        const prepared = prepareWindowsIsolatedProfile({
+        const prepared = await inStep('isolated profile preparation', () => prepareWindowsIsolatedProfile({
           root: config.root,
           profileId: profile.profileId,
           userSid,
           maximumManagedFileBytes: config.maximumManagedFileBytes,
           bindings,
-        })
-        await workers.ensure({
+        }))
+        await inStep('worker launch', () => workers.ensure({
           profileId: profile.profileId,
           profileRoot: prepared.profileRoot,
           credentialHandle: profile.keyHandle,
           pluginRoots: prepared.pluginRoots,
           env: { TEMP: prepared.tempRoot, TMP: prepared.tempRoot },
-        })
+        }))
       }
       const host = new DesktopHost({
         registry,
