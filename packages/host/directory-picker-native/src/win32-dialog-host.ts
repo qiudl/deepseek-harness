@@ -23,7 +23,9 @@ import type { Win32DialogWorkerData } from './win32-dialog-worker.ts'
  */
 export function spawnDialogWorker(data: Win32DialogWorkerData): ReturnType<typeof spawn> {
   const env = { ...process.env, DSH_DIALOG_TITLE: data.title }
-  const stdio: StdioOptions = ['ignore', 'inherit', 'inherit', 'ipc']
+  // stderr is piped rather than inherited so a child that dies before its first message
+  // still reports why; the host log otherwise swallows it.
+  const stdio: StdioOptions = ['ignore', 'inherit', 'pipe', 'ipc']
   /* v8 ignore next 3 -- the built-output arm: tests always run unbuilt (src/) */
   if (!import.meta.url.endsWith('.ts')) {
     return spawn(process.execPath, [fileURLToPath(new URL('./worker.cjs', import.meta.url))], { env, stdio, windowsHide: true })

@@ -18,7 +18,9 @@ export interface Win32DialogWorkerLike {
    */
   on(event: 'message', listener: (message: Win32DialogWorkerMessage) => void): unknown
   on(event: 'error', listener: (error: Error) => void): unknown
-  on(event: 'exit', listener: (code: number) => void): unknown
+  on(event: 'exit', listener: (code: number | null, signal: string | null) => void): unknown
+  /** Child diagnostics; a child that dies before its first message reports only here. */
+  readonly stderr?: { on(event: 'data', listener: (chunk: unknown) => void): unknown } | null
   /**
    * Force-stop the child; the abort path's last resort when `WM_CLOSE`
    * never lands (e.g. the dialog window was never created).
@@ -49,6 +51,8 @@ export const DIALOG_TITLE = 'Select Workspace Directory'
 const CLOSE_RETRY_MS = 150
 /** Abort-service attempts before force-terminating the worker. */
 const CLOSE_MAX_ATTEMPTS = 20
+/** Longest child diagnostic carried into a rejection, so one failure cannot flood a log. */
+const MAX_WORKER_STDERR = 2048
 
 /** Fail loudly if the closed worker-to-driver union gains an unhandled member. */
 /* v8 ignore start -- closed-union backstop; unreachable without a TypeScript contract violation */
@@ -73,6 +77,16 @@ export async function pickWin32Directory(
   const closeRetryMs = internals.closeRetryMs ?? CLOSE_RETRY_MS
 
   const worker: Win32DialogWorkerLike = spawnWorker({ title: DIALOG_TITLE })
+  // A child that dies before its first message says nothing through the protocol, so its
+  // own output is the only account of why; `exited before reporting a result` alone is not.
+  let workerStderr = ''
+  worker.stderr?.on('data', (chunk) => {
+    workerStderr = (workerStderr + String(chunk)).slice(-MAX_WORKER_STDERR)
+  })
+  const withDetail = (message: string): string => {
+    const detail = workerStderr.replace(/[\u0000-\u001f\u007f]+/gu, ' ').trim()
+    return detail === '' ? message : `${message}: ${detail}`
+  }
   let dialogThreadId: number | undefined
   let closeTimer: NodeJS.Timeout | undefined
   let settled = false
@@ -137,7 +151,7 @@ export async function pickWin32Directory(
           return
         case 'error':
           settle(() => {
-            reject(new Error(`win32 folder dialog failed: ${message.message}`))
+            reject(new Error(withDetail(`win32 folder dialog failed: ${message.message}`)))
           })
           return
         /* v8 ignore next 2 -- closed worker-owned union; a fourth kind becomes a compile error */
@@ -150,9 +164,11 @@ export async function pickWin32Directory(
         reject(error)
       })
     })
-    worker.on('exit', () => {
+    worker.on('exit', (code, signal) => {
       settle(() => {
-        reject(new Error('win32 folder dialog worker exited before reporting a result'))
+        reject(new Error(withDetail(
+          `win32 folder dialog worker exited before reporting a result (code=${String(code)} signal=${String(signal)})`,
+        )))
       })
     })
   })
