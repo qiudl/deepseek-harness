@@ -66,8 +66,9 @@ function pinnedNativeDependencies(
       loadKoffi,
     }),
     loadAttestor: options => loadWindowsPeerAttestor(options, {
-      loadAuthenticode: facts => loadWindowsAuthenticodeVerifier({
+      loadAuthenticode: (facts, acceptUntrustedRoot) => loadWindowsAuthenticodeVerifier({
         ...facts,
+        acceptUntrustedRoot,
         loadKoffi,
       }),
       loadDigest: facts => loadWindowsExecutableDigest({
