@@ -158,7 +158,7 @@ export function CodeBlock({
        typed fallback if the DOM shape ever diverges. */
     const text = rootRef.current?.querySelector('pre')?.textContent ?? trimmed
     copyPending.current = true
-    void writeClipboard(text).catch(() => false).then((ok) => {
+    void writeClipboard(text).then((ok) => {
       copyPending.current = false
       setCopyState(ok ? 'copied' : 'failed')
       window.setTimeout(() => { setCopyState('idle') }, 1000)
