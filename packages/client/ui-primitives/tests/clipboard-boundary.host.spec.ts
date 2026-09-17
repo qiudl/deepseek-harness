@@ -3,14 +3,14 @@ import { join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const clientRoot = resolve('packages/client')
-const owner = 'ui-primitives/src/clipboard.ts'
+const owner = resolve(clientRoot, 'ui-primitives/src/clipboard.ts')
 
 describe('client clipboard ownership', () => {
   it('keeps every direct Web Clipboard write in the shared facade', () => {
     const violations = sourceFiles(clientRoot)
       .filter(file => /navigator\.clipboard\s*\.\s*writeText/u.test(readFileSync(file, 'utf8')))
-      .map(file => relative(clientRoot, file))
       .filter(file => file !== owner)
+      .map(file => relative(clientRoot, file))
     expect(violations).toEqual([])
   })
 })
