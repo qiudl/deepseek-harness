@@ -203,10 +203,13 @@ export function createMacOSPeerAttestor(options: MacOSPeerAttestorOptions): Unix
           throw new HostAuthorityError('unauthorized')
         }
         const bytesBefore = readExecutable(fd, before.size)
-        // `codesign` accepts paths rather than descriptors. Verify a private
-        // snapshot made from this already-open descriptor so a rename race
-        // cannot pair one file's signature with another file's digest.
-        const team = await verifyExecutableSnapshot(bytesBefore, candidate => bindings.verifyCodeSignature(candidate))
+        // App executables are sealed together with their Info.plist. A bare
+        // copy cannot pass codesign verification; keep the original descriptor
+        // open and compare its identity and bytes again after verifying the
+        // bundle path. Standalone executables can still use a private snapshot.
+        const team = /\.app\/Contents\/MacOS\/[^/]+$/u.test(path)
+          ? await bindings.verifyCodeSignature(path)
+          : await verifyExecutableSnapshot(bytesBefore, candidate => bindings.verifyCodeSignature(candidate))
         if (!options.allowedTeamIdentifiers.has(team)) throw new HostAuthorityError('unauthorized')
         const after = fstatSync(fd)
         const namedAfter = lstatSync(path)
