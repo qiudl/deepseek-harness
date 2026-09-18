@@ -175,18 +175,11 @@ async function ownerState(root: string, uid: number): Promise<MigrationOwnerStat
   jsonValue(settings)
   if ('externalConnections' in settings) throw new Error('legacy_migration_source_schema_unsupported')
   // The legacy home belongs to the OS user, not the authenticated Person Profile.
-  // Only sections with reviewed, account-neutral schemas can enter a Profile;
-  // future provider sections and all credentials stay at the original path.
-  const accountNeutralNamespaces = new Set(['agent-loop', 'permission', 'shell', 'ui-onboarding'])
-  const accountNeutralSettings = Object.fromEntries(
-    Object.entries(settings).filter(([name]) => accountNeutralNamespaces.has(name)),
-  )
-  const withheldSettings = Object.fromEntries(
-    Object.entries(settings).filter(([name]) => !accountNeutralNamespaces.has(name)),
-  )
+  // Legacy settings have no account owner. Even permission and onboarding
+  // state would change the first account's behavior without its consent.
   const legacyCredentials = credentials(await ownerDocument(join(root, '.credentials.yaml'), uid, {}))
   const legacyWithheldSourceDigest = createHash('sha256')
-    .update(JSON.stringify({ settings: withheldSettings, credentials: legacyCredentials }))
+    .update(JSON.stringify({ settings, credentials: legacyCredentials }))
     .digest('hex')
   let workspace: Record<string, unknown> = { grants: [] }
   try {
@@ -218,7 +211,7 @@ async function ownerState(root: string, uid: number): Promise<MigrationOwnerStat
   return {
     version: 1,
     documents: [
-      { kind: 'settings', schemaVersion: 1, value: accountNeutralSettings },
+      { kind: 'settings', schemaVersion: 1, value: {} },
       { kind: 'credentials', schemaVersion: 1, value: { refs: {}, records: {} } },
       { kind: 'workspace', schemaVersion: 1, value: workspace },
       { kind: 'profile', schemaVersion: 1, value: {

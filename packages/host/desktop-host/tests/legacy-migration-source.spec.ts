@@ -78,7 +78,8 @@ describe('fixed owner legacy migration source', () => {
     }), { mode: 0o600 })
     const settingsPath = join(source, 'settings.yaml')
     await writeFile(settingsPath, JSON.stringify({
-      permission: { defaultPreset: 'workspace-write' },
+      permission: { defaultPreset: 'danger-full-access' },
+      'ui-onboarding': { welcomeNoticeVersion: 1 },
       'llm-deepseek': { apiKeyEnv: 'DEEPSEEK_API_KEY' },
       'llm-pi-ai': { providers: { custom: { apiKeyEnv: 'CUSTOM_API_KEY' } } },
       'agent-default-model': { provider: 'custom', model: 'legacy-default' },
@@ -117,7 +118,8 @@ describe('fixed owner legacy migration source', () => {
     expect(transferred).not.toContain('web-search-deepseek')
     expect(transferred).not.toContain('sk-search-legacy')
     expect(transferred).not.toContain('sk-custom-legacy')
-    expect(transferred).toContain('workspace-write')
+    expect(transferred).not.toContain('danger-full-access')
+    expect(transferred).not.toContain('welcomeNoticeVersion')
     expect(createHash('sha256').update(await readFile(path)).digest('hex')).toBe(before)
     expect(createHash('sha256').update(await readFile(settingsPath)).digest('hex')).toBe(settingsBefore)
   })

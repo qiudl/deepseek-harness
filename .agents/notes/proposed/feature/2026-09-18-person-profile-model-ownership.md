@@ -10,7 +10,7 @@ The fixed OS-user `.dsh` home predates authenticated Person Profiles. Its creden
 
 ## Proposal
 
-The fixed legacy exporter transfers sessions, workspace and only the reviewed account-neutral settings namespaces (`agent-loop`, `permission`, `shell`, `ui-onboarding`). It withholds all credentials and every other settings namespace, including default model, search-provider keys, and unknown future plugins. It reads and validates the original documents, leaves them unchanged, and carries a digest of the withheld data so inventory confirmation detects a concurrent source change. This closes implicit assignment for new imports without changing ordinary Profile-to-Profile migration.
+The fixed legacy exporter transfers sessions and workspace while withholding all settings and credentials. Permission defaults and onboarding acknowledgements also belong to an account; copying them would change the first login's behavior without confirmation. It reads and validates the original documents, leaves them unchanged, and carries a digest of the withheld data so inventory confirmation detects a concurrent source change. This closes implicit assignment for new imports without changing ordinary Profile-to-Profile migration.
 
 DSH Models settings will present a redacted, provider-specific claim action for an authenticated Person Profile. The claim will check source ownership and generation, commit the provider credential and corresponding route into that Profile, and record single-owner consumption before the route becomes usable. A failed or interrupted claim retains the original files and a retryable status. The same account may retry idempotently; a competing account receives a conflict. Existing Profile generations containing automatically imported legacy values require a separate upgrade migration before model reuse can be enabled in Desktop.
 
@@ -22,7 +22,7 @@ DSH Models settings will present a redacted, provider-specific claim action for 
 
 ## Acceptance criteria
 
-- A fresh legacy transfer leaves every provider credential and model route unavailable to both accounts until an explicit claim, while workspace, sessions and reviewed account-neutral settings survive.
+- A fresh legacy transfer leaves every setting and provider credential unavailable to both accounts until an explicit claim, while workspace and sessions survive.
 - Claiming one provider exposes only that provider to the confirmed account; a second account cannot claim or read it. Repeated and interrupted claims have deterministic recovery without plaintext disclosure.
 - Existing automatically imported Profile generations are made safe before Desktop enables personal model reuse.
 - macOS and Windows installed artifacts enforce the same account and source ownership rules.
