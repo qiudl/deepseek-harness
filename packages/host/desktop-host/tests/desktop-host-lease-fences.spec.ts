@@ -20,6 +20,57 @@ async function fixture() {
 }
 
 describe('Desktop Host lease fences', () => {
+  it('rechecks Account recovery proof without starting a pending Profile worker', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-account-claim-recovery-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const clock = { now: () => 1_000 }
+    const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+    const binding = {
+      authorityEnvironmentId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+      accountBindingHandle: 'binding:recovery', authorityBindingVersion: 1,
+    }
+    const account = await registry.registerAccount({
+      issuer: 'https://accounts.example.test', subject: 'person', keyHandle: 'keychain:recovery',
+      unlockMaterial, ...binding,
+    })
+    await registry.registerAccount({
+      issuer: 'https://accounts.example.test', subject: 'other', keyHandle: 'keychain:other',
+      unlockMaterial, ...binding, accountBindingHandle: 'binding:other',
+    })
+    const local = await registry.createLocalAnonymous({ keyHandle: 'keychain:local', unlockMaterial })
+    expect(registry.matchesAccountIdentity(local, { issuer: 'https://accounts.example.test', subject: 'person' }))
+      .toBe(false)
+    let tokenValid = true
+    let workerStarts = 0
+    const host = new DesktopHost({ registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: (token) => {
+        if (!tokenValid || token !== 'valid-token') throw Error('expired token')
+        return { issuer: 'https://accounts.example.test', subject: 'person' }
+      },
+      ensureProfileWorker: async () => { workerStarts += 1; throw Error('pending claim') },
+    })
+    const proof = {
+      issuer: 'https://accounts.example.test', subject: 'person', accountAccessToken: 'valid-token',
+      ...binding, keyHandle: 'keychain:recovery', unlockMaterial,
+    }
+    expect(host.authorizeAccountModelClaimRecovery(proof)).toBe(account.profileId)
+    expect(workerStarts).toBe(0)
+    expect(() => { host.authorizeAccountModelClaimRecovery({ ...proof, subject: 'other' }) })
+      .toThrow(/profile_mismatch/u)
+    expect(() => { host.authorizeAccountModelClaimRecovery({ ...proof, accountBindingHandle: 'binding:other' }) })
+      .toThrow(/unauthorized/u)
+    expect(() => { host.authorizeAccountModelClaimRecovery({ ...proof, accountBindingHandle: 'binding:missing' }) })
+      .toThrow(/unauthorized/u)
+    expect(() => { host.authorizeAccountModelClaimRecovery({ ...proof, unlockMaterial: Buffer.alloc(32, 8).toString('base64url') }) })
+      .toThrow(/unauthorized/u)
+    expect(() => { host.authorizeAccountModelClaimRecovery({ ...proof, keyHandle: 'keychain:other' }) })
+      .toThrow(/unauthorized/u)
+    tokenValid = false
+    expect(() => { host.authorizeAccountModelClaimRecovery(proof) }).toThrow(/unauthorized/u)
+    const unavailable = new DesktopHost({ registry, clock, runtimeGeneration: 5 })
+    expect(() => { unavailable.authorizeAccountModelClaimRecovery(proof) }).toThrow(/unavailable/u)
+  })
+
   it('allows model claims only from a token-verified Account view on the same live connection', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-account-claim-lease-'))
     onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })

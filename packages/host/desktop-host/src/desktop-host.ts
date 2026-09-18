@@ -631,6 +631,39 @@ export class DesktopHost {
   }
 
   /**
+   * Recheck a token, current binding and Main-vault proof when a pending claim prevents worker startup.
+   * This grants no view lease and must only be used with a durable same-Profile claim receipt.
+   * @param input - Fresh Account token, current binding, and matching Main-vault unlock proof.
+   * @returns The existing Account Profile authorized for recovery.
+   */
+  authorizeAccountModelClaimRecovery(input: {
+    readonly issuer: string
+    readonly subject: string
+    readonly accountAccessToken: string
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+  }): PersonProfileId {
+    const verify = this.options.verifyAccountAccessToken
+    if (!verify) throw new HostAuthorityError('unavailable')
+    let account: { readonly issuer: string; readonly subject: string }
+    try { account = verify(input.accountAccessToken) } catch { throw new HostAuthorityError('unauthorized') }
+    if (account.issuer !== input.issuer || account.subject !== input.subject) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
+    const profile = this.options.registry.resolveBinding(
+      input.authorityEnvironmentId, input.accountBindingHandle, input.authorityBindingVersion,
+    )
+    if (!profile || !this.options.registry.matchesAccountIdentity(profile, account)) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    this.options.registry.verifyUnlock(profile, input.keyHandle, input.unlockMaterial)
+    return profile.profileId
+  }
+
+  /**
    * Revoke one local window lease.
    * @param viewLeaseId - opaque lease to revoke.
    */
