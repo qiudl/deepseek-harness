@@ -32,6 +32,8 @@ The target writer reads the current mutable settings and credential documents af
 
 The Host coordinator serializes operations per Profile. A retry after ledger commit verifies the target against the durable projected digests without rereading the mutable legacy source; a retry after verified restoration clears the remaining marker. Once the worker has restarted after a terminal outcome, Host deletes the private recovery snapshot by comparing its exact bytes. Cleanup failure remains visible as a redacted pending-cleanup result and does not stop an otherwise committed Profile.
 
+Before committed-marker verification or pending-target restoration, Host confirms that the active persistence generation still matches the recorded claim generation. A changed generation leaves the affected Profile pending rather than reading or restoring an obsolete target.
+
 The legacy default model is offered only after its provider is claimed and only when the target Profile has no personal default. The user explicitly confirms applying it. Existing Profile generations need provenance-aware inspection before any personal model request is enabled; if imported values cannot be distinguished from later personal edits, preserve the files and require an explicit resolution rather than deleting or silently trusting them. DSH workspace, sessions, and non-model actions remain available during this resolution.
 
 ## Alternatives considered

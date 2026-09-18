@@ -152,6 +152,17 @@ describe('Host-internal legacy claim transaction order', () => {
     expect(state.running()).toBe(true)
   })
 
+  it('keeps a committed marker fenced if the active target generation changed', async () => {
+    const state = fixture()
+    state.failClearMarker()
+    await expect(state.coordinator.claim(state.claim)).rejects.toThrow('marker_clear_interrupted')
+    state.generation(2)
+    await expect(state.coordinator.claim(state.claim)).rejects.toThrow(/stale/u)
+    expect(state.marker.pending(profileId)).toBe(true)
+    expect(state.running()).toBe(false)
+    expect(state.sourceReads()).toBe(1)
+  })
+
   it('restores an interrupted target pair and survives restoration retry', async () => {
     const state = fixture()
     const before = state.current()
@@ -163,6 +174,16 @@ describe('Host-internal legacy claim transaction order', () => {
     expect(state.marker.pending(profileId)).toBe(false)
     expect(state.ledger.status(candidateId, profileId)).toBeNull()
     expect(await state.coordinator.restore(state.restore)).toEqual({ state: 'restored', cleanupPending: false })
+  })
+
+  it('keeps an interrupted target fenced if its active generation changed before restore', async () => {
+    const state = fixture()
+    state.failSettings(true)
+    await expect(state.coordinator.claim(state.claim)).rejects.toThrow('settings_interrupted')
+    state.generation(2)
+    await expect(state.coordinator.restore(state.restore)).rejects.toThrow(/stale/u)
+    expect(state.marker.pending(profileId)).toBe(true)
+    expect(state.running()).toBe(false)
   })
 
   it('reports cleanup pending without withholding a committed Profile', async () => {

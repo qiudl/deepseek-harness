@@ -73,6 +73,8 @@ export class LegacyClaimCoordinator {
         this.deps.marker.mark(key)
         await this.deps.stopWorker(profileId)
         guard()
+        if (await this.deps.targetGeneration(profileId) !== prior.targetGeneration) throw new HostAuthorityError('stale')
+        guard()
         if (!recovery || recovery.targetGeneration !== prior.targetGeneration) throw new HostAuthorityError('unavailable')
         this.deps.target(profileId, prior.targetGeneration).verify(recovery, guard)
         guard()
@@ -127,6 +129,8 @@ export class LegacyClaimCoordinator {
     if (state.status === 'pending' || pending) {
       this.deps.marker.mark(key)
       await this.deps.stopWorker(profileId)
+      guard()
+      if (await this.deps.targetGeneration(profileId) !== state.targetGeneration) throw new HostAuthorityError('stale')
       guard()
       const recovery = this.deps.recovery.read(profileId, input.operationId)
       if (!recovery || recovery.targetGeneration !== state.targetGeneration) throw new HostAuthorityError('unavailable')
