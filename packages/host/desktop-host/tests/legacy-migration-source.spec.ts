@@ -5,7 +5,10 @@ import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { MigrationOwnerTransferBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
 import { compressZstdFrame } from '@deepseek-ai/dsh-session-persistence-jsonl/src/zstd.ts'
-import { createLegacyMigrationExportService, inspectLegacyModelClaimSource } from '../src/legacy-migration-source.ts'
+import {
+  createLegacyMigrationExportService, inspectLegacyModelClaimSource, readLegacyModelClaimDocuments,
+} from '../src/legacy-migration-source.ts'
+import { projectLegacyModelClaim } from '../src/legacy-claim-projection.ts'
 import { MigrationOwnerStateApplicator } from '../src/migration-owner-state-applicator.ts'
 
 const uid = process.getuid?.() ?? 0
@@ -106,6 +109,19 @@ describe('fixed owner legacy migration source', () => {
     for (const value of ['SHARED_API_KEY', 'UNUSED_API_KEY', 'sk-', 'private-model', 'custom-plugin']) {
       expect(redacted).not.toContain(value)
     }
+    const privateDocuments = await readLegacyModelClaimDocuments(input)
+    expect(privateDocuments.sourceDigest).toBe(first.sourceDigest)
+    const projected = projectLegacyModelClaim({
+      candidateId: 'llm-pi-ai:custom',
+      profileId: 'b9e8b0aa-5c8e-4d4c-8e7a-139a86985f41',
+      operationId: '97086a03-9508-41c0-bec3-7464dc835953',
+      sourceSettings: privateDocuments.settings, sourceCredentials: privateDocuments.credentials,
+      targetSettings: {}, targetCredentials: { refs: {}, records: {} },
+    })
+    expect(projected.credentials.refs[projected.reference]).toBe('sk-shared-private')
+    expect(JSON.stringify(projected.settings)).not.toContain('sk-search-private')
+    expect(JSON.stringify(projected.settings)).not.toContain('sk-unknown-private')
+    expect(JSON.stringify(projected.credentials)).not.toContain('sk-record-private')
     await writeFile(join(source, '.credentials.yaml'), JSON.stringify({
       version: 1, refs: { SHARED_API_KEY: 'sk-rotated-private', UNUSED_API_KEY: 'sk-unused-private' },
       records: { 'custom/token': { kind: 'api-key', key: 'sk-record-private' } },

@@ -134,6 +134,38 @@ export interface LegacyModelClaimInventory {
   readonly unassignedCredentialRecords: number
 }
 
+/** Secret-bearing Host-only documents. Never return this value through Desktop control frames. */
+export interface LegacyModelClaimDocuments {
+  readonly sourceDigest: string
+  readonly settings: Record<string, unknown>
+  readonly credentials: { readonly refs: Record<string, string>; readonly records: Record<string, unknown> }
+}
+
+/** Revalidate the fixed legacy source and return its normalized private documents to Host code only. */
+export async function readLegacyModelClaimDocuments(input: {
+  expectedUid: number
+  assertSourceQuiescent(signal?: AbortSignal): Promise<void>
+  signal?: AbortSignal
+  /** Fixture seam only; production must omit it. */
+  _testOwnerHome?: string
+  /** Fixture seam to change the source between validated reads. */
+  _testAfterValidatedState?: () => Promise<void>
+}): Promise<LegacyModelClaimDocuments> {
+  await input.assertSourceQuiescent(input.signal)
+  input.signal?.throwIfAborted()
+  const root = legacyRoot(input._testOwnerHome)
+  const state = await ownerState(root, input.expectedUid)
+  const profile = map(state.documents.find(document => document.kind === 'profile')?.value)
+  const sourceDigest = profile.legacyWithheldSourceDigest as string
+  await input._testAfterValidatedState?.()
+  const settings = map(await ownerDocument(join(root, 'settings.yaml'), input.expectedUid, {}))
+  const credentialStore = credentials(await ownerDocument(join(root, '.credentials.yaml'), input.expectedUid, {}))
+  if (createHash('sha256').update(JSON.stringify({ settings, credentials: credentialStore })).digest('hex') !== sourceDigest) {
+    throw new Error('legacy_migration_source_changed')
+  }
+  return { sourceDigest, settings, credentials: credentialStore }
+}
+
 /**
  * Read a redacted inventory from the fixed owner-local legacy home.
  * Candidate ids are selectors for a later fenced claim, never authorization.
@@ -147,18 +179,7 @@ export async function inspectLegacyModelClaimSource(input: {
   /** Fixture seam to change the source between validated reads. */
   _testAfterValidatedState?: () => Promise<void>
 }): Promise<LegacyModelClaimInventory> {
-  await input.assertSourceQuiescent(input.signal)
-  input.signal?.throwIfAborted()
-  const root = legacyRoot(input._testOwnerHome)
-  const state = await ownerState(root, input.expectedUid)
-  const profile = map(state.documents.find(document => document.kind === 'profile')?.value)
-  const sourceDigest = profile.legacyWithheldSourceDigest as string
-  await input._testAfterValidatedState?.()
-  const settings = map(await ownerDocument(join(root, 'settings.yaml'), input.expectedUid, {}))
-  const credentialStore = credentials(await ownerDocument(join(root, '.credentials.yaml'), input.expectedUid, {}))
-  if (createHash('sha256').update(JSON.stringify({ settings, credentials: credentialStore })).digest('hex') !== sourceDigest) {
-    throw new Error('legacy_migration_source_changed')
-  }
+  const { sourceDigest, settings, credentials: credentialStore } = await readLegacyModelClaimDocuments(input)
   const candidates: Array<LegacyModelClaimCandidate & { ref?: string }> = []
   const usedRefs = new Set<string>()
   const add = (id: string, provider: string, kind: 'llm' | 'web-search', ref?: string, literal = false): void => {
