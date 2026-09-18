@@ -175,18 +175,18 @@ async function ownerState(root: string, uid: number): Promise<MigrationOwnerStat
   jsonValue(settings)
   if ('externalConnections' in settings) throw new Error('legacy_migration_source_schema_unsupported')
   // The legacy home belongs to the OS user, not the authenticated Person Profile.
-  // Keep its model settings and credentials only at the original path until an
-  // account explicitly claims them through the Models settings surface.
-  const modelSettings = new Set(['llm-deepseek', 'llm-pi-ai', 'subagent-model-selection'])
+  // Only sections with reviewed, account-neutral schemas can enter a Profile;
+  // future provider sections and all credentials stay at the original path.
+  const accountNeutralNamespaces = new Set(['agent-loop', 'permission', 'shell', 'ui-onboarding'])
   const accountNeutralSettings = Object.fromEntries(
-    Object.entries(settings).filter(([name]) => !modelSettings.has(name)),
+    Object.entries(settings).filter(([name]) => accountNeutralNamespaces.has(name)),
   )
-  const legacyModelSettings = Object.fromEntries(
-    Object.entries(settings).filter(([name]) => modelSettings.has(name)),
+  const withheldSettings = Object.fromEntries(
+    Object.entries(settings).filter(([name]) => !accountNeutralNamespaces.has(name)),
   )
   const legacyCredentials = credentials(await ownerDocument(join(root, '.credentials.yaml'), uid, {}))
-  const legacyModelSourceDigest = createHash('sha256')
-    .update(JSON.stringify({ settings: legacyModelSettings, credentials: legacyCredentials }))
+  const legacyWithheldSourceDigest = createHash('sha256')
+    .update(JSON.stringify({ settings: withheldSettings, credentials: legacyCredentials }))
     .digest('hex')
   let workspace: Record<string, unknown> = { grants: [] }
   try {
@@ -222,7 +222,7 @@ async function ownerState(root: string, uid: number): Promise<MigrationOwnerStat
       { kind: 'credentials', schemaVersion: 1, value: { refs: {}, records: {} } },
       { kind: 'workspace', schemaVersion: 1, value: workspace },
       { kind: 'profile', schemaVersion: 1, value: {
-        name: 'web', customPlugins: [], externalConnections: [], legacyModelSourceDigest,
+        name: 'web', customPlugins: [], externalConnections: [], legacyWithheldSourceDigest,
       } },
     ],
   }

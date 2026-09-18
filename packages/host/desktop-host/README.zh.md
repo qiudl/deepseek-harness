@@ -110,7 +110,7 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 - **解锁材料仍由嵌入应用拥有**——Slark Main 必须把随机 32 字节 Profile material 保存在 macOS Keychain／safeStorage 中，并且只通过已认证 Main-to-Host 链路提供；它绝不能进入 Renderer、argv、environment、日志或 registration 文件。
 - **Account access 与 session 绑定**——Slark Main 必须从 DSH Account 获取 `dsh-host` token，并且只通过已认证 Main-to-Host 链路提供。Host 不持久化或记录该凭据；token 过期后，Slark Main 必须刷新 Account session，`profile.ensure` 才能成功。
 - **旧数据迁移在完整闭环前 fail closed**——只有 active Profile 的完整 owner-only bundle（session、settings、credential、workspace 与 Profile 配置）可被 stage 时，Host 才发布 export 能力。digest-only 或 session-only transfer 不会被宣称为安全迁移。
-- **旧主目录的模型数据没有账号归属**——固定 OS 用户 `.dsh` 主目录的导出会迁移会话、工作区和非模型设置，但所有凭据及 `llm-deepseek`、`llm-pi-ai`、`subagent-model-selection` 设置留在原路径。来源摘要会检测盘点到传输之间的变更。在显式账号认领实现之前，新 Person Profile 无法使用这些值；已经激活的 Profile 数据另行处理兼容性。
+- **旧主目录的模型数据没有账号归属**——固定 OS 用户 `.dsh` 主目录的导出会迁移会话、工作区，以及经过审查的 `agent-loop`、`permission`、`shell`、`ui-onboarding` 设置。所有凭据和其他设置，包括模型路由与默认模型，都留在原路径。来源摘要会检测盘点到传输之间的变更。在显式账号认领实现之前，新 Person Profile 无法使用这些值；已经激活的 Profile 数据另行处理兼容性。
 
 <a id="dev-note"></a>
 ### 开发备注

@@ -81,7 +81,10 @@ describe('fixed owner legacy migration source', () => {
       permission: { defaultPreset: 'workspace-write' },
       'llm-deepseek': { apiKeyEnv: 'DEEPSEEK_API_KEY' },
       'llm-pi-ai': { providers: { custom: { apiKeyEnv: 'CUSTOM_API_KEY' } } },
+      'agent-default-model': { provider: 'custom', model: 'legacy-default' },
       'subagent-model-selection': { enabled: true, allowedModels: [{ provider: 'custom', model: 'm' }] },
+      'web-search-deepseek': { apiKey: 'sk-search-legacy', model: 'legacy-search' },
+      'custom-model-plugin': { token: 'sk-custom-legacy', route: 'custom' },
     }), { mode: 0o600 })
     const before = createHash('sha256').update(await readFile(path)).digest('hex')
     const settingsBefore = createHash('sha256').update(await readFile(settingsPath)).digest('hex')
@@ -108,7 +111,12 @@ describe('fixed owner legacy migration source', () => {
     expect(transferred).not.toContain('CUSTOM_API_KEY')
     expect(transferred).not.toContain('llm-deepseek')
     expect(transferred).not.toContain('llm-pi-ai')
+    expect(transferred).not.toContain('agent-default-model')
+    expect(transferred).not.toContain('legacy-default')
     expect(transferred).not.toContain('subagent-model-selection')
+    expect(transferred).not.toContain('web-search-deepseek')
+    expect(transferred).not.toContain('sk-search-legacy')
+    expect(transferred).not.toContain('sk-custom-legacy')
     expect(transferred).toContain('workspace-write')
     expect(createHash('sha256').update(await readFile(path)).digest('hex')).toBe(before)
     expect(createHash('sha256').update(await readFile(settingsPath)).digest('hex')).toBe(settingsBefore)
@@ -355,7 +363,7 @@ describe('fixed owner legacy migration source', () => {
     })
     expect(receipt.recordCount).toBe(6)
     expect(transferred).not.toContain('secret')
-    expect(transferred).toContain('legacyModelSourceDigest')
+    expect(transferred).toContain('legacyWithheldSourceDigest')
     expect(JSON.stringify(service.read({ exportId: receipt.exportId, chunkIndex: 0 }))).not.toContain('secret')
     expect(createHash('sha256').update(await readFile(join(source, '.credentials.yaml'))).digest('hex')).toBe(before)
   })
