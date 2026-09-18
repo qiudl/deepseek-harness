@@ -128,6 +128,14 @@ export class LegacyClaimLedger {
     return state?.status === 'restored' ? null : state
   }
 
+  /** Enumerate only unfinished operations for a proven Profile, without touching source data. */
+  pendingReceipts(profileId: string): readonly ClaimState[] {
+    const pending = [...this.claims.values()].filter(state =>
+      state.profileId === profileId && state.status === 'pending')
+    if (pending.length > 128) throw new HostAuthorityError('unavailable')
+    return pending
+  }
+
   /** Internal receipt, including a restored operation that still needs marker cleanup. */
   ownerState(candidateId: string, profileId: string): ClaimState | null {
     const state = this.claims.get(candidateId)

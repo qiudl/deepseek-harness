@@ -22,6 +22,11 @@ const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value
 
 describe('same-Account model claim recovery wire', () => {
   it('round-trips token and vault proof requests without adding a view lease', () => {
+    const inventory = { version: 1, type: 'request', request_id: randomUUID(),
+      method: 'profile.model_claim_recovery_inventory',
+      params: (({ candidate_id: _candidate, ...rest }) => rest)(proof()) }
+    expect(encodeHostControlFrame(decode(inventory))).toBe(`${JSON.stringify(inventory)}\n`)
+    expect(() => decode({ ...inventory, params: { ...inventory.params, candidate_id: candidateId } })).toThrow()
     for (const method of ['profile.model_claim_recovery_status', 'profile.model_claim_restore',
       'profile.model_claim_retry'] as const) {
       const value = request(method)
@@ -31,6 +36,19 @@ describe('same-Account model claim recovery wire', () => {
   })
 
   it('round-trips only redacted owned receipts and restore outcomes', () => {
+    const inventory = { version: 1, type: 'result', request_id: randomUUID(),
+      method: 'profile.model_claim_recovery_inventory',
+      result: { receipts: [{ candidate_id: candidateId, operation_id: randomUUID(),
+        source_digest: 'a'.repeat(64), state: 'pending' }] } }
+    expect(encodeHostControlFrame(decode(inventory))).toBe(`${JSON.stringify(inventory)}\n`)
+    expect(() => decode({ ...inventory, result: { receipts: [
+      ...inventory.result.receipts, ...inventory.result.receipts,
+    ] } })).toThrow()
+    expect(() => decode({ ...inventory, result: { receipts: Array.from({ length: 129 },
+      () => inventory.result.receipts[0]) } })).toThrow()
+    expect(() => decode({ ...inventory, result: { receipts: [
+      { ...inventory.result.receipts[0], secret: 'key' },
+    ] } })).toThrow()
     for (const value of [
       { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.model_claim_recovery_status',
         result: { state: 'unclaimed' } },

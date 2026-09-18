@@ -4,6 +4,7 @@ import type {
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
   ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
   ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
+  ProfileModelClaimRecoveryInventoryRequest, ProfileModelClaimRecoveryInventoryResult,
   ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRecoveryStatusResult,
   ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
   ProfileModelClaimRetryRequest, ProfileModelClaimRetryResult,
@@ -517,6 +518,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
+  | ProfileModelClaimRecoveryInventoryRequest
   | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest | ProfileModelClaimRetryRequest {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
@@ -535,15 +537,18 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     return { version: 1, type: 'request', request_id: requestId, method: frame.method,
       params: { ...authorized(params), confirmation: sourceAuthority(params.confirmation) } }
   }
-  if (frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore'
+  if (frame.method === 'profile.model_claim_recovery_inventory'
+    || frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore'
     || frame.method === 'profile.model_claim_retry') {
     const proofKeys = [
       ...AUTHORIZED_KEYS, 'account_access_token', 'account_issuer', 'account_subject',
       'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
-      'profile_key_handle', 'profile_unlock_material', 'candidate_id',
+      'profile_key_handle', 'profile_unlock_material',
     ]
-    exactKeys(params, frame.method === 'profile.model_claim_restore' ? [...proofKeys, 'operation_id']
-      : frame.method === 'profile.model_claim_retry' ? [...proofKeys, 'operation_id', 'source_digest'] : proofKeys)
+    exactKeys(params, frame.method === 'profile.model_claim_recovery_inventory' ? proofKeys
+      : frame.method === 'profile.model_claim_restore' ? [...proofKeys, 'candidate_id', 'operation_id']
+        : frame.method === 'profile.model_claim_retry' ? [...proofKeys, 'candidate_id', 'operation_id', 'source_digest']
+          : [...proofKeys, 'candidate_id'])
     const proof = {
       ...authorized(params),
       account_access_token: boundedText(params.account_access_token, 8_192),
@@ -554,18 +559,21 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       authority_binding_version: generation(params.authority_binding_version),
       profile_key_handle: boundedText(params.profile_key_handle, 512),
       profile_unlock_material: unlockMaterial(params.profile_unlock_material),
-      candidate_id: modelClaimCandidate(params.candidate_id),
     }
+    if (frame.method === 'profile.model_claim_recovery_inventory') {
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: proof }
+    }
+    const candidate_id = modelClaimCandidate(params.candidate_id)
     if (frame.method === 'profile.model_claim_restore') {
       return { version: 1, type: 'request', request_id: requestId, method: frame.method,
-        params: { ...proof, operation_id: uuid(params.operation_id) } }
+        params: { ...proof, candidate_id, operation_id: uuid(params.operation_id) } }
     }
     if (frame.method === 'profile.model_claim_retry') {
       return { version: 1, type: 'request', request_id: requestId, method: frame.method,
-        params: { ...proof, operation_id: uuid(params.operation_id), source_digest: digest(params.source_digest) } }
+        params: { ...proof, candidate_id, operation_id: uuid(params.operation_id), source_digest: digest(params.source_digest) } }
     }
     return { version: 1, type: 'request', request_id: requestId,
-      method: 'profile.model_claim_recovery_status', params: proof }
+      method: 'profile.model_claim_recovery_status', params: { ...proof, candidate_id } }
   }
   if (frame.method === 'profile.model_claim_inventory') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation'])
@@ -758,6 +766,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
+  | ProfileModelClaimRecoveryInventoryResult
   | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult | ProfileModelClaimRetryResult {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
@@ -774,6 +783,22 @@ function decodeProfileResult(frame: Record<string, unknown>):
     if (result.state !== 'committed' || typeof result.cleanup_pending !== 'boolean') reject()
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { state: 'committed', cleanup_pending: result.cleanup_pending } }
+  }
+  if (frame.method === 'profile.model_claim_recovery_inventory') {
+    exactKeys(result, ['receipts'])
+    if (!Array.isArray(result.receipts) || result.receipts.length > 128) reject()
+    const ids = new Set<string>()
+    const receipts = result.receipts.map((value) => {
+      const receipt = record(value)
+      exactKeys(receipt, ['candidate_id', 'operation_id', 'source_digest', 'state'])
+      const candidate_id = modelClaimCandidate(receipt.candidate_id)
+      if (ids.has(candidate_id) || !['pending', 'committed', 'restored'].includes(receipt.state as string)) reject()
+      ids.add(candidate_id)
+      return { candidate_id, operation_id: uuid(receipt.operation_id),
+        source_digest: digest(receipt.source_digest),
+        state: receipt.state as 'pending' | 'committed' | 'restored' }
+    })
+    return { version: 1, type: 'result', request_id, method: frame.method, result: { receipts } }
   }
   if (frame.method === 'profile.model_claim_recovery_status') {
     if (result.state === 'unclaimed') {

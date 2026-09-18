@@ -21,6 +21,7 @@ export type {
   ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
   ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
   ProfileModelClaimRecoveryProof, ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRecoveryStatusResult,
+  ProfileModelClaimRecoveryInventoryRequest, ProfileModelClaimRecoveryInventoryResult,
   ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
   ProfileModelClaimRetryRequest, ProfileModelClaimRetryResult,
   HostControlCapability,

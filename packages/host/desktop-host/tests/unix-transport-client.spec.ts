@@ -175,6 +175,8 @@ describe('Unix Host client protocol projections', () => {
     const operationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3146'
     const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, { state: 'unclaimed' }) },
       [...baseCapabilities].sort())
+    await expect(unsupported.client.modelClaimRecoveryInventory(proof))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
     await expect(unsupported.client.modelClaimRecoveryStatus(proof))
       .rejects.toMatchObject({ code: 'upgrade_required' })
     await expect(unsupported.client.restoreModelClaim({ ...proof, operationId }))
@@ -184,13 +186,20 @@ describe('Unix Host client protocol projections', () => {
     expect(seen).toEqual([])
     const enabled = await makeClient((frame) => {
       seen.push(frame)
-      return frame.method === 'profile.model_claim_recovery_status'
-        ? result(frame, { state: 'pending', candidate_id: proof.candidateId,
-          operation_id: operationId, source_digest: 'a'.repeat(64) })
-        : result(frame, { state: frame.method === 'profile.model_claim_retry' ? 'committed' : 'restored',
-          cleanup_pending: true })
-    }, [...baseCapabilities, 'profile.model_claim_recovery_status', 'profile.model_claim_restore',
+      return frame.method === 'profile.model_claim_recovery_inventory'
+        ? result(frame, { receipts: [{ candidate_id: proof.candidateId,
+          operation_id: operationId, source_digest: 'a'.repeat(64), state: 'pending' }] })
+        : frame.method === 'profile.model_claim_recovery_status'
+          ? result(frame, { state: 'pending', candidate_id: proof.candidateId,
+            operation_id: operationId, source_digest: 'a'.repeat(64) })
+          : result(frame, { state: frame.method === 'profile.model_claim_retry' ? 'committed' : 'restored',
+            cleanup_pending: true })
+    }, [...baseCapabilities, 'profile.model_claim_recovery_inventory',
+      'profile.model_claim_recovery_status', 'profile.model_claim_restore',
       'profile.model_claim_retry'].sort() as HostControlCapability[])
+    await expect(enabled.client.modelClaimRecoveryInventory(proof)).resolves.toEqual([{
+      candidateId: proof.candidateId, operationId, sourceDigest: 'a'.repeat(64), status: 'pending',
+    }])
     await expect(enabled.client.modelClaimRecoveryStatus(proof)).resolves.toEqual({
       candidateId: proof.candidateId, operationId, sourceDigest: 'a'.repeat(64), status: 'pending',
     })
@@ -200,6 +209,8 @@ describe('Unix Host client protocol projections', () => {
     await expect(enabled.client.retryModelClaim({ ...proof, operationId, sourceDigest: 'a'.repeat(64) }))
       .resolves.toEqual({ state: 'committed', cleanupPending: true })
     expect(seen).toMatchObject([
+      { method: 'profile.model_claim_recovery_inventory', params: {
+        account_access_token: proof.accountAccessToken, profile_unlock_material: proof.unlockMaterial } },
       { method: 'profile.model_claim_recovery_status', params: { candidate_id: proof.candidateId,
         account_access_token: proof.accountAccessToken, profile_unlock_material: proof.unlockMaterial } },
       { method: 'profile.model_claim_restore', params: { candidate_id: proof.candidateId,
@@ -216,8 +227,11 @@ describe('Unix Host client protocol projections', () => {
       .rejects.toMatchObject({ code: 'upgrade_required' })
     const malformed = await makeClient(frame => ({ version: 1, type: 'result', request_id: frame.request_id,
       method: 'profile.status', result: { state: 'locked' } }),
-    [...baseCapabilities, 'profile.model_claim_recovery_status', 'profile.model_claim_restore',
+    [...baseCapabilities, 'profile.model_claim_recovery_inventory',
+      'profile.model_claim_recovery_status', 'profile.model_claim_restore',
       'profile.model_claim_retry'].sort() as HostControlCapability[])
+    await expect(malformed.client.modelClaimRecoveryInventory(proof))
+      .rejects.toMatchObject({ code: 'unavailable' })
     await expect(malformed.client.modelClaimRecoveryStatus(proof)).rejects.toMatchObject({ code: 'unavailable' })
     await expect(malformed.client.restoreModelClaim({ ...proof, operationId }))
       .rejects.toMatchObject({ code: 'unavailable' })

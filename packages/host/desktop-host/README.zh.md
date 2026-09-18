@@ -119,6 +119,7 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 - **认领协调仍是 Host 内部能力**——协调器按 Profile 串行认领，停止 worker、保存原文档、预留提供方唯一归属、标记 Profile 未决、写入并核验两份实时文档、提交账本、清除标记、重启 worker，最后比较并删除含密钥的快照。已提交操作的重试根据目标摘要核验，无需重读旧来源；中断的恢复也能继续清除标记。macOS 控制接口在 Account 视图授权下调用该协调器。
 - **账号认领授权独立于普通视图访问**——Host 只能凭有效的 Main 持有租约，为通过 `profile.ensure` 验证过 Account 令牌的同一连接解析 Account Profile 认领目标。仅靠本机保管库恢复、离线恢复、本地 Profile、连接撤销和过期租约都不能授权认领。盘点、确认和 macOS 事务每次生效都使用该检查；未决认领的恢复使用独立的同账号证明。
 - **旧模型盘点只读**——声明旧来源已静止的 macOS Host 会发布 `profile.model_claim_inventory`、`profile.model_claim_confirm`、`profile.model_claim_apply` 和 `profile.model_claim_retry`。盘点只返回脱敏候选元数据。确认重验 Account 租约、来源摘要和凭据是否存在，再签发只在当前连接有效、60 秒内只能使用一次的授权。写入在认领事务前消费该授权。重试要求新鲜的同账号证明，以及账本中已预留的准确候选项、操作号和来源摘要。Windows 在原生来源盘点完成前不发布这些能力。
+- **认领恢复盘点可在视图失败时使用**——macOS Host 校验当前 Account 令牌、绑定和保管库证明后，只列出账本中未完成的预留以及 Profile 标记尚未清除的操作。它返回有界的脱敏回执，不读取旧凭据，也不启动 Profile worker。已提交或已恢复但标记未清除的操作，可通过现有重试或恢复接口完成。
 
 <a id="dev-note"></a>
 ### 开发备注

@@ -57,6 +57,13 @@ export class ProfileClaimMarker {
     return parse(this.files.read(validId(profileId)), profileId)?.state === 'pending'
   }
 
+  /** Identify the durable fence that still blocks this Profile's worker. */
+  pendingOperation(profileId: string): { readonly candidateId: string; readonly operationId: string } | null {
+    const marker = parse(this.files.read(validId(profileId)), profileId)
+    return marker?.state === 'pending'
+      ? { candidateId: marker.candidateId, operationId: marker.operationId } : null
+  }
+
   /** Check that no other unfinished operation owns this Profile before reserving a provider. */
   assertMarkable(input: { readonly profileId: string; readonly candidateId: string; readonly operationId: string }): void {
     validId(input.profileId); validId(input.operationId)

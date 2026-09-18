@@ -38,6 +38,8 @@ The negotiated `profile.extensions` method carries a Main-held lease and one inv
 
 `profile.model_claim_retry` accepts the same fresh Account and vault proof as recovery, plus the exact candidate, operation id, and source digest from an existing receipt. The Host checks durable ownership before resuming the transaction. It is available only while the legacy source has been declared quiescent; status and preimage restoration remain available without that declaration.
 
+`profile.model_claim_recovery_inventory` accepts the same proof without a candidate id. It returns at most 128 distinct, secret-free receipts for the authenticated Account's pending claims and uncleared Profile marker. This query does not open the worker or grant a new claim.
+
 ## Challenge authentication
 
 `encodeHostInspectSignaturePayload(request, response)` returns the exact UTF-8 bytes signed with the installation Ed25519 key. The domain-separated statement binds the request id, Desktop client id, challenge, selected version, Host and installation ids, installation public key, generations, process nonce, capabilities, and executable digest.

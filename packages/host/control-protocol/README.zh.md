@@ -39,6 +39,8 @@ kind: "package-reference"
 
 `profile.model_claim_retry` 使用与恢复相同的新鲜 Account 与保管库证明，并提交现有回执中的准确候选项、操作号和来源摘要。Host 在恢复事务前校验账本中的归属。只有在声明旧来源静止时才开放重试；状态查询与原文件恢复不需要该声明。
 
+`profile.model_claim_recovery_inventory` 使用同一证明，但不要求候选项 ID。它最多返回 128 条属于已验证账号的脱敏回执，覆盖未完成认领和 Profile 标记尚未清除的操作。查询不启动 worker，也不授权新认领。
+
 <a id="challenge-authentication"></a>
 ## 挑战认证
 

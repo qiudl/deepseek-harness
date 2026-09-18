@@ -74,6 +74,23 @@ export class LegacyClaimCoordinator {
       sourceDigest: receipt.sourceDigest, status: receipt.status }
   }
 
+  /** Discover interrupted operations after Desktop or Host restart, even when the worker cannot open. */
+  pendingReceipts(input: { authorizeAccountProfile(): string }): readonly LegacyClaimReceipt[] {
+    const profileId = input.authorizeAccountProfile()
+    const receipts = [...this.deps.ledger.pendingReceipts(profileId)]
+    const marker = this.deps.marker.pendingOperation(profileId)
+    if (marker) {
+      const marked = this.deps.ledger.ownerState(marker.candidateId, profileId)
+      if (!marked || marked.operationId !== marker.operationId) throw new HostAuthorityError('unavailable')
+      if (!receipts.some(receipt => receipt.candidateId === marker.candidateId)) receipts.push(marked)
+    }
+    if (receipts.length > 128) throw new HostAuthorityError('unavailable')
+    return receipts.map(receipt => ({
+      candidateId: receipt.candidateId, operationId: receipt.operationId,
+      sourceDigest: receipt.sourceDigest, status: receipt.status,
+    }))
+  }
+
   /** Restore a pending claim's verified preimage and release its worker. */
   restore(input: RestoreOperation): Promise<LegacyClaimOutcome> {
     const profileId = input.authorizeAccountProfile()

@@ -705,6 +705,8 @@ export async function startDesktopHostApplication(
         inventory: (profileId, kind, signal) => executor.inventory(profileId, kind, signal) },
       profilePersistenceGeneration: async profileId => (await targetFor(profileId).activePersistenceConfig()).generation,
       modelClaimRecovery: {
+        pendingReceipts: (input: Parameters<LegacyClaimCoordinator['pendingReceipts']>[0]) =>
+          claims().pendingReceipts(input),
         status: (input: Parameters<LegacyClaimCoordinator['status']>[0]) => claims().status(input),
         restore: (input: Parameters<LegacyClaimCoordinator['restore']>[0]) => claims().restore(input),
       },

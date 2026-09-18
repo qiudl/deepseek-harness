@@ -918,6 +918,29 @@ export type ProfileModelClaimRecoveryProof = HostAuthorizedParams & {
   readonly profile_unlock_material: string
 }
 
+/** Find this Account's unfinished claims when Desktop lost the candidate id. */
+export interface ProfileModelClaimRecoveryInventoryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_inventory'
+  readonly params: ProfileModelClaimRecoveryProof
+}
+
+/** Bounded, secret-free pending receipts. */
+export interface ProfileModelClaimRecoveryInventoryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_inventory'
+  readonly result: { readonly receipts: readonly {
+    readonly candidate_id: string
+    readonly operation_id: string
+    readonly source_digest: HostControlSha256
+    readonly state: 'pending' | 'committed' | 'restored'
+  }[] }
+}
+
 /** Query a legacy claim receipt using the current Account and vault proof. */
 export interface ProfileModelClaimRecoveryStatusRequest {
   readonly version: 1
@@ -994,6 +1017,8 @@ export type HostControlFrame =
   | ProfileModelClaimConfirmResult
   | ProfileModelClaimApplyRequest
   | ProfileModelClaimApplyResult
+  | ProfileModelClaimRecoveryInventoryRequest
+  | ProfileModelClaimRecoveryInventoryResult
   | ProfileModelClaimRecoveryStatusRequest
   | ProfileModelClaimRecoveryStatusResult
   | ProfileModelClaimRestoreRequest

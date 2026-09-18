@@ -68,7 +68,10 @@ describe('Host model claim recovery authority', () => {
       identity: { hostInstanceId, installationId: randomUUID(), installationPublicKey: publicKey,
         installationPrivateKey: keys.privateKey, processNonce, executableSignatureDigest: '1'.repeat(64),
         runtimeGeneration: 5, schemaGeneration: 1 },
-      host, modelClaimRecovery: { status, restore },
+      host, modelClaimRecovery: { pendingReceipts: ({ authorizeAccountProfile }) => {
+        expect(authorizeAccountProfile()).toBe(profile.profileId)
+        return [{ candidateId, operationId, sourceDigest, status: 'pending' }]
+      }, status, restore },
       modelClaimTransaction: { claim: vi.fn(), retry },
       inspectModelClaimSource: async () => { throw Error('retry does not inspect inventory') },
       profilePersistenceGeneration: () => 1, now: () => now,
@@ -79,6 +82,7 @@ describe('Host model claim recovery authority', () => {
         client_instance_id: clientInstanceId as never, supported_versions: [1] } })
     if (handshake.type !== 'result' || handshake.method !== 'host.inspect') throw Error('inspect failed')
     expect(handshake.result.capabilities).toContain('profile.model_claim_recovery_status')
+    expect(handshake.result.capabilities).toContain('profile.model_claim_recovery_inventory')
     expect(handshake.result.capabilities).toContain('profile.model_claim_restore')
     expect(handshake.result.capabilities).toContain('profile.model_claim_retry')
     const proof = () => ({
@@ -101,6 +105,14 @@ describe('Host model claim recovery authority', () => {
       state: 'pending', candidate_id: candidateId, operation_id: operationId, source_digest: sourceDigest,
     } })
     expect(encodeHostControlFrame(found)).not.toContain('valid-token')
+    const inventory = await session.handleRequest({ version: 1, type: 'request',
+      request_id: randomUUID() as never, method: 'profile.model_claim_recovery_inventory',
+      params: (({ candidate_id: _candidate, ...recoveryProof }) => recoveryProof)(proof()),
+    })
+    expect(inventory).toMatchObject({ type: 'result', result: { receipts: [
+      { candidate_id: candidateId, operation_id: operationId, state: 'pending' },
+    ] } })
+    expect(encodeHostControlFrame(inventory)).not.toContain('valid-token')
     expect(revoke).not.toHaveBeenCalled()
     status.mockReturnValueOnce(null as never)
     expect(await session.handleRequest(request('profile.model_claim_recovery_status')))
@@ -148,7 +160,8 @@ describe('Host model claim recovery authority', () => {
       identity: { hostInstanceId, installationId: randomUUID(), installationPublicKey: publicKey,
         installationPrivateKey: keys.privateKey, processNonce, executableSignatureDigest: '1'.repeat(64),
         runtimeGeneration: 5, schemaGeneration: 1 },
-      host, modelClaimRecovery: { status, restore }, profilePersistenceGeneration: () => 1, now: () => now,
+      host, modelClaimRecovery: { pendingReceipts: () => [], status, restore },
+      profilePersistenceGeneration: () => 1, now: () => now,
     }).openSession(randomUUID(), new AbortController().signal)
     await noRetry.handleRequest({ version: 1, type: 'request', request_id: randomUUID() as never,
       method: 'host.inspect', params: { challenge: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8' as never,

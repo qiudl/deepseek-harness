@@ -31,12 +31,15 @@ describe('legacy provider claim ledger', () => {
     expect(ledger.hasPending('profile-b')).toBe(false)
     const restarted = new LegacyClaimLedger(store, () => 101)
     expect(restarted.status(first.candidateId, first.profileId)).toEqual(reserved)
+    expect(restarted.pendingReceipts('profile-a')).toEqual([reserved])
+    expect(restarted.pendingReceipts('profile-b')).toEqual([])
     expect(restarted.hasPending('profile-a')).toBe(true)
     const committed = restarted.commit(first)
     expect(committed.status).toBe('committed')
     expect(restarted.commit(first)).toEqual(committed)
     expect(store.events).toHaveLength(2)
     expect(new LegacyClaimLedger(store, () => 102).hasPending('profile-a')).toBe(false)
+    expect(new LegacyClaimLedger(store, () => 102).pendingReceipts('profile-a')).toEqual([])
   })
 
   it('keeps another account out and fences changed retries', () => {
@@ -56,6 +59,16 @@ describe('legacy provider claim ledger', () => {
       .toThrow(/idempotency_conflict/u)
     expect(() => ledger.commit({ ...first, operationId: 'operation-b' })).toThrow(/conflict/u)
     expect(() => { ledger.restore({ ...first, profileId: 'profile-b' }) }).toThrow(/conflict/u)
+  })
+
+  it('bounds the Account-only recovery inventory', () => {
+    const ledger = new LegacyClaimLedger(new MemoryStore(), () => 100)
+    for (let index = 0; index < 129; index += 1) {
+      ledger.reserve({ ...first, candidateId: `llm-pi-ai:provider-${index}`,
+        operationId: `operation-${index}` })
+    }
+    expect(() => ledger.pendingReceipts(first.profileId)).toThrow(/unavailable/u)
+    expect(ledger.pendingReceipts('profile-b')).toEqual([])
   })
 
   it('releases only a pending reservation and never reuses an operation id', () => {

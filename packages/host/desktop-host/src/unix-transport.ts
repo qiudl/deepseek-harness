@@ -4,6 +4,7 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import type {
   HostExtensionCommand, HostExtensionResponse, HostExtensionKind, ProfileExtensionsRequest,
   ProfileModelClaimInventoryRequest,
+  ProfileModelClaimRecoveryInventoryRequest,
   ProfileModelClaimConfirmRequest, ProfileModelClaimApplyRequest,
   ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRestoreRequest,
   ProfileModelClaimRetryRequest,
@@ -97,7 +98,7 @@ export interface UnixHostServerOptions {
   /** Initial claims require a fresh, connection-owned confirmation and a live Account view. */
   readonly modelClaimTransaction?: Pick<LegacyClaimCoordinator, 'claim'> & Partial<Pick<LegacyClaimCoordinator, 'retry'>>
   /** Worker-independent recovery of a durable same-Account claim receipt. */
-  readonly modelClaimRecovery?: Pick<LegacyClaimCoordinator, 'status' | 'restore'>
+  readonly modelClaimRecovery?: Pick<LegacyClaimCoordinator, 'pendingReceipts' | 'status' | 'restore'>
   readonly extensions?: {
     readonly operations: ProfileExtensionOperations
     readonly kinds: readonly HostExtensionKind[]
@@ -800,7 +801,8 @@ export class HostControlAuthority {
           this.options.host.revokeProfile(confirmed.profileId)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { state: 'committed', cleanup_pending: outcome.cleanupPending } })
-        } else if (frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore'
+        } else if (frame.method === 'profile.model_claim_recovery_inventory'
+          || frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore'
           || frame.method === 'profile.model_claim_retry') {
           const service = this.options.modelClaimRecovery
           if (!service) throw new HostAuthorityError('upgrade_required')
@@ -816,7 +818,14 @@ export class HostControlAuthority {
               unlockMaterial: frame.params.profile_unlock_material,
             })
           }
-          if (frame.method === 'profile.model_claim_recovery_status') {
+          if (frame.method === 'profile.model_claim_recovery_inventory') {
+            const receipts = service.pendingReceipts({ authorizeAccountProfile: proof })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { receipts: receipts.map(receipt => ({
+                candidate_id: receipt.candidateId, operation_id: receipt.operationId,
+                source_digest: receipt.sourceDigest as never, state: receipt.status,
+              })) } })
+          } else if (frame.method === 'profile.model_claim_recovery_status') {
             const receipt = service.status({ candidateId: frame.params.candidate_id, authorizeAccountProfile: proof })
             channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
               result: receipt ? { state: receipt.status, candidate_id: receipt.candidateId,
@@ -1243,7 +1252,8 @@ export class HostControlAuthority {
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
             ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
-          ...(this.options.modelClaimRecovery ? ['profile.model_claim_recovery_status', 'profile.model_claim_restore'] : []),
+          ...(this.options.modelClaimRecovery ? ['profile.model_claim_recovery_inventory',
+            'profile.model_claim_recovery_status', 'profile.model_claim_restore'] : []),
           ...(this.options.modelClaimRecovery && this.options.modelClaimTransaction?.retry && this.options.inspectModelClaimSource
             ? ['profile.model_claim_retry'] : []),
           ...(this.options.extensions ? ['profile.extensions'] : []),
@@ -1965,6 +1975,27 @@ export class UnixHostClient {
   }
 
   /**
+   * Discover same-Account unfinished claims without requiring a running Profile worker.
+   * @param input - Current Account token, binding, and matching Main-vault proof.
+   * @returns Bounded receipts without credentials or source paths.
+   */
+  async modelClaimRecoveryInventory(input: Omit<ModelClaimRecoveryInput, 'candidateId'>): Promise<readonly LegacyClaimReceipt[]> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_recovery_inventory' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRecoveryInventoryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_recovery_inventory',
+      params: this.modelClaimRecoveryParams(input),
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.receipts.map(receipt => ({
+      candidateId: receipt.candidate_id, operationId: receipt.operation_id,
+      sourceDigest: receipt.source_digest, status: receipt.state,
+    }))
+  }
+
+  /**
    * Restore an interrupted claim from its durable preimage after rechecking Account ownership.
    * @param input - Recovery proof and exact operation id returned by status.
    * @returns Redacted restored outcome.
@@ -1997,7 +2028,8 @@ export class UnixHostClient {
     }
     const request: ProfileModelClaimRetryRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_retry',
-      params: { ...this.modelClaimRecoveryParams(input), operation_id: input.operationId,
+      params: { ...this.modelClaimRecoveryParams(input), candidate_id: input.candidateId,
+        operation_id: input.operationId,
         source_digest: input.sourceDigest as HostControlSha256 },
     }
     const frame = await this.call(request, input.signal)
@@ -2005,14 +2037,14 @@ export class UnixHostClient {
     return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
   }
 
-  private modelClaimRecoveryParams(input: ModelClaimRecoveryInput): ProfileModelClaimRecoveryStatusRequest['params'] {
+  private modelClaimRecoveryParams(input: Omit<ModelClaimRecoveryInput, 'candidateId'>):
+  ProfileModelClaimRecoveryInventoryRequest['params'] {
     return { ...this.auth(), account_access_token: input.accountAccessToken,
       account_issuer: input.issuer, account_subject: input.subject,
       authority_environment_id: input.authorityEnvironmentId as never,
       account_binding_handle: input.accountBindingHandle,
       authority_binding_version: input.authorityBindingVersion,
-      profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial,
-      candidate_id: input.candidateId }
+      profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial }
   }
 
   /**
@@ -2385,6 +2417,7 @@ export class UnixHostClient {
     request: ProfileExtensionsRequest | ProfileModelClaimInventoryRequest
       | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
       | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
+      | ProfileModelClaimRecoveryInventoryRequest
       | ProfileModelClaimRetryRequest
       | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest

@@ -117,6 +117,9 @@ describe('Host-internal legacy claim transaction order', () => {
     await expect(state.coordinator.claim(state.claim)).rejects.toThrow('settings_interrupted')
     expect(state.coordinator.status({ candidateId, authorizeAccountProfile: () => profileId }))
       .toEqual({ candidateId, operationId, sourceDigest, status: 'pending' })
+    expect(state.coordinator.pendingReceipts({ authorizeAccountProfile: () => profileId }))
+      .toEqual([{ candidateId, operationId, sourceDigest, status: 'pending' }])
+    expect(state.coordinator.pendingReceipts({ authorizeAccountProfile: () => otherProfileId })).toEqual([])
     expect(() => { state.coordinator.status({ candidateId, authorizeAccountProfile: () => otherProfileId }) })
       .toThrow(/conflict/u)
     expect(() => { state.coordinator.retry({ ...state.claim, operationId: '2a2ec924-9005-4bcd-ae53-aa8f4f74fcf3' }) })
@@ -127,6 +130,7 @@ describe('Host-internal legacy claim transaction order', () => {
     expect(await state.coordinator.retry(state.claim)).toEqual({ state: 'committed', cleanupPending: false })
     expect(state.coordinator.status({ candidateId, authorizeAccountProfile: () => profileId })?.status)
       .toBe('committed')
+    expect(state.coordinator.pendingReceipts({ authorizeAccountProfile: () => profileId })).toEqual([])
   })
 
   it('retains a restored receipt only while its marker still needs recovery', async () => {
@@ -138,9 +142,35 @@ describe('Host-internal legacy claim transaction order', () => {
     await expect(state.coordinator.restore(state.restore)).rejects.toThrow('marker_clear_interrupted')
     expect(state.coordinator.status({ candidateId, authorizeAccountProfile: () => profileId })?.status)
       .toBe('restored')
+    expect(state.coordinator.pendingReceipts({ authorizeAccountProfile: () => profileId }))
+      .toEqual([{ candidateId, operationId, sourceDigest, status: 'restored' }])
     expect(() => { state.coordinator.retry(state.claim) }).toThrow(/conflict/u)
     await state.coordinator.restore(state.restore)
     expect(state.coordinator.status({ candidateId, authorizeAccountProfile: () => profileId })).toBeNull()
+    expect(state.coordinator.pendingReceipts({ authorizeAccountProfile: () => profileId })).toEqual([])
+  })
+
+  it('rejects a marker without its exact durable operation', () => {
+    const state = fixture()
+    state.marker.mark({ profileId, candidateId, operationId })
+    expect(() => state.coordinator.pendingReceipts({ authorizeAccountProfile: () => profileId }))
+      .toThrow(/unavailable/u)
+    state.ledger.reserve({ profileId, candidateId, operationId: 'different-operation',
+      sourceDigest, targetGeneration: 1 })
+    expect(() => state.coordinator.pendingReceipts({ authorizeAccountProfile: () => profileId }))
+      .toThrow(/unavailable/u)
+  })
+
+  it('rejects a recovery list over the wire limit after adding a committed marker', async () => {
+    const state = fixture()
+    state.failClearMarker()
+    await expect(state.coordinator.claim(state.claim)).rejects.toThrow('marker_clear_interrupted')
+    for (let index = 0; index < 128; index += 1) {
+      state.ledger.reserve({ profileId, candidateId: `llm-pi-ai:provider-${index}`,
+        operationId: `operation-${index}`, sourceDigest, targetGeneration: 1 })
+    }
+    expect(() => state.coordinator.pendingReceipts({ authorizeAccountProfile: () => profileId }))
+      .toThrow(/unavailable/u)
   })
 
   it('commits one provider only after both target files verify, then restarts the worker', async () => {
@@ -182,6 +212,8 @@ describe('Host-internal legacy claim transaction order', () => {
     expect(state.ledger.status(candidateId, profileId)?.status).toBe('committed')
     expect(state.marker.pending(profileId)).toBe(true)
     expect(state.running()).toBe(false)
+    expect(state.coordinator.pendingReceipts({ authorizeAccountProfile: () => profileId }))
+      .toEqual([{ candidateId, operationId, sourceDigest, status: 'committed' }])
     expect(await state.coordinator.claim(state.claim)).toEqual({ state: 'committed', cleanupPending: false })
     expect(state.sourceReads()).toBe(1)
     expect(state.running()).toBe(true)
