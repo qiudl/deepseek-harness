@@ -18,6 +18,7 @@ interface Operation {
 }
 
 interface RestoreOperation extends Pick<Operation, 'candidateId' | 'operationId' | 'authorizeAccountProfile' | 'signal'> {}
+interface StatusOperation extends Pick<Operation, 'candidateId' | 'authorizeAccountProfile'> {}
 
 export interface LegacyClaimCoordinatorDependencies {
   readonly ledger: LegacyClaimLedger
@@ -35,6 +36,14 @@ export interface LegacyClaimOutcome {
   readonly cleanupPending: boolean
 }
 
+/** Secret-free receipt available only to the Account that owns the candidate. */
+export interface LegacyClaimReceipt {
+  readonly candidateId: string
+  readonly operationId: string
+  readonly sourceDigest: string
+  readonly status: 'pending' | 'committed' | 'restored'
+}
+
 /** Host-only claim order; the production caller supplies Account authorization and worker quiescence. */
 export class LegacyClaimCoordinator {
   private readonly tails = new Map<string, Promise<void>>()
@@ -45,6 +54,24 @@ export class LegacyClaimCoordinator {
   claim(input: Operation): Promise<LegacyClaimOutcome> {
     const profileId = input.authorizeAccountProfile()
     return this.serial(profileId, () => this.claimOwned(profileId, input))
+  }
+
+  /** Retry only an operation already reserved for this Account Profile. */
+  retry(input: Operation): Promise<LegacyClaimOutcome> {
+    const profileId = input.authorizeAccountProfile()
+    const receipt = this.deps.ledger.ownerState(input.candidateId, profileId)
+    if (!receipt || receipt.status === 'restored' || receipt.operationId !== input.operationId
+      || receipt.sourceDigest !== input.expectedSourceDigest) throw new HostAuthorityError('conflict')
+    return this.serial(profileId, () => this.claimOwned(profileId, input))
+  }
+
+  /** Let the same Account find a durable operation after Host restart without reading any secret. */
+  status(input: StatusOperation): LegacyClaimReceipt | null {
+    const profileId = input.authorizeAccountProfile()
+    const receipt = this.deps.ledger.ownerState(input.candidateId, profileId)
+    if (!receipt || receipt.status === 'restored' && !this.deps.marker.pending(profileId)) return null
+    return { candidateId: receipt.candidateId, operationId: receipt.operationId,
+      sourceDigest: receipt.sourceDigest, status: receipt.status }
   }
 
   /** Restore a pending claim's verified preimage and release its worker. */

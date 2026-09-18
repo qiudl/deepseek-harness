@@ -108,6 +108,41 @@ function fixture() {
 }
 
 describe('Host-internal legacy claim transaction order', () => {
+  it('exposes only an owned durable receipt and refuses an unreserved retry', async () => {
+    const state = fixture()
+    expect(state.coordinator.status({ candidateId, authorizeAccountProfile: () => profileId })).toBeNull()
+    expect(() => { state.coordinator.retry(state.claim) }).toThrow(/conflict/u)
+    expect(state.sourceReads()).toBe(0)
+    state.failSettings(true)
+    await expect(state.coordinator.claim(state.claim)).rejects.toThrow('settings_interrupted')
+    expect(state.coordinator.status({ candidateId, authorizeAccountProfile: () => profileId }))
+      .toEqual({ candidateId, operationId, sourceDigest, status: 'pending' })
+    expect(() => { state.coordinator.status({ candidateId, authorizeAccountProfile: () => otherProfileId }) })
+      .toThrow(/conflict/u)
+    expect(() => { state.coordinator.retry({ ...state.claim, operationId: '2a2ec924-9005-4bcd-ae53-aa8f4f74fcf3' }) })
+      .toThrow(/conflict/u)
+    expect(() => { state.coordinator.retry({ ...state.claim, expectedSourceDigest: 'b'.repeat(64) }) })
+      .toThrow(/conflict/u)
+    state.failSettings(false)
+    expect(await state.coordinator.retry(state.claim)).toEqual({ state: 'committed', cleanupPending: false })
+    expect(state.coordinator.status({ candidateId, authorizeAccountProfile: () => profileId })?.status)
+      .toBe('committed')
+  })
+
+  it('retains a restored receipt only while its marker still needs recovery', async () => {
+    const state = fixture()
+    state.failSettings(true)
+    await expect(state.coordinator.claim(state.claim)).rejects.toThrow('settings_interrupted')
+    state.failSettings(false)
+    state.failClearMarker()
+    await expect(state.coordinator.restore(state.restore)).rejects.toThrow('marker_clear_interrupted')
+    expect(state.coordinator.status({ candidateId, authorizeAccountProfile: () => profileId })?.status)
+      .toBe('restored')
+    expect(() => { state.coordinator.retry(state.claim) }).toThrow(/conflict/u)
+    await state.coordinator.restore(state.restore)
+    expect(state.coordinator.status({ candidateId, authorizeAccountProfile: () => profileId })).toBeNull()
+  })
+
   it('commits one provider only after both target files verify, then restarts the worker', async () => {
     const state = fixture()
     expect(await state.coordinator.claim(state.claim)).toEqual({ state: 'committed', cleanupPending: false })
