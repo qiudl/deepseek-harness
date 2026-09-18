@@ -131,6 +131,42 @@ const inventory = {
 }
 
 describe('Unix Host client protocol projections', () => {
+  it('projects one-use model claim confirmation and committed outcome', async () => {
+    const seen: HostControlFrame[] = []
+    const request = { viewLeaseId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3146', leaseGeneration: 2,
+      runtimeGeneration: 5, candidateId: 'llm-deepseek:deepseek', sourceDigest: 'a'.repeat(64) }
+    const confirmation = 'A'.repeat(43)
+    const operationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3147'
+    const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, {}) },
+      [...baseCapabilities].sort())
+    await expect(unsupported.client.confirmModelClaim(request)).rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(unsupported.client.applyModelClaim({ confirmation }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(seen).toEqual([])
+    const capabilities = [...baseCapabilities, 'profile.model_claim_confirm', 'profile.model_claim_apply']
+      .sort() as HostControlCapability[]
+    const enabled = await makeClient((frame) => { seen.push(frame)
+      return frame.method === 'profile.model_claim_confirm'
+        ? result(frame, { confirmation, operation_id: operationId, expires_at: 61_000 })
+        : result(frame, { state: 'committed', cleanup_pending: false })
+    }, capabilities)
+    await expect(enabled.client.confirmModelClaim(request)).resolves.toEqual({
+      confirmation, operationId, expiresAt: 61_000,
+    })
+    await expect(enabled.client.applyModelClaim({ confirmation })).resolves.toEqual({
+      state: 'committed', cleanupPending: false,
+    })
+    expect(seen).toMatchObject([
+      { method: 'profile.model_claim_confirm', params: { candidate_id: request.candidateId,
+        source_digest: request.sourceDigest, view_lease_id: request.viewLeaseId } },
+      { method: 'profile.model_claim_apply', params: { confirmation } },
+    ])
+    const malformed = await makeClient(frame => ({ version: 1, type: 'result', request_id: frame.request_id,
+      method: 'profile.status', result: { state: 'locked' } }), capabilities)
+    await expect(malformed.client.confirmModelClaim(request)).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(malformed.client.applyModelClaim({ confirmation })).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('projects worker-independent model claim recovery only with the advertised capability', async () => {
     const seen: HostControlFrame[] = []
     const proof = { ...binding, issuer: 'https://accounts.example.test', subject: 'person',

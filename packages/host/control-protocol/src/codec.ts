@@ -2,6 +2,8 @@ import type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
+  ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
+  ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
   ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRecoveryStatusResult,
   ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
   HostControlCapability,
@@ -513,10 +515,25 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
-  | ProfileModelClaimInventoryRequest | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest {
+  | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
+  | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
   const requestId = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_confirm') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation',
+      'candidate_id', 'source_digest'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+      candidate_id: modelClaimCandidate(params.candidate_id), source_digest: digest(params.source_digest),
+    } }
+  }
+  if (frame.method === 'profile.model_claim_apply') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'confirmation'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), confirmation: sourceAuthority(params.confirmation) } }
+  }
   if (frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore') {
     const proofKeys = [
       ...AUTHORIZED_KEYS, 'account_access_token', 'account_issuer', 'account_subject',
@@ -731,10 +748,24 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileLeaseCloseResult | ProfileExtensionsResult
-  | ProfileModelClaimInventoryResult | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult {
+  | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
+  | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
   const request_id = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_confirm') {
+    exactKeys(result, ['confirmation', 'operation_id', 'expires_at'])
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      confirmation: sourceAuthority(result.confirmation), operation_id: uuid(result.operation_id),
+      expires_at: timestamp(result.expires_at),
+    } }
+  }
+  if (frame.method === 'profile.model_claim_apply') {
+    exactKeys(result, ['state', 'cleanup_pending'])
+    if (result.state !== 'committed' || typeof result.cleanup_pending !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { state: 'committed', cleanup_pending: result.cleanup_pending } }
+  }
   if (frame.method === 'profile.model_claim_recovery_status') {
     if (result.state === 'unclaimed') {
       exactKeys(result, ['state'])

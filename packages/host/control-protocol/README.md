@@ -34,6 +34,8 @@ The negotiated `profile.extensions` method carries a Main-held lease and one inv
 
 `profile.model_claim_inventory` carries a Main-held Account view lease and returns a source digest, at most 128 distinct provider candidates, credential presence, shared-reference flags, and counts of unmapped records. The codec rejects credential values, reference names, paths, and additional fields. This read-only inventory is not a claim confirmation or credential transfer authority.
 
+`profile.model_claim_confirm` rechecks the Account lease and a fresh source digest for one candidate with a present credential. It returns a one-use confirmation bound to the current Host connection and valid for 60 seconds. `profile.model_claim_apply` consumes that confirmation and rechecks the Account view through the claim transaction. Both results omit credential values and paths. A failed or interrupted write uses the separate same-Account recovery methods.
+
 ## Challenge authentication
 
 `encodeHostInspectSignaturePayload(request, response)` returns the exact UTF-8 bytes signed with the installation Ed25519 key. The domain-separated statement binds the request id, Desktop client id, challenge, selected version, Host and installation ids, installation public key, generations, process nonce, capabilities, and executable digest.

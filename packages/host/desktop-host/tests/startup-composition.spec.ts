@@ -199,6 +199,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   })
   expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => profile.profileId })).toBeNull()
+  expect(serverOptions.modelClaimTransaction).toBeDefined()
   expect(workerSpecs).toHaveLength(1)
   const opened = await application.host.openLocalProfile({ profileId: profile.profileId, ownerId: 'owner' })
   expect((await application.host.activateView({
@@ -406,6 +407,7 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
   })
   onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
   expect(serverOptions?.modelClaimRecovery).toBeDefined()
+  expect(serverOptions?.modelClaimTransaction).toBeUndefined()
   expect(serverOptions?.inspectModelClaimSource).toBeUndefined()
   expect(() => { serverOptions?.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => randomUUID() }) }).toThrow(/unavailable/u)

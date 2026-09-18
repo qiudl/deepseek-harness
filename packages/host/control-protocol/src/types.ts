@@ -863,6 +863,49 @@ export interface ProfileModelClaimInventoryResult {
   }
 }
 
+/** Confirm one displayed candidate against a fresh source digest and Account view. */
+export interface ProfileModelClaimConfirmRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_confirm'
+  readonly params: ProfileModelClaimInventoryRequest['params'] & {
+    readonly candidate_id: string
+    readonly source_digest: HostControlSha256
+  }
+}
+
+/** One-use, connection-owned authority for a single claim transaction. */
+export interface ProfileModelClaimConfirmResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_confirm'
+  readonly result: {
+    readonly confirmation: string
+    readonly operation_id: string
+    readonly expires_at: number
+  }
+}
+
+/** Consume a confirmed claim authority on its originating Host connection. */
+export interface ProfileModelClaimApplyRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_apply'
+  readonly params: HostAuthorizedParams & { readonly confirmation: string }
+}
+
+/** Redacted result of the committed provider claim. */
+export interface ProfileModelClaimApplyResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_apply'
+  readonly result: { readonly state: 'committed'; readonly cleanup_pending: boolean }
+}
+
 /** Account proof accepted only for an already recorded legacy model claim. */
 export type ProfileModelClaimRecoveryProof = HostAuthorizedParams & {
   readonly account_access_token: string
@@ -925,6 +968,10 @@ export type HostControlFrame =
   | ProfileExtensionsResult
   | ProfileModelClaimInventoryRequest
   | ProfileModelClaimInventoryResult
+  | ProfileModelClaimConfirmRequest
+  | ProfileModelClaimConfirmResult
+  | ProfileModelClaimApplyRequest
+  | ProfileModelClaimApplyResult
   | ProfileModelClaimRecoveryStatusRequest
   | ProfileModelClaimRecoveryStatusResult
   | ProfileModelClaimRestoreRequest

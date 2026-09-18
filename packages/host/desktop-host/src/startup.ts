@@ -709,6 +709,10 @@ export async function startDesktopHostApplication(
         restore: (input: Parameters<LegacyClaimCoordinator['restore']>[0]) => claims().restore(input),
       },
       ...(config.legacySourceQuiescent === true ? {
+        modelClaimTransaction: {
+          /* v8 ignore next -- production source home is fixed; coordinator and control authority are tested separately. */
+          claim: (input: Parameters<LegacyClaimCoordinator['claim']>[0]) => claims().claim(input),
+        },
         inspectModelClaimSource: (signal?: AbortSignal) => inspectLegacyModelClaimSource({
           expectedUid: uid, assertSourceQuiescent: () => Promise.resolve(),
           ...(signal === undefined ? {} : { signal }),

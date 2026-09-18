@@ -35,6 +35,8 @@ kind: "package-reference"
 
 `profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
 
+`profile.model_claim_confirm` 针对一个凭据存在的候选项，重新校验 Account 租约和新鲜的来源摘要。它返回只在当前 Host 连接有效、60 秒内只能使用一次的确认授权。`profile.model_claim_apply` 消费该授权，并在认领事务中重新校验 Account 视图。两种结果都不包含凭据值或路径。写入失败或中断时使用独立的同账号恢复方法。
+
 <a id="challenge-authentication"></a>
 ## 挑战认证
 

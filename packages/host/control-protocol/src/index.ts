@@ -18,6 +18,8 @@ export type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
+  ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
+  ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
   ProfileModelClaimRecoveryProof, ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRecoveryStatusResult,
   ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
   HostControlCapability,
