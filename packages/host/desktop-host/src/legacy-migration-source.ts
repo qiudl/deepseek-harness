@@ -112,6 +112,110 @@ function credentials(value: unknown): { refs: Record<string, string>; records: R
   return { refs: refs as Record<string, string>, records }
 }
 
+/** Redacted, source-bound candidate for a later authenticated account claim. */
+export interface LegacyModelClaimCandidate {
+  readonly id: string
+  readonly provider: string
+  readonly kind: 'llm' | 'web-search'
+  readonly credential: 'present' | 'missing' | 'none'
+  readonly sharedCredential: boolean
+}
+
+/** Owner-only source inventory; no credential values or references cross to Desktop. */
+export interface LegacyModelClaimInventory {
+  readonly sourceDigest: string
+  readonly candidates: readonly LegacyModelClaimCandidate[]
+  readonly unsupportedSettings: number
+  readonly unassignedCredentialReferences: number
+  readonly unassignedCredentialRecords: number
+}
+
+/**
+ * Read a redacted inventory from the fixed owner-local legacy home.
+ * Candidate ids are selectors for a later fenced claim, never authorization.
+ */
+export async function inspectLegacyModelClaimSource(input: {
+  expectedUid: number
+  assertSourceQuiescent(signal?: AbortSignal): Promise<void>
+  signal?: AbortSignal
+  /** Fixture seam only; production must omit it. */
+  _testOwnerHome?: string
+}): Promise<LegacyModelClaimInventory> {
+  await input.assertSourceQuiescent(input.signal)
+  input.signal?.throwIfAborted()
+  const root = join(resolve(input._testOwnerHome ?? homedir()), '.dsh')
+  const state = await ownerState(root, input.expectedUid)
+  const profile = map(state.documents.find(document => document.kind === 'profile')?.value)
+  const sourceDigest = profile.legacyWithheldSourceDigest
+  if (typeof sourceDigest !== 'string') throw new Error('legacy_migration_source_schema_unsupported')
+  const settings = map(await ownerDocument(join(root, 'settings.yaml'), input.expectedUid, {}))
+  const credentialStore = credentials(await ownerDocument(join(root, '.credentials.yaml'), input.expectedUid, {}))
+  if (createHash('sha256').update(JSON.stringify({ settings, credentials: credentialStore })).digest('hex') !== sourceDigest) {
+    throw new Error('legacy_migration_source_changed')
+  }
+  const candidates: Array<LegacyModelClaimCandidate & { ref?: string }> = []
+  const usedRefs = new Set<string>()
+  const add = (id: string, provider: string, kind: 'llm' | 'web-search', ref?: string, literal = false): void => {
+    if (ref !== undefined) usedRefs.add(ref)
+    candidates.push({
+      id, provider, kind,
+      credential: literal || ref !== undefined && credentialStore.refs[ref] !== undefined
+        ? 'present' : ref === undefined ? 'none' : 'missing',
+      sharedCredential: false,
+      ...(ref === undefined ? {} : { ref }),
+    })
+  }
+  const deepseek = settings['llm-deepseek']
+  const deepseekRef = deepseek === undefined ? 'DEEPSEEK_API_KEY' : map(deepseek).apiKeyEnv ?? 'DEEPSEEK_API_KEY'
+  if (typeof deepseekRef !== 'string' || !REF.test(deepseekRef)) {
+    throw new Error('legacy_migration_source_schema_unsupported')
+  }
+  if (deepseek !== undefined || credentialStore.refs[deepseekRef] !== undefined) {
+    add('llm-deepseek:deepseek', 'deepseek', 'llm', deepseekRef)
+  }
+  let unsupportedSettings = 0
+  const pi = settings['llm-pi-ai']
+  if (pi !== undefined) {
+    const providers = map(map(pi).providers ?? {})
+    for (const [provider, value] of Object.entries(providers)) {
+      if (!/^[a-z][a-z0-9-]{0,63}$/u.test(provider)) { unsupportedSettings++; continue }
+      const ref = map(value).apiKeyEnv
+      if (ref !== undefined && (typeof ref !== 'string' || !REF.test(ref))) {
+        throw new Error('legacy_migration_source_schema_unsupported')
+      }
+      add(`llm-pi-ai:${provider}`, provider, 'llm', ref)
+    }
+  }
+  const search = settings['web-search-deepseek']
+  if (search !== undefined) {
+    const source = map(search)
+    const ref = source.apiKeyEnv ?? 'DEEPSEEK_API_KEY'
+    if (typeof ref !== 'string' || !REF.test(ref)) throw new Error('legacy_migration_source_schema_unsupported')
+    const literal = typeof source.apiKey === 'string' && source.apiKey.length > 0
+    add('web-search-deepseek:deepseek', 'deepseek', 'web-search', literal ? undefined : ref, literal)
+  }
+  for (const name of Object.keys(settings)) {
+    if (!['llm-deepseek', 'llm-pi-ai', 'web-search-deepseek', 'agent-default-model',
+      'agent-loop', 'permission', 'shell', 'ui-onboarding'].includes(name)) {
+      unsupportedSettings++
+    }
+  }
+  const refCounts = new Map<string, number>()
+  for (const candidate of candidates) {
+    if (candidate.ref !== undefined) refCounts.set(candidate.ref, (refCounts.get(candidate.ref) ?? 0) + 1)
+  }
+  return {
+    sourceDigest,
+    candidates: candidates.map(({ ref, ...candidate }) => ({
+      ...candidate,
+      sharedCredential: ref !== undefined && (refCounts.get(ref) ?? 0) > 1,
+    })),
+    unsupportedSettings,
+    unassignedCredentialReferences: Object.keys(credentialStore.refs).filter(ref => !usedRefs.has(ref)).length,
+    unassignedCredentialRecords: Object.keys(credentialStore.records).length,
+  }
+}
+
 async function ownerState(root: string, uid: number): Promise<MigrationOwnerStateBundle> {
   await ownerDirectory(root, uid)
   const rootEntries = await readdir(root, { withFileTypes: true })
