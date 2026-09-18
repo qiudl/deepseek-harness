@@ -32,6 +32,8 @@ The transport is not JSON-RPC. A malformed line is a connection-fatal protocol v
 
 The negotiated `profile.extensions` method carries a Main-held lease and one inventory, prepare, commit, status, or cancel command. Prepare payloads are limited to 32,768 UTF-8 bytes; results contain only plans, bounded metadata, or durable receipt states. Plugin completion actions must be literal `install`, `update`, or `remove` strings; arrays and objects are rejected without coercion. Kind support belongs to the Host executor, so a decoded kind is not proof that installation is available. Skill inventory may include the boolean `skill_archives`; absence means that the caller cannot assume archive support. Archive plans carry URL and digest metadata within the same payload limit, not ZIP bytes.
 
+`profile.model_claim_inventory` carries a Main-held Account view lease and returns a source digest, at most 128 distinct provider candidates, credential presence, shared-reference flags, and counts of unmapped records. The codec rejects credential values, reference names, paths, and additional fields. This read-only inventory is not a claim confirmation or credential transfer authority.
+
 ## Challenge authentication
 
 `encodeHostInspectSignaturePayload(request, response)` returns the exact UTF-8 bytes signed with the installation Ed25519 key. The domain-separated statement binds the request id, Desktop client id, challenge, selected version, Host and installation ids, installation public key, generations, process nonce, capabilities, and executable digest.

@@ -829,10 +829,46 @@ export interface ProfileExtensionsResult {
   readonly result: HostExtensionResponse
 }
 
+/** Inspect legacy model candidates through a token-verified Account view. */
+export interface ProfileModelClaimInventoryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_inventory'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+  }
+}
+
+/** Redacted source candidates; credentials, references and paths are excluded. */
+export interface ProfileModelClaimInventoryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_inventory'
+  readonly result: {
+    readonly source_digest: HostControlSha256
+    readonly candidates: readonly {
+      readonly id: string
+      readonly provider: string
+      readonly kind: 'llm' | 'web-search'
+      readonly credential: 'present' | 'missing' | 'none'
+      readonly shared_credential: boolean
+    }[]
+    readonly unsupported_settings: number
+    readonly unassigned_credential_references: number
+    readonly unassigned_credential_records: number
+  }
+}
+
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
   | ProfileExtensionsRequest
   | ProfileExtensionsResult
+  | ProfileModelClaimInventoryRequest
+  | ProfileModelClaimInventoryResult
   | HostInspectRequest
   | HostInspectResult
   | ProfileStatusRequest

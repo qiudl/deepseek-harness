@@ -6,6 +6,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
 import type { Config } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
+import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from '../src/legacy-claim-marker.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -184,6 +185,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   })
   expect(serverStart).toHaveBeenCalledOnce()
   if (!serverOptions) throw new Error('missing captured server options')
+  expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
+  expect(await serverOptions.inspectModelClaimSource?.(new AbortController().signal)).toMatchObject({ candidates: [] })
 
   const profile = await application.host.bootstrapLocalProfile({
     keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner',
@@ -366,6 +369,14 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     keyHandle: 'keychain:account-startup', unlockMaterial: accountUnlock,
     operationId: randomUUID(), ownerId: 'retry-owner',
   })).rejects.toBeDefined()
+
+  const marker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), process.getuid!()))
+  const pending = { profileId: profile.profileId, candidateId: 'llm-deepseek:deepseek', operationId: randomUUID() }
+  marker.mark(pending)
+  await expect(application.host.restoreLocalProfile({ ...profile,
+    keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'retry-owner',
+  })).rejects.toMatchObject({ code: 'unavailable' })
+  marker.clear(pending)
 
   await application.close()
   await application.close()

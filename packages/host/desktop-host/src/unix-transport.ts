@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import type {
   HostExtensionCommand, HostExtensionResponse, HostExtensionKind, ProfileExtensionsRequest,
+  ProfileModelClaimInventoryRequest,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlErrorCode,
@@ -57,6 +58,7 @@ import type {
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import type { DesktopHost } from './desktop-host.ts'
+import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
 import type { SingleHostLock } from './single-instance.ts'
@@ -86,6 +88,8 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** Read-only source inspection; omitted on hosts without a validated legacy source. */
+  readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
   readonly extensions?: {
     readonly operations: ProfileExtensionOperations
     readonly kinds: readonly HostExtensionKind[]
@@ -220,7 +224,7 @@ interface MigrationExportChunk {
 /** Transport-independent Host account, Profile, and migration authority inputs. */
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
-  'identity' | 'host' | 'createMigrationExport' | 'createLegacyMigrationExport'
+  'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
 >
 
@@ -714,7 +718,33 @@ export class HostControlAuthority {
       ),
       dispatchAuthorized: async (frame, context, respond) => {
         const channel = { send: respond }
-        if (frame.method === 'migration.existing_source.inventory') {
+        if (frame.method === 'profile.model_claim_inventory') {
+          const inspectSource = this.options.inspectModelClaimSource
+          if (!inspectSource) throw new HostAuthorityError('upgrade_required')
+          const authority = () => {
+            context.signal.throwIfAborted()
+            return this.options.host.authorizeAccountModelClaimView({
+              viewLeaseId: frame.params.view_lease_id as never,
+              leaseGeneration: frame.params.lease_generation,
+              runtimeGeneration: frame.params.runtime_generation,
+              ownerId,
+            })
+          }
+          authority()
+          const inventory = await inspectSource(context.signal)
+          authority()
+          if (inventory.candidates.length > 128) throw new HostAuthorityError('unavailable')
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result: {
+            source_digest: inventory.sourceDigest as never,
+            candidates: inventory.candidates.map(candidate => ({
+              id: candidate.id, provider: candidate.provider, kind: candidate.kind,
+              credential: candidate.credential, shared_credential: candidate.sharedCredential,
+            })),
+            unsupported_settings: inventory.unsupportedSettings,
+            unassigned_credential_references: inventory.unassignedCredentialReferences,
+            unassigned_credential_records: inventory.unassignedCredentialRecords,
+          } })
+        } else if (frame.method === 'migration.existing_source.inventory') {
           try {
             const decoded = verifyProfileSelector(this.options.identity, frame.params.target_profile_selector)
             const profileId = this.options.host.authorizeMigrationProfileSelector({
@@ -1093,6 +1123,7 @@ export class HostControlAuthority {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
+          ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.extensions ? ['profile.extensions'] : []),
           ...(offlineAccountRecovery ? recoveryCapabilities : []),
           ...(migrationExport ? [
@@ -1712,6 +1743,39 @@ export class UnixHostClient {
   }
 
   /**
+   * Inspect redacted legacy model candidates using a token-verified Account view.
+   * @param input - Main-held view lease and optional cancellation.
+   * @returns source digest and candidate metadata without credentials or paths.
+   */
+  async modelClaimInventory(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly signal?: AbortSignal
+  }): Promise<LegacyModelClaimInventory> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_inventory' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimInventoryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_inventory',
+      params: { ...this.auth(), view_lease_id: input.viewLeaseId as never,
+        lease_generation: input.leaseGeneration, runtime_generation: input.runtimeGeneration },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return {
+      sourceDigest: frame.result.source_digest,
+      candidates: frame.result.candidates.map(candidate => ({
+        id: candidate.id, provider: candidate.provider, kind: candidate.kind,
+        credential: candidate.credential, sharedCredential: candidate.shared_credential,
+      })),
+      unsupportedSettings: frame.result.unsupported_settings,
+      unassignedCredentialReferences: frame.result.unassigned_credential_references,
+      unassignedCredentialRecords: frame.result.unassigned_credential_records,
+    }
+  }
+
+  /**
    * Close one view lease on the connection that minted it.
    * @param input - lease identity, generations, and optional cancellation.
    */
@@ -2078,7 +2142,8 @@ export class UnixHostClient {
   }
 
   private async call(
-    request: ProfileExtensionsRequest | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
+    request: ProfileExtensionsRequest | ProfileModelClaimInventoryRequest
+      | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest

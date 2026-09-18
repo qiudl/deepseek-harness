@@ -1,6 +1,7 @@
 import type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
+  ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
   HostControlCapability,
   HostAccountBindingHandle,
   HostAuthorityEnvironmentId,
@@ -503,10 +504,18 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest {
+  | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
+  | ProfileModelClaimInventoryRequest {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
   const requestId = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_inventory') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation'])
+    return { version: 1, type: 'request', request_id: requestId, method: 'profile.model_claim_inventory', params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+    } }
+  }
   if (frame.method === 'profile.extensions') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.extensions', params: {
@@ -689,10 +698,42 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileLeaseCloseResult | ProfileExtensionsResult {
+  | ProfileViewActivateResult | ProfileLeaseCloseResult | ProfileExtensionsResult
+  | ProfileModelClaimInventoryResult {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
   const request_id = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_inventory') {
+    exactKeys(result, ['source_digest', 'candidates',
+      'unsupported_settings', 'unassigned_credential_references', 'unassigned_credential_records'])
+    if (!Array.isArray(result.candidates) || result.candidates.length > 128) reject()
+    const ids = new Set<string>()
+    const candidates = result.candidates.map((value) => {
+      const candidate = record(value)
+      exactKeys(candidate, ['id', 'provider', 'kind', 'credential', 'shared_credential'])
+      if (typeof candidate.provider !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/u.test(candidate.provider)
+        || (candidate.kind !== 'llm' && candidate.kind !== 'web-search')
+        || candidate.kind === 'web-search' && candidate.provider !== 'deepseek'
+        || !['present', 'missing', 'none'].includes(candidate.credential as string)
+        || typeof candidate.shared_credential !== 'boolean'
+        || candidate.id !== (candidate.kind === 'web-search'
+          ? 'web-search-deepseek:deepseek'
+          : candidate.provider === 'deepseek' && candidate.id === 'llm-deepseek:deepseek'
+            ? 'llm-deepseek:deepseek' : `llm-pi-ai:${candidate.provider}`)
+        || ids.has(candidate.id)) reject()
+      ids.add(candidate.id)
+      return {
+        id: candidate.id, provider: candidate.provider, kind: candidate.kind,
+        credential: candidate.credential, shared_credential: candidate.shared_credential,
+      } as ProfileModelClaimInventoryResult['result']['candidates'][number]
+    })
+    return { version: 1, type: 'result', request_id, method: 'profile.model_claim_inventory', result: {
+      source_digest: digest(result.source_digest), candidates,
+      unsupported_settings: nonnegative(result.unsupported_settings),
+      unassigned_credential_references: nonnegative(result.unassigned_credential_references),
+      unassigned_credential_records: nonnegative(result.unassigned_credential_records),
+    } }
+  }
   if (frame.method === 'profile.extensions') {
     return { version: 1, type: 'result', request_id, method: 'profile.extensions', result: extensionResponse(result) }
   }

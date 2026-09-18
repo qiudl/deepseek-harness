@@ -38,7 +38,7 @@ import { DesktopHost } from './desktop-host.ts'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'
 import { DshWebProfileWorkerFactory } from './dsh-web-profile-worker.ts'
-import { createLegacyMigrationExportService } from './legacy-migration-source.ts'
+import { createLegacyMigrationExportService, inspectLegacyModelClaimSource } from './legacy-migration-source.ts'
 import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from './legacy-claim-marker.ts'
 import { createMacOSPeerAttestor } from './macos-peer-attestor.ts'
 import { ProfileRegistry } from './profile-registry.ts'
@@ -654,6 +654,10 @@ export async function startDesktopHostApplication(
         inventory: (profileId, kind, signal) => executor.inventory(profileId, kind, signal) },
       profilePersistenceGeneration: async profileId => (await targetFor(profileId).activePersistenceConfig()).generation,
       ...(config.legacySourceQuiescent === true ? {
+        inspectModelClaimSource: (signal?: AbortSignal) => inspectLegacyModelClaimSource({
+          expectedUid: uid, assertSourceQuiescent: () => Promise.resolve(),
+          ...(signal === undefined ? {} : { signal }),
+        }),
         createLegacyMigrationExport: () => createLegacyMigrationExportService({
           expectedUid: uid,
           assertSourceQuiescent: () => Promise.resolve(),

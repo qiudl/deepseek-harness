@@ -17,6 +17,7 @@ export type { CanonicalMigrationRecord } from './migration-canonical.js'
 export type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
+  ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlCorrelationId,
