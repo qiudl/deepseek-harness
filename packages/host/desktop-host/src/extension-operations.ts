@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { validPluginPackageRecovery, type PluginPackageRecovery } from './plugin-package-recovery.ts'
+import { readOwnerPrivateFile } from './private-file-io.ts'
 
 export type ExtensionKind = 'plugin' | 'mcp' | 'skill'
 /** Bounded source of the default-preset winner after removing a local Skill. */
@@ -185,19 +186,12 @@ export class FileExtensionReceipts implements ExtensionReceiptStore {
   read(operationId: string): ExtensionReceipt | undefined {
     this.directory()
     const path = join(this.root, `${uuid(operationId)}.json`)
-    let fd: number
-    try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-      throw error
-    }
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.uid || (stat.mode & 0o077) !== 0 || stat.size > 65_536) throw new Error('unsafe_receipt')
-      const receipt: unknown = JSON.parse(readFileSync(fd, 'utf8'))
-      validateExtensionReceipt(receipt)
-      if (receipt.operationId !== operationId) throw new Error('invalid_receipt')
-      return receipt
-    } finally { closeSync(fd) }
+    const bytes = readOwnerPrivateFile(path, this.uid, 65_536, () => new Error('unsafe_receipt'))
+    if (bytes === undefined) return undefined
+    const receipt: unknown = JSON.parse(bytes.toString('utf8'))
+    validateExtensionReceipt(receipt)
+    if (receipt.operationId !== operationId) throw new Error('invalid_receipt')
+    return receipt
   }
   /** @param receipt Metadata only; raw installation payloads must never be stored here. */
   write(receipt: ExtensionReceipt): void {

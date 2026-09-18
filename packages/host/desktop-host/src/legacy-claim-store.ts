@@ -1,8 +1,4 @@
-import { randomUUID } from 'node:crypto'
-import {
-  closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync,
-  openSync, readFileSync, renameSync, unlinkSync, writeFileSync,
-} from 'node:fs'
+import { lstatSync, mkdirSync } from 'node:fs'
 import { isAbsolute, join, resolve, win32 } from 'node:path'
 import { parseLegacyClaimEvent, type LegacyClaimEvent, type LegacyClaimEventStore } from './legacy-claim-ledger.ts'
 import {
@@ -11,6 +7,7 @@ import {
   type WindowsHostRegistrationFileBindings,
 } from './windows-host-registration.ts'
 import { HostAuthorityError } from './types.ts'
+import { readOwnerPrivateFile, replaceOwnerPrivateFile } from './private-file-io.ts'
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
@@ -76,31 +73,12 @@ export class FileLegacyClaimEventStore extends SnapshotLegacyClaimStore {
 
   protected readBytes(): Buffer | undefined {
     this.directory()
-    let fd: number
-    try { fd = openSync(this.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-      throw error
-    }
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.uid || (stat.mode & 0o077) !== 0
-        || stat.size > this.maximumBytes) {
-        throw new HostAuthorityError('unavailable')
-      }
-      return readFileSync(fd)
-    } finally { closeSync(fd) }
+    return readOwnerPrivateFile(this.path, this.uid, this.maximumBytes, () => new HostAuthorityError('unavailable'))
   }
 
   protected replaceBytes(bytes: Buffer): void {
     this.directory()
-    const temporary = join(this.root, `.legacy-claims.${randomUUID()}.tmp`)
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    try { writeFileSync(fd, bytes); fsyncSync(fd) } finally { closeSync(fd) }
-    try {
-      renameSync(temporary, this.path)
-      const directory = openSync(this.root, constants.O_RDONLY | constants.O_NOFOLLOW)
-      try { fsyncSync(directory) } finally { closeSync(directory) }
-    } finally { if (existsSync(temporary)) unlinkSync(temporary) }
+    replaceOwnerPrivateFile(this.root, this.path, 'legacy-claims', bytes)
   }
 }
 

@@ -793,7 +793,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
       expires_at: timestamp(result.expires_at),
     } }
   }
-  if (frame.method === 'profile.model_claim_apply') {
+  if (frame.method === 'profile.model_claim_apply' || frame.method === 'profile.model_claim_retry') {
     exactKeys(result, ['state', 'cleanup_pending'])
     if (result.state !== 'committed' || typeof result.cleanup_pending !== 'boolean') reject()
     return { version: 1, type: 'result', request_id, method: frame.method,
@@ -832,12 +832,6 @@ function decodeProfileResult(frame: Record<string, unknown>):
     if (result.state !== 'restored' || typeof result.cleanup_pending !== 'boolean') reject()
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { state: 'restored', cleanup_pending: result.cleanup_pending } }
-  }
-  if (frame.method === 'profile.model_claim_retry') {
-    exactKeys(result, ['state', 'cleanup_pending'])
-    if (result.state !== 'committed' || typeof result.cleanup_pending !== 'boolean') reject()
-    return { version: 1, type: 'result', request_id, method: frame.method,
-      result: { state: 'committed', cleanup_pending: result.cleanup_pending } }
   }
   if (frame.method === 'profile.model_claim_inventory') {
     exactKeys(result, ['source_digest', 'candidates',

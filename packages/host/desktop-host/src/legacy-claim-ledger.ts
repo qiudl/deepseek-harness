@@ -1,16 +1,11 @@
 import { HostAuthorityError } from './types.ts'
+import { exactRecordKeys } from './exact-record-keys.ts'
 
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const SHA256 = /^[0-9a-f]{64}$/u
 
 function boundedText(value: unknown): value is string {
   return typeof value === 'string' && value.length >= 1 && value.length <= 512 && !CONTROL_CHARACTER.test(value)
-}
-
-function exactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(record).sort()
-  const sorted = [...expected].sort()
-  return actual.length === sorted.length && actual.every((key, index) => key === sorted[index])
 }
 
 /** Secret-free facts persisted before and after one legacy provider claim. */
@@ -36,13 +31,13 @@ export function parseLegacyClaimEvent(value: unknown): LegacyClaimEvent {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HostAuthorityError('unavailable')
   const record = value as Record<string, unknown>
   if (record.kind === 'reserved') {
-    if (!exactKeys(record, ['kind', 'candidateId', 'profileId', 'operationId', 'sourceDigest', 'targetGeneration', 'at'])
+    if (!exactRecordKeys(record, ['kind', 'candidateId', 'profileId', 'operationId', 'sourceDigest', 'targetGeneration', 'at'])
       || !boundedText(record.candidateId) || !boundedText(record.profileId) || !boundedText(record.operationId)
       || typeof record.sourceDigest !== 'string' || !SHA256.test(record.sourceDigest)
       || !Number.isSafeInteger(record.targetGeneration) || (record.targetGeneration as number) < 1
       || !Number.isSafeInteger(record.at) || (record.at as number) < 0) throw new HostAuthorityError('unavailable')
   } else if (record.kind === 'committed' || record.kind === 'restored') {
-    if (!exactKeys(record, ['kind', 'candidateId', 'operationId', 'at'])
+    if (!exactRecordKeys(record, ['kind', 'candidateId', 'operationId', 'at'])
       || !boundedText(record.candidateId) || !boundedText(record.operationId)
       || !Number.isSafeInteger(record.at) || (record.at as number) < 0) throw new HostAuthorityError('unavailable')
   } else throw new HostAuthorityError('unavailable')

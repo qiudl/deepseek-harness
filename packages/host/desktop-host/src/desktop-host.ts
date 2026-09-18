@@ -620,8 +620,7 @@ export class DesktopHost {
     readonly runtimeGeneration: number
     readonly ownerId: string
   }): PersonProfileId {
-    if (input.runtimeGeneration !== this.options.runtimeGeneration) throw new HostAuthorityError('stale')
-    const profileId = this.validateViewLease(input)
+    const profileId = this.authorizeExtensionView(input)
     const profile = this.options.registry.resolveProfile(profileId)
     const grant = this.ownerGrants.get(input.ownerId)?.get(profileId)
     if (profile?.kind !== 'account' || grant?.scope !== 'connected' || !grant.accountVerified) {

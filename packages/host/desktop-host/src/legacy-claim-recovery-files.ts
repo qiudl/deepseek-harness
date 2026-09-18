@@ -1,7 +1,5 @@
-import { randomUUID } from 'node:crypto'
 import {
-  closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, openSync,
-  readFileSync, renameSync, unlinkSync, writeFileSync,
+  closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, unlinkSync,
 } from 'node:fs'
 import { isAbsolute, join, resolve, win32 } from 'node:path'
 import type { LegacyClaimRecoveryFiles } from './legacy-claim-recovery.ts'
@@ -10,10 +8,10 @@ import {
   type WindowsHostRegistrationFileBindings,
 } from './windows-host-registration.ts'
 import { HostAuthorityError } from './types.ts'
+import { assertWindowsPrivateRoot, readOwnerPrivateFile, replaceOwnerPrivateFile } from './private-file-io.ts'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const MAX_BYTES = 45 * 1024 * 1024
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
 function validId(value: string): string {
   if (!UUID.test(value)) throw new HostAuthorityError('invalid_input')
@@ -50,31 +48,13 @@ export class FileLegacyClaimRecoveryFiles implements LegacyClaimRecoveryFiles {
 
   read(profileId: string, operationId: string): Buffer | undefined {
     const { file } = this.path(profileId, operationId)
-    let fd: number
-    try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-      throw error
-    }
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.uid || (stat.mode & 0o077) !== 0
-        || stat.size > MAX_BYTES) throw new HostAuthorityError('unavailable')
-      return readFileSync(fd)
-    } finally { closeSync(fd) }
+    return readOwnerPrivateFile(file, this.uid, MAX_BYTES, () => new HostAuthorityError('unavailable'))
   }
 
   replace(profileId: string, operationId: string, bytes: Buffer): void {
     bounded(bytes)
     const { root, file } = this.path(profileId, operationId)
-    const temporary = join(root, `.legacy-model-claim-recovery.${randomUUID()}.tmp`)
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    try { writeFileSync(fd, bytes); fsyncSync(fd) } finally { closeSync(fd) }
-    try {
-      renameSync(temporary, file)
-      const directory = openSync(root, constants.O_RDONLY | constants.O_NOFOLLOW)
-      try { fsyncSync(directory) } finally { closeSync(directory) }
-    } finally { if (existsSync(temporary)) unlinkSync(temporary) }
+    replaceOwnerPrivateFile(root, file, 'legacy-model-claim-recovery', bytes)
   }
 
   remove(profileId: string, operationId: string, expected: Buffer, guard: () => void): void {
@@ -107,9 +87,7 @@ export class WindowsLegacyClaimRecoveryFiles implements LegacyClaimRecoveryFiles
     readonly userSid: string
     readonly bindings: WindowsHostRegistrationFileBindings
   }) {
-    if (!/^[A-Za-z]:\\/u.test(options.profilesRoot) || CONTROL_CHARACTER.test(options.profilesRoot)
-      || options.profilesRoot.slice(2).includes(':')
-      || win32.normalize(options.profilesRoot) !== options.profilesRoot) throw new HostAuthorityError('invalid_input')
+    assertWindowsPrivateRoot(options.profilesRoot)
     this.securityDescriptor = windowsHostPrivateSecurityDescriptor(options.userSid)
   }
 
