@@ -10,11 +10,11 @@ Slark Desktop 需要一个简单入口，使用本机 DSH Profile 已维护的�
 
 ## 决策
 
-Desktop Main 为每次请求打开独立的认证 Host 连接。新的 Account 证明打开由该连接持有的租约；Host 仅为已验证的在线 Account Profile 接受 `profile.model_text`，并在生成前后检查租约，连接关闭时取消调用。Profile worker 读取当前默认模型和凭据服务，不启用工具或 Session，仅执行一次有长度限制的文本生成，返回提供方、模型和回答文本。随机且由 Host 持有的令牌授权 worker 的私有本机接口；浏览器不会得到该令牌。
+Desktop Main 为每次请求打开独立的认证 Host 连接。新的 Account 证明授权该连接访问在线 Account Profile；Host 在 `profile.model_text` 生成前后检查授权，连接关闭时取消调用。它不打开视图租约：第二个视图租约会推进 Profile 代际，使正在显示的 DSH 页面失效。Profile worker 读取当前默认模型和凭据服务，不启用工具或 Session，仅执行一次有长度限制的文本生成，返回提供方、模型和回答文本。随机且由 Host 持有的令牌授权 worker 的私有本机接口；浏览器不会得到该令牌。
 
 ## 已考虑的替代方案
 
-共用可见 Profile 视图的连接会让取消请求影响用户正在看的 DSH 页面。通过浏览器会话调用 worker 会使浏览器内容能够访问模型请求。在 Slark 另存 API Key 则需要重复管理凭据生命周期和撤销规则。
+共用可见 Profile 视图的连接会让取消请求影响用户正在看的 DSH 页面；打开第二个视图租约会使原视图代际失效。通过浏览器会话调用 worker 会使浏览器内容能够访问模型请求。在 Slark 另存 API Key 则需要重复管理凭据生命周期和撤销规则。
 
 ## 结果
 

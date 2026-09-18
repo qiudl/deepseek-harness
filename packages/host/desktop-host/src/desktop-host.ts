@@ -631,6 +631,27 @@ export class DesktopHost {
   }
 
   /**
+   * Resolve a verified Account grant without changing any visible view lease generation.
+   * @param input - Account binding and the connection that completed token verification.
+   * @returns the connected Account Profile selected by that binding.
+   */
+  authorizeAccountModelText(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly ownerId: string
+  }): PersonProfileId {
+    const profile = this.options.registry.resolveBinding(
+      input.authorityEnvironmentId, input.accountBindingHandle, input.authorityBindingVersion,
+    )
+    const grant = profile && this.ownerGrants.get(input.ownerId)?.get(profile.profileId)
+    if (!profile || profile.kind !== 'account' || grant?.scope !== 'connected' || !grant.accountVerified) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return profile.profileId
+  }
+
+  /**
    * Recheck a token, current binding and Main-vault proof when a pending claim prevents worker startup.
    * This grants no view lease and must only be used with a durable same-Profile claim receipt.
    * @param input - Fresh Account token, current binding, and matching Main-vault unlock proof.

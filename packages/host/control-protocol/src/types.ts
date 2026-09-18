@@ -432,16 +432,16 @@ export interface ProfileViewActivateResult {
   }
 }
 
-/** One bounded text request authorized by this connection's live Account view lease. */
+/** One bounded text request authorized by this connection's verified Account grant. */
 export interface ProfileModelTextRequest {
   readonly version: 1
   readonly type: 'request'
   readonly request_id: HostControlRequestId
   readonly method: 'profile.model_text'
   readonly params: HostAuthorizedParams & {
-    readonly view_lease_id: HostViewLeaseId
-    readonly lease_generation: number
-    readonly runtime_generation: number
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
     readonly text: string
   }
 }

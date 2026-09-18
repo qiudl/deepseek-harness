@@ -10,11 +10,11 @@ Slark Desktop needs a small text entry point to the model and API Key already ma
 
 ## Decision
 
-The Desktop Main process opens a separate authenticated Host connection for each request. A fresh Account proof opens a connection-owned lease; the Host accepts `profile.model_text` only for a verified connected Account Profile, checks that lease before and after generation, and cancels work when the connection closes. A Profile worker reads its current default model and credential service, performs one bounded text generation without tools or a Session, and returns only provider, model, and answer text. A random Host-owned token authorizes the worker's private loopback endpoint; the browser never receives it.
+The Desktop Main process opens a separate authenticated Host connection for each request. A fresh Account proof grants that connection access to the connected Account Profile; the Host checks the grant before and after `profile.model_text` and cancels work when the connection closes. It does not open a view lease: a second view lease would advance the Profile's generation and invalidate the visible DSH page. A Profile worker reads its current default model and credential service, performs one bounded text generation without tools or a Session, and returns only provider, model, and answer text. A random Host-owned token authorizes the worker's private loopback endpoint; the browser never receives it.
 
 ## Alternatives considered
 
-Sharing the visible Profile view connection would make cancellation affect the user's DSH page. Calling the worker through the browser session would give browser content access to the model request. Storing a second API Key in Slark would require duplicate lifecycle and revocation rules.
+Sharing the visible Profile view connection would make cancellation affect the user's DSH page. Opening another view lease would invalidate its generation. Calling the worker through the browser session would give browser content access to the model request. Storing a second API Key in Slark would require duplicate lifecycle and revocation rules.
 
 ## Consequences
 

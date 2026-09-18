@@ -197,8 +197,10 @@ describe('transport-neutral Host control authority', () => {
       params: {
         client_instance_id: clientInstanceId as never, host_instance_id: hostInstanceId as never,
         process_nonce: processNonce as never, jti: randomUUID() as never, issued_at: now,
-        expires_at: now + 1000, view_lease_id: opened.viewLeaseId as never,
-        lease_generation: opened.leaseGeneration, runtime_generation: 5, text: 'hello',
+        expires_at: now + 1000,
+        authority_environment_id: binding.authorityEnvironmentId as never,
+        account_binding_handle: binding.accountBindingHandle as never,
+        authority_binding_version: binding.authorityBindingVersion, text: 'hello',
       },
     })
     expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'error',
@@ -213,6 +215,21 @@ describe('transport-neutral Host control authority', () => {
       method: 'profile.model_text', result: { state: 'complete', provider: 'deepseek',
         model: 'deepseek-chat', text: 'answer: hello' } })
     expect(generateModelText).toHaveBeenCalledWith(profile.profileId, 'hello', expect.any(AbortSignal))
+    const modelOwner = randomUUID()
+    const independent = authority.openSession(modelOwner, new AbortController().signal)
+    expect(await independent.handleRequest({
+      version: 1, type: 'request', request_id: randomUUID() as never, method: 'host.inspect',
+      params: { challenge: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8' as never,
+        client_instance_id: clientInstanceId as never, supported_versions: [1] },
+    })).toMatchObject({ type: 'result', method: 'host.inspect' })
+    await host.ensureAccountProfile({ issuer: 'https://accounts.example.test', subject: 'owner',
+      accountAccessToken: 'valid-token', keyHandle: 'keychain:model-claim', unlockMaterial,
+      ...binding, ownerId: modelOwner })
+    expect(await independent.handleRequest(modelRequest())).toMatchObject({ type: 'result',
+      method: 'profile.model_text', result: { state: 'complete', text: 'answer: hello' } })
+    expect(host.authorizeAccountModelClaimView({ viewLeaseId: opened.viewLeaseId,
+      leaseGeneration: opened.leaseGeneration, runtimeGeneration: 5, ownerId })).toBe(profile.profileId)
+    independent.close()
     generateModelText.mockRejectedValueOnce(new DesktopModelWorkerError('missing_credential'))
     expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'result',
       method: 'profile.model_text', result: { state: 'rejected', code: 'missing_credential' } })
@@ -247,7 +264,7 @@ describe('transport-neutral Host control authority', () => {
     expect(await pending).toMatchObject({ type: 'error', method: 'profile.model_claim_inventory',
       error: { code: 'stale' } })
     expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'error',
-      method: 'profile.model_text', error: { code: 'stale' } })
+      method: 'profile.model_text', error: { code: 'unauthorized' } })
     session.close()
   })
 })

@@ -44,7 +44,7 @@ kind: "package-reference"
 <a id="challenge-authentication"></a>
 ## 挑战认证
 
-`profile.model_text` 接受当前连接持有的有效 Account 视图租约，以及一条最多 8 KiB 的非空文本。成功结果包含所选提供方、模型和最多 16 KiB 的回答；拒绝结果只包含分类错误码，其中 `cancelled` 与 `timeout` 分别表示取消与超时。该方法不传输 API Key、工具请求、Session id 或提供方原始错误。
+`profile.model_text` 接受同一 Host 连接上已验证的 Account 绑定，以及一条最多 8 KiB 的非空文本；它不会打开或改变可见 Profile 的视图租约。成功结果包含所选提供方、模型和最多 16 KiB 的回答；拒绝结果只包含分类错误码，其中 `cancelled` 与 `timeout` 分别表示取消与超时。该方法不传输 API Key、工具请求、Session id 或提供方原始错误。
 
 `encodeHostInspectSignaturePayload(request, response)` 返回由安装级 Ed25519 密钥签名的精确 UTF-8 字节。带域隔离的声明绑定 request id、Desktop client id、challenge、选定版本、Host 与安装 id、安装公钥、generation、process nonce、capability 和可执行文件摘要。
 

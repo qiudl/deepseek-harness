@@ -742,13 +742,16 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     }
   }
   if (frame.method === 'profile.model_text') {
-    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'text'])
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
+      'account_binding_handle', 'authority_binding_version', 'text'])
     if (typeof params.text !== 'string' || !params.text.trim()
       || Buffer.byteLength(params.text, 'utf8') > 8192) reject()
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.model_text', params: {
-      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
-      lease_generation: generation(params.lease_generation),
-      runtime_generation: generation(params.runtime_generation), text: params.text,
+      ...authorized(params),
+      authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      text: params.text,
     } }
   }
   if (frame.method === 'profile.view_activate') {

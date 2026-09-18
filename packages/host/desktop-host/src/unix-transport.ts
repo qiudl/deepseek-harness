@@ -1203,19 +1203,19 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.model_text') {
           const generate = this.options.generateModelText
           if (!generate) throw new HostAuthorityError('upgrade_required')
-          const lease = {
-            viewLeaseId: frame.params.view_lease_id as never,
-            leaseGeneration: frame.params.lease_generation,
-            runtimeGeneration: frame.params.runtime_generation,
+          const account = {
+            authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
             ownerId,
           }
-          const profileId = this.options.host.authorizeAccountModelClaimView(lease)
+          const profileId = this.options.host.authorizeAccountModelText(account)
           let result: { readonly state: 'complete'; readonly provider: string; readonly model: string; readonly text: string }
             | { readonly state: 'rejected'; readonly code: DesktopModelWorkerError['code'] }
           try {
             const answer = await generate(profileId, frame.params.text, context.signal)
             context.signal.throwIfAborted()
-            this.options.host.authorizeAccountModelClaimView(lease)
+            this.options.host.authorizeAccountModelText(account)
             result = { state: 'complete', ...answer }
           } catch (error) {
             if (error instanceof HostAuthorityError) throw error
@@ -1883,14 +1883,14 @@ export class UnixHostClient {
   }
 
   /**
-   * Invoke the current Account Profile's default model using a live connection-owned lease.
-   * @param input - current lease, bounded text, and optional cancellation signal.
+   * Invoke the current Account Profile's default model using a token-verified connection grant.
+   * @param input - current Account binding, bounded text, and optional cancellation signal.
    * @returns bounded text with model identity, or a classified failure.
    */
   async generateModelText(input: {
-    readonly viewLeaseId: string
-    readonly leaseGeneration: number
-    readonly runtimeGeneration: number
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
     readonly text: string
     readonly signal?: AbortSignal
   }): Promise<ProfileModelTextResult['result']> {
@@ -1899,8 +1899,9 @@ export class UnixHostClient {
     }
     const request: ProfileModelTextRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.model_text',
-      params: { ...this.auth(), view_lease_id: input.viewLeaseId as never,
-        lease_generation: input.leaseGeneration, runtime_generation: input.runtimeGeneration,
+      params: { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
         text: input.text },
     }
     const frame = await this.call(request, input.signal)

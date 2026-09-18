@@ -42,7 +42,7 @@ The negotiated `profile.extensions` method carries a Main-held lease and one inv
 
 ## Challenge authentication
 
-`profile.model_text` accepts a live connection-owned Account view lease and one nonempty text input of at most 8 KiB. A complete result contains the selected provider, model, and at most 16 KiB of answer text; a rejected result contains one classified code, including distinct `cancelled` and `timeout` outcomes. The method carries no API Key, tool request, Session id, or raw provider error.
+`profile.model_text` accepts an Account binding already verified on the same Host connection and one nonempty text input of at most 8 KiB. It does not open or change a visible Profile view lease. A complete result contains the selected provider, model, and at most 16 KiB of answer text; a rejected result contains one classified code, including distinct `cancelled` and `timeout` outcomes. The method carries no API Key, tool request, Session id, or raw provider error.
 
 `encodeHostInspectSignaturePayload(request, response)` returns the exact UTF-8 bytes signed with the installation Ed25519 key. The domain-separated statement binds the request id, Desktop client id, challenge, selected version, Host and installation ids, installation public key, generations, process nonce, capabilities, and executable digest.
 
