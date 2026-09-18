@@ -50,4 +50,17 @@ describe('legacy model claim worker gate', () => {
       .rejects.toThrow(/unavailable/u)
     expect(dispose).toHaveBeenCalledTimes(2)
   })
+
+  it('stops a newly started worker when the marker becomes unreadable', async () => {
+    let reads = 0
+    const gate = new LegacyClaimWorkerGate(() => {
+      reads += 1
+      if (reads === 2) throw Error('marker unreadable')
+      return false
+    })
+    const dispose = vi.fn(async () => undefined)
+    await expect(gate.start('profile', async () => undefined, dispose))
+      .rejects.toThrow('marker unreadable')
+    expect(dispose).toHaveBeenCalledOnce()
+  })
 })

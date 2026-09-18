@@ -21,10 +21,16 @@ export class LegacyClaimWorkerGate {
     if (!claimRestart && this.fenced.has(profileId)) throw new HostAuthorityError('unavailable')
     if (this.pending(profileId)) throw new HostAuthorityError('unavailable')
     await ensure()
-    if (this.pending(profileId) || !claimRestart && this.fenced.has(profileId)) {
+    try {
+      if (!this.pending(profileId) && (claimRestart || !this.fenced.has(profileId))) {
+        if (claimRestart) this.fenced.delete(profileId)
+        return
+      }
+    } catch (error) {
       await dispose()
-      throw new HostAuthorityError('unavailable')
+      throw error
     }
-    if (claimRestart) this.fenced.delete(profileId)
+    await dispose()
+    throw new HostAuthorityError('unavailable')
   }
 }
