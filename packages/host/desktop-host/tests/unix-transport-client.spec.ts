@@ -179,36 +179,49 @@ describe('Unix Host client protocol projections', () => {
       .rejects.toMatchObject({ code: 'upgrade_required' })
     await expect(unsupported.client.restoreModelClaim({ ...proof, operationId }))
       .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(unsupported.client.retryModelClaim({ ...proof, operationId, sourceDigest: 'a'.repeat(64) }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
     expect(seen).toEqual([])
     const enabled = await makeClient((frame) => {
       seen.push(frame)
       return frame.method === 'profile.model_claim_recovery_status'
         ? result(frame, { state: 'pending', candidate_id: proof.candidateId,
           operation_id: operationId, source_digest: 'a'.repeat(64) })
-        : result(frame, { state: 'restored', cleanup_pending: true })
-    }, [...baseCapabilities, 'profile.model_claim_recovery_status', 'profile.model_claim_restore'].sort() as HostControlCapability[])
+        : result(frame, { state: frame.method === 'profile.model_claim_retry' ? 'committed' : 'restored',
+          cleanup_pending: true })
+    }, [...baseCapabilities, 'profile.model_claim_recovery_status', 'profile.model_claim_restore',
+      'profile.model_claim_retry'].sort() as HostControlCapability[])
     await expect(enabled.client.modelClaimRecoveryStatus(proof)).resolves.toEqual({
       candidateId: proof.candidateId, operationId, sourceDigest: 'a'.repeat(64), status: 'pending',
     })
     await expect(enabled.client.restoreModelClaim({ ...proof, operationId })).resolves.toEqual({
       state: 'restored', cleanupPending: true,
     })
+    await expect(enabled.client.retryModelClaim({ ...proof, operationId, sourceDigest: 'a'.repeat(64) }))
+      .resolves.toEqual({ state: 'committed', cleanupPending: true })
     expect(seen).toMatchObject([
       { method: 'profile.model_claim_recovery_status', params: { candidate_id: proof.candidateId,
         account_access_token: proof.accountAccessToken, profile_unlock_material: proof.unlockMaterial } },
       { method: 'profile.model_claim_restore', params: { candidate_id: proof.candidateId,
         operation_id: operationId } },
+      { method: 'profile.model_claim_retry', params: { candidate_id: proof.candidateId,
+        operation_id: operationId, source_digest: 'a'.repeat(64) } },
     ])
     const unclaimed = await makeClient(frame => result(frame, { state: 'unclaimed' }),
       [...baseCapabilities, 'profile.model_claim_recovery_status'].sort() as HostControlCapability[])
     await expect(unclaimed.client.modelClaimRecoveryStatus(proof)).resolves.toBeNull()
     await expect(unclaimed.client.restoreModelClaim({ ...proof, operationId }))
       .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(unclaimed.client.retryModelClaim({ ...proof, operationId, sourceDigest: 'a'.repeat(64) }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
     const malformed = await makeClient(frame => ({ version: 1, type: 'result', request_id: frame.request_id,
       method: 'profile.status', result: { state: 'locked' } }),
-    [...baseCapabilities, 'profile.model_claim_recovery_status', 'profile.model_claim_restore'].sort() as HostControlCapability[])
+    [...baseCapabilities, 'profile.model_claim_recovery_status', 'profile.model_claim_restore',
+      'profile.model_claim_retry'].sort() as HostControlCapability[])
     await expect(malformed.client.modelClaimRecoveryStatus(proof)).rejects.toMatchObject({ code: 'unavailable' })
     await expect(malformed.client.restoreModelClaim({ ...proof, operationId }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(malformed.client.retryModelClaim({ ...proof, operationId, sourceDigest: 'a'.repeat(64) }))
       .rejects.toMatchObject({ code: 'unavailable' })
   })
 

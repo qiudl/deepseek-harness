@@ -37,6 +37,8 @@ kind: "package-reference"
 
 `profile.model_claim_confirm` 针对一个凭据存在的候选项，重新校验 Account 租约和新鲜的来源摘要。它返回只在当前 Host 连接有效、60 秒内只能使用一次的确认授权。`profile.model_claim_apply` 消费该授权，并在认领事务中重新校验 Account 视图。两种结果都不包含凭据值或路径。写入失败或中断时使用独立的同账号恢复方法。
 
+`profile.model_claim_retry` 使用与恢复相同的新鲜 Account 与保管库证明，并提交现有回执中的准确候选项、操作号和来源摘要。Host 在恢复事务前校验账本中的归属。只有在声明旧来源静止时才开放重试；状态查询与原文件恢复不需要该声明。
+
 <a id="challenge-authentication"></a>
 ## 挑战认证
 

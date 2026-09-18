@@ -36,6 +36,8 @@ The negotiated `profile.extensions` method carries a Main-held lease and one inv
 
 `profile.model_claim_confirm` rechecks the Account lease and a fresh source digest for one candidate with a present credential. It returns a one-use confirmation bound to the current Host connection and valid for 60 seconds. `profile.model_claim_apply` consumes that confirmation and rechecks the Account view through the claim transaction. Both results omit credential values and paths. A failed or interrupted write uses the separate same-Account recovery methods.
 
+`profile.model_claim_retry` accepts the same fresh Account and vault proof as recovery, plus the exact candidate, operation id, and source digest from an existing receipt. The Host checks durable ownership before resuming the transaction. It is available only while the legacy source has been declared quiescent; status and preimage restoration remain available without that declaration.
+
 ## Challenge authentication
 
 `encodeHostInspectSignaturePayload(request, response)` returns the exact UTF-8 bytes signed with the installation Ed25519 key. The domain-separated statement binds the request id, Desktop client id, challenge, selected version, Host and installation ids, installation public key, generations, process nonce, capabilities, and executable digest.

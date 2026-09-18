@@ -200,6 +200,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => profile.profileId })).toBeNull()
   expect(serverOptions.modelClaimTransaction).toBeDefined()
+  expect(serverOptions.modelClaimTransaction?.retry).toBeDefined()
   expect(workerSpecs).toHaveLength(1)
   const opened = await application.host.openLocalProfile({ profileId: profile.profileId, ownerId: 'owner' })
   expect((await application.host.activateView({

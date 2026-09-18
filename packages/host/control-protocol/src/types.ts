@@ -962,6 +962,28 @@ export interface ProfileModelClaimRestoreResult {
   readonly result: { readonly state: 'restored'; readonly cleanup_pending: boolean }
 }
 
+/** Retry only a durable claim already reserved for this Account Profile. */
+export interface ProfileModelClaimRetryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_retry'
+  readonly params: ProfileModelClaimRecoveryProof & {
+    readonly candidate_id: string
+    readonly operation_id: string
+    readonly source_digest: HostControlSha256
+  }
+}
+
+/** Redacted outcome of a resumed, verified claim. */
+export interface ProfileModelClaimRetryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_retry'
+  readonly result: { readonly state: 'committed'; readonly cleanup_pending: boolean }
+}
+
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
   | ProfileExtensionsRequest
@@ -976,6 +998,8 @@ export type HostControlFrame =
   | ProfileModelClaimRecoveryStatusResult
   | ProfileModelClaimRestoreRequest
   | ProfileModelClaimRestoreResult
+  | ProfileModelClaimRetryRequest
+  | ProfileModelClaimRetryResult
   | HostInspectRequest
   | HostInspectResult
   | ProfileStatusRequest

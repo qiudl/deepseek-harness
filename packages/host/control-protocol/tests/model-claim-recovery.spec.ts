@@ -12,15 +12,18 @@ const proof = () => ({
   profile_key_handle: 'keychain:person', profile_unlock_material: 'A'.repeat(43),
   candidate_id: candidateId,
 })
-const request = (method: 'profile.model_claim_recovery_status' | 'profile.model_claim_restore') => ({
+const request = (method: 'profile.model_claim_recovery_status' | 'profile.model_claim_restore'
+  | 'profile.model_claim_retry') => ({
   version: 1, type: 'request', request_id: randomUUID(), method,
-  params: { ...proof(), ...(method === 'profile.model_claim_restore' ? { operation_id: randomUUID() } : {}) },
+  params: { ...proof(), ...(method === 'profile.model_claim_recovery_status' ? {} : { operation_id: randomUUID() }),
+    ...(method === 'profile.model_claim_retry' ? { source_digest: 'a'.repeat(64) } : {}) },
 })
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('same-Account model claim recovery wire', () => {
   it('round-trips token and vault proof requests without adding a view lease', () => {
-    for (const method of ['profile.model_claim_recovery_status', 'profile.model_claim_restore'] as const) {
+    for (const method of ['profile.model_claim_recovery_status', 'profile.model_claim_restore',
+      'profile.model_claim_retry'] as const) {
       const value = request(method)
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
       expect(value.params).not.toHaveProperty('view_lease_id')
@@ -37,16 +40,21 @@ describe('same-Account model claim recovery wire', () => {
       })),
       { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.model_claim_restore',
         result: { state: 'restored', cleanup_pending: false } },
+      { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.model_claim_retry',
+        result: { state: 'committed', cleanup_pending: false } },
     ]) expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
   })
 
   it('rejects path, secret, wrong operation and malformed status fields', () => {
     const status = request('profile.model_claim_recovery_status')
     const restore = request('profile.model_claim_restore')
+    const retry = request('profile.model_claim_retry')
     expect(() => decode({ ...status, params: { ...status.params, source_path: '/home/person/.dsh' } })).toThrow()
     expect(() => decode({ ...status, params: { ...status.params, candidate_id: '../provider' } })).toThrow()
     expect(() => decode({ ...status, params: { ...status.params, account_access_token: '' } })).toThrow()
     expect(() => decode({ ...restore, params: { ...restore.params, operation_id: 'other' } })).toThrow()
+    expect(() => decode({ ...retry, params: { ...retry.params, source_digest: 'bad' } })).toThrow()
+    expect(() => decode({ ...retry, params: { ...retry.params, source_path: '/home/person/.dsh' } })).toThrow()
     const base = { version: 1, type: 'result', request_id: randomUUID(),
       method: 'profile.model_claim_recovery_status' }
     expect(() => decode({ ...base, result: { state: 'unclaimed', operation_id: randomUUID() } })).toThrow()
@@ -59,5 +67,8 @@ describe('same-Account model claim recovery wire', () => {
     const restored = { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.model_claim_restore' }
     expect(() => decode({ ...restored, result: { state: 'restored', cleanup_pending: 'false' } })).toThrow()
     expect(() => decode({ ...restored, result: { state: 'committed', cleanup_pending: false } })).toThrow()
+    const committed = { ...restored, method: 'profile.model_claim_retry' }
+    expect(() => decode({ ...committed, result: { state: 'restored', cleanup_pending: false } })).toThrow()
+    expect(() => decode({ ...committed, result: { state: 'committed', cleanup_pending: 'false' } })).toThrow()
   })
 })

@@ -22,6 +22,7 @@ export type {
   ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
   ProfileModelClaimRecoveryProof, ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRecoveryStatusResult,
   ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
+  ProfileModelClaimRetryRequest, ProfileModelClaimRetryResult,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlCorrelationId,

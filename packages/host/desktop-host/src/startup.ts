@@ -712,6 +712,8 @@ export async function startDesktopHostApplication(
         modelClaimTransaction: {
           /* v8 ignore next -- production source home is fixed; coordinator and control authority are tested separately. */
           claim: (input: Parameters<LegacyClaimCoordinator['claim']>[0]) => claims().claim(input),
+          /* v8 ignore next -- retry reads the fixed production source; coordinator and authority tests cover it. */
+          retry: (input: Parameters<LegacyClaimCoordinator['retry']>[0]) => claims().retry(input),
         },
         inspectModelClaimSource: (signal?: AbortSignal) => inspectLegacyModelClaimSource({
           expectedUid: uid, assertSourceQuiescent: () => Promise.resolve(),

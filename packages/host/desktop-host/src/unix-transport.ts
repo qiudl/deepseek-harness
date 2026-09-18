@@ -6,6 +6,7 @@ import type {
   ProfileModelClaimInventoryRequest,
   ProfileModelClaimConfirmRequest, ProfileModelClaimApplyRequest,
   ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRestoreRequest,
+  ProfileModelClaimRetryRequest,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlErrorCode,
@@ -94,7 +95,7 @@ export interface UnixHostServerOptions {
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
   readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
   /** Initial claims require a fresh, connection-owned confirmation and a live Account view. */
-  readonly modelClaimTransaction?: Pick<LegacyClaimCoordinator, 'claim'>
+  readonly modelClaimTransaction?: Pick<LegacyClaimCoordinator, 'claim'> & Partial<Pick<LegacyClaimCoordinator, 'retry'>>
   /** Worker-independent recovery of a durable same-Account claim receipt. */
   readonly modelClaimRecovery?: Pick<LegacyClaimCoordinator, 'status' | 'restore'>
   readonly extensions?: {
@@ -799,7 +800,8 @@ export class HostControlAuthority {
           this.options.host.revokeProfile(confirmed.profileId)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { state: 'committed', cleanup_pending: outcome.cleanupPending } })
-        } else if (frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore') {
+        } else if (frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore'
+          || frame.method === 'profile.model_claim_retry') {
           const service = this.options.modelClaimRecovery
           if (!service) throw new HostAuthorityError('upgrade_required')
           const proof = () => {
@@ -820,7 +822,7 @@ export class HostControlAuthority {
               result: receipt ? { state: receipt.status, candidate_id: receipt.candidateId,
                 operation_id: receipt.operationId, source_digest: receipt.sourceDigest as never }
                 : { state: 'unclaimed' } })
-          } else {
+          } else if (frame.method === 'profile.model_claim_restore') {
             const profileId = proof()
             const outcome = await service.restore({ candidateId: frame.params.candidate_id,
               operationId: frame.params.operation_id, authorizeAccountProfile: proof, signal: context.signal })
@@ -828,6 +830,17 @@ export class HostControlAuthority {
             this.options.host.revokeProfile(profileId)
             channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
               result: { state: 'restored', cleanup_pending: outcome.cleanupPending } })
+          } else {
+            const retry = this.options.modelClaimTransaction?.retry
+            if (!retry) throw new HostAuthorityError('upgrade_required')
+            const profileId = proof()
+            const outcome = await retry({ candidateId: frame.params.candidate_id,
+              operationId: frame.params.operation_id, expectedSourceDigest: frame.params.source_digest,
+              authorizeAccountProfile: proof, signal: context.signal })
+            if (outcome.state !== 'committed') throw new HostAuthorityError('unavailable')
+            this.options.host.revokeProfile(profileId)
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { state: 'committed', cleanup_pending: outcome.cleanupPending } })
           }
         } else if (frame.method === 'profile.model_claim_inventory') {
           const inspectSource = this.options.inspectModelClaimSource
@@ -1231,6 +1244,8 @@ export class HostControlAuthority {
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
             ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
           ...(this.options.modelClaimRecovery ? ['profile.model_claim_recovery_status', 'profile.model_claim_restore'] : []),
+          ...(this.options.modelClaimRecovery && this.options.modelClaimTransaction?.retry && this.options.inspectModelClaimSource
+            ? ['profile.model_claim_retry'] : []),
           ...(this.options.extensions ? ['profile.extensions'] : []),
           ...(offlineAccountRecovery ? recoveryCapabilities : []),
           ...(migrationExport ? [
@@ -1968,6 +1983,28 @@ export class UnixHostClient {
     return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
   }
 
+  /**
+   * Resume an already reserved claim after rechecking its same-Account recovery proof.
+   * @param input - Recovery proof and exact operation and source digest from status.
+   * @returns Redacted committed outcome.
+   */
+  async retryModelClaim(input: ModelClaimRecoveryInput & {
+    readonly operationId: string
+    readonly sourceDigest: string
+  }): Promise<LegacyClaimOutcome> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_retry' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRetryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_retry',
+      params: { ...this.modelClaimRecoveryParams(input), operation_id: input.operationId,
+        source_digest: input.sourceDigest as HostControlSha256 },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
+  }
+
   private modelClaimRecoveryParams(input: ModelClaimRecoveryInput): ProfileModelClaimRecoveryStatusRequest['params'] {
     return { ...this.auth(), account_access_token: input.accountAccessToken,
       account_issuer: input.issuer, account_subject: input.subject,
@@ -2348,6 +2385,7 @@ export class UnixHostClient {
     request: ProfileExtensionsRequest | ProfileModelClaimInventoryRequest
       | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
       | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
+      | ProfileModelClaimRetryRequest
       | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest
