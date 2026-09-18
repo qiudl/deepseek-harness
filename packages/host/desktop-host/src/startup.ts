@@ -39,6 +39,7 @@ import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'
 import { DshWebProfileWorkerFactory } from './dsh-web-profile-worker.ts'
 import { createLegacyMigrationExportService } from './legacy-migration-source.ts'
+import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from './legacy-claim-marker.ts'
 import { createMacOSPeerAttestor } from './macos-peer-attestor.ts'
 import { ProfileRegistry } from './profile-registry.ts'
 import { MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
@@ -446,6 +447,7 @@ export async function startDesktopHostApplication(
     const transferStore = new FileOwnerMigrationTransferStore(join(migrationRoot, 'transfers'), uid)
     const targets = new Map<string, FileOwnerJsonlMigrationGenerationTarget>()
     const ownerStateApplicator = new MigrationOwnerStateApplicator(uid)
+    const claimMarker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), uid))
     const targetFor = (profileId: string): FileOwnerJsonlMigrationGenerationTarget => {
       const existing = targets.get(profileId)
       if (existing) return existing
@@ -460,6 +462,7 @@ export async function startDesktopHostApplication(
       ownerDirectory(profilesRoot, uid)
       const profileRoot = join(profilesRoot, profile.profileId)
       ownerDirectory(profileRoot, uid)
+      if (claimMarker.pending(profile.profileId)) throw new HostAuthorityError('unavailable')
       const target = targetFor(profile.profileId)
       const persistence = await target.activePersistenceConfig()
       let ownerState: MigrationOwnerStateBundle
