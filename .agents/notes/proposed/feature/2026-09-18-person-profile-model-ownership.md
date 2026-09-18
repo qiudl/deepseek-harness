@@ -24,6 +24,8 @@ The global single-owner ledger is an atomic private snapshot, but worker startup
 
 Before either target document changes, Host stores an operation-scoped, owner-private preimage of both documents and digests of both projected results in the affected Profile. Recovery may restore a document only when its current bytes match that preimage or the projected digest; a later personal edit is a conflict. This private snapshot contains credentials and must never enter the global ledger, Desktop IPC, or logs. A separate operation gets a separate snapshot, so a completed provider claim does not prevent another provider claim in the same Profile.
 
+The target writer reads the current mutable settings and credential documents after worker quiescence. It rechecks the expected bytes before replacing each file, verifies both projected files after publication, and keeps the Profile pending when either write or verification fails. A retry derives the same projection from the recorded preimage and accepts only an original or projected version of each live document. The authenticated caller must serialize operations for that Profile and revalidate its lease before each effect.
+
 The legacy default model is offered only after its provider is claimed and only when the target Profile has no personal default. The user explicitly confirms applying it. Existing Profile generations need provenance-aware inspection before any personal model request is enabled; if imported values cannot be distinguished from later personal edits, preserve the files and require an explicit resolution rather than deleting or silently trusting them. DSH workspace, sessions, and non-model actions remain available during this resolution.
 
 ## Alternatives considered
