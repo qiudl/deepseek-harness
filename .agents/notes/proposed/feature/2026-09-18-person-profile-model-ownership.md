@@ -14,6 +14,14 @@ The fixed legacy exporter transfers sessions and workspace while withholding all
 
 DSH Models settings will present a redacted, provider-specific claim action for an authenticated Person Profile. The claim will check source ownership and generation, commit the provider credential and corresponding route into that Profile, and record single-owner consumption before the route becomes usable. A failed or interrupted claim retains the original files and a retryable status. The same account may retry idempotently; a competing account receives a conflict. Existing Profile generations containing automatically imported legacy values require a separate upgrade migration before model reuse can be enabled in Desktop.
 
+### Claim contract
+
+The Models page reaches the claim action through the trusted Desktop bridge; the browser receives candidate names and status, never credential values or a path to the OS-user home. Host binds each candidate to the current authenticated Account Profile, a live Main-owned view lease, the source inventory digest, and a short expiry. A local-only or remote browser cannot claim. An unsupported plugin or ambiguous source mapping remains visible as unavailable instead of being guessed into a provider.
+
+For each confirmed provider, Host reserves a durable single-owner claim before writing into the target Profile. It stops that Profile's worker and blocks restart while the claim is pending. It copies only that provider's route and credential into owner-private files. A legacy reference shared by providers is rewritten to a unique Profile-local reference, so claiming one provider does not enable another. The source documents remain untouched. After validating both target documents and committing the receipt, Host restarts the worker. A crash or failed write leaves a pending receipt; the same account can retry or restore the target files from the recorded preimage, while another account receives a conflict. The UI reports only redacted progress and errors.
+
+The legacy default model is offered only after its provider is claimed and only when the target Profile has no personal default. The user explicitly confirms applying it. Existing Profile generations need provenance-aware inspection before any personal model request is enabled; if imported values cannot be distinguished from later personal edits, preserve the files and require an explicit resolution rather than deleting or silently trusting them. DSH workspace, sessions, and non-model actions remain available during this resolution.
+
 ## Alternatives considered
 
 **Import all legacy credentials with the workspace.** This preserves the previous behavior but gives the first login implicit control of credentials that have no account owner.
@@ -24,6 +32,7 @@ DSH Models settings will present a redacted, provider-specific claim action for 
 
 - A fresh legacy transfer leaves every setting and provider credential unavailable to both accounts until an explicit claim, while workspace and sessions survive.
 - Claiming one provider exposes only that provider to the confirmed account; a second account cannot claim or read it. Repeated and interrupted claims have deterministic recovery without plaintext disclosure.
+- A shared legacy credential reference is remapped per claimed provider; no other provider becomes usable through that claim. An interrupted claim never starts a worker with partially applied target documents.
 - Existing automatically imported Profile generations are made safe before Desktop enables personal model reuse.
 - macOS and Windows installed artifacts enforce the same account and source ownership rules.
 
