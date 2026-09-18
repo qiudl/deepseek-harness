@@ -40,6 +40,7 @@ import { CurrentMigrationExportService } from './current-migration-export.ts'
 import { DshWebProfileWorkerFactory } from './dsh-web-profile-worker.ts'
 import { createLegacyMigrationExportService, inspectLegacyModelClaimSource } from './legacy-migration-source.ts'
 import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from './legacy-claim-marker.ts'
+import { LegacyClaimWorkerGate } from './legacy-claim-worker-gate.ts'
 import { createMacOSPeerAttestor } from './macos-peer-attestor.ts'
 import { ProfileRegistry } from './profile-registry.ts'
 import { MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
@@ -448,6 +449,7 @@ export async function startDesktopHostApplication(
     const targets = new Map<string, FileOwnerJsonlMigrationGenerationTarget>()
     const ownerStateApplicator = new MigrationOwnerStateApplicator(uid)
     const claimMarker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), uid))
+    const claimWorkerGate = new LegacyClaimWorkerGate(profileId => claimMarker.pending(profileId))
     const targetFor = (profileId: string): FileOwnerJsonlMigrationGenerationTarget => {
       const existing = targets.get(profileId)
       if (existing) return existing
@@ -462,7 +464,7 @@ export async function startDesktopHostApplication(
       ownerDirectory(profilesRoot, uid)
       const profileRoot = join(profilesRoot, profile.profileId)
       ownerDirectory(profileRoot, uid)
-      if (claimMarker.pending(profile.profileId)) throw new HostAuthorityError('unavailable')
+      claimWorkerGate.assertOpen(profile.profileId)
       const target = targetFor(profile.profileId)
       const persistence = await target.activePersistenceConfig()
       let ownerState: MigrationOwnerStateBundle
@@ -481,10 +483,12 @@ export async function startDesktopHostApplication(
       }
       const ownerPaths = await ownerStateApplicator.apply(profileRoot, persistence.generation, ownerState)
       replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
-      await workers.ensure({
+      await claimWorkerGate.start(profile.profileId, () => workers.ensure({
         profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
         pluginRoots: [join(profileRoot, 'plugins')],
-      })
+      }),
+      /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
+      () => workers.dispose(profile.profileId))
     }
     const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
     const recoveryInspector = new OfflineProfileRecoveryInspector({
@@ -503,14 +507,17 @@ export async function startDesktopHostApplication(
       profile: PersonProfileRecord,
       preflight: Awaited<ReturnType<typeof inspectOfflineAccountProfile>>,
     ): Promise<void> => {
+      claimWorkerGate.assertOpen(profile.profileId)
       await recoveryInspector.prepareConfirmedProfile(profile, preflight)
       try {
-        await workers.ensure({
+        await claimWorkerGate.start(profile.profileId, () => workers.ensure({
           profileId: profile.profileId,
           profileRoot: join(root, 'profiles', profile.profileId),
           credentialHandle: profile.keyHandle,
           pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
-        })
+        }),
+        /* v8 ignore next -- the claim gate's startup-race test covers disposal; offline recovery needs packaged artifacts. */
+        () => workers.dispose(profile.profileId))
         // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
         // Reinspect and pin those generated links into the Profile-owned content-addressed closure
         // before returning an offline grant, so replacing the App cannot break the next launch.
@@ -527,7 +534,12 @@ export async function startDesktopHostApplication(
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
       verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
-      activateProfileView: profileId => workers.activate(profileId),
+      activateProfileView: async (profileId) => {
+        claimWorkerGate.assertOpen(profileId)
+        const view = await workers.activate(profileId)
+        claimWorkerGate.assertOpen(profileId)
+        return view
+      },
       ensureProfileWorker: ensureWorker,
       inspectOfflineAccountProfile,
       ensureRecoveredProfileWorker,
