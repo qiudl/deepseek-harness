@@ -77,18 +77,22 @@ describe('legacy provider claim ledger', () => {
     expect(() => ledger.reserve({ ...next, operationId: 'operation-c' })).toThrow(/idempotency_conflict/u)
   })
 
-  it('does not publish a transition when durable append fails', () => {
+  it('fences the affected Profile and all writes after an uncertain durable append', () => {
     const store = new MemoryStore()
     const ledger = new LegacyClaimLedger(store, () => 100)
     store.fail = true
     expect(() => ledger.reserve(first)).toThrow(/journal_unavailable/u)
     expect(ledger.status(first.candidateId, first.profileId)).toBeNull()
-    store.fail = false
-    ledger.reserve(first)
-    store.fail = true
-    expect(() => ledger.commit(first)).toThrow(/journal_unavailable/u)
-    expect(() => { ledger.restore(first) }).toThrow(/journal_unavailable/u)
     expect(ledger.hasPending(first.profileId)).toBe(true)
+    expect(ledger.hasPending('profile-b')).toBe(false)
+    store.fail = false
+    expect(() => ledger.reserve(first)).toThrow(/unavailable/u)
+    const restarted = new LegacyClaimLedger(store, () => 101)
+    restarted.reserve(first)
+    store.fail = true
+    expect(() => restarted.commit(first)).toThrow(/journal_unavailable/u)
+    expect(() => { restarted.restore(first) }).toThrow(/unavailable/u)
+    expect(restarted.hasPending(first.profileId)).toBe(true)
   })
 
   it('rejects inconsistent durable histories before granting worker access', () => {

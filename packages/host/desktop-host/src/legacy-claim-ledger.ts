@@ -68,6 +68,8 @@ interface ClaimState {
 export class LegacyClaimLedger {
   private readonly claims = new Map<string, ClaimState>()
   private readonly operationIds = new Set<string>()
+  private readonly uncertainProfiles = new Set<string>()
+  private poisoned = false
 
   constructor(private readonly store: LegacyClaimEventStore, private readonly now: () => number) {
     for (const event of store.read()) this.apply(parseLegacyClaimEvent(event))
@@ -75,6 +77,7 @@ export class LegacyClaimLedger {
 
   /** Reserve a provider before any target write; retries must keep the same operation id. */
   reserve(input: Omit<Extract<LegacyClaimEvent, { kind: 'reserved' }>, 'kind' | 'at'>): ClaimState {
+    this.assertWritable()
     const existing = this.claims.get(input.candidateId)
     if (existing && existing.status !== 'restored') {
       if (existing.profileId !== input.profileId) throw new HostAuthorityError('conflict')
@@ -85,13 +88,14 @@ export class LegacyClaimLedger {
     if (this.operationIds.has(input.operationId)) throw new HostAuthorityError('idempotency_conflict')
     const event: LegacyClaimEvent = { kind: 'reserved', ...input, at: this.now() }
     parseLegacyClaimEvent(event)
-    this.store.append(event)
+    this.append(event, input.profileId)
     this.apply(event)
     return this.claims.get(input.candidateId) as ClaimState
   }
 
   /** Confirm a verified target write before a Profile worker is allowed to restart. */
   commit(input: { readonly candidateId: string; readonly profileId: string; readonly operationId: string }): ClaimState {
+    this.assertWritable()
     const existing = this.requireOwner(input)
     if (existing.status === 'committed') return existing
     if (existing.status !== 'pending') throw new HostAuthorityError('conflict')
@@ -99,13 +103,14 @@ export class LegacyClaimLedger {
       kind: 'committed', candidateId: input.candidateId, operationId: input.operationId, at: this.now(),
     }
     parseLegacyClaimEvent(event)
-    this.store.append(event)
+    this.append(event, input.profileId)
     this.apply(event)
     return this.claims.get(input.candidateId) as ClaimState
   }
 
   /** Record a verified preimage restoration; this makes a later claim possible. */
   restore(input: { readonly candidateId: string; readonly profileId: string; readonly operationId: string }): void {
+    this.assertWritable()
     const existing = this.requireOwner(input)
     if (existing.status === 'restored') return
     if (existing.status !== 'pending') throw new HostAuthorityError('conflict')
@@ -113,7 +118,7 @@ export class LegacyClaimLedger {
       kind: 'restored', candidateId: input.candidateId, operationId: input.operationId, at: this.now(),
     }
     parseLegacyClaimEvent(event)
-    this.store.append(event)
+    this.append(event, input.profileId)
     this.apply(event)
   }
 
@@ -127,7 +132,22 @@ export class LegacyClaimLedger {
 
   /** Pending target writes prohibit worker startup, including after Host restart. */
   hasPending(profileId: string): boolean {
-    return [...this.claims.values()].some(state => state.profileId === profileId && state.status === 'pending')
+    return this.uncertainProfiles.has(profileId)
+      || [...this.claims.values()].some(state => state.profileId === profileId && state.status === 'pending')
+  }
+
+  private assertWritable(): void {
+    if (this.poisoned) throw new HostAuthorityError('unavailable')
+  }
+
+  private append(event: LegacyClaimEvent, profileId: string): void {
+    try { this.store.append(event) } catch (error) {
+      // An atomic replacement can fail after publication but before its directory sync.
+      // Its outcome is unknown until a fresh Host reloads the durable snapshot.
+      this.poisoned = true
+      this.uncertainProfiles.add(profileId)
+      throw error
+    }
   }
 
   private requireOwner(input: { candidateId: string; profileId: string; operationId: string }): ClaimState {
