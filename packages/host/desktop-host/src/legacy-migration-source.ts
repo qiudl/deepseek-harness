@@ -16,6 +16,10 @@ const REF = /^[A-Za-z_][A-Za-z0-9_]*$/u
 const CREDENTIAL_KEY = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/u
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 
+function legacyRoot(testOwnerHome?: string): string {
+  return join(resolve(testOwnerHome ?? homedir()), '.dsh')
+}
+
 async function ownerDirectory(path: string, uid: number): Promise<void> {
   const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
@@ -140,14 +144,16 @@ export async function inspectLegacyModelClaimSource(input: {
   signal?: AbortSignal
   /** Fixture seam only; production must omit it. */
   _testOwnerHome?: string
+  /** Fixture seam to change the source between validated reads. */
+  _testAfterValidatedState?: () => Promise<void>
 }): Promise<LegacyModelClaimInventory> {
   await input.assertSourceQuiescent(input.signal)
   input.signal?.throwIfAborted()
-  const root = join(resolve(input._testOwnerHome ?? homedir()), '.dsh')
+  const root = legacyRoot(input._testOwnerHome)
   const state = await ownerState(root, input.expectedUid)
   const profile = map(state.documents.find(document => document.kind === 'profile')?.value)
-  const sourceDigest = profile.legacyWithheldSourceDigest
-  if (typeof sourceDigest !== 'string') throw new Error('legacy_migration_source_schema_unsupported')
+  const sourceDigest = profile.legacyWithheldSourceDigest as string
+  await input._testAfterValidatedState?.()
   const settings = map(await ownerDocument(join(root, 'settings.yaml'), input.expectedUid, {}))
   const credentialStore = credentials(await ownerDocument(join(root, '.credentials.yaml'), input.expectedUid, {}))
   if (createHash('sha256').update(JSON.stringify({ settings, credentials: credentialStore })).digest('hex') !== sourceDigest) {
@@ -208,7 +214,7 @@ export async function inspectLegacyModelClaimSource(input: {
     sourceDigest,
     candidates: candidates.map(({ ref, ...candidate }) => ({
       ...candidate,
-      sharedCredential: ref !== undefined && (refCounts.get(ref) ?? 0) > 1,
+      sharedCredential: ref !== undefined && (refCounts.get(ref) as number) > 1,
     })),
     unsupportedSettings,
     unassignedCredentialReferences: Object.keys(credentialStore.refs).filter(ref => !usedRefs.has(ref)).length,
@@ -341,8 +347,7 @@ export function createLegacyMigrationExportService(input: {
   /** Fixture seam only; production must omit it. */
   _testOwnerHome?: string
 }): JsonlMigrationExportService {
-  const ownerHome = resolve(input._testOwnerHome ?? homedir())
-  const root = join(ownerHome, '.dsh')
+  const root = legacyRoot(input._testOwnerHome)
   const source = new FileJsonlMigrationExportSource(join(root, 'sessions'), input.expectedUid, {
     read: () => ownerState(root, input.expectedUid),
   })

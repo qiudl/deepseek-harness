@@ -114,6 +114,88 @@ describe('fixed owner legacy migration source', () => {
     expect(second.sourceDigest).not.toBe(first.sourceDigest)
   })
 
+  it('does not invent a provider when the source has no model route or credential', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, '.credentials.yaml'), '{}\n', { mode: 0o600 })
+    const inventory = await inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })
+    expect(inventory.candidates).toEqual([])
+    expect(inventory.unassignedCredentialReferences).toBe(0)
+  })
+
+  it('accepts an empty pi-ai section without inventing a route', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), '{"llm-pi-ai":{}}\n', { mode: 0o600 })
+    const inventory = await inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })
+    expect(inventory.candidates).toEqual([{
+      id: 'llm-deepseek:deepseek', provider: 'deepseek', kind: 'llm',
+      credential: 'present', sharedCredential: false,
+    }])
+  })
+
+  it('describes missing and independent provider credentials without exposing their references', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), JSON.stringify({
+      'llm-deepseek': {},
+      'llm-pi-ai': { providers: { custom: { apiKeyEnv: 'CUSTOM_API_KEY' } } },
+      'web-search-deepseek': { apiKeyEnv: 'SEARCH_API_KEY' },
+    }), { mode: 0o600 })
+    const inventory = await inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })
+    expect(inventory.candidates).toEqual([
+      { id: 'llm-deepseek:deepseek', provider: 'deepseek', kind: 'llm',
+        credential: 'present', sharedCredential: false },
+      { id: 'llm-pi-ai:custom', provider: 'custom', kind: 'llm',
+        credential: 'missing', sharedCredential: false },
+      { id: 'web-search-deepseek:deepseek', provider: 'deepseek', kind: 'web-search',
+        credential: 'missing', sharedCredential: false },
+    ])
+    expect(JSON.stringify(inventory)).not.toContain('CUSTOM_API_KEY')
+  })
+
+  it('counts provider ids that cannot be safely presented', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), JSON.stringify({
+      'llm-pi-ai': { providers: { 'PRIVATE_API_KEY!': { apiKeyEnv: 'PRIVATE_API_KEY' } } },
+    }), { mode: 0o600 })
+    const inventory = await inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })
+    expect(inventory).toMatchObject({ candidates: [{ id: 'llm-deepseek:deepseek' }], unsupportedSettings: 1 })
+    expect(JSON.stringify(inventory)).not.toContain('PRIVATE_API_KEY')
+  })
+
+  it.each([
+    { 'llm-deepseek': { apiKeyEnv: 7 } },
+    { 'llm-deepseek': { apiKeyEnv: 'invalid-ref' } },
+    { 'llm-pi-ai': { providers: { custom: { apiKeyEnv: 7 } } } },
+    { 'llm-pi-ai': { providers: { custom: { apiKeyEnv: 'invalid-ref' } } } },
+    { 'web-search-deepseek': { apiKeyEnv: 7 } },
+    { 'web-search-deepseek': { apiKeyEnv: 'invalid-ref' } },
+  ])('rejects a malformed model credential reference in a claim source', async (settings) => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), JSON.stringify(settings), { mode: 0o600 })
+    await expect(inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })).rejects.toThrow(/schema_unsupported/u)
+  })
+
+  it('rejects a source changed after validation and an aborted inspection', async () => {
+    const { home, source } = await fixture()
+    await expect(inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+      _testAfterValidatedState: () => writeFile(join(source, 'settings.yaml'), '{}\n', { mode: 0o600 }),
+    })).rejects.toThrow(/source_changed/u)
+    const aborted = AbortSignal.abort()
+    await expect(inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined, signal: aborted,
+    })).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
   it('keeps legacy model credentials and routes inactive without rewriting the source', async () => {
     const { home, source } = await fixture()
     const path = join(source, '.credentials.yaml')
