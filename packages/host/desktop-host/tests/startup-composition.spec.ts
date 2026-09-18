@@ -199,6 +199,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   })
   expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => profile.profileId })).toBeNull()
+  expect(serverOptions.modelClaimRecovery?.pendingReceipts({
+    authorizeAccountProfile: () => profile.profileId,
+  })).toEqual([])
   expect(serverOptions.modelClaimTransaction).toBeDefined()
   expect(serverOptions.modelClaimTransaction?.retry).toBeDefined()
   expect(workerSpecs).toHaveLength(1)
