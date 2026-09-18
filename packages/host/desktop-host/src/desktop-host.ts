@@ -55,6 +55,7 @@ type AccountProfileRecord = ReturnType<ProfileRegistry['resolveUniqueAccountByKe
 interface ProfileAccessGrant {
   readonly scope: ProfileAccessScope
   readonly operationId?: OfflineProfileRecoveryOperationId
+  readonly accountVerified: boolean
   readonly grantedAt: number
 }
 
@@ -175,7 +176,7 @@ export class DesktopHost {
       authorityBindingVersion: input.authorityBindingVersion, keyHandle: input.keyHandle,
       unlockMaterial: input.unlockMaterial,
     }, ensureWorker)
-    this.grant(input.ownerId, profile.profileId, 'connected')
+    this.grant(input.ownerId, profile.profileId, 'connected', undefined, true)
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
@@ -608,6 +609,28 @@ export class DesktopHost {
   }
 
   /**
+   * Resolve a legacy model claim target from a live Main lease and a token-verified Account grant.
+   * A vault-only restore, offline recovery, or local Profile cannot claim OS-user credentials.
+   * @param input - Main-held lease and runtime generation, bound to the authenticated broker.
+   * @returns the currently authorized Account Profile id.
+   */
+  authorizeAccountModelClaimView(input: {
+    readonly viewLeaseId: ProfileViewLeaseId
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly ownerId: string
+  }): PersonProfileId {
+    if (input.runtimeGeneration !== this.options.runtimeGeneration) throw new HostAuthorityError('stale')
+    const profileId = this.validateViewLease(input)
+    const profile = this.options.registry.resolveProfile(profileId)
+    const grant = this.ownerGrants.get(input.ownerId)?.get(profileId)
+    if (profile?.kind !== 'account' || grant?.scope !== 'connected' || !grant.accountVerified) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return profileId
+  }
+
+  /**
    * Revoke one local window lease.
    * @param viewLeaseId - opaque lease to revoke.
    */
@@ -661,9 +684,12 @@ export class DesktopHost {
     profileId: PersonProfileId,
     scope: ProfileAccessScope,
     operationId?: OfflineProfileRecoveryOperationId,
+    accountVerified = false,
   ): void {
     const profiles = this.ownerGrants.get(ownerId) ?? new Map<PersonProfileId, ProfileAccessGrant>()
-    profiles.set(profileId, { scope, ...(operationId === undefined ? {} : { operationId }), grantedAt: this.options.clock.now() })
+    profiles.set(profileId, {
+      scope, ...(operationId === undefined ? {} : { operationId }), accountVerified, grantedAt: this.options.clock.now(),
+    })
     this.ownerGrants.set(ownerId, profiles)
   }
 

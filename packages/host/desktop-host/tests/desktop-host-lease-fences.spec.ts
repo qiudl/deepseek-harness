@@ -20,6 +20,60 @@ async function fixture() {
 }
 
 describe('Desktop Host lease fences', () => {
+  it('allows model claims only from a token-verified Account view on the same live connection', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-account-claim-lease-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    let now = 1_000
+    const clock = { now: () => now }
+    const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+    const binding = {
+      authorityEnvironmentId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+      accountBindingHandle: 'binding:claim', authorityBindingVersion: 1,
+    }
+    const account = await registry.registerAccount({
+      issuer: 'https://accounts.example.test', subject: 'person', keyHandle: 'keychain:claim',
+      unlockMaterial, ...binding,
+    })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5, viewLeaseTtlMs: 100,
+      verifyAccountAccessToken: (token) => {
+        if (token !== 'valid-account-token') throw Error('invalid token')
+        return { issuer: 'https://accounts.example.test', subject: 'person' }
+      },
+      ensureProfileWorker: async () => undefined,
+    })
+    await host.restoreProfile({ ...account, ...binding, keyHandle: 'keychain:claim', unlockMaterial, ownerId: 'owner' })
+    const restored = await host.openProfile({ ...binding, ownerId: 'owner' })
+    const restoredLease = { ...restored, ownerId: 'owner' }
+    expect(() => host.authorizeAccountModelClaimView(restoredLease)).toThrow(/unauthorized/)
+    await host.ensureAccountProfile({
+      issuer: 'https://accounts.example.test', subject: 'person', accountAccessToken: 'valid-account-token',
+      keyHandle: 'keychain:claim', unlockMaterial, ...binding, ownerId: 'owner',
+    })
+    const opened = await host.openProfile({ ...binding, ownerId: 'owner' })
+    const lease = { ...opened, ownerId: 'owner' }
+    expect(host.authorizeAccountModelClaimView(lease)).toBe(account.profileId)
+    await host.restoreProfile({ ...account, ...binding, keyHandle: 'keychain:claim', unlockMaterial, ownerId: 'owner' })
+    expect(() => host.authorizeAccountModelClaimView(lease)).toThrow(/unauthorized/)
+    await host.ensureAccountProfile({
+      issuer: 'https://accounts.example.test', subject: 'person', accountAccessToken: 'valid-account-token',
+      keyHandle: 'keychain:claim', unlockMaterial, ...binding, ownerId: 'owner',
+    })
+    expect(host.authorizeAccountModelClaimView(lease)).toBe(account.profileId)
+    expect(() => host.authorizeAccountModelClaimView({ ...lease, ownerId: 'other' })).toThrow(/stale/)
+    expect(() => host.authorizeAccountModelClaimView({ ...lease, runtimeGeneration: 4 })).toThrow(/stale/)
+    expect(() => host.authorizeAccountModelClaimView({ ...lease, leaseGeneration: lease.leaseGeneration + 1 })).toThrow(/stale/)
+    const { host: localHost, opened: localOpened } = await fixture()
+    expect(() => localHost.authorizeAccountModelClaimView({ ...localOpened, ownerId: 'one' }))
+      .toThrow(/unauthorized/)
+    now += 101
+    expect(() => host.authorizeAccountModelClaimView(lease)).toThrow(/stale/)
+    const renewed = await host.openProfile({ ...binding, ownerId: 'owner' })
+    expect(host.authorizeAccountModelClaimView({ ...renewed, ownerId: 'owner' })).toBe(account.profileId)
+    host.revokeOwner('owner')
+    expect(() => host.authorizeAccountModelClaimView({ ...renewed, ownerId: 'owner' })).toThrow(/stale/)
+  })
+
   it('validates owner and generation, expires leases, and fences old generations after reopening', async () => {
     const { host, local, opened, advance } = await fixture()
     const lease = { ...opened, ownerId: 'one' }

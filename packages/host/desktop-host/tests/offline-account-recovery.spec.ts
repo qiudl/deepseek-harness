@@ -127,6 +127,10 @@ describe('offline Account Profile recovery', () => {
       viewLeaseId: opened.viewLeaseId, leaseGeneration: opened.leaseGeneration,
       runtimeGeneration: 5, ownerId: 'connection-1',
     })).toThrow(expect.objectContaining({ code: 'unauthorized' }))
+    expect(() => host.authorizeAccountModelClaimView({
+      viewLeaseId: opened.viewLeaseId, leaseGeneration: opened.leaseGeneration,
+      runtimeGeneration: 5, ownerId: 'connection-1',
+    })).toThrow(expect.objectContaining({ code: 'unauthorized' }))
     await expect(host.openProfile({
       authorityEnvironmentId: environmentId, accountBindingHandle: 'binding:original',
       authorityBindingVersion: 1, ownerId: 'connection-1',
