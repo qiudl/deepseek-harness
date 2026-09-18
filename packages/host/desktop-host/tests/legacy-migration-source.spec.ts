@@ -3,8 +3,10 @@ import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, utimes, writeFile
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import type { MigrationOwnerTransferBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
 import { compressZstdFrame } from '@deepseek-ai/dsh-session-persistence-jsonl/src/zstd.ts'
 import { createLegacyMigrationExportService } from '../src/legacy-migration-source.ts'
+import { MigrationOwnerStateApplicator } from '../src/migration-owner-state-applicator.ts'
 
 const uid = process.getuid?.() ?? 0
 
@@ -90,11 +92,13 @@ describe('fixed owner legacy migration source', () => {
     const before = createHash('sha256').update(await readFile(path)).digest('hex')
     const settingsBefore = createHash('sha256').update(await readFile(settingsPath)).digest('hex')
     let transferred = ''
+    let ownerTransfer: MigrationOwnerTransferBundle | undefined
     const service = createLegacyMigrationExportService({
       expectedUid: uid,
       _testOwnerHome: home,
       assertSourceQuiescent: async () => undefined,
       stageOwnerTransfer: async (bundle) => {
+        ownerTransfer = bundle
         transferred = JSON.stringify(bundle)
         return { transferId: 'a'.repeat(48), transferDigest: 'b'.repeat(64) }
       },
@@ -120,6 +124,16 @@ describe('fixed owner legacy migration source', () => {
     expect(transferred).not.toContain('sk-custom-legacy')
     expect(transferred).not.toContain('danger-full-access')
     expect(transferred).not.toContain('welcomeNoticeVersion')
+    if (!ownerTransfer) throw new Error('legacy owner transfer was not staged')
+    const target = join(home, 'personal-profile')
+    await mkdir(target, { mode: 0o700 })
+    const applied = await new MigrationOwnerStateApplicator(uid).apply(target, 1, ownerTransfer.ownerState)
+    expect(JSON.parse(await readFile(applied.settingsPath, 'utf8'))).toEqual({})
+    expect(JSON.parse(await readFile(applied.credentialsPath, 'utf8'))).toEqual({
+      version: 1, refs: {}, records: {},
+    })
+    expect(JSON.parse(await readFile(join(applied.storageRoot, 'workspace.json'), 'utf8')))
+      .toMatchObject({ tables: { workspaces: { 'workspace-1': { path: '/workspace' } } } })
     expect(createHash('sha256').update(await readFile(path)).digest('hex')).toBe(before)
     expect(createHash('sha256').update(await readFile(settingsPath)).digest('hex')).toBe(settingsBefore)
   })
