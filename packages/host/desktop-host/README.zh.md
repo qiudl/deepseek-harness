@@ -112,6 +112,7 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 - **旧数据迁移在完整闭环前 fail closed**——只有 active Profile 的完整 owner-only bundle（session、settings、credential、workspace 与 Profile 配置）可被 stage 时，Host 才发布 export 能力。digest-only 或 session-only transfer 不会被宣称为安全迁移。
 - **旧主目录的设置和凭据没有账号归属**——固定 OS 用户 `.dsh` 主目录的导出只迁移会话和工作区，全部设置与凭据都留在原路径，其中也包括权限、引导状态、模型路由与默认模型。来源摘要会检测盘点到传输之间的变更。在显式账号认领实现之前，新 Person Profile 无法使用这些值；已经激活的 Profile 数据另行处理兼容性。
 - **旧数据认领盘点仍是 Host 内部的脱敏能力**——Host 可对同一份已校验来源盘点 DeepSeek、已配置的 pi-ai 路由及 DeepSeek 网页搜索。结果只包含候选标识、凭据是否存在、共享引用状态、来源摘要，以及无法映射的设置和凭据记录数量；不返回密钥值或引用名。盘点本身不授予认领权限，也不修改来源或目标；仍需实现已认证的认领事务。
+- **旧数据认领账本是 Host 内部基础能力**——状态机校验不含密钥的预留、提交和已验证恢复事件；持久化适配器须先写入每个事件，状态才能改变。重启后仍能识别未决预留及必须停止 worker 的 Profile。向用户提供认领前，仍需接入平台文件适配器、worker 管控和目标凭据写入。
 
 <a id="dev-note"></a>
 ### 开发备注
