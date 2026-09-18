@@ -216,6 +216,9 @@ describe('transport-neutral Host control authority', () => {
     generateModelText.mockRejectedValueOnce(new DesktopModelWorkerError('missing_credential'))
     expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'result',
       method: 'profile.model_text', result: { state: 'rejected', code: 'missing_credential' } })
+    generateModelText.mockRejectedValueOnce(new DesktopModelWorkerError('timeout'))
+    expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'result',
+      method: 'profile.model_text', result: { state: 'rejected', code: 'timeout' } })
     generateModelText.mockRejectedValueOnce(Error('DEEPSEEK_API_KEY=private'))
     const modelFailure = await session.handleRequest(modelRequest())
     expect(modelFailure).toMatchObject({ type: 'result', method: 'profile.model_text',

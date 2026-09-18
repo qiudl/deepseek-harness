@@ -16,7 +16,7 @@ const RESERVED_ENV = new Set([
 /** Classified failure from the authenticated worker model endpoint. */
 export class DesktopModelWorkerError extends Error {
   constructor(readonly code: 'invalid_input' | 'no_default_model' | 'missing_credential'
-    | 'provider_failed' | 'cancelled' | 'response_too_large') {
+    | 'provider_failed' | 'cancelled' | 'timeout' | 'response_too_large') {
     super(code)
     this.name = 'DesktopModelWorkerError'
   }
@@ -204,7 +204,8 @@ export class DshWebProfileWorkerFactory {
         if (!response.ok) {
           const code = value.error
           if (code === 'invalid_input' || code === 'no_default_model' || code === 'missing_credential'
-            || code === 'provider_failed' || code === 'cancelled' || code === 'response_too_large') {
+            || code === 'provider_failed' || code === 'cancelled' || code === 'timeout'
+            || code === 'response_too_large') {
             throw new DesktopModelWorkerError(code)
           }
           throw new HostAuthorityError('unavailable')

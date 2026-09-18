@@ -5,7 +5,7 @@ import { BlockAssembler, createUserMessage, type GenerateOptions, type StreamChu
 
 /** Errors safe to return across the Desktop Host protocol. */
 export type DesktopModelErrorCode = 'invalid_input' | 'no_default_model' | 'missing_credential'
-  | 'provider_failed' | 'cancelled' | 'response_too_large'
+  | 'provider_failed' | 'cancelled' | 'timeout' | 'response_too_large'
 
 /** A public code without a provider message or credential reference. */
 export class DesktopModelError extends Error {
@@ -104,7 +104,7 @@ export async function handleDesktopModelRequest(
     return
   }
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 60_000)
+  const timer = setTimeout(() => controller.abort('timeout'), 60_000)
   res.once('close', () => controller.abort())
   try {
     const chunks: Buffer[] = []
@@ -125,7 +125,8 @@ export async function handleDesktopModelRequest(
       .end(JSON.stringify(result))
   } catch (error) {
     if (res.writableEnded || res.destroyed) return
-    const code = controller.signal.aborted ? 'cancelled'
+    const code = controller.signal.aborted
+      ? controller.signal.reason === 'timeout' ? 'timeout' : 'cancelled'
       : error instanceof DesktopModelError ? error.code : 'invalid_input'
     res.writeHead(code === 'invalid_input' ? 400 : 422,
       { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })

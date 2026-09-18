@@ -462,7 +462,7 @@ export interface ProfileModelTextResult {
     | {
       readonly state: 'rejected'
       readonly code: 'invalid_input' | 'no_default_model' | 'missing_credential'
-        | 'provider_failed' | 'cancelled' | 'response_too_large'
+        | 'provider_failed' | 'cancelled' | 'timeout' | 'response_too_large'
     }
 }
 

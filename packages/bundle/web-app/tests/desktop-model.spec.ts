@@ -221,7 +221,31 @@ describe('Host-only Desktop model worker route', () => {
       await vi.advanceTimersByTimeAsync(60_000)
       await operation
       expect(response.statusCode).toBe(422)
-      expect((response as unknown as { body: string }).body).toBe('{"error":"cancelled"}')
+      expect((response as unknown as { body: string }).body).toBe('{"error":"timeout"}')
     } finally { vi.useRealTimers() }
+  })
+
+  it('classifies a closed response as caller cancellation', async () => {
+    const req = Object.assign(new EventEmitter(), {
+      headers: { authorization: `Bearer ${token}` }, method: 'POST',
+      async *[Symbol.asyncIterator]() { yield Buffer.from('{"text":"q"}') },
+    }) as unknown as IncomingMessage
+    const response = Object.assign(new EventEmitter(), {
+      statusCode: 0, body: '', writableEnded: false, destroyed: false,
+      writeHead(code: number) { this.statusCode = code; return this },
+      end(body = '') { this.body = body; this.writableEnded = true; return this },
+    }) as unknown as ServerResponse
+    let started!: () => void
+    const active = new Promise<void>((resolve) => { started = resolve })
+    const operation = handleDesktopModelRequest(req, response, token, async (_text, signal) => {
+      started()
+      await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+      throw Error('private late error')
+    })
+    await active
+    response.emit('close')
+    await operation
+    expect(response.statusCode).toBe(422)
+    expect((response as unknown as { body: string }).body).toBe('{"error":"cancelled"}')
   })
 })

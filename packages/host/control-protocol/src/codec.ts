@@ -995,7 +995,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
       exactKeys(result, ['state', 'code'])
       if (result.code !== 'invalid_input' && result.code !== 'no_default_model'
         && result.code !== 'missing_credential' && result.code !== 'provider_failed'
-        && result.code !== 'cancelled' && result.code !== 'response_too_large') reject()
+        && result.code !== 'cancelled' && result.code !== 'timeout'
+        && result.code !== 'response_too_large') reject()
       return { version: 1, type: 'result', request_id, method: 'profile.model_text', result: {
         state: 'rejected', code: result.code,
       } }
