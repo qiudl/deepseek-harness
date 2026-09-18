@@ -68,8 +68,8 @@ describe('Host model claim recovery authority', () => {
       identity: { hostInstanceId, installationId: randomUUID(), installationPublicKey: publicKey,
         installationPrivateKey: keys.privateKey, processNonce, executableSignatureDigest: '1'.repeat(64),
         runtimeGeneration: 5, schemaGeneration: 1 },
-      host, modelClaimRecovery: { pendingReceipts: ({ authorizeAccountProfile }) => {
-        expect(authorizeAccountProfile()).toBe(profile.profileId)
+      host, modelClaimRecovery: { pendingReceipts: (input) => {
+        expect(input.authorizeAccountProfile()).toBe(profile.profileId)
         return [{ candidateId, operationId, sourceDigest, status: 'pending' }]
       }, status, restore },
       modelClaimTransaction: { claim: vi.fn(), retry },

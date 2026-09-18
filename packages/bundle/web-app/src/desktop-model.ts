@@ -12,6 +12,10 @@ export class DesktopModelError extends Error {
   constructor(readonly code: DesktopModelErrorCode) { super(code); this.name = 'DesktopModelError' }
 }
 
+function throwIfCancelled(signal: AbortSignal): void {
+  if (signal.aborted) throw new DesktopModelError('cancelled')
+}
+
 /**
  * Generate one text answer without tools or a DSH Session.
  * @param input - text, live Profile selection reader, Profile LLM stream, and cancellation.
@@ -26,7 +30,7 @@ export async function generateDesktopModelText(input: {
   if (input.text.trim().length === 0 || Buffer.byteLength(input.text, 'utf8') > 8192) {
     throw new DesktopModelError('invalid_input')
   }
-  if (input.signal.aborted) throw new DesktopModelError('cancelled')
+  throwIfCancelled(input.signal)
   let selection: ReturnType<typeof input.selection>
   try { selection = input.selection() }
   catch { throw new DesktopModelError('no_default_model') }
@@ -45,7 +49,7 @@ export async function generateDesktopModelText(input: {
   let finished = false
   try {
     for await (const chunk of input.stream(options)) {
-      if (input.signal.aborted) throw new DesktopModelError('cancelled')
+      throwIfCancelled(input.signal)
       if (chunk.type === 'text-delta') {
         deltaBytes += Buffer.byteLength(chunk.text, 'utf8')
         if (deltaBytes > 16384) throw new DesktopModelError('response_too_large')
@@ -55,12 +59,12 @@ export async function generateDesktopModelText(input: {
     }
   } catch (error) {
     if (error instanceof DesktopModelError) throw error
-    if (input.signal.aborted) throw new DesktopModelError('cancelled')
+    throwIfCancelled(input.signal)
     const code = (error as { code?: unknown } | null)?.code
     throw new DesktopModelError(code === 'MISSING_CREDENTIAL' || code === 'INVALID_CREDENTIAL'
       ? 'missing_credential' : 'provider_failed')
   }
-  if (input.signal.aborted) throw new DesktopModelError('cancelled')
+  throwIfCancelled(input.signal)
   if (!finished) throw new DesktopModelError('provider_failed')
   const finish = assembler.finish
   if (finish.kind !== 'stop') {
@@ -104,13 +108,14 @@ export async function handleDesktopModelRequest(
     return
   }
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort('timeout'), 60_000)
-  res.once('close', () => controller.abort())
+  const timer = setTimeout(() => { controller.abort('timeout') }, 60_000)
+  res.once('close', () => { controller.abort() })
   try {
     const chunks: Buffer[] = []
     let size = 0
-    for await (const chunk of req) {
-      size += Buffer.byteLength(chunk)
+    for await (const chunk of req as AsyncIterable<unknown>) {
+      if (!(chunk instanceof Uint8Array)) throw new DesktopModelError('invalid_input')
+      size += chunk.byteLength
       if (size > 8256) throw new DesktopModelError('invalid_input')
       chunks.push(Buffer.from(chunk))
     }

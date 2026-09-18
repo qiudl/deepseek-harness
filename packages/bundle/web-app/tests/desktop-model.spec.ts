@@ -109,10 +109,10 @@ describe('Desktop personal text model request', () => {
     await expect(generateDesktopModelText({ text: 'q', selection: () => ({ provider: 'p', model: 'm' }),
       signal: during.signal, stream: async function* () { during.abort(); yield { type: 'usage', usage: {
         inputTokens: 1, outputTokens: 1,
-      } } as StreamChunk } })).rejects.toMatchObject({ code: 'cancelled' })
+      } } } })).rejects.toMatchObject({ code: 'cancelled' })
     const after = new AbortController()
     await expect(generateDesktopModelText({ text: 'q', selection: () => ({ provider: 'p', model: 'm' }),
-      signal: after.signal, stream: async function* () { yield { type: 'finish', reason: { kind: 'stop' } } as StreamChunk
+      signal: after.signal, stream: async function* () { yield { type: 'finish', reason: { kind: 'stop' } }
         after.abort() } })).rejects.toMatchObject({ code: 'cancelled' })
     const thrown = new AbortController()
     await expect(generateDesktopModelText({ text: 'q', selection: () => ({ provider: 'p', model: 'm' }),
@@ -129,7 +129,10 @@ describe('Host-only Desktop model worker route', () => {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const address = server.address() as AddressInfo
     try { await run(`http://127.0.0.1:${address.port}`) }
-    finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
+    finally { await new Promise<void>((resolve, reject) => server.close((error) => {
+      if (error) reject(error)
+      else resolve()
+    })) }
   }
 
   it('refuses missing or malformed Host authority without generating', async () => {
@@ -188,7 +191,7 @@ describe('Host-only Desktop model worker route', () => {
     const handled = new Promise<void>((resolve) => { finished = resolve })
     await withServer(async (_text, signal) => {
       started()
-      await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+      await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
       finished()
       return { provider: 'p', model: 'm', text: 'late answer' }
     }, async (url) => {
@@ -215,7 +218,7 @@ describe('Host-only Desktop model worker route', () => {
         end(body = '') { this.body = body; this.writableEnded = true; return this },
       }) as unknown as ServerResponse
       const operation = handleDesktopModelRequest(req, response, token, async (_text, signal) => {
-        await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+        await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
         throw Error('private late provider message')
       })
       await vi.advanceTimersByTimeAsync(60_000)
@@ -239,7 +242,7 @@ describe('Host-only Desktop model worker route', () => {
     const active = new Promise<void>((resolve) => { started = resolve })
     const operation = handleDesktopModelRequest(req, response, token, async (_text, signal) => {
       started()
-      await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+      await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
       throw Error('private late error')
     })
     await active
