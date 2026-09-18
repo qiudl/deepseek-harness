@@ -7,6 +7,12 @@ import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transpor
 import type { Config } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
 import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from '../src/legacy-claim-marker.ts'
+import { FileLegacyClaimEventStore } from '../src/legacy-claim-store.ts'
+import { LegacyClaimLedger } from '../src/legacy-claim-ledger.ts'
+import { FileLegacyClaimRecoveryFiles } from '../src/legacy-claim-recovery-files.ts'
+import { LegacyClaimRecoveryStore } from '../src/legacy-claim-recovery.ts'
+import { FileLegacyClaimTargetFiles } from '../src/legacy-claim-target-files.ts'
+import { LegacyClaimTarget } from '../src/legacy-claim-target.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -191,6 +197,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const profile = await application.host.bootstrapLocalProfile({
     keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner',
   })
+  expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
+    authorizeAccountProfile: () => profile.profileId })).toBeNull()
   expect(workerSpecs).toHaveLength(1)
   const opened = await application.host.openLocalProfile({ profileId: profile.profileId, ownerId: 'owner' })
   expect((await application.host.activateView({
@@ -383,3 +391,81 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   expect(serverClose).toHaveBeenCalledOnce()
   expect(workerEvents.some(event => event.startsWith('abort:'))).toBe(true)
 }, 20_000)
+
+it.skipIf(process.platform === 'win32')('keeps Host startup available when the global claim ledger is corrupt', async () => {
+  const { config, root } = fixture()
+  const recoveringConfig = Object.assign({}, config, { legacySourceQuiescent: false })
+  const ledgerRoot = join(root, 'control', 'legacy-model-claims')
+  mkdirSync(ledgerRoot, { recursive: true, mode: 0o700 })
+  writeFileSync(join(ledgerRoot, 'legacy-claims.v1.json'), 'corrupt', { mode: 0o600 })
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  let serverOptions: UnixHostServerOptions | undefined
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(recoveringConfig, { now: () => NOW }, {
+    platform: 'darwin', createServer: (options) => { serverOptions = options; return server },
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  expect(serverOptions?.modelClaimRecovery).toBeDefined()
+  expect(serverOptions?.inspectModelClaimSource).toBeUndefined()
+  expect(() => { serverOptions?.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
+    authorizeAccountProfile: () => randomUUID() }) }).toThrow(/unavailable/u)
+})
+
+it.skipIf(process.platform === 'win32')('restores a partially written Account claim through production Host composition', async () => {
+  const { config, root, accountPrivateKey } = fixture()
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  let serverOptions: UnixHostServerOptions | undefined
+  let workerStarts = 0
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: (options) => { serverOptions = options; return server },
+    profileWorkerFactory: async (): Promise<ProfileWorkerHandle> => {
+      workerStarts += 1
+      return { viewOrigin: 'http://127.0.0.1:43123', generation: workerStarts,
+        bootstrapCookie: { name: 'fixture', value: 'private' },
+        closeNotifications: () => undefined, abort: () => undefined, done: Promise.resolve() }
+    },
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  const binding = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:claim-recovery',
+    authorityBindingVersion: 1 }
+  const material = Buffer.alloc(32, 9).toString('base64url')
+  const subject = randomUUID()
+  const token = accountToken(accountPrivateKey, subject)
+  const account = { issuer: 'https://accounts.dsh.colorbuyai.com', subject,
+    accountAccessToken: token, keyHandle: 'keychain:claim-recovery', unlockMaterial: material, ...binding }
+  const profile = await application.host.ensureAccountProfile({ ...account, ownerId: 'owner' })
+  const profileRoot = join(root, 'profiles', profile.profileId)
+  const ownerRoot = join(profileRoot, 'migration-owner-state', '1')
+  const uid = process.getuid!()
+  const recovery = new LegacyClaimRecoveryStore(new FileLegacyClaimRecoveryFiles(join(root, 'profiles'), uid))
+  const files = new FileLegacyClaimTargetFiles({ generation: 1, settingsPath: join(ownerRoot, 'settings.yaml'),
+    credentialsPath: join(ownerRoot, '.credentials.yaml'), storageRoot: join(ownerRoot, 'storages') }, uid)
+  const target = new LegacyClaimTarget(files, recovery)
+  const candidateId = 'llm-deepseek:deepseek'
+  const operationId = randomUUID()
+  const sourceDigest = 'a'.repeat(64)
+  const before = { settings: files.read('settings'), credentials: files.read('credentials') }
+  const prepared = target.prepare({ profileId: profile.profileId, candidateId, operationId,
+    targetGeneration: 1, sourceSettings: { 'llm-deepseek': { apiKeyEnv: 'OLD_KEY' } },
+    sourceCredentials: { refs: { OLD_KEY: 'legacy-secret' }, records: {} }, guard: () => undefined })
+  const ledger = new LegacyClaimLedger(new FileLegacyClaimEventStore({
+    root: join(root, 'control', 'legacy-model-claims'), uid, maximumBytes: 4 * 1024 * 1024,
+  }), () => NOW)
+  ledger.reserve({ profileId: profile.profileId, candidateId, operationId, sourceDigest, targetGeneration: 1 })
+  const marker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), uid))
+  marker.mark({ profileId: profile.profileId, candidateId, operationId })
+  files.replace('credentials', prepared.credentialsAfter)
+  const claims = serverOptions?.modelClaimRecovery
+  if (!claims) throw Error('missing model claim recovery')
+  const authorizeAccountProfile = () => application.host.authorizeAccountModelClaimRecovery(account)
+  expect(claims.status({ candidateId, authorizeAccountProfile })?.status).toBe('pending')
+  expect(await claims.restore({ candidateId, operationId, authorizeAccountProfile })).toEqual({
+    state: 'restored', cleanupPending: false,
+  })
+  expect(files.read('settings')).toEqual(before.settings)
+  expect(files.read('credentials')).toEqual(before.credentials)
+  expect(marker.pending(profile.profileId)).toBe(false)
+  expect(workerStarts).toBe(2)
+  expect(claims.status({ candidateId, authorizeAccountProfile })).toBeNull()
+})

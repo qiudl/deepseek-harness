@@ -863,12 +863,72 @@ export interface ProfileModelClaimInventoryResult {
   }
 }
 
+/** Account proof accepted only for an already recorded legacy model claim. */
+export type ProfileModelClaimRecoveryProof = HostAuthorizedParams & {
+  readonly account_access_token: string
+  readonly account_issuer: string
+  readonly account_subject: string
+  readonly authority_environment_id: HostAuthorityEnvironmentId
+  readonly account_binding_handle: string
+  readonly authority_binding_version: number
+  readonly profile_key_handle: string
+  readonly profile_unlock_material: string
+}
+
+/** Query a legacy claim receipt using the current Account and vault proof. */
+export interface ProfileModelClaimRecoveryStatusRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_status'
+  readonly params: ProfileModelClaimRecoveryProof & { readonly candidate_id: string }
+}
+
+/** Redacted receipt or an unclaimed state for the authorized Account. */
+export interface ProfileModelClaimRecoveryStatusResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_status'
+  readonly result: { readonly state: 'unclaimed' } | {
+    readonly state: 'pending' | 'committed' | 'restored'
+    readonly candidate_id: string
+    readonly operation_id: string
+    readonly source_digest: HostControlSha256
+  }
+}
+
+/** Restore one interrupted claim from its durable private preimage. */
+export interface ProfileModelClaimRestoreRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_restore'
+  readonly params: ProfileModelClaimRecoveryProof & {
+    readonly candidate_id: string
+    readonly operation_id: string
+  }
+}
+
+/** Restoration outcome without source or target credential data. */
+export interface ProfileModelClaimRestoreResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_restore'
+  readonly result: { readonly state: 'restored'; readonly cleanup_pending: boolean }
+}
+
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
   | ProfileExtensionsRequest
   | ProfileExtensionsResult
   | ProfileModelClaimInventoryRequest
   | ProfileModelClaimInventoryResult
+  | ProfileModelClaimRecoveryStatusRequest
+  | ProfileModelClaimRecoveryStatusResult
+  | ProfileModelClaimRestoreRequest
+  | ProfileModelClaimRestoreResult
   | HostInspectRequest
   | HostInspectResult
   | ProfileStatusRequest

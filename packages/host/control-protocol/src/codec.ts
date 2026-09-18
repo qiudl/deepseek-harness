@@ -2,6 +2,8 @@ import type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
+  ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRecoveryStatusResult,
+  ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
   HostControlCapability,
   HostAccountBindingHandle,
   HostAuthorityEnvironmentId,
@@ -171,6 +173,12 @@ function signature(value: unknown): HostControlSignature {
 function digest(value: unknown): HostControlSha256 {
   if (typeof value !== 'string' || !SHA256.test(value)) reject()
   return value as HostControlSha256
+}
+
+function modelClaimCandidate(value: unknown): string {
+  if (typeof value !== 'string'
+    || !/^(?:llm-deepseek|llm-pi-ai|web-search-deepseek):[a-z][a-z0-9-]{0,63}$/u.test(value)) reject()
+  return value
 }
 
 function capability(value: unknown): HostControlCapability {
@@ -505,10 +513,34 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
-  | ProfileModelClaimInventoryRequest {
+  | ProfileModelClaimInventoryRequest | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
   const requestId = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore') {
+    const proofKeys = [
+      ...AUTHORIZED_KEYS, 'account_access_token', 'account_issuer', 'account_subject',
+      'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
+      'profile_key_handle', 'profile_unlock_material', 'candidate_id',
+    ]
+    exactKeys(params, frame.method === 'profile.model_claim_restore' ? [...proofKeys, 'operation_id'] : proofKeys)
+    const proof = {
+      ...authorized(params),
+      account_access_token: boundedText(params.account_access_token, 8_192),
+      account_issuer: accountIssuer(params.account_issuer),
+      account_subject: boundedText(params.account_subject, 512),
+      authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      profile_key_handle: boundedText(params.profile_key_handle, 512),
+      profile_unlock_material: unlockMaterial(params.profile_unlock_material),
+      candidate_id: modelClaimCandidate(params.candidate_id),
+    }
+    return frame.method === 'profile.model_claim_restore'
+      ? { version: 1, type: 'request', request_id: requestId, method: 'profile.model_claim_restore',
+        params: { ...proof, operation_id: uuid(params.operation_id) } }
+      : { version: 1, type: 'request', request_id: requestId, method: 'profile.model_claim_recovery_status', params: proof }
+  }
   if (frame.method === 'profile.model_claim_inventory') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation'])
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.model_claim_inventory', params: {
@@ -699,10 +731,28 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileLeaseCloseResult | ProfileExtensionsResult
-  | ProfileModelClaimInventoryResult {
+  | ProfileModelClaimInventoryResult | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
   const request_id = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_recovery_status') {
+    if (result.state === 'unclaimed') {
+      exactKeys(result, ['state'])
+      return { version: 1, type: 'result', request_id, method: frame.method, result: { state: 'unclaimed' } }
+    }
+    exactKeys(result, ['state', 'candidate_id', 'operation_id', 'source_digest'])
+    if (result.state !== 'pending' && result.state !== 'committed' && result.state !== 'restored') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      state: result.state, candidate_id: modelClaimCandidate(result.candidate_id),
+      operation_id: uuid(result.operation_id), source_digest: digest(result.source_digest),
+    } }
+  }
+  if (frame.method === 'profile.model_claim_restore') {
+    exactKeys(result, ['state', 'cleanup_pending'])
+    if (result.state !== 'restored' || typeof result.cleanup_pending !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { state: 'restored', cleanup_pending: result.cleanup_pending } }
+  }
   if (frame.method === 'profile.model_claim_inventory') {
     exactKeys(result, ['source_digest', 'candidates',
       'unsupported_settings', 'unassigned_credential_references', 'unassigned_credential_records'])

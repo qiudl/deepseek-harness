@@ -131,6 +131,51 @@ const inventory = {
 }
 
 describe('Unix Host client protocol projections', () => {
+  it('projects worker-independent model claim recovery only with the advertised capability', async () => {
+    const seen: HostControlFrame[] = []
+    const proof = { ...binding, issuer: 'https://accounts.example.test', subject: 'person',
+      accountAccessToken: 'header.payload.signature', keyHandle: 'keychain:person',
+      unlockMaterial: 'A'.repeat(43), candidateId: 'llm-deepseek:deepseek' }
+    const operationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3146'
+    const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, { state: 'unclaimed' }) },
+      [...baseCapabilities].sort())
+    await expect(unsupported.client.modelClaimRecoveryStatus(proof))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(unsupported.client.restoreModelClaim({ ...proof, operationId }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(seen).toEqual([])
+    const enabled = await makeClient((frame) => {
+      seen.push(frame)
+      return frame.method === 'profile.model_claim_recovery_status'
+        ? result(frame, { state: 'pending', candidate_id: proof.candidateId,
+          operation_id: operationId, source_digest: 'a'.repeat(64) })
+        : result(frame, { state: 'restored', cleanup_pending: true })
+    }, [...baseCapabilities, 'profile.model_claim_recovery_status', 'profile.model_claim_restore'].sort() as HostControlCapability[])
+    await expect(enabled.client.modelClaimRecoveryStatus(proof)).resolves.toEqual({
+      candidateId: proof.candidateId, operationId, sourceDigest: 'a'.repeat(64), status: 'pending',
+    })
+    await expect(enabled.client.restoreModelClaim({ ...proof, operationId })).resolves.toEqual({
+      state: 'restored', cleanupPending: true,
+    })
+    expect(seen).toMatchObject([
+      { method: 'profile.model_claim_recovery_status', params: { candidate_id: proof.candidateId,
+        account_access_token: proof.accountAccessToken, profile_unlock_material: proof.unlockMaterial } },
+      { method: 'profile.model_claim_restore', params: { candidate_id: proof.candidateId,
+        operation_id: operationId } },
+    ])
+    const unclaimed = await makeClient(frame => result(frame, { state: 'unclaimed' }),
+      [...baseCapabilities, 'profile.model_claim_recovery_status'].sort() as HostControlCapability[])
+    await expect(unclaimed.client.modelClaimRecoveryStatus(proof)).resolves.toBeNull()
+    await expect(unclaimed.client.restoreModelClaim({ ...proof, operationId }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    const malformed = await makeClient(frame => ({ version: 1, type: 'result', request_id: frame.request_id,
+      method: 'profile.status', result: { state: 'locked' } }),
+    [...baseCapabilities, 'profile.model_claim_recovery_status', 'profile.model_claim_restore'].sort() as HostControlCapability[])
+    await expect(malformed.client.modelClaimRecoveryStatus(proof)).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(malformed.client.restoreModelClaim({ ...proof, operationId }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('projects redacted model candidates only when the Host advertises inventory', async () => {
     const seen: HostControlFrame[] = []
     const response = { source_digest: 'a'.repeat(64), candidates: [{

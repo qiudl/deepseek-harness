@@ -4,6 +4,7 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import type {
   HostExtensionCommand, HostExtensionResponse, HostExtensionKind, ProfileExtensionsRequest,
   ProfileModelClaimInventoryRequest,
+  ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRestoreRequest,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlErrorCode,
@@ -42,6 +43,7 @@ import type {
   MigrationImportStatusRequest,
   MigrationImportVerifyRequest,
 } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+import type { LegacyClaimCoordinator, LegacyClaimReceipt, LegacyClaimOutcome } from './legacy-claim-coordinator.ts'
 import {
   HOST_CONTROL_MAX_FRAME_BYTES,
   decodeHostControlFrame,
@@ -90,6 +92,8 @@ export interface UnixHostServerOptions {
   readonly host: DesktopHost
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
   readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
+  /** Worker-independent recovery of a durable same-Account claim receipt. */
+  readonly modelClaimRecovery?: Pick<LegacyClaimCoordinator, 'status' | 'restore'>
   readonly extensions?: {
     readonly operations: ProfileExtensionOperations
     readonly kinds: readonly HostExtensionKind[]
@@ -225,7 +229,7 @@ interface MigrationExportChunk {
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
-    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
+    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions' | 'modelClaimRecovery'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -357,6 +361,13 @@ interface AccountBindingInput {
   readonly authorityEnvironmentId: string
   readonly accountBindingHandle: string
   readonly authorityBindingVersion: number
+}
+
+interface ModelClaimRecoveryInput extends AccountBindingInput, ProfileUnlockInput {
+  readonly issuer: string
+  readonly subject: string
+  readonly accountAccessToken: string
+  readonly candidateId: string
 }
 function openProfileWireFields(opened: OpenedProfileLease): {
   profile_id: never
@@ -718,7 +729,37 @@ export class HostControlAuthority {
       ),
       dispatchAuthorized: async (frame, context, respond) => {
         const channel = { send: respond }
-        if (frame.method === 'profile.model_claim_inventory') {
+        if (frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore') {
+          const service = this.options.modelClaimRecovery
+          if (!service) throw new HostAuthorityError('upgrade_required')
+          const proof = () => {
+            context.signal.throwIfAborted()
+            return this.options.host.authorizeAccountModelClaimRecovery({
+              issuer: frame.params.account_issuer, subject: frame.params.account_subject,
+              accountAccessToken: frame.params.account_access_token,
+              authorityEnvironmentId: frame.params.authority_environment_id,
+              accountBindingHandle: frame.params.account_binding_handle,
+              authorityBindingVersion: frame.params.authority_binding_version,
+              keyHandle: frame.params.profile_key_handle,
+              unlockMaterial: frame.params.profile_unlock_material,
+            })
+          }
+          if (frame.method === 'profile.model_claim_recovery_status') {
+            const receipt = service.status({ candidateId: frame.params.candidate_id, authorizeAccountProfile: proof })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: receipt ? { state: receipt.status, candidate_id: receipt.candidateId,
+                operation_id: receipt.operationId, source_digest: receipt.sourceDigest as never }
+                : { state: 'unclaimed' } })
+          } else {
+            const profileId = proof()
+            const outcome = await service.restore({ candidateId: frame.params.candidate_id,
+              operationId: frame.params.operation_id, authorizeAccountProfile: proof, signal: context.signal })
+            if (outcome.state !== 'restored') throw new HostAuthorityError('unavailable')
+            this.options.host.revokeProfile(profileId)
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { state: 'restored', cleanup_pending: outcome.cleanupPending } })
+          }
+        } else if (frame.method === 'profile.model_claim_inventory') {
           const inspectSource = this.options.inspectModelClaimSource
           if (!inspectSource) throw new HostAuthorityError('upgrade_required')
           const authority = () => {
@@ -1124,6 +1165,7 @@ export class HostControlAuthority {
         capabilities: [
           ...capabilities,
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
+          ...(this.options.modelClaimRecovery ? ['profile.model_claim_recovery_status', 'profile.model_claim_restore'] : []),
           ...(this.options.extensions ? ['profile.extensions'] : []),
           ...(offlineAccountRecovery ? recoveryCapabilities : []),
           ...(migrationExport ? [
@@ -1776,6 +1818,56 @@ export class UnixHostClient {
   }
 
   /**
+   * Read only this Account's durable claim receipt without starting a pending worker.
+   * @param input - Fresh Account token, current binding, vault proof and candidate id.
+   * @returns Secret-free receipt, or null when this Account has no active claim.
+   */
+  async modelClaimRecoveryStatus(input: ModelClaimRecoveryInput): Promise<LegacyClaimReceipt | null> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_recovery_status' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRecoveryStatusRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_recovery_status',
+      params: { ...this.modelClaimRecoveryParams(input), candidate_id: input.candidateId },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.state === 'unclaimed' ? null : {
+      candidateId: frame.result.candidate_id, operationId: frame.result.operation_id,
+      sourceDigest: frame.result.source_digest, status: frame.result.state,
+    }
+  }
+
+  /**
+   * Restore an interrupted claim from its durable preimage after rechecking Account ownership.
+   * @param input - Recovery proof and exact operation id returned by status.
+   * @returns Redacted restored outcome.
+   */
+  async restoreModelClaim(input: ModelClaimRecoveryInput & { readonly operationId: string }): Promise<LegacyClaimOutcome> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_restore' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRestoreRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_restore',
+      params: { ...this.modelClaimRecoveryParams(input), candidate_id: input.candidateId,
+        operation_id: input.operationId },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
+  }
+
+  private modelClaimRecoveryParams(input: ModelClaimRecoveryInput): ProfileModelClaimRecoveryStatusRequest['params'] {
+    return { ...this.auth(), account_access_token: input.accountAccessToken,
+      account_issuer: input.issuer, account_subject: input.subject,
+      authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle,
+      authority_binding_version: input.authorityBindingVersion,
+      profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial,
+      candidate_id: input.candidateId }
+  }
+
+  /**
    * Close one view lease on the connection that minted it.
    * @param input - lease identity, generations, and optional cancellation.
    */
@@ -2143,6 +2235,7 @@ export class UnixHostClient {
 
   private async call(
     request: ProfileExtensionsRequest | ProfileModelClaimInventoryRequest
+      | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
       | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest
