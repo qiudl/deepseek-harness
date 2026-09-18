@@ -42,6 +42,8 @@ The negotiated `profile.extensions` method carries a Main-held lease and one inv
 
 ## Challenge authentication
 
+`profile.model_text` accepts a live connection-owned Account view lease and one nonempty text input of at most 8 KiB. A complete result contains the selected provider, model, and at most 16 KiB of answer text; a rejected result contains one classified code. The method carries no API Key, tool request, Session id, or raw provider error.
+
 `encodeHostInspectSignaturePayload(request, response)` returns the exact UTF-8 bytes signed with the installation Ed25519 key. The domain-separated statement binds the request id, Desktop client id, challenge, selected version, Host and installation ids, installation public key, generations, process nonce, capabilities, and executable digest.
 
 The public key in an answer is not trust by itself. The Desktop broker must match it to its authenticated installation record and independently compare the peer executable's code-signing digest before accepting the signature. A migration flow may establish that record only through its explicit consent and verification policy; ordinary connection must never silently trust a new key.

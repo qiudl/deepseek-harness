@@ -49,6 +49,8 @@ export type {
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
+  ProfileModelTextRequest,
+  ProfileModelTextResult,
   ProfileLeaseCloseRequest,
   ProfileLeaseCloseResult,
   ProfileStatusRequest,

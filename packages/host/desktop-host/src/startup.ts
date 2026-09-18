@@ -698,6 +698,7 @@ export async function startDesktopHostApplication(
         runtimeGeneration: config.runtimeGeneration, schemaGeneration: config.schemaGeneration,
       },
       host,
+      generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       extensions: { operations: extensionOperations, kinds: pluginExecutor ? ['plugin', 'mcp', 'skill'] : ['mcp', 'skill'],
         pluginRemove: pluginExecutor !== undefined, pluginUpdate: pluginExecutor !== undefined, pluginToggle: pluginExecutor !== undefined,
         skillArchives: true, skillRemove: true, skillReplace: true, skillFiles: true, skillInvocation: true,

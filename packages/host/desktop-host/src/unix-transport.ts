@@ -31,6 +31,8 @@ import type {
   ProfileOpenRequest,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
+  ProfileModelTextRequest,
+  ProfileModelTextResult,
   ProfileStatusRequest,
   ProfileRecoveryInspectRequest,
   ProfileRecoverOfflineAccountRequest,
@@ -62,6 +64,7 @@ import type {
   ProfileViewLeaseId,
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
@@ -93,6 +96,12 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** Call the Profile worker without exposing its private model token to Desktop. */
+  readonly generateModelText?: (profileId: string, text: string, signal: AbortSignal) => Promise<{
+    readonly provider: string
+    readonly model: string
+    readonly text: string
+  }>
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
   readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
   /** Initial claims require a fresh, connection-owned confirmation and a live Account view. */
@@ -235,7 +244,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'generateModelText'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1191,6 +1200,30 @@ export class HostControlAuthority {
             throw new HostAuthorityError('invalid_input')
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.model_text') {
+          const generate = this.options.generateModelText
+          if (!generate) throw new HostAuthorityError('upgrade_required')
+          const lease = {
+            viewLeaseId: frame.params.view_lease_id as never,
+            leaseGeneration: frame.params.lease_generation,
+            runtimeGeneration: frame.params.runtime_generation,
+            ownerId,
+          }
+          const profileId = this.options.host.authorizeAccountModelClaimView(lease)
+          let result: { readonly state: 'complete'; readonly provider: string; readonly model: string; readonly text: string }
+            | { readonly state: 'rejected'; readonly code: DesktopModelWorkerError['code'] }
+          try {
+            const answer = await generate(profileId, frame.params.text, context.signal)
+            context.signal.throwIfAborted()
+            this.options.host.authorizeAccountModelClaimView(lease)
+            result = { state: 'complete', ...answer }
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            result = { state: 'rejected', code: error instanceof DesktopModelWorkerError
+              ? error.code : context.signal.aborted ? 'cancelled' : 'provider_failed' }
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: 'profile.model_text', result })
         } else if (frame.method === 'profile.view_activate') {
           const activated = await this.options.host.activateView({
             profileId: frame.params.profile_id as never,
@@ -1249,6 +1282,7 @@ export class HostControlAuthority {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
+          ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
             ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
@@ -1849,6 +1883,32 @@ export class UnixHostClient {
   }
 
   /**
+   * Invoke the current Account Profile's default model using a live connection-owned lease.
+   * @param input - current lease, bounded text, and optional cancellation signal.
+   * @returns bounded text with model identity, or a classified failure.
+   */
+  async generateModelText(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly text: string
+    readonly signal?: AbortSignal
+  }): Promise<ProfileModelTextResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.model_text' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelTextRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_text',
+      params: { ...this.auth(), view_lease_id: input.viewLeaseId as never,
+        lease_generation: input.leaseGeneration, runtime_generation: input.runtimeGeneration,
+        text: input.text },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
    * Execute a negotiated extension command using a Main-held lease; no target paths cross the socket.
    * @param input - lease, runtime generation, bounded command and optional cancellation.
    * @returns a prepared plan, sanitized inventory or durable receipt; old Hosts reject before mutation.
@@ -2424,7 +2484,7 @@ export class UnixHostClient {
       | ProfileOpenRequest | ProfileOpenLocalRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-      | ProfileViewActivateRequest | ProfileLeaseCloseRequest
+      | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest
       | MigrationImportStageRequest | MigrationImportStatusRequest | MigrationImportVerifyRequest

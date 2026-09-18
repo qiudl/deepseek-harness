@@ -35,6 +35,8 @@ import type {
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
+  ProfileModelTextRequest,
+  ProfileModelTextResult,
   ProfileStatusRequest,
   ProfileStatusResult,
   ProfileEnsureRequest,
@@ -516,7 +518,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
+  | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
   | ProfileModelClaimRecoveryInventoryRequest
   | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest | ProfileModelClaimRetryRequest {
@@ -739,6 +741,16 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       },
     }
   }
+  if (frame.method === 'profile.model_text') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'text'])
+    if (typeof params.text !== 'string' || !params.text.trim()
+      || Buffer.byteLength(params.text, 'utf8') > 8192) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: 'profile.model_text', params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation),
+      runtime_generation: generation(params.runtime_generation), text: params.text,
+    } }
+  }
   if (frame.method === 'profile.view_activate') {
     exactKeys(params, [
       ...AUTHORIZED_KEYS, 'profile_id', 'view_lease_id', 'view_activation_handle',
@@ -764,7 +776,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileLeaseCloseResult | ProfileExtensionsResult
+  | ProfileViewActivateResult | ProfileModelTextResult | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
   | ProfileModelClaimRecoveryInventoryResult
   | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult | ProfileModelClaimRetryResult {
@@ -977,6 +989,25 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['closed'])
     if (result.closed !== true) reject()
     return { version: 1, type: 'result', request_id, method: 'profile.lease_close', result: { closed: true } }
+  }
+  if (frame.method === 'profile.model_text') {
+    if (result.state === 'rejected') {
+      exactKeys(result, ['state', 'code'])
+      if (result.code !== 'invalid_input' && result.code !== 'no_default_model'
+        && result.code !== 'missing_credential' && result.code !== 'provider_failed'
+        && result.code !== 'cancelled' && result.code !== 'response_too_large') reject()
+      return { version: 1, type: 'result', request_id, method: 'profile.model_text', result: {
+        state: 'rejected', code: result.code,
+      } }
+    }
+    exactKeys(result, ['state', 'provider', 'model', 'text'])
+    if (result.state !== 'complete' || typeof result.provider !== 'string' || !result.provider
+      || result.provider.length > 256 || typeof result.model !== 'string' || !result.model
+      || result.model.length > 256 || typeof result.text !== 'string' || !result.text.trim()
+      || Buffer.byteLength(result.text, 'utf8') > 16384) reject()
+    return { version: 1, type: 'result', request_id, method: 'profile.model_text', result: {
+      state: 'complete', provider: result.provider, model: result.model, text: result.text,
+    } }
   }
   return reject('unknown_method')
 }

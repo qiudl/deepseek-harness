@@ -432,6 +432,40 @@ export interface ProfileViewActivateResult {
   }
 }
 
+/** One bounded text request authorized by this connection's live Account view lease. */
+export interface ProfileModelTextRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_text'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly text: string
+  }
+}
+
+/** Text and model identity, or a classified failure without provider details. */
+export interface ProfileModelTextResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_text'
+  readonly result:
+    | {
+      readonly state: 'complete'
+      readonly provider: string
+      readonly model: string
+      readonly text: string
+    }
+    | {
+      readonly state: 'rejected'
+      readonly code: 'invalid_input' | 'no_default_model' | 'missing_credential'
+        | 'provider_failed' | 'cancelled' | 'response_too_large'
+    }
+}
+
 /** Revoke one Main-owned personal view lease. */
 export interface ProfileLeaseCloseRequest {
   readonly version: 1
@@ -1051,6 +1085,8 @@ export type HostControlFrame =
   | ProfileRecoveryStatusResult
   | ProfileViewActivateRequest
   | ProfileViewActivateResult
+  | ProfileModelTextRequest
+  | ProfileModelTextResult
   | ProfileLeaseCloseRequest
   | ProfileLeaseCloseResult
   | MigrationExportBeginRequest

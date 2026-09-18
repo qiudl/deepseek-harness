@@ -96,6 +96,12 @@ export interface ProfileWorkerHandle {
   readonly generation?: number
   /** Signed browser cookie exchanged owner-side; it never enters Renderer or logs. */
   readonly bootstrapCookie?: { readonly name: string; readonly value: string }
+  /** Host-only text model call; no worker token or credential enters a view lease. */
+  readonly generateText?: (text: string, signal: AbortSignal) => Promise<{
+    readonly provider: string
+    readonly model: string
+    readonly text: string
+  }>
 }
 
 /** Factory that starts one isolated profile worker. */

@@ -10,6 +10,7 @@ import {
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DesktopHost } from '../src/desktop-host.ts'
+import { DesktopModelWorkerError } from '../src/dsh-web-profile-worker.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { HostControlAuthority } from '../src/unix-transport.ts'
 import { WindowsHostWorkerBridge } from '../src/windows-host-worker-bridge.ts'
@@ -159,13 +160,16 @@ describe('transport-neutral Host control authority', () => {
       credential: 'present' as const, sharedCredential: false,
     }], unsupportedSettings: 0, unassignedCredentialReferences: 0, unassignedCredentialRecords: 0 }
     const inspectSource = vi.fn(async () => inventory)
+    const generateModelText = vi.fn(async (_profileId: string, text: string, _signal: AbortSignal) =>
+      ({ provider: 'deepseek', model: 'deepseek-chat', text: `answer: ${text}` }))
     const authority = new HostControlAuthority({
       identity: {
         hostInstanceId, installationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3121',
         installationPublicKey: publicKey, installationPrivateKey: keys.privateKey,
         processNonce, executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1,
       },
-      host, inspectModelClaimSource: inspectSource, profilePersistenceGeneration: () => 1, now: () => now,
+      host, inspectModelClaimSource: inspectSource, generateModelText,
+      profilePersistenceGeneration: () => 1, now: () => now,
     })
     const session = authority.openSession(ownerId, new AbortController().signal)
     const handshake = await session.handleRequest({
@@ -176,6 +180,7 @@ describe('transport-neutral Host control authority', () => {
     expect(handshake).toMatchObject({ type: 'result', method: 'host.inspect' })
     if (handshake.type !== 'result' || handshake.method !== 'host.inspect') throw Error('inspect failed')
     expect(handshake.result.capabilities).toContain('profile.model_claim_inventory')
+    expect(handshake.result.capabilities).toContain('profile.model_text')
     await host.restoreProfile({ ...profile, ...binding, keyHandle: 'keychain:model-claim',
       unlockMaterial, ownerId })
     const opened = await host.openProfile({ ...binding, ownerId })
@@ -187,11 +192,35 @@ describe('transport-neutral Host control authority', () => {
         view_lease_id: opened.viewLeaseId as never, lease_generation: opened.leaseGeneration, runtime_generation: 5,
       },
     })
+    const modelRequest = (): HostControlFrame => ({
+      version: 1, type: 'request', request_id: randomUUID() as never, method: 'profile.model_text',
+      params: {
+        client_instance_id: clientInstanceId as never, host_instance_id: hostInstanceId as never,
+        process_nonce: processNonce as never, jti: randomUUID() as never, issued_at: now,
+        expires_at: now + 1000, view_lease_id: opened.viewLeaseId as never,
+        lease_generation: opened.leaseGeneration, runtime_generation: 5, text: 'hello',
+      },
+    })
+    expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'error',
+      method: 'profile.model_text', error: { code: 'unauthorized' } })
+    expect(generateModelText).not.toHaveBeenCalled()
     expect(await session.handleRequest(request())).toMatchObject({ type: 'error',
       method: 'profile.model_claim_inventory', error: { code: 'unauthorized' } })
     expect(inspectSource).not.toHaveBeenCalled()
     await host.ensureAccountProfile({ issuer: 'https://accounts.example.test', subject: 'owner',
       accountAccessToken: 'valid-token', keyHandle: 'keychain:model-claim', unlockMaterial, ...binding, ownerId })
+    expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'result',
+      method: 'profile.model_text', result: { state: 'complete', provider: 'deepseek',
+        model: 'deepseek-chat', text: 'answer: hello' } })
+    expect(generateModelText).toHaveBeenCalledWith(profile.profileId, 'hello', expect.any(AbortSignal))
+    generateModelText.mockRejectedValueOnce(new DesktopModelWorkerError('missing_credential'))
+    expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'result',
+      method: 'profile.model_text', result: { state: 'rejected', code: 'missing_credential' } })
+    generateModelText.mockRejectedValueOnce(Error('DEEPSEEK_API_KEY=private'))
+    const modelFailure = await session.handleRequest(modelRequest())
+    expect(modelFailure).toMatchObject({ type: 'result', method: 'profile.model_text',
+      result: { state: 'rejected', code: 'provider_failed' } })
+    expect(encodeHostControlFrame(modelFailure)).not.toContain('private')
     const success = await session.handleRequest(request())
     expect(success).toMatchObject({ type: 'result', method: 'profile.model_claim_inventory', result: {
       source_digest: inventory.sourceDigest, candidates: [{ id: 'llm-deepseek:deepseek', credential: 'present' }],
@@ -214,6 +243,8 @@ describe('transport-neutral Host control authority', () => {
     completeRead?.(inventory)
     expect(await pending).toMatchObject({ type: 'error', method: 'profile.model_claim_inventory',
       error: { code: 'stale' } })
+    expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'error',
+      method: 'profile.model_text', error: { code: 'stale' } })
     session.close()
   })
 })

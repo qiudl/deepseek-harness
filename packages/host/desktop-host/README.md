@@ -47,6 +47,8 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 ## Profile and execution authority
 
+Desktop model text requests require a token-verified connected Account Profile and a live lease owned by the requesting Host connection. The Host checks the lease before and after the worker call, forwards cancellation, and returns only a classified failure or bounded text. Each worker receives a random private token for its local endpoint; ordinary browser cookies cannot authorize that endpoint.
+
 Account provisioning preserves the exact prior registry row when worker preparation fails, including an issuer or subject replacement. A concurrent registry change prevents rollback and returns `stale`. A missing worker provider rejects before registration. These rules affect registry metadata only; they neither authorize a cloud identity migration nor move or delete Profile content.
 
 Adding an account binding after restoring a row without the optional binding field writes the canonical registry field order, so the updated row remains readable after Host restart.

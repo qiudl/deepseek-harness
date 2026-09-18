@@ -44,6 +44,8 @@ kind: "package-reference"
 <a id="challenge-authentication"></a>
 ## 挑战认证
 
+`profile.model_text` 接受当前连接持有的有效 Account 视图租约，以及一条最多 8 KiB 的非空文本。成功结果包含所选提供方、模型和最多 16 KiB 的回答；拒绝结果只包含分类错误码。该方法不传输 API Key、工具请求、Session id 或提供方原始错误。
+
 `encodeHostInspectSignaturePayload(request, response)` 返回由安装级 Ed25519 密钥签名的精确 UTF-8 字节。带域隔离的声明绑定 request id、Desktop client id、challenge、选定版本、Host 与安装 id、安装公钥、generation、process nonce、capability 和可执行文件摘要。
 
 响应里的公钥本身不构成信任。Desktop Broker 必须将其与已认证安装记录匹配，并独立比对对端可执行文件的代码签名摘要后才接受签名。迁移流程只能依据其显式同意和校验策略建立该记录；普通连接绝不能静默信任新密钥。

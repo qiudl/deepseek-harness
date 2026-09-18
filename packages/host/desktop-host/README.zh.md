@@ -49,6 +49,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
 
+Desktop 模型文本请求必须使用已验证令牌的在线 Account Profile，以及由请求连接持有的有效租约。Host 在调用 worker 前后检查租约，传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
+
 账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。注册表出现并发变更时，回退被阻止并返回 `stale`。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
 
 恢复不含可选绑定字段的记录后再添加账号绑定时，Host 按注册表的规范字段顺序写入，使更新后的记录在 Host 重启后仍可读取。
