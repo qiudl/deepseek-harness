@@ -50,6 +50,11 @@ function windowsFixture() {
       return contents === undefined ? undefined : { contents, evidence: evidence('file') }
     }),
     replacePrivateFile: vi.fn((path: string, contents: Buffer) => { values.set(path, Buffer.from(contents)); return evidence('file') }),
+    removePrivateFile: vi.fn((path: string, expected: Buffer, _sid: string, guard: () => void) => {
+      guard()
+      if (!values.get(path)?.equals(expected)) throw Error('conflict')
+      values.delete(path)
+    }),
     acquirePrivateFileLease: vi.fn(() => ({ evidence: evidence('file'), initialize: vi.fn(), release: vi.fn() })),
   }
   return { values, bindings }
@@ -72,6 +77,33 @@ describe('legacy model claim recovery snapshot', () => {
     expect(store.restorable(prepared, input.settingsAfter, input.credentialsBefore)).toBe(true)
     expect(store.restorable(prepared, Buffer.from('later edit'), input.credentialsAfter)).toBe(false)
     expect(store.restorable(prepared, input.settingsAfter, Buffer.from('later secret'))).toBe(false)
+  })
+
+  it('removes a completed Unix snapshot only after its exact bytes and authority match', () => {
+    const { root, uid, file } = unixFixture()
+    const files = new FileLegacyClaimRecoveryFiles(root, uid)
+    const store = new LegacyClaimRecoveryStore(files)
+    const prepared = store.prepare(input)
+    expect(() => { store.clear({ ...prepared, candidateId: 'llm-pi-ai:other' }, () => undefined) }).toThrow()
+    expect(() => { store.clear(prepared, () => { throw Error('stale') }) }).toThrow('stale')
+    expect(() => { files.remove(profileId, operationId, Buffer.from('{}'), () => undefined) }).toThrow()
+    expect(readFileSync(file).length).toBeGreaterThan(0)
+    store.clear(prepared, () => undefined)
+    expect(store.read(profileId, operationId)).toBeNull()
+    store.clear(prepared, () => undefined)
+  })
+
+  it('rejects a replacement Unix path during compare-and-delete', () => {
+    const { root, uid, file } = unixFixture()
+    const ordinary = new FileLegacyClaimRecoveryFiles(root, uid)
+    const prepared = new LegacyClaimRecoveryStore(ordinary).prepare(input)
+    const expected = readFileSync(file)
+    const racing = new FileLegacyClaimRecoveryFiles(root, uid, () => {
+      rmSync(file)
+      writeFileSync(file, expected, { mode: 0o600 })
+    })
+    expect(() => { racing.remove(profileId, operationId, expected, () => undefined) }).toThrow(/conflict/u)
+    expect(new LegacyClaimRecoveryStore(ordinary).read(profileId, operationId)).toEqual(prepared)
   })
 
   it('rejects corrupted snapshots and unsafe Unix files', () => {
@@ -120,6 +152,35 @@ describe('legacy model claim recovery snapshot', () => {
     expect(() => store.read(profileId, operationId)).toThrow()
   })
 
+  it('clears a Windows snapshot through native compare-and-delete', () => {
+    const state = windowsFixture()
+    const files = new WindowsLegacyClaimRecoveryFiles({ profilesRoot: windowsRoot, userSid, bindings: state.bindings })
+    const store = new LegacyClaimRecoveryStore(files)
+    const prepared = store.prepare(input)
+    let checked = 0
+    store.clear(prepared, () => { checked += 1 })
+    expect(checked).toBe(2)
+    expect(state.values.size).toBe(0)
+    const missing = { ...state.bindings }
+    delete missing.removePrivateFile
+    const noRemove = new WindowsLegacyClaimRecoveryFiles({ profilesRoot: windowsRoot, userSid, bindings: missing })
+    expect(() => { noRemove.remove(profileId, operationId, Buffer.from('{}'), () => undefined) })
+      .toThrow(/upgrade_required/u)
+  })
+
+  it('retains snapshots when deletion cannot be verified', () => {
+    const state = windowsFixture()
+    const files = new WindowsLegacyClaimRecoveryFiles({ profilesRoot: windowsRoot, userSid, bindings: state.bindings })
+    const store = new LegacyClaimRecoveryStore(files)
+    const prepared = store.prepare(input)
+    const stuck = new LegacyClaimRecoveryStore({
+      read: (profile, operation) => files.read(profile, operation),
+      replace: () => undefined, remove: () => undefined,
+    })
+    expect(() => { stuck.clear(prepared, () => undefined) }).toThrow(/unavailable/u)
+    expect(store.read(profileId, operationId)).toEqual(prepared)
+  })
+
   it('rejects invalid operation input and missing durable publication', () => {
     const { root, uid } = unixFixture()
     const store = new LegacyClaimRecoveryStore(new FileLegacyClaimRecoveryFiles(root, uid))
@@ -128,7 +189,9 @@ describe('legacy model claim recovery snapshot', () => {
     expect(() => store.prepare({ ...input, candidateId: '../bad' })).toThrow()
     expect(() => store.prepare({ ...input, settingsAfter: Buffer.alloc(16 * 1024 * 1024 + 1) })).toThrow()
     expect(() => store.prepare({ ...input, settingsBefore: 'bad' as never })).toThrow()
-    const lost = new LegacyClaimRecoveryStore({ read: () => undefined, replace: () => undefined })
+    const lost = new LegacyClaimRecoveryStore({
+      read: () => undefined, replace: () => undefined, remove: () => undefined,
+    })
     expect(() => lost.prepare(input)).toThrow()
   })
 

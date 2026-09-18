@@ -137,6 +137,18 @@ export class LegacyClaimTarget {
       || !this.files.read('credentials').equals(recovery.credentialsBefore)) throw new HostAuthorityError('unavailable')
   }
 
+  /** Verify an already committed result after restart without consulting the mutable legacy source. */
+  verify(recovery: LegacyClaimRecovery, guard: () => void): void {
+    this.assertRecovery(recovery)
+    guard()
+    const settings = this.files.read('settings')
+    const credentialBytes = this.files.read('credentials')
+    if (digest(settings) !== recovery.settingsAfterDigest
+      || digest(credentialBytes) !== recovery.credentialsAfterDigest) throw new HostAuthorityError('conflict')
+    parse(settings)
+    credentials(credentialBytes)
+  }
+
   private assertPrepared(prepared: PreparedLegacyClaimTarget): void {
     this.assertRecovery(prepared.recovery)
     if (digest(prepared.settingsAfter) !== prepared.recovery.settingsAfterDigest

@@ -27,6 +27,7 @@ function fixture() {
   const recoveryFiles: LegacyClaimRecoveryFiles = {
     read: () => snapshot === undefined ? undefined : Buffer.from(snapshot),
     replace: (_profileId, _operationId, bytes) => { snapshot = Buffer.from(bytes) },
+    remove: () => { snapshot = undefined },
   }
   const recovery = new LegacyClaimRecoveryStore(recoveryFiles)
   return {
@@ -55,6 +56,7 @@ describe('one-provider claim target document pair', () => {
     expect(after.settings.toString()).not.toContain('legacy-secret')
     expect(after.settings.toString()).toContain('dark')
     expect(after.credentials.toString()).toContain('private-secret')
+    state.target.verify(prepared.recovery, input.guard)
     state.target.publish(prepared, input.guard)
     expect(state.current()).toEqual(after)
   })
@@ -80,6 +82,7 @@ describe('one-provider claim target document pair', () => {
     const state = fixture()
     const prepared = state.target.prepare(input)
     state.change('settings', Buffer.from('{"personal":"later"}\n'))
+    expect(() => { state.target.verify(prepared.recovery, input.guard) }).toThrow(/conflict/u)
     expect(() => { state.target.publish(prepared, input.guard) }).toThrow(/conflict/u)
     expect(() => { state.target.restore(prepared.recovery, input.guard) }).toThrow(/conflict/u)
     expect(() => state.target.prepare(input)).toThrow(/conflict/u)
@@ -88,8 +91,10 @@ describe('one-provider claim target document pair', () => {
       .toThrow(/unavailable/u)
     expect(() => { state.target.restore({ ...prepared.recovery, candidateId: 'llm-pi-ai:other' }, input.guard) })
       .toThrow(/unavailable/u)
+    expect(() => { state.target.verify({ ...prepared.recovery, candidateId: 'llm-pi-ai:other' }, input.guard) })
+      .toThrow(/unavailable/u)
     const missing = new LegacyClaimTarget(state.files, new LegacyClaimRecoveryStore({
-      read: () => undefined, replace: () => undefined,
+      read: () => undefined, replace: () => undefined, remove: () => undefined,
     }))
     expect(() => { missing.publish(prepared, input.guard) }).toThrow(/unavailable/u)
   })

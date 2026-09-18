@@ -57,14 +57,21 @@ export class ProfileClaimMarker {
     return parse(this.files.read(validId(profileId)), profileId)?.state === 'pending'
   }
 
-  mark(input: { readonly profileId: string; readonly candidateId: string; readonly operationId: string }): void {
+  /** Check that no other unfinished operation owns this Profile before reserving a provider. */
+  assertMarkable(input: { readonly profileId: string; readonly candidateId: string; readonly operationId: string }): void {
     validId(input.profileId); validId(input.operationId)
     if (!CANDIDATE.test(input.candidateId)) throw new HostAuthorityError('invalid_input')
     const current = parse(this.files.read(input.profileId), input.profileId)
+    if (current?.state === 'pending'
+      && (current.candidateId !== input.candidateId || current.operationId !== input.operationId)) {
+      throw new HostAuthorityError('conflict')
+    }
+  }
+
+  mark(input: { readonly profileId: string; readonly candidateId: string; readonly operationId: string }): void {
+    this.assertMarkable(input)
+    const current = parse(this.files.read(input.profileId), input.profileId)
     if (current?.state === 'pending') {
-      if (current.candidateId !== input.candidateId || current.operationId !== input.operationId) {
-        throw new HostAuthorityError('conflict')
-      }
       return
     }
     this.files.replace(input.profileId, Buffer.from(JSON.stringify({ version: 1, ...input, state: 'pending' })))

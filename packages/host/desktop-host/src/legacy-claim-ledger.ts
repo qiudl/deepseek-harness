@@ -124,10 +124,15 @@ export class LegacyClaimLedger {
 
   /** Redacted status scoped to the authenticated Profile; another account receives a conflict. */
   status(candidateId: string, profileId: string): ClaimState | null {
+    const state = this.ownerState(candidateId, profileId)
+    return state?.status === 'restored' ? null : state
+  }
+
+  /** Internal receipt, including a restored operation that still needs marker cleanup. */
+  ownerState(candidateId: string, profileId: string): ClaimState | null {
     const state = this.claims.get(candidateId)
-    if (!state || state.status === 'restored') return null
-    if (state.profileId !== profileId) throw new HostAuthorityError('conflict')
-    return state
+    if (state && state.profileId !== profileId) throw new HostAuthorityError('conflict')
+    return state ?? null
   }
 
   /** Pending target writes prohibit worker startup, including after Host restart. */

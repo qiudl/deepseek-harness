@@ -33,6 +33,7 @@ export interface LegacyClaimRecovery {
 export interface LegacyClaimRecoveryFiles {
   read(profileId: string, operationId: string): Buffer | undefined
   replace(profileId: string, operationId: string, bytes: Buffer): void
+  remove(profileId: string, operationId: string, expected: Buffer, guard: () => void): void
 }
 
 function validate(value: LegacyClaimRecovery): void {
@@ -137,5 +138,22 @@ export class LegacyClaimRecoveryStore {
     if (settings !== digest(input.settingsBefore) && settings !== input.settingsAfterDigest) return false
     if (credentials !== digest(input.credentialsBefore) && credentials !== input.credentialsAfterDigest) return false
     return true
+  }
+
+  /** Remove one verified terminal snapshot without touching another operation's bytes. */
+  clear(input: LegacyClaimRecovery, guard: () => void): void {
+    guard()
+    validate(input)
+    const bytes = this.files.read(input.profileId, input.operationId)
+    if (bytes === undefined) return
+    const current = decode(bytes, input.profileId)
+    if (current.operationId !== input.operationId || current.candidateId !== input.candidateId
+      || current.targetGeneration !== input.targetGeneration
+      || current.settingsAfterDigest !== input.settingsAfterDigest
+      || current.credentialsAfterDigest !== input.credentialsAfterDigest
+      || !current.settingsBefore.equals(input.settingsBefore)
+      || !current.credentialsBefore.equals(input.credentialsBefore)) throw new HostAuthorityError('conflict')
+    this.files.remove(input.profileId, input.operationId, bytes, guard)
+    if (this.files.read(input.profileId, input.operationId) !== undefined) throw new HostAuthorityError('unavailable')
   }
 }
