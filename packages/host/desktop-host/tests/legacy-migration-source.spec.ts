@@ -70,11 +70,21 @@ function service(home: string) {
 }
 
 describe('fixed owner legacy migration source', () => {
-  it('imports released flat environment credentials without rewriting the source', async () => {
+  it('keeps legacy model credentials and routes inactive without rewriting the source', async () => {
     const { home, source } = await fixture()
     const path = join(source, '.credentials.yaml')
-    await writeFile(path, JSON.stringify({ DEEPSEEK_API_KEY: 'legacy-secret' }), { mode: 0o600 })
+    await writeFile(path, JSON.stringify({
+      DEEPSEEK_API_KEY: 'legacy-secret', CUSTOM_API_KEY: 'custom-secret',
+    }), { mode: 0o600 })
+    const settingsPath = join(source, 'settings.yaml')
+    await writeFile(settingsPath, JSON.stringify({
+      permission: { defaultPreset: 'workspace-write' },
+      'llm-deepseek': { apiKeyEnv: 'DEEPSEEK_API_KEY' },
+      'llm-pi-ai': { providers: { custom: { apiKeyEnv: 'CUSTOM_API_KEY' } } },
+      'subagent-model-selection': { enabled: true, allowedModels: [{ provider: 'custom', model: 'm' }] },
+    }), { mode: 0o600 })
     const before = createHash('sha256').update(await readFile(path)).digest('hex')
+    const settingsBefore = createHash('sha256').update(await readFile(settingsPath)).digest('hex')
     let transferred = ''
     const service = createLegacyMigrationExportService({
       expectedUid: uid,
@@ -93,9 +103,15 @@ describe('fixed owner legacy migration source', () => {
       maxBytes: proof.requiredMaxBytes,
     })
 
-    expect(transferred).toContain('"refs":{"DEEPSEEK_API_KEY":"legacy-secret"}')
-    expect(transferred).toContain('"records":{}')
+    expect(transferred).not.toContain('legacy-secret')
+    expect(transferred).not.toContain('custom-secret')
+    expect(transferred).not.toContain('CUSTOM_API_KEY')
+    expect(transferred).not.toContain('llm-deepseek')
+    expect(transferred).not.toContain('llm-pi-ai')
+    expect(transferred).not.toContain('subagent-model-selection')
+    expect(transferred).toContain('workspace-write')
     expect(createHash('sha256').update(await readFile(path)).digest('hex')).toBe(before)
+    expect(createHash('sha256').update(await readFile(settingsPath)).digest('hex')).toBe(settingsBefore)
   })
 
   it('rejects mixed flat and versioned credential schemas', async () => {
@@ -338,7 +354,8 @@ describe('fixed owner legacy migration source', () => {
       maxBytes: proof.requiredMaxBytes,
     })
     expect(receipt.recordCount).toBe(6)
-    expect(transferred).toContain('secret')
+    expect(transferred).not.toContain('secret')
+    expect(transferred).toContain('legacyModelSourceDigest')
     expect(JSON.stringify(service.read({ exportId: receipt.exportId, chunkIndex: 0 }))).not.toContain('secret')
     expect(createHash('sha256').update(await readFile(join(source, '.credentials.yaml'))).digest('hex')).toBe(before)
   })
