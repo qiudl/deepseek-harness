@@ -13,6 +13,7 @@ import {
   type ProfileListenerAttestor,
 } from './dsh-web-profile-worker.ts'
 import { ProfileRegistry } from './profile-registry.ts'
+import { ProfileClaimMarker, WindowsProfileClaimMarkerFiles } from './legacy-claim-marker.ts'
 import { SessionCommandAuthority } from './session-command.ts'
 import type { HostClock, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
@@ -356,6 +357,9 @@ async function startWindowsDesktopHostApplicationWithTrust(
         loadSnapshot: path => registryFiles.loadSnapshot(path),
         persistSnapshot: (path, root, snapshot) => { registryFiles.persistSnapshot(path, root, snapshot) },
       })
+      const claimMarker = new ProfileClaimMarker(new WindowsProfileClaimMarkerFiles({
+        profilesRoot: win32.join(config.root, 'profiles'), userSid, bindings,
+      }))
       const ensureWorker = async (profile: PersonProfileRecord): Promise<void> => {
         const prepared = prepareWindowsIsolatedProfile({
           root: config.root,
@@ -365,6 +369,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           prepareMcpStorage: config.maximumExtensionReceiptBytes !== undefined,
           bindings,
         })
+        if (claimMarker.pending(profile.profileId)) throw new HostAuthorityError('unavailable')
         await workers.ensure({
           profileId: profile.profileId,
           profileRoot: prepared.profileRoot,

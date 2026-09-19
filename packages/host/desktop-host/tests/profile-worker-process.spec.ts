@@ -357,6 +357,15 @@ describe('dsh web Profile worker', () => {
       const cookieValue = 'v1.${'b'.repeat(8)}.${'c'.repeat(43)}'
       const server = createServer((request, response) => {
         const url = new URL(request.url, 'http://127.0.0.1')
+        if (url.pathname === '/internal/desktop-model-text') {
+          if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_MODEL_TOKEN) {
+            response.writeHead(403).end()
+            return
+          }
+          response.writeHead(200, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ provider: 'deepseek', model: 'chat', text: 'answer' }))
+          return
+        }
         if (url.searchParams.get('token') === 'must-stay-owner-only') {
           response.writeHead(303, {
             location: '/',
@@ -392,6 +401,10 @@ describe('dsh web Profile worker', () => {
     expect(JSON.stringify(worker)).not.toContain('must-stay-owner-only')
     expect(worker.bootstrapCookie).toEqual({
       name: `dsh-auth-${'a'.repeat(43)}`, value: `v1.${'b'.repeat(8)}.${'c'.repeat(43)}`,
+    })
+    expect((await fetch(`${worker.viewOrigin}/internal/desktop-model-text`, { method: 'POST' })).status).toBe(403)
+    await expect(worker.generateText?.('question', new AbortController().signal)).resolves.toEqual({
+      provider: 'deepseek', model: 'chat', text: 'answer',
     })
     worker.closeNotifications(); worker.abort()
     await expect(worker.done).resolves.toBeUndefined()

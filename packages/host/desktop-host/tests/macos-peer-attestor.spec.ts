@@ -130,6 +130,51 @@ describe('macOS Unix peer attestation', () => {
     expect(evidence.executableSignatureDigest).toMatch(/^[0-9a-f]{64}$/u)
   })
 
+  it('verifies a bundled app executable with its Info.plist still attached', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-peer-bundle-'))
+    const contents = join(root, 'Slark.app', 'Contents')
+    const executablePath = join(contents, 'MacOS', 'Slark')
+    mkdirSync(join(contents, 'MacOS'), { recursive: true })
+    writeFileSync(join(contents, 'Info.plist'), 'signed bundle fixture')
+    writeFileSync(executablePath, 'signed app executable fixture', { mode: 0o700 })
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = process.getuid?.() ?? 501
+    const attest = createMacOSPeerAttestor({
+      allowedTeamIdentifiers: new Set(['TEAM123']),
+      bindings: {
+        peerIdentity: () => ({ uid, pid: 42 }),
+        executablePath: () => executablePath,
+        verifyCodeSignature: async (candidate) => {
+          expect(candidate).toBe(realpathSync(executablePath))
+          expect(readFileSync(join(contents, 'Info.plist'), 'utf8')).toBe('signed bundle fixture')
+          return 'TEAM123'
+        },
+      },
+    })
+    await expect(attest({ _handle: { fd: 9 } } as never)).resolves.toMatchObject({ uid })
+  })
+
+  it('rejects a bundled app executable changed while its bundle signature is verified', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-peer-bundle-race-'))
+    const executablePath = join(root, 'Slark.app', 'Contents', 'MacOS', 'Slark')
+    mkdirSync(join(root, 'Slark.app', 'Contents', 'MacOS'), { recursive: true })
+    writeFileSync(executablePath, 'signed app executable fixture', { mode: 0o700 })
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = process.getuid?.() ?? 501
+    const attest = createMacOSPeerAttestor({
+      allowedTeamIdentifiers: new Set(['TEAM123']),
+      bindings: {
+        peerIdentity: () => ({ uid, pid: 42 }),
+        executablePath: () => executablePath,
+        verifyCodeSignature: async () => {
+          writeFileSync(executablePath, 'unsigned replacement bytes')
+          return 'TEAM123'
+        },
+      },
+    })
+    await expect(attest({ _handle: { fd: 9 } } as never)).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
   it('fails closed for a spoofed Team ID or inaccessible native socket fd', async () => {
     const path = executable()
     const uid = process.getuid?.() ?? 501

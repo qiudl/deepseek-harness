@@ -367,6 +367,16 @@ export class ProfileRegistry {
   }
 
   /**
+   * Match a token-verified Account to a stored Profile without exposing the device index key.
+   * @param profile - Stored Profile selected by the current opaque binding.
+   * @param identity - Account identity decoded from a verified access token.
+   * @returns Whether the stored Profile belongs to that Account.
+   */
+  matchesAccountIdentity(profile: PersonProfileRecord, identity: AccountIdentity): boolean {
+    return profile.kind === 'account' && profile.personIndex === personIndex(this.options.deviceIndexKey, identity)
+  }
+
+  /**
    * Resolve exactly one account Profile from an opaque Main-vault key handle.
    * @param keyHandle - Keychain handle already selected by trusted Desktop Main.
    * @returns the unique account Profile; missing and ambiguous handles fail closed.

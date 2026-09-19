@@ -38,7 +38,16 @@ import { DesktopHost } from './desktop-host.ts'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'
 import { DshWebProfileWorkerFactory } from './dsh-web-profile-worker.ts'
-import { createLegacyMigrationExportService } from './legacy-migration-source.ts'
+import { createLegacyMigrationExportService, inspectLegacyModelClaimSource, readLegacyModelClaimDocuments } from './legacy-migration-source.ts'
+import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from './legacy-claim-marker.ts'
+import { LegacyClaimWorkerGate } from './legacy-claim-worker-gate.ts'
+import { LegacyClaimCoordinator } from './legacy-claim-coordinator.ts'
+import { LegacyClaimLedger } from './legacy-claim-ledger.ts'
+import { FileLegacyClaimEventStore } from './legacy-claim-store.ts'
+import { LegacyClaimRecoveryStore } from './legacy-claim-recovery.ts'
+import { FileLegacyClaimRecoveryFiles } from './legacy-claim-recovery-files.ts'
+import { LegacyClaimTarget } from './legacy-claim-target.ts'
+import { FileLegacyClaimTargetFiles } from './legacy-claim-target-files.ts'
 import { createMacOSPeerAttestor } from './macos-peer-attestor.ts'
 import { ProfileRegistry } from './profile-registry.ts'
 import { MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
@@ -446,6 +455,8 @@ export async function startDesktopHostApplication(
     const transferStore = new FileOwnerMigrationTransferStore(join(migrationRoot, 'transfers'), uid)
     const targets = new Map<string, FileOwnerJsonlMigrationGenerationTarget>()
     const ownerStateApplicator = new MigrationOwnerStateApplicator(uid)
+    const claimMarker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), uid))
+    const claimWorkerGate = new LegacyClaimWorkerGate(profileId => claimMarker.pending(profileId))
     const targetFor = (profileId: string): FileOwnerJsonlMigrationGenerationTarget => {
       const existing = targets.get(profileId)
       if (existing) return existing
@@ -455,11 +466,15 @@ export async function startDesktopHostApplication(
       targets.set(profileId, target)
       return target
     }
-    const ensureWorker = async (profile: PersonProfileRecord): Promise<void> => {
+    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> => {
       const profilesRoot = join(root, 'profiles')
       ownerDirectory(profilesRoot, uid)
       const profileRoot = join(profilesRoot, profile.profileId)
       ownerDirectory(profileRoot, uid)
+      if (claimRestart) {
+        /* v8 ignore next -- the coordinator clears the marker synchronously before its restart callback. */
+        if (claimMarker.pending(profile.profileId)) throw new HostAuthorityError('unavailable')
+      } else claimWorkerGate.assertOpen(profile.profileId)
       const target = targetFor(profile.profileId)
       const persistence = await target.activePersistenceConfig()
       let ownerState: MigrationOwnerStateBundle
@@ -478,10 +493,12 @@ export async function startDesktopHostApplication(
       }
       const ownerPaths = await ownerStateApplicator.apply(profileRoot, persistence.generation, ownerState)
       replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
-      await workers.ensure({
+      await claimWorkerGate.start(profile.profileId, () => workers.ensure({
         profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
         pluginRoots: [join(profileRoot, 'plugins')],
-      })
+      }),
+      /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
+      () => workers.dispose(profile.profileId), claimRestart)
     }
     const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
     const recoveryInspector = new OfflineProfileRecoveryInspector({
@@ -500,14 +517,17 @@ export async function startDesktopHostApplication(
       profile: PersonProfileRecord,
       preflight: Awaited<ReturnType<typeof inspectOfflineAccountProfile>>,
     ): Promise<void> => {
+      claimWorkerGate.assertOpen(profile.profileId)
       await recoveryInspector.prepareConfirmedProfile(profile, preflight)
       try {
-        await workers.ensure({
+        await claimWorkerGate.start(profile.profileId, () => workers.ensure({
           profileId: profile.profileId,
           profileRoot: join(root, 'profiles', profile.profileId),
           credentialHandle: profile.keyHandle,
           pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
-        })
+        }),
+        /* v8 ignore next -- the claim gate's startup-race test covers disposal; offline recovery needs packaged artifacts. */
+        () => workers.dispose(profile.profileId))
         // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
         // Reinspect and pin those generated links into the Profile-owned content-addressed closure
         // before returning an offline grant, so replacing the App cannot break the next launch.
@@ -524,7 +544,12 @@ export async function startDesktopHostApplication(
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
       verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
-      activateProfileView: profileId => workers.activate(profileId),
+      activateProfileView: async (profileId) => {
+        claimWorkerGate.assertOpen(profileId)
+        const view = await workers.activate(profileId)
+        claimWorkerGate.assertOpen(profileId)
+        return view
+      },
       ensureProfileWorker: ensureWorker,
       inspectOfflineAccountProfile,
       ensureRecoveredProfileWorker,
@@ -631,6 +656,35 @@ export async function startDesktopHostApplication(
       new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid), executor, clock,
     )
     const socketPath = join(root, 'host.sock')
+    let modelClaimCoordinator: LegacyClaimCoordinator | undefined
+    const claims = (): LegacyClaimCoordinator => {
+      if (modelClaimCoordinator) return modelClaimCoordinator
+      // Load the global ledger only for a claim request. Corruption cannot prevent unrelated DSH Profiles from booting.
+      const ledger = new LegacyClaimLedger(new FileLegacyClaimEventStore({
+        root: join(root, 'control', 'legacy-model-claims'), uid, maximumBytes: 4 * 1024 * 1024,
+      }), () => clock.now())
+      const recovery = new LegacyClaimRecoveryStore(new FileLegacyClaimRecoveryFiles(join(root, 'profiles'), uid))
+      modelClaimCoordinator = new LegacyClaimCoordinator({
+        ledger, marker: claimMarker, recovery,
+        /* v8 ignore start -- initial claims are not exposed by this recovery-only control capability. */
+        readSource: (signal?: AbortSignal) => readLegacyModelClaimDocuments({
+          expectedUid: uid, assertSourceQuiescent: () => Promise.resolve(),
+          ...(signal === undefined ? {} : { signal }),
+        }),
+        /* v8 ignore stop */
+        targetGeneration: async profileId => (await targetFor(profileId).activePersistenceConfig()).generation,
+        target: (profileId, generation) => {
+          const ownerRoot = join(root, 'profiles', profileId, 'migration-owner-state', String(generation))
+          return new LegacyClaimTarget(new FileLegacyClaimTargetFiles({
+            generation, settingsPath: join(ownerRoot, 'settings.yaml'),
+            credentialsPath: join(ownerRoot, '.credentials.yaml'), storageRoot: join(ownerRoot, 'storages'),
+          }, uid), recovery)
+        },
+        stopWorker: profileId => claimWorkerGate.stop(profileId, () => workers.dispose(profileId)),
+        startWorker: profileId => ensureWorker(requiredProfile(registry, profileId), true),
+      })
+      return modelClaimCoordinator
+    }
     const serverOptions: UnixHostServerOptions = {
       socketPath, ownership, expectedUid: uid,
       allowedDesktopExecutableDigests: new Set(config.desktopExecutableDigests),
@@ -644,13 +698,30 @@ export async function startDesktopHostApplication(
         runtimeGeneration: config.runtimeGeneration, schemaGeneration: config.schemaGeneration,
       },
       host,
+      generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       extensions: { operations: extensionOperations, kinds: pluginExecutor ? ['plugin', 'mcp', 'skill'] : ['mcp', 'skill'],
         pluginRemove: pluginExecutor !== undefined, pluginUpdate: pluginExecutor !== undefined, pluginToggle: pluginExecutor !== undefined,
         skillArchives: true, skillRemove: true, skillReplace: true, skillFiles: true, skillInvocation: true,
         mcpRemove: true, mcpUpdate: true,
         inventory: (profileId, kind, signal) => executor.inventory(profileId, kind, signal) },
       profilePersistenceGeneration: async profileId => (await targetFor(profileId).activePersistenceConfig()).generation,
+      modelClaimRecovery: {
+        pendingReceipts: (input: Parameters<LegacyClaimCoordinator['pendingReceipts']>[0]) =>
+          claims().pendingReceipts(input),
+        status: (input: Parameters<LegacyClaimCoordinator['status']>[0]) => claims().status(input),
+        restore: (input: Parameters<LegacyClaimCoordinator['restore']>[0]) => claims().restore(input),
+      },
       ...(config.legacySourceQuiescent === true ? {
+        modelClaimTransaction: {
+          /* v8 ignore next -- production source home is fixed; coordinator and control authority are tested separately. */
+          claim: (input: Parameters<LegacyClaimCoordinator['claim']>[0]) => claims().claim(input),
+          /* v8 ignore next -- retry reads the fixed production source; coordinator and authority tests cover it. */
+          retry: (input: Parameters<LegacyClaimCoordinator['retry']>[0]) => claims().retry(input),
+        },
+        inspectModelClaimSource: (signal?: AbortSignal) => inspectLegacyModelClaimSource({
+          expectedUid: uid, assertSourceQuiescent: () => Promise.resolve(),
+          ...(signal === undefined ? {} : { signal }),
+        }),
         createLegacyMigrationExport: () => createLegacyMigrationExportService({
           expectedUid: uid,
           assertSourceQuiescent: () => Promise.resolve(),

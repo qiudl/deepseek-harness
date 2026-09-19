@@ -39,6 +39,12 @@
       "path": "../../core/system-prompt"
     },
     {
+      "path": "../../core/agent-default-model"
+    },
+    {
+      "path": "../../llm/llm"
+    },
+    {
       "path": "../../shell/shell-env"
     },
     {

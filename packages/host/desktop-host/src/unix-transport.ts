@@ -3,6 +3,11 @@ import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import type {
   HostExtensionCommand, HostExtensionResponse, HostExtensionKind, ProfileExtensionsRequest,
+  ProfileModelClaimInventoryRequest,
+  ProfileModelClaimRecoveryInventoryRequest,
+  ProfileModelClaimConfirmRequest, ProfileModelClaimApplyRequest,
+  ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRestoreRequest,
+  ProfileModelClaimRetryRequest,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlErrorCode,
@@ -26,6 +31,8 @@ import type {
   ProfileOpenRequest,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
+  ProfileModelTextRequest,
+  ProfileModelTextResult,
   ProfileStatusRequest,
   ProfileRecoveryInspectRequest,
   ProfileRecoverOfflineAccountRequest,
@@ -41,6 +48,7 @@ import type {
   MigrationImportStatusRequest,
   MigrationImportVerifyRequest,
 } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+import type { LegacyClaimCoordinator, LegacyClaimReceipt, LegacyClaimOutcome } from './legacy-claim-coordinator.ts'
 import {
   HOST_CONTROL_MAX_FRAME_BYTES,
   decodeHostControlFrame,
@@ -56,7 +64,9 @@ import type {
   ProfileViewLeaseId,
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
+import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
 import type { SingleHostLock } from './single-instance.ts'
@@ -86,6 +96,18 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** Call the Profile worker without exposing its private model token to Desktop. */
+  readonly generateModelText?: (profileId: string, text: string, signal: AbortSignal) => Promise<{
+    readonly provider: string
+    readonly model: string
+    readonly text: string
+  }>
+  /** Read-only source inspection; omitted on hosts without a validated legacy source. */
+  readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
+  /** Initial claims require a fresh, connection-owned confirmation and a live Account view. */
+  readonly modelClaimTransaction?: Pick<LegacyClaimCoordinator, 'claim'> & Partial<Pick<LegacyClaimCoordinator, 'retry'>>
+  /** Worker-independent recovery of a durable same-Account claim receipt. */
+  readonly modelClaimRecovery?: Pick<LegacyClaimCoordinator, 'pendingReceipts' | 'status' | 'restore'>
   readonly extensions?: {
     readonly operations: ProfileExtensionOperations
     readonly kinds: readonly HostExtensionKind[]
@@ -220,8 +242,9 @@ interface MigrationExportChunk {
 /** Transport-independent Host account, Profile, and migration authority inputs. */
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
-  'identity' | 'host' | 'createMigrationExport' | 'createLegacyMigrationExport'
+  'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'generateModelText'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -353,6 +376,13 @@ interface AccountBindingInput {
   readonly authorityEnvironmentId: string
   readonly accountBindingHandle: string
   readonly authorityBindingVersion: number
+}
+
+interface ModelClaimRecoveryInput extends AccountBindingInput, ProfileUnlockInput {
+  readonly issuer: string
+  readonly subject: string
+  readonly accountAccessToken: string
+  readonly candidateId: string
 }
 function openProfileWireFields(opened: OpenedProfileLease): {
   profile_id: never
@@ -655,12 +685,23 @@ export class HostControlAuthority {
 
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
+    const clock = this.options.now ?? Date.now
     const migrationExports = new Map<string, MigrationExportService>()
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
       readonly expiresAt: number
       readonly service: MigrationExportService
       readonly exportIds: Set<string>
+    }>()
+    const claimConfirmations = new Map<string, {
+      readonly profileId: PersonProfileId
+      readonly viewLeaseId: string
+      readonly leaseGeneration: number
+      readonly runtimeGeneration: number
+      readonly candidateId: string
+      readonly sourceDigest: string
+      readonly operationId: string
+      readonly expiresAt: number
     }>()
     const migrationExportEnabled = this.options.createMigrationExport !== undefined
     const migrationExportFor = async (
@@ -706,7 +747,7 @@ export class HostControlAuthority {
     }
     const session = new HostControlServerSession({
       ownerId,
-      now: this.options.now ?? Date.now,
+      now: clock,
       signal,
       inspect: frame => this.inspect(
         frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
@@ -714,7 +755,131 @@ export class HostControlAuthority {
       ),
       dispatchAuthorized: async (frame, context, respond) => {
         const channel = { send: respond }
-        if (frame.method === 'migration.existing_source.inventory') {
+        const accountClaimView = (viewLeaseId: string, leaseGeneration: number, runtimeGeneration: number) => {
+          context.signal.throwIfAborted()
+          return this.options.host.authorizeAccountModelClaimView({
+            viewLeaseId: viewLeaseId as never, leaseGeneration, runtimeGeneration, ownerId,
+          })
+        }
+        if (frame.method === 'profile.model_claim_confirm') {
+          const inspectSource = this.options.inspectModelClaimSource
+          if (!inspectSource || !this.options.modelClaimTransaction) throw new HostAuthorityError('upgrade_required')
+          const authority = () => accountClaimView(frame.params.view_lease_id,
+            frame.params.lease_generation, frame.params.runtime_generation)
+          const profileId = authority()
+          const inventory = await inspectSource(context.signal)
+          if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          if (inventory.candidates.length > 128) throw new HostAuthorityError('unavailable')
+          if (inventory.sourceDigest !== frame.params.source_digest
+            || !inventory.candidates.some(candidate => candidate.id === frame.params.candidate_id
+              && candidate.credential === 'present')) throw new HostAuthorityError('conflict')
+          const now = clock()
+          for (const [id, existing] of claimConfirmations) {
+            if (existing.expiresAt <= now) claimConfirmations.delete(id)
+          }
+          if (claimConfirmations.size >= 32) throw new HostAuthorityError('busy')
+          const confirmation = randomBytes(32).toString('base64url')
+          const operationId = randomUUID()
+          const expiresAt = now + 60_000
+          claimConfirmations.set(confirmation, {
+            profileId, viewLeaseId: frame.params.view_lease_id,
+            leaseGeneration: frame.params.lease_generation, runtimeGeneration: frame.params.runtime_generation,
+            candidateId: frame.params.candidate_id, sourceDigest: inventory.sourceDigest, operationId, expiresAt,
+          })
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { confirmation, operation_id: operationId, expires_at: expiresAt } })
+        } else if (frame.method === 'profile.model_claim_apply') {
+          const transaction = this.options.modelClaimTransaction
+          if (!transaction) throw new HostAuthorityError('upgrade_required')
+          const confirmed = claimConfirmations.get(frame.params.confirmation)
+          if (!confirmed) throw new HostAuthorityError('stale')
+          claimConfirmations.delete(frame.params.confirmation)
+          if (confirmed.expiresAt <= clock()) throw new HostAuthorityError('stale')
+          const authority = () => {
+            context.signal.throwIfAborted()
+            const profileId = accountClaimView(confirmed.viewLeaseId,
+              confirmed.leaseGeneration, confirmed.runtimeGeneration)
+            if (profileId !== confirmed.profileId) throw new HostAuthorityError('profile_mismatch')
+            return profileId
+          }
+          authority()
+          const outcome = await transaction.claim({ candidateId: confirmed.candidateId,
+            operationId: confirmed.operationId, expectedSourceDigest: confirmed.sourceDigest,
+            authorizeAccountProfile: authority, signal: context.signal })
+          if (outcome.state !== 'committed') throw new HostAuthorityError('unavailable')
+          this.options.host.revokeProfile(confirmed.profileId)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { state: 'committed', cleanup_pending: outcome.cleanupPending } })
+        } else if (frame.method === 'profile.model_claim_recovery_inventory'
+          || frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore'
+          || frame.method === 'profile.model_claim_retry') {
+          const service = this.options.modelClaimRecovery
+          if (!service) throw new HostAuthorityError('upgrade_required')
+          const proof = () => {
+            context.signal.throwIfAborted()
+            return this.options.host.authorizeAccountModelClaimRecovery({
+              issuer: frame.params.account_issuer, subject: frame.params.account_subject,
+              accountAccessToken: frame.params.account_access_token,
+              authorityEnvironmentId: frame.params.authority_environment_id,
+              accountBindingHandle: frame.params.account_binding_handle,
+              authorityBindingVersion: frame.params.authority_binding_version,
+              keyHandle: frame.params.profile_key_handle,
+              unlockMaterial: frame.params.profile_unlock_material,
+            })
+          }
+          if (frame.method === 'profile.model_claim_recovery_inventory') {
+            const receipts = service.pendingReceipts({ authorizeAccountProfile: proof })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { receipts: receipts.map(receipt => ({
+                candidate_id: receipt.candidateId, operation_id: receipt.operationId,
+                source_digest: receipt.sourceDigest as never, state: receipt.status,
+              })) } })
+          } else if (frame.method === 'profile.model_claim_recovery_status') {
+            const receipt = service.status({ candidateId: frame.params.candidate_id, authorizeAccountProfile: proof })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: receipt ? { state: receipt.status, candidate_id: receipt.candidateId,
+                operation_id: receipt.operationId, source_digest: receipt.sourceDigest as never }
+                : { state: 'unclaimed' } })
+          } else if (frame.method === 'profile.model_claim_restore') {
+            const profileId = proof()
+            const outcome = await service.restore({ candidateId: frame.params.candidate_id,
+              operationId: frame.params.operation_id, authorizeAccountProfile: proof, signal: context.signal })
+            if (outcome.state !== 'restored') throw new HostAuthorityError('unavailable')
+            this.options.host.revokeProfile(profileId)
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { state: 'restored', cleanup_pending: outcome.cleanupPending } })
+          } else {
+            const retry = this.options.modelClaimTransaction?.retry
+            if (!retry) throw new HostAuthorityError('upgrade_required')
+            const profileId = proof()
+            const outcome = await retry({ candidateId: frame.params.candidate_id,
+              operationId: frame.params.operation_id, expectedSourceDigest: frame.params.source_digest,
+              authorizeAccountProfile: proof, signal: context.signal })
+            if (outcome.state !== 'committed') throw new HostAuthorityError('unavailable')
+            this.options.host.revokeProfile(profileId)
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { state: 'committed', cleanup_pending: outcome.cleanupPending } })
+          }
+        } else if (frame.method === 'profile.model_claim_inventory') {
+          const inspectSource = this.options.inspectModelClaimSource
+          if (!inspectSource) throw new HostAuthorityError('upgrade_required')
+          const authority = () => accountClaimView(frame.params.view_lease_id,
+            frame.params.lease_generation, frame.params.runtime_generation)
+          authority()
+          const inventory = await inspectSource(context.signal)
+          authority()
+          if (inventory.candidates.length > 128) throw new HostAuthorityError('unavailable')
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result: {
+            source_digest: inventory.sourceDigest as never,
+            candidates: inventory.candidates.map(candidate => ({
+              id: candidate.id, provider: candidate.provider, kind: candidate.kind,
+              credential: candidate.credential, shared_credential: candidate.sharedCredential,
+            })),
+            unsupported_settings: inventory.unsupportedSettings,
+            unassigned_credential_references: inventory.unassignedCredentialReferences,
+            unassigned_credential_records: inventory.unassignedCredentialRecords,
+          } })
+        } else if (frame.method === 'migration.existing_source.inventory') {
           try {
             const decoded = verifyProfileSelector(this.options.identity, frame.params.target_profile_selector)
             const profileId = this.options.host.authorizeMigrationProfileSelector({
@@ -1035,6 +1200,30 @@ export class HostControlAuthority {
             throw new HostAuthorityError('invalid_input')
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.model_text') {
+          const generate = this.options.generateModelText
+          if (!generate) throw new HostAuthorityError('upgrade_required')
+          const account = {
+            authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId,
+          }
+          const profileId = this.options.host.authorizeAccountModelText(account)
+          let result: { readonly state: 'complete'; readonly provider: string; readonly model: string; readonly text: string }
+            | { readonly state: 'rejected'; readonly code: DesktopModelWorkerError['code'] }
+          try {
+            const answer = await generate(profileId, frame.params.text, context.signal)
+            context.signal.throwIfAborted()
+            this.options.host.authorizeAccountModelText(account)
+            result = { state: 'complete', ...answer }
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            result = { state: 'rejected', code: error instanceof DesktopModelWorkerError
+              ? error.code : context.signal.aborted ? 'cancelled' : 'provider_failed' }
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: 'profile.model_text', result })
         } else if (frame.method === 'profile.view_activate') {
           const activated = await this.options.host.activateView({
             profileId: frame.params.profile_id as never,
@@ -1093,6 +1282,14 @@ export class HostControlAuthority {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
+          ...(this.options.generateModelText ? ['profile.model_text'] : []),
+          ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
+          ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
+            ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
+          ...(this.options.modelClaimRecovery ? ['profile.model_claim_recovery_inventory',
+            'profile.model_claim_recovery_status', 'profile.model_claim_restore'] : []),
+          ...(this.options.modelClaimRecovery && this.options.modelClaimTransaction?.retry && this.options.inspectModelClaimSource
+            ? ['profile.model_claim_retry'] : []),
           ...(this.options.extensions ? ['profile.extensions'] : []),
           ...(offlineAccountRecovery ? recoveryCapabilities : []),
           ...(migrationExport ? [
@@ -1686,6 +1883,33 @@ export class UnixHostClient {
   }
 
   /**
+   * Invoke the current Account Profile's default model using a token-verified connection grant.
+   * @param input - current Account binding, bounded text, and optional cancellation signal.
+   * @returns bounded text with model identity, or a classified failure.
+   */
+  async generateModelText(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly text: string
+    readonly signal?: AbortSignal
+  }): Promise<ProfileModelTextResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.model_text' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelTextRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_text',
+      params: { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        text: input.text },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
    * Execute a negotiated extension command using a Main-held lease; no target paths cross the socket.
    * @param input - lease, runtime generation, bounded command and optional cancellation.
    * @returns a prepared plan, sanitized inventory or durable receipt; old Hosts reject before mutation.
@@ -1709,6 +1933,179 @@ export class UnixHostClient {
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== 'profile.extensions') throw new HostAuthorityError('unavailable')
     return frame.result
+  }
+
+  /**
+   * Inspect redacted legacy model candidates using a token-verified Account view.
+   * @param input - Main-held view lease and optional cancellation.
+   * @returns source digest and candidate metadata without credentials or paths.
+   */
+  async modelClaimInventory(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly signal?: AbortSignal
+  }): Promise<LegacyModelClaimInventory> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_inventory' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimInventoryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_inventory',
+      params: { ...this.auth(), view_lease_id: input.viewLeaseId as never,
+        lease_generation: input.leaseGeneration, runtime_generation: input.runtimeGeneration },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return {
+      sourceDigest: frame.result.source_digest,
+      candidates: frame.result.candidates.map(candidate => ({
+        id: candidate.id, provider: candidate.provider, kind: candidate.kind,
+        credential: candidate.credential, sharedCredential: candidate.shared_credential,
+      })),
+      unsupportedSettings: frame.result.unsupported_settings,
+      unassignedCredentialReferences: frame.result.unassigned_credential_references,
+      unassignedCredentialRecords: frame.result.unassigned_credential_records,
+    }
+  }
+
+  /**
+   * Confirm one candidate against the current source and Account view for at most one minute.
+   * @param input - Account view, selected candidate and displayed source digest.
+   * @returns One-use confirmation and operation id; no credential data.
+   */
+  async confirmModelClaim(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly candidateId: string
+    readonly sourceDigest: string
+    readonly signal?: AbortSignal
+  }): Promise<{ confirmation: string; operationId: string; expiresAt: number }> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_confirm' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimConfirmRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_confirm',
+      params: { ...this.auth(), view_lease_id: input.viewLeaseId as never,
+        lease_generation: input.leaseGeneration, runtime_generation: input.runtimeGeneration,
+        candidate_id: input.candidateId, source_digest: input.sourceDigest as HostControlSha256 },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { confirmation: frame.result.confirmation, operationId: frame.result.operation_id,
+      expiresAt: frame.result.expires_at }
+  }
+
+  /**
+   * Consume a one-use confirmation on this Host connection and commit its provider.
+   * @param input - Confirmation returned by confirmModelClaim and optional cancellation.
+   * @returns Redacted claim outcome.
+   */
+  async applyModelClaim(input: { readonly confirmation: string; readonly signal?: AbortSignal }): Promise<LegacyClaimOutcome> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_apply' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimApplyRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_apply',
+      params: { ...this.auth(), confirmation: input.confirmation },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
+  }
+
+  /**
+   * Read only this Account's durable claim receipt without starting a pending worker.
+   * @param input - Fresh Account token, current binding, vault proof and candidate id.
+   * @returns Secret-free receipt, or null when this Account has no active claim.
+   */
+  async modelClaimRecoveryStatus(input: ModelClaimRecoveryInput): Promise<LegacyClaimReceipt | null> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_recovery_status' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRecoveryStatusRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_recovery_status',
+      params: { ...this.modelClaimRecoveryParams(input), candidate_id: input.candidateId },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.state === 'unclaimed' ? null : {
+      candidateId: frame.result.candidate_id, operationId: frame.result.operation_id,
+      sourceDigest: frame.result.source_digest, status: frame.result.state,
+    }
+  }
+
+  /**
+   * Discover same-Account unfinished claims without requiring a running Profile worker.
+   * @param input - Current Account token, binding, and matching Main-vault proof.
+   * @returns Bounded receipts without credentials or source paths.
+   */
+  async modelClaimRecoveryInventory(input: Omit<ModelClaimRecoveryInput, 'candidateId'>): Promise<readonly LegacyClaimReceipt[]> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_recovery_inventory' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRecoveryInventoryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_recovery_inventory',
+      params: this.modelClaimRecoveryParams(input),
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.receipts.map(receipt => ({
+      candidateId: receipt.candidate_id, operationId: receipt.operation_id,
+      sourceDigest: receipt.source_digest, status: receipt.state,
+    }))
+  }
+
+  /**
+   * Restore an interrupted claim from its durable preimage after rechecking Account ownership.
+   * @param input - Recovery proof and exact operation id returned by status.
+   * @returns Redacted restored outcome.
+   */
+  async restoreModelClaim(input: ModelClaimRecoveryInput & { readonly operationId: string }): Promise<LegacyClaimOutcome> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_restore' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRestoreRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_restore',
+      params: { ...this.modelClaimRecoveryParams(input), candidate_id: input.candidateId,
+        operation_id: input.operationId },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
+  }
+
+  /**
+   * Resume an already reserved claim after rechecking its same-Account recovery proof.
+   * @param input - Recovery proof and exact operation and source digest from status.
+   * @returns Redacted committed outcome.
+   */
+  async retryModelClaim(input: ModelClaimRecoveryInput & {
+    readonly operationId: string
+    readonly sourceDigest: string
+  }): Promise<LegacyClaimOutcome> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_retry' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRetryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_retry',
+      params: { ...this.modelClaimRecoveryParams(input), candidate_id: input.candidateId,
+        operation_id: input.operationId,
+        source_digest: input.sourceDigest as HostControlSha256 },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
+  }
+
+  private modelClaimRecoveryParams(input: Omit<ModelClaimRecoveryInput, 'candidateId'>):
+  ProfileModelClaimRecoveryInventoryRequest['params'] {
+    return { ...this.auth(), account_access_token: input.accountAccessToken,
+      account_issuer: input.issuer, account_subject: input.subject,
+      authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle,
+      authority_binding_version: input.authorityBindingVersion,
+      profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial }
   }
 
   /**
@@ -2078,12 +2475,17 @@ export class UnixHostClient {
   }
 
   private async call(
-    request: ProfileExtensionsRequest | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
+    request: ProfileExtensionsRequest | ProfileModelClaimInventoryRequest
+      | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
+      | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
+      | ProfileModelClaimRecoveryInventoryRequest
+      | ProfileModelClaimRetryRequest
+      | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-      | ProfileViewActivateRequest | ProfileLeaseCloseRequest
+      | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest
       | MigrationImportStageRequest | MigrationImportStatusRequest | MigrationImportVerifyRequest

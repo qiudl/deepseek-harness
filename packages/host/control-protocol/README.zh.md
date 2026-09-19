@@ -33,8 +33,18 @@ kind: "package-reference"
 
 协商后的 `profile.extensions` 方法携带 Main 持有的租约，以及清单、准备、提交、状态或取消命令。准备载荷上限为 32,768 个 UTF-8 字节；结果仅包含计划、有界元数据或持久回执状态。插件继续执行的操作类型必须为字面字符串 `install`、`update` 或 `remove`；数组和对象直接拒绝，不做强制转换。种类支持由 Host 执行器决定，能够解析某种类不代表安装能力可用。 技能清单可包含布尔字段 `skill_archives`；缺失时调用方不能认定支持资源包。资源包计划在同一载荷上限内携带 URL 和摘要元数据，不携带 ZIP 字节。
 
+`profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
+
+`profile.model_claim_confirm` 针对一个凭据存在的候选项，重新校验 Account 租约和新鲜的来源摘要。它返回只在当前 Host 连接有效、60 秒内只能使用一次的确认授权。`profile.model_claim_apply` 消费该授权，并在认领事务中重新校验 Account 视图。两种结果都不包含凭据值或路径。写入失败或中断时使用独立的同账号恢复方法。
+
+`profile.model_claim_retry` 使用与恢复相同的新鲜 Account 与保管库证明，并提交现有回执中的准确候选项、操作号和来源摘要。Host 在恢复事务前校验账本中的归属。只有在声明旧来源静止时才开放重试；状态查询与原文件恢复不需要该声明。
+
+`profile.model_claim_recovery_inventory` 使用同一证明，但不要求候选项 ID。它最多返回 128 条属于已验证账号的脱敏回执，覆盖未完成认领和 Profile 标记尚未清除的操作。查询不启动 worker，也不授权新认领。
+
 <a id="challenge-authentication"></a>
 ## 挑战认证
+
+`profile.model_text` 接受同一 Host 连接上已验证的 Account 绑定，以及一条最多 8 KiB 的非空文本；它不会打开或改变可见 Profile 的视图租约。成功结果包含所选提供方、模型和最多 16 KiB 的回答；拒绝结果只包含分类错误码，其中 `cancelled` 与 `timeout` 分别表示取消与超时。该方法不传输 API Key、工具请求、Session id 或提供方原始错误。
 
 `encodeHostInspectSignaturePayload(request, response)` 返回由安装级 Ed25519 密钥签名的精确 UTF-8 字节。带域隔离的声明绑定 request id、Desktop client id、challenge、选定版本、Host 与安装 id、安装公钥、generation、process nonce、capability 和可执行文件摘要。
 

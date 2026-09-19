@@ -31,6 +31,8 @@ A provider with a stored catalog error remains visible with its diagnostic and e
 
 ### API keys
 
+In a Slark Desktop personal Account view, the Models page can inspect redacted providers from an older local DSH installation. The user claims one provider at a time through Desktop Main's native confirmation dialog; the page receives only candidate metadata, source digest, and operation receipts. A pending claim exposes status, retry, and restoration controls. The browser version has no claim card. Existing API-key editing remains the way to add or replace a key.
+
 The primary field on an editor card is a single **API key** input — the page never asks for an environment-variable name. A typed key stores write-only through `credentials.set` under the profile's reference, deriving `<ROUTE>_API_KEY` when the profile has none, and the pi-ai profile records that derivation as `apiKeyEnv`, so `settings.yaml` never carries a key value. Leaving a new pi-ai provider's key blank saves a reference-free profile and preserves provider-native authentication (for example the Bedrock credential chain or Vertex ADC). A row labels API-key state with a green solid dot only when a referenced credential is confirmed configured, and with a red solid dot only when a named reference is confirmed missing. A successful Apply emits a local accessible status message without echoing secret material.
 
 ### Editing a provider

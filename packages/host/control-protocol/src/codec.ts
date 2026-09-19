@@ -1,6 +1,13 @@
 import type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
+  ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
+  ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
+  ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
+  ProfileModelClaimRecoveryInventoryRequest, ProfileModelClaimRecoveryInventoryResult,
+  ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRecoveryStatusResult,
+  ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
+  ProfileModelClaimRetryRequest, ProfileModelClaimRetryResult,
   HostControlCapability,
   HostAccountBindingHandle,
   HostAuthorityEnvironmentId,
@@ -28,6 +35,8 @@ import type {
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
+  ProfileModelTextRequest,
+  ProfileModelTextResult,
   ProfileStatusRequest,
   ProfileStatusResult,
   ProfileEnsureRequest,
@@ -170,6 +179,12 @@ function signature(value: unknown): HostControlSignature {
 function digest(value: unknown): HostControlSha256 {
   if (typeof value !== 'string' || !SHA256.test(value)) reject()
   return value as HostControlSha256
+}
+
+function modelClaimCandidate(value: unknown): string {
+  if (typeof value !== 'string'
+    || !/^(?:llm-deepseek|llm-pi-ai|web-search-deepseek):[a-z][a-z0-9-]{0,63}$/u.test(value)) reject()
+  return value
 }
 
 function capability(value: unknown): HostControlCapability {
@@ -503,10 +518,72 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest {
+  | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
+  | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
+  | ProfileModelClaimRecoveryInventoryRequest
+  | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest | ProfileModelClaimRetryRequest {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
   const requestId = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_confirm') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation',
+      'candidate_id', 'source_digest'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+      candidate_id: modelClaimCandidate(params.candidate_id), source_digest: digest(params.source_digest),
+    } }
+  }
+  if (frame.method === 'profile.model_claim_apply') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'confirmation'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), confirmation: sourceAuthority(params.confirmation) } }
+  }
+  if (frame.method === 'profile.model_claim_recovery_inventory'
+    || frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore'
+    || frame.method === 'profile.model_claim_retry') {
+    const proofKeys = [
+      ...AUTHORIZED_KEYS, 'account_access_token', 'account_issuer', 'account_subject',
+      'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
+      'profile_key_handle', 'profile_unlock_material',
+    ]
+    exactKeys(params, frame.method === 'profile.model_claim_recovery_inventory' ? proofKeys
+      : frame.method === 'profile.model_claim_restore' ? [...proofKeys, 'candidate_id', 'operation_id']
+        : frame.method === 'profile.model_claim_retry' ? [...proofKeys, 'candidate_id', 'operation_id', 'source_digest']
+          : [...proofKeys, 'candidate_id'])
+    const proof = {
+      ...authorized(params),
+      account_access_token: boundedText(params.account_access_token, 8_192),
+      account_issuer: accountIssuer(params.account_issuer),
+      account_subject: boundedText(params.account_subject, 512),
+      authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      profile_key_handle: boundedText(params.profile_key_handle, 512),
+      profile_unlock_material: unlockMaterial(params.profile_unlock_material),
+    }
+    if (frame.method === 'profile.model_claim_recovery_inventory') {
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: proof }
+    }
+    const candidate_id = modelClaimCandidate(params.candidate_id)
+    if (frame.method === 'profile.model_claim_restore') {
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...proof, candidate_id, operation_id: uuid(params.operation_id) } }
+    }
+    if (frame.method === 'profile.model_claim_retry') {
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...proof, candidate_id, operation_id: uuid(params.operation_id), source_digest: digest(params.source_digest) } }
+    }
+    return { version: 1, type: 'request', request_id: requestId,
+      method: 'profile.model_claim_recovery_status', params: { ...proof, candidate_id } }
+  }
+  if (frame.method === 'profile.model_claim_inventory') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation'])
+    return { version: 1, type: 'request', request_id: requestId, method: 'profile.model_claim_inventory', params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+    } }
+  }
   if (frame.method === 'profile.extensions') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.extensions', params: {
@@ -664,6 +741,19 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       },
     }
   }
+  if (frame.method === 'profile.model_text') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
+      'account_binding_handle', 'authority_binding_version', 'text'])
+    if (typeof params.text !== 'string' || !params.text.trim()
+      || Buffer.byteLength(params.text, 'utf8') > 8192) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: 'profile.model_text', params: {
+      ...authorized(params),
+      authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      text: params.text,
+    } }
+  }
   if (frame.method === 'profile.view_activate') {
     exactKeys(params, [
       ...AUTHORIZED_KEYS, 'profile_id', 'view_lease_id', 'view_activation_handle',
@@ -689,10 +779,91 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileLeaseCloseResult | ProfileExtensionsResult {
+  | ProfileViewActivateResult | ProfileModelTextResult | ProfileLeaseCloseResult | ProfileExtensionsResult
+  | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
+  | ProfileModelClaimRecoveryInventoryResult
+  | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult | ProfileModelClaimRetryResult {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
   const request_id = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_confirm') {
+    exactKeys(result, ['confirmation', 'operation_id', 'expires_at'])
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      confirmation: sourceAuthority(result.confirmation), operation_id: uuid(result.operation_id),
+      expires_at: timestamp(result.expires_at),
+    } }
+  }
+  if (frame.method === 'profile.model_claim_apply' || frame.method === 'profile.model_claim_retry') {
+    exactKeys(result, ['state', 'cleanup_pending'])
+    if (result.state !== 'committed' || typeof result.cleanup_pending !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { state: 'committed', cleanup_pending: result.cleanup_pending } }
+  }
+  if (frame.method === 'profile.model_claim_recovery_inventory') {
+    exactKeys(result, ['receipts'])
+    if (!Array.isArray(result.receipts) || result.receipts.length > 128) reject()
+    const ids = new Set<string>()
+    const receipts = result.receipts.map((value) => {
+      const receipt = record(value)
+      exactKeys(receipt, ['candidate_id', 'operation_id', 'source_digest', 'state'])
+      const candidate_id = modelClaimCandidate(receipt.candidate_id)
+      if (ids.has(candidate_id) || !['pending', 'committed', 'restored'].includes(receipt.state as string)) reject()
+      ids.add(candidate_id)
+      return { candidate_id, operation_id: uuid(receipt.operation_id),
+        source_digest: digest(receipt.source_digest),
+        state: receipt.state as 'pending' | 'committed' | 'restored' }
+    })
+    return { version: 1, type: 'result', request_id, method: frame.method, result: { receipts } }
+  }
+  if (frame.method === 'profile.model_claim_recovery_status') {
+    if (result.state === 'unclaimed') {
+      exactKeys(result, ['state'])
+      return { version: 1, type: 'result', request_id, method: frame.method, result: { state: 'unclaimed' } }
+    }
+    exactKeys(result, ['state', 'candidate_id', 'operation_id', 'source_digest'])
+    if (result.state !== 'pending' && result.state !== 'committed' && result.state !== 'restored') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      state: result.state, candidate_id: modelClaimCandidate(result.candidate_id),
+      operation_id: uuid(result.operation_id), source_digest: digest(result.source_digest),
+    } }
+  }
+  if (frame.method === 'profile.model_claim_restore') {
+    exactKeys(result, ['state', 'cleanup_pending'])
+    if (result.state !== 'restored' || typeof result.cleanup_pending !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { state: 'restored', cleanup_pending: result.cleanup_pending } }
+  }
+  if (frame.method === 'profile.model_claim_inventory') {
+    exactKeys(result, ['source_digest', 'candidates',
+      'unsupported_settings', 'unassigned_credential_references', 'unassigned_credential_records'])
+    if (!Array.isArray(result.candidates) || result.candidates.length > 128) reject()
+    const ids = new Set<string>()
+    const candidates = result.candidates.map((value) => {
+      const candidate = record(value)
+      exactKeys(candidate, ['id', 'provider', 'kind', 'credential', 'shared_credential'])
+      if (typeof candidate.provider !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/u.test(candidate.provider)
+        || (candidate.kind !== 'llm' && candidate.kind !== 'web-search')
+        || candidate.kind === 'web-search' && candidate.provider !== 'deepseek'
+        || !['present', 'missing', 'none'].includes(candidate.credential as string)
+        || typeof candidate.shared_credential !== 'boolean'
+        || candidate.id !== (candidate.kind === 'web-search'
+          ? 'web-search-deepseek:deepseek'
+          : candidate.provider === 'deepseek' && candidate.id === 'llm-deepseek:deepseek'
+            ? 'llm-deepseek:deepseek' : `llm-pi-ai:${candidate.provider}`)
+        || ids.has(candidate.id)) reject()
+      ids.add(candidate.id)
+      return {
+        id: candidate.id, provider: candidate.provider, kind: candidate.kind,
+        credential: candidate.credential, shared_credential: candidate.shared_credential,
+      } as ProfileModelClaimInventoryResult['result']['candidates'][number]
+    })
+    return { version: 1, type: 'result', request_id, method: 'profile.model_claim_inventory', result: {
+      source_digest: digest(result.source_digest), candidates,
+      unsupported_settings: nonnegative(result.unsupported_settings),
+      unassigned_credential_references: nonnegative(result.unassigned_credential_references),
+      unassigned_credential_records: nonnegative(result.unassigned_credential_records),
+    } }
+  }
   if (frame.method === 'profile.extensions') {
     return { version: 1, type: 'result', request_id, method: 'profile.extensions', result: extensionResponse(result) }
   }
@@ -815,6 +986,26 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['closed'])
     if (result.closed !== true) reject()
     return { version: 1, type: 'result', request_id, method: 'profile.lease_close', result: { closed: true } }
+  }
+  if (frame.method === 'profile.model_text') {
+    if (result.state === 'rejected') {
+      exactKeys(result, ['state', 'code'])
+      if (result.code !== 'invalid_input' && result.code !== 'no_default_model'
+        && result.code !== 'missing_credential' && result.code !== 'provider_failed'
+        && result.code !== 'cancelled' && result.code !== 'timeout'
+        && result.code !== 'response_too_large') reject()
+      return { version: 1, type: 'result', request_id, method: 'profile.model_text', result: {
+        state: 'rejected', code: result.code,
+      } }
+    }
+    exactKeys(result, ['state', 'provider', 'model', 'text'])
+    if (result.state !== 'complete' || typeof result.provider !== 'string' || !result.provider
+      || result.provider.length > 256 || typeof result.model !== 'string' || !result.model
+      || result.model.length > 256 || typeof result.text !== 'string' || !result.text.trim()
+      || Buffer.byteLength(result.text, 'utf8') > 16384) reject()
+    return { version: 1, type: 'result', request_id, method: 'profile.model_text', result: {
+      state: 'complete', provider: result.provider, model: result.model, text: result.text,
+    } }
   }
   return reject('unknown_method')
 }
