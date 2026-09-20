@@ -232,20 +232,37 @@ describe('AppFrame', () => {
 
   it('switches only the keyed main outlet when the active panel changes', () => {
     selectedSessionTitle = 'Session title'
-    const { instance, frame, slotCalls, getByTestId } = mountFrame()
+    const { instance, frame, slotCalls, getByTestId, getAllByTestId } = mountFrame()
     const sessionId = selectedSession
     const layoutInfo = instance.getSnapshot().layoutInfo
     for (const panelId of ['panel-a' as MainPanelId, 'panel-b' as MainPanelId, null]) {
       slotCalls.length = 0
       act(() => { instance.actions.selectPanel(panelId) })
-      expect(slotCalls).toEqual([{ key: 'main', props: {}, options: { entryKey: panelId ?? 'conversation' } }])
-      expect(getByTestId('main-content').getAttribute('data-entry-key')).toBe(panelId ?? 'conversation')
+      expect(slotCalls).toEqual([
+        { key: 'main', props: {}, options: { entryKey: 'conversation' } },
+        ...(panelId === null ? [] : [{ key: 'main', props: {}, options: { entryKey: panelId } }]),
+      ])
+      const panels = panelId === null ? [getByTestId('main-content')] : getAllByTestId('main-content')
+      expect(panels.at(-1)?.getAttribute('data-entry-key')).toBe(panelId ?? 'conversation')
       expect(instance.getSnapshot().panelInfo).toEqual({ activePanelId: panelId })
       expect(instance.getSnapshot().layoutInfo).toBe(layoutInfo)
       expect(tracks(frame)).toEqual([280, 0])
       expect(selectedSession).toBe(sessionId)
       expect(document.title).toBe(panelId === null ? 'Session title — DSH Local Build' : 'DSH Local Build')
     }
+  })
+
+  it('keeps the Conversation mounted while a global main panel is selected', () => {
+    const { instance, getAllByTestId } = mountFrame()
+    const conversation = getAllByTestId('main-content')[0]
+
+    act(() => { instance.actions.selectPanel('extensions' as MainPanelId) })
+
+    const panels = getAllByTestId('main-content')
+    expect(panels).toHaveLength(2)
+    expect(panels[0]).toBe(conversation)
+    expect(panels[0]!.closest('[data-main-panel="conversation"]')?.hasAttribute('hidden')).toBe(true)
+    expect(panels[1]!.getAttribute('data-entry-key')).toBe('extensions')
   })
 })
 

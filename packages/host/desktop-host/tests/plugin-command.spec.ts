@@ -29,6 +29,16 @@ it('runs the pinned CLI and pnpm under the selected Profile without ambient cred
   expect(readdirSync(f.control)).toEqual([])
   expect(JSON.parse(readFileSync(join(f.profile, 'observed.json'), 'utf8'))).toEqual({ args: ['add', '@fixture/bundle@1.2.3', '--save-exact', '--ignore-scripts'], home: f.profile })
 })
+it('runs scripts only after persisting the exact version approval', async () => {
+  const f = fixture()
+  writeFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'packages:\n  - profiles/*\nallowBuilds:\n  unrelated: false\n', { mode: 0o600 })
+  await runProfilePluginCommand({ ...f.options, spec: '@fixture/bundle@1.2.3', allowBuild: '@fixture/bundle@1.2.3',
+    signal: new AbortController().signal, guard() {} })
+  expect(JSON.parse(readFileSync(join(f.profile, 'observed.json'), 'utf8')).args)
+    .toEqual(['add', '@fixture/bundle@1.2.3', '--save-exact'])
+  expect(readFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'utf8')).toContain('"@fixture/bundle@1.2.3": true')
+  expect(readFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'utf8')).toContain('unrelated: false')
+})
 it('rejects mutable specs and revocation before launching', async () => {
   const f = fixture()
   for (const spec of ['bundle@latest', '../local', '--ignore-scripts', 'github:owner/repo#main']) {

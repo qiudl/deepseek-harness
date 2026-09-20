@@ -36,6 +36,19 @@
   overflow: hidden;
 }
 
+.mainPanel {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mainPanel[hidden] {
+  display: none;
+}
+
 /* Drag handles are frame children (columns clip overflow): an 8px hit strip
    centered on the column border via inline left, above column content. No
    handle draws a visible pill: the details column was the only one that did,

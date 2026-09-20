@@ -10,7 +10,7 @@ Status: implemented
 
 ## 决策
 
-布局声明 root 作用域的 keyed `main` slot。保留的 `conversation` key 属于 Conversation 插件，其 `main.conversation` 子 slot 保留可选的会话绑定。其他主面板条目不获得隐式会话绑定。
+布局声明 root 作用域的 keyed `main` slot。保留的 `conversation` key 属于 Conversation 插件，其 `main.conversation` 子 slot 保留可选的会话绑定。其他主面板条目不获得隐式会话绑定。AppFrame 在选择其他主面板时保持 Conversation 条目挂载并将其隐藏，从而保留组件本地草稿和滚动状态。
 
 侧栏拥有 root 作用域的 `sidebar.panellist` list。每个 list 条目提供图标，以及与主面板条目匹配的 id；字符串或随语言变化的标签提供普通可见文字、无障碍名称和折叠提示。默认组合不注册面板条目，因此空列表没有 DOM 或间距。选中操作检查实时主面板条目，对缺失的 key 报错而不替换当前面板。
 
@@ -32,6 +32,6 @@ DOM 焦点不是导航选中态。搜索和目录选择控件可以获得焦点�
 
 ## 后果
 
-默认侧栏快照保持不变。扩展面板没有右侧 Sidebar，选择另一个全局面板不会改变布局偏好。在显示右侧 Sidebar 的 Conversation 与全局面板之间切换时，所需列宽仍会变化；这并不保证浏览器完全不计算布局。
+默认侧栏快照保持不变。扩展面板没有右侧 Sidebar，选择另一个全局面板不会改变布局偏好。保持 Conversation 挂载会保留其组件状态，也会在显示其他面板时继续占用其常驻内存。在显示右侧 Sidebar 的 Conversation 与全局面板之间切换时，所需列宽仍会变化；这并不保证浏览器完全不计算布局。
 
 面板选中态是瞬时状态，刷新后重置。插件 dispose（资源释放）会移除其贡献；移除当前选中的主面板条目会使中央区域回到 Conversation。测试注册真实临时面板，覆盖行交互、焦点、存储引用的独立性、无效 id、过期异步导航、声明生命周期和默认空侧栏。[Slots 参考](../../../../docs/subsystems/slots.zh.md)拥有组合 API 的说明。

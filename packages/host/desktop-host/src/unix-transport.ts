@@ -1168,10 +1168,14 @@ export class HostControlAuthority {
               result = { state: 'inventory', kind: command.kind, entries, ...(command.kind === 'plugin' && extension.pluginRemove ? { plugin_remove: true } : {}), ...(command.kind === 'plugin' && extension.pluginUpdate ? { plugin_update: true } : {}), ...(command.kind === 'plugin' && extension.pluginToggle ? { plugin_toggle: true } : {}), ...(command.kind === 'skill' && extension.skillArchives ? { skill_archives: true } : {}), ...(command.kind === 'skill' && extension.skillRemove ? { skill_remove: true } : {}), ...(command.kind === 'skill' && extension.skillReplace ? { skill_replace: true } : {}), ...(command.kind === 'skill' && extension.skillFiles ? { skill_files: true } : {}), ...(command.kind === 'skill' && extension.skillInvocation ? { skill_invocation: true } : {}), ...(command.kind === 'mcp' && extension.mcpRemove ? { mcp_remove: true } : {}), ...(command.kind === 'mcp' && extension.mcpUpdate ? { mcp_update: true } : {}) }
             } else if (command.action === 'prepare') {
               const plan = await extension.operations.prepare(authority, command.kind, command.payload)
-              result = { state: 'prepared', plan_id: plan.planId as never, kind: plan.kind, digest: plan.digest as never, expires_at: plan.expiresAt }
+              result = { state: 'prepared', plan_id: plan.planId as never, kind: plan.kind,
+                digest: plan.digest as never, expires_at: plan.expiresAt,
+                ...(plan.scriptApproval ? {
+                  scripts: plan.scriptApproval.scripts, script_digest: plan.scriptApproval.digest as never,
+                } : {}) }
             } else {
               const receipt = command.action === 'commit'
-                ? extension.operations.commit(authority, command.plan_id, command.operation_id, signal)
+                ? extension.operations.commit(authority, command.plan_id, command.operation_id, signal, command.script_digest)
                 : command.action === 'cancel'
                   ? extension.operations.cancel(authority, command.operation_id)
                   : extension.operations.status(authority, command.operation_id)

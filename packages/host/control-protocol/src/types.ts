@@ -786,7 +786,12 @@ export type HostExtensionKind = 'plugin' | 'mcp' | 'skill'
 export type HostExtensionCommand =
   | { readonly action: 'inventory'; readonly kind: HostExtensionKind }
   | { readonly action: 'prepare'; readonly kind: HostExtensionKind; readonly payload: string }
-  | { readonly action: 'commit'; readonly plan_id: HostExtensionPlanId; readonly operation_id: HostExtensionOperationId }
+  | {
+    readonly action: 'commit'
+    readonly plan_id: HostExtensionPlanId
+    readonly operation_id: HostExtensionOperationId
+    readonly script_digest?: HostControlSha256
+  }
   | { readonly action: 'status' | 'cancel'; readonly operation_id: HostExtensionOperationId }
 /** Secret-free extension metadata returned to the trusted broker. */
 export type HostExtensionResponse =
@@ -796,6 +801,8 @@ export type HostExtensionResponse =
     readonly kind: HostExtensionKind
     readonly digest: HostControlSha256
     readonly expires_at: number
+    readonly scripts?: readonly { readonly name: string; readonly command: string }[]
+    readonly script_digest?: HostControlSha256
   }
   | {
     readonly state: 'inventory'
