@@ -65,6 +65,7 @@ export type HostControlErrorCode =
   | 'conflict'
   | 'busy'
   | 'upgrade_required'
+  | 'script_approval_required'
   | 'migration_required'
   | 'unavailable'
   | 'internal_error'

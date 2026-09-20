@@ -557,6 +557,7 @@ function authorityCodeFromFrame(code: HostControlErrorCode): HostAuthorityErrorC
     case 'conflict':
     case 'busy':
     case 'upgrade_required':
+    case 'script_approval_required':
     case 'profile_not_found':
     case 'profile_ambiguous':
     case 'profile_integrity_failed':
@@ -1198,7 +1199,8 @@ export class HostControlAuthority {
             if (error instanceof HostAuthorityError) throw error
             const code = error instanceof Error ? error.message : ''
             if (code === 'expired') throw new HostAuthorityError('stale')
-            if (code === 'busy' || code === 'idempotency_conflict' || code === 'unauthorized' || code === 'upgrade_required') {
+            if (code === 'busy' || code === 'idempotency_conflict' || code === 'unauthorized'
+              || code === 'upgrade_required' || code === 'script_approval_required') {
               throw new HostAuthorityError(code)
             }
             throw new HostAuthorityError('invalid_input')
