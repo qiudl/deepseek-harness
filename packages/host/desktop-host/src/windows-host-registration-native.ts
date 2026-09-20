@@ -46,7 +46,14 @@ const MOVEFILE_REPLACE_EXISTING = 0x00000001
 const MOVEFILE_WRITE_THROUGH = 0x00000008
 const SE_FILE_OBJECT = 1
 const CSTR_EQUAL = 2
-const FULL_CONTROL = 0x1F01FF
+const SE_DACL_PROTECTED = 0x1000
+const ACCESS_ALLOWED_ACE_TYPE = 0
+const ACCESS_DENIED_ACE_TYPE = 1
+const ACE_OBJECT_INHERIT = 0x01
+const ACE_CONTAINER_INHERIT = 0x02
+const ACE_INHERITED = 0x10
+const ACL_HEADER_BYTES = 8
+const ACCESS_ACE_SID_OFFSET = 8n
 const MAX_WINDOWS_PATH_CHARS = 32_768
 const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
 
@@ -54,7 +61,7 @@ type NativePointer = bigint | null
 interface HostRegistrationKoffiModule extends WindowsKoffiModule {
   struct(fields: Record<string, unknown>): { readonly size: number }
   alloc(type: unknown, count: number): unknown
-  decode(pointer: unknown, type: unknown): unknown
+  decode(pointer: unknown, offsetOrType: unknown, maybeType?: unknown): unknown
 }
 
 /** Injectable runtime facts for the Windows registration filesystem loader. */
@@ -82,80 +89,6 @@ function pointerFromSlot(slot: Buffer, api: string): bigint {
   return value
 }
 
-function normalizedSid(value: string): string {
-  if (value === 'SY') return 'S-1-5-18'
-  if (value === 'BA') return 'S-1-5-32-544'
-  return value
-}
-
-function section(sddl: string, name: 'O' | 'D'): string | undefined {
-  const start = sddl.indexOf(`${name}:`)
-  if (start < 0) return undefined
-  const body = start + 2
-  const next = /[OGDS]:/gu
-  next.lastIndex = body
-  const match = next.exec(sddl)
-  return sddl.slice(body, match?.index ?? sddl.length)
-}
-
-// Preserve generic rights as unsigned bits; private-file admission requires exact file rights.
-function decodeFileRights(rights: string): number {
-  if (/^0x[0-9a-f]{1,8}$/iu.test(rights)) return Number.parseInt(rights.slice(2), 16)
-  const tokens: Readonly<Record<string, number>> = {
-    GA: 0x10000000, GR: 0x80000000, GW: 0x40000000, GX: 0x20000000,
-    RC: 0x20000, SD: 0x10000, WD: 0x40000, WO: 0x80000,
-    FA: FULL_CONTROL, FR: 0x120089, FW: 0x120116, FX: 0x1200a0,
-  }
-  let mask = 0
-  for (let offset = 0; offset < rights.length; offset += 2) {
-    const token = tokens[rights.slice(offset, offset + 2)]
-    if (token === undefined) {
-      throw new WindowsHostRegistrationNativeError('ConvertSecurityDescriptorToStringSecurityDescriptorW', ERROR_INVALID_DATA)
-    }
-    mask = (mask | token) >>> 0
-  }
-  if (!rights) {
-    throw new WindowsHostRegistrationNativeError('ConvertSecurityDescriptorToStringSecurityDescriptorW', ERROR_INVALID_DATA)
-  }
-  return mask
-}
-
-function decodeEvidenceSddl(sddl: string): Pick<WindowsHostPrivatePathEvidence, 'ownerSid' | 'daclProtected' | 'access'> {
-  const owner = section(sddl, 'O')
-  const dacl = section(sddl, 'D')
-  if (owner === undefined || dacl === undefined) {
-    throw new WindowsHostRegistrationNativeError('ConvertSecurityDescriptorToStringSecurityDescriptorW', ERROR_INVALID_DATA)
-  }
-  const firstAce = dacl.indexOf('(')
-  const flags = firstAce < 0 ? dacl : dacl.slice(0, firstAce)
-  const encodedAces = firstAce < 0 ? '' : dacl.slice(firstAce)
-  const access: WindowsHostPathAccessEntry[] = []
-  for (const match of encodedAces.matchAll(/\(([^()]*)\)/gu)) {
-    const encodedAce = match[1]
-    /* v8 ignore next -- this regular expression has one unconditional capture group. */
-    if (encodedAce === undefined) {
-      throw new WindowsHostRegistrationNativeError('ConvertSecurityDescriptorToStringSecurityDescriptorW', ERROR_INVALID_DATA)
-    }
-    const [type, aceFlags, rights, objectGuid, inheritGuid, sid] = encodedAce.split(';')
-    if ((type !== 'A' && type !== 'D') || sid === undefined || objectGuid !== '' || inheritGuid !== '') {
-      throw new WindowsHostRegistrationNativeError('ConvertSecurityDescriptorToStringSecurityDescriptorW', ERROR_INVALID_DATA)
-    }
-    // A defined sixth field proves every semicolon-delimited field before it is a string.
-    const decodedRights = rights as string
-    const decodedAceFlags = aceFlags as string
-    const mask = decodeFileRights(decodedRights)
-    access.push({
-      sid: normalizedSid(sid),
-      type: type === 'A' ? 'allow' : 'deny',
-      mask,
-      inherited: decodedAceFlags.includes('ID'),
-      objectInherit: decodedAceFlags.includes('OI'),
-      containerInherit: decodedAceFlags.includes('CI'),
-    })
-  }
-  return { ownerSid: normalizedSid(owner), daclProtected: flags.includes('P'), access }
-}
-
 /**
  * Load stable-handle Windows registration file operations on the Desktop main thread.
  * The adapter refuses reparse final-path substitution, bounds every read at its caller's
@@ -174,12 +107,15 @@ export async function loadWindowsHostRegistrationFileBindings(
   assertWindowsSecurityAttributesSize(securityAttributes.size)
   const bind = (library: WindowsKoffiLibrary, name: string, result: unknown, args: unknown[]): WindowsKoffiFunction =>
     bindWindowsLibrary(library)(name, result, args)
+  const uint16Pointer = koffi.pointer('uint16')
   const convertSddl = bind(advapi32, 'ConvertStringSecurityDescriptorToSecurityDescriptorW', 'int', [
     'str16', 'uint32', pointerPointer, pointer,
   ])
-  const convertDescriptor = bind(advapi32, 'ConvertSecurityDescriptorToStringSecurityDescriptorW', 'int', [
-    pointer, 'uint32', 'uint32', pointerPointer, uint32Pointer,
+  const convertSidToString = bind(advapi32, 'ConvertSidToStringSidW', 'int', [pointer, pointerPointer])
+  const getSecurityDescriptorControl = bind(advapi32, 'GetSecurityDescriptorControl', 'int', [
+    pointer, uint16Pointer, uint32Pointer,
   ])
+  const getAce = bind(advapi32, 'GetAce', 'int', [pointer, 'uint32', pointerPointer])
   const createDirectory = bind(kernel32, 'CreateDirectoryW', 'int', ['str16', koffi.pointer(securityAttributes)])
   const createFile = bind(kernel32, 'CreateFileW', pointer, [
     'str16', 'uint32', 'uint32', koffi.pointer(securityAttributes), 'uint32', 'uint32', pointer,
@@ -222,6 +158,83 @@ export async function loadWindowsHostRegistrationFileBindings(
   const checkedFree = (allocation: bigint, detail: string): void => {
     const remainder = localFree(allocation) as NativePointer
     if (remainder !== null && remainder !== 0n) lastError(detail)
+  }
+  // ACE_HEADER reads through the same layout the sandbox ACL package parses:
+  // AceType@0, AceFlags@1, AceSize@2 (WORD), Mask@4 (DWORD), inline SID@8.
+  const decodeU8 = (address: bigint, offset: number): number => koffi.decode(address, offset, 'uint8') as number
+  const decodeU16 = (address: bigint, offset: number): number => koffi.decode(address, offset, 'uint16') as number
+  const decodeU32 = (address: bigint, offset: number): number => koffi.decode(address, offset, 'uint32') as number
+  /**
+   * Render one binary SID through ConvertSidToStringSidW, which always emits
+   * the canonical numeric form; the SDDL text form aliases well-known SIDs
+   * (the built-in Administrator account becomes "LA") and cannot be compared
+   * with a caller's full SID string.
+   * @param sid - native SID pointer.
+   * @returns the canonical SID string.
+   */
+  const sidText = (sid: bigint): string => {
+    const textSlot = Buffer.alloc(8)
+    if (Number(convertSidToString(sid, textSlot)) === 0) lastError('ConvertSidToStringSidW')
+    const text = pointerFromSlot(textSlot, 'ConvertSidToStringSidW')
+    try {
+      // Decode the LPWSTR output slot, retaining text only for LocalFree.
+      const value = koffi.decode(textSlot, 'str16')
+      if (typeof value !== 'string' || !/^S-1-[0-9]+(?:-[0-9]+)+$/u.test(value)) invalidData('ConvertSidToStringSidW')
+      return value as string
+    } finally { checkedFree(text, 'LocalFree') }
+  }
+  const slotPointer = (slot: Buffer, api: string): NativePointer => {
+    const value = slot.readBigUInt64LE(0)
+    if (value === 0n) return null
+    return pointerFromSlot(slot, api)
+  }
+  /**
+   * Decode the owner and DACL of one handle-derived descriptor into evidence.
+   * A null DACL reads as an empty access list (the private-path check rejects
+   * it downstream); an ACE of any type other than allow/deny rejects the
+   * evidence because the trustee layout of object ACEs differs and an
+   * unreadable ACE must fail closed.
+   * @param descriptor - native security descriptor pointer.
+   * @param owner - native owner SID pointer (null when Windows reports none).
+   * @param dacl - native DACL pointer (null when the descriptor carries none).
+   * @returns the owner SID, DACL-protected flag, and access entries.
+   */
+  const decodeDescriptorSecurity = (
+    descriptor: bigint,
+    owner: NativePointer,
+    dacl: NativePointer,
+  ): Pick<WindowsHostPrivatePathEvidence, 'ownerSid' | 'daclProtected' | 'access'> => {
+    const controlSlot = Buffer.alloc(2)
+    const revisionSlot = Buffer.alloc(4)
+    if (Number(getSecurityDescriptorControl(descriptor, controlSlot, revisionSlot)) === 0) {
+      lastError('GetSecurityDescriptorControl')
+    }
+    const daclProtected = (controlSlot.readUInt16LE(0) & SE_DACL_PROTECTED) !== 0
+    const ownerSid = owner === null ? invalidData('GetSecurityInfo') : sidText(owner)
+    const access: WindowsHostPathAccessEntry[] = []
+    if (dacl !== null) {
+      const aclSize = decodeU16(dacl, 2)
+      const aceCount = decodeU16(dacl, 4)
+      if (aclSize < ACL_HEADER_BYTES) invalidData('GetAce')
+      for (let index = 0; index < aceCount; index += 1) {
+        const aceSlot = Buffer.alloc(8)
+        if (Number(getAce(dacl, index, aceSlot)) === 0) lastError('GetAce')
+        const ace = pointerFromSlot(aceSlot, 'GetAce')
+        if (decodeU16(ace, 2) < 8) invalidData('GetAce')
+        const aceType = decodeU8(ace, 0)
+        if (aceType !== ACCESS_ALLOWED_ACE_TYPE && aceType !== ACCESS_DENIED_ACE_TYPE) invalidData('GetAce')
+        const aceFlags = decodeU8(ace, 1)
+        access.push({
+          sid: sidText(ace + ACCESS_ACE_SID_OFFSET),
+          type: aceType === ACCESS_ALLOWED_ACE_TYPE ? 'allow' : 'deny',
+          mask: decodeU32(ace, 4),
+          inherited: (aceFlags & ACE_INHERITED) !== 0,
+          objectInherit: (aceFlags & ACE_OBJECT_INHERIT) !== 0,
+          containerInherit: (aceFlags & ACE_CONTAINER_INHERIT) !== 0,
+        })
+      }
+    }
+    return { ownerSid, daclProtected, access }
   }
   function securityDescriptor<Result>(sddl: string, operation: (descriptor: bigint) => Result): Result {
     const slot = Buffer.alloc(8)
@@ -267,35 +280,17 @@ export async function loadWindowsHostRegistrationFileBindings(
     ))
     if (result !== ERROR_SUCCESS) throw new WindowsHostRegistrationNativeError('GetSecurityInfo', result)
     const descriptor = pointerFromSlot(descriptorSlot, 'GetSecurityInfo')
-    let decoded: ReturnType<typeof decodeEvidenceSddl> | undefined
+    let decoded: Pick<WindowsHostPrivatePathEvidence, 'ownerSid' | 'daclProtected' | 'access'> | undefined
     let failure: unknown
     try {
-      const textSlot = Buffer.alloc(8)
-      const textLength = Buffer.alloc(4)
-      if (Number(convertDescriptor(
-        descriptor,
-        SECURITY_DESCRIPTOR_REVISION,
-        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-        textSlot,
-        textLength,
-      )) === 0) lastError('ConvertSecurityDescriptorToStringSecurityDescriptorW')
-      const text = pointerFromSlot(textSlot, 'ConvertSecurityDescriptorToStringSecurityDescriptorW')
-      try {
-        // Decode the LPWSTR output slot, retaining text only for LocalFree.
-        const value = koffi.decode(textSlot, 'str16')
-        if (typeof value !== 'string') invalidData('ConvertSecurityDescriptorToStringSecurityDescriptorW')
-        decoded = decodeEvidenceSddl(value as string)
-      } finally { checkedFree(text, 'LocalFree') }
+      decoded = decodeDescriptorSecurity(descriptor, slotPointer(owner, 'GetSecurityInfo'), slotPointer(dacl, 'GetSecurityInfo'))
     } catch (error) { failure = error }
     try { checkedFree(descriptor, 'LocalFree') } catch (error) { failure ??= error }
     if (failure !== undefined) throwFailure(failure)
     const security = decoded
-    /* v8 ignore next -- successful string decoding assigns decoded; every other path records failure above. */
+    /* v8 ignore next 3 -- a successful decode always assigns decoded; every failure path records and throws above. */
     if (security === undefined) {
-      throw new WindowsHostRegistrationNativeError(
-        'ConvertSecurityDescriptorToStringSecurityDescriptorW',
-        ERROR_INVALID_DATA,
-      )
+      throw new WindowsHostRegistrationNativeError('GetSecurityInfo', ERROR_INVALID_DATA)
     }
     return {
       kind: (attributes & FILE_ATTRIBUTE_DIRECTORY) === 0 ? 'file' : 'directory',
