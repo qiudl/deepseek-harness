@@ -32,6 +32,10 @@ env:
 
 jobs:
   preview:
+    # Pull requests from forks cannot read the Cloudflare and Access secrets.
+    # Keep their source/build gates meaningful without failing on unavailable
+    # deployment credentials; same-repository pull requests still publish.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     name: cloudflare pages preview
     steps:

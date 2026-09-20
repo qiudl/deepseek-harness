@@ -2,6 +2,7 @@
 
 export type ExtensionKind = 'plugin' | 'mcp' | 'skill'
 
+/** Opaque identity and display metadata for the active Desktop Profile. */
 export interface ExtensionProfile {
   /** Opaque stable key used only to scope local presentation preferences. */
   readonly key: string
@@ -9,6 +10,7 @@ export interface ExtensionProfile {
   readonly label: string
 }
 
+/** One extension projected from the active Profile's Host-owned inventory. */
 export interface ExtensionEntry {
   readonly id: string
   readonly name: string
@@ -17,19 +19,22 @@ export interface ExtensionEntry {
   readonly enabled?: boolean
 }
 
+/** Stable error code and human-readable reason returned by the Desktop bridge. */
 export interface ExtensionBridgeError {
   readonly code: string
   readonly message: string
 }
 
+/** Success or failure returned without exposing transport-specific errors. */
 export type ExtensionBridgeResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: ExtensionBridgeError }
 
+/** Restricted operations available only to an authenticated Desktop Profile renderer. */
 export interface DesktopExtensionBridge {
   /** Prove that this renderer is the active DSH Profile view. */
   readonly hello: () => Promise<ExtensionBridgeResult<{
-    readonly protocol: 1
+    readonly protocol: number
     readonly profile: ExtensionProfile
   }>>
   /** Read a bounded inventory for one extension kind. */
@@ -63,7 +68,10 @@ declare global {
   }
 }
 
-/** Resolve the capability without falling back to any general desktop API. */
+/**
+ * Resolve the capability without falling back to any general desktop API.
+ * @returns the restricted bridge, or `undefined` when the preload did not install every required method.
+ */
 export function desktopExtensionBridge(): DesktopExtensionBridge | undefined {
   const candidate = window.__SLARK_DSH_EXTENSIONS__
   if (candidate === undefined) return undefined

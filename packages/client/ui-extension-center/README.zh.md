@@ -57,14 +57,15 @@ kind: "package-reference"
 <a id="model-experience"></a>
 ## 模型体验
 
-无。本包只贡献 Desktop UI，不发送面向模型的提示词或工具描述。
+无，因为本包只贡献 Desktop UI，不发送面向模型的提示词或工具描述。
 
 #### KV Cache 影响
 
 无；它不组装提供方请求。
 
-<a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延期工作
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - 已支持插件安装、精确版本更新或恢复以及回执重连。MCP/Skill 修改控件和插件启停或移除控件仍延期；对应清单已可查看。
 - 普通浏览器托管的 DSH 页面无法证明 Slark Desktop Profile 权限，因此刻意不显示扩展中心。
@@ -76,6 +77,8 @@ kind: "package-reference"
 <summary>维护者的工作上下文——点击展开</summary>
 
 桥是能力边界，不是传输便利层。扩展时应增加明确的方法与结果码；不要暴露 `ipcRenderer`、文件系统路径、Profile selector 或通用 invoke 函数。
+
+本包不发布运行时不变式 companion，因为成功的 Desktop Profile 握手拥有唯一激活决定，且本包不保留可独立观测的跨插件状态。
 
 </details>
 

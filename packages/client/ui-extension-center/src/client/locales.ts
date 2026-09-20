@@ -34,6 +34,7 @@ export const zh = {
   invalidInstall: '请输入包名和固定版本或固定提交来源。',
 } satisfies Record<string, string>
 
+/** Typed key accepted by the Extension Center locale function. */
 export type ExtensionCenterLocaleKey = keyof typeof zh
 
 /** English dictionary checked against the Chinese key set. */

@@ -39,7 +39,7 @@ function persistBuildApproval(profileRoot: string, uid: number, buildKey: string
   }
   const path = join(profileRoot, 'pnpm-workspace.yaml')
   const stat = lstatSync(path)
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o022) !== 0) throw Error('unsafe_plugin_policy')
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.uid !== uid || (stat.mode & 0o022) !== 0) throw Error('unsafe_plugin_policy')
   const document = parseDocument(readFileSync(path, 'utf8'))
   if (document.errors.length) throw Error('invalid_plugin_policy')
   const current = document.getIn(['allowBuilds', buildKey])

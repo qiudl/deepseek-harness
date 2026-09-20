@@ -17,6 +17,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 export const inject = ['slots', 'locale', 'layout']
+/** Locale namespace owned by the Extension Center. */
 export const NS = 'extensionCenter'
 const PANEL_ID = 'extensions' as MainPanelId
 
