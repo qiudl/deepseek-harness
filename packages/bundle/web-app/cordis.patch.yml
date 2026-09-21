@@ -258,6 +258,11 @@
     - id: ui-plugin-manager
       name: '@deepseek-ai/dsh-client-ui-plugin-manager'
 
+    # Slark Desktop only: a bridge-gated navigation row above Settings opens
+    # the existing Desktop Hub. It contributes no page in standalone DSH.
+    - id: ui-extension-center
+      name: '@deepseek-ai/dsh-client-ui-extension-center'
+
     # Read-only Plugin list tab in the Settings Plugins section; the built-in
     # bundles the sidebar page leaves out are inspected here.
     - id: ui-settings-plugin-inventory
