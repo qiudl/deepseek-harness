@@ -143,10 +143,13 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
 it.skipIf(process.platform === 'win32')('wires profile, extension, and migration owners into one disposable application', async () => {
   const { config, root, accountPrivateKey } = fixture()
   const cleanup = { closeApplication: undefined as (() => Promise<void>) | undefined }
+  let manifestRequests = 0
   const fetchManifest = vi.fn<typeof fetch>(async (input) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     if (url !== 'https://registry.npmjs.org/startup-plugin/1.0.0') throw new Error(`unexpected request: ${url}`)
-    return new Response(JSON.stringify({ name: 'startup-plugin', version: '1.0.0' }), {
+    manifestRequests += 1
+    return new Response(JSON.stringify({ name: 'startup-plugin', version: '1.0.0',
+      ...(manifestRequests === 1 ? { scripts: { postinstall: 'node build.js' } } : {}) }), {
       status: 200, headers: { 'content-type': 'application/json' },
     })
   })
@@ -239,7 +242,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const runOperation = async (kind: 'mcp' | 'skill' | 'plugin', payload: string): Promise<void> => {
     const plan = await operations.prepare(authority, kind, payload)
     const operationId = randomUUID()
-    operations.commit(authority, plan.planId, operationId)
+    operations.commit(authority, plan.planId, operationId, undefined, plan.scriptApproval?.digest)
     await operations.settled()
     const status = operations.status(authority, operationId)
     if (status.state !== 'succeeded') throw new Error(JSON.stringify(status))
@@ -260,7 +263,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   }))
   let failRemoval = false
   mocks.pluginCommand.mockImplementation(async (raw) => {
-    const input = raw as { profileRoot: string; spec: string; action?: string }
+    const input = raw as { profileRoot: string; spec: string; action?: string; allowBuild?: string }
     if (input.action === 'repair') return
     const path = join(input.profileRoot, 'profiles/web/package.json')
     const manifest = JSON.parse(readFileSync(path, 'utf8')) as {
@@ -284,6 +287,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     }
   })
   await runOperation('plugin', JSON.stringify({ packageName: 'startup-plugin', spec: 'startup-plugin@1.0.0' }))
+  expect(mocks.pluginCommand).toHaveBeenCalledWith(expect.objectContaining({ allowBuild: 'startup-plugin@1.0.0' }))
   await runOperation('plugin', JSON.stringify({
     action: 'toggle', packageName: 'startup-plugin', enabled: false,
   }))
