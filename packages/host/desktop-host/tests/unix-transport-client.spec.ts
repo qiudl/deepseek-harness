@@ -41,6 +41,7 @@ const allCapabilities = [
   'profile.recovery_status',
   'profile.open_offline_account',
   'profile.extensions',
+  'profile.model_text',
 ].sort() as HostControlCapability[]
 
 function inspection(
@@ -131,6 +132,36 @@ const inventory = {
 }
 
 describe('Unix Host client protocol projections', () => {
+  it('projects bounded personal model text only when the Host advertises it', async () => {
+    const seen: HostControlFrame[] = []
+    const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, {}) },
+      [...baseCapabilities].sort())
+    await expect(unsupported.client.generateModelText({ ...binding, text: 'question' }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(seen).toEqual([])
+
+    const enabled = await makeClient((frame) => {
+      seen.push(frame)
+      return result(frame, { state: 'complete', provider: 'deepseek', model: 'deepseek-chat', text: 'answer' })
+    })
+    await expect(enabled.client.generateModelText({ ...binding, text: 'question' })).resolves.toEqual({
+      state: 'complete', provider: 'deepseek', model: 'deepseek-chat', text: 'answer',
+    })
+    expect(seen.at(-1)).toMatchObject({ method: 'profile.model_text', params: {
+      authority_environment_id: binding.authorityEnvironmentId,
+      account_binding_handle: binding.accountBindingHandle,
+      authority_binding_version: binding.authorityBindingVersion,
+      text: 'question',
+    } })
+
+    const wrongKind = await makeClient(frame => frame)
+    await expect(wrongKind.client.generateModelText({ ...binding, text: 'question' }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    const wrongMethod = await makeClient(frame => ({ ...result(frame, {}), method: 'profile.status' } as HostControlFrame))
+    await expect(wrongMethod.client.generateModelText({ ...binding, text: 'question' }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('projects one-use model claim confirmation and committed outcome', async () => {
     const seen: HostControlFrame[] = []
     const request = { viewLeaseId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3146', leaseGeneration: 2,
