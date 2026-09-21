@@ -24,6 +24,44 @@ describe('Profile extension wire commands', () => {
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
     }
   })
+  it('round-trips explicit lifecycle-script approval on prepare and commit', () => {
+    const scriptDigest = 'b'.repeat(64)
+    const commit = frame({ action: 'commit', plan_id: randomUUID(), operation_id: randomUUID(), script_digest: scriptDigest })
+    expect(encodeHostControlFrame(decode(commit))).toBe(`${JSON.stringify(commit)}\n`)
+    const prepared = { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.extensions', result: {
+      state: 'prepared', plan_id: randomUUID(), kind: 'plugin', digest: 'a'.repeat(64), expires_at: 2000,
+      scripts: [{ name: 'postinstall', command: 'node build.js' }], script_digest: scriptDigest,
+    } }
+    expect(encodeHostControlFrame(decode(prepared))).toBe(`${JSON.stringify(prepared)}\n`)
+  })
+  it('rejects incomplete, oversized, or unsafe lifecycle-script approval metadata', () => {
+    const prepared = { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.extensions', result: {
+      state: 'prepared', plan_id: randomUUID(), kind: 'plugin', digest: 'a'.repeat(64), expires_at: 2000,
+      scripts: [{ name: 'postinstall', command: 'node build.js' }], script_digest: 'b'.repeat(64),
+    } }
+    const badScripts: unknown[] = [
+      undefined,
+      [],
+      Array.from({ length: 7 }, () => ({ name: 'install', command: 'node build.js' })),
+      [null],
+      [{ name: 'install', command: 'node build.js', extra: true }],
+      [{ name: 1, command: 'node build.js' }],
+      [{ name: 'unknown', command: 'node build.js' }],
+      [{ name: 'install', command: 1 }],
+      [{ name: 'install', command: '' }],
+      [{ name: 'install', command: 'x'.repeat(4097) }],
+      [{ name: 'install', command: 'node\u0000build.js' }],
+    ]
+    for (const scripts of badScripts) {
+      const result = scripts === undefined
+        ? { ...prepared.result, scripts: undefined }
+        : { ...prepared.result, scripts }
+      expect(() => decode({ ...prepared, result })).toThrow()
+    }
+    const { script_digest: _digest, ...withoutDigest } = prepared.result
+    expect(() => decode({ ...prepared, result: withoutDigest })).toThrow()
+    expect(() => decode({ ...prepared, result: { ...prepared.result, scripts: 'not-an-array' } })).toThrow()
+  })
   it('rejects injected paths, unknown actions, invalid ids and oversized UTF-8 payloads', () => {
     for (const command of [
       { action: 'prepare', kind: 'mcp', payload: '{}', profile_root: '/another-user' },
