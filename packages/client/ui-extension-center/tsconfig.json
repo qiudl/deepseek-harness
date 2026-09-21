@@ -5,6 +5,7 @@
   "references": [
     { "path": "../../../vendor/cordis" },
     { "path": "../locale" },
+    { "path": "../ui-layout" },
     { "path": "../ui-primitives" },
     { "path": "../ui-renderer" },
     { "path": "../ui-sidebar" },
