@@ -1,4 +1,5 @@
 import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
 
 interface StartProfileWorkerInput {
@@ -79,6 +80,17 @@ export class ProfileWorkerSupervisor {
       throw new HostAuthorityError('unavailable')
     }
     return { origin: worker.viewOrigin, generation: worker.generation, bootstrapCookie: worker.bootstrapCookie }
+  }
+
+  /** Execute one closed Session command in the running Profile worker. */
+  async remoteSession(
+    profileId: string,
+    command: HostRemoteSessionCommand,
+    signal: AbortSignal,
+  ): Promise<HostRemoteSessionJson> {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.remoteSession) throw new HostAuthorityError('unavailable')
+    return worker.remoteSession(command, signal)
   }
 
   /**

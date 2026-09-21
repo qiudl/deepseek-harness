@@ -9,6 +9,12 @@
   ],
   "references": [
     {
+      "path": "../../api/gateway/tsconfig.host.json"
+    },
+    {
+      "path": "../../host/control-protocol"
+    },
+    {
       "path": "../../../vendor/cordis"
     },
     {

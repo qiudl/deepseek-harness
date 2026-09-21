@@ -26,6 +26,7 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-shell-env'
+import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'web-app'
@@ -224,6 +225,19 @@ export const internals: {
  */
 export function apply(ctx: Context, config: Config): void {
   const runtime = resolveLanTrust(ctx.webServer.host, config.trustedHosts)
+  const desktopRemoteSessionToken = process.env.DSH_PROFILE_REMOTE_SESSION_TOKEN
+  if (desktopRemoteSessionToken && /^[A-Za-z0-9_-]{43}$/u.test(desktopRemoteSessionToken)) {
+    ctx.inject(['typertGateway'], (remoteCtx) => {
+      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway)
+      remoteCtx.effect(() => remoteCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-remote-session',
+        handler: (req, res) => handleDesktopRemoteSessionRequest(
+          req, res, desktopRemoteSessionToken,
+          (command, signal) => executor.execute(command, signal),
+        ),
+      }))
+    })
+  }
   // The loopback URL belongs to this host. Under SSH, the operator reaches it
   // through a local forwarding address that this process cannot derive.
   const handoffBrowser = config.openBrowser && !launchedThroughSsh(launchEnvironmentOf(ctx))

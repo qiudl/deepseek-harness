@@ -1,8 +1,10 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import type { Writable } from 'node:stream'
 import { promisify } from 'node:util'
+import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
@@ -10,6 +12,7 @@ const execFileAsync = promisify(execFile)
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
+  'DSH_PROFILE_REMOTE_SESSION_TOKEN',
 ])
 // The Profile's environment is whatever the Host hands over on fd 3, never the ambient one.
 // SystemRoot and its siblings are the exception: libuv injects them into every child it spawns
@@ -149,12 +152,14 @@ export class DshWebProfileWorkerFactory {
   async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
+    const remoteSessionToken = randomBytes(32).toString('base64url')
     const environment = {
       ...spec.env,
       DSH_HOME: root,
       DSH_PROFILE_ID: spec.profileId,
       DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
       DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
+      DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
     }
     const windows = process.platform === 'win32' || this.options.platform === 'win32'
     const configurationInput = windows
@@ -178,7 +183,7 @@ export class DshWebProfileWorkerFactory {
     if (configurationInput !== undefined) this.sendWindowsConfiguration(child, configurationInput)
     const activated = await this.waitForOrigin(child, spawnedAt)
     this.generation += 1
-    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation)
+    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation, remoteSessionToken)
   }
 
   private sendWindowsConfiguration(child: ChildProcess, input: string): void {
@@ -262,6 +267,7 @@ export class DshWebProfileWorkerFactory {
     viewOrigin: string,
     bootstrapCookie: { readonly name: string; readonly value: string },
     generation: number,
+    remoteSessionToken: string,
   ): ProfileWorkerHandle {
     // Readiness removed the only reader of these pipes; a full pipe would block the
     // running worker, so both are drained for the rest of its life.
@@ -283,6 +289,9 @@ export class DshWebProfileWorkerFactory {
       viewOrigin,
       generation,
       bootstrapCookie,
+      remoteSession: (command, signal) => this.remoteSession(
+        viewOrigin, remoteSessionToken, command, signal, () => requestedStop || settled,
+      ),
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
         if (requestedStop || settled) return
@@ -293,5 +302,31 @@ export class DshWebProfileWorkerFactory {
       },
       done,
     }
+  }
+
+  private async remoteSession(
+    viewOrigin: string,
+    token: string,
+    command: HostRemoteSessionCommand,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostRemoteSessionJson> {
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const response = await fetch(`${viewOrigin}/internal/desktop-remote-session`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(command),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
+    })
+    if (!response.ok) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
+    const body = await response.text()
+    if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')
+    let parsed: unknown
+    try { parsed = JSON.parse(body) } catch { throw new HostAuthorityError('unavailable') }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'value')) {
+      throw new HostAuthorityError('unavailable')
+    }
+    return (parsed as { value: HostRemoteSessionJson }).value
   }
 }

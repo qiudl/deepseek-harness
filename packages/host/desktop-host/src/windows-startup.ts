@@ -13,7 +13,7 @@ import {
   type ProfileListenerAttestor,
 } from './dsh-web-profile-worker.ts'
 import { ProfileRegistry } from './profile-registry.ts'
-import { SessionCommandAuthority } from './session-command.ts'
+import { executeRemoteSessionCommand, SessionCommandAuthority } from './session-command.ts'
 import type { HostClock, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import { HostControlAuthority } from './unix-transport.ts'
@@ -442,6 +442,9 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
+        remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({
+          authority: commandAuthority, workers, profileId, command, signal,
+        }),
         ...(mcp && extensionOperations ? { extensions: { operations: extensionOperations, kinds: ['mcp'] as const,
           mcpRemove: true, mcpUpdate: true, inventory: (profileId: string) => mcp.inventory(profileId) } } : {}),
         profilePersistenceGeneration: () => 1,

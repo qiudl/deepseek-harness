@@ -41,6 +41,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-agent-presets": "workspace:^",
     "@deepseek-ai/dsh-api-remotes": "workspace:^",
+    "@deepseek-ai/dsh-api-gateway": "workspace:^",
     "@deepseek-ai/dsh-api-session-controller": "workspace:^",
     "@deepseek-ai/dsh-api-settings-controller": "workspace:^",
     "@deepseek-ai/dsh-api-workspace-controller": "workspace:^",
@@ -103,6 +104,7 @@
     "@deepseek-ai/dsh-host-directory-picker-browse": "workspace:^",
     "@deepseek-ai/dsh-host-directory-picker-native": "workspace:^",
     "@deepseek-ai/dsh-host-frontend-static": "workspace:^",
+    "@deepseek-ai/dsh-host-control-protocol": "workspace:^",
     "@deepseek-ai/dsh-host-open-in-app": "workspace:^",
     "@deepseek-ai/dsh-host-plugin-inventory": "workspace:^",
     "@deepseek-ai/dsh-host-webserver": "workspace:^",

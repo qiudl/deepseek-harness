@@ -1,4 +1,5 @@
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 /** Stable profile id that reveals no account or environment identifier. */
 export type PersonProfileId = Branded<'PersonProfileId'>
@@ -100,6 +101,11 @@ export interface ProfileWorkerHandle {
   readonly generation?: number
   /** Signed browser cookie exchanged owner-side; it never enters Renderer or logs. */
   readonly bootstrapCookie?: { readonly name: string; readonly value: string }
+  /** Host-only closed Session command; no worker token enters a view lease. */
+  readonly remoteSession?: (
+    command: HostRemoteSessionCommand,
+    signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
 }
 
 /** Factory that starts one isolated profile worker. */
