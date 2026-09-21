@@ -295,6 +295,7 @@ describe('dsh web Profile worker', () => {
     onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
     const executable = fixture(`#!${process.execPath}
       import { createServer } from 'node:http'
+      if (process.env.DSH_PROFILE_DEFAULT_PLUGINS !== '[{"name":"dsh-worktable","version":"0.4.0"}]') process.exit(94)
       const server = createServer((_request, response) => response.end())
       server.listen(0, '127.0.0.1', () => {
         const { port } = server.address()
@@ -394,6 +395,7 @@ describe('dsh web Profile worker', () => {
         expect(pid).toBeGreaterThan(0)
         await expect(fetch(origin).then(response => response.status)).resolves.toBe(401)
       },
+      defaultProfilePlugins: [{ name: 'dsh-worktable', version: '0.4.0' }],
     })
     process.env.DSH_TEST_SECRET = 'must-not-leak'
     const worker = await factory.create({
@@ -415,6 +417,8 @@ describe('dsh web Profile worker', () => {
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
     })
     await expect(factory.create({ ...spec(root), env: { DSH_HOME: '/tmp/attacker' } }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_DEFAULT_PLUGINS: '[]' } }))
       .rejects.toMatchObject({ code: 'invalid_input' })
   })
 
