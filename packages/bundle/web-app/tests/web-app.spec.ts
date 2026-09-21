@@ -152,7 +152,10 @@ describe('web-app runtime glue', () => {
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ provider: 'deepseek', model: 'chat', text: 'answer' })
     } finally {
-      await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()))
+      await new Promise<void>((resolve, reject) => http.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
       await ctx.fiber.dispose()
     }
   })
