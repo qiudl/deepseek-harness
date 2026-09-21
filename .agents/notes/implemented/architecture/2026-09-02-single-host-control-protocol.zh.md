@@ -20,7 +20,7 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 后续操作任务扩展已解码载荷联合，不得削弱帧边界，也不得把 transport、authorization、migration 或 Host 进程状态放进本包。
 
-`profile.remote_session` 定义绑定视图租约的 Session 与审批执行器线值，但不创建通用 API 代理。它的封闭命令联合携带独立 UUID 幂等键和按操作限制的字段；结果只接受限制深度、节点数、字符串长度和完整帧大小的 JSON。编解码器绝不接受 HTTP 路径、Profile 根目录、凭据、浏览器 cookie 或启动 token。在 Host 拥有能够重新校验租约并调用所选 Profile worker 的执行器前，该方法不会出现在 Host capability 中。
+`profile.remote_session` 定义绑定视图租约的 Session 与审批执行器线值，但不创建通用 API 代理。它的封闭命令联合携带独立 UUID 幂等键和按操作限制的字段；结果只接受限制深度、节点数、字符串长度和完整帧大小的 JSON。编解码器绝不接受 HTTP 路径、Profile 根目录、凭据、浏览器 cookie 或启动 token。Host 现在提供可选执行缝：仅在安装执行器时发布该方法，从绑定 owner 的有效 lease 解出 Profile，转发连接取消，在异步调用后重新校验 lease，并让结果通过规范 codec 后才响应。在 Profile worker 执行器接线前，启动组合仍不发布该 capability。
 
 `profile.ensure` 携带由规范 DSH Account 权威为 `dsh-host` audience 签发的短时 ES256 access token。`profile.ensure_account_token` capability 标识这一载荷修订。新客户端拒绝向缺少该 capability 的 Host 发送修订载荷；新 Host 仍解析旧载荷，并在访问 registry 前返回 `upgrade_required`。Host 使用 owner-private 公钥环校验精确 JWT 形状与签名，该公钥环的 SHA-256 摘要由嵌入应用发布版本固定；Host 随后要求已验证的 issuer 与 subject 等于 Desktop 提供的账号字段，才会读取或修改 Profile registry。Host 既不持久化也不记录该 token。
 
@@ -84,6 +84,6 @@ Decoder 接收完整字符串，因此能拒绝超限帧，却不能阻止 trans
 
 聚焦套件从已提交的 request、result、error 和签名原文向量开始，逐字节 round-trip。负向覆盖未知／缺失字段、空白、多帧、超限、伪造出站值、非规范 base64url、缺失基线 capability、身份复用、未来客户端降级协商、畸形或过期 Account token，以及 registry mutation 前的已验证 Account 不匹配。Host 生命周期覆盖证明：再次打开已激活 lease 会保留 id 和 generation，同时延后 expiry 并轮换单次 activation handle；本地 Profile 可以在没有 Account 凭据时 bootstrap、重连、restore 和 open。
 
-远程 Session codec 覆盖逐条往返所有允许命令和有界 JSON 结果，并拒绝未知操作、selector 注入、畸形操作字段、危险对象键和过深嵌套。Host 执行与 capability 测试保持独立，因为本次 codec 变更不发布该方法。
+远程 Session codec 覆盖逐条往返所有允许命令和有界 JSON 结果，并拒绝未知操作、selector 注入、畸形操作字段、危险对象键和过深嵌套。Host 权威覆盖证明条件 capability 发布、客户端 `upgrade_required`、执行前后 owner lease 校验、取消转发，以及非有限数执行结果在进入传输前被拒绝。
 
 离线恢复覆盖 scope 分离、唯一 handle 解析、缺失 root 的只读行为、二次预检 stale、operation 幂等、断线撤销、条件 capability 发布、多 vault 选择、映射后 not-found 继续、不可读 vault 报告和超时状态映射。Runtime fixture 覆盖 legacy closure 复制、内容摘要校验、最终根绝对链接重写、原子发布、recovery journal 完成，以及扁平化、断链、逃逸、特殊 inode 或不安全依赖拒绝。聚焦 recovery inspector 保持 statements、branches、functions、lines 四项 100%；任何用户批准的 materialization 前，真实 legacy Profile 只做只读检查。

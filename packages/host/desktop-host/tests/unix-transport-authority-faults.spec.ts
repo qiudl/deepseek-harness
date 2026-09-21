@@ -2,6 +2,7 @@ import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import type {
   HostControlCapability,
   HostExtensionKind,
+  HostRemoteSessionCommand,
   ProfileEnsureRequest,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { describe, expect, it, vi } from 'vitest'
@@ -105,6 +106,65 @@ async function localSelector(client: UnixHostClient): Promise<string> {
 }
 
 describe('Unix transport authority failures', () => {
+  it('advertises and executes remote session commands only through a live owned view lease', async () => {
+    const command: HostRemoteSessionCommand = {
+      operation: 'session.list', command_id: randomUUID() as never,
+    }
+    const unavailable = await authorityClient()
+    expect(unavailable.client.inspection.capabilities).not.toContain('profile.remote_session')
+    await expect(unavailable.client.remoteSession({ ...opened, command }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    unavailable.client.close()
+
+    const host = fakeHost()
+    const remoteSession = vi.fn(async (resolvedProfileId: string, received: HostRemoteSessionCommand,
+      signal: AbortSignal) => {
+      expect(signal.aborted).toBe(false)
+      return { profile_id: resolvedProfileId, operation: received.operation }
+    })
+    const { client } = await authorityClient({ host, remoteSession })
+    expect(client.inspection.capabilities).toContain('profile.remote_session')
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteSession({ ...lease, command })).resolves.toEqual({
+      profile_id: profileId, operation: 'session.list',
+    })
+    expect(host.authorizeExtensionView).toHaveBeenCalledTimes(2)
+    expect(remoteSession).toHaveBeenCalledWith(profileId, command, expect.any(AbortSignal))
+    client.close()
+  })
+
+  it('rechecks the remote session lease after awaited execution', async () => {
+    const host = fakeHost()
+    vi.mocked(host.authorizeExtensionView)
+      .mockReturnValueOnce(profileId as never)
+      .mockImplementationOnce(() => { throw new HostAuthorityError('stale') })
+    const { client } = await authorityClient({
+      host,
+      remoteSession: async () => ({ items: [] }),
+    })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteSession({
+      ...lease,
+      command: { operation: 'session.list', command_id: randomUUID() as never },
+    })).rejects.toMatchObject({ code: 'stale' })
+    client.close()
+  })
+
+  it('rejects an unbounded remote session executor result before transport', async () => {
+    const { client } = await authorityClient({
+      remoteSession: async () => ({ invalid: Number.NaN }) as never,
+    })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteSession({
+      ...lease,
+      command: { operation: 'session.list', command_id: randomUUID() as never },
+    })).rejects.toMatchObject({ code: 'unavailable' })
+    client.close()
+  })
+
   it('maps unavailable migration providers without exposing implementation failures', async () => {
     const absentExport = await authorityClient({ createMigrationExport: async () => undefined as never })
     const selector = await localSelector(absentExport.client)

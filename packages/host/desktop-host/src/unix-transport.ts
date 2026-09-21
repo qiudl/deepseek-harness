@@ -2,7 +2,8 @@ import { createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, verif
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import type {
-  HostExtensionCommand, HostExtensionResponse, HostExtensionKind, ProfileExtensionsRequest,
+  HostExtensionCommand, HostExtensionResponse, HostExtensionKind, HostRemoteSessionCommand,
+  HostRemoteSessionJson, ProfileExtensionsRequest, ProfileRemoteSessionRequest,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlErrorCode,
@@ -86,6 +87,11 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  readonly remoteSession?: (
+    profileId: string,
+    command: HostRemoteSessionCommand,
+    signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
   readonly extensions?: {
     readonly operations: ProfileExtensionOperations
     readonly kinds: readonly HostExtensionKind[]
@@ -221,7 +227,7 @@ interface MigrationExportChunk {
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'createMigrationExport' | 'createLegacyMigrationExport'
-    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
+    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions' | 'remoteSession'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1035,6 +1041,24 @@ export class HostControlAuthority {
             throw new HostAuthorityError('invalid_input')
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.remote_session') {
+          const execute = this.options.remoteSession
+          if (!execute) throw new HostAuthorityError('upgrade_required')
+          const authority = () => {
+            context.signal.throwIfAborted()
+            return this.options.host.authorizeExtensionView({
+              viewLeaseId: frame.params.view_lease_id as never,
+              leaseGeneration: frame.params.lease_generation,
+              runtimeGeneration: frame.params.runtime_generation,
+              ownerId,
+            })
+          }
+          const profileId = authority()
+          const value = await execute(profileId, frame.params.command, context.signal)
+          if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { value } }
+          channel.send(decodeHostControlFrame(encodeHostControlFrame(response)))
         } else if (frame.method === 'profile.view_activate') {
           const activated = await this.options.host.activateView({
             profileId: frame.params.profile_id as never,
@@ -1093,6 +1117,7 @@ export class HostControlAuthority {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
+          ...(this.options.remoteSession ? ['profile.remote_session'] : []),
           ...(this.options.extensions ? ['profile.extensions'] : []),
           ...(offlineAccountRecovery ? recoveryCapabilities : []),
           ...(migrationExport ? [
@@ -1711,6 +1736,28 @@ export class UnixHostClient {
     return frame.result
   }
 
+  /** Execute one bounded mobile Session command through the lease-selected Profile. */
+  async remoteSession(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: HostRemoteSessionCommand
+    readonly signal?: AbortSignal
+  }): Promise<HostRemoteSessionJson> {
+    if (!this.inspection.capabilities.includes('profile.remote_session' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRemoteSessionRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_session', params: {
+        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+        runtime_generation: input.runtimeGeneration, command: input.command,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.value
+  }
+
   /**
    * Close one view lease on the connection that minted it.
    * @param input - lease identity, generations, and optional cancellation.
@@ -2078,7 +2125,8 @@ export class UnixHostClient {
   }
 
   private async call(
-    request: ProfileExtensionsRequest | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
+    request: ProfileExtensionsRequest | ProfileRemoteSessionRequest
+      | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
