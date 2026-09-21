@@ -1,6 +1,7 @@
 import type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
+  HostRemoteSessionCommand, HostRemoteSessionJson, ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
   ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
   ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
@@ -236,6 +237,19 @@ function boundedText(value: unknown, max: number): string {
   return value
 }
 
+function wireText(value: unknown, maxBytes: number, multiline = false): string {
+  const controls = multiline
+    ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u
+    : /[\u0000-\u001f\u007f]/u
+  if (typeof value !== 'string' || !value || Buffer.byteLength(value, 'utf8') > maxBytes || controls.test(value)) reject()
+  return value
+}
+
+function remoteIdentifier(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value)) reject()
+  return value
+}
+
 function unlockMaterial(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(value)) reject()
   const decoded = Buffer.from(value, 'base64url')
@@ -418,6 +432,97 @@ function extensionCommand(value: unknown): HostExtensionCommand {
   }
   return reject()
 }
+
+function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
+  const command = record(value)
+  const command_id = uuid(command.command_id) as HostControlRequestId
+  if (command.operation === 'session.list' || command.operation === 'session.create') {
+    exactKeys(command, ['operation', 'command_id'])
+    return { operation: command.operation, command_id }
+  }
+  if (command.operation === 'session.history') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'max_events'])
+    if (!Number.isSafeInteger(command.max_events) || (command.max_events as number) < 1
+      || (command.max_events as number) > 100) reject()
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      max_events: command.max_events as number }
+  }
+  if (command.operation === 'session.prompt') {
+    const withTimeZone = 'client_time_zone' in command
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'mode', 'content',
+      ...(withTimeZone ? ['client_time_zone'] : [])])
+    if (command.mode !== 'queue' || !Array.isArray(command.content)
+      || command.content.length < 1 || command.content.length > 16) reject()
+    const content = command.content.map((value) => {
+      const part = record(value)
+      exactKeys(part, ['type', 'text'])
+      if (part.type !== 'text') reject()
+      return { type: 'text' as const, text: wireText(part.text, 32_768, true) }
+    })
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      mode: 'queue', content,
+      ...(withTimeZone ? { client_time_zone: wireText(command.client_time_zone, 128) } : {}) }
+  }
+  if (command.operation === 'session.cancel' || command.operation === 'session.delete') {
+    exactKeys(command, ['operation', 'command_id', 'session_id'])
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id) }
+  }
+  if (command.operation === 'session.rename') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'title'])
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      title: wireText(command.title, 256) }
+  }
+  if (command.operation === 'approval.poll') {
+    const withCursor = 'cursor' in command
+    exactKeys(command, ['operation', 'command_id', 'wait_ms', ...(withCursor ? ['cursor'] : [])])
+    if (!Number.isSafeInteger(command.wait_ms) || (command.wait_ms as number) < 100
+      || (command.wait_ms as number) > 5_000) reject()
+    return { operation: command.operation, command_id, wait_ms: command.wait_ms as number,
+      ...(withCursor ? { cursor: wireText(command.cursor, 512) } : {}) }
+  }
+  if (command.operation === 'approval.respond') {
+    const withDigest = 'operation_digest' in command
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'approval_id', 'outcome',
+      ...(withDigest ? ['operation_digest'] : [])])
+    if ((command.outcome !== 'allowed-once' && command.outcome !== 'rejected')
+      || (command.outcome === 'allowed-once') !== withDigest) reject()
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      approval_id: remoteIdentifier(command.approval_id), outcome: command.outcome,
+      ...(withDigest ? { operation_digest: digest(command.operation_digest) } : {}) }
+  }
+  return reject()
+}
+
+function remoteSessionJson(value: unknown, depth = 0, count = { value: 0 }): HostRemoteSessionJson {
+  count.value += 1
+  if (count.value > 1_024 || depth > 8) reject()
+  if (value === null || typeof value === 'boolean') return value
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) reject()
+    return value
+  }
+  if (typeof value === 'string') {
+    if (Buffer.byteLength(value, 'utf8') > 32_768) reject()
+    return value
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 256) reject()
+    return value.map(item => remoteSessionJson(item, depth + 1, count))
+  }
+  const source = record(value)
+  const entries = Object.entries(source)
+  if (entries.length > 256) reject()
+  const result: Record<string, HostRemoteSessionJson> = {}
+  for (const [key, item] of entries) {
+    if (!key || Buffer.byteLength(key, 'utf8') > 128 || /[\u0000-\u001f\u007f]/u.test(key)
+      || key === '__proto__' || key === 'prototype' || key === 'constructor') reject()
+    Object.defineProperty(result, key, {
+      value: remoteSessionJson(item, depth + 1, count), enumerable: true, configurable: true, writable: true,
+    })
+  }
+  return result
+}
+
 function extensionResponse(result: Record<string, unknown>): HostExtensionResponse {
   if (result.state === 'prepared') {
     const hasScripts = 'scripts' in result || 'script_digest' in result
@@ -531,6 +636,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
+  | ProfileRemoteSessionRequest
   | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
   | ProfileModelClaimRecoveryInventoryRequest
   | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest | ProfileModelClaimRetryRequest {
@@ -594,6 +700,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.model_claim_inventory', params: {
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
       lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+    } }
+  }
+  if (frame.method === 'profile.remote_session') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+      command: remoteSessionCommand(params.command),
     } }
   }
   if (frame.method === 'profile.extensions') {
@@ -792,6 +906,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileModelTextResult | ProfileLeaseCloseResult | ProfileExtensionsResult
+  | ProfileRemoteSessionResult
   | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
   | ProfileModelClaimRecoveryInventoryResult
   | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult | ProfileModelClaimRetryResult {
@@ -875,6 +990,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
       unassigned_credential_references: nonnegative(result.unassigned_credential_references),
       unassigned_credential_records: nonnegative(result.unassigned_credential_records),
     } }
+  }
+  if (frame.method === 'profile.remote_session') {
+    exactKeys(result, ['value'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { value: remoteSessionJson(result.value) } }
   }
   if (frame.method === 'profile.extensions') {
     return { version: 1, type: 'result', request_id, method: 'profile.extensions', result: extensionResponse(result) }

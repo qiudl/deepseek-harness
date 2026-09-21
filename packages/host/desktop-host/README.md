@@ -49,6 +49,8 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 Desktop model text requests require a token-verified connected Account grant owned by the requesting Host connection. The Host checks that grant before and after the worker call without changing the visible Profile view lease, forwards cancellation, and returns only a classified failure or bounded text. Each worker receives a random private token for its local endpoint; ordinary browser cookies cannot authorize that endpoint.
 
+Remote Session execution is an optional Host dependency. When installed, `profile.remote_session` is advertised and accepts only the control protocol's closed command union through a live owner-bound view lease. The Host resolves the Profile from that lease, forwards connection cancellation, rechecks the same lease after the awaited executor call, and validates the bounded result through the canonical wire codec before returning it. Hosts without the executor omit the capability, and the client returns `upgrade_required` without sending a command. This seam does not expose browser cookies, launch tokens, Profile paths, or a generic HTTP proxy.
+
 Account provisioning preserves the exact prior registry row when worker preparation fails, including an issuer or subject replacement. A concurrent registry change prevents rollback and returns `stale`. A missing worker provider rejects before registration. These rules affect registry metadata only; they neither authorize a cloud identity migration nor move or delete Profile content.
 
 Adding an account binding after restoring a row without the optional binding field writes the canonical registry field order, so the updated row remains readable after Host restart.

@@ -55,7 +55,7 @@ import { MigrationOwnerStateApplicator } from './migration-owner-state-applicato
 import { MaterializedMigrationOwnerStateSource } from './materialized-migration-owner-state-source.ts'
 import { existingProfilePatch, OfflineProfileRecoveryInspector, packagedRuntimeAppRoot } from './offline-profile-recovery.ts'
 import { RestartingMigrationTarget } from './restarting-migration-target.ts'
-import { FileHostJournal, SessionCommandAuthority } from './session-command.ts'
+import { executeRemoteSessionCommand, FileHostJournal, SessionCommandAuthority } from './session-command.ts'
 import { acquireSingleHostLock, type SingleHostLock } from './single-instance.ts'
 import type { HostClock, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
@@ -702,6 +702,9 @@ export async function startDesktopHostApplication(
       },
       host,
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
+      remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({
+        authority: commandAuthority, workers, profileId, command, signal,
+      }),
       extensions: { operations: extensionOperations, kinds: pluginExecutor ? ['plugin', 'mcp', 'skill'] : ['mcp', 'skill'],
         pluginRemove: pluginExecutor !== undefined, pluginUpdate: pluginExecutor !== undefined, pluginToggle: pluginExecutor !== undefined,
         skillArchives: true, skillRemove: true, skillReplace: true, skillFiles: true, skillInvocation: true,

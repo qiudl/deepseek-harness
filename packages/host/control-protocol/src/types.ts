@@ -871,6 +871,78 @@ export interface ProfileExtensionsResult {
   readonly result: HostExtensionResponse
 }
 
+/** JSON returned from one bounded remote Session command. */
+export type HostRemoteSessionJson =
+  | null | boolean | number | string
+  | readonly HostRemoteSessionJson[]
+  | { readonly [key: string]: HostRemoteSessionJson }
+
+/** Closed command set exposed to a remote personal client through a leased Profile. */
+export type HostRemoteSessionCommand =
+  | { readonly operation: 'session.list' | 'session.create'; readonly command_id: HostControlRequestId }
+  | {
+    readonly operation: 'session.history'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly max_events: number
+  }
+  | {
+    readonly operation: 'session.prompt'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly mode: 'queue'
+    readonly content: readonly { readonly type: 'text'; readonly text: string }[]
+    readonly client_time_zone?: string
+  }
+  | {
+    readonly operation: 'session.cancel' | 'session.delete'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+  }
+  | {
+    readonly operation: 'session.rename'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly title: string
+  }
+  | {
+    readonly operation: 'approval.poll'
+    readonly command_id: HostControlRequestId
+    readonly wait_ms: number
+    readonly cursor?: string
+  }
+  | {
+    readonly operation: 'approval.respond'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly approval_id: string
+    readonly outcome: 'allowed-once' | 'rejected'
+    readonly operation_digest?: HostControlSha256
+  }
+
+/** Execute one command only through the Profile worker selected by this view lease. */
+export interface ProfileRemoteSessionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_session'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly command: HostRemoteSessionCommand
+  }
+}
+
+/** Bounded worker projection; credentials, paths, cookies and launch tokens are excluded. */
+export interface ProfileRemoteSessionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_session'
+  readonly result: { readonly value: HostRemoteSessionJson }
+}
+
 /** Inspect legacy model candidates through a token-verified Account view. */
 export interface ProfileModelClaimInventoryRequest {
   readonly version: 1
@@ -1051,6 +1123,8 @@ export interface ProfileModelClaimRetryResult {
 
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
+  | ProfileRemoteSessionRequest
+  | ProfileRemoteSessionResult
   | ProfileExtensionsRequest
   | ProfileExtensionsResult
   | ProfileModelClaimInventoryRequest
