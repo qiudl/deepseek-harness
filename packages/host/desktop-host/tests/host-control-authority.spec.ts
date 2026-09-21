@@ -12,6 +12,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { DesktopModelWorkerError } from '../src/dsh-web-profile-worker.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
+import { HostAuthorityError } from '../src/types.ts'
 import { HostControlAuthority } from '../src/unix-transport.ts'
 import { WindowsHostWorkerBridge } from '../src/windows-host-worker-bridge.ts'
 
@@ -171,7 +172,8 @@ describe('transport-neutral Host control authority', () => {
       host, inspectModelClaimSource: inspectSource, generateModelText,
       profilePersistenceGeneration: () => 1, now: () => now,
     })
-    const session = authority.openSession(ownerId, new AbortController().signal)
+    const sessionController = new AbortController()
+    const session = authority.openSession(ownerId, sessionController.signal)
     const handshake = await session.handleRequest({
       version: 1, type: 'request', request_id: randomUUID() as never, method: 'host.inspect',
       params: { challenge: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8' as never,
@@ -216,7 +218,8 @@ describe('transport-neutral Host control authority', () => {
         model: 'deepseek-chat', text: 'answer: hello' } })
     expect(generateModelText).toHaveBeenCalledWith(profile.profileId, 'hello', expect.any(AbortSignal))
     const modelOwner = randomUUID()
-    const independent = authority.openSession(modelOwner, new AbortController().signal)
+    const independentController = new AbortController()
+    const independent = authority.openSession(modelOwner, independentController.signal)
     expect(await independent.handleRequest({
       version: 1, type: 'request', request_id: randomUUID() as never, method: 'host.inspect',
       params: { challenge: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8' as never,
@@ -229,7 +232,33 @@ describe('transport-neutral Host control authority', () => {
       method: 'profile.model_text', result: { state: 'complete', text: 'answer: hello' } })
     expect(host.authorizeAccountModelClaimView({ viewLeaseId: opened.viewLeaseId,
       leaseGeneration: opened.leaseGeneration, runtimeGeneration: 5, ownerId })).toBe(profile.profileId)
+    generateModelText.mockImplementationOnce(async (_profileId, _text, signal) => {
+      Object.defineProperty(signal, 'aborted', { value: true })
+      throw Error('private cancellation detail')
+    })
+    expect(await independent.handleRequest(modelRequest())).toMatchObject({ type: 'result',
+      method: 'profile.model_text', result: { state: 'rejected', code: 'cancelled' } })
     independent.close()
+    const noModelOwner = randomUUID()
+    await host.ensureAccountProfile({ issuer: 'https://accounts.example.test', subject: 'owner',
+      accountAccessToken: 'valid-token', keyHandle: 'keychain:model-claim', unlockMaterial,
+      ...binding, ownerId: noModelOwner })
+    const withoutModel = new HostControlAuthority({
+      identity: {
+        hostInstanceId, installationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3121',
+        installationPublicKey: publicKey, installationPrivateKey: keys.privateKey,
+        processNonce, executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1,
+      },
+      host, profilePersistenceGeneration: () => 1, now: () => now,
+    }).openSession(noModelOwner, new AbortController().signal)
+    expect(await withoutModel.handleRequest({
+      version: 1, type: 'request', request_id: randomUUID() as never, method: 'host.inspect',
+      params: { challenge: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8' as never,
+        client_instance_id: clientInstanceId as never, supported_versions: [1] },
+    })).toMatchObject({ type: 'result', method: 'host.inspect' })
+    expect(await withoutModel.handleRequest(modelRequest())).toMatchObject({ type: 'error',
+      method: 'profile.model_text', error: { code: 'upgrade_required' } })
+    withoutModel.close()
     generateModelText.mockRejectedValueOnce(new DesktopModelWorkerError('missing_credential'))
     expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'result',
       method: 'profile.model_text', result: { state: 'rejected', code: 'missing_credential' } })
@@ -241,6 +270,9 @@ describe('transport-neutral Host control authority', () => {
     expect(modelFailure).toMatchObject({ type: 'result', method: 'profile.model_text',
       result: { state: 'rejected', code: 'provider_failed' } })
     expect(encodeHostControlFrame(modelFailure)).not.toContain('private')
+    generateModelText.mockRejectedValueOnce(new HostAuthorityError('stale'))
+    expect(await session.handleRequest(modelRequest())).toMatchObject({ type: 'error',
+      method: 'profile.model_text', error: { code: 'stale' } })
     const success = await session.handleRequest(request())
     expect(success).toMatchObject({ type: 'result', method: 'profile.model_claim_inventory', result: {
       source_digest: inventory.sourceDigest, candidates: [{ id: 'llm-deepseek:deepseek', credential: 'present' }],

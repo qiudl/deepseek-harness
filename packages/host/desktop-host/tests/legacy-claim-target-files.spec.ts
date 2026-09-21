@@ -69,7 +69,7 @@ function windowsFixture() {
 }
 
 describe('legacy claim live target files', () => {
-  it('reads and durably replaces only the two Unix generation documents', () => {
+  it.skipIf(process.platform === 'win32')('reads and durably replaces only the two Unix generation documents', () => {
     const options = unixFixture()
     const files = new FileLegacyClaimTargetFiles(options.paths, options.uid)
     expect(files.read('settings').toString()).toBe('{}\n')
@@ -80,7 +80,7 @@ describe('legacy claim live target files', () => {
     expect(files.read('credentials').toString()).toContain('secret')
   })
 
-  it('projects and verifies one provider through real Unix target and recovery files', () => {
+  it.skipIf(process.platform === 'win32')('projects and verifies one provider through real Unix target and recovery files', () => {
     const options = unixFixture()
     const files = new FileLegacyClaimTargetFiles(options.paths, options.uid)
     const recovery = new LegacyClaimRecoveryStore(
@@ -102,7 +102,7 @@ describe('legacy claim live target files', () => {
     expect(files.read('credentials').toString()).not.toContain('old-secret')
   })
 
-  it('rejects malformed Unix paths, unsafe files, and failed publication', () => {
+  it.skipIf(process.platform === 'win32')('rejects malformed Unix paths, unsafe files, and failed publication', () => {
     const options = unixFixture()
     expect(() => new FileLegacyClaimTargetFiles({ ...options.paths, settingsPath: 'relative' }, options.uid)).toThrow()
     expect(() => new FileLegacyClaimTargetFiles({ ...options.paths, generation: 2 }, options.uid)).toThrow()
@@ -129,7 +129,7 @@ describe('legacy claim live target files', () => {
     expect(() => files.read('credentials')).toThrow()
   })
 
-  it('removes the temporary Unix file when publication fails', () => {
+  it.skipIf(process.platform === 'win32')('removes the temporary Unix file when publication fails', () => {
     const options = unixFixture()
     const files = new FileLegacyClaimTargetFiles(options.paths, options.uid, () => {
       rmSync(options.paths.settingsPath)

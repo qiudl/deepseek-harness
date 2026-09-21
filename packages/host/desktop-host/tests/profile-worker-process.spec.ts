@@ -29,6 +29,22 @@ class ControlledChild extends EventEmitter {
   readonly send = (_message: unknown, callback: (error: Error | null) => void) => { callback(null); return true }
 }
 
+function controlledWebChild(): EventEmitter & {
+  stdout: PassThrough
+  stderr: PassThrough
+  kill(signal?: string | number): boolean
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: PassThrough
+    stderr: PassThrough
+    kill(signal?: string | number): boolean
+  }
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  child.kill = () => true
+  return child
+}
+
 async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle> {
   const factory = new ProfileWorkerProcessFactory({ executablePath: process.execPath, arguments: () => [] })
   const pending = (factory as unknown as { readyHandle(child: ChildProcess): Promise<ProfileWorkerHandle> })
@@ -226,31 +242,19 @@ describe('dsh web Profile worker', () => {
       ): ProfileWorkerHandle
     }).handle.bind(factory)
     const cookie = { name: 'dsh-auth-fixture', value: 'v1.fixture.fixture' }
-    const child = () => {
-      const controlled = new EventEmitter() as EventEmitter & {
-        stdout: PassThrough
-        stderr: PassThrough
-        kill(signal?: string | number): boolean
-      }
-      controlled.stdout = new PassThrough()
-      controlled.stderr = new PassThrough()
-      controlled.kill = () => true
-      return controlled
-    }
-
-    const errored = child()
+    const errored = controlledWebChild()
     const failed = handle(errored as unknown as ChildProcess, 'http://127.0.0.1:1', cookie, 1)
     const failure = expect(failed.done).rejects.toThrow('worker error')
     errored.emit('error', new Error('worker error'))
     errored.emit('exit', 1, null)
     await failure
 
-    const crashed = child()
+    const crashed = controlledWebChild()
     const unexpected = handle(crashed as unknown as ChildProcess, 'http://127.0.0.1:2', cookie, 2)
     crashed.emit('exit', 73, 'SIGABRT')
     await expect(unexpected.done).rejects.toThrow('73')
 
-    const clean = child()
+    const clean = controlledWebChild()
     const completed = handle(clean as unknown as ChildProcess, 'http://127.0.0.1:3', cookie, 3)
     clean.emit('exit', 0, null)
     clean.emit('error', new Error('late error'))
@@ -258,7 +262,7 @@ describe('dsh web Profile worker', () => {
     completed.abort()
 
     const signals: (string | number | undefined)[] = []
-    const stubborn = child()
+    const stubborn = controlledWebChild()
     stubborn.kill = (signal) => { signals.push(signal); return true }
     const stopped = handle(stubborn as unknown as ChildProcess, 'http://127.0.0.1:4', cookie, 4)
     stopped.abort()
@@ -276,7 +280,7 @@ describe('dsh web Profile worker', () => {
     const clearTimer = vi.spyOn(globalThis, 'clearTimeout').mockImplementationOnce(() => undefined)
     try {
       const raceSignals: (string | number | undefined)[] = []
-      const raced = child()
+      const raced = controlledWebChild()
       raced.kill = (signal) => { raceSignals.push(signal); return true }
       const racedStop = handle(raced as unknown as ChildProcess, 'http://127.0.0.1:5', cookie, 5)
       racedStop.abort()
@@ -288,6 +292,88 @@ describe('dsh web Profile worker', () => {
       setTimer.mockRestore()
       clearTimer.mockRestore()
     }
+  })
+
+  it('validates every model worker response before returning it to the Host', async () => {
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    })
+    const handle = (factory as unknown as {
+      handle(
+        child: ChildProcess,
+        origin: string,
+        cookie: { readonly name: string; readonly value: string },
+        generation: number,
+        modelToken: string,
+      ): ProfileWorkerHandle
+    }).handle.bind(factory)
+    const cookie = { name: 'dsh-auth-fixture', value: 'v1.fixture.fixture' }
+    const controlled = controlledWebChild()
+    const worker = handle(controlled as unknown as ChildProcess, 'http://127.0.0.1:1', cookie, 1, 'A'.repeat(43))
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const generate = (text = 'question') => worker.generateText!(text, new AbortController().signal)
+    try {
+      fetchMock.mockResolvedValueOnce(new Response('x'.repeat(17_409), { status: 200 }))
+      await expect(generate()).rejects.toMatchObject({ code: 'unavailable' })
+      fetchMock.mockResolvedValueOnce(new Response('{', { status: 200 }))
+      await expect(generate()).rejects.toMatchObject({ code: 'unavailable' })
+      for (const value of [null, [], 'text']) {
+        fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(value), { status: 200 }))
+        await expect(generate()).rejects.toMatchObject({ code: 'unavailable' })
+      }
+      for (const code of [
+        'invalid_input', 'no_default_model', 'missing_credential', 'provider_failed', 'cancelled', 'timeout',
+        'response_too_large',
+      ] as const) {
+        fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: code }), { status: 422 }))
+        await expect(generate()).rejects.toMatchObject({ code })
+      }
+      fetchMock.mockResolvedValueOnce(new Response('{"error":"private"}', { status: 422 }))
+      await expect(generate()).rejects.toMatchObject({ code: 'unavailable' })
+      for (const value of [
+        { provider: 1, model: 'm', text: 'a' },
+        { provider: ' ', model: 'm', text: 'a' },
+        { provider: 'p'.repeat(257), model: 'm', text: 'a' },
+        { provider: 'p', model: 1, text: 'a' },
+        { provider: 'p', model: ' ', text: 'a' },
+        { provider: 'p', model: 'm'.repeat(257), text: 'a' },
+        { provider: 'p', model: 'm', text: 1 },
+        { provider: 'p', model: 'm', text: ' ' },
+        { provider: 'p', model: 'm', text: 'a'.repeat(16_385) },
+        { provider: 'p', model: 'm', text: 'a', extra: true },
+      ]) {
+        fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(value), { status: 200 }))
+        await expect(generate()).rejects.toMatchObject({ code: 'unavailable' })
+      }
+      fetchMock.mockResolvedValueOnce(new Response('{"provider":"p","model":"m","text":"answer"}', { status: 200 }))
+      await expect(generate()).resolves.toEqual({ provider: 'p', model: 'm', text: 'answer' })
+      const lastCall = fetchMock.mock.lastCall
+      expect(lastCall?.[0]).toBe('http://127.0.0.1:1/internal/desktop-model-text')
+      expect(lastCall?.[1]?.method).toBe('POST')
+      expect(lastCall?.[1]?.headers).toMatchObject({ authorization: `Bearer ${'A'.repeat(43)}` })
+      expect(lastCall?.[1]?.body).toBe('{"text":"question"}')
+      expect(lastCall?.[1]?.signal).toBeInstanceOf(AbortSignal)
+    } finally {
+      fetchMock.mockRestore()
+      worker.abort()
+      controlled.emit('exit', 0, null)
+      await worker.done
+    }
+
+    const stoppedChild = controlledWebChild()
+    const stopped = handle(stoppedChild as unknown as ChildProcess, 'http://127.0.0.1:2', cookie, 2, 'B'.repeat(43))
+    stopped.abort()
+    await expect(stopped.generateText?.('question', new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    stoppedChild.emit('exit', 0, null)
+    await stopped.done
+
+    const settledChild = controlledWebChild()
+    const settled = handle(settledChild as unknown as ChildProcess, 'http://127.0.0.1:3', cookie, 3, 'C'.repeat(43))
+    settledChild.emit('exit', 0, null)
+    await settled.done
+    await expect(settled.generateText?.('question', new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
   })
 
   it.runIf(process.platform !== 'darwin')('fails closed when the default macOS listener attestor is unavailable', async () => {
