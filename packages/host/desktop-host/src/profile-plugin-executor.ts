@@ -6,6 +6,8 @@ import type { ExtensionExecutor, ExtensionKind, ExtensionReceipt, PluginToggleRe
 import { removePluginToggleOverrides, type PluginTogglePlan } from './plugin-toggle-plan.ts'
 import { validPluginPackageRecovery, type PluginPackageRecovery } from './plugin-package-recovery.ts'
 import { isPinnedPluginSpec } from './plugin-command.ts'
+import type { PluginScriptApproval } from './plugin-script-preflight.ts'
+import { parse } from 'yaml'
 
 type Lifetime = Parameters<ExtensionExecutor['execute']>[2]
 interface PluginRemoveInput { action: 'remove'; packageName: string }
@@ -21,6 +23,7 @@ interface ProfilePluginExecutorOptions {
   remove?(this: void, profileRoot: string, packageName: string, context: Lifetime): Promise<void>
   acknowledgeRemoval?(this: void, profileId: string, entryIds: readonly string[], context: Lifetime): Promise<void>
   install(profileRoot: string, spec: string, context: Lifetime): Promise<void>
+  inspectScripts?(packageName: string, spec: string, signal?: AbortSignal): Promise<PluginScriptApproval | undefined>
   /** Must reload the selected worker and prove the installed bundle's contributions; CLI exit is insufficient. */
   acknowledge(profileId: string, packageName: string, context: Lifetime): Promise<void>
 }
@@ -101,6 +104,14 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
         if (Array.isArray(bundles) && bundles.includes(parsed.packageName)) throw Error('plugin_already_installed')
       }
     }
+  }
+  /** Inspect immutable package metadata without mutating the selected Profile. */
+  preflight(profileId: string, kind: ExtensionKind, payload: string): Promise<PluginScriptApproval | undefined> {
+    if (kind !== 'plugin') return Promise.resolve(undefined)
+    this.root(profileId)
+    const parsed = input(payload)
+    if ('action' in parsed || !this.options.inspectScripts) return Promise.resolve(undefined)
+    return this.options.inspectScripts(parsed.packageName, parsed.spec)
   }
   /** @param profileId Selected Profile. @returns Revision of package resolution, build policy and patch inputs. */
   revision(profileId: string): Promise<string> {
@@ -298,13 +309,28 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     }
     const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable)
       : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)])) : value
+    const policy = (text: string | null): unknown => {
+      if (text === null) return null
+      const value: unknown = parse(text)
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_plugin_policy')
+      const copy = structuredClone(value) as Record<string, unknown>
+      if (copy.allowBuilds !== undefined) {
+        const builds = record(copy.allowBuilds)
+        for (const key of Object.keys(builds)) {
+          if (key === name || key.startsWith(`${name}@`)) Reflect.deleteProperty(builds, key)
+        }
+        if (!Object.keys(builds).length) delete copy.allowBuilds
+      }
+      return stable(copy)
+    }
     const values: unknown[] = []
     for (const prefix of ['', 'profiles/web/']) {
       values.push(normalize(this.read(root, `${prefix}package.json`), !!prefix))
       for (const file of ['pnpm-workspace.yaml', '.npmrc', 'cordis.patch.yml']) {
         const text = this.read(root, `${prefix}${file}`)
-        values.push(prefix && file === 'cordis.patch.yml' && text !== null && removedIds.length
-          ? removePluginToggleOverrides(text, removedIds.map(id => id.slice('include:'.length))) : text)
+        values.push(file === 'pnpm-workspace.yaml' ? policy(text)
+          : prefix && file === 'cordis.patch.yml' && text !== null && removedIds.length
+            ? removePluginToggleOverrides(text, removedIds.map(id => id.slice('include:'.length))) : text)
       }
     }
     return createHash('sha256').update(JSON.stringify(stable(values))).digest('hex')

@@ -125,6 +125,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<HostControlErrorCode>([
   'conflict',
   'busy',
   'upgrade_required',
+  'script_approval_required',
   'migration_required',
   'unavailable',
   'internal_error',
@@ -406,9 +407,10 @@ function extensionCommand(value: unknown): HostExtensionCommand {
     return { action: 'prepare', kind: extensionKind(command.kind), payload: command.payload }
   }
   if (command.action === 'commit') {
-    exactKeys(command, ['action', 'plan_id', 'operation_id'])
+    exactKeys(command, ['action', 'plan_id', 'operation_id', ...('script_digest' in command ? ['script_digest'] : [])])
     return { action: 'commit', plan_id: uuid(command.plan_id) as HostExtensionPlanId,
-      operation_id: uuid(command.operation_id) as HostExtensionOperationId }
+      operation_id: uuid(command.operation_id) as HostExtensionOperationId,
+      ...('script_digest' in command ? { script_digest: digest(command.script_digest) } : {}) }
   }
   if (command.action === 'status' || command.action === 'cancel') {
     exactKeys(command, ['action', 'operation_id'])
@@ -418,9 +420,19 @@ function extensionCommand(value: unknown): HostExtensionCommand {
 }
 function extensionResponse(result: Record<string, unknown>): HostExtensionResponse {
   if (result.state === 'prepared') {
-    exactKeys(result, ['state', 'plan_id', 'kind', 'digest', 'expires_at'])
+    const hasScripts = 'scripts' in result || 'script_digest' in result
+    exactKeys(result, ['state', 'plan_id', 'kind', 'digest', 'expires_at', ...(hasScripts ? ['scripts', 'script_digest'] : [])])
+    if (hasScripts && (!Array.isArray(result.scripts) || result.scripts.length < 1 || result.scripts.length > 6)) reject()
+    const scripts = hasScripts ? (result.scripts as unknown[]).map((value) => {
+      const row = record(value); exactKeys(row, ['name', 'command'])
+      if (typeof row.name !== 'string' || !['preinstall', 'install', 'postinstall', 'prepack', 'prepare', 'postpack'].includes(row.name)
+        || typeof row.command !== 'string' || !row.command || new TextEncoder().encode(row.command).byteLength > 4096
+        || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(row.command)) reject()
+      return { name: row.name, command: row.command }
+    }) : undefined
     return { state: 'prepared', plan_id: uuid(result.plan_id) as HostExtensionPlanId, kind: extensionKind(result.kind),
-      digest: digest(result.digest), expires_at: timestamp(result.expires_at) }
+      digest: digest(result.digest), expires_at: timestamp(result.expires_at),
+      ...(scripts ? { scripts, script_digest: digest(result.script_digest) } : {}) }
   }
   if (result.state === 'inventory') {
     exactKeys(result, ['state', 'kind', 'entries', ...('plugin_remove' in result ? ['plugin_remove'] : []), ...('plugin_update' in result ? ['plugin_update'] : []), ...('plugin_toggle' in result ? ['plugin_toggle'] : []), ...('skill_archives' in result ? ['skill_archives'] : []), ...('skill_remove' in result ? ['skill_remove'] : []), ...('skill_replace' in result ? ['skill_replace'] : []), ...('skill_files' in result ? ['skill_files'] : []), ...('skill_invocation' in result ? ['skill_invocation'] : []), ...('mcp_remove' in result ? ['mcp_remove'] : []), ...('mcp_update' in result ? ['mcp_update'] : [])])

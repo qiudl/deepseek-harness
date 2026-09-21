@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
-import { lstatSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, lstatSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { buildPluginCommand } from '#hub-plugin-command'
+import { parseDocument } from 'yaml'
 
 /** Host-owned binaries and selected Profile; renderer input supplies only the immutable package spec. */
 export interface ProfilePluginCommand {
@@ -14,6 +15,8 @@ export interface ProfilePluginCommand {
   uid: number
   spec: string
   action?: 'remove' | 'repair'
+  /** Exact manifest identity approved by the second confirmation. */
+  allowBuild?: string
   signal: AbortSignal
   guard(this: void): void
 }
@@ -29,6 +32,28 @@ export function isPinnedPluginSpec(spec: string): boolean {
 function shellQuote(path: string): string { return `'${path.replaceAll("'", "'\\''")}'` }
 function assertPluginAuthority(guard: () => void): void {
   try { guard() } catch { throw Error('plugin_authority_revoked') }
+}
+function persistBuildApproval(profileRoot: string, uid: number, buildKey: string): void {
+  if (!exactNpm.test(buildKey)) {
+    throw Error('invalid_build_approval')
+  }
+  const path = join(profileRoot, 'pnpm-workspace.yaml')
+  const stat = lstatSync(path)
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.uid !== uid || (stat.mode & 0o022) !== 0) throw Error('unsafe_plugin_policy')
+  const document = parseDocument(readFileSync(path, 'utf8'))
+  if (document.errors.length) throw Error('invalid_plugin_policy')
+  const current = document.getIn(['allowBuilds', buildKey])
+  if (current !== undefined && current !== true) throw Error('build_policy_conflict')
+  document.setIn(['allowBuilds', buildKey], true)
+  const temporary = join(profileRoot, `.plugin-policy-${process.pid}-${Date.now()}`)
+  const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+  let published = false
+  try {
+    try { writeFileSync(fd, document.toString()); fsyncSync(fd) } finally { closeSync(fd) }
+    renameSync(temporary, path); published = true
+    const directory = openSync(profileRoot, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try { fsyncSync(directory) } finally { closeSync(directory) }
+  } finally { if (!published) unlinkSync(temporary) }
 }
 
 /**
@@ -52,11 +77,18 @@ export async function runProfilePluginCommand(input: ProfilePluginCommand): Prom
   try {
     writeFileSync(join(shim, 'pnpm'), `#!/bin/sh\nexec ${shellQuote(input.nodeExecutablePath)} ${shellQuote(input.pnpmEntrypointPath)} "$@"\n`, { mode: 0o700 })
     assertPluginAuthority(input.guard); input.signal.throwIfAborted()
+    if (input.allowBuild) {
+      const approvedName = input.allowBuild.slice(0, input.allowBuild.lastIndexOf('@'))
+      const requestedName = exactNpm.exec(input.spec)?.[0].slice(0, input.spec.lastIndexOf('@'))
+      if (input.action || (requestedName !== undefined && requestedName !== approvedName)) throw Error('invalid_build_approval')
+      persistBuildApproval(input.profileRoot, input.uid, input.allowBuild)
+      assertPluginAuthority(input.guard); input.signal.throwIfAborted()
+    }
     await new Promise<void>((resolve, reject) => {
       const child = spawn(input.nodeExecutablePath, [input.dshEntrypointPath,
         ...(input.action === 'repair' ? ['plugin', '--profile', 'web', 'install', '--no-frozen-lockfile', '--ignore-scripts']
           : buildPluginCommand('web', input.action ?? 'add', input.action === 'remove'
-            ? [input.spec, '--config.ignore-scripts=true'] : [input.spec, '--save-exact', '--ignore-scripts']))], {
+            ? [input.spec, '--config.ignore-scripts=true'] : [input.spec, '--save-exact', ...(input.allowBuild ? [] : ['--ignore-scripts'])]))], {
         cwd: input.profileRoot, detached: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
         env: { PATH: `${shim}:${dirname(input.nodeExecutablePath)}:/usr/bin:/bin`, HOME: homedir(), DSH_HOME: input.profileRoot, CI: '1' },
       })

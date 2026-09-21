@@ -142,6 +142,21 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
 
 it.skipIf(process.platform === 'win32')('wires profile, extension, and migration owners into one disposable application', async () => {
   const { config, root, accountPrivateKey } = fixture()
+  const cleanup = { closeApplication: undefined as (() => Promise<void>) | undefined }
+  const fetchManifest = vi.fn<typeof fetch>(async (input) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (url !== 'https://registry.npmjs.org/startup-plugin/1.0.0') throw new Error(`unexpected request: ${url}`)
+    return new Response(JSON.stringify({ name: 'startup-plugin', version: '1.0.0' }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })
+  })
+  vi.stubGlobal('fetch', fetchManifest)
+  onTestFinished(async () => {
+    await cleanup.closeApplication?.()
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    rmSync(root, { recursive: true, force: true })
+  })
   mkdirSync(join(root, '.dsh/sessions'), { recursive: true, mode: 0o700 })
   vi.stubEnv('HOME', root)
   let serverOptions: UnixHostServerOptions | undefined
@@ -184,11 +199,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     attestPeer: async () => ({ uid: process.getuid!(), executableSignatureDigest: '2'.repeat(64) }),
     createServer: (options) => { serverOptions = options; return server },
   })
-  onTestFinished(async () => {
-    await application.close()
-    vi.unstubAllEnvs()
-    rmSync(root, { recursive: true, force: true })
-  })
+  cleanup.closeApplication = () => application.close()
   expect(serverStart).toHaveBeenCalledOnce()
   if (!serverOptions) throw new Error('missing captured server options')
   expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
@@ -278,6 +289,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   }))
   await runOperation('plugin', JSON.stringify({ action: 'remove', packageName: 'startup-plugin' }))
   await runOperation('plugin', JSON.stringify({ packageName: 'startup-plugin', spec: 'startup-plugin@1.0.0' }))
+  expect(fetchManifest).toHaveBeenCalledTimes(2)
   failRemoval = true
   const interruptedPlan = await operations.prepare(authority, 'plugin', JSON.stringify({
     action: 'remove', packageName: 'startup-plugin',

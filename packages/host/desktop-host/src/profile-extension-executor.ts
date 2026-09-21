@@ -20,6 +20,10 @@ export class ProfileExtensionExecutor implements ExtensionExecutor {
   validate(profileId: string, kind: ExtensionKind, payload: string): void {
     this.executor(kind).validate(profileId, kind, payload)
   }
+  /** Resolve script approval metadata before a plan exists; non-plugin kinds never request it. */
+  preflight(profileId: string, kind: ExtensionKind, payload: string) {
+    return kind === 'plugin' && this.plugin ? this.plugin.preflight(profileId, kind, payload) : Promise.resolve(undefined)
+  }
   /** @param profileId Authorized Profile. @returns Revision covering every configured installer. */
   async revision(profileId: string): Promise<string> {
     const revisions = await Promise.all([this.mcp.revision(profileId), this.skill.revision(profileId)])

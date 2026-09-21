@@ -28,6 +28,7 @@ import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
 import { ProfileSkillExecutor } from './profile-skill-executor.ts'
 import { ProfilePluginExecutor } from './profile-plugin-executor.ts'
 import { runProfilePluginCommand } from './plugin-command.ts'
+import { inspectPluginScripts } from './plugin-script-preflight.ts'
 import { planPluginToggle } from './plugin-toggle-plan.ts'
 import { pluginBundleEntries } from './plugin-bundle-entries.ts'
 import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
@@ -611,6 +612,7 @@ export async function startDesktopHostApplication(
     const pnpmEntrypointPath = config.pnpmEntrypointPath
     const pluginExecutor = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
       uid,
+      inspectScripts: (packageName, spec, signal) => inspectPluginScripts({ packageName, spec, ...(signal ? { signal } : {}) }),
       togglePlan: (profileId, packageName, enabled, patch) => {
         requiredProfile(registry, profileId)
         const profileRoot = join(root, 'profiles', profileId)
@@ -653,6 +655,7 @@ export async function startDesktopHostApplication(
         nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
         pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec,
         signal: context.signal, guard: context.guard,
+        ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
       }),
       acknowledge: async (profileId, packageName, context) => {
         context.guard(); context.signal.throwIfAborted()

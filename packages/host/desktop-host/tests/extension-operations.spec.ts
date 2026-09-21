@@ -227,6 +227,31 @@ function setup() {
 }
 
 describe('Profile extension operations', () => {
+  it('requires the exact preflight script digest before queuing an approved build', async () => {
+    const f = setup()
+    const scriptDigest = hash('reviewed scripts')
+    let approval: unknown
+    const operations = new ProfileExtensionOperations(f.store, {
+      ...f.executor,
+      preflight: async () => ({ buildKey: 'demo@1.0.0', digest: scriptDigest,
+        scripts: [{ name: 'postinstall', command: 'node build.js' }] }),
+      execute: async (_profileId, _payload, context) => {
+        approval = context.buildApproval
+        return { state: 'succeeded' as const }
+      },
+    }, { now: () => 1000 })
+    const plan = await operations.prepare(f.authority, 'plugin', 'immutable payload')
+    expect(plan.scriptApproval?.scripts).toEqual([{ name: 'postinstall', command: 'node build.js' }])
+    expect(() => operations.commit(f.authority, plan.planId, randomUUID())).toThrow('script_approval_required')
+    expect(() => operations.commit(f.authority, plan.planId, randomUUID(), undefined, hash('wrong')))
+      .toThrow('script_approval_required')
+    const id = randomUUID()
+    operations.commit(f.authority, plan.planId, id, undefined, scriptDigest)
+    await operations.settled()
+    expect(approval).toEqual({ buildKey: 'demo@1.0.0', digest: scriptDigest })
+    await operations.dispose(); await f.operations.dispose()
+  })
+
   it('persists before real writes, returns an idempotent receipt and keeps payload secrets out of disk', async () => {
     const f = setup()
     const plan = await f.operations.prepare(f.authority, 'mcp', 'token=private-test')

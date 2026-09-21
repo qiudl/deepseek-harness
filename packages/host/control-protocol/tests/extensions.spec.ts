@@ -8,6 +8,12 @@ const frame = (command: object) => ({ version: 1, type: 'request', request_id: r
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile extension wire commands', () => {
+  it('round-trips the explicit lifecycle-script approval error without leaking details', () => {
+    const value = { version: 1, type: 'error', request_id: randomUUID(), method: 'profile.extensions',
+      error: { code: 'script_approval_required', retryable: false, correlation_id: randomUUID() } }
+    expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+  })
+
   it('round-trips bounded prepare, confirmation, inventory and recovery queries', () => {
     for (const command of [
       { action: 'inventory', kind: 'mcp' }, { action: 'prepare', kind: 'mcp', payload: '{"mcpServers":{}}' },
