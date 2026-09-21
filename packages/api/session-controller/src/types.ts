@@ -327,6 +327,16 @@ export interface SessionRenameValue {
   readonly seq: number
 }
 
+/** Session requested for user-visible deletion. */
+export interface SessionDeleteRequest {
+  readonly sessionId: SessionId
+}
+
+/** Receipt after the Session is durably hidden and live work has drained. */
+export interface SessionDeleteValue {
+  readonly deleted: true
+}
+
 /** Session fork request. */
 export interface SessionForkRequest {
   readonly sessionId: SessionId

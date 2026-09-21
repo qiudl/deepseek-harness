@@ -127,9 +127,11 @@ export class ApiSessionList {
     signal?.throwIfAborted()
     const records = await this.ctx.sessionQuery.listSessions(signal)
     signal?.throwIfAborted()
+    const archived = new Set(this.ctx.get('workspaceRegistry')?.archivedSessionIds ?? [])
     const items: SessionSummary[] = []
     const cold: SessionHeader[] = []
     for (const record of records) {
+      if (archived.has(record.header.id)) continue
       const live = this.ctx.sessions.get(record.header.id)
       if (live !== undefined) {
         items.push(this.summaryFor(live))
@@ -177,8 +179,9 @@ export class ApiSessionList {
     try {
       const visible = await provider.listSessions(signal)
       signal.throwIfAborted()
+      const archived = new Set(this.ctx.get('workspaceRegistry')?.archivedSessionIds ?? [])
       const visibleIds = new Set(visible
-        .filter(record => record.header.cwd !== undefined)
+        .filter(record => record.header.cwd !== undefined && !archived.has(record.header.id))
         .map(record => record.header.id))
       if (visibleIds.size === 0) return { items: [], hasMore: false }
       const authorized: SessionSearchItem[] = []
