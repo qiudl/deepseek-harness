@@ -37,7 +37,7 @@ import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
 import { DesktopHost } from './desktop-host.ts'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'
-import { DshWebProfileWorkerFactory } from './dsh-web-profile-worker.ts'
+import { DshWebProfileWorkerFactory, type DefaultProfilePlugin } from './dsh-web-profile-worker.ts'
 import { createLegacyMigrationExportService } from './legacy-migration-source.ts'
 import { createMacOSPeerAttestor } from './macos-peer-attestor.ts'
 import { ProfileRegistry } from './profile-registry.ts'
@@ -124,6 +124,7 @@ export interface Config {
   readonly runtimeGeneration: number
   readonly schemaGeneration: number
   readonly legacySourceQuiescent?: boolean
+  readonly defaultProfilePlugins?: DefaultProfilePlugin[]
 }
 
 /** Validate the fail-closed startup settings resolved from the shipped profile patch. */
@@ -164,7 +165,23 @@ export const Config: z<Config> = z.object({
   runtimeGeneration: z.number().required(),
   schemaGeneration: z.number().required(),
   legacySourceQuiescent: z.boolean(),
+  defaultProfilePlugins: z.array(z.object({ name: z.string().required(), version: z.string().required() })),
 })
+
+const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u
+const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u
+
+function defaultProfilePlugins(value: readonly DefaultProfilePlugin[] | undefined): readonly DefaultProfilePlugin[] {
+  const plugins = value ?? []
+  const names = new Set<string>()
+  if (plugins.length > 32) throw new HostAuthorityError('invalid_input')
+  for (const plugin of plugins) {
+    if (!PACKAGE_NAME.test(plugin.name) || plugin.name.startsWith('@deepseek-ai/')
+      || !SEMVER.test(plugin.version) || names.has(plugin.name)) throw new HostAuthorityError('invalid_input')
+    names.add(plugin.name)
+  }
+  return plugins.map(plugin => Object.freeze({ name: plugin.name, version: plugin.version }))
+}
 
 /** Running owner composition; close reaches listener, worker, and lock quiescence. */
 export interface DesktopHostApplication {
@@ -261,6 +278,7 @@ export function windowsDesktopHostConfig(config: Config): WindowsDesktopHostPriv
     executableSignatureDigest: config.executableSignatureDigest,
     runtimeGeneration: config.runtimeGeneration,
     schemaGeneration: config.schemaGeneration,
+    defaultProfilePlugins: defaultProfilePlugins(config.defaultProfilePlugins),
     workerEntry: windowsFileUrl(config.windowsWorkerEntryPath),
     nativeModule: {
       path: config.windowsNativeModulePath,
@@ -432,6 +450,7 @@ export async function startDesktopHostApplication(
   if (config.pnpmEntrypointPath !== undefined) executableArtifact(config.pnpmEntrypointPath, uid)
   const workerFactory = new DshWebProfileWorkerFactory({
     nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+    defaultProfilePlugins: defaultProfilePlugins(config.defaultProfilePlugins),
   })
   /* v8 ignore next -- the production subprocess factory is exercised by packaged Host integration, not unit composition. */
   const workers = new ProfileWorkerSupervisor(dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)))

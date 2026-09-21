@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile)
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
+  'DSH_PROFILE_DEFAULT_PLUGINS',
 ])
 // The Profile's environment is whatever the Host hands over on fd 3, never the ambient one.
 // SystemRoot and its siblings are the exception: libuv injects them into every child it spawns
@@ -48,6 +49,12 @@ if (typeof dsh.runCli !== 'function') throw Error('profile_entry_invalid');
 await dsh.runCli();
 `
 
+/** Exact packaged plugin offered to a Profile only through the baseline reconciler. */
+export interface DefaultProfilePlugin {
+  readonly name: string
+  readonly version: string
+}
+
 /** Verifies that a child PID, rather than another local process, owns a loopback listener. */
 export type ProfileListenerAttestor = (pid: number, origin: string) => Promise<void>
 
@@ -66,6 +73,7 @@ export interface DshWebProfileWorkerFactoryOptions {
    * which cannot be diagnosed from the launcher; this is the only channel that says why.
    */
   readonly onDiagnostic?: (detail: string) => void
+  readonly defaultProfilePlugins?: readonly DefaultProfilePlugin[]
 }
 
 /** Longest worker diagnostic the launcher accepts, so one failure cannot flood its log. */
@@ -155,6 +163,7 @@ export class DshWebProfileWorkerFactory {
       DSH_PROFILE_ID: spec.profileId,
       DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
       DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
+      DSH_PROFILE_DEFAULT_PLUGINS: JSON.stringify(this.options.defaultProfilePlugins ?? []),
     }
     const windows = process.platform === 'win32' || this.options.platform === 'win32'
     const configurationInput = windows

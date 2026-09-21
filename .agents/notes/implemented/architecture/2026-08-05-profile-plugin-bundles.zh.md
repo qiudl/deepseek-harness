@@ -14,6 +14,8 @@ Status: implemented
 
 默认 Profile 模板为 `web`、`headless`、`sdk` 与 `acp` 使用 `@deepseek-ai/dsh-base` 作为共享核心，并在其上叠加一个模式组合包。[独立 `sdk-minimal` profile](../../../../packages/bundle/sdk-minimal/README.zh.md)则只列出一个拥有完整显式配置树的组合包。通用的 `dsh --profile <name>` 把剩余参数交给该 profile 的命令行启动行：Web 持有自己的 flag 家族，headless 持有任务位置参数，协议 profile 不接受应用选项。patch overlay 使用启动器持有的 `--patch`。新的非内置目标可以使用 `--from-default-profile <template>`，在启动或配置 dump 之前复制一个默认模板的 bundle 列表与 patch 重载策略。这会创建依赖为空、用户 patch 为空的独立 profile：它既不读取与模板同名的本地 profile，也不记录继承关系。launcher 会以独占方式领取完整的目标目录，因此既有状态和并发创建者都会在不作修改的情况下失败。`dsh plugin --profile <name> <args...>` 是一层薄薄的 pnpm 转发器，负责初始化一个以 base 为基础的 profile，并依据已安装包的组合包声明调和 `dsh.profile.bundles`；没有组合包声明的包保持为普通依赖。[Headless 作为直接 core 入口](../../archived/architecture/2026-08-09-headless-direct-core-entry-point.md)负责 headless 组合约定。
 
+可信嵌入应用可以向其 Web worker 提供一份有数量上限、版本精确的外部默认组合包清单。launcher 把每个所提供版本记录在 Profile 私有标记中，并且只有依赖项和 bundle 行都不存在时才添加该包。后续发布只有在依赖仍等于已记录基线且 bundle 仍存在时才推进版本。用户删除、自定义来源或版本以及不完整声明均保持不变。manifest 与标记采用有序原子写入，因此崩溃可以让同一默认项被再次尝试，但不会把尚未应用的版本误判为用户此前的基线。嵌入输入、标记状态或相关 manifest 字段异常时，启动会失败。由 Profile 声明的外部包优先从该 Profile 解析；`@deepseek-ai/*` 组合包继续优先从安装目录解析。
+
 解析在构造上就是双锚点的：`dsh.profile.bundles` 中的名称先从 dsh 安装目录解析，再从 profile 目录解析——因此内置组合包始终来自与运行中 `dsh` 相同的安装，pnpm 从不管理它们——而 patch 行中的裸插件名称经 profile 目录的 Node 父目录逐级查找，落到受维护的扁平回退目录 `$DSH_HOME/profiles/node_modules`（安装目录的应用与各组合包所依赖的每个包各一个符号链接，每次启动时修复）。
 
 两项配套重构：webserver 内置的静态 dist 服务改为单一所有者的**回退席位**（`registerFallback`／`applyIndexTaps`），SPA 服务器提取到 `@deepseek-ai/dsh-host-frontend-static`，使 web 组合包以组合的方式持有自己的 dist，而不是靠启动器代码；[dsh CLI 个人配置决策](../../archived/feature/2026-07-20-dsh-cli-personal-config.md)的个人 overlay 机制（`loadPersonalPatches`、`$DSH_HOME/config.yaml`）改为面向逐 profile 与 home 级的 `cordis.patch.yml` 层（`loadOptionalPatches`、接受文件名的 `watchUserPatches`），取代该笔记的各入口模式与文件位置，同时保留其 Harness home 根目录、patch 语义与响亮失败的解析。
@@ -25,11 +27,13 @@ Status: implemented
 - **在组合包 manifest 中放一个启动前 `context` 模块**承载启动期取值（dist 路径、flag 事实）：否决，改用纯插件——粘合逻辑就是普通配置行和由应用持有的启动服务，因此组合始终可完整 dump，manifest 保持纯数据。启动器提供的宿主 slot（`ctx.cmdlineArgs`、`ctx.appExit` 与环境快照）在任何配置树条目挂载之前，于 `boot()` 的 `prepare` 钩子中提供。
 - **组合包的传递式自动应用**：只有直接列在 `dsh.profile.bundles` 中的条目才贡献层；想重新导出另一个组合包 patch 的元组合包，必须在自己的 patch 文件中显式完成。
 - **动态模板继承或克隆本地 profile**：记录父级会要求为 bundle 成员关系、依赖和用户 patch 制定合并与升级规则，而复制本地状态会重复机器特定选择。基于模板的创建只会一次性复制安装自有的默认值。
+- **把嵌入默认项视为强制模板成员**：恢复已删除的 bundle 或替换自定义依赖会把发布升级变成隐式扩展操作。已记录基线可以区分未修改的产品默认项与用户持有状态，而不永久取得 Profile 所有权。
 
 ## Consequences
 
 - 新的组合表层（TUI、提供方扩展包）以普通 npm 包形式交付，可按 profile 安装，无需在仓库中为每种部署形态各留一行。
 - 用户可以从任意随附应用模板启动一个独立的自定义 profile，而不会复制机器本地的 profile 状态。
+- 嵌入应用可以向新建及未修改的 Web Profile 交付已审阅外部组合包，同时在升级时保留显式删除、停用与自定义包来源。
 - `apps/cli` 收缩为 argv 解析、profile 机制的消费方和 pnpm 转发器；`AppCLIEntry` 与各表层专属的启动路径全部移除。
 - 无密钥 web e2e 脚手架以与生产相同的空根形态启动相同的组合包层，包括 profiles 模块回退，因此测试与产品之间的组合漂移会响亮失败。
 - 按发布前姿态，后端不携带旧磁盘配置的兼容行为；`$DSH_HOME/config.yaml` 会被忽略。
