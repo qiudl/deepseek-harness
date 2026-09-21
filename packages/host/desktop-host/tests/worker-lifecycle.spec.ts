@@ -46,6 +46,33 @@ it('starts, activates, and disposes exactly one owned worker generation', async 
   await expect(workers.start(input)).rejects.toMatchObject({ code: 'unavailable' })
 })
 
+it('forwards model text only to a live worker that owns the model capability', async () => {
+  const generateText = async (text: string, signal: AbortSignal) => ({
+    provider: 'deepseek', model: 'deepseek-chat', text: `${text}:${String(signal.aborted)}`,
+  })
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(), generateText,
+  }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  await expect(workers.generateText(input.profileId, 'before', new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  await workers.start(input)
+  await expect(workers.generateText(input.profileId, 'question', new AbortController().signal)).resolves.toEqual({
+    provider: 'deepseek', model: 'deepseek-chat', text: 'question:false',
+  })
+  await workers.disposeAll()
+  await expect(workers.generateText(input.profileId, 'after', new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+
+  const unsupported = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+  }))
+  await unsupported.start(input)
+  await expect(unsupported.generateText(input.profileId, 'question', new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  await unsupported.disposeAll()
+})
+
 it('refuses activation until every verified listener field is present', async () => {
   const handles = [
     {},
