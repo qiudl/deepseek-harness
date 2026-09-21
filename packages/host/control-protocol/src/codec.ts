@@ -1,6 +1,14 @@
 import type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
+  HostRemoteSessionCommand, HostRemoteSessionJson, ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
+  ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
+  ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
+  ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
+  ProfileModelClaimRecoveryInventoryRequest, ProfileModelClaimRecoveryInventoryResult,
+  ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRecoveryStatusResult,
+  ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
+  ProfileModelClaimRetryRequest, ProfileModelClaimRetryResult,
   HostControlCapability,
   HostAccountBindingHandle,
   HostAuthorityEnvironmentId,
@@ -28,6 +36,8 @@ import type {
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
+  ProfileModelTextRequest,
+  ProfileModelTextResult,
   ProfileStatusRequest,
   ProfileStatusResult,
   ProfileEnsureRequest,
@@ -116,6 +126,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<HostControlErrorCode>([
   'conflict',
   'busy',
   'upgrade_required',
+  'script_approval_required',
   'migration_required',
   'unavailable',
   'internal_error',
@@ -172,6 +183,12 @@ function digest(value: unknown): HostControlSha256 {
   return value as HostControlSha256
 }
 
+function modelClaimCandidate(value: unknown): string {
+  if (typeof value !== 'string'
+    || !/^(?:llm-deepseek|llm-pi-ai|web-search-deepseek):[a-z][a-z0-9-]{0,63}$/u.test(value)) reject()
+  return value
+}
+
 function capability(value: unknown): HostControlCapability {
   if (typeof value !== 'string' || !CAPABILITY.test(value)) reject('unknown_method')
   return value as HostControlCapability
@@ -217,6 +234,19 @@ function opaqueHandle(value: unknown): HostAccountBindingHandle {
 
 function boundedText(value: unknown, max: number): string {
   if (typeof value !== 'string' || value.length < 1 || value.length > max || /[\u0000-\u001f\u007f]/u.test(value)) reject()
+  return value
+}
+
+function wireText(value: unknown, maxBytes: number, multiline = false): string {
+  const controls = multiline
+    ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u
+    : /[\u0000-\u001f\u007f]/u
+  if (typeof value !== 'string' || !value || Buffer.byteLength(value, 'utf8') > maxBytes || controls.test(value)) reject()
+  return value
+}
+
+function remoteIdentifier(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value)) reject()
   return value
 }
 
@@ -391,9 +421,10 @@ function extensionCommand(value: unknown): HostExtensionCommand {
     return { action: 'prepare', kind: extensionKind(command.kind), payload: command.payload }
   }
   if (command.action === 'commit') {
-    exactKeys(command, ['action', 'plan_id', 'operation_id'])
+    exactKeys(command, ['action', 'plan_id', 'operation_id', ...('script_digest' in command ? ['script_digest'] : [])])
     return { action: 'commit', plan_id: uuid(command.plan_id) as HostExtensionPlanId,
-      operation_id: uuid(command.operation_id) as HostExtensionOperationId }
+      operation_id: uuid(command.operation_id) as HostExtensionOperationId,
+      ...('script_digest' in command ? { script_digest: digest(command.script_digest) } : {}) }
   }
   if (command.action === 'status' || command.action === 'cancel') {
     exactKeys(command, ['action', 'operation_id'])
@@ -401,11 +432,112 @@ function extensionCommand(value: unknown): HostExtensionCommand {
   }
   return reject()
 }
+
+function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
+  const command = record(value)
+  const command_id = uuid(command.command_id) as HostControlRequestId
+  if (command.operation === 'session.list' || command.operation === 'session.create') {
+    exactKeys(command, ['operation', 'command_id'])
+    return { operation: command.operation, command_id }
+  }
+  if (command.operation === 'session.history') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'max_events'])
+    if (!Number.isSafeInteger(command.max_events) || (command.max_events as number) < 1
+      || (command.max_events as number) > 100) reject()
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      max_events: command.max_events as number }
+  }
+  if (command.operation === 'session.prompt') {
+    const withTimeZone = 'client_time_zone' in command
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'mode', 'content',
+      ...(withTimeZone ? ['client_time_zone'] : [])])
+    if (command.mode !== 'queue' || !Array.isArray(command.content)
+      || command.content.length < 1 || command.content.length > 16) reject()
+    const content = command.content.map((value) => {
+      const part = record(value)
+      exactKeys(part, ['type', 'text'])
+      if (part.type !== 'text') reject()
+      return { type: 'text' as const, text: wireText(part.text, 32_768, true) }
+    })
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      mode: 'queue', content,
+      ...(withTimeZone ? { client_time_zone: wireText(command.client_time_zone, 128) } : {}) }
+  }
+  if (command.operation === 'session.cancel' || command.operation === 'session.delete') {
+    exactKeys(command, ['operation', 'command_id', 'session_id'])
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id) }
+  }
+  if (command.operation === 'session.rename') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'title'])
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      title: wireText(command.title, 256) }
+  }
+  if (command.operation === 'approval.poll') {
+    const withCursor = 'cursor' in command
+    exactKeys(command, ['operation', 'command_id', 'wait_ms', ...(withCursor ? ['cursor'] : [])])
+    if (!Number.isSafeInteger(command.wait_ms) || (command.wait_ms as number) < 100
+      || (command.wait_ms as number) > 5_000) reject()
+    return { operation: command.operation, command_id, wait_ms: command.wait_ms as number,
+      ...(withCursor ? { cursor: wireText(command.cursor, 512) } : {}) }
+  }
+  if (command.operation === 'approval.respond') {
+    const withDigest = 'operation_digest' in command
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'approval_id', 'outcome',
+      ...(withDigest ? ['operation_digest'] : [])])
+    if ((command.outcome !== 'allowed-once' && command.outcome !== 'rejected')
+      || (command.outcome === 'allowed-once') !== withDigest) reject()
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      approval_id: remoteIdentifier(command.approval_id), outcome: command.outcome,
+      ...(withDigest ? { operation_digest: digest(command.operation_digest) } : {}) }
+  }
+  return reject()
+}
+
+function remoteSessionJson(value: unknown, depth = 0, count = { value: 0 }): HostRemoteSessionJson {
+  count.value += 1
+  if (count.value > 1_024 || depth > 8) reject()
+  if (value === null || typeof value === 'boolean') return value
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) reject()
+    return value
+  }
+  if (typeof value === 'string') {
+    if (Buffer.byteLength(value, 'utf8') > 32_768) reject()
+    return value
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 256) reject()
+    return value.map(item => remoteSessionJson(item, depth + 1, count))
+  }
+  const source = record(value)
+  const entries = Object.entries(source)
+  if (entries.length > 256) reject()
+  const result: Record<string, HostRemoteSessionJson> = {}
+  for (const [key, item] of entries) {
+    if (!key || Buffer.byteLength(key, 'utf8') > 128 || /[\u0000-\u001f\u007f]/u.test(key)
+      || key === '__proto__' || key === 'prototype' || key === 'constructor') reject()
+    Object.defineProperty(result, key, {
+      value: remoteSessionJson(item, depth + 1, count), enumerable: true, configurable: true, writable: true,
+    })
+  }
+  return result
+}
+
 function extensionResponse(result: Record<string, unknown>): HostExtensionResponse {
   if (result.state === 'prepared') {
-    exactKeys(result, ['state', 'plan_id', 'kind', 'digest', 'expires_at'])
+    const hasScripts = 'scripts' in result || 'script_digest' in result
+    exactKeys(result, ['state', 'plan_id', 'kind', 'digest', 'expires_at', ...(hasScripts ? ['scripts', 'script_digest'] : [])])
+    if (hasScripts && (!Array.isArray(result.scripts) || result.scripts.length < 1 || result.scripts.length > 6)) reject()
+    const scripts = hasScripts ? (result.scripts as unknown[]).map((value) => {
+      const row = record(value); exactKeys(row, ['name', 'command'])
+      if (typeof row.name !== 'string' || !['preinstall', 'install', 'postinstall', 'prepack', 'prepare', 'postpack'].includes(row.name)
+        || typeof row.command !== 'string' || !row.command || new TextEncoder().encode(row.command).byteLength > 4096
+        || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(row.command)) reject()
+      return { name: row.name, command: row.command }
+    }) : undefined
     return { state: 'prepared', plan_id: uuid(result.plan_id) as HostExtensionPlanId, kind: extensionKind(result.kind),
-      digest: digest(result.digest), expires_at: timestamp(result.expires_at) }
+      digest: digest(result.digest), expires_at: timestamp(result.expires_at),
+      ...(scripts ? { scripts, script_digest: digest(result.script_digest) } : {}) }
   }
   if (result.state === 'inventory') {
     exactKeys(result, ['state', 'kind', 'entries', ...('plugin_remove' in result ? ['plugin_remove'] : []), ...('plugin_update' in result ? ['plugin_update'] : []), ...('plugin_toggle' in result ? ['plugin_toggle'] : []), ...('skill_archives' in result ? ['skill_archives'] : []), ...('skill_remove' in result ? ['skill_remove'] : []), ...('skill_replace' in result ? ['skill_replace'] : []), ...('skill_files' in result ? ['skill_files'] : []), ...('skill_invocation' in result ? ['skill_invocation'] : []), ...('mcp_remove' in result ? ['mcp_remove'] : []), ...('mcp_update' in result ? ['mcp_update'] : [])])
@@ -503,10 +635,81 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest {
+  | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
+  | ProfileRemoteSessionRequest
+  | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
+  | ProfileModelClaimRecoveryInventoryRequest
+  | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest | ProfileModelClaimRetryRequest {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
   const requestId = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_confirm') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation',
+      'candidate_id', 'source_digest'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+      candidate_id: modelClaimCandidate(params.candidate_id), source_digest: digest(params.source_digest),
+    } }
+  }
+  if (frame.method === 'profile.model_claim_apply') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'confirmation'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), confirmation: sourceAuthority(params.confirmation) } }
+  }
+  if (frame.method === 'profile.model_claim_recovery_inventory'
+    || frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore'
+    || frame.method === 'profile.model_claim_retry') {
+    const proofKeys = [
+      ...AUTHORIZED_KEYS, 'account_access_token', 'account_issuer', 'account_subject',
+      'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
+      'profile_key_handle', 'profile_unlock_material',
+    ]
+    exactKeys(params, frame.method === 'profile.model_claim_recovery_inventory' ? proofKeys
+      : frame.method === 'profile.model_claim_restore' ? [...proofKeys, 'candidate_id', 'operation_id']
+        : frame.method === 'profile.model_claim_retry' ? [...proofKeys, 'candidate_id', 'operation_id', 'source_digest']
+          : [...proofKeys, 'candidate_id'])
+    const proof = {
+      ...authorized(params),
+      account_access_token: boundedText(params.account_access_token, 8_192),
+      account_issuer: accountIssuer(params.account_issuer),
+      account_subject: boundedText(params.account_subject, 512),
+      authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      profile_key_handle: boundedText(params.profile_key_handle, 512),
+      profile_unlock_material: unlockMaterial(params.profile_unlock_material),
+    }
+    if (frame.method === 'profile.model_claim_recovery_inventory') {
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: proof }
+    }
+    const candidate_id = modelClaimCandidate(params.candidate_id)
+    if (frame.method === 'profile.model_claim_restore') {
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...proof, candidate_id, operation_id: uuid(params.operation_id) } }
+    }
+    if (frame.method === 'profile.model_claim_retry') {
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...proof, candidate_id, operation_id: uuid(params.operation_id), source_digest: digest(params.source_digest) } }
+    }
+    return { version: 1, type: 'request', request_id: requestId,
+      method: 'profile.model_claim_recovery_status', params: { ...proof, candidate_id } }
+  }
+  if (frame.method === 'profile.model_claim_inventory') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation'])
+    return { version: 1, type: 'request', request_id: requestId, method: 'profile.model_claim_inventory', params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+    } }
+  }
+  if (frame.method === 'profile.remote_session') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+      command: remoteSessionCommand(params.command),
+    } }
+  }
   if (frame.method === 'profile.extensions') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.extensions', params: {
@@ -664,6 +867,19 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       },
     }
   }
+  if (frame.method === 'profile.model_text') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
+      'account_binding_handle', 'authority_binding_version', 'text'])
+    if (typeof params.text !== 'string' || !params.text.trim()
+      || Buffer.byteLength(params.text, 'utf8') > 8192) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: 'profile.model_text', params: {
+      ...authorized(params),
+      authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      text: params.text,
+    } }
+  }
   if (frame.method === 'profile.view_activate') {
     exactKeys(params, [
       ...AUTHORIZED_KEYS, 'profile_id', 'view_lease_id', 'view_activation_handle',
@@ -689,10 +905,97 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileLeaseCloseResult | ProfileExtensionsResult {
+  | ProfileViewActivateResult | ProfileModelTextResult | ProfileLeaseCloseResult | ProfileExtensionsResult
+  | ProfileRemoteSessionResult
+  | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
+  | ProfileModelClaimRecoveryInventoryResult
+  | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult | ProfileModelClaimRetryResult {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
   const request_id = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.model_claim_confirm') {
+    exactKeys(result, ['confirmation', 'operation_id', 'expires_at'])
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      confirmation: sourceAuthority(result.confirmation), operation_id: uuid(result.operation_id),
+      expires_at: timestamp(result.expires_at),
+    } }
+  }
+  if (frame.method === 'profile.model_claim_apply' || frame.method === 'profile.model_claim_retry') {
+    exactKeys(result, ['state', 'cleanup_pending'])
+    if (result.state !== 'committed' || typeof result.cleanup_pending !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { state: 'committed', cleanup_pending: result.cleanup_pending } }
+  }
+  if (frame.method === 'profile.model_claim_recovery_inventory') {
+    exactKeys(result, ['receipts'])
+    if (!Array.isArray(result.receipts) || result.receipts.length > 128) reject()
+    const ids = new Set<string>()
+    const receipts = result.receipts.map((value) => {
+      const receipt = record(value)
+      exactKeys(receipt, ['candidate_id', 'operation_id', 'source_digest', 'state'])
+      const candidate_id = modelClaimCandidate(receipt.candidate_id)
+      if (ids.has(candidate_id) || !['pending', 'committed', 'restored'].includes(receipt.state as string)) reject()
+      ids.add(candidate_id)
+      return { candidate_id, operation_id: uuid(receipt.operation_id),
+        source_digest: digest(receipt.source_digest),
+        state: receipt.state as 'pending' | 'committed' | 'restored' }
+    })
+    return { version: 1, type: 'result', request_id, method: frame.method, result: { receipts } }
+  }
+  if (frame.method === 'profile.model_claim_recovery_status') {
+    if (result.state === 'unclaimed') {
+      exactKeys(result, ['state'])
+      return { version: 1, type: 'result', request_id, method: frame.method, result: { state: 'unclaimed' } }
+    }
+    exactKeys(result, ['state', 'candidate_id', 'operation_id', 'source_digest'])
+    if (result.state !== 'pending' && result.state !== 'committed' && result.state !== 'restored') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      state: result.state, candidate_id: modelClaimCandidate(result.candidate_id),
+      operation_id: uuid(result.operation_id), source_digest: digest(result.source_digest),
+    } }
+  }
+  if (frame.method === 'profile.model_claim_restore') {
+    exactKeys(result, ['state', 'cleanup_pending'])
+    if (result.state !== 'restored' || typeof result.cleanup_pending !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { state: 'restored', cleanup_pending: result.cleanup_pending } }
+  }
+  if (frame.method === 'profile.model_claim_inventory') {
+    exactKeys(result, ['source_digest', 'candidates',
+      'unsupported_settings', 'unassigned_credential_references', 'unassigned_credential_records'])
+    if (!Array.isArray(result.candidates) || result.candidates.length > 128) reject()
+    const ids = new Set<string>()
+    const candidates = result.candidates.map((value) => {
+      const candidate = record(value)
+      exactKeys(candidate, ['id', 'provider', 'kind', 'credential', 'shared_credential'])
+      if (typeof candidate.provider !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/u.test(candidate.provider)
+        || (candidate.kind !== 'llm' && candidate.kind !== 'web-search')
+        || candidate.kind === 'web-search' && candidate.provider !== 'deepseek'
+        || !['present', 'missing', 'none'].includes(candidate.credential as string)
+        || typeof candidate.shared_credential !== 'boolean'
+        || candidate.id !== (candidate.kind === 'web-search'
+          ? 'web-search-deepseek:deepseek'
+          : candidate.provider === 'deepseek' && candidate.id === 'llm-deepseek:deepseek'
+            ? 'llm-deepseek:deepseek' : `llm-pi-ai:${candidate.provider}`)
+        || ids.has(candidate.id)) reject()
+      ids.add(candidate.id)
+      return {
+        id: candidate.id, provider: candidate.provider, kind: candidate.kind,
+        credential: candidate.credential, shared_credential: candidate.shared_credential,
+      } as ProfileModelClaimInventoryResult['result']['candidates'][number]
+    })
+    return { version: 1, type: 'result', request_id, method: 'profile.model_claim_inventory', result: {
+      source_digest: digest(result.source_digest), candidates,
+      unsupported_settings: nonnegative(result.unsupported_settings),
+      unassigned_credential_references: nonnegative(result.unassigned_credential_references),
+      unassigned_credential_records: nonnegative(result.unassigned_credential_records),
+    } }
+  }
+  if (frame.method === 'profile.remote_session') {
+    exactKeys(result, ['value'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { value: remoteSessionJson(result.value) } }
+  }
   if (frame.method === 'profile.extensions') {
     return { version: 1, type: 'result', request_id, method: 'profile.extensions', result: extensionResponse(result) }
   }
@@ -815,6 +1118,26 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['closed'])
     if (result.closed !== true) reject()
     return { version: 1, type: 'result', request_id, method: 'profile.lease_close', result: { closed: true } }
+  }
+  if (frame.method === 'profile.model_text') {
+    if (result.state === 'rejected') {
+      exactKeys(result, ['state', 'code'])
+      if (result.code !== 'invalid_input' && result.code !== 'no_default_model'
+        && result.code !== 'missing_credential' && result.code !== 'provider_failed'
+        && result.code !== 'cancelled' && result.code !== 'timeout'
+        && result.code !== 'response_too_large') reject()
+      return { version: 1, type: 'result', request_id, method: 'profile.model_text', result: {
+        state: 'rejected', code: result.code,
+      } }
+    }
+    exactKeys(result, ['state', 'provider', 'model', 'text'])
+    if (result.state !== 'complete' || typeof result.provider !== 'string' || !result.provider
+      || result.provider.length > 256 || typeof result.model !== 'string' || !result.model
+      || result.model.length > 256 || typeof result.text !== 'string' || !result.text.trim()
+      || Buffer.byteLength(result.text, 'utf8') > 16384) reject()
+    return { version: 1, type: 'result', request_id, method: 'profile.model_text', result: {
+      state: 'complete', provider: result.provider, model: result.model, text: result.text,
+    } }
   }
   return reject('unknown_method')
 }

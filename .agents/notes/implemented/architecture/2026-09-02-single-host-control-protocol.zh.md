@@ -20,6 +20,8 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 后续操作任务扩展已解码载荷联合，不得削弱帧边界，也不得把 transport、authorization、migration 或 Host 进程状态放进本包。
 
+`profile.remote_session` 定义绑定视图租约的 Session 与审批执行器线值，但不创建通用 API 代理。它的封闭命令联合携带独立 UUID 幂等键和按操作限制的字段；结果只接受限制深度、节点数、字符串长度和完整帧大小的 JSON。编解码器绝不接受 HTTP 路径、Profile 根目录、凭据、浏览器 cookie 或启动 token。在 Host 拥有能够重新校验租约并调用所选 Profile worker 的执行器前，该方法不会出现在 Host capability 中。
+
 `profile.ensure` 携带由规范 DSH Account 权威为 `dsh-host` audience 签发的短时 ES256 access token。`profile.ensure_account_token` capability 标识这一载荷修订。新客户端拒绝向缺少该 capability 的 Host 发送修订载荷；新 Host 仍解析旧载荷，并在访问 registry 前返回 `upgrade_required`。Host 使用 owner-private 公钥环校验精确 JWT 形状与签名，该公钥环的 SHA-256 摘要由嵌入应用发布版本固定；Host 随后要求已验证的 issuer 与 subject 等于 Desktop 提供的账号字段，才会读取或修改 Profile registry。Host 既不持久化也不记录该 token。
 
 `profile.bootstrap_local`、`profile.restore_local` 与 `profile.open_local` 负责不依赖账号的本地 Profile 路径。Bootstrap 只接收 Main-vault key handle 和 32 字节 unlock material，并返回与账号 provisioning 相同、绑定 installation 与 generation 的 Host selector。Restore 校验 selector、本地专用 Profile kind、精确 generation 与新鲜 unlock material；open 要求该 Profile 已被同一 authenticated connection 的 bootstrap 或 restore 解锁。这些操作绝不接收或创建 Account binding、issuer、subject、token 或 environment assertion。各自发布的 capability 让新版 Desktop 能在向旧 Host 发送本地 unlock material 前报告 `upgrade_required`。
@@ -76,8 +78,12 @@ Profile 内自包含的插件安装不能证明 runtime 兼容。只有顶层模
 
 Decoder 接收完整字符串，因此能拒绝超限帧，却不能阻止 transport 先缓冲它。Unix domain socket carrier 必须增量执行字节上限，并在首次错误时关闭。没有可信 request id 的无效输入不返回错误帧，只关闭连接。
 
+先定义远程 Session 线值、后发布操作，使两个 peer 能审查并测试同一规范命令集合；但在 Host 执行器存在前，已发布调用方不能使用该方法。功能可用性仍由 capability 协商而非 decoder 接受能力决定。
+
 ## 测试
 
 聚焦套件从已提交的 request、result、error 和签名原文向量开始，逐字节 round-trip。负向覆盖未知／缺失字段、空白、多帧、超限、伪造出站值、非规范 base64url、缺失基线 capability、身份复用、未来客户端降级协商、畸形或过期 Account token，以及 registry mutation 前的已验证 Account 不匹配。Host 生命周期覆盖证明：再次打开已激活 lease 会保留 id 和 generation，同时延后 expiry 并轮换单次 activation handle；本地 Profile 可以在没有 Account 凭据时 bootstrap、重连、restore 和 open。
+
+远程 Session codec 覆盖逐条往返所有允许命令和有界 JSON 结果，并拒绝未知操作、selector 注入、畸形操作字段、危险对象键和过深嵌套。Host 执行与 capability 测试保持独立，因为本次 codec 变更不发布该方法。
 
 离线恢复覆盖 scope 分离、唯一 handle 解析、缺失 root 的只读行为、二次预检 stale、operation 幂等、断线撤销、条件 capability 发布、多 vault 选择、映射后 not-found 继续、不可读 vault 报告和超时状态映射。Runtime fixture 覆盖 legacy closure 复制、内容摘要校验、最终根绝对链接重写、原子发布、recovery journal 完成，以及扁平化、断链、逃逸、特殊 inode 或不安全依赖拒绝。聚焦 recovery inspector 保持 statements、branches、functions、lines 四项 100%；任何用户批准的 materialization 前，真实 legacy Profile 只做只读检查。
