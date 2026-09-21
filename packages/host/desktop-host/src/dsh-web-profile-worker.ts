@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
@@ -9,7 +10,17 @@ const execFileAsync = promisify(execFile)
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
+  'DSH_PROFILE_MODEL_TOKEN',
 ])
+
+/** Classified failure from the authenticated worker model endpoint. */
+export class DesktopModelWorkerError extends Error {
+  constructor(readonly code: 'invalid_input' | 'no_default_model' | 'missing_credential'
+    | 'provider_failed' | 'cancelled' | 'timeout' | 'response_too_large') {
+    super(code)
+    this.name = 'DesktopModelWorkerError'
+  }
+}
 
 /** Verifies that a child PID, rather than another local process, owns a loopback listener. */
 export type ProfileListenerAttestor = (pid: number, origin: string) => Promise<void>
@@ -85,6 +96,7 @@ export class DshWebProfileWorkerFactory {
   async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
+    const modelToken = randomBytes(32).toString('base64url')
     const child = spawn(this.options.nodeExecutablePath, [
       this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
     ], {
@@ -95,12 +107,13 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_ID: spec.profileId,
         DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
+        DSH_PROFILE_MODEL_TOKEN: modelToken,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const activated = await this.waitForOrigin(child)
     this.generation += 1
-    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation)
+    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation, modelToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -156,6 +169,7 @@ export class DshWebProfileWorkerFactory {
     viewOrigin: string,
     bootstrapCookie: { readonly name: string; readonly value: string },
     generation: number,
+    modelToken: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -173,6 +187,37 @@ export class DshWebProfileWorkerFactory {
       viewOrigin,
       generation,
       bootstrapCookie,
+      generateText: async (text, signal) => {
+        if (requestedStop || settled) throw new HostAuthorityError('unavailable')
+        const response = await fetch(`${viewOrigin}/internal/desktop-model-text`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${modelToken}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ text }),
+          signal: AbortSignal.any([signal, AbortSignal.timeout(65_000)]),
+        })
+        const body = await response.text()
+        if (Buffer.byteLength(body, 'utf8') > 17_408) throw new HostAuthorityError('unavailable')
+        let parsed: unknown
+        try { parsed = JSON.parse(body) } catch { throw new HostAuthorityError('unavailable') }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HostAuthorityError('unavailable')
+        const value = parsed as Record<string, unknown>
+        if (!response.ok) {
+          const code = value.error
+          if (code === 'invalid_input' || code === 'no_default_model' || code === 'missing_credential'
+            || code === 'provider_failed' || code === 'cancelled' || code === 'timeout'
+            || code === 'response_too_large') {
+            throw new DesktopModelWorkerError(code)
+          }
+          throw new HostAuthorityError('unavailable')
+        }
+        if (typeof value.provider !== 'string' || !value.provider.trim() || value.provider.length > 256
+          || typeof value.model !== 'string' || !value.model.trim() || value.model.length > 256
+          || typeof value.text !== 'string' || !value.text.trim()
+          || Buffer.byteLength(value.text, 'utf8') > 16_384 || Object.keys(value).length !== 3) {
+          throw new HostAuthorityError('unavailable')
+        }
+        return { provider: value.provider, model: value.model, text: value.text }
+      },
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
         if (requestedStop || settled) return

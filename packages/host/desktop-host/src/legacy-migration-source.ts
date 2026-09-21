@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { open, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -14,6 +15,10 @@ const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 const REF = /^[A-Za-z_][A-Za-z0-9_]*$/u
 const CREDENTIAL_KEY = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/u
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+
+function legacyRoot(testOwnerHome?: string): string {
+  return join(resolve(testOwnerHome ?? homedir()), '.dsh')
+}
 
 async function ownerDirectory(path: string, uid: number): Promise<void> {
   const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
@@ -111,6 +116,133 @@ function credentials(value: unknown): { refs: Record<string, string>; records: R
   return { refs: refs as Record<string, string>, records }
 }
 
+/** Redacted, source-bound candidate for a later authenticated account claim. */
+export interface LegacyModelClaimCandidate {
+  readonly id: string
+  readonly provider: string
+  readonly kind: 'llm' | 'web-search'
+  readonly credential: 'present' | 'missing' | 'none'
+  readonly sharedCredential: boolean
+}
+
+/** Owner-only source inventory; no credential values or references cross to Desktop. */
+export interface LegacyModelClaimInventory {
+  readonly sourceDigest: string
+  readonly candidates: readonly LegacyModelClaimCandidate[]
+  readonly unsupportedSettings: number
+  readonly unassignedCredentialReferences: number
+  readonly unassignedCredentialRecords: number
+}
+
+/** Secret-bearing Host-only documents. Never return this value through Desktop control frames. */
+export interface LegacyModelClaimDocuments {
+  readonly sourceDigest: string
+  readonly settings: Record<string, unknown>
+  readonly credentials: { readonly refs: Record<string, string>; readonly records: Record<string, unknown> }
+}
+
+/** Revalidate the fixed legacy source and return its normalized private documents to Host code only. */
+export async function readLegacyModelClaimDocuments(input: {
+  expectedUid: number
+  assertSourceQuiescent(signal?: AbortSignal): Promise<void>
+  signal?: AbortSignal
+  /** Fixture seam only; production must omit it. */
+  _testOwnerHome?: string
+  /** Fixture seam to change the source between validated reads. */
+  _testAfterValidatedState?: () => Promise<void>
+}): Promise<LegacyModelClaimDocuments> {
+  await input.assertSourceQuiescent(input.signal)
+  input.signal?.throwIfAborted()
+  const root = legacyRoot(input._testOwnerHome)
+  const state = await ownerState(root, input.expectedUid)
+  const profile = map(state.documents.find(document => document.kind === 'profile')?.value)
+  const sourceDigest = profile.legacyWithheldSourceDigest as string
+  await input._testAfterValidatedState?.()
+  const settings = map(await ownerDocument(join(root, 'settings.yaml'), input.expectedUid, {}))
+  const credentialStore = credentials(await ownerDocument(join(root, '.credentials.yaml'), input.expectedUid, {}))
+  if (createHash('sha256').update(JSON.stringify({ settings, credentials: credentialStore })).digest('hex') !== sourceDigest) {
+    throw new Error('legacy_migration_source_changed')
+  }
+  return { sourceDigest, settings, credentials: credentialStore }
+}
+
+/**
+ * Read a redacted inventory from the fixed owner-local legacy home.
+ * Candidate ids are selectors for a later fenced claim, never authorization.
+ */
+export async function inspectLegacyModelClaimSource(input: {
+  expectedUid: number
+  assertSourceQuiescent(signal?: AbortSignal): Promise<void>
+  signal?: AbortSignal
+  /** Fixture seam only; production must omit it. */
+  _testOwnerHome?: string
+  /** Fixture seam to change the source between validated reads. */
+  _testAfterValidatedState?: () => Promise<void>
+}): Promise<LegacyModelClaimInventory> {
+  const { sourceDigest, settings, credentials: credentialStore } = await readLegacyModelClaimDocuments(input)
+  const candidates: Array<LegacyModelClaimCandidate & { ref?: string }> = []
+  const usedRefs = new Set<string>()
+  const add = (id: string, provider: string, kind: 'llm' | 'web-search', ref?: string, literal = false): void => {
+    if (ref !== undefined) usedRefs.add(ref)
+    candidates.push({
+      id, provider, kind,
+      credential: literal || ref !== undefined && credentialStore.refs[ref] !== undefined
+        ? 'present' : ref === undefined ? 'none' : 'missing',
+      sharedCredential: false,
+      ...(ref === undefined ? {} : { ref }),
+    })
+  }
+  const deepseek = settings['llm-deepseek']
+  const deepseekRef = deepseek === undefined ? 'DEEPSEEK_API_KEY' : map(deepseek).apiKeyEnv ?? 'DEEPSEEK_API_KEY'
+  if (typeof deepseekRef !== 'string' || !REF.test(deepseekRef)) {
+    throw new Error('legacy_migration_source_schema_unsupported')
+  }
+  if (deepseek !== undefined || credentialStore.refs[deepseekRef] !== undefined) {
+    add('llm-deepseek:deepseek', 'deepseek', 'llm', deepseekRef)
+  }
+  let unsupportedSettings = 0
+  const pi = settings['llm-pi-ai']
+  if (pi !== undefined) {
+    const providers = map(map(pi).providers ?? {})
+    for (const [provider, value] of Object.entries(providers)) {
+      if (!/^[a-z][a-z0-9-]{0,63}$/u.test(provider)) { unsupportedSettings++; continue }
+      const ref = map(value).apiKeyEnv
+      if (ref !== undefined && (typeof ref !== 'string' || !REF.test(ref))) {
+        throw new Error('legacy_migration_source_schema_unsupported')
+      }
+      add(`llm-pi-ai:${provider}`, provider, 'llm', ref)
+    }
+  }
+  const search = settings['web-search-deepseek']
+  if (search !== undefined) {
+    const source = map(search)
+    const ref = source.apiKeyEnv ?? 'DEEPSEEK_API_KEY'
+    if (typeof ref !== 'string' || !REF.test(ref)) throw new Error('legacy_migration_source_schema_unsupported')
+    const literal = typeof source.apiKey === 'string' && source.apiKey.length > 0
+    add('web-search-deepseek:deepseek', 'deepseek', 'web-search', literal ? undefined : ref, literal)
+  }
+  for (const name of Object.keys(settings)) {
+    if (!['llm-deepseek', 'llm-pi-ai', 'web-search-deepseek', 'agent-default-model',
+      'agent-loop', 'permission', 'shell', 'ui-onboarding'].includes(name)) {
+      unsupportedSettings++
+    }
+  }
+  const refCounts = new Map<string, number>()
+  for (const candidate of candidates) {
+    if (candidate.ref !== undefined) refCounts.set(candidate.ref, (refCounts.get(candidate.ref) ?? 0) + 1)
+  }
+  return {
+    sourceDigest,
+    candidates: candidates.map(({ ref, ...candidate }) => ({
+      ...candidate,
+      sharedCredential: ref !== undefined && (refCounts.get(ref) as number) > 1,
+    })),
+    unsupportedSettings,
+    unassignedCredentialReferences: Object.keys(credentialStore.refs).filter(ref => !usedRefs.has(ref)).length,
+    unassignedCredentialRecords: Object.keys(credentialStore.records).length,
+  }
+}
+
 async function ownerState(root: string, uid: number): Promise<MigrationOwnerStateBundle> {
   await ownerDirectory(root, uid)
   const rootEntries = await readdir(root, { withFileTypes: true })
@@ -173,6 +305,13 @@ async function ownerState(root: string, uid: number): Promise<MigrationOwnerStat
   const settings = map(await ownerDocument(join(root, 'settings.yaml'), uid, {}))
   jsonValue(settings)
   if ('externalConnections' in settings) throw new Error('legacy_migration_source_schema_unsupported')
+  // The legacy home belongs to the OS user, not the authenticated Person Profile.
+  // Legacy settings have no account owner. Even permission and onboarding
+  // state would change the first account's behavior without its consent.
+  const legacyCredentials = credentials(await ownerDocument(join(root, '.credentials.yaml'), uid, {}))
+  const legacyWithheldSourceDigest = createHash('sha256')
+    .update(JSON.stringify({ settings, credentials: legacyCredentials }))
+    .digest('hex')
   let workspace: Record<string, unknown> = { grants: [] }
   try {
     const storageEntries = await readdir(join(root, 'storages'))
@@ -203,12 +342,12 @@ async function ownerState(root: string, uid: number): Promise<MigrationOwnerStat
   return {
     version: 1,
     documents: [
-      { kind: 'settings', schemaVersion: 1, value: settings },
-      { kind: 'credentials', schemaVersion: 1, value: credentials(
-        await ownerDocument(join(root, '.credentials.yaml'), uid, {}),
-      ) },
+      { kind: 'settings', schemaVersion: 1, value: {} },
+      { kind: 'credentials', schemaVersion: 1, value: { refs: {}, records: {} } },
       { kind: 'workspace', schemaVersion: 1, value: workspace },
-      { kind: 'profile', schemaVersion: 1, value: { name: 'web', customPlugins: [], externalConnections: [] } },
+      { kind: 'profile', schemaVersion: 1, value: {
+        name: 'web', customPlugins: [], externalConnections: [], legacyWithheldSourceDigest,
+      } },
     ],
   }
 }
@@ -229,8 +368,7 @@ export function createLegacyMigrationExportService(input: {
   /** Fixture seam only; production must omit it. */
   _testOwnerHome?: string
 }): JsonlMigrationExportService {
-  const ownerHome = resolve(input._testOwnerHome ?? homedir())
-  const root = join(ownerHome, '.dsh')
+  const root = legacyRoot(input._testOwnerHome)
   const source = new FileJsonlMigrationExportSource(join(root, 'sessions'), input.expectedUid, {
     read: () => ownerState(root, input.expectedUid),
   })

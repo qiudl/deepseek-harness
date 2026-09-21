@@ -32,7 +32,17 @@ The transport is not JSON-RPC. A malformed line is a connection-fatal protocol v
 
 The negotiated `profile.extensions` method carries a Main-held lease and one inventory, prepare, commit, status, or cancel command. Prepare payloads are limited to 32,768 UTF-8 bytes; results contain only plans, bounded metadata, or durable receipt states. Plugin completion actions must be literal `install`, `update`, or `remove` strings; arrays and objects are rejected without coercion. Kind support belongs to the Host executor, so a decoded kind is not proof that installation is available. Skill inventory may include the boolean `skill_archives`; absence means that the caller cannot assume archive support. Archive plans carry URL and digest metadata within the same payload limit, not ZIP bytes.
 
+`profile.model_claim_inventory` carries a Main-held Account view lease and returns a source digest, at most 128 distinct provider candidates, credential presence, shared-reference flags, and counts of unmapped records. The codec rejects credential values, reference names, paths, and additional fields. This read-only inventory is not a claim confirmation or credential transfer authority.
+
+`profile.model_claim_confirm` rechecks the Account lease and a fresh source digest for one candidate with a present credential. It returns a one-use confirmation bound to the current Host connection and valid for 60 seconds. `profile.model_claim_apply` consumes that confirmation and rechecks the Account view through the claim transaction. Both results omit credential values and paths. A failed or interrupted write uses the separate same-Account recovery methods.
+
+`profile.model_claim_retry` accepts the same fresh Account and vault proof as recovery, plus the exact candidate, operation id, and source digest from an existing receipt. The Host checks durable ownership before resuming the transaction. It is available only while the legacy source has been declared quiescent; status and preimage restoration remain available without that declaration.
+
+`profile.model_claim_recovery_inventory` accepts the same proof without a candidate id. It returns at most 128 distinct, secret-free receipts for the authenticated Account's pending claims and uncleared Profile marker. This query does not open the worker or grant a new claim.
+
 ## Challenge authentication
+
+`profile.model_text` accepts an Account binding already verified on the same Host connection and one nonempty text input of at most 8 KiB. It does not open or change a visible Profile view lease. A complete result contains the selected provider, model, and at most 16 KiB of answer text; a rejected result contains one classified code, including distinct `cancelled` and `timeout` outcomes. The method carries no API Key, tool request, Session id, or raw provider error.
 
 `encodeHostInspectSignaturePayload(request, response)` returns the exact UTF-8 bytes signed with the installation Ed25519 key. The domain-separated statement binds the request id, Desktop client id, challenge, selected version, Host and installation ids, installation public key, generations, process nonce, capabilities, and executable digest.
 

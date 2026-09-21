@@ -41,6 +41,7 @@ const allCapabilities = [
   'profile.recovery_status',
   'profile.open_offline_account',
   'profile.extensions',
+  'profile.model_text',
 ].sort() as HostControlCapability[]
 
 function inspection(
@@ -131,6 +132,174 @@ const inventory = {
 }
 
 describe('Unix Host client protocol projections', () => {
+  it('projects bounded personal model text only when the Host advertises it', async () => {
+    const seen: HostControlFrame[] = []
+    const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, {}) },
+      [...baseCapabilities].sort())
+    await expect(unsupported.client.generateModelText({ ...binding, text: 'question' }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(seen).toEqual([])
+
+    const enabled = await makeClient((frame) => {
+      seen.push(frame)
+      return result(frame, { state: 'complete', provider: 'deepseek', model: 'deepseek-chat', text: 'answer' })
+    })
+    await expect(enabled.client.generateModelText({ ...binding, text: 'question' })).resolves.toEqual({
+      state: 'complete', provider: 'deepseek', model: 'deepseek-chat', text: 'answer',
+    })
+    expect(seen.at(-1)).toMatchObject({ method: 'profile.model_text', params: {
+      authority_environment_id: binding.authorityEnvironmentId,
+      account_binding_handle: binding.accountBindingHandle,
+      authority_binding_version: binding.authorityBindingVersion,
+      text: 'question',
+    } })
+
+    const wrongKind = await makeClient(frame => frame)
+    await expect(wrongKind.client.generateModelText({ ...binding, text: 'question' }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    const wrongMethod = await makeClient(frame => ({ ...result(frame, {}), method: 'profile.status' } as HostControlFrame))
+    await expect(wrongMethod.client.generateModelText({ ...binding, text: 'question' }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('projects one-use model claim confirmation and committed outcome', async () => {
+    const seen: HostControlFrame[] = []
+    const request = { viewLeaseId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3146', leaseGeneration: 2,
+      runtimeGeneration: 5, candidateId: 'llm-deepseek:deepseek', sourceDigest: 'a'.repeat(64) }
+    const confirmation = 'A'.repeat(43)
+    const operationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3147'
+    const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, {}) },
+      [...baseCapabilities].sort())
+    await expect(unsupported.client.confirmModelClaim(request)).rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(unsupported.client.applyModelClaim({ confirmation }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(seen).toEqual([])
+    const capabilities = [...baseCapabilities, 'profile.model_claim_confirm', 'profile.model_claim_apply']
+      .sort() as HostControlCapability[]
+    const enabled = await makeClient((frame) => { seen.push(frame)
+      return frame.method === 'profile.model_claim_confirm'
+        ? result(frame, { confirmation, operation_id: operationId, expires_at: 61_000 })
+        : result(frame, { state: 'committed', cleanup_pending: false })
+    }, capabilities)
+    await expect(enabled.client.confirmModelClaim(request)).resolves.toEqual({
+      confirmation, operationId, expiresAt: 61_000,
+    })
+    await expect(enabled.client.applyModelClaim({ confirmation })).resolves.toEqual({
+      state: 'committed', cleanupPending: false,
+    })
+    expect(seen).toMatchObject([
+      { method: 'profile.model_claim_confirm', params: { candidate_id: request.candidateId,
+        source_digest: request.sourceDigest, view_lease_id: request.viewLeaseId } },
+      { method: 'profile.model_claim_apply', params: { confirmation } },
+    ])
+    const malformed = await makeClient(frame => ({ version: 1, type: 'result', request_id: frame.request_id,
+      method: 'profile.status', result: { state: 'locked' } }), capabilities)
+    await expect(malformed.client.confirmModelClaim(request)).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(malformed.client.applyModelClaim({ confirmation })).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('projects worker-independent model claim recovery only with the advertised capability', async () => {
+    const seen: HostControlFrame[] = []
+    const proof = { ...binding, issuer: 'https://accounts.example.test', subject: 'person',
+      accountAccessToken: 'header.payload.signature', keyHandle: 'keychain:person',
+      unlockMaterial: 'A'.repeat(43), candidateId: 'llm-deepseek:deepseek' }
+    const operationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3146'
+    const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, { state: 'unclaimed' }) },
+      [...baseCapabilities].sort())
+    await expect(unsupported.client.modelClaimRecoveryInventory(proof))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(unsupported.client.modelClaimRecoveryStatus(proof))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(unsupported.client.restoreModelClaim({ ...proof, operationId }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(unsupported.client.retryModelClaim({ ...proof, operationId, sourceDigest: 'a'.repeat(64) }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(seen).toEqual([])
+    const enabled = await makeClient((frame) => {
+      seen.push(frame)
+      return frame.method === 'profile.model_claim_recovery_inventory'
+        ? result(frame, { receipts: [{ candidate_id: proof.candidateId,
+          operation_id: operationId, source_digest: 'a'.repeat(64), state: 'pending' }] })
+        : frame.method === 'profile.model_claim_recovery_status'
+          ? result(frame, { state: 'pending', candidate_id: proof.candidateId,
+            operation_id: operationId, source_digest: 'a'.repeat(64) })
+          : result(frame, { state: frame.method === 'profile.model_claim_retry' ? 'committed' : 'restored',
+            cleanup_pending: true })
+    }, [...baseCapabilities, 'profile.model_claim_recovery_inventory',
+      'profile.model_claim_recovery_status', 'profile.model_claim_restore',
+      'profile.model_claim_retry'].sort() as HostControlCapability[])
+    await expect(enabled.client.modelClaimRecoveryInventory(proof)).resolves.toEqual([{
+      candidateId: proof.candidateId, operationId, sourceDigest: 'a'.repeat(64), status: 'pending',
+    }])
+    await expect(enabled.client.modelClaimRecoveryStatus(proof)).resolves.toEqual({
+      candidateId: proof.candidateId, operationId, sourceDigest: 'a'.repeat(64), status: 'pending',
+    })
+    await expect(enabled.client.restoreModelClaim({ ...proof, operationId })).resolves.toEqual({
+      state: 'restored', cleanupPending: true,
+    })
+    await expect(enabled.client.retryModelClaim({ ...proof, operationId, sourceDigest: 'a'.repeat(64) }))
+      .resolves.toEqual({ state: 'committed', cleanupPending: true })
+    expect(seen).toMatchObject([
+      { method: 'profile.model_claim_recovery_inventory', params: {
+        account_access_token: proof.accountAccessToken, profile_unlock_material: proof.unlockMaterial } },
+      { method: 'profile.model_claim_recovery_status', params: { candidate_id: proof.candidateId,
+        account_access_token: proof.accountAccessToken, profile_unlock_material: proof.unlockMaterial } },
+      { method: 'profile.model_claim_restore', params: { candidate_id: proof.candidateId,
+        operation_id: operationId } },
+      { method: 'profile.model_claim_retry', params: { candidate_id: proof.candidateId,
+        operation_id: operationId, source_digest: 'a'.repeat(64) } },
+    ])
+    const unclaimed = await makeClient(frame => result(frame, { state: 'unclaimed' }),
+      [...baseCapabilities, 'profile.model_claim_recovery_status'].sort() as HostControlCapability[])
+    await expect(unclaimed.client.modelClaimRecoveryStatus(proof)).resolves.toBeNull()
+    await expect(unclaimed.client.restoreModelClaim({ ...proof, operationId }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(unclaimed.client.retryModelClaim({ ...proof, operationId, sourceDigest: 'a'.repeat(64) }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    const malformed = await makeClient(frame => ({ version: 1, type: 'result', request_id: frame.request_id,
+      method: 'profile.status', result: { state: 'locked' } }),
+    [...baseCapabilities, 'profile.model_claim_recovery_inventory',
+      'profile.model_claim_recovery_status', 'profile.model_claim_restore',
+      'profile.model_claim_retry'].sort() as HostControlCapability[])
+    await expect(malformed.client.modelClaimRecoveryInventory(proof))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(malformed.client.modelClaimRecoveryStatus(proof)).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(malformed.client.restoreModelClaim({ ...proof, operationId }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(malformed.client.retryModelClaim({ ...proof, operationId, sourceDigest: 'a'.repeat(64) }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('projects redacted model candidates only when the Host advertises inventory', async () => {
+    const seen: HostControlFrame[] = []
+    const response = { source_digest: 'a'.repeat(64), candidates: [{
+      id: 'llm-deepseek:deepseek', provider: 'deepseek', kind: 'llm',
+      credential: 'present', shared_credential: false,
+    }], unsupported_settings: 1, unassigned_credential_references: 2,
+    unassigned_credential_records: 3 }
+    const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, response) },
+      [...baseCapabilities].sort())
+    const request = { viewLeaseId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3146',
+      leaseGeneration: 2, runtimeGeneration: 5 }
+    await expect(unsupported.client.modelClaimInventory(request)).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(seen).toEqual([])
+    const enabled = await makeClient((frame) => { seen.push(frame); return result(frame, response) },
+      [...baseCapabilities, 'profile.model_claim_inventory'].sort() as HostControlCapability[])
+    await expect(enabled.client.modelClaimInventory(request)).resolves.toEqual({
+      sourceDigest: response.source_digest, candidates: [{
+        id: 'llm-deepseek:deepseek', provider: 'deepseek', kind: 'llm',
+        credential: 'present', sharedCredential: false,
+      }], unsupportedSettings: 1, unassignedCredentialReferences: 2, unassignedCredentialRecords: 3,
+    })
+    expect(seen).toMatchObject([{ method: 'profile.model_claim_inventory', params: {
+      view_lease_id: request.viewLeaseId, lease_generation: 2, runtime_generation: 5,
+    } }])
+    const malformed = await makeClient(frame => ({
+      version: 1, type: 'result', request_id: frame.request_id, method: 'profile.status', result: { state: 'locked' },
+    }), [...baseCapabilities, 'profile.model_claim_inventory'].sort() as HostControlCapability[])
+    await expect(malformed.client.modelClaimInventory(request)).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('projects every successful response and optional wire field', async () => {
     let statusCalls = 0
     let recoveryCalls = 0

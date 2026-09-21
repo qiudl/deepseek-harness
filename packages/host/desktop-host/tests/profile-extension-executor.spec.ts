@@ -51,7 +51,13 @@ describe('ProfileExtensionExecutor', () => {
     const calls: string[] = []
     const mcp = executor('mcp', 'mcp-revision', calls)
     const skill = executor('skill', 'skill-revision', calls)
-    const plugin = executor('plugin', 'plugin-revision', calls)
+    const approval = { buildKey: 'plugin@1.0.0', digest: 'a'.repeat(64),
+      scripts: [{ name: 'postinstall' as const, command: 'node build.js' }] }
+    const plugin = { ...executor('plugin', 'plugin-revision', calls),
+      preflight: async (profileId: string, kind: ExtensionKind, payload: string) => {
+        calls.push(`plugin.preflight:${profileId}:${kind}:${payload}`)
+        return approval
+      } }
     const combined = new ProfileExtensionExecutor(
       mcp as unknown as ProfileMcpExecutor,
       skill as unknown as ProfileSkillExecutor,
@@ -59,6 +65,8 @@ describe('ProfileExtensionExecutor', () => {
     )
 
     for (const kind of ['mcp', 'skill', 'plugin'] as const) combined.validate('profile', kind, `${kind}-payload`)
+    await expect(combined.preflight('profile', 'plugin', 'plugin-payload')).resolves.toEqual(approval)
+    await expect(combined.preflight('profile', 'mcp', 'mcp-payload')).resolves.toBeUndefined()
     expect(await combined.revision('profile')).toBe(createHash('sha256')
       .update(JSON.stringify(['mcp-revision', 'skill-revision', 'plugin-revision'])).digest('hex'))
     const signal = new AbortController().signal
@@ -96,6 +104,7 @@ describe('ProfileExtensionExecutor', () => {
       .update(JSON.stringify(['mcp-revision', 'skill-revision'])).digest('hex'))
     expect(() => { combined.validate('profile', 'plugin', 'payload') }).toThrow('upgrade_required')
     expect(() => combined.inventory('profile', 'plugin')).toThrow('upgrade_required')
+    await expect(combined.preflight('profile', 'plugin', 'payload')).resolves.toBeUndefined()
     await expect(combined.validatePluginCompletion('profile', receipt)).rejects.toThrow('upgrade_required')
     await expect(combined.completePluginPackage('profile', receipt, context('plugin'))).rejects.toThrow('upgrade_required')
     await expect(combined.validatePluginRestore('profile', receipt)).rejects.toThrow('upgrade_required')

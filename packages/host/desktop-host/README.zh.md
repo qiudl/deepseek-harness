@@ -49,6 +49,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
 
+Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
+
 账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。注册表出现并发变更时，回退被阻止并返回 `stale`。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
 
 恢复不含可选绑定字段的记录后再添加账号绑定时，Host 按注册表的规范字段顺序写入，使更新后的记录在 Host 重启后仍可读取。
@@ -110,6 +112,16 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 - **解锁材料仍由嵌入应用拥有**——Slark Main 必须把随机 32 字节 Profile material 保存在 macOS Keychain／safeStorage 中，并且只通过已认证 Main-to-Host 链路提供；它绝不能进入 Renderer、argv、environment、日志或 registration 文件。
 - **Account access 与 session 绑定**——Slark Main 必须从 DSH Account 获取 `dsh-host` token，并且只通过已认证 Main-to-Host 链路提供。Host 不持久化或记录该凭据；token 过期后，Slark Main 必须刷新 Account session，`profile.ensure` 才能成功。
 - **旧数据迁移在完整闭环前 fail closed**——只有 active Profile 的完整 owner-only bundle（session、settings、credential、workspace 与 Profile 配置）可被 stage 时，Host 才发布 export 能力。digest-only 或 session-only transfer 不会被宣称为安全迁移。
+- **旧主目录的设置和凭据没有账号归属**——固定 OS 用户 `.dsh` 主目录的导出只迁移会话和工作区，全部设置与凭据都留在原路径，其中也包括权限、引导状态、模型路由与默认模型。来源摘要会检测盘点到传输之间的变更。在显式账号认领实现之前，新 Person Profile 无法使用这些值；已经激活的 Profile 数据另行处理兼容性。
+- **旧数据认领盘点仍是 Host 内部的脱敏能力**——Host 可对同一份已校验来源盘点 DeepSeek、已配置的 pi-ai 路由及 DeepSeek 网页搜索。结果只包含候选标识、凭据是否存在、共享引用状态、来源摘要，以及无法映射的设置和凭据记录数量；不返回密钥值或引用名。盘点本身不授予认领权限，也不修改来源或目标；仍需实现已认证的认领事务。
+- **旧数据认领存储与启动拦截留在 Host 内部**——状态机校验不含密钥的预留、提交和已验证恢复事件。Unix 用户私有及 Windows SID 私有适配器会先原子替换有大小上限的全局快照，再发布状态变化；替换结果不确定时，重载前拒绝后续写入。每个 Profile 另有私有的未决标记，两套启动装配只检查该 Profile 的标记，再决定是否启动 worker，因此全局账本损坏不会让无关 DSH Profile 停摆。macOS 认领事务在目标凭据写入及核验前后设置、清除该标记。
+- **旧数据认领的恢复快照只保存在目标 Profile 内**——按操作保存的 Unix 用户私有或 Windows SID 私有文件记录两份原文档，以及两份预期结果的摘要。重复操作不能替换原快照；只有当前文档仍与原内容或预期结果一致时才允许还原。快照包含凭据，绝不通过 Desktop IPC 传输。认领事务在写入任一文档前持久保存快照，并在核验终态后删除。
+- **提供方转换仍是 Host 内部能力**——经校验的旧来源读取器只向 Host 代码返回绑定来源的私有文档；转换函数只把用户确认的 DeepSeek、pi-ai 或网页搜索路由写入目标文档对。它生成绑定 Profile 和操作的独立凭据引用，保留已有个人路由，把网页搜索的明文密钥从设置中移走，且不导入其他提供方、授权记录或旧默认模型。DeepSeek 和 pi-ai 路由如果包含内嵌密钥字段或自定义请求头，则要求用户手工配置，不把这些值复制到设置中。macOS 认领事务在确认后调用该转换函数。
+- **目标文档写入仍是 Host 内部能力**——写入器根据已校验的来源文档把单个提供方投影到当前可变设置与凭据文件，修改前记录两份原文档，支持任一文件写入后重试，并核验最终文档对。恢复时拒绝覆盖后续个人编辑。macOS 定位当前已物化的代际；Windows 定位 SID 私有的 `owner-state` 文件。macOS 认领事务停止 worker、隔离该 Profile、校验来源摘要、预留账本归属，再调用写入器。
+- **认领协调仍是 Host 内部能力**——协调器按 Profile 串行认领，停止 worker、保存原文档、预留提供方唯一归属、标记 Profile 未决、写入并核验两份实时文档、提交账本、清除标记、重启 worker，最后比较并删除含密钥的快照。已提交操作的重试根据目标摘要核验，无需重读旧来源；中断的恢复也能继续清除标记。macOS 控制接口在 Account 视图授权下调用该协调器。
+- **账号认领授权独立于普通视图访问**——Host 只能凭有效的 Main 持有租约，为通过 `profile.ensure` 验证过 Account 令牌的同一连接解析 Account Profile 认领目标。仅靠本机保管库恢复、离线恢复、本地 Profile、连接撤销和过期租约都不能授权认领。盘点、确认和 macOS 事务每次生效都使用该检查；未决认领的恢复使用独立的同账号证明。
+- **旧模型盘点只读**——声明旧来源已静止的 macOS Host 会发布 `profile.model_claim_inventory`、`profile.model_claim_confirm`、`profile.model_claim_apply` 和 `profile.model_claim_retry`。盘点只返回脱敏候选元数据。确认重验 Account 租约、来源摘要和凭据是否存在，再签发只在当前连接有效、60 秒内只能使用一次的授权。写入在认领事务前消费该授权。重试要求新鲜的同账号证明，以及账本中已预留的准确候选项、操作号和来源摘要。Windows 在原生来源盘点完成前不发布这些能力。
+- **认领恢复盘点可在视图失败时使用**——macOS Host 校验当前 Account 令牌、绑定和保管库证明后，只列出账本中未完成的预留以及 Profile 标记尚未清除的操作。它返回有界的脱敏回执，不读取旧凭据，也不启动 Profile worker。已提交或已恢复但标记未清除的操作，可通过现有重试或恢复接口完成。
 
 <a id="dev-note"></a>
 ### 开发备注
@@ -133,7 +145,9 @@ REQ-20260911-0004 的原生存储证据仅来自 Windows 11 x64 管理员环境�
 
 经确认的插件更新使用 `{ action: "update", packageName, spec }` 和现有精确来源 add 命令。仅允许由依赖管理、可独立且全部启用的插件包更新，避免停用、混合或不支持的组合意外增加启用功能。Main 通过 Hub 预检锁定所选来源，并要求包名匹配已有条目。CLI 必须发布请求版本，新 worker 确认贡献后才成功；依赖部分变更保留未知回执，不假装已经回滚。
 
-经确认的卸载使用 `{ action: "remove", packageName }`，仅接受由依赖管理的独立插件包，并调用固定 CLI 的 remove 命令。pnpm 11.7 的 remove 要使用 `--config.ignore-scripts=true`，会拒绝 add 可用的 `--ignore-scripts` 写法。确认依赖及插件包登记已移除后，Host 清理原贡献 ID 对应的独立 `{ id, disabled }` 覆盖，保留其他配置，再要求对应运行时 ID 全部消失。模板内置包不可卸载。真实安装/更新/卸载夹具中的生命周期脚本哨兵始终未生成。
+插件安装预检从不可变的 npm 精确版本清单或 GitHub 精确提交清单读取信息，不写入所选 Profile。它只返回已识别的生命周期脚本名称及精确命令，并用 SHA-256 摘要绑定来源和精确包版本。脚本清单为空、Desktop 未提交摘要或摘要改变时，生命周期脚本继续禁用。匹配的二次确认只把已审阅的 `package@version` 持久加入 `allowBuilds`，再以固定 add 命令执行且不附加 `--ignore-scripts`；其他构建包仍默认拒绝。清单身份漂移、重定向、元数据超限或策略冲突均在包管理器产生副作用前关闭失败。
+
+经确认的卸载使用 `{ action: "remove", packageName }`，仅接受由依赖管理的独立插件包，并调用固定 CLI 的 remove 命令。pnpm 11.7 的 remove 要使用 `--config.ignore-scripts=true`，会拒绝 add 可用的 `--ignore-scripts` 写法。确认依赖及插件包登记已移除后，Host 清理原贡献 ID 对应的独立 `{ id, disabled }` 覆盖，保留其他配置，再要求对应运行时 ID 全部消失。模板内置包不可卸载。卸载、修复以及未经批准的安装或更新路径继续禁用生命周期脚本。
 
 技能列表将自有本地条目与当前 worker 经认证的 `skills/profileCatalog` 快照合并，读取不重启 worker。读取期间本地修订变化、快照不完整、胜出名称重复或合计超过 128 条时拒绝读取。条目仅公开有界来源类别，以及 `effective`、`shadowed` 或 `not_visible` 状态；被覆盖的本地条目标出生效来源。外部胜出条目使用不透明的 `catalog-` ID，在 Desktop 中只读。提供方路径保留在 Host 内部。列表范围是自有本地定义和默认预设胜出条目，不包含所有外部落选候选项或项目专属预设。
 

@@ -64,6 +64,23 @@ export class ProfileWorkerSupervisor {
   }
 
   /**
+   * Invoke the running Profile worker without exposing its private token.
+   * @param profileId - Profile containing the selected model and credentials.
+   * @param text - one bounded user input.
+   * @param signal - request cancellation from the owning Host connection.
+   * @returns the selected model identity and bounded answer text.
+   */
+  async generateText(profileId: string, text: string, signal: AbortSignal): Promise<{
+    readonly provider: string
+    readonly model: string
+    readonly text: string
+  }> {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.generateText) throw new HostAuthorityError('unavailable')
+    return worker.generateText(text, signal)
+  }
+
+  /**
    * Stop notifications before cancellation, then await the child's exit.
    * @param profileId - worker owner to dispose.
    */

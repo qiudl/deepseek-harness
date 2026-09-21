@@ -286,6 +286,28 @@ describe('Windows Desktop Host startup', () => {
     expect(state.dispose).toHaveBeenCalledOnce()
   })
 
+  it('blocks only the Profile with a durable pending model claim after restart', async () => {
+    const state = fixture()
+    const first = await startWindowsDesktopHostApplication(state.options, undefined, state.dependencies)
+    const local = await first.host.bootstrapLocalProfile({
+      keyHandle: 'windows-credential:local', unlockMaterial, ownerId: 'desktop-owner',
+    })
+    await first.close()
+    state.files.set(`${root}\\profiles\\${local.profileId}\\legacy-model-claim.v1.json`, Buffer.from(JSON.stringify({
+      version: 1, profileId: local.profileId, candidateId: 'llm-deepseek:deepseek',
+      operationId: randomUUID(), state: 'pending',
+    })))
+    const second = await startWindowsDesktopHostApplication(state.options, undefined, state.dependencies)
+    try {
+      await expect(second.host.restoreLocalProfile({
+        profileId: local.profileId, bindingGeneration: local.bindingGeneration,
+        keyHandle: 'windows-credential:local', unlockMaterial, ownerId: 'desktop-owner',
+      }))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      expect(state.createProfileWorker).toHaveBeenCalledTimes(1)
+    } finally { await second.close() }
+  })
+
   it('rejects unsupported platforms and mismatched trust material before loading native authority', async () => {
     for (const change of [
       { platform: 'darwin' },

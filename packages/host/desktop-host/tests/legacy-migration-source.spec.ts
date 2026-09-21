@@ -3,8 +3,13 @@ import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, utimes, writeFile
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import type { MigrationOwnerTransferBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
 import { compressZstdFrame } from '@deepseek-ai/dsh-session-persistence-jsonl/src/zstd.ts'
-import { createLegacyMigrationExportService } from '../src/legacy-migration-source.ts'
+import {
+  createLegacyMigrationExportService, inspectLegacyModelClaimSource, readLegacyModelClaimDocuments,
+} from '../src/legacy-migration-source.ts'
+import { projectLegacyModelClaim } from '../src/legacy-claim-projection.ts'
+import { MigrationOwnerStateApplicator } from '../src/migration-owner-state-applicator.ts'
 
 const uid = process.getuid?.() ?? 0
 
@@ -70,17 +75,170 @@ function service(home: string) {
 }
 
 describe('fixed owner legacy migration source', () => {
-  it('imports released flat environment credentials without rewriting the source', async () => {
+  it('inventories provider claims without revealing shared references or values', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), JSON.stringify({
+      'llm-deepseek': { apiKeyEnv: 'SHARED_API_KEY' },
+      'llm-pi-ai': { providers: {
+        custom: { apiKeyEnv: 'SHARED_API_KEY', models: [{ id: 'private-model' }] },
+        native: { models: [{ id: 'native-model' }] },
+      } },
+      'web-search-deepseek': { apiKey: 'sk-search-private' },
+      'agent-default-model': { provider: 'custom', model: 'private-model' },
+      'subagent-model-selection': { allowedModels: [{ provider: 'custom', model: 'private-model' }] },
+      'custom-plugin': { token: 'sk-unknown-private' },
+    }), { mode: 0o600 })
+    await writeFile(join(source, '.credentials.yaml'), JSON.stringify({
+      version: 1, refs: { SHARED_API_KEY: 'sk-shared-private', UNUSED_API_KEY: 'sk-unused-private' },
+      records: { 'custom/token': { kind: 'api-key', key: 'sk-record-private' } },
+    }), { mode: 0o600 })
+    const input = { expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined }
+    const first = await inspectLegacyModelClaimSource(input)
+    expect(first).toMatchObject({
+      candidates: [
+        { id: 'llm-deepseek:deepseek', credential: 'present', sharedCredential: true },
+        { id: 'llm-pi-ai:custom', credential: 'present', sharedCredential: true },
+        { id: 'llm-pi-ai:native', credential: 'none', sharedCredential: false },
+        { id: 'web-search-deepseek:deepseek', credential: 'present', sharedCredential: false },
+      ],
+      unsupportedSettings: 2,
+      unassignedCredentialReferences: 1,
+      unassignedCredentialRecords: 1,
+    })
+    const redacted = JSON.stringify(first)
+    for (const value of ['SHARED_API_KEY', 'UNUSED_API_KEY', 'sk-', 'private-model', 'custom-plugin']) {
+      expect(redacted).not.toContain(value)
+    }
+    const privateDocuments = await readLegacyModelClaimDocuments(input)
+    expect(privateDocuments.sourceDigest).toBe(first.sourceDigest)
+    const projected = projectLegacyModelClaim({
+      candidateId: 'llm-pi-ai:custom',
+      profileId: 'b9e8b0aa-5c8e-4d4c-8e7a-139a86985f41',
+      operationId: '97086a03-9508-41c0-bec3-7464dc835953',
+      sourceSettings: privateDocuments.settings, sourceCredentials: privateDocuments.credentials,
+      targetSettings: {}, targetCredentials: { refs: {}, records: {} },
+    })
+    expect(projected.credentials.refs[projected.reference]).toBe('sk-shared-private')
+    expect(JSON.stringify(projected.settings)).not.toContain('sk-search-private')
+    expect(JSON.stringify(projected.settings)).not.toContain('sk-unknown-private')
+    expect(JSON.stringify(projected.credentials)).not.toContain('sk-record-private')
+    await writeFile(join(source, '.credentials.yaml'), JSON.stringify({
+      version: 1, refs: { SHARED_API_KEY: 'sk-rotated-private', UNUSED_API_KEY: 'sk-unused-private' },
+      records: { 'custom/token': { kind: 'api-key', key: 'sk-record-private' } },
+    }), { mode: 0o600 })
+    const second = await inspectLegacyModelClaimSource(input)
+    expect(second.sourceDigest).not.toBe(first.sourceDigest)
+  })
+
+  it('does not invent a provider when the source has no model route or credential', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, '.credentials.yaml'), '{}\n', { mode: 0o600 })
+    const inventory = await inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })
+    expect(inventory.candidates).toEqual([])
+    expect(inventory.unassignedCredentialReferences).toBe(0)
+  })
+
+  it('accepts an empty pi-ai section without inventing a route', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), '{"llm-pi-ai":{}}\n', { mode: 0o600 })
+    const inventory = await inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })
+    expect(inventory.candidates).toEqual([{
+      id: 'llm-deepseek:deepseek', provider: 'deepseek', kind: 'llm',
+      credential: 'present', sharedCredential: false,
+    }])
+  })
+
+  it('describes missing and independent provider credentials without exposing their references', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), JSON.stringify({
+      'llm-deepseek': {},
+      'llm-pi-ai': { providers: { custom: { apiKeyEnv: 'CUSTOM_API_KEY' } } },
+      'web-search-deepseek': { apiKeyEnv: 'SEARCH_API_KEY' },
+    }), { mode: 0o600 })
+    const inventory = await inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })
+    expect(inventory.candidates).toEqual([
+      { id: 'llm-deepseek:deepseek', provider: 'deepseek', kind: 'llm',
+        credential: 'present', sharedCredential: false },
+      { id: 'llm-pi-ai:custom', provider: 'custom', kind: 'llm',
+        credential: 'missing', sharedCredential: false },
+      { id: 'web-search-deepseek:deepseek', provider: 'deepseek', kind: 'web-search',
+        credential: 'missing', sharedCredential: false },
+    ])
+    expect(JSON.stringify(inventory)).not.toContain('CUSTOM_API_KEY')
+  })
+
+  it('counts provider ids that cannot be safely presented', async () => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), JSON.stringify({
+      'llm-pi-ai': { providers: { 'PRIVATE_API_KEY!': { apiKeyEnv: 'PRIVATE_API_KEY' } } },
+    }), { mode: 0o600 })
+    const inventory = await inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })
+    expect(inventory).toMatchObject({ candidates: [{ id: 'llm-deepseek:deepseek' }], unsupportedSettings: 1 })
+    expect(JSON.stringify(inventory)).not.toContain('PRIVATE_API_KEY')
+  })
+
+  it.each([
+    { 'llm-deepseek': { apiKeyEnv: 7 } },
+    { 'llm-deepseek': { apiKeyEnv: 'invalid-ref' } },
+    { 'llm-pi-ai': { providers: { custom: { apiKeyEnv: 7 } } } },
+    { 'llm-pi-ai': { providers: { custom: { apiKeyEnv: 'invalid-ref' } } } },
+    { 'web-search-deepseek': { apiKeyEnv: 7 } },
+    { 'web-search-deepseek': { apiKeyEnv: 'invalid-ref' } },
+  ])('rejects a malformed model credential reference in a claim source', async (settings) => {
+    const { home, source } = await fixture()
+    await writeFile(join(source, 'settings.yaml'), JSON.stringify(settings), { mode: 0o600 })
+    await expect(inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+    })).rejects.toThrow(/schema_unsupported/u)
+  })
+
+  it('rejects a source changed after validation and an aborted inspection', async () => {
+    const { home, source } = await fixture()
+    await expect(inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined,
+      _testAfterValidatedState: () => writeFile(join(source, 'settings.yaml'), '{}\n', { mode: 0o600 }),
+    })).rejects.toThrow(/source_changed/u)
+    const aborted = AbortSignal.abort()
+    await expect(inspectLegacyModelClaimSource({
+      expectedUid: uid, _testOwnerHome: home, assertSourceQuiescent: async () => undefined, signal: aborted,
+    })).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('keeps legacy model credentials and routes inactive without rewriting the source', async () => {
     const { home, source } = await fixture()
     const path = join(source, '.credentials.yaml')
-    await writeFile(path, JSON.stringify({ DEEPSEEK_API_KEY: 'legacy-secret' }), { mode: 0o600 })
+    await writeFile(path, JSON.stringify({
+      DEEPSEEK_API_KEY: 'legacy-secret', CUSTOM_API_KEY: 'custom-secret',
+    }), { mode: 0o600 })
+    const settingsPath = join(source, 'settings.yaml')
+    await writeFile(settingsPath, JSON.stringify({
+      permission: { defaultPreset: 'danger-full-access' },
+      'ui-onboarding': { welcomeNoticeVersion: 1 },
+      'llm-deepseek': { apiKeyEnv: 'DEEPSEEK_API_KEY' },
+      'llm-pi-ai': { providers: { custom: { apiKeyEnv: 'CUSTOM_API_KEY' } } },
+      'agent-default-model': { provider: 'custom', model: 'legacy-default' },
+      'subagent-model-selection': { enabled: true, allowedModels: [{ provider: 'custom', model: 'm' }] },
+      'web-search-deepseek': { apiKey: 'sk-search-legacy', model: 'legacy-search' },
+      'custom-model-plugin': { token: 'sk-custom-legacy', route: 'custom' },
+    }), { mode: 0o600 })
     const before = createHash('sha256').update(await readFile(path)).digest('hex')
+    const settingsBefore = createHash('sha256').update(await readFile(settingsPath)).digest('hex')
     let transferred = ''
+    let ownerTransfer: MigrationOwnerTransferBundle | undefined
     const service = createLegacyMigrationExportService({
       expectedUid: uid,
       _testOwnerHome: home,
       assertSourceQuiescent: async () => undefined,
       stageOwnerTransfer: async (bundle) => {
+        ownerTransfer = bundle
         transferred = JSON.stringify(bundle)
         return { transferId: 'a'.repeat(48), transferDigest: 'b'.repeat(64) }
       },
@@ -93,9 +251,31 @@ describe('fixed owner legacy migration source', () => {
       maxBytes: proof.requiredMaxBytes,
     })
 
-    expect(transferred).toContain('"refs":{"DEEPSEEK_API_KEY":"legacy-secret"}')
-    expect(transferred).toContain('"records":{}')
+    expect(transferred).not.toContain('legacy-secret')
+    expect(transferred).not.toContain('custom-secret')
+    expect(transferred).not.toContain('CUSTOM_API_KEY')
+    expect(transferred).not.toContain('llm-deepseek')
+    expect(transferred).not.toContain('llm-pi-ai')
+    expect(transferred).not.toContain('agent-default-model')
+    expect(transferred).not.toContain('legacy-default')
+    expect(transferred).not.toContain('subagent-model-selection')
+    expect(transferred).not.toContain('web-search-deepseek')
+    expect(transferred).not.toContain('sk-search-legacy')
+    expect(transferred).not.toContain('sk-custom-legacy')
+    expect(transferred).not.toContain('danger-full-access')
+    expect(transferred).not.toContain('welcomeNoticeVersion')
+    if (!ownerTransfer) throw new Error('legacy owner transfer was not staged')
+    const target = join(home, 'personal-profile')
+    await mkdir(target, { mode: 0o700 })
+    const applied = await new MigrationOwnerStateApplicator(uid).apply(target, 1, ownerTransfer.ownerState)
+    expect(JSON.parse(await readFile(applied.settingsPath, 'utf8'))).toEqual({})
+    expect(JSON.parse(await readFile(applied.credentialsPath, 'utf8'))).toEqual({
+      version: 1, refs: {}, records: {},
+    })
+    expect(JSON.parse(await readFile(join(applied.storageRoot, 'workspace.json'), 'utf8')))
+      .toMatchObject({ tables: { workspaces: { 'workspace-1': { path: '/workspace' } } } })
     expect(createHash('sha256').update(await readFile(path)).digest('hex')).toBe(before)
+    expect(createHash('sha256').update(await readFile(settingsPath)).digest('hex')).toBe(settingsBefore)
   })
 
   it('rejects mixed flat and versioned credential schemas', async () => {
@@ -338,7 +518,8 @@ describe('fixed owner legacy migration source', () => {
       maxBytes: proof.requiredMaxBytes,
     })
     expect(receipt.recordCount).toBe(6)
-    expect(transferred).toContain('secret')
+    expect(transferred).not.toContain('secret')
+    expect(transferred).toContain('legacyWithheldSourceDigest')
     expect(JSON.stringify(service.read({ exportId: receipt.exportId, chunkIndex: 0 }))).not.toContain('secret')
     expect(createHash('sha256').update(await readFile(join(source, '.credentials.yaml'))).digest('hex')).toBe(before)
   })

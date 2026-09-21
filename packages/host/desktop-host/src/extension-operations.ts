@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { validPluginPackageRecovery, type PluginPackageRecovery } from './plugin-package-recovery.ts'
+import { readOwnerPrivateFile } from './private-file-io.ts'
 
 export type ExtensionKind = 'plugin' | 'mcp' | 'skill'
 /** Bounded source of the default-preset winner after removing a local Skill. */
@@ -66,6 +67,18 @@ interface Plan {
   restores?: string
   recoveryDigest?: string
   recoveryMode?: 'complete'
+  scriptApproval?: { buildKey: string; digest: string; scripts: readonly { name: string; command: string }[] }
+}
+export interface ExtensionExecutionContext {
+  kind: ExtensionKind
+  operationId?: string
+  buildApproval?: { buildKey: string; digest: string }
+  checkpointPluginPackage?(this: void, evidence: PluginPackageRecovery): void
+  checkpointPluginToggle?(this: void, evidence: PluginToggleRecovery): void
+  checkpointMcp?(this: void, evidence: McpRecovery): void
+  checkpointSkillRemoval?(this: void, evidence: SkillRemovalRecovery): void
+  signal: AbortSignal
+  guard(this: void): void
 }
 export interface ExtensionExecutor {
   validatePluginCompletion?(profileId: string, original: ExtensionReceipt): Promise<void>
@@ -77,17 +90,10 @@ export interface ExtensionExecutor {
   validateSkillRestore?(profileId: string, original: ExtensionReceipt): Promise<void>
   restoreSkillRemoval?(profileId: string, original: ExtensionReceipt, context: Parameters<ExtensionExecutor['execute']>[2]): ReturnType<ExtensionExecutor['execute']>
   validate?(profileId: string, kind: ExtensionKind, payload: string): void
+  preflight?(profileId: string, kind: ExtensionKind, payload: string): Promise<Plan['scriptApproval']>
   revision(profileId: string): Promise<string>
-  execute(profileId: string, payload: string, context: {
-    kind: ExtensionKind
-    operationId?: string
-    checkpointPluginPackage?(this: void, evidence: PluginPackageRecovery): void
-    checkpointPluginToggle?(this: void, evidence: PluginToggleRecovery): void
-    checkpointMcp?(this: void, evidence: McpRecovery): void
-    checkpointSkillRemoval?(this: void, evidence: SkillRemovalRecovery): void
-    signal: AbortSignal
-    guard(this: void): void
-  }): Promise<{ state: Outcome; skillSource?: SkillRemovalSource }>
+  execute(profileId: string, payload: string, context: ExtensionExecutionContext):
+  Promise<{ state: Outcome; skillSource?: SkillRemovalSource }>
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const kinds = ['plugin', 'mcp', 'skill']
@@ -185,19 +191,12 @@ export class FileExtensionReceipts implements ExtensionReceiptStore {
   read(operationId: string): ExtensionReceipt | undefined {
     this.directory()
     const path = join(this.root, `${uuid(operationId)}.json`)
-    let fd: number
-    try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-      throw error
-    }
-    try {
-      const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.uid || (stat.mode & 0o077) !== 0 || stat.size > 65_536) throw new Error('unsafe_receipt')
-      const receipt: unknown = JSON.parse(readFileSync(fd, 'utf8'))
-      validateExtensionReceipt(receipt)
-      if (receipt.operationId !== operationId) throw new Error('invalid_receipt')
-      return receipt
-    } finally { closeSync(fd) }
+    const bytes = readOwnerPrivateFile(path, this.uid, 65_536, () => new Error('unsafe_receipt'))
+    if (bytes === undefined) return undefined
+    const receipt: unknown = JSON.parse(bytes.toString('utf8'))
+    validateExtensionReceipt(receipt)
+    if (receipt.operationId !== operationId) throw new Error('invalid_receipt')
+    return receipt
   }
   /** @param receipt Metadata only; raw installation payloads must never be stored here. */
   write(receipt: ExtensionReceipt): void {
@@ -271,14 +270,16 @@ export class ProfileExtensionOperations {
       }
     }
     if (!restores) this.executor.validate?.(profileId, kind, payload)
+    const scriptApproval = !restores ? await this.executor.preflight?.(profileId, kind, payload) : undefined
     const revision = await this.executor.revision(profileId)
     this.assertOpen()
     if (authority() !== profileId) throw new Error('unauthorized')
     if (this.plans.size >= 128) throw new Error('busy')
     const plan: Plan = { planId: randomUUID(), profileId, kind, payload, revision,
       ...(restores && recoveryDigest ? { restores, recoveryDigest } : {}),
-      ...(recoveryMode ? { recoveryMode } : {}),
-      digest: createHash('sha256').update(JSON.stringify([profileId, kind, payload, revision, ...(recoveryDigest ? [recoveryDigest] : [])])).digest('hex'), expiresAt: this.clock.now() + 300_000 }
+      ...(recoveryMode ? { recoveryMode } : {}), ...(scriptApproval ? { scriptApproval } : {}),
+      digest: createHash('sha256').update(JSON.stringify([profileId, kind, payload, revision,
+        ...(recoveryDigest ? [recoveryDigest] : []), ...(scriptApproval ? [scriptApproval.digest] : [])])).digest('hex'), expiresAt: this.clock.now() + 300_000 }
     this.plans.set(plan.planId, plan)
     const { payload: _payload, ...result } = plan
     return result
@@ -290,7 +291,7 @@ export class ProfileExtensionOperations {
    * @param signal Authenticated connection lifetime; abort stops queued and running work.
    * @returns Durably queued or existing receipt.
    */
-  commit(authority: () => string, planId: string, operationId: string, signal?: AbortSignal): ExtensionReceipt {
+  commit(authority: () => string, planId: string, operationId: string, signal?: AbortSignal, scriptDigest?: string): ExtensionReceipt {
     this.assertOpen(); uuid(planId); uuid(operationId)
     const profileId = uuid(authority())
     const existing = this.store.read(operationId)
@@ -301,6 +302,9 @@ export class ProfileExtensionOperations {
     const plan = this.plans.get(planId)
     if (!plan || plan.profileId !== profileId) throw new Error('unauthorized')
     if (plan.expiresAt <= this.clock.now()) throw new Error('expired')
+    if (plan.scriptApproval ? scriptDigest !== plan.scriptApproval.digest : scriptDigest !== undefined) {
+      throw new Error('script_approval_required')
+    }
     if (this.blocked(profileId, plan.restores)) throw new Error('busy')
     // One confirmation plan can produce only one operation, even with a different client UUID.
     if (this.store.list(profileId).some(receipt => receipt.planId === planId)) throw new Error('idempotency_conflict')
@@ -422,6 +426,7 @@ export class ProfileExtensionOperations {
       }
       const context = { kind: plan.kind, operationId: initial.operationId, checkpointSkillRemoval, checkpointMcp,
         checkpointPluginToggle, checkpointPluginPackage,
+        ...(plan.scriptApproval ? { buildApproval: { buildKey: plan.scriptApproval.buildKey, digest: plan.scriptApproval.digest } } : {}),
         signal: controller.signal, guard }
       const original = plan.restores ? this.status(authority, plan.restores) : undefined
       const evidence = plan.recoveryMode === 'complete' ? original?.pluginPackage : plan.kind === 'skill' ? original?.skillRemoval : plan.kind === 'mcp' ? original?.mcpRecovery : original?.pluginToggleRecovery

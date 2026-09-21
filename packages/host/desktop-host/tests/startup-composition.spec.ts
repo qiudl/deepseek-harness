@@ -6,6 +6,13 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
 import type { Config } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
+import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from '../src/legacy-claim-marker.ts'
+import { FileLegacyClaimEventStore } from '../src/legacy-claim-store.ts'
+import { LegacyClaimLedger } from '../src/legacy-claim-ledger.ts'
+import { FileLegacyClaimRecoveryFiles } from '../src/legacy-claim-recovery-files.ts'
+import { LegacyClaimRecoveryStore } from '../src/legacy-claim-recovery.ts'
+import { FileLegacyClaimTargetFiles } from '../src/legacy-claim-target-files.ts'
+import { LegacyClaimTarget } from '../src/legacy-claim-target.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -135,11 +142,32 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
 
 it.skipIf(process.platform === 'win32')('wires profile, extension, and migration owners into one disposable application', async () => {
   const { config, root, accountPrivateKey } = fixture()
+  const cleanup = { closeApplication: undefined as (() => Promise<void>) | undefined }
+  let manifestRequests = 0
+  const fetchManifest = vi.fn<typeof fetch>(async (input) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (url !== 'https://registry.npmjs.org/startup-plugin/1.0.0') throw new Error(`unexpected request: ${url}`)
+    manifestRequests += 1
+    return new Response(JSON.stringify({ name: 'startup-plugin', version: '1.0.0',
+      ...(manifestRequests === 1 ? { scripts: { postinstall: 'node build.js' } } : {}) }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })
+  })
+  vi.stubGlobal('fetch', fetchManifest)
+  onTestFinished(async () => {
+    await cleanup.closeApplication?.()
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    rmSync(root, { recursive: true, force: true })
+  })
   mkdirSync(join(root, '.dsh/sessions'), { recursive: true, mode: 0o700 })
   vi.stubEnv('HOME', root)
   let serverOptions: UnixHostServerOptions | undefined
   const workerSpecs: ProfileWorkerSpec[] = []
   const workerEvents: string[] = []
+  const generateText = vi.fn(async (text: string, _signal: AbortSignal) => ({
+    provider: 'deepseek', model: 'deepseek-chat', text: `answer: ${text}`,
+  }))
   const serverStart = vi.fn(async () => undefined)
   const serverClose = vi.fn(async () => undefined)
   const server = {
@@ -165,6 +193,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       viewOrigin: 'http://127.0.0.1:43123',
       generation: workerSpecs.length,
       bootstrapCookie: { name: 'fixture', value: 'private' },
+      generateText,
       closeNotifications: () => { workerEvents.push(`notifications:${spec.profileId}`) },
       abort: () => { workerEvents.push(`abort:${spec.profileId}`); rejectDone?.(new Error('worker exit failed')) },
       done,
@@ -177,17 +206,22 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     attestPeer: async () => ({ uid: process.getuid!(), executableSignatureDigest: '2'.repeat(64) }),
     createServer: (options) => { serverOptions = options; return server },
   })
-  onTestFinished(async () => {
-    await application.close()
-    vi.unstubAllEnvs()
-    rmSync(root, { recursive: true, force: true })
-  })
+  cleanup.closeApplication = () => application.close()
   expect(serverStart).toHaveBeenCalledOnce()
   if (!serverOptions) throw new Error('missing captured server options')
+  expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
+  expect(await serverOptions.inspectModelClaimSource?.(new AbortController().signal)).toMatchObject({ candidates: [] })
 
   const profile = await application.host.bootstrapLocalProfile({
     keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner',
   })
+  expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
+    authorizeAccountProfile: () => profile.profileId })).toBeNull()
+  expect(serverOptions.modelClaimRecovery?.pendingReceipts({
+    authorizeAccountProfile: () => profile.profileId,
+  })).toEqual([])
+  expect(serverOptions.modelClaimTransaction).toBeDefined()
+  expect(serverOptions.modelClaimTransaction?.retry).toBeDefined()
   expect(workerSpecs).toHaveLength(1)
   const opened = await application.host.openLocalProfile({ profileId: profile.profileId, ownerId: 'owner' })
   expect((await application.host.activateView({
@@ -195,6 +229,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     ownerId: 'owner',
   })).origin).toBe('http://127.0.0.1:43123')
   expect(await serverOptions.profilePersistenceGeneration(profile.profileId)).toBe(1)
+  await expect(serverOptions.generateModelText?.(profile.profileId, 'question', new AbortController().signal))
+    .resolves.toEqual({ provider: 'deepseek', model: 'deepseek-chat', text: 'answer: question' })
+  expect(generateText).toHaveBeenCalledWith('question', expect.any(AbortSignal))
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'mcp')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'skill')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'plugin')).toEqual([])
@@ -212,7 +249,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const runOperation = async (kind: 'mcp' | 'skill' | 'plugin', payload: string): Promise<void> => {
     const plan = await operations.prepare(authority, kind, payload)
     const operationId = randomUUID()
-    operations.commit(authority, plan.planId, operationId)
+    operations.commit(authority, plan.planId, operationId, undefined, plan.scriptApproval?.digest)
     await operations.settled()
     const status = operations.status(authority, operationId)
     if (status.state !== 'succeeded') throw new Error(JSON.stringify(status))
@@ -233,7 +270,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   }))
   let failRemoval = false
   mocks.pluginCommand.mockImplementation(async (raw) => {
-    const input = raw as { profileRoot: string; spec: string; action?: string }
+    const input = raw as { profileRoot: string; spec: string; action?: string; allowBuild?: string }
     if (input.action === 'repair') return
     const path = join(input.profileRoot, 'profiles/web/package.json')
     const manifest = JSON.parse(readFileSync(path, 'utf8')) as {
@@ -257,11 +294,13 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     }
   })
   await runOperation('plugin', JSON.stringify({ packageName: 'startup-plugin', spec: 'startup-plugin@1.0.0' }))
+  expect(mocks.pluginCommand).toHaveBeenCalledWith(expect.objectContaining({ allowBuild: 'startup-plugin@1.0.0' }))
   await runOperation('plugin', JSON.stringify({
     action: 'toggle', packageName: 'startup-plugin', enabled: false,
   }))
   await runOperation('plugin', JSON.stringify({ action: 'remove', packageName: 'startup-plugin' }))
   await runOperation('plugin', JSON.stringify({ packageName: 'startup-plugin', spec: 'startup-plugin@1.0.0' }))
+  expect(fetchManifest).toHaveBeenCalledTimes(2)
   failRemoval = true
   const interruptedPlan = await operations.prepare(authority, 'plugin', JSON.stringify({
     action: 'remove', packageName: 'startup-plugin',
@@ -367,8 +406,95 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     operationId: randomUUID(), ownerId: 'retry-owner',
   })).rejects.toBeDefined()
 
+  const marker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), process.getuid!()))
+  const pending = { profileId: profile.profileId, candidateId: 'llm-deepseek:deepseek', operationId: randomUUID() }
+  marker.mark(pending)
+  await expect(application.host.restoreLocalProfile({ ...profile,
+    keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'retry-owner',
+  })).rejects.toMatchObject({ code: 'unavailable' })
+  marker.clear(pending)
+
   await application.close()
   await application.close()
   expect(serverClose).toHaveBeenCalledOnce()
   expect(workerEvents.some(event => event.startsWith('abort:'))).toBe(true)
 }, 20_000)
+
+it.skipIf(process.platform === 'win32')('keeps Host startup available when the global claim ledger is corrupt', async () => {
+  const { config, root } = fixture()
+  const recoveringConfig = Object.assign({}, config, { legacySourceQuiescent: false })
+  const ledgerRoot = join(root, 'control', 'legacy-model-claims')
+  mkdirSync(ledgerRoot, { recursive: true, mode: 0o700 })
+  writeFileSync(join(ledgerRoot, 'legacy-claims.v1.json'), 'corrupt', { mode: 0o600 })
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  let serverOptions: UnixHostServerOptions | undefined
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(recoveringConfig, { now: () => NOW }, {
+    platform: 'darwin', createServer: (options) => { serverOptions = options; return server },
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  expect(serverOptions?.modelClaimRecovery).toBeDefined()
+  expect(serverOptions?.modelClaimTransaction).toBeUndefined()
+  expect(serverOptions?.inspectModelClaimSource).toBeUndefined()
+  expect(() => { serverOptions?.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
+    authorizeAccountProfile: () => randomUUID() }) }).toThrow(/unavailable/u)
+})
+
+it.skipIf(process.platform === 'win32')('restores a partially written Account claim through production Host composition', async () => {
+  const { config, root, accountPrivateKey } = fixture()
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  let serverOptions: UnixHostServerOptions | undefined
+  let workerStarts = 0
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: (options) => { serverOptions = options; return server },
+    profileWorkerFactory: async (): Promise<ProfileWorkerHandle> => {
+      workerStarts += 1
+      return { viewOrigin: 'http://127.0.0.1:43123', generation: workerStarts,
+        bootstrapCookie: { name: 'fixture', value: 'private' },
+        closeNotifications: () => undefined, abort: () => undefined, done: Promise.resolve() }
+    },
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  const binding = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:claim-recovery',
+    authorityBindingVersion: 1 }
+  const material = Buffer.alloc(32, 9).toString('base64url')
+  const subject = randomUUID()
+  const token = accountToken(accountPrivateKey, subject)
+  const account = { issuer: 'https://accounts.dsh.colorbuyai.com', subject,
+    accountAccessToken: token, keyHandle: 'keychain:claim-recovery', unlockMaterial: material, ...binding }
+  const profile = await application.host.ensureAccountProfile({ ...account, ownerId: 'owner' })
+  const profileRoot = join(root, 'profiles', profile.profileId)
+  const ownerRoot = join(profileRoot, 'migration-owner-state', '1')
+  const uid = process.getuid!()
+  const recovery = new LegacyClaimRecoveryStore(new FileLegacyClaimRecoveryFiles(join(root, 'profiles'), uid))
+  const files = new FileLegacyClaimTargetFiles({ generation: 1, settingsPath: join(ownerRoot, 'settings.yaml'),
+    credentialsPath: join(ownerRoot, '.credentials.yaml'), storageRoot: join(ownerRoot, 'storages') }, uid)
+  const target = new LegacyClaimTarget(files, recovery)
+  const candidateId = 'llm-deepseek:deepseek'
+  const operationId = randomUUID()
+  const sourceDigest = 'a'.repeat(64)
+  const before = { settings: files.read('settings'), credentials: files.read('credentials') }
+  const prepared = target.prepare({ profileId: profile.profileId, candidateId, operationId,
+    targetGeneration: 1, sourceSettings: { 'llm-deepseek': { apiKeyEnv: 'OLD_KEY' } },
+    sourceCredentials: { refs: { OLD_KEY: 'legacy-secret' }, records: {} }, guard: () => undefined })
+  const ledger = new LegacyClaimLedger(new FileLegacyClaimEventStore({
+    root: join(root, 'control', 'legacy-model-claims'), uid, maximumBytes: 4 * 1024 * 1024,
+  }), () => NOW)
+  ledger.reserve({ profileId: profile.profileId, candidateId, operationId, sourceDigest, targetGeneration: 1 })
+  const marker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), uid))
+  marker.mark({ profileId: profile.profileId, candidateId, operationId })
+  files.replace('credentials', prepared.credentialsAfter)
+  const claims = serverOptions?.modelClaimRecovery
+  if (!claims) throw Error('missing model claim recovery')
+  const authorizeAccountProfile = () => application.host.authorizeAccountModelClaimRecovery(account)
+  expect(claims.status({ candidateId, authorizeAccountProfile })?.status).toBe('pending')
+  expect(await claims.restore({ candidateId, operationId, authorizeAccountProfile })).toEqual({
+    state: 'restored', cleanupPending: false,
+  })
+  expect(files.read('settings')).toEqual(before.settings)
+  expect(files.read('credentials')).toEqual(before.credentials)
+  expect(marker.pending(profile.profileId)).toBe(false)
+  expect(workerStarts).toBe(2)
+  expect(claims.status({ candidateId, authorizeAccountProfile })).toBeNull()
+})

@@ -55,6 +55,7 @@ type AccountProfileRecord = ReturnType<ProfileRegistry['resolveUniqueAccountByKe
 interface ProfileAccessGrant {
   readonly scope: ProfileAccessScope
   readonly operationId?: OfflineProfileRecoveryOperationId
+  readonly accountVerified: boolean
   readonly grantedAt: number
 }
 
@@ -175,7 +176,7 @@ export class DesktopHost {
       authorityBindingVersion: input.authorityBindingVersion, keyHandle: input.keyHandle,
       unlockMaterial: input.unlockMaterial,
     }, ensureWorker)
-    this.grant(input.ownerId, profile.profileId, 'connected')
+    this.grant(input.ownerId, profile.profileId, 'connected', undefined, true)
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
 
@@ -608,6 +609,81 @@ export class DesktopHost {
   }
 
   /**
+   * Resolve a legacy model claim target from a live Main lease and a token-verified Account grant.
+   * A vault-only restore, offline recovery, or local Profile cannot claim OS-user credentials.
+   * @param input - Main-held lease and runtime generation, bound to the authenticated broker.
+   * @returns the currently authorized Account Profile id.
+   */
+  authorizeAccountModelClaimView(input: {
+    readonly viewLeaseId: ProfileViewLeaseId
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly ownerId: string
+  }): PersonProfileId {
+    const profileId = this.authorizeExtensionView(input)
+    const profile = this.options.registry.resolveProfile(profileId)
+    const grant = this.ownerGrants.get(input.ownerId)?.get(profileId)
+    if (profile?.kind !== 'account' || grant?.scope !== 'connected' || !grant.accountVerified) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return profileId
+  }
+
+  /**
+   * Resolve a verified Account grant without changing any visible view lease generation.
+   * @param input - Account binding and the connection that completed token verification.
+   * @returns the connected Account Profile selected by that binding.
+   */
+  authorizeAccountModelText(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly ownerId: string
+  }): PersonProfileId {
+    const profile = this.options.registry.resolveBinding(
+      input.authorityEnvironmentId, input.accountBindingHandle, input.authorityBindingVersion,
+    )
+    const grant = profile && this.ownerGrants.get(input.ownerId)?.get(profile.profileId)
+    if (!profile || profile.kind !== 'account' || grant?.scope !== 'connected' || !grant.accountVerified) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return profile.profileId
+  }
+
+  /**
+   * Recheck a token, current binding and Main-vault proof when a pending claim prevents worker startup.
+   * This grants no view lease and must only be used with a durable same-Profile claim receipt.
+   * @param input - Fresh Account token, current binding, and matching Main-vault unlock proof.
+   * @returns The existing Account Profile authorized for recovery.
+   */
+  authorizeAccountModelClaimRecovery(input: {
+    readonly issuer: string
+    readonly subject: string
+    readonly accountAccessToken: string
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+  }): PersonProfileId {
+    const verify = this.options.verifyAccountAccessToken
+    if (!verify) throw new HostAuthorityError('unavailable')
+    let account: { readonly issuer: string; readonly subject: string }
+    try { account = verify(input.accountAccessToken) } catch { throw new HostAuthorityError('unauthorized') }
+    if (account.issuer !== input.issuer || account.subject !== input.subject) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
+    const profile = this.options.registry.resolveBinding(
+      input.authorityEnvironmentId, input.accountBindingHandle, input.authorityBindingVersion,
+    )
+    if (!profile || !this.options.registry.matchesAccountIdentity(profile, account)) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    this.options.registry.verifyUnlock(profile, input.keyHandle, input.unlockMaterial)
+    return profile.profileId
+  }
+
+  /**
    * Revoke one local window lease.
    * @param viewLeaseId - opaque lease to revoke.
    */
@@ -661,9 +737,12 @@ export class DesktopHost {
     profileId: PersonProfileId,
     scope: ProfileAccessScope,
     operationId?: OfflineProfileRecoveryOperationId,
+    accountVerified = false,
   ): void {
     const profiles = this.ownerGrants.get(ownerId) ?? new Map<PersonProfileId, ProfileAccessGrant>()
-    profiles.set(profileId, { scope, ...(operationId === undefined ? {} : { operationId }), grantedAt: this.options.clock.now() })
+    profiles.set(profileId, {
+      scope, ...(operationId === undefined ? {} : { operationId }), accountVerified, grantedAt: this.options.clock.now(),
+    })
     this.ownerGrants.set(ownerId, profiles)
   }
 

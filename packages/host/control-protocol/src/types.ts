@@ -65,6 +65,7 @@ export type HostControlErrorCode =
   | 'conflict'
   | 'busy'
   | 'upgrade_required'
+  | 'script_approval_required'
   | 'migration_required'
   | 'unavailable'
   | 'internal_error'
@@ -432,6 +433,40 @@ export interface ProfileViewActivateResult {
   }
 }
 
+/** One bounded text request authorized by this connection's verified Account grant. */
+export interface ProfileModelTextRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_text'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly text: string
+  }
+}
+
+/** Text and model identity, or a classified failure without provider details. */
+export interface ProfileModelTextResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_text'
+  readonly result:
+    | {
+      readonly state: 'complete'
+      readonly provider: string
+      readonly model: string
+      readonly text: string
+    }
+    | {
+      readonly state: 'rejected'
+      readonly code: 'invalid_input' | 'no_default_model' | 'missing_credential'
+        | 'provider_failed' | 'cancelled' | 'timeout' | 'response_too_large'
+    }
+}
+
 /** Revoke one Main-owned personal view lease. */
 export interface ProfileLeaseCloseRequest {
   readonly version: 1
@@ -752,7 +787,12 @@ export type HostExtensionKind = 'plugin' | 'mcp' | 'skill'
 export type HostExtensionCommand =
   | { readonly action: 'inventory'; readonly kind: HostExtensionKind }
   | { readonly action: 'prepare'; readonly kind: HostExtensionKind; readonly payload: string }
-  | { readonly action: 'commit'; readonly plan_id: HostExtensionPlanId; readonly operation_id: HostExtensionOperationId }
+  | {
+    readonly action: 'commit'
+    readonly plan_id: HostExtensionPlanId
+    readonly operation_id: HostExtensionOperationId
+    readonly script_digest?: HostControlSha256
+  }
   | { readonly action: 'status' | 'cancel'; readonly operation_id: HostExtensionOperationId }
 /** Secret-free extension metadata returned to the trusted broker. */
 export type HostExtensionResponse =
@@ -762,6 +802,8 @@ export type HostExtensionResponse =
     readonly kind: HostExtensionKind
     readonly digest: HostControlSha256
     readonly expires_at: number
+    readonly scripts?: readonly { readonly name: string; readonly command: string }[]
+    readonly script_digest?: HostControlSha256
   }
   | {
     readonly state: 'inventory'
@@ -829,10 +871,202 @@ export interface ProfileExtensionsResult {
   readonly result: HostExtensionResponse
 }
 
+/** Inspect legacy model candidates through a token-verified Account view. */
+export interface ProfileModelClaimInventoryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_inventory'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+  }
+}
+
+/** Redacted source candidates; credentials, references and paths are excluded. */
+export interface ProfileModelClaimInventoryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_inventory'
+  readonly result: {
+    readonly source_digest: HostControlSha256
+    readonly candidates: readonly {
+      readonly id: string
+      readonly provider: string
+      readonly kind: 'llm' | 'web-search'
+      readonly credential: 'present' | 'missing' | 'none'
+      readonly shared_credential: boolean
+    }[]
+    readonly unsupported_settings: number
+    readonly unassigned_credential_references: number
+    readonly unassigned_credential_records: number
+  }
+}
+
+/** Confirm one displayed candidate against a fresh source digest and Account view. */
+export interface ProfileModelClaimConfirmRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_confirm'
+  readonly params: ProfileModelClaimInventoryRequest['params'] & {
+    readonly candidate_id: string
+    readonly source_digest: HostControlSha256
+  }
+}
+
+/** One-use, connection-owned authority for a single claim transaction. */
+export interface ProfileModelClaimConfirmResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_confirm'
+  readonly result: {
+    readonly confirmation: string
+    readonly operation_id: string
+    readonly expires_at: number
+  }
+}
+
+/** Consume a confirmed claim authority on its originating Host connection. */
+export interface ProfileModelClaimApplyRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_apply'
+  readonly params: HostAuthorizedParams & { readonly confirmation: string }
+}
+
+/** Redacted result of the committed provider claim. */
+export interface ProfileModelClaimApplyResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_apply'
+  readonly result: { readonly state: 'committed'; readonly cleanup_pending: boolean }
+}
+
+/** Account proof accepted only for an already recorded legacy model claim. */
+export type ProfileModelClaimRecoveryProof = HostAuthorizedParams & {
+  readonly account_access_token: string
+  readonly account_issuer: string
+  readonly account_subject: string
+  readonly authority_environment_id: HostAuthorityEnvironmentId
+  readonly account_binding_handle: string
+  readonly authority_binding_version: number
+  readonly profile_key_handle: string
+  readonly profile_unlock_material: string
+}
+
+/** Find this Account's unfinished claims when Desktop lost the candidate id. */
+export interface ProfileModelClaimRecoveryInventoryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_inventory'
+  readonly params: ProfileModelClaimRecoveryProof
+}
+
+/** Bounded, secret-free pending receipts. */
+export interface ProfileModelClaimRecoveryInventoryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_inventory'
+  readonly result: { readonly receipts: readonly {
+    readonly candidate_id: string
+    readonly operation_id: string
+    readonly source_digest: HostControlSha256
+    readonly state: 'pending' | 'committed' | 'restored'
+  }[] }
+}
+
+/** Query a legacy claim receipt using the current Account and vault proof. */
+export interface ProfileModelClaimRecoveryStatusRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_status'
+  readonly params: ProfileModelClaimRecoveryProof & { readonly candidate_id: string }
+}
+
+/** Redacted receipt or an unclaimed state for the authorized Account. */
+export interface ProfileModelClaimRecoveryStatusResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_status'
+  readonly result: { readonly state: 'unclaimed' } | {
+    readonly state: 'pending' | 'committed' | 'restored'
+    readonly candidate_id: string
+    readonly operation_id: string
+    readonly source_digest: HostControlSha256
+  }
+}
+
+/** Restore one interrupted claim from its durable private preimage. */
+export interface ProfileModelClaimRestoreRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_restore'
+  readonly params: ProfileModelClaimRecoveryProof & {
+    readonly candidate_id: string
+    readonly operation_id: string
+  }
+}
+
+/** Restoration outcome without source or target credential data. */
+export interface ProfileModelClaimRestoreResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_restore'
+  readonly result: { readonly state: 'restored'; readonly cleanup_pending: boolean }
+}
+
+/** Retry only a durable claim already reserved for this Account Profile. */
+export interface ProfileModelClaimRetryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_retry'
+  readonly params: ProfileModelClaimRecoveryProof & {
+    readonly candidate_id: string
+    readonly operation_id: string
+    readonly source_digest: HostControlSha256
+  }
+}
+
+/** Redacted outcome of a resumed, verified claim. */
+export interface ProfileModelClaimRetryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_retry'
+  readonly result: { readonly state: 'committed'; readonly cleanup_pending: boolean }
+}
+
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
   | ProfileExtensionsRequest
   | ProfileExtensionsResult
+  | ProfileModelClaimInventoryRequest
+  | ProfileModelClaimInventoryResult
+  | ProfileModelClaimConfirmRequest
+  | ProfileModelClaimConfirmResult
+  | ProfileModelClaimApplyRequest
+  | ProfileModelClaimApplyResult
+  | ProfileModelClaimRecoveryInventoryRequest
+  | ProfileModelClaimRecoveryInventoryResult
+  | ProfileModelClaimRecoveryStatusRequest
+  | ProfileModelClaimRecoveryStatusResult
+  | ProfileModelClaimRestoreRequest
+  | ProfileModelClaimRestoreResult
+  | ProfileModelClaimRetryRequest
+  | ProfileModelClaimRetryResult
   | HostInspectRequest
   | HostInspectResult
   | ProfileStatusRequest
@@ -859,6 +1093,8 @@ export type HostControlFrame =
   | ProfileRecoveryStatusResult
   | ProfileViewActivateRequest
   | ProfileViewActivateResult
+  | ProfileModelTextRequest
+  | ProfileModelTextResult
   | ProfileLeaseCloseRequest
   | ProfileLeaseCloseResult
   | MigrationExportBeginRequest
