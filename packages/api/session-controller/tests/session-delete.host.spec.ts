@@ -4,6 +4,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { WorkspaceUnknownSessionError } from '@deepseek-ai/dsh-workspace'
 import { describe, expect, it, vi } from 'vitest'
 import { SessionCommandController } from '../src/commands.ts'
+import { createSessionTestRemote } from './test-remote.ts'
 
 const sid = (value: string) => SessionId(value)
 
@@ -18,6 +19,24 @@ function controller(
 }
 
 describe('session.delete', () => {
+  it('forwards the public Remote method to the deletion controller', async () => {
+    const ctx = new Context()
+    const archiveSession = vi.fn(() => Promise.resolve())
+    ctx.provide('workspaceRegistry', { archiveSession } as never)
+    ctx.provide('agents', { get: () => undefined } as never)
+    const remote = createSessionTestRemote(ctx, {
+      cwd: '/tmp',
+      defaultModelSelection: () => ({ provider: 'deepseek', model: 'chat' }),
+    })
+
+    await expect(remote.delete({ sessionId: sid('session-remote') })).resolves.toEqual({
+      ok: true,
+      value: { deleted: true },
+    })
+    expect(archiveSession).toHaveBeenCalledExactlyOnceWith(sid('session-remote'))
+    await ctx.fiber.dispose()
+  })
+
   it('archives an idle Session without removing its immutable log', async () => {
     const archiveSession = vi.fn(() => Promise.resolve())
     const commands = controller(archiveSession)

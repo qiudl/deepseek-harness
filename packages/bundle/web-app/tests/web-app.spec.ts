@@ -8,6 +8,8 @@
 import { EventEmitter } from 'node:events'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -110,6 +112,51 @@ interface BashContribution {
 }
 
 describe('web-app runtime glue', () => {
+  it('mounts the authenticated Profile model worker when the desktop supplies its token', async () => {
+    stageDist()
+    vi.stubEnv('DSH_PROFILE_MODEL_TOKEN', 'A'.repeat(43))
+    const ctx = new Context()
+    let handler: ((req: IncomingMessage, res: ServerResponse) => void) | undefined
+    const web = fakeHttpServer().server
+    Object.assign(web, {
+      register: vi.fn((route: { handler: (req: IncomingMessage, res: ServerResponse) => void }) => {
+        handler = route.handler
+        return () => { handler = undefined }
+      }),
+    })
+    ctx.provide('webServer', web)
+    provideConnection(ctx)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek', model: 'chat' }),
+    } as never)
+    ctx.provide('llm', {
+      stream: async function* () {
+        yield { type: 'text-delta', index: 0, text: 'answer' }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: 'answer' } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    } as never)
+
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(handler).toBeTypeOf('function')
+    const http = createServer((req, res) => { handler?.(req, res) })
+    await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve))
+    try {
+      const address = http.address() as AddressInfo
+      const response = await fetch(`http://127.0.0.1:${address.port}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${'A'.repeat(43)}` },
+        body: '{"text":"question"}',
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ provider: 'deepseek', model: 'chat', text: 'answer' })
+    } finally {
+      await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()))
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('mounts dist serving, prompt section, bash variables, and publishes the URL with the LAN snapshot', async () => {
     stageDist()
     const ctx = new Context()

@@ -184,6 +184,24 @@ describe('Host-only Desktop model worker route', () => {
     expect(generate).not.toHaveBeenCalled()
   })
 
+  it('rejects a non-byte request chunk before generation', async () => {
+    const generate = vi.fn(async () => ({ provider: 'p', model: 'm', text: 'a' }))
+    const req = Object.assign(new EventEmitter(), {
+      headers: { authorization: `Bearer ${token}` }, method: 'POST',
+      async *[Symbol.asyncIterator]() { yield 'not-bytes' },
+    }) as unknown as IncomingMessage
+    const response = Object.assign(new EventEmitter(), {
+      statusCode: 0, body: '', writableEnded: false, destroyed: false,
+      writeHead(code: number) { this.statusCode = code; return this },
+      end(body = '') { this.body = body; this.writableEnded = true; return this },
+    }) as unknown as ServerResponse
+
+    await handleDesktopModelRequest(req, response, token, generate)
+    expect(response.statusCode).toBe(400)
+    expect((response as unknown as { body: string }).body).toBe('{"error":"invalid_input"}')
+    expect(generate).not.toHaveBeenCalled()
+  })
+
   it('aborts generation when its caller closes the connection', async () => {
     let started!: () => void
     const active = new Promise<void>((resolve) => { started = resolve })
