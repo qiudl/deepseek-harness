@@ -32,10 +32,10 @@ env:
 
 jobs:
   preview:
-    # Pull requests from forks cannot read the Cloudflare and Access secrets.
-    # Keep their source/build gates meaningful without failing on unavailable
-    # deployment credentials; same-repository pull requests still publish.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Repositories without the Cloudflare and Access secrets keep this optional
+    # deployment lane disabled explicitly; their required source/build gates run
+    # in ci.yml without trying to infer secret availability in an expression.
+    if: vars.DSH_CLOUDFLARE_PREVIEW_ENABLED == 'true'
     runs-on: ubuntu-24.04
     name: cloudflare pages preview
     steps:
