@@ -321,6 +321,12 @@ describe('loadProfile', () => {
     expect(PROFILE_TEMPLATES['sdk-minimal']).toEqual({
       bundles: ['@deepseek-ai/dsh-sdk-minimal'],
     })
+    expect(PROFILE_TEMPLATES['desktop-host']).toEqual({
+      bundles: ['@deepseek-ai/dsh-desktop-host'],
+    })
+    expect(PROFILE_TEMPLATES['slark-desktop-host']).toEqual({
+      bundles: ['@deepseek-ai/dsh-slark-desktop-host'],
+    })
     try {
       loadProfile('t', 'web', anchor, home)
     } catch {

@@ -22,7 +22,18 @@ const labels: MessageImageLabels = {
   openNamed: label => `${label}，点击查看原图`,
   loading: '图片加载中…',
   loadFailed: '图片加载失败，点击重试',
-  lightbox: { dialog: '原图预览', close: '关闭原图预览' },
+  lightbox: {
+    dialog: '原图预览',
+    close: '关闭原图预览',
+    zoomOut: '缩小图片',
+    zoomIn: '放大图片',
+    resetZoom: '恢复适应窗口',
+    save: '另存附件',
+    saving: '正在保存…',
+    saved: '附件已保存',
+    saveFailed: '保存失败，请重试',
+    cancelSave: '取消保存',
+  },
 }
 
 const attachment = {

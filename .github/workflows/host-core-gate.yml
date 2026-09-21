@@ -1,0 +1,12 @@
+name: host-core-slark-gate
+on:
+  pull_request:
+  push:
+    branches: [master]
+jobs:
+  host-core-slark-sniff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run sniff
+        run: node scripts/host-core-slark-sniff.mjs

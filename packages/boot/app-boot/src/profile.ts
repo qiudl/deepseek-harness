@@ -148,6 +148,12 @@ export const PROFILE_TEMPLATES: Record<string, ProfileTemplate> = {
   'sdk-minimal': {
     bundles: ['@deepseek-ai/dsh-sdk-minimal'],
   },
+  'desktop-host': {
+    bundles: ['@deepseek-ai/dsh-desktop-host'],
+  },
+  'slark-desktop-host': {
+    bundles: ['@deepseek-ai/dsh-slark-desktop-host'],
+  },
 }
 
 /** Installation-owned bundle tuples normalized to the shipped template. */

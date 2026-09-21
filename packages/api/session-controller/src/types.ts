@@ -241,6 +241,36 @@ export interface SkillListValue {
   readonly skills: readonly SkillEntry[]
 }
 
+/** Profile skill lookup in the default standing preset, without a project or Session. */
+export interface ProfileSkillInspectionRequest {
+  readonly name: string
+}
+
+/** Invocation-neutral definition used to acknowledge Profile-local skill publication. */
+export interface ProfileSkillInspectionValue {
+  readonly skill: {
+    readonly name: string
+    readonly description: string
+    readonly whenToUse?: string
+    readonly content: string
+    readonly source: string
+    readonly provider: string
+    readonly path?: string
+    readonly invocation: { readonly modelInvocable: boolean; readonly userInvocable: boolean }
+  } | null
+}
+
+/** Invocation-neutral winning summaries from the default standing preset. */
+export interface ProfileSkillCatalogValue {
+  readonly complete: boolean
+  readonly skills: readonly {
+    readonly name: string
+    readonly source: string
+    readonly path?: string
+    readonly invocation: { readonly modelInvocable: boolean; readonly userInvocable: boolean }
+  }[]
+}
+
 /** Session list request. */
 export interface SessionListRequest {
   readonly cursor?: string

@@ -11,6 +11,7 @@ English | [中文](README.zh.md)
 
 Run `dsh --profile web` to open an interactive browser GUI with chat, model and settings management, and session history. It uses the same model access, tools, and safety defaults as other dsh surfaces. Startup prints an authenticated URL and normally opens it in the default browser; SSH sessions and `--no-open` leave the URL for manual opening. You can change the port and allow extra hosts, but cannot bind all network interfaces. Choose this package for interactive browser work; use `dsh-headless` for one-shot command-line tasks.
 
+
 ## Table of Contents
 
 - [Use this package](#use-this-package)
@@ -69,6 +70,8 @@ Each browser session composes its own agent from the shipped presets (the `stand
 
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
+
+When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the bundle also serves one Host-only local text request. It snapshots the Profile's current default model and uses its credential service for a single user message without tools or a Session. The private token is never returned to the browser; requests are limited to 8 KiB, answers to 16 KiB, and execution to 60 seconds.
 
 <details>
 <summary>Implementation internals — click to expand</summary>

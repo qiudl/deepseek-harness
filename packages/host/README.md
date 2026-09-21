@@ -1,15 +1,15 @@
 ---
-description: "Package map for the web GUI host half: the HTTP and SPA servers, workspace-directory picking implementations, the open-in-app launch routes, and the plugin inventory projection."
+description: "Host package map: the Desktop control protocol and authority plus web GUI servers, workspace-directory picking, open-in-app routes, and plugin inventory."
 kind: "package-group"
 ---
 
-# host/ — web-GUI host half
+# host/ — Host-side packages
 
 English | [中文](README.zh.md)
 
 ## Summary
 
-The `host/` group provides the web GUI's plain HTTP server, the SPA dist server that serves the built Web shell, the workspace-directory picking seam with its native, browse, and adaptive composition packages, the open-in-app application probe and launch routes, and the read-only plugin inventory projection. All eight packages are product packages; the browser transport lives in [`client/`](../client/README.md), and the composed application is [`apps/cli`](../../apps/cli/README.md) booting the [`dsh-base` bundle](../bundle/base/cordis.patch.yml) that serves the web app under `apps/web/`. The picker backends replace one another behind the shared seam.
+The `host/` group provides the Desktop-to-Host control wire and single-Host authority alongside the web GUI's plain HTTP server, SPA dist server, workspace-directory picking seam with its native, browse, and adaptive composition packages, open-in-app probe and launch routes, and read-only plugin inventory projection. All ten packages are product packages; the browser transport lives in [`client/`](../client/README.md), and the composed application is [`apps/cli`](../../apps/cli/README.md) booting the [`dsh-base` bundle](../bundle/base/cordis.patch.yml) that serves the web app under `apps/web/`. The Desktop Host owns no HTTP listener; the picker backends replace one another behind their shared seam.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ The `host/` group provides the web GUI's plain HTTP server, the SPA dist server 
 <a id="packages"></a>
 ## Packages
 
-Eight packages play the host roles; each package README owns its contract and configuration.
+Ten packages play Host-side roles; each package README owns its contract and configuration.
 
 | Package | Role | ctx key |
 |---|---|---|
@@ -34,6 +34,8 @@ Eight packages play the host roles; each package README owns its contract and co
 | [`directory-picker-auto/`](directory-picker-auto/README.md) | Host-adaptive chooser that mounts the matching backend at boot | mounts a backend |
 | [`open-in-app/`](open-in-app/README.md) | Application probe, icon, and launch routes opening the workspace directory in an installed application | consumes `ctx.webServer` |
 | [`plugin-inventory/`](plugin-inventory/README.md) | Read-only projection of current Loader entries | Remote `pluginInventory/list` |
+| [`control-protocol/`](control-protocol/README.md) | Strict Desktop-to-single-Host identity negotiation and control frame codec | zero-I/O library |
+| [`desktop-host/`](desktop-host/README.md) | Person Profile, session, lease, worker, and authenticated Unix transport authority | Main-only local SDK |
 
 -----
 

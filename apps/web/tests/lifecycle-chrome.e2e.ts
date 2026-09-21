@@ -396,6 +396,11 @@ describe('web e2e: lifecycle & chrome (workspace flow / reload / dark mode)', ()
     await expect.poll(() => page.locator('[role="treeitem"][aria-selected="true"]').count(), { timeout: 10_000 }).toBe(1)
     // Golden of the recovered conversation region: rebuilt from the log, it
     // must render the same settled transcript the live turn produced.
+    // The session projection arrives before the separately loaded preset
+    // roster, so the header may briefly show the durable id (`standard`).
+    // Wait for roster-backed display copy before declaring the full surface
+    // stable; two equal aria frames alone cannot prove that async read settled.
+    await page.getByText('Standard mode', { exact: true }).waitFor({ timeout: 15_000 })
     const snapshot = await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd)
     await compareOrRefreshGolden(RELOADED_EXPECTED, snapshot, MODE)
     const expanded = await captureExpandedTurnProcessAria(

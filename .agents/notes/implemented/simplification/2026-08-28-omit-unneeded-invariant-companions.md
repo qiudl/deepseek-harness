@@ -26,6 +26,8 @@ A package without a qualifying relationship omits `src/invariant.ts`, the `./inv
 
 `verify-package-invariants` scans every package. It requires a package-specific omission reason in the English README, rejects partial export, publication, or companion build wiring, rejects empty installers, and applies the registration, Loader namespace, reporter-use, dependency, reference, and build checks to every published companion. The Vitest host mounts the current package companion only when one exists, while topology and built-artifact checks enumerate the published set.
 
+The Host control codec and Slark Desktop Host omit empty companions: the codec owns wire validation, and Host validates filesystem and lease authority at effect boundaries. JSONL persistence also omits its empty companion; backend round-trip and crash-tail tests own that behavior. None of these packages advertises an invariant artifact without an implemented check.
+
 ### Audit result
 
 The repository-wide audit removed the 209 explained-empty companions and the synthetic `dsh-host-webserver` companion, leaving 39 checks with independent observations. The retained set includes cross-event protocols such as session, command, approval, workflow, and hook lifecycles; event-to-state checks such as settings, storage-domain, Workspace, client modules, and slots; multi-producer assembly such as system prompt and time context; and durable data consumed by projections or policy state such as todo, plan mode, and sandbox mode.

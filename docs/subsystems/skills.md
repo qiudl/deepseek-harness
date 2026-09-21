@@ -236,6 +236,8 @@ The model-facing `skill({ name })` tool validates the kebab-case name, finds the
 
 `SkillListRequest` addresses one Session by `sessionId`; `SkillListValue` returns the user-invocable entries with name, description, optional usage guidance, and model-invocation availability. `SessionSkillCatalog` reads the Session cwd and recorded preset without activating an Agent. A live Agent may supply its scoped registry, while a cold Session uses the preset's standing scope.
 
+`ProfileSkillInspectionRequest` selects a name in the default standing preset without a Session or project cwd. `ProfileSkillInspectionValue` carries a nullable invocation-neutral definition, including content, source, provider, optional path and guidance, and both invocation flags. An unavailable default preset rejects the lookup without global fallback; this read does not establish visibility in project-specific or other preset scopes.
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -251,6 +253,23 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 Host service backing `ctx.remote.skills` without activating a cold Agent.
 
 ```ts cordis-catalog
+/**
+ * Read a Profile skill through the default standing preset without starting a Session.
+ * @param request Skill name; no caller-controlled filesystem path or project context.
+ * @param signal Lookup lifetime propagated into the registry.
+ * @returns The invocation-neutral winning definition, or null when absent.
+ * @throws RemoteError when the name is invalid or the preset or registry is unavailable; never falls back to a global catalog.
+ */
+@Remote async inspectProfile(request: ProfileSkillInspectionRequest, signal: AbortSignal): Promise<ProfileSkillInspectionValue>
+
+/**
+ * List winning Profile skill summaries without loading instruction bodies or starting a Session.
+ * @param signal Lookup lifetime propagated into the default standing preset registry.
+ * @returns Invocation-neutral summaries and whether every provider was observed successfully.
+ * @throws RemoteError when the preset or registry is unavailable; never falls back to a global catalog.
+ */
+@Remote async profileCatalog(signal: AbortSignal): Promise<ProfileSkillCatalogValue>
+
 /**
  * List the user-invocable skills visible to one Session composition.
  * @param request - Session identity whose cwd and preset select the catalog view.
@@ -350,3 +369,5 @@ A skill provider, runtime contribution, or provider-backed catalog may have chan
 
 Source: [`packages/skill/skill/src/index.ts`](../../packages/skill/skill/src/index.ts)
 <!-- END GENERATED cordis-surface -->
+
+`ProfileSkillCatalogValue` carries invocation-neutral winning summaries and the snapshot completeness marker for the default standing preset. `skills/profileCatalog` has no Session or cwd argument and does not load bodies. Desktop combines this observation with owned files to show source and shadowing; incomplete provider reads cannot establish absence.

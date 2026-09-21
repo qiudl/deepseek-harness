@@ -41,6 +41,12 @@ const sessionId = SessionId('workspace-context-resume')
 const refreshing = process.env.DSH_SNAPSHOT === 'refresh'
 const oldInstruction = 'Old workspace instruction.'
 const newInstruction = 'New workspace instruction after offline edit.'
+// This case seeds and rewrites a real persisted session before the assembled
+// app resumes it. Under the consumers lane's parallel build/runtime load, keep
+// that end-to-end proof bounded without treating a 30-second cold exit as a
+// workspace-context failure.
+const OFFLINE_REPLACEMENT_PROCESS_TIMEOUT_MS = 60_000
+const OFFLINE_REPLACEMENT_TEST_TIMEOUT_MS = OFFLINE_REPLACEMENT_PROCESS_TIMEOUT_MS + 15_000
 
 /** Compare one current normalized Session with its generation-aware committed fixture. */
 async function expectSession(actual: string, expectedPath: string): Promise<void> {
@@ -146,6 +152,7 @@ describe('agent-instructions resume snapshot', () => {
       configPath,
       binArgs: [configPath, 'Acknowledge the current workspace instruction.'],
       tsconfigPath,
+      processTimeoutMs: OFFLINE_REPLACEMENT_PROCESS_TIMEOUT_MS,
       env: {
         DSH_SNAPSHOT_FILE: replayFixture,
         DSH_SNAPSHOT_OVERRIDE: replayOverride,
@@ -190,7 +197,7 @@ describe('agent-instructions resume snapshot', () => {
       sessionId,
       output: 'RESUME_DONE',
     })
-  }, LOADER_SMOKE_TEST_TIMEOUT_MS)
+  }, OFFLINE_REPLACEMENT_TEST_TIMEOUT_MS)
 
   it('supersedes an incompatible baseline when precedence changed offline', async () => {
     let cwd = ''

@@ -1,0 +1,1 @@
+{"version":1,"type":"error","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3110","method":"host.inspect","error":{"code":"unsupported_protocol","retryable":false,"correlation_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3199"}}

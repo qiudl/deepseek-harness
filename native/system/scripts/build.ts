@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import { darwinCompilerArchitecture } from './compiler-target.js'
 
 const root = resolve(import.meta.dirname, '..')
 const { values } = parseArgs({ options: { 'host-addon-only': { type: 'boolean' } }, allowPositionals: false })
@@ -62,7 +63,10 @@ for (const name of readdirSync(join(root, 'packages')).sort()) {
       flags = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-fPIC', '-fvisibility=hidden', '-DNAPI_VERSION=8', '-I', headers]
       if (process.platform === 'darwin') {
         if (binary.libc !== undefined) throw new Error('build: macOS flock does not select a Linux libc')
-        flags.push('-bundle', '-undefined', 'dynamic_lookup', '-mmacosx-version-min=11.0')
+        flags.push(
+          '-arch', darwinCompilerArchitecture(process.arch),
+          '-bundle', '-undefined', 'dynamic_lookup', '-mmacosx-version-min=11.0',
+        )
       } else {
         if (binary.libc !== 'glibc' && binary.libc !== 'musl') {
           throw new Error('build: Linux flock must select glibc or musl')

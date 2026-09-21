@@ -12,7 +12,7 @@ import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import {
   assertNoRetiredHeaderFields, encodeSegment, eventLines, generationLogFilename, generationLogPath,
   logPath, parseGenerationLogFilename, projectDir, projectKey, scanLog, sessionDir, SessionLogScanner,
-  toHeaderLine,
+  sessionInheritedEventCount, toHeaderLine,
 } from '../src/format.ts'
 import {
   runPersistenceContract, meta, oneTurnLog, releasedV1OneTurnLog,
@@ -433,6 +433,17 @@ describe('JsonlSessionPersistence: format helpers', () => {
     ))
     expect(scan.meta).toEqual(full)
     expect(scan.inheritedEventCount).toBe(3)
+  })
+
+  it('refuses lineage markers that contradict the seeded header state', () => {
+    const header = meta('lineage-mismatch')
+    const inherited = {
+      type: 'session/end-seed', seq: SessionSeq(0), time: 1, data: { inherited: true },
+    } as SessionEvent
+    expect(() => sessionInheritedEventCount({ ...header, isSeeded: true }, []))
+      .toThrow(/seeded v2 header lacks an inherited end-seed marker/u)
+    expect(() => sessionInheritedEventCount(header, [inherited]))
+      .toThrow(/unseeded v2 header contains an inherited end-seed marker/u)
   })
 
   it.each([

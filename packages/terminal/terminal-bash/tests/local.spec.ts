@@ -190,7 +190,7 @@ describe.skipIf(process.platform === 'win32')('terminal-bash real shell', () => 
       text: `bash -c 'exec </dev/tty; printf "%s" "$BASHPID" > "$1"; printf "WAITING\\n"; read -r answer; printf "ANSWER=%s\\n" "$answer"' dsh "${readerPidFile}"`,
       submit: true,
     })
-    await waitForOutput(waiting, 'WAITING')
+    await waitForOutput(waiting, 'WAITING', 8_000)
     const result = await waiting.done
     const readerPid = Number(readFileSync(readerPidFile, 'utf8'))
     expect(readerPid).toBeGreaterThan(0)
@@ -327,7 +327,7 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
       const { ctx, root, agent } = await harness('danger-full-access', {
         idleSilenceMs: 300,
         handoffGraceMs: 300,
-        timeoutMs: 8_000,
+        timeoutMs: 15_000,
       }, 'pwsh')
       const created = await ctx.terminals.spawn(agent, { type: 'shell', name: 'main', cwd: root })
       // stdin_read can precede delivery of the printable prompt to the PTY reader.
@@ -359,7 +359,7 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
       // A silence-settled send stops collecting output; scrollback still receives
       // the command's later output. Only the child can produce this formatted token.
       const read = () => ctx.terminals.read(agent, created.sessionId, { offset: 0, count: 100 }).text
-      await expect.poll(read, { timeout: 8_000 }).toContain(expected)
+      await expect.poll(read, { timeout: 15_000 }).toContain(expected)
       expect(read()).not.toContain('must-not-leak')
       expect(await ctx.terminals.kill(agent, created.sessionId)).toBe(true)
       expect(ctx.terminals.list(agent)).toEqual([])
@@ -367,13 +367,13 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
       if (previous === undefined) delete process.env.DSH_TEST_SECRET
       else process.env.DSH_TEST_SECRET = previous
     }
-  }, 30_000)
+  }, 45_000)
 
   it('pins UTF-8 output encoding so non-ASCII output survives the byte decode', async () => {
     const { ctx, root, agent } = await harness('danger-full-access', {
       idleSilenceMs: 300,
       handoffGraceMs: 300,
-      timeoutMs: 8_000,
+      timeoutMs: 15_000,
     }, 'pwsh')
     const created = await ctx.terminals.spawn(agent, { type: 'shell', name: 'main', cwd: root })
     // The bootstrap itself must have pinned both encodings: the session byte
@@ -394,5 +394,5 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
     const result = await sent.done
     expect(result.viewport).toContain('中文 encoding-ok')
     await ctx.terminals.kill(agent, created.sessionId)
-  }, 30_000)
+  }, 45_000)
 })

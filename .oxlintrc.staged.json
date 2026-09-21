@@ -13,6 +13,9 @@
     "**/.node-next-types-*/**",
     "website/.generated/**",
     "vendor/**",
+    "packages/host/desktop-host/hub-upstream/mcp.ts", // Pinned upstream bytes; bundle runs sync.mjs hash checks.
+    "packages/host/desktop-host/hub-upstream/plugins.ts",
+    "packages/host/desktop-host/hub-upstream/skills.ts",
     "native/**",
     "**/*.js",
     "**/*.mjs",

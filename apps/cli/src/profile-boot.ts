@@ -42,6 +42,20 @@ import { createProcessShutdown, type ProcessShutdown } from './process-shutdown.
 
 const NAME = 'dsh'
 
+/** Installation-owned authority profiles accept no user-controlled input. */
+const INSTALLATION_OWNED_PROFILES = new Set(['desktop-host', 'slark-desktop-host'])
+
+/** Reject overlays and forwarded arguments for the trusted Desktop Host profiles. */
+export function assertProfileInvocationPolicy(
+  profile: string,
+  patchFiles: readonly string[],
+  args: readonly string[],
+): void {
+  if (INSTALLATION_OWNED_PROFILES.has(profile) && (patchFiles.length !== 0 || args.length !== 0)) {
+    throw new Error(`dsh: ${profile} profile does not accept user overlays or arguments`)
+  }
+}
+
 /** Launcher-owned readiness signal committed only after boot and host setup succeed. */
 function createAppReady(): { service: AppReady; commit(): void } {
   let ready = false
@@ -250,6 +264,7 @@ export interface RunProfileOptions {
  * @throws after disposing startup resources; cleanup failures retain the original error.
  */
 export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Context; shutdown: ProcessShutdown }> {
+  assertProfileInvocationPolicy(options.profile, options.patchFiles, options.args)
   // Before the first plugin mounts and before anything can issue a request: Node's fetch ignores the
   // proxy environment on its own, so every profile would otherwise connect directly. Resolving from
   // the launcher's snapshot — not `process.env` — is what lets a proxy declared in a `.env` layer

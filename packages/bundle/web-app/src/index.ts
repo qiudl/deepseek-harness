@@ -26,6 +26,9 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-shell-env'
+import type {} from '@deepseek-ai/dsh-agent-default-model'
+import type {} from '@deepseek-ai/dsh-llm'
+import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'web-app'
@@ -224,6 +227,20 @@ export const internals: {
  */
 export function apply(ctx: Context, config: Config): void {
   const runtime = resolveLanTrust(ctx.webServer.host, config.trustedHosts)
+  const desktopModelToken = process.env.DSH_PROFILE_MODEL_TOKEN
+  if (desktopModelToken && /^[A-Za-z0-9_-]{43}$/u.test(desktopModelToken)) {
+    ctx.inject(['llm', 'agentDefaultModel'], (modelCtx) => {
+      modelCtx.effect(() => modelCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-model-text',
+        handler: (req, res) => handleDesktopModelRequest(req, res, desktopModelToken,
+          (text, signal) => generateDesktopModelText({
+            text, signal,
+            selection: () => modelCtx.agentDefaultModel.currentSelection(),
+            stream: options => modelCtx.llm.stream(options),
+          })),
+      }))
+    })
+  }
   // The loopback URL belongs to this host. Under SSH, the operator reaches it
   // through a local forwarding address that this process cannot derive.
   const handoffBrowser = config.openBrowser && !launchedThroughSsh(launchEnvironmentOf(ctx))

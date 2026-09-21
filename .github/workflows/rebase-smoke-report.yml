@@ -1,0 +1,42 @@
+name: dsh-rebase-smoke-report
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_sha:
+        description: 'fixed upstream SHA (default: latest upstream master)'
+        required: false
+jobs:
+  drill-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: probe overlay replay
+        run: |
+          set -u
+          git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git || true
+          git fetch -q upstream master || { echo 'upstream fetch failed'; exit 0; }
+          BASE=${upstream_sha:-$(git rev-parse upstream/master)}
+          git cat-file -t "$BASE" >/dev/null || { echo "invalid upstream_sha"; exit 2; }
+          CONTENT=$(git rev-list --no-merges dsh-v0.1.2-alpha.1..HEAD)
+          OK=0; CONFLICT=0
+          for sha in $CONTENT; do
+            git checkout -q -B drill/check "$BASE" 2>/dev/null || true
+            if git cherry-pick --no-commit "$sha" >/dev/null 2>&1; then OK=$((OK+1)); else
+              CONFLICT=$((CONFLICT+1)); FILES=$(git diff --name-only --diff-filter=U | tr '\n' ' ' | cut -c1-400)
+              echo "CONFLICT ${sha:0:8} :: $FILES" | tee -a drill-report.txt
+              git reset -q --hard "$BASE"
+            fi
+          done
+          git reset -q --hard "$BASE" 2>/dev/null || true
+          echo "base=$BASE ok=$OK conflict=$CONFLICT" | tee -a drill-report.txt
+          {
+            echo "### rebase-smoke report"
+            echo "fixed base: $BASE"
+            echo "clean: $OK, conflict: $CONFLICT"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drill-report
+          path: drill-report.txt
+          if-no-files-found: ignore

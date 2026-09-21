@@ -2,7 +2,9 @@
    resolves against the pane and never scrolls horizontally; a taller image
    grows the frame and scrolls vertically. */
 .frame {
-  display: flex;
+  display: grid;
+  grid-template-areas: 'preview';
+  place-items: center;
   box-sizing: border-box;
   width: 100%;
   height: max-content;
@@ -10,11 +12,53 @@
   padding: 12px;
   font-family: var(--dsw-font, sans-serif);
   white-space: normal;
+  outline: none;
+}
+
+.frame:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-focus-ring, #4c8bf5);
+}
+
+.toolbar {
+  grid-area: preview;
+  place-self: start;
+  position: sticky;
+  z-index: 1;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  width: max-content;
+  overflow: hidden;
+  border: 0.5px solid var(--dsw-alias-border-secondary);
+  border-radius: 6px;
+  background: var(--dsw-alias-background-primary);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+
+.toolbar button {
+  min-width: 32px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 0.5px solid var(--dsw-alias-border-secondary);
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.toolbar button:last-child {
+  border-right: 0;
+}
+
+.toolbar button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 /* A wider image shrinks to the pane's width at its aspect ratio; a smaller
    one keeps its intrinsic size. The auto margins centre it either way. */
 .image {
+  grid-area: preview;
   display: block;
   flex: none;
   width: auto;
@@ -31,6 +75,7 @@
 }
 
 .status {
+  grid-area: preview;
   display: flex;
   align-items: center;
   justify-content: center;
