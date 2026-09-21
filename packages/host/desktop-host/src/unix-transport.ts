@@ -2,7 +2,8 @@ import { createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, verif
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import type {
-  HostExtensionCommand, HostExtensionResponse, HostExtensionKind, ProfileExtensionsRequest,
+  HostExtensionCommand, HostExtensionResponse, HostExtensionKind, HostRemoteSessionCommand,
+  HostRemoteSessionJson, ProfileExtensionsRequest, ProfileRemoteSessionRequest,
   ProfileModelClaimInventoryRequest,
   ProfileModelClaimRecoveryInventoryRequest,
   ProfileModelClaimConfirmRequest, ProfileModelClaimApplyRequest,
@@ -102,6 +103,12 @@ export interface UnixHostServerOptions {
     readonly model: string
     readonly text: string
   }>
+  /** Execute one bounded mobile session command inside the lease-selected Profile worker. */
+  readonly remoteSession?: (
+    profileId: string,
+    command: HostRemoteSessionCommand,
+    signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
   readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
   /** Initial claims require a fresh, connection-owned confirmation and a live Account view. */
@@ -244,7 +251,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'generateModelText'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'generateModelText' | 'remoteSession'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1206,6 +1213,24 @@ export class HostControlAuthority {
             throw new HostAuthorityError('invalid_input')
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.remote_session') {
+          const execute = this.options.remoteSession
+          if (!execute) throw new HostAuthorityError('upgrade_required')
+          const authority = () => {
+            context.signal.throwIfAborted()
+            return this.options.host.authorizeExtensionView({
+              viewLeaseId: frame.params.view_lease_id as never,
+              leaseGeneration: frame.params.lease_generation,
+              runtimeGeneration: frame.params.runtime_generation,
+              ownerId,
+            })
+          }
+          const profileId = authority()
+          const value = await execute(profileId, frame.params.command, context.signal)
+          if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { value } }
+          channel.send(decodeHostControlFrame(encodeHostControlFrame(response)))
         } else if (frame.method === 'profile.model_text') {
           const generate = this.options.generateModelText
           if (!generate) throw new HostAuthorityError('upgrade_required')
@@ -1289,6 +1314,7 @@ export class HostControlAuthority {
         capabilities: [
           ...capabilities,
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
+          ...(this.options.remoteSession ? ['profile.remote_session'] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
             ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
@@ -1942,6 +1968,32 @@ export class UnixHostClient {
   }
 
   /**
+   * Execute one bounded mobile session command through the lease-selected Profile.
+   * @param input - live view lease, closed command union, and optional cancellation.
+   * @returns bounded JSON produced by the Profile worker executor.
+   */
+  async remoteSession(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: HostRemoteSessionCommand
+    readonly signal?: AbortSignal
+  }): Promise<HostRemoteSessionJson> {
+    if (!this.inspection.capabilities.includes('profile.remote_session' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRemoteSessionRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_session', params: {
+        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+        runtime_generation: input.runtimeGeneration, command: input.command,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.value
+  }
+
+  /**
    * Inspect redacted legacy model candidates using a token-verified Account view.
    * @param input - Main-held view lease and optional cancellation.
    * @returns source digest and candidate metadata without credentials or paths.
@@ -2481,7 +2533,7 @@ export class UnixHostClient {
   }
 
   private async call(
-    request: ProfileExtensionsRequest | ProfileModelClaimInventoryRequest
+    request: ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileModelClaimInventoryRequest
       | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
       | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
       | ProfileModelClaimRecoveryInventoryRequest
