@@ -49,6 +49,8 @@ Profile 与组合包的声明类型从 [`@deepseek-ai/dsh-package-manifest`](../
 
 profile 是同一套 dsh 安装提供不同应用界面的方式：`web`、`headless`、`acp`、`sdk` 与 `sdk-minimal` 从同一 launcher 启动不同组合。profile 位于 `$DSH_HOME/profiles/<name>`，由可安装组合包和自身 `cordis.patch.yml` 组成。YAML 组合决定是否启用 HMR。随产品交付的 `web` 模板实时重载，其他随附模板只在启动时应用 patch。`sdk-minimal` 只列出自身的独立组合包，其他模板保留 base 加模式的组合包栈。`dsh --profile <name> --from-default-profile <template>` 从一个随附模板，在新的非内置名称处创建自定义 profile；`dsh plugin` 则初始化以 base 为基础的 profile，并管理其中安装的组合包。缺失组合包或未声明 patch 的组合包会让启动明确失败。由应用持有的 npm 项目（例如 Electron 保留的 Desktop profile）通过 `loadProfileDirectory` 加载已经初始化的目录，而不会将它暴露给 CLI profile 查找。
 
+可信嵌入应用可以向其 `web` Profile 提供精确版本的外部组合包作为默认项。只有依赖项和 bundle 行都不存在时，app-boot 才添加该组合包，并把所提供的基线记录在 Profile 私有标记中；后续默认版本只有在依赖仍等于上一基线且 bundle 仍启用时才会推进。用户删除 bundle、更换依赖来源或版本，或只声明其中一侧后，该包即由用户持有，协调过程不会修复或替换它。Profile 管理的外部组合包优先于安装目录中的副本解析，`@deepseek-ai/*` 组合包则继续由安装目录持有。基线、标记、依赖或 bundle 数据无效时，启动会失败且不重写 manifest。
+
 你的机器本地偏好同样位于 harness home 中：
 
 - **`.env`**——你的普通环境层：调用目录的文件优先于 harness home 的文件，两者都低于继承环境。在文件中设置的进程启动变量（如 `PATH`、`DSH_*`、`XDG_*`）会被拒绝：请改为导出这些变量。四个代理名（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`）只从 harness home 的文件接受，绝不从调用目录的文件接受——后者随 clone 一起到来。对于只想加载某个目录 `.env` 的非产品 bin，文件缺失不影响启动，文件无法加载时输出一行带标签的警告。

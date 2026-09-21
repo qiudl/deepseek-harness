@@ -25,6 +25,7 @@ import {
   PROFILE_TEMPLATES,
   readProfileManifest,
   readProfilePatches,
+  reconcileDefaultProfilePlugins,
   resolveBundleDir,
   resolveProfileDir,
   writeProfileManifest,
@@ -222,6 +223,60 @@ describe('initProfile', () => {
   })
 })
 
+describe('default Profile plugins', () => {
+  it('adds each default once, advances untouched defaults, and preserves removal or customization', async () => {
+    const dir = resolveProfileDir('web', tmp())
+    await reconcileDefaultProfilePlugins(dir, [{ name: 'dsh-worktable', version: '0.4.0' }])
+    expect(readProfileManifest('t', dir)).toMatchObject({
+      dependencies: { 'dsh-worktable': '0.4.0' },
+      dsh: { profile: { bundles: [...PROFILE_TEMPLATES.web!.bundles, 'dsh-worktable'] } },
+    })
+
+    await reconcileDefaultProfilePlugins(dir, [{ name: 'dsh-worktable', version: '0.4.1' }])
+    expect(readProfileManifest('t', dir).dependencies?.['dsh-worktable']).toBe('0.4.1')
+
+    const removed = readProfileManifest('t', dir)
+    delete removed.dependencies?.['dsh-worktable']
+    removed.dsh!.profile!.bundles = removed.dsh!.profile!.bundles!.filter(name => name !== 'dsh-worktable')
+    writeProfileManifest(dir, removed)
+    await reconcileDefaultProfilePlugins(dir, [{ name: 'dsh-worktable', version: '0.5.0' }])
+    expect(readProfileManifest('t', dir).dependencies?.['dsh-worktable']).toBeUndefined()
+    expect(readProfileManifest('t', dir).dsh?.profile?.bundles).not.toContain('dsh-worktable')
+
+    const custom = readProfileManifest('t', dir)
+    custom.dependencies = { ...custom.dependencies, 'dsh-worktable': 'github:Aisland-SJL/dsh-worktable#abc' }
+    custom.dsh!.profile!.bundles!.push('dsh-worktable')
+    writeProfileManifest(dir, custom)
+    await reconcileDefaultProfilePlugins(dir, [{ name: 'dsh-worktable', version: '0.6.0' }])
+    expect(readProfileManifest('t', dir).dependencies?.['dsh-worktable'])
+      .toBe('github:Aisland-SJL/dsh-worktable#abc')
+  })
+
+  it('does not repair a partial user-owned declaration and rejects corrupt state', async () => {
+    const dir = resolveProfileDir('web', tmp())
+    initProfile(dir, [...PROFILE_TEMPLATES.web!.bundles, 'dsh-worktable'])
+    await reconcileDefaultProfilePlugins(dir, [{ name: 'dsh-worktable', version: '0.4.0' }])
+    expect(readProfileManifest('t', dir).dependencies?.['dsh-worktable']).toBeUndefined()
+    writeFileSync(join(dir, '.dsh-default-plugins.v1.json'), '{}')
+    await expect(reconcileDefaultProfilePlugins(dir, [{ name: 'dsh-worktable', version: '0.4.1' }]))
+      .rejects.toThrow('invalid default Profile plugin state')
+    await expect(reconcileDefaultProfilePlugins(resolveProfileDir('web', tmp()), Array.from(
+      { length: 33 }, (_, index) => ({ name: `plugin-${index}`, version: '1.0.0' }),
+    ))).rejects.toThrow('invalid default Profile plugin baseline')
+  })
+
+  it('rejects malformed manifest plugin fields instead of rewriting them', async () => {
+    const dir = resolveProfileDir('web', tmp())
+    initProfile(dir, PROFILE_TEMPLATES.web!.bundles)
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({
+      dependencies: ['dsh-worktable'],
+      dsh: { profile: { bundles: PROFILE_TEMPLATES.web!.bundles } },
+    }))
+    await expect(reconcileDefaultProfilePlugins(dir, [{ name: 'dsh-worktable', version: '0.4.0' }]))
+      .rejects.toThrow('invalid Profile plugin manifest')
+  })
+})
+
 describe('manifest round-trip', () => {
   it('writes and reads back, and fails loud on a broken manifest', () => {
     const dir = tmp()
@@ -243,6 +298,24 @@ describe('resolveBundleDir', () => {
     expect(resolveBundleDir('t', 'in-box', anchor, profileDir)).toContain('in-box')
     expect(resolveBundleDir('t', 'local-only', anchor, profileDir)).toContain('local-only')
     expect(() => resolveBundleDir('t', 'absent', anchor, profileDir)).toThrow('cannot resolve profile bundle')
+  })
+
+  it('prefers a Profile-managed external version but never shadows in-box bundles', () => {
+    const anchor = stageInstallation({
+      'dsh-worktable': { patch: '[]\n' },
+      '@deepseek-ai/dsh-base': { patch: '[]\n' },
+    })
+    const profileDir = tmp()
+    for (const name of ['dsh-worktable', '@deepseek-ai/dsh-base']) {
+      const dir = join(profileDir, 'node_modules', name)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version: '9.0.0' }))
+    }
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      dependencies: { 'dsh-worktable': '9.0.0', '@deepseek-ai/dsh-base': '9.0.0' },
+    }))
+    expect(resolveBundleDir('t', 'dsh-worktable', anchor, profileDir)).toBe(join(profileDir, 'node_modules/dsh-worktable'))
+    expect(resolveBundleDir('t', '@deepseek-ai/dsh-base', anchor, profileDir)).not.toContain(profileDir)
   })
 
   it('resolves a package whose exports map omits ./package.json', () => {

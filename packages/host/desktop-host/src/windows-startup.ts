@@ -9,6 +9,7 @@ import { WindowsMcpStorage } from './windows-mcp-storage.ts'
 import { WindowsExtensionReceipts } from './windows-extension-receipts.ts'
 import {
   DshWebProfileWorkerFactory,
+  type DefaultProfilePlugin,
   type DshWebProfileWorkerFactoryOptions,
   type ProfileListenerAttestor,
 } from './dsh-web-profile-worker.ts'
@@ -67,6 +68,7 @@ export interface WindowsDesktopHostBaseConfig extends Omit<
   readonly maximumExtensionReceiptBytes?: number
   readonly profileReadyTimeoutMs: number
   readonly profileAbortTimeoutMs: number
+  readonly defaultProfilePlugins?: readonly DefaultProfilePlugin[]
 }
 
 /** Trusted in-memory inputs used by embedders and deterministic tests. */
@@ -123,6 +125,8 @@ interface WindowsOwnedTrust {
 }
 
 function validatePublicConfig(config: WindowsDesktopHostBaseConfig): void {
+  const defaults = config.defaultProfilePlugins ?? []
+  const defaultNames = new Set<string>()
   if ((config.platform ?? process.platform) !== 'win32' || (config.arch ?? process.arch) !== 'x64'
     || !windowsRoot(config.root) || !windowsRoot(config.registrationRoot)
     || win32.dirname(config.root) === config.root
@@ -139,7 +143,14 @@ function validatePublicConfig(config: WindowsDesktopHostBaseConfig): void {
     || !positive(config.maximumRegistryBytes) || !positive(config.maximumManagedFileBytes)
     || !positive(config.maximumJournalBytes) || !positive(config.profileReadyTimeoutMs)
     || (config.maximumExtensionReceiptBytes !== undefined && !positive(config.maximumExtensionReceiptBytes))
-    || !positive(config.profileAbortTimeoutMs)) throw new HostAuthorityError('invalid_input')
+    || !positive(config.profileAbortTimeoutMs) || defaults.length > 32) throw new HostAuthorityError('invalid_input')
+  for (const plugin of defaults) {
+    if (!/^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u.test(plugin.name)
+      || plugin.name.startsWith('@deepseek-ai/')
+      || !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(plugin.version)
+      || defaultNames.has(plugin.name)) throw new HostAuthorityError('invalid_input')
+    defaultNames.add(plugin.name)
+  }
 }
 
 function validateOwnedTrust(
@@ -286,6 +297,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
     attestListener,
     readyTimeoutMs: config.profileReadyTimeoutMs,
     abortTimeoutMs: config.profileAbortTimeoutMs,
+    defaultProfilePlugins: config.defaultProfilePlugins ?? [],
   }
   /* v8 ignore next 7 -- Windows path admission and the packaged child process run in the Windows platform lane. */
   const defaultProfileWorkerFactory = dependencies.createProfileWorkerFactory === undefined

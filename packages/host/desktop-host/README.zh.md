@@ -63,6 +63,8 @@ Profile registry 为每个 Profile 保存 opaque Profile id、opaque Keychain ha
 
 macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启动一个 Host，分别检查 Node executable 与固定 DSH entrypoint，按照嵌入应用发布版本提供的 SHA-256 pin 校验 Account 公钥环，执行原生 peer PID／executable／code-signature attestation，并发布不含秘密的精确 `~/.dsh/host/registration.v1.json` discovery 记录。取得 Host 独占所有权后，Runtime 升级只能原子刷新该记录的 executable signature digest；installation、key、endpoint 和 socket 字段必须全部保持一致。Profile worker 不继承 ambient environment。Host 校验子进程确实拥有其报告的 loopback listener，自行把一次性启动 token 兑换为签名 Cookie，确认未认证 `/` 为 401、携 Cookie 的 `/` 为 200，然后立即丢弃 token。
 
+macOS 与 Windows 启动组合从可信嵌入配置接收有数量上限、带精确版本的外部默认 Profile 插件清单。Host 在把清单序列化到 worker 的保留环境变量前，校验包名、语义版本、唯一性与数量。CLI 只通过 app-boot 的非破坏基线协调把这份已认证清单应用到自身 `web` Profile；调用方不能通过普通 worker 环境覆盖替换它。
+
 离线 Account 恢复只有在每个顶层依赖都通过当前打包 runtime 或摘要已验证的 Profile 兼容闭包解析时，才会启动声明的插件。Profile 内扁平化的依赖树会被报告为 runtime 不兼容并保留只读导出能力；Host 不会根据文件可读或存在锁文件来推断兼容。
 
 命令写入按 Profile 与 Session 串行，不同 Session 可并发。fsync 日志在执行前记录 `started`，随后记录 committed outcome；两者之间崩溃恢复为 `unknown`，绝不推断成功。审批决策同时比较 payload hash、decision version、window generation 与过期时间。环境上下文只附着到 Session lease，不形成 Profile 全局状态。

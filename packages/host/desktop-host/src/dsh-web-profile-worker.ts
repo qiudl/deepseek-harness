@@ -13,6 +13,7 @@ const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
+  'DSH_PROFILE_DEFAULT_PLUGINS',
 ])
 
 /** Classified failure from the authenticated worker model endpoint. */
@@ -22,6 +23,12 @@ export class DesktopModelWorkerError extends Error {
     super(code)
     this.name = 'DesktopModelWorkerError'
   }
+}
+
+/** Exact packaged plugin offered to a Profile only through the baseline reconciler. */
+export interface DefaultProfilePlugin {
+  readonly name: string
+  readonly version: string
 }
 
 /** Verifies that a child PID, rather than another local process, owns a loopback listener. */
@@ -34,6 +41,7 @@ export interface DshWebProfileWorkerFactoryOptions {
   readonly attestListener?: ProfileListenerAttestor
   readonly readyTimeoutMs?: number
   readonly abortTimeoutMs?: number
+  readonly defaultProfilePlugins?: readonly DefaultProfilePlugin[]
 }
 
 /** @internal Verify the Web worker's macOS loopback listener ownership. */
@@ -112,6 +120,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
         DSH_PROFILE_MODEL_TOKEN: modelToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
+        DSH_PROFILE_DEFAULT_PLUGINS: JSON.stringify(this.options.defaultProfilePlugins ?? []),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })

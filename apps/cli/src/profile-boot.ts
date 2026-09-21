@@ -28,9 +28,11 @@ import {
   PluginPackages,
   PROFILE_PATCH_FILENAME,
   PROFILE_TEMPLATES,
+  reconcileDefaultProfilePlugins,
   resolveProfileDir,
   type ProfileContext,
   type Profile,
+  type DefaultProfilePlugin,
   type ProfileResolutionGeneration,
   type ProfileResolutionMode,
 } from '@deepseek-ai/dsh-app-boot'
@@ -44,6 +46,30 @@ const NAME = 'dsh'
 
 /** Installation-owned authority profiles accept no user-controlled input. */
 const INSTALLATION_OWNED_PROFILES = new Set(['desktop-host', 'slark-desktop-host'])
+const DEFAULT_PROFILE_PLUGINS_ENV = 'DSH_PROFILE_DEFAULT_PLUGINS'
+const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u
+const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u
+
+/** Parse the Host-only initial plugin baseline without accepting package sources or extra fields. */
+export function parseDefaultProfilePlugins(value: string | undefined): DefaultProfilePlugin[] {
+  if (value === undefined) return []
+  if (Buffer.byteLength(value, 'utf8') > 16 * 1024) throw new Error('dsh: invalid default Profile plugins')
+  let parsed: unknown
+  try { parsed = JSON.parse(value) } catch { throw new Error('dsh: invalid default Profile plugins') }
+  if (!Array.isArray(parsed) || parsed.length > 32) throw new Error('dsh: invalid default Profile plugins')
+  const names = new Set<string>()
+  return parsed.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('dsh: invalid default Profile plugins')
+    const plugin = item as Record<string, unknown>
+    if (Object.keys(plugin).length !== 2 || typeof plugin.name !== 'string'
+      || !PACKAGE_NAME.test(plugin.name) || plugin.name.startsWith('@deepseek-ai/')
+      || typeof plugin.version !== 'string' || !SEMVER.test(plugin.version) || names.has(plugin.name)) {
+      throw new Error('dsh: invalid default Profile plugins')
+    }
+    names.add(plugin.name)
+    return { name: plugin.name, version: plugin.version }
+  })
+}
 
 /** Reject overlays and forwarded arguments for the trusted Desktop Host profiles. */
 export function assertProfileInvocationPolicy(
@@ -217,6 +243,12 @@ async function composeProfile(
   fromDefaultProfile?: string,
   resolvedProfile?: ResolvedProfileRuntime,
 ): Promise<ComposedProfile> {
+  if (name === 'web') {
+    const defaults = parseDefaultProfilePlugins(process.env[DEFAULT_PROFILE_PLUGINS_ENV])
+    if (defaults.length > 0) {
+      await reconcileDefaultProfilePlugins(resolveProfileDir(name), defaults)
+    }
+  }
   const profile = resolvedProfile?.profile ?? prepareProfile(name, true, fromDefaultProfile)
   if (resolvedProfile !== undefined) writeFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), PROFILE_ROOT_CONFIG)
   const resolutionOptions = { installAnchor: resolvedProfile?.installAnchor ?? INSTALL_ANCHOR, profile }
