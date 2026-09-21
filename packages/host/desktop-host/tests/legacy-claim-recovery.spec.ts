@@ -61,7 +61,7 @@ function windowsFixture() {
 }
 
 describe('legacy model claim recovery snapshot', () => {
-  it('keeps an immutable, operation-scoped preimage across Unix restarts', () => {
+  it.skipIf(process.platform === 'win32')('keeps an immutable, operation-scoped preimage across Unix restarts', () => {
     const { root, uid, file } = unixFixture()
     const store = new LegacyClaimRecoveryStore(new FileLegacyClaimRecoveryFiles(root, uid))
     expect(store.read(profileId, operationId)).toBeNull()
@@ -79,7 +79,7 @@ describe('legacy model claim recovery snapshot', () => {
     expect(store.restorable(prepared, input.settingsAfter, Buffer.from('later secret'))).toBe(false)
   })
 
-  it('removes a completed Unix snapshot only after its exact bytes and authority match', () => {
+  it.skipIf(process.platform === 'win32')('removes a completed Unix snapshot only after its exact bytes and authority match', () => {
     const { root, uid, file } = unixFixture()
     const files = new FileLegacyClaimRecoveryFiles(root, uid)
     const store = new LegacyClaimRecoveryStore(files)
@@ -93,7 +93,7 @@ describe('legacy model claim recovery snapshot', () => {
     store.clear(prepared, () => undefined)
   })
 
-  it('rejects a replacement Unix path during compare-and-delete', () => {
+  it.skipIf(process.platform === 'win32')('rejects a replacement Unix path during compare-and-delete', () => {
     const { root, uid, file } = unixFixture()
     const ordinary = new FileLegacyClaimRecoveryFiles(root, uid)
     const prepared = new LegacyClaimRecoveryStore(ordinary).prepare(input)
@@ -106,7 +106,7 @@ describe('legacy model claim recovery snapshot', () => {
     expect(new LegacyClaimRecoveryStore(ordinary).read(profileId, operationId)).toEqual(prepared)
   })
 
-  it('rejects corrupted snapshots and unsafe Unix files', () => {
+  it.skipIf(process.platform === 'win32')('rejects corrupted snapshots and unsafe Unix files', () => {
     const { root, uid, file } = unixFixture()
     const files = new FileLegacyClaimRecoveryFiles(root, uid)
     const store = new LegacyClaimRecoveryStore(files)
@@ -181,7 +181,7 @@ describe('legacy model claim recovery snapshot', () => {
     expect(store.read(profileId, operationId)).toEqual(prepared)
   })
 
-  it('rejects invalid operation input and missing durable publication', () => {
+  it.skipIf(process.platform === 'win32')('rejects invalid operation input and missing durable publication', () => {
     const { root, uid } = unixFixture()
     const store = new LegacyClaimRecoveryStore(new FileLegacyClaimRecoveryFiles(root, uid))
     expect(() => store.read('bad', operationId)).toThrow()
@@ -195,7 +195,7 @@ describe('legacy model claim recovery snapshot', () => {
     expect(() => lost.prepare(input)).toThrow()
   })
 
-  it('rejects malformed private snapshots before using their preimages', () => {
+  it.skipIf(process.platform === 'win32')('rejects malformed private snapshots before using their preimages', () => {
     const { root, uid, file } = unixFixture()
     const store = new LegacyClaimRecoveryStore(new FileLegacyClaimRecoveryFiles(root, uid))
     store.prepare(input)
@@ -214,7 +214,7 @@ describe('legacy model claim recovery snapshot', () => {
     }
   })
 
-  it('rejects unsafe paths and bounds both platform files', () => {
+  it.skipIf(process.platform === 'win32')('rejects unsafe Unix paths and file bounds', () => {
     const { root, uid, file } = unixFixture()
     expect(() => new FileLegacyClaimRecoveryFiles('relative', uid)).toThrow()
     expect(() => new FileLegacyClaimRecoveryFiles(root, -1)).toThrow()
@@ -228,6 +228,9 @@ describe('legacy model claim recovery snapshot', () => {
     rmSync(file, { recursive: true })
     chmodSync(join(root, profileId), 0o777)
     expect(() => files.read(profileId, operationId)).toThrow()
+  })
+
+  it('rejects unsafe Windows paths and file bounds', () => {
     expect(() => new WindowsLegacyClaimRecoveryFiles({
       profilesRoot: `${windowsRoot}\\..\\bad`, userSid, bindings: windowsFixture().bindings,
     })).toThrow()

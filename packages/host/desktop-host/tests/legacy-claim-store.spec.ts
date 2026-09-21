@@ -52,7 +52,7 @@ function windowsFixture(contents?: Buffer) {
 }
 
 describe('legacy claim private snapshots', () => {
-  it('atomically persists Unix claims and replays after Host restart', () => {
+  it.skipIf(process.platform === 'win32')('atomically persists Unix claims and replays after Host restart', () => {
     const options = fixture()
     const store = new FileLegacyClaimEventStore(options)
     expect(store.read()).toEqual([])
@@ -65,7 +65,7 @@ describe('legacy claim private snapshots', () => {
     expect(new LegacyClaimLedger(new FileLegacyClaimEventStore(options), () => 3).hasPending('profile-a')).toBe(false)
   })
 
-  it('rejects malformed, oversized, and unsafe Unix snapshots', () => {
+  it.skipIf(process.platform === 'win32')('rejects malformed, oversized, and unsafe Unix snapshots', () => {
     const options = fixture()
     const store = new FileLegacyClaimEventStore(options)
     for (const contents of [
@@ -94,7 +94,7 @@ describe('legacy claim private snapshots', () => {
     expect(() => store.read()).toThrow()
   })
 
-  it('validates Unix and Windows roots and rejects invalid append input and capacity', () => {
+  it.skipIf(process.platform === 'win32')('validates Unix roots and rejects invalid append input and capacity', () => {
     const options = fixture()
     expect(() => new FileLegacyClaimEventStore({ ...options, root: 'relative' })).toThrow()
     expect(() => new FileLegacyClaimEventStore({ ...options, uid: -1 })).toThrow()
@@ -104,6 +104,9 @@ describe('legacy claim private snapshots', () => {
     store.append(reserved)
     expect(() => { store.append(committed) }).toThrow()
     expect(store.read()).toEqual([reserved])
+  })
+
+  it('validates Windows roots', () => {
     const windows = windowsFixture()
     expect(() => new WindowsLegacyClaimEventStore({
       root: `${windowsRoot}\\..\\bad`, userSid, maximumBytes: 4096, bindings: windows.bindings,
@@ -160,14 +163,14 @@ describe('legacy claim private snapshots', () => {
     }), () => 2).hasPending('profile-a')).toBe(true)
   })
 
-  it('rejects a non-directory Unix root', () => {
+  it.skipIf(process.platform === 'win32')('rejects a non-directory Unix root', () => {
     const options = fixture()
     const root = join(options.root, 'file')
     writeFileSync(root, '')
     expect(() => new FileLegacyClaimEventStore({ ...options, root })).toThrow()
   })
 
-  it('cleans an uncommitted Unix temporary file when publication fails', () => {
+  it.skipIf(process.platform === 'win32')('cleans an uncommitted Unix temporary file when publication fails', () => {
     const options = fixture()
     const store = new FileLegacyClaimEventStore(options)
     vi.spyOn(store, 'read').mockImplementationOnce(() => {

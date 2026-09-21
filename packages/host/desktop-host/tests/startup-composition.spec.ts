@@ -147,6 +147,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   let serverOptions: UnixHostServerOptions | undefined
   const workerSpecs: ProfileWorkerSpec[] = []
   const workerEvents: string[] = []
+  const generateText = vi.fn(async (text: string, _signal: AbortSignal) => ({
+    provider: 'deepseek', model: 'deepseek-chat', text: `answer: ${text}`,
+  }))
   const serverStart = vi.fn(async () => undefined)
   const serverClose = vi.fn(async () => undefined)
   const server = {
@@ -172,6 +175,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       viewOrigin: 'http://127.0.0.1:43123',
       generation: workerSpecs.length,
       bootstrapCookie: { name: 'fixture', value: 'private' },
+      generateText,
       closeNotifications: () => { workerEvents.push(`notifications:${spec.profileId}`) },
       abort: () => { workerEvents.push(`abort:${spec.profileId}`); rejectDone?.(new Error('worker exit failed')) },
       done,
@@ -211,6 +215,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     ownerId: 'owner',
   })).origin).toBe('http://127.0.0.1:43123')
   expect(await serverOptions.profilePersistenceGeneration(profile.profileId)).toBe(1)
+  await expect(serverOptions.generateModelText?.(profile.profileId, 'question', new AbortController().signal))
+    .resolves.toEqual({ provider: 'deepseek', model: 'deepseek-chat', text: 'answer: question' })
+  expect(generateText).toHaveBeenCalledWith('question', expect.any(AbortSignal))
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'mcp')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'skill')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'plugin')).toEqual([])
