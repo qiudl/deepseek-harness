@@ -30,7 +30,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
+import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { applyEntryPatches, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
@@ -161,6 +161,120 @@ const PROFILE_PNPM_WORKSPACE = `packages:
 nodeLinker: hoisted
 autoInstallPeers: false
 `
+
+const DEFAULT_PLUGINS_STATE_FILENAME = '.dsh-default-plugins.v1.json'
+const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u
+const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u
+
+/** One embedding-owned plugin version offered to a Profile as its initial baseline. */
+export interface DefaultProfilePlugin {
+  /** Exact npm package name. */
+  name: string
+  /** Exact packaged version. */
+  version: string
+}
+
+function validatedDefaultPlugins(defaults: readonly DefaultProfilePlugin[]): DefaultProfilePlugin[] {
+  if (defaults.length > 32) throw new Error('dsh: invalid default Profile plugin baseline')
+  const names = new Set<string>()
+  return defaults.map((plugin) => {
+    if (!PACKAGE_NAME.test(plugin.name) || plugin.name.startsWith('@deepseek-ai/')
+      || !SEMVER.test(plugin.version) || names.has(plugin.name)) {
+      throw new Error('dsh: invalid default Profile plugin baseline')
+    }
+    names.add(plugin.name)
+    return { name: plugin.name, version: plugin.version }
+  })
+}
+
+function defaultPluginState(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('dsh: invalid default Profile plugin state')
+  }
+  const record = value as Record<string, unknown>
+  if (Object.keys(record).length !== 2 || record.schemaVersion !== 1
+    || !record.plugins || typeof record.plugins !== 'object' || Array.isArray(record.plugins)) {
+    throw new Error('dsh: invalid default Profile plugin state')
+  }
+  const plugins = record.plugins as Record<string, unknown>
+  if (Object.entries(plugins).some(([name, version]) => !PACKAGE_NAME.test(name)
+    || name.startsWith('@deepseek-ai/') || typeof version !== 'string' || !SEMVER.test(version))) {
+    throw new Error('dsh: invalid default Profile plugin state')
+  }
+  return plugins as Record<string, string>
+}
+
+function defaultPluginManifest(manifest: ProfileManifest): {
+  dependencies: Record<string, string>
+  bundles: string[]
+} {
+  const dependencies = manifest.dependencies
+  const bundles = manifest.dsh?.profile?.bundles
+  if ((dependencies !== undefined && (typeof dependencies !== 'object' || Array.isArray(dependencies)
+    || Object.entries(dependencies).some(([name, version]) => !PACKAGE_NAME.test(name)
+      || typeof version !== 'string')))
+    || (bundles !== undefined && (!Array.isArray(bundles)
+      || bundles.some(bundle => typeof bundle !== 'string')))) {
+    throw new Error('dsh: invalid Profile plugin manifest')
+  }
+  return {
+    dependencies: { ...dependencies },
+    bundles: [...(bundles ?? [])],
+  }
+}
+
+/**
+ * Apply each embedding-owned default once without restoring a later removal or replacing a custom version.
+ * @param dir - Web Profile package directory.
+ * @param defaults - Exact packaged plugin versions from the verified embedding.
+ * @returns after the manifest and baseline marker have been atomically published.
+ */
+export async function reconcileDefaultProfilePlugins(
+  dir: string,
+  defaults: readonly DefaultProfilePlugin[],
+): Promise<void> {
+  const validated = validatedDefaultPlugins(defaults)
+  if (validated.length === 0) return
+  const webTemplate = PROFILE_TEMPLATES.web
+  if (webTemplate === undefined) throw new Error('dsh: missing web Profile template')
+  initProfile(dir, webTemplate.bundles, webTemplate.patchReload)
+  const statePath = join(dir, DEFAULT_PLUGINS_STATE_FILENAME)
+  await withFileLock(statePath, async () => {
+    let previous: Record<string, string> = {}
+    if (existsSync(statePath)) {
+      previous = defaultPluginState(JSON.parse(readFileSync(statePath, 'utf8')))
+    }
+    const manifest = readProfileManifest('dsh', dir)
+    const { dependencies, bundles } = defaultPluginManifest(manifest)
+    let changed = false
+    for (const plugin of validated) {
+      const priorVersion = previous[plugin.name]
+      const dependency = dependencies[plugin.name]
+      const bundled = bundles.includes(plugin.name)
+      if (priorVersion === undefined) {
+        if (dependency === undefined && !bundled) {
+          dependencies[plugin.name] = plugin.version
+          bundles.push(plugin.name)
+          changed = true
+        }
+      } else if (dependency === priorVersion && bundled && priorVersion !== plugin.version) {
+        dependencies[plugin.name] = plugin.version
+        changed = true
+      }
+    }
+    if (changed) {
+      await writeFileAtomic(join(dir, 'package.json'), `${JSON.stringify({
+        ...manifest,
+        dependencies,
+        dsh: { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles } },
+      }, undefined, 2)}\n`, { mode: 0o600 })
+    }
+    const plugins = { ...previous, ...Object.fromEntries(validated.map(plugin => [plugin.name, plugin.version])) }
+    await writeFileAtomic(statePath, `${JSON.stringify({ schemaVersion: 1, plugins }, undefined, 2)}\n`, {
+      mode: 0o600,
+    })
+  })
+}
 
 /**
  * Initialize a profile directory: manifest, empty user patch layer, and the
@@ -754,7 +868,11 @@ function packageDirFromAnchor(
 export function resolveBundleDir(
   binName: string, packageName: string, installAnchor: string, profileDir: string,
 ): string {
-  for (const anchor of [installAnchor, join(profileDir, 'package.json')]) {
+  const profileAnchor = join(profileDir, 'package.json')
+  const profileDependencies = readProfileManifest(binName, profileDir).dependencies ?? {}
+  const profileOwned = !packageName.startsWith('@deepseek-ai/')
+    && Object.hasOwn(profileDependencies, packageName)
+  for (const anchor of profileOwned ? [profileAnchor, installAnchor] : [installAnchor, profileAnchor]) {
     const dir = packageDirFromAnchor(anchor, packageName)
     if (dir !== undefined) return dir
   }

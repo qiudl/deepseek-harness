@@ -10,8 +10,14 @@ const execFileAsync = promisify(execFile)
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
-  'DSH_PROFILE_MODEL_TOKEN',
+  'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_DEFAULT_PLUGINS',
 ])
+
+/** Exact packaged plugin offered to a Profile only through the baseline reconciler. */
+export interface DefaultProfilePlugin {
+  readonly name: string
+  readonly version: string
+}
 
 /** Classified failure from the authenticated worker model endpoint. */
 export class DesktopModelWorkerError extends Error {
@@ -32,6 +38,7 @@ export interface DshWebProfileWorkerFactoryOptions {
   readonly attestListener?: ProfileListenerAttestor
   readonly readyTimeoutMs?: number
   readonly abortTimeoutMs?: number
+  readonly defaultProfilePlugins?: readonly DefaultProfilePlugin[]
 }
 
 /** @internal Verify the Web worker's macOS loopback listener ownership. */
@@ -108,6 +115,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
         DSH_PROFILE_MODEL_TOKEN: modelToken,
+        DSH_PROFILE_DEFAULT_PLUGINS: JSON.stringify(this.options.defaultProfilePlugins ?? []),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })

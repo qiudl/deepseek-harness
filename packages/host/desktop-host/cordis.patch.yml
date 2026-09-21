@@ -40,3 +40,4 @@
         runtimeGeneration: !!js Number(process.env.DSH_HOST_RUNTIME_GENERATION)
         schemaGeneration: !!js Number(process.env.DSH_HOST_SCHEMA_GENERATION)
         legacySourceQuiescent: !!js process.env.DSH_HOST_LEGACY_SOURCE_QUIESCENT === '1'
+        defaultProfilePlugins: !!js JSON.parse(process.env.DSH_HOST_DEFAULT_PROFILE_PLUGINS ?? '[]')
