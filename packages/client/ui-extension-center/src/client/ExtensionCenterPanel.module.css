@@ -9,6 +9,8 @@
   padding: clamp(28px, 5vw, 64px);
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-layer-2);
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
 .header {
@@ -123,7 +125,7 @@
 .installFields { display: grid; grid-template-columns: minmax(140px, .65fr) minmax(140px, .75fr) minmax(240px, 1.3fr) auto; gap: 10px; align-items: end; }
 .installFields label { display: grid; gap: 5px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .installFields input,
-.installFields select { box-sizing: border-box; width: 100%; height: 36px; border: .5px solid var(--dsw-alias-border-l3); border-radius: 8px; padding: 0 10px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: inherit; }
+.installFields select { box-sizing: border-box; width: 100%; height: 36px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 8px; padding: 0 10px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: inherit; }
 .installFields button,
 .confirmation button { min-height: 36px; border: 0; border-radius: 8px; padding: 0 14px; background: var(--dsw-alias-state-business-primary); color: white; cursor: pointer; font: inherit; }
 .installFields button:disabled,

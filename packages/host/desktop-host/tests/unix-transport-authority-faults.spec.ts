@@ -172,13 +172,18 @@ describe('Unix transport authority failures', () => {
   })
 
   it('advertises and projects extension flags only for their matching kind', async () => {
+    const scriptDigest = '9'.repeat(64)
+    let committedScriptDigest: string | undefined
     let currentReceipt: Record<string, unknown> = {
       operationId, state: 'queued', cancellationRequested: false, createdAt: 1_000, updatedAt: 1_000,
     }
     const operations = {
       prepare: (authority: () => string, kind: HostExtensionKind) => ({ planId: 'plan-1', kind,
-        digest: '8'.repeat(64), expiresAt: 20_000, profileId: authority() }),
-      commit: (authority: () => string) => ({ ...currentReceipt, profileId: authority() }),
+        digest: '8'.repeat(64), expiresAt: 20_000, profileId: authority(),
+        ...(kind === 'plugin' ? { scriptApproval: { buildKey: 'demo@1.0.0', digest: scriptDigest,
+          scripts: [{ name: 'postinstall', command: 'node build.js' }] } } : {}) }),
+      commit: (authority: () => string, _planId: string, _operationId: string, _signal: AbortSignal,
+        digest?: string) => { committedScriptDigest = digest; return { ...currentReceipt, profileId: authority() } },
       cancel: (authority: () => string) => ({ ...currentReceipt, profileId: authority() }),
       status: (authority: () => string) => ({ ...currentReceipt, profileId: authority() }),
       dispose: async () => undefined,
@@ -196,6 +201,11 @@ describe('Unix transport authority failures', () => {
     }
     const prepared = await client.extensions({ ...profileLease, command: { action: 'prepare', kind: 'skill', payload: '{}' } })
     expect(prepared).toMatchObject({ state: 'prepared', kind: 'skill' })
+    await expect(client.extensions({ ...profileLease,
+      command: { action: 'prepare', kind: 'plugin', payload: '{}' } })).resolves.toMatchObject({
+      state: 'prepared', kind: 'plugin', scripts: [{ name: 'postinstall', command: 'node build.js' }],
+      script_digest: scriptDigest,
+    })
     await expect(client.extensions({ ...profileLease, command: { action: 'cancel', operation_id: operationId as never } }))
       .resolves.toMatchObject({ state: 'receipt', outcome: 'queued' })
 
@@ -215,8 +225,9 @@ describe('Unix transport authority failures', () => {
       .resolves.toMatchObject({ plugin_restore: 'demo', plugin_complete: { action: 'install', package_name: 'demo', spec: 'demo@1.0.0' } })
     currentReceipt = { ...currentReceipt, pluginPackage: { action: 'remove', packageName: 'demo' } }
     await expect(client.extensions({ ...profileLease, command: { action: 'commit', plan_id: 'plan-1' as never,
-      operation_id: operationId as never } }))
+      operation_id: operationId as never, script_digest: scriptDigest as never } }))
       .resolves.toMatchObject({ plugin_complete: { action: 'remove', package_name: 'demo' } })
+    expect(committedScriptDigest).toBe(scriptDigest)
     client.close()
 
     const withoutFlags = await authorityClient({ extensions: { operations, kinds: extensions.kinds, inventory: async () => [] } })
@@ -257,7 +268,8 @@ describe('Unix transport authority failures', () => {
     const failures: Array<[unknown, string]> = [
       [new HostAuthorityError('busy'), 'busy'], [new Error('expired'), 'stale'], [new Error('busy'), 'busy'],
       [new Error('idempotency_conflict'), 'idempotency_conflict'], [new Error('unauthorized'), 'unauthorized'],
-      [new Error('upgrade_required'), 'upgrade_required'], ['non-error', 'unavailable'], [new Error('other'), 'unavailable'],
+      [new Error('upgrade_required'), 'upgrade_required'], [new Error('script_approval_required'), 'script_approval_required'],
+      ['non-error', 'unavailable'], [new Error('other'), 'unavailable'],
     ]
     for (const [nextFailure, code] of failures) {
       failure = nextFailure

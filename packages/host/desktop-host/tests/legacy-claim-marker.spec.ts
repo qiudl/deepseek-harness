@@ -50,7 +50,7 @@ function windowsFixture(contents?: Buffer) {
 }
 
 describe('Profile-local legacy claim startup marker', () => {
-  it('marks and clears only the matching Profile operation across Unix restarts', () => {
+  it.skipIf(process.platform === 'win32')('marks and clears only the matching Profile operation across Unix restarts', () => {
     const options = unixFixture()
     const files = new FileProfileClaimMarkerFiles(options.root, options.uid)
     const marker = new ProfileClaimMarker(files)
@@ -68,7 +68,7 @@ describe('Profile-local legacy claim startup marker', () => {
     expect(marker.pending(profileId)).toBe(true)
   })
 
-  it('rejects corrupt and unsafe Unix marker files per Profile', () => {
+  it.skipIf(process.platform === 'win32')('rejects corrupt and unsafe Unix marker files per Profile', () => {
     const options = unixFixture()
     const marker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(options.root, options.uid))
     for (const value of [
@@ -98,7 +98,7 @@ describe('Profile-local legacy claim startup marker', () => {
     expect(() => marker.pending(profileId)).toThrow()
   })
 
-  it('rejects invalid inputs and only writes bounded bytes', () => {
+  it.skipIf(process.platform === 'win32')('rejects invalid inputs and only writes bounded bytes', () => {
     const options = unixFixture()
     expect(() => new FileProfileClaimMarkerFiles('relative', options.uid)).toThrow()
     expect(() => new FileProfileClaimMarkerFiles(options.root, -1)).toThrow()
@@ -114,7 +114,7 @@ describe('Profile-local legacy claim startup marker', () => {
     expect(() => { new FileProfileClaimMarkerFiles(options.root, options.uid).read('f100eb18-b77e-4693-abab-7d80750d9be4') }).toThrow()
   })
 
-  it('cleans a Unix temporary file when marker publication fails', () => {
+  it.skipIf(process.platform === 'win32')('cleans a Unix temporary file when marker publication fails', () => {
     const options = unixFixture()
     const files = new FileProfileClaimMarkerFiles(options.root, options.uid)
     const root = options.profileRoot

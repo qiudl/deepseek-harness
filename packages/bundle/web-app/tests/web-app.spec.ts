@@ -11,7 +11,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -69,18 +70,27 @@ function stageDist(): string {
 }
 
 /** A fake webServer capturing the fallback seat and index taps. */
-function fakeHttpServer(host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1'): { server: WebServer; seat: () => unknown } {
+function fakeHttpServer(host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1'): {
+  server: WebServer
+  seat: () => unknown
+  routes: () => readonly unknown[]
+} {
   let fallback: unknown
+  const routes: unknown[] = []
   const server = {
     host,
     port: 4567,
+    register: (route: unknown) => {
+      routes.push(route)
+      return () => { routes.splice(routes.indexOf(route), 1) }
+    },
     registerFallback: (handler: unknown) => {
       fallback = handler
       return () => { fallback = undefined }
     },
     renderIndex: (html: string) => html,
   } as unknown as WebServer
-  return { server, seat: () => fallback }
+  return { server, seat: () => fallback, routes: () => routes }
 }
 
 /** Deterministic Host Connection face for URL publication and frontend injection. */
@@ -110,6 +120,58 @@ interface BashContribution {
 }
 
 describe('web-app runtime glue', () => {
+  it('mounts the Host-token model route only for a valid worker token', async () => {
+    const invalid = new Context()
+    onTestFinished(async () => { await invalid.fiber.dispose() })
+    const invalidServer = fakeHttpServer()
+    invalid.provide('webServer', invalidServer.server)
+    vi.stubEnv('DSH_PROFILE_MODEL_TOKEN', 'invalid')
+    apply(invalid, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(invalidServer.routes()).toEqual([])
+    await invalid.fiber.dispose()
+
+    const ctx = new Context()
+    onTestFinished(async () => { await ctx.fiber.dispose() })
+    const modelServer = fakeHttpServer()
+    const currentSelection = vi.fn(() => ({ provider: 'deepseek', model: 'deepseek-chat' }))
+    const stream = vi.fn(async function* () {
+      yield { type: 'text-delta' as const, index: 0, text: 'answer' }
+      yield { type: 'block-end' as const, index: 0, block: { type: 'text' as const, text: 'answer' } }
+      yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+    })
+    ctx.provide('webServer', modelServer.server)
+    ctx.provide('agentDefaultModel', { currentSelection } as never)
+    ctx.provide('llm', { stream } as never)
+    const token = 'A'.repeat(43)
+    vi.stubEnv('DSH_PROFILE_MODEL_TOKEN', token)
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const route = modelServer.routes()[0] as {
+      kind: string
+      path: string
+      handler(req: IncomingMessage, res: ServerResponse): Promise<void>
+    }
+    expect(route).toMatchObject({ kind: 'exact', path: '/internal/desktop-model-text' })
+    const req = Object.assign(new EventEmitter(), {
+      headers: { authorization: `Bearer ${token}` }, method: 'POST',
+      async *[Symbol.asyncIterator]() { yield Buffer.from('{"text":"question"}') },
+    }) as unknown as IncomingMessage
+    const response = Object.assign(new EventEmitter(), {
+      statusCode: 0, body: '', writableEnded: false, destroyed: false,
+      writeHead(code: number) { this.statusCode = code; return this },
+      end(body = '') { this.body = body; this.writableEnded = true; return this },
+    }) as unknown as ServerResponse
+    await route.handler(req, response)
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse((response as unknown as { body: string }).body)).toEqual({
+      provider: 'deepseek', model: 'deepseek-chat', text: 'answer',
+    })
+    expect(currentSelection).toHaveBeenCalledOnce()
+    expect(stream).toHaveBeenCalledOnce()
+    await ctx.fiber.dispose()
+  })
+
   it('mounts dist serving, prompt section, bash variables, and publishes the URL with the LAN snapshot', async () => {
     stageDist()
     const ctx = new Context()

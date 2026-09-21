@@ -23,7 +23,7 @@ interface ProfilePluginExecutorOptions {
   remove?(this: void, profileRoot: string, packageName: string, context: Lifetime): Promise<void>
   acknowledgeRemoval?(this: void, profileId: string, entryIds: readonly string[], context: Lifetime): Promise<void>
   install(profileRoot: string, spec: string, context: Lifetime): Promise<void>
-  inspectScripts?(packageName: string, spec: string, signal?: AbortSignal): Promise<PluginScriptApproval | undefined>
+  inspectScripts?(packageName: string, spec: string): Promise<PluginScriptApproval | undefined>
   /** Must reload the selected worker and prove the installed bundle's contributions; CLI exit is insufficient. */
   acknowledge(profileId: string, packageName: string, context: Lifetime): Promise<void>
 }

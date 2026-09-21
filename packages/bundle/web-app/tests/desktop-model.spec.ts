@@ -164,6 +164,23 @@ describe('Host-only Desktop model worker route', () => {
     expect(generate).toHaveBeenCalledWith('q', expect.any(AbortSignal))
   })
 
+  it('rejects a non-byte request body chunk', async () => {
+    const req = Object.assign(new EventEmitter(), {
+      headers: { authorization: `Bearer ${token}` }, method: 'POST',
+      async *[Symbol.asyncIterator]() { yield 'not-bytes' },
+    }) as unknown as IncomingMessage
+    const response = Object.assign(new EventEmitter(), {
+      statusCode: 0, body: '', writableEnded: false, destroyed: false,
+      writeHead(code: number) { this.statusCode = code; return this },
+      end(body = '') { this.body = body; this.writableEnded = true; return this },
+    }) as unknown as ServerResponse
+    const generate = vi.fn(async () => ({ provider: 'p', model: 'm', text: 'a' }))
+    await handleDesktopModelRequest(req, response, token, generate)
+    expect(response.statusCode).toBe(400)
+    expect((response as unknown as { body: string }).body).toBe('{"error":"invalid_input"}')
+    expect(generate).not.toHaveBeenCalled()
+  })
+
   it('returns only a classified provider error', async () => {
     await withServer(async () => { throw new DesktopModelError('missing_credential') }, async (url) => {
       const response = await fetch(url, { method: 'POST',

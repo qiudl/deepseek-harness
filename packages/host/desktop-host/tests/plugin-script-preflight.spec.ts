@@ -40,6 +40,16 @@ describe('plugin script zero-write preflight', () => {
     )
   })
 
+  it('reads an exact npm manifest through the default fetch', async () => {
+    const fetchManifest = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      name: 'demo', version: '1.0.0',
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchManifest)
+    await expect(inspectPluginScripts({ packageName: 'demo', spec: 'demo@1.0.0' })).resolves.toBeUndefined()
+    expect(fetchManifest).toHaveBeenCalledWith('https://registry.npmjs.org/demo/1.0.0',
+      expect.objectContaining({ redirect: 'error' }))
+  })
+
   it('needs no approval when the immutable manifest has no lifecycle script', async () => {
     await expect(inspectPluginScripts({ packageName: 'demo', spec: 'demo@1.0.0',
       fetchFn: async () => reply({ name: 'demo', version: '1.0.0', scripts: { test: 'vitest' } }) }))

@@ -612,7 +612,7 @@ export async function startDesktopHostApplication(
     const pnpmEntrypointPath = config.pnpmEntrypointPath
     const pluginExecutor = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
       uid,
-      inspectScripts: (packageName, spec, signal) => inspectPluginScripts({ packageName, spec, ...(signal ? { signal } : {}) }),
+      inspectScripts: (packageName, spec) => inspectPluginScripts({ packageName, spec }),
       togglePlan: (profileId, packageName, enabled, patch) => {
         requiredProfile(registry, profileId)
         const profileRoot = join(root, 'profiles', profileId)
