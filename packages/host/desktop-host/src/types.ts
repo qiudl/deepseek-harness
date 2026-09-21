@@ -31,6 +31,7 @@ export type HostAuthorityErrorCode =
   | 'idempotency_conflict'
   | 'busy'
   | 'upgrade_required'
+  | 'script_approval_required'
   | 'unavailable'
   | 'profile_not_found'
   | 'profile_ambiguous'

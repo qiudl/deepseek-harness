@@ -10,7 +10,7 @@ Plugins need application-wide views that do not belong to a Session. A Session-s
 
 ## Decision
 
-The layout declares a root-scoped keyed `main` slot. The reserved `conversation` key belongs to the Conversation plugin, whose `main.conversation` child retains optional-Session binding. Other main entries receive no implicit Session binding.
+The layout declares a root-scoped keyed `main` slot. The reserved `conversation` key belongs to the Conversation plugin, whose `main.conversation` child retains optional-Session binding. Other main entries receive no implicit Session binding. AppFrame keeps the Conversation entry mounted and hides it while another main entry is selected, preserving component-local drafts and scroll state.
 
 The sidebar owns the root-scoped `sidebar.panellist` list. Each list entry supplies its icon and an id matching its main entry; its string or locale-aware label provides plain visible text, the accessible name, and the collapsed tooltip. The shipped composition registers no panel entry, so the empty list has no DOM or spacing. Selection validates the live main entry and rejects a missing key without replacing the current panel.
 
@@ -32,6 +32,6 @@ DOM focus is not navigation selection. Search and directory-picker controls can 
 
 ## Consequences
 
-The default sidebar snapshots remain unchanged. Extension panels have no right Sidebar, and selecting a different global panel does not change layout preferences. Switching between a Conversation with a visible right Sidebar and a global panel still changes the required column widths; this is not a promise of zero browser layout work.
+The default sidebar snapshots remain unchanged. Extension panels have no right Sidebar, and selecting a different global panel does not change layout preferences. Keeping the Conversation mounted retains its component state but also retains its resident memory while another panel is visible. Switching between a Conversation with a visible right Sidebar and a global panel still changes the required column widths; this is not a promise of zero browser layout work.
 
 Panel selection is transient and resets on reload. Plugin disposal removes its contributions; removing the selected main entry returns the main area to the Conversation. Tests register real temporary panels and cover row interaction, focus, independent stored references, invalid ids, superseded asynchronous navigation, declaration lifetimes, and the empty default sidebar. The [Slots reference](../../../../docs/subsystems/slots.md) owns the composition API.

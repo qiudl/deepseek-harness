@@ -145,7 +145,9 @@ REQ-20260911-0004 的原生存储证据仅来自 Windows 11 x64 管理员环境�
 
 经确认的插件更新使用 `{ action: "update", packageName, spec }` 和现有精确来源 add 命令。仅允许由依赖管理、可独立且全部启用的插件包更新，避免停用、混合或不支持的组合意外增加启用功能。Main 通过 Hub 预检锁定所选来源，并要求包名匹配已有条目。CLI 必须发布请求版本，新 worker 确认贡献后才成功；依赖部分变更保留未知回执，不假装已经回滚。
 
-经确认的卸载使用 `{ action: "remove", packageName }`，仅接受由依赖管理的独立插件包，并调用固定 CLI 的 remove 命令。pnpm 11.7 的 remove 要使用 `--config.ignore-scripts=true`，会拒绝 add 可用的 `--ignore-scripts` 写法。确认依赖及插件包登记已移除后，Host 清理原贡献 ID 对应的独立 `{ id, disabled }` 覆盖，保留其他配置，再要求对应运行时 ID 全部消失。模板内置包不可卸载。真实安装/更新/卸载夹具中的生命周期脚本哨兵始终未生成。
+插件安装预检从不可变的 npm 精确版本清单或 GitHub 精确提交清单读取信息，不写入所选 Profile。它只返回已识别的生命周期脚本名称及精确命令，并用 SHA-256 摘要绑定来源和精确包版本。脚本清单为空、Desktop 未提交摘要或摘要改变时，生命周期脚本继续禁用。匹配的二次确认只把已审阅的 `package@version` 持久加入 `allowBuilds`，再以固定 add 命令执行且不附加 `--ignore-scripts`；其他构建包仍默认拒绝。清单身份漂移、重定向、元数据超限或策略冲突均在包管理器产生副作用前关闭失败。
+
+经确认的卸载使用 `{ action: "remove", packageName }`，仅接受由依赖管理的独立插件包，并调用固定 CLI 的 remove 命令。pnpm 11.7 的 remove 要使用 `--config.ignore-scripts=true`，会拒绝 add 可用的 `--ignore-scripts` 写法。确认依赖及插件包登记已移除后，Host 清理原贡献 ID 对应的独立 `{ id, disabled }` 覆盖，保留其他配置，再要求对应运行时 ID 全部消失。模板内置包不可卸载。卸载、修复以及未经批准的安装或更新路径继续禁用生命周期脚本。
 
 技能列表将自有本地条目与当前 worker 经认证的 `skills/profileCatalog` 快照合并，读取不重启 worker。读取期间本地修订变化、快照不完整、胜出名称重复或合计超过 128 条时拒绝读取。条目仅公开有界来源类别，以及 `effective`、`shadowed` 或 `not_visible` 状态；被覆盖的本地条目标出生效来源。外部胜出条目使用不透明的 `catalog-` ID，在 Desktop 中只读。提供方路径保留在 Host 内部。列表范围是自有本地定义和默认预设胜出条目，不包含所有外部落选候选项或项目专属预设。
 

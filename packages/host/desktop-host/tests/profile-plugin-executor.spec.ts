@@ -27,6 +27,20 @@ function fixture(acknowledged = true) {
   return { root, web, manifest, executor, store, operations, authority, calls: () => calls }
 }
 const payload = JSON.stringify({ packageName: 'fixture', spec: 'fixture@1.0.0' })
+
+it('preflights only new plugin installs when an inspector is available', async () => {
+  const f = fixture()
+  const approval = { scripts: [{ name: 'postinstall' as const, command: 'node build.js' }], digest: 'a'.repeat(64), buildKey: 'fixture@1.0.0' }
+  const inspectScripts = vi.fn(async () => approval)
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {}, inspectScripts })
+  await expect(executor.preflight(f.authority(), 'plugin', payload)).resolves.toEqual(approval)
+  expect(inspectScripts).toHaveBeenCalledWith('fixture', 'fixture@1.0.0')
+  await expect(executor.preflight(f.authority(), 'plugin', JSON.stringify({ action: 'remove', packageName: 'fixture' })))
+    .resolves.toBeUndefined()
+  await expect(executor.preflight('not-a-profile', 'mcp', 'not-json')).resolves.toBeUndefined()
+  await expect(f.executor.preflight(f.authority(), 'plugin', payload)).resolves.toBeUndefined()
+})
 it.each([
   ['null', null],
   ['array', []],
@@ -346,6 +360,8 @@ it('removes an installed bundle, clears its standalone toggle override and requi
   const { planPluginToggle } = await import('../src/plugin-toggle-plan.ts')
   const f = fixture(); const file = join(f.web, 'cordis.patch.yml')
   writeFileSync(file, '# keep\n- id: tool\n  disabled: true\n- id: other\n  config:\n    secret: !!js process.platform\n', { mode:0o600 })
+  writeFileSync(join(f.root, 'pnpm-workspace.yaml'), 'packages: []\n', { mode: 0o600 })
+  writeFileSync(join(f.web, 'pnpm-workspace.yaml'), 'allowBuilds:\n  fixture: true\n  fixture@1.0.0: true\n  unrelated: false\n', { mode: 0o600 })
   writeFileSync(f.manifest, JSON.stringify({ dependencies:{ fixture:'1.0.0' },dsh:{ profile:{ bundles:['fixture'] } } }))
   const layers=[{ packageName:'fixture',patches:[{ insert:[{ id:'tool',name:'fixture-tool' }] }] }]
   let acknowledged=false
@@ -359,6 +375,30 @@ it('removes an installed bundle, clears its standalone toggle override and requi
   expect(await executor.inventory(f.authority())).toEqual([])
   expect(readFileSync(file,'utf8')).not.toContain('disabled: true')
   expect(readFileSync(file,'utf8')).toContain('!!js process.platform')
+})
+
+it('ignores an approval map that becomes empty after removing the target package', async () => {
+  const f = fixture()
+  writeFileSync(join(f.web, 'pnpm-workspace.yaml'), 'allowBuilds:\n  fixture: true\n', { mode: 0o600 })
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {}, togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }),
+    acknowledgeToggle: async () => {}, remove: async () => {
+      writeFileSync(f.manifest, JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }))
+    }, acknowledgeRemoval: async () => {} })
+  await expect(executor.execute(f.authority(), JSON.stringify({ action: 'remove', packageName: 'fixture' }),
+    { kind: 'plugin', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'succeeded' })
+})
+
+it.each(['null', 'fixture', '[]'])('rejects a non-object plugin build policy (%s)', async (policy) => {
+  const f = fixture()
+  writeFileSync(join(f.web, 'pnpm-workspace.yaml'), `${policy}\n`, { mode: 0o600 })
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {}, togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }),
+    acknowledgeToggle: async () => {}, remove: async () => {}, acknowledgeRemoval: async () => {} })
+  await expect(executor.execute(f.authority(), JSON.stringify({ action: 'remove', packageName: 'fixture' }),
+    { kind: 'plugin', signal: new AbortController().signal, guard() {} })).rejects.toThrow('invalid_plugin_policy')
 })
 
 it.each(['bundle remains', 'bundle metadata missing', 'acknowledgement drift'] as const)(
