@@ -1,5 +1,8 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { dirname } from 'node:path'
+import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 import { parseCommandJournalEvent, type JournalEvent } from './command-journal-event.ts'
 import type { HostClock } from './types.ts'
 import { HostAuthorityError } from './types.ts'
@@ -121,4 +124,30 @@ export class SessionCommandAuthority {
     })
     return promise
   }
+}
+
+const READ_OPERATIONS = new Set<HostRemoteSessionCommand['operation']>([
+  'session.list', 'session.history', 'approval.poll',
+])
+
+/** Apply durable idempotency to mutations before forwarding them to one Profile worker. */
+export async function executeRemoteSessionCommand(input: {
+  readonly authority: SessionCommandAuthority
+  readonly workers: ProfileWorkerSupervisor
+  readonly profileId: string
+  readonly command: HostRemoteSessionCommand
+  readonly signal: AbortSignal
+}): Promise<HostRemoteSessionJson> {
+  if (READ_OPERATIONS.has(input.command.operation)) {
+    return input.workers.remoteSession(input.profileId, input.command, input.signal)
+  }
+  const sessionId = 'session_id' in input.command ? input.command.session_id : '$profile'
+  const outcome = await input.authority.run({
+    profileId: input.profileId,
+    sessionId,
+    commandId: input.command.command_id,
+    payloadHash: createHash('sha256').update(JSON.stringify(input.command)).digest('hex'),
+  }, () => input.workers.remoteSession(input.profileId, input.command, input.signal))
+  if (outcome.status !== 'committed') throw new HostAuthorityError('unavailable')
+  return outcome.value as HostRemoteSessionJson
 }

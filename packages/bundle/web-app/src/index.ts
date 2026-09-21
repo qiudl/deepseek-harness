@@ -29,6 +29,7 @@ import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
+import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'web-app'
@@ -238,6 +239,19 @@ export function apply(ctx: Context, config: Config): void {
             selection: () => modelCtx.agentDefaultModel.currentSelection(),
             stream: options => modelCtx.llm.stream(options),
           })),
+      }))
+    })
+  }
+  const desktopRemoteSessionToken = process.env.DSH_PROFILE_REMOTE_SESSION_TOKEN
+  if (desktopRemoteSessionToken && /^[A-Za-z0-9_-]{43}$/u.test(desktopRemoteSessionToken)) {
+    ctx.inject(['typertGateway'], (remoteCtx) => {
+      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway)
+      remoteCtx.effect(() => remoteCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-remote-session',
+        handler: (req, res) => handleDesktopRemoteSessionRequest(
+          req, res, desktopRemoteSessionToken,
+          (command, signal) => executor.execute(command, signal),
+        ),
       }))
     })
   }
