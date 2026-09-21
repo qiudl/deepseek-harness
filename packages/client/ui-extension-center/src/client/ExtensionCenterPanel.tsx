@@ -32,14 +32,14 @@ type OperationState = {
   readonly reason?: string
 }
 
-const TABS = [
-  { kind: 'plugin', label: 'tabPlugin', empty: 'emptyPlugin' },
-  { kind: 'mcp', label: 'tabMcp', empty: 'emptyMcp' },
-  { kind: 'skill', label: 'tabSkill', empty: 'emptySkill' },
+const TAB_DEFINITIONS = [
+  { kind: 'plugin', labelKey: 'tabPlugin', emptyKey: 'emptyPlugin' },
+  { kind: 'mcp', labelKey: 'tabMcp', emptyKey: 'emptyMcp' },
+  { kind: 'skill', labelKey: 'tabSkill', emptyKey: 'emptySkill' },
 ] as const satisfies readonly {
   kind: ExtensionKind
-  label: ExtensionCenterLocaleKey
-  empty: ExtensionCenterLocaleKey
+  labelKey: ExtensionCenterLocaleKey
+  emptyKey: ExtensionCenterLocaleKey
 }[]
 
 function storageKey(profile: ExtensionProfile): string {
@@ -53,7 +53,7 @@ function operationStorageKey(profile: ExtensionProfile): string {
 function rememberedTab(profile: ExtensionProfile): ExtensionKind {
   try {
     const stored = window.localStorage.getItem(storageKey(profile))
-    return TABS.some(tab => tab.kind === stored) ? stored as ExtensionKind : 'plugin'
+    return TAB_DEFINITIONS.some(tab => tab.kind === stored) ? stored as ExtensionKind : 'plugin'
   } catch {
     return 'plugin'
   }
@@ -129,10 +129,9 @@ export function ExtensionCenterPanel({ bridge, profile, t }: ExtensionCenterPane
     }, () => { setPreparing(false); setInstallError(t('operationFailed')) })
   }
 
-  const commitInstall = () => {
-    if (!plan) return
+  const commitInstall = (activePlan: InstallPlan) => {
     setPreparing(true); setInstallError(undefined)
-    void bridge.commit(plan.planId, plan.scriptDigest).then((result) => {
+    void bridge.commit(activePlan.planId, activePlan.scriptDigest).then((result) => {
       setPreparing(false)
       if (!result.ok) { setInstallError(result.error.message); return }
       const next = result.value
@@ -142,7 +141,8 @@ export function ExtensionCenterPanel({ bridge, profile, t }: ExtensionCenterPane
     }, () => { setPreparing(false); setInstallError(t('operationFailed')) })
   }
 
-  const selected = TABS.find(tab => tab.kind === kind) ?? TABS[0]
+  const selected = kind === 'plugin' ? TAB_DEFINITIONS[0]
+    : kind === 'mcp' ? TAB_DEFINITIONS[1] : TAB_DEFINITIONS[2]
   return (
     <main className={css.root} data-testid="extension-center-panel">
       <header className={css.header}>
@@ -157,7 +157,7 @@ export function ExtensionCenterPanel({ bridge, profile, t }: ExtensionCenterPane
       </header>
 
       <div className={css.tabs} role="tablist" aria-label={t('title')}>
-        {TABS.map(tab => (
+        {TAB_DEFINITIONS.map(tab => (
           <button
             key={tab.kind}
             id={`${tabId}-${tab.kind}`}
@@ -168,7 +168,7 @@ export function ExtensionCenterPanel({ bridge, profile, t }: ExtensionCenterPane
             data-testid={`extension-center-tab-${tab.kind}`}
             onClick={() => { setKind(tab.kind) }}
           >
-            {t(tab.label)}
+            {t(tab.labelKey)}
           </button>
         ))}
       </div>
@@ -202,7 +202,7 @@ export function ExtensionCenterPanel({ bridge, profile, t }: ExtensionCenterPane
                 {plan.scripts && <><strong>{t('scriptsWarning')}</strong><ul>{plan.scripts.map(script => (
                   <li key={script.name}><code>{script.name}</code><code>{script.command}</code></li>
                 ))}</ul></>}
-                <button type="button" disabled={preparing} onClick={commitInstall}>
+                <button type="button" disabled={preparing} onClick={() => { commitInstall(plan) }}>
                   {t(plan.scripts ? 'confirmScripts' : 'confirmInstall')}
                 </button>
               </div>
@@ -226,7 +226,7 @@ export function ExtensionCenterPanel({ bridge, profile, t }: ExtensionCenterPane
         {state.status === 'ready' && state.entries.length === 0 && (
           <div className={css.empty}>
             <span aria-hidden="true">◇</span>
-            <p>{t(selected.empty)}</p>
+            <p>{t(selected.emptyKey)}</p>
           </div>
         )}
         {state.status === 'ready' && state.entries.length > 0 && (

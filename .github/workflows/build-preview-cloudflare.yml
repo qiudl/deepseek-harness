@@ -32,6 +32,10 @@ env:
 
 jobs:
   preview:
+    # Repositories without the Cloudflare and Access secrets keep this optional
+    # deployment lane disabled explicitly; their required source/build gates run
+    # in ci.yml without trying to infer secret availability in an expression.
+    if: vars.DSH_CLOUDFLARE_PREVIEW_ENABLED == 'true'
     runs-on: ubuntu-24.04
     name: cloudflare pages preview
     steps:

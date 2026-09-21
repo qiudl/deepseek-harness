@@ -7,7 +7,8 @@ import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { apply, inject } from '../src/client/index.ts'
 import { ExtensionCenterPanel } from '../src/client/ExtensionCenterPanel.tsx'
 import { ExtensionCenterFooterAction } from '../src/client/ExtensionCenterFooterAction.tsx'
-import type { DesktopExtensionBridge } from '../src/client/bridge.ts'
+import { desktopExtensionBridge, type DesktopExtensionBridge } from '../src/client/bridge.ts'
+import { apply as applyHost } from '../src/index.ts'
 
 afterEach(() => { delete window.__SLARK_DSH_EXTENSIONS__ })
 
@@ -52,6 +53,18 @@ function readyBridge(): DesktopExtensionBridge {
 describe('ui-extension-center browser plugin', () => {
   it('declares only its presentation dependencies', () => {
     expect(inject).toEqual(['slots', 'locale', 'layout'])
+    expect(() => { applyHost() }).not.toThrow()
+  })
+
+  it('accepts only a complete restricted bridge', () => {
+    expect(desktopExtensionBridge()).toBeUndefined()
+    const complete = readyBridge()
+    for (const key of ['hello', 'list', 'prepare', 'commit', 'status', 'onOpen'] as const) {
+      window.__SLARK_DSH_EXTENSIONS__ = { ...complete, [key]: undefined }
+      expect(desktopExtensionBridge()).toBeUndefined()
+    }
+    window.__SLARK_DSH_EXTENSIONS__ = complete
+    expect(desktopExtensionBridge()).toBe(complete)
   })
 
   it('stays absent without the restricted desktop bridge', async () => {
@@ -74,6 +87,9 @@ describe('ui-extension-center browser plugin', () => {
     await vi.waitFor(() => { expect(b.slots.entries('main')).toHaveLength(1) })
     expect(b.slots.entries('main')[0]?.component).toBe(ExtensionCenterPanel)
     expect(b.slots.entries('main')[0]?.options.key).toBe('extensions')
+    expect((b.slots.entries('main')[0]?.inject as unknown as () => unknown)()).toEqual({
+      bridge, profile: { key: 'profile-a', label: 'Personal' },
+    })
     expect(b.slots.entries('sidebar.footer.action')[0]?.component).toBe(ExtensionCenterFooterAction)
 
     const footer = b.slots.entries('sidebar.footer.action')[0]!
@@ -103,6 +119,45 @@ describe('ui-extension-center browser plugin', () => {
     await vi.waitFor(() => { expect(bridge.hello).toHaveBeenCalledOnce() })
     expect(b.slots.entries('main')).toHaveLength(0)
     expect(b.slots.entries('sidebar.footer.action')).toHaveLength(0)
+    await b.ctx.fiber.dispose()
+  })
+
+  it('fails closed on an unsupported protocol or rejected handshake promise', async () => {
+    const unsupported = readyBridge()
+    vi.mocked(unsupported.hello).mockResolvedValue({
+      ok: true,
+      value: { protocol: 2, profile: { key: 'profile-a', label: 'Personal' } },
+    } as never)
+    const first = await bench(unsupported)
+    declare(first.slots)
+    await first.ctx.plugin({ inject: [...inject], apply }).await()
+    await vi.waitFor(() => { expect(unsupported.hello).toHaveBeenCalledOnce() })
+    expect(first.slots.entries('main')).toHaveLength(0)
+    await first.ctx.fiber.dispose()
+
+    const rejected = readyBridge()
+    vi.mocked(rejected.hello).mockRejectedValue(new Error('offline'))
+    const second = await bench(rejected)
+    declare(second.slots)
+    await second.ctx.plugin({ inject: [...inject], apply }).await()
+    await vi.waitFor(() => { expect(rejected.hello).toHaveBeenCalledOnce() })
+    expect(second.slots.entries('main')).toHaveLength(0)
+    await second.ctx.fiber.dispose()
+  })
+
+  it('does not register when disposed before the handshake settles', async () => {
+    let resolve!: (value: Awaited<ReturnType<DesktopExtensionBridge['hello']>>) => void
+    const handshake = new Promise<Awaited<ReturnType<DesktopExtensionBridge['hello']>>>((done) => { resolve = done })
+    const bridge = readyBridge()
+    vi.mocked(bridge.hello).mockReturnValue(handshake)
+    const b = await bench(bridge)
+    declare(b.slots)
+    const fiber = b.ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    await fiber.dispose()
+    resolve({ ok: true, value: { protocol: 1, profile: { key: 'profile-a', label: 'Personal' } } })
+    await handshake
+    expect(b.slots.entries('main')).toHaveLength(0)
     await b.ctx.fiber.dispose()
   })
 

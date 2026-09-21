@@ -1,9 +1,19 @@
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { setTimeout as pause } from 'node:timers/promises'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { runProfilePluginCommand } from '../src/plugin-command.ts'
+
+const fsFaults = vi.hoisted(() => ({ failPolicyRename: false }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const renameSync: typeof actual.renameSync = (oldPath, newPath) => {
+    if (fsFaults.failPolicyRename) throw Object.assign(Error('rename failed'), { code: 'EIO' })
+    actual.renameSync(oldPath, newPath)
+  }
+  return { ...actual, renameSync }
+})
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "host-plugin 'command-"))
@@ -34,10 +44,60 @@ it('runs scripts only after persisting the exact version approval', async () => 
   writeFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'packages:\n  - profiles/*\nallowBuilds:\n  unrelated: false\n', { mode: 0o600 })
   await runProfilePluginCommand({ ...f.options, spec: '@fixture/bundle@1.2.3', allowBuild: '@fixture/bundle@1.2.3',
     signal: new AbortController().signal, guard() {} })
-  expect(JSON.parse(readFileSync(join(f.profile, 'observed.json'), 'utf8')).args)
-    .toEqual(['add', '@fixture/bundle@1.2.3', '--save-exact'])
+  expect(JSON.parse(readFileSync(join(f.profile, 'observed.json'), 'utf8')))
+    .toMatchObject({ args: ['add', '@fixture/bundle@1.2.3', '--save-exact'] })
   expect(readFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'utf8')).toContain('"@fixture/bundle@1.2.3": true')
   expect(readFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'utf8')).toContain('unrelated: false')
+})
+it('rejects invalid or mismatched build approvals before package execution', async () => {
+  const f = fixture()
+  writeFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'packages: []\nallowBuilds: {}\n', { mode: 0o600 })
+  const request = { ...f.options, spec: '@fixture/bundle@1.2.3', signal: new AbortController().signal, guard() {} }
+  await expect(runProfilePluginCommand({ ...request, allowBuild: '@fixture/bundle@latest' }))
+    .rejects.toThrow('invalid_build_approval')
+  await expect(runProfilePluginCommand({ ...request, allowBuild: '@fixture/other@1.2.3' }))
+    .rejects.toThrow('invalid_build_approval')
+  await expect(runProfilePluginCommand({ ...request, action: 'remove', spec: '@fixture/bundle',
+    allowBuild: '@fixture/bundle@1.2.3' })).rejects.toThrow('invalid_build_approval')
+})
+it('rejects malformed, conflicting, and unsafe build policy files', async () => {
+  const signal = new AbortController().signal
+  const run = async (profile: string, options: ReturnType<typeof fixture>['options']) => runProfilePluginCommand({
+    ...options, profileRoot: profile, spec: '@fixture/bundle@1.2.3', allowBuild: '@fixture/bundle@1.2.3', signal, guard() {},
+  })
+
+  const malformed = fixture()
+  writeFileSync(join(malformed.profile, 'pnpm-workspace.yaml'), 'allowBuilds: [\n', { mode: 0o600 })
+  await expect(run(malformed.profile, malformed.options)).rejects.toThrow('invalid_plugin_policy')
+
+  const conflict = fixture()
+  writeFileSync(join(conflict.profile, 'pnpm-workspace.yaml'), 'allowBuilds:\n  "@fixture/bundle@1.2.3": false\n', { mode: 0o600 })
+  await expect(run(conflict.profile, conflict.options)).rejects.toThrow('build_policy_conflict')
+
+  const writable = fixture()
+  writeFileSync(join(writable.profile, 'pnpm-workspace.yaml'), 'allowBuilds: {}\n', { mode: 0o600 })
+  chmodSync(join(writable.profile, 'pnpm-workspace.yaml'), 0o622)
+  await expect(run(writable.profile, writable.options)).rejects.toThrow('unsafe_plugin_policy')
+
+  const directory = fixture()
+  mkdirSync(join(directory.profile, 'pnpm-workspace.yaml'))
+  await expect(run(directory.profile, directory.options)).rejects.toThrow('unsafe_plugin_policy')
+
+  const linked = fixture()
+  const target = join(linked.profile, 'policy-target.yaml')
+  writeFileSync(target, 'allowBuilds: {}\n', { mode: 0o600 })
+  symlinkSync(target, join(linked.profile, 'pnpm-workspace.yaml'))
+  await expect(run(linked.profile, linked.options)).rejects.toThrow('unsafe_plugin_policy')
+})
+it('removes a temporary build policy when atomic publication fails', async () => {
+  const f = fixture()
+  writeFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'allowBuilds: {}\n', { mode: 0o600 })
+  fsFaults.failPolicyRename = true
+  onTestFinished(() => { fsFaults.failPolicyRename = false })
+  await expect(runProfilePluginCommand({ ...f.options, spec: '@fixture/bundle@1.2.3',
+    allowBuild: '@fixture/bundle@1.2.3', signal: new AbortController().signal, guard() {} }))
+    .rejects.toThrow('rename failed')
+  expect(readdirSync(f.profile)).toEqual(['pnpm-workspace.yaml'])
 })
 it('rejects mutable specs and revocation before launching', async () => {
   const f = fixture()

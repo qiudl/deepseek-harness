@@ -57,14 +57,15 @@ Inventory reads are bound to the selected tab and ignore stale completions after
 <a id="model-experience"></a>
 ## Model Experience
 
-None. The package contributes Desktop UI and sends no model-facing prompt or tool description.
+None, as the package contributes Desktop UI and sends no model-facing prompt or tool description.
 
 #### KV Cache effect
 
 None; it does not assemble provider requests.
 
-<a id="known-limitations-and-deferred-work"></a>
 ## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - Plugin install, exact-version update/restore and receipt reconnection are available. MCP/Skill mutation controls and plugin enable/remove controls remain deferred; their inventory is already visible.
 - A regular browser-hosted DSH page intentionally shows no Extension Center because it cannot prove a Slark Desktop Profile authority.
@@ -76,6 +77,8 @@ None; it does not assemble provider requests.
 <summary>Working context for maintainers — click to expand</summary>
 
 The bridge is a capability boundary, not a transport convenience. Extend its explicit methods and result codes; do not expose `ipcRenderer`, filesystem paths, profile selectors, or a generic invoke function.
+
+No runtime invariant companion is published because the successful Desktop Profile handshake owns the only activation decision and the package retains no independently observable cross-plugin state.
 
 </details>
 

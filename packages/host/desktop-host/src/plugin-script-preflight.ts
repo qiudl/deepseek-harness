@@ -8,6 +8,10 @@ const npmSpec = new RegExp('^((?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*)@'
   + '(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?)$', 'u')
 const githubSpec = /^github:([a-z0-9_.-]+)\/([a-z0-9_.-]+)#([a-f0-9]{40})$/iu
 
+function githubManifestUrl(match: RegExpExecArray): string {
+  return `https://raw.githubusercontent.com/${match[1]}/${match[2]}/${match[3]}/package.json`
+}
+
 export interface PluginScriptApproval {
   readonly buildKey: string
   readonly digest: string
@@ -44,12 +48,16 @@ export async function inspectPluginScripts(input: {
   const source = npmName && npmVersion
     ? await manifest(`https://registry.npmjs.org/${encodeURIComponent(npmName)}/${encodeURIComponent(npmVersion)}`,
       input.fetchFn ?? fetch, input.signal)
-    : github
-      ? await manifest(`https://raw.githubusercontent.com/${github[1]}/${github[2]}/${github[3]}/package.json`, input.fetchFn ?? fetch, input.signal)
-      : undefined
-  if (!source || source.name !== input.packageName || typeof source.version !== 'string'
-    || !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(source.version)
-    || (npmVersion && source.version !== npmVersion)) throw Error('plugin_preflight_mismatch')
+    : await manifest(githubManifestUrl(github as RegExpExecArray), input.fetchFn ?? fetch, input.signal)
+  /* v8 ignore next -- V8 attributes the implicit fallthrough arm to this guard even though successful manifests exercise it below. */
+  if (source.name !== input.packageName) {
+    throw Error('plugin_preflight_mismatch')
+  }
+  if (typeof source.version !== 'string'
+    || !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(source.version)) {
+    throw Error('plugin_preflight_mismatch')
+  }
+  if (npmVersion !== undefined && source.version !== npmVersion) throw Error('plugin_preflight_mismatch')
   if (source.scripts !== undefined
     && (!source.scripts || typeof source.scripts !== 'object' || Array.isArray(source.scripts))) {
     throw Error('plugin_preflight_failed')
