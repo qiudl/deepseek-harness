@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-20-windows-private-acl-binary-sid-evidence.md
+2026-09-20-windows-private-acl-binary-sid-evidence.md: 6740f01d4d8b5af2254991e2613d9e5025046343
+2026-09-20-windows-private-acl-binary-sid-evidence.zh.md: 1a1124ac6c3d9b2aa73be418996dcd5b85ec8f81

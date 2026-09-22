@@ -4,21 +4,38 @@ import {
   WindowsHostRegistrationNativeError,
 } from '../src/windows-host-registration-native.ts'
 import { WindowsHostPrivateLeaseConflictError } from '../src/windows-host-registration.ts'
+import { createFakeSecurityWorld, type FakeAceSpec, type FakeSecurityEvidence } from './windows-native-security-fixture.ts'
 
 const path = String.raw`C:\Users\alice\AppData\Local\Slark\DSH\profile.json`
 const userSid = 'S-1-5-21-1000-2000-3000-1001'
 const sddl = `O:${userSid}D:P(A;OICI;FA;;;${userSid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`
+const FULL_CONTROL = 0x1F01FF
+const OICI = 0x01 | 0x02
+
+function privateEvidence(user: string): FakeSecurityEvidence {
+  return {
+    ownerSid: user,
+    daclProtected: true,
+    aces: [
+      { type: 0, flags: OICI, mask: FULL_CONTROL, sid: user },
+      { type: 0, flags: OICI, mask: FULL_CONTROL, sid: 'S-1-5-18' },
+      { type: 0, flags: OICI, mask: FULL_CONTROL, sid: 'S-1-5-32-544' },
+    ],
+  }
+}
 
 function world(options: { readonly existing?: boolean; readonly writeError?: number } = {}) {
+  const security = createFakeSecurityWorld()
+  security.setEvidence(privateEvidence(userSid))
   let lastError = 0
   let firstCreate = true
-  let observedSddl = sddl
   const written: Buffer[] = []
   const createdPaths: string[] = []
   const closeHandle = vi.fn(() => 1)
   const deleteFile = vi.fn(() => 1)
   const moveFile = vi.fn(() => 1)
   const functions: Record<string, (...args: unknown[]) => unknown> = {
+    ...security.functions,
     ConvertStringSecurityDescriptorToSecurityDescriptorW: (_text, _revision, output) => {
       if (!Buffer.isBuffer(output)) throw new Error('expected security descriptor buffer')
       output.writeBigUInt64LE(11n); return 1
@@ -38,14 +55,6 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
     GetFileInformationByHandle: (_handle, output) => {
       if (!Buffer.isBuffer(output)) throw new Error('expected file information buffer')
       output.writeUInt32LE(0x80, 0); output.writeUInt32LE(1, 40); return 1
-    },
-    GetSecurityInfo: (_handle, _type, _info, owner, _group, _dacl, _sacl, descriptor) => {
-      if (!Buffer.isBuffer(owner) || !Buffer.isBuffer(descriptor)) throw new Error('expected security information buffers')
-      owner.writeBigUInt64LE(21n); descriptor.writeBigUInt64LE(22n); return 0
-    },
-    ConvertSecurityDescriptorToStringSecurityDescriptorW: (_descriptor, _revision, _info, output) => {
-      if (!Buffer.isBuffer(output)) throw new Error('expected security descriptor text buffer')
-      output.writeBigUInt64LE(23n); return 1
     },
     LocalFree: () => 0n,
     CloseHandle: closeHandle,
@@ -71,8 +80,7 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
     pointer: vi.fn((value: unknown) => ({ pointer: value })),
     struct: vi.fn(() => ({ size: 24 })),
     alloc: vi.fn(() => Buffer.alloc(8)),
-    decode: vi.fn((value: unknown, type: unknown) =>
-      Buffer.isBuffer(value) && value.length === 8 && value.readBigUInt64LE() === 23n && type === 'str16' ? observedSddl : value),
+    decode: vi.fn(security.decode),
     load: vi.fn(() => ({
       func: vi.fn((_convention: string, name: string) => {
         if (!functions[name]) throw new Error(`unexpected native function: ${name}`)
@@ -82,6 +90,7 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
   }
   return {
     koffi,
+    security,
     written,
     createdPaths,
     closeHandle,
@@ -89,7 +98,7 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
     moveFile,
     functions,
     setLastError(value: number) { lastError = value },
-    setObservedSddl(value: string) { observedSddl = value },
+    setEvidence(evidence: FakeSecurityEvidence) { security.setEvidence(evidence) },
   }
 }
 
@@ -264,38 +273,50 @@ describe('Windows private create-new native file operation', () => {
     }
   })
 
-  it('rejects malformed security descriptor text returned by Windows', async () => {
-    for (const malformed of [
-      `D:P(A;;FA;;;${userSid})`,
-      `O:${userSid}`,
-      `O:${userSid}D:P`,
-      `O:${userSid}D:P(X;;FA;;;BA)`,
-      `O:${userSid}D:P(A;;FA;object;;BA)`,
-      `O:${userSid}D:P(A;;FA;;inherit;BA)`,
-      `O:${userSid}D:P(D;;;;;BA)`,
-      `O:${userSid}G:S-1-5-18D:P(A;;FA;;;BA)`,
-    ]) {
+  it('rejects malformed binary security evidence returned by Windows', async () => {
+    const noDacl = world()
+    noDacl.setEvidence({ ownerSid: userSid, daclProtected: true, aces: [], noDacl: true })
+    const noDaclBindings = await loadWindowsHostRegistrationFileBindings({
+      platform: 'win32', arch: 'x64', loadKoffi: async () => noDacl.koffi,
+    })
+    expect(noDaclBindings.inspectExistingDirectory?.(path)).toMatchObject({ access: [] })
+
+    const wrongOwner = world()
+    wrongOwner.setEvidence(privateEvidence('S-1-5-21-1-2-3-4'))
+    const wrongOwnerBindings = await loadWindowsHostRegistrationFileBindings({
+      platform: 'win32', arch: 'x64', loadKoffi: async () => wrongOwner.koffi,
+    })
+    expect(wrongOwnerBindings.inspectExistingDirectory?.(path)).toMatchObject({ ownerSid: 'S-1-5-21-1-2-3-4' })
+
+    for (const configure of [
+      (state: ReturnType<typeof world>) => { state.setEvidence({
+        ownerSid: userSid,
+        daclProtected: true,
+        aces: [{ type: 5, flags: OICI, mask: FULL_CONTROL, sid: 'S-1-5-32-544' } satisfies FakeAceSpec],
+      }) },
+      (state: ReturnType<typeof world>) => { state.functions.GetSecurityDescriptorControl = () => { state.setLastError(5); return 0 } },
+      (state: ReturnType<typeof world>) => { state.functions.GetAce = () => { state.setLastError(5); return 0 } },
+      (state: ReturnType<typeof world>) => { state.functions.ConvertSidToStringSidW = () => { state.setLastError(5); return 0 } },
+    ] as const) {
       const state = world()
-      state.setObservedSddl(malformed)
+      configure(state)
       const bindings = await loadWindowsHostRegistrationFileBindings({
         platform: 'win32', arch: 'x64', loadKoffi: async () => state.koffi,
       })
-      if (malformed.endsWith('D:P')) {
-        expect(bindings.inspectExistingDirectory?.(path)).toMatchObject({ access: [] })
-      } else if (malformed.includes('G:S-1-5-18')) {
-        expect(bindings.inspectExistingDirectory?.(path)).toMatchObject({ ownerSid: userSid })
-      } else {
-        expect(() => bindings.inspectExistingDirectory?.(path), malformed).toThrow()
-      }
+      expect(() => bindings.inspectExistingDirectory?.(path)).toThrow()
     }
 
     const denied = world()
-    denied.setObservedSddl(`O:${userSid}D:P(D;;FA;;;BA)`)
+    denied.setEvidence({
+      ownerSid: userSid,
+      daclProtected: true,
+      aces: [{ type: 1, flags: 0x10, mask: FULL_CONTROL, sid: 'S-1-5-32-544' }],
+    })
     const deniedBindings = await loadWindowsHostRegistrationFileBindings({
       platform: 'win32', arch: 'x64', loadKoffi: async () => denied.koffi,
     })
     expect(deniedBindings.inspectExistingDirectory?.(path).access[0]).toMatchObject({
-      type: 'deny', inherited: false, objectInherit: false, containerInherit: false,
+      type: 'deny', inherited: true, objectInherit: false, containerInherit: false,
     })
   })
 
@@ -311,9 +332,13 @@ describe('Windows private create-new native file operation', () => {
       { api: 'GetFileInformationByHandle', configure: (state) => { state.functions.GetFileInformationByHandle = () => { state.setLastError(5); return 0 } } },
       { api: 'GetSecurityInfo', configure: (state) => { state.functions.GetSecurityInfo = () => 5 } },
       { api: 'GetSecurityInfo', configure: (state) => { state.functions.GetSecurityInfo = () => 0 } },
-      { api: 'ConvertSecurityDescriptorToStringSecurityDescriptorW', configure: (state) => { state.functions.ConvertSecurityDescriptorToStringSecurityDescriptorW = () => { state.setLastError(5); return 0 } } },
-      { api: 'ConvertSecurityDescriptorToStringSecurityDescriptorW', configure: (state) => { state.functions.ConvertSecurityDescriptorToStringSecurityDescriptorW = () => 1 } },
-      { api: 'ConvertSecurityDescriptorToStringSecurityDescriptorW', configure: (state) => { state.koffi.decode.mockReturnValueOnce(42) } },
+      { api: 'GetSecurityDescriptorControl', configure: (state) => { state.functions.GetSecurityDescriptorControl = () => { state.setLastError(5); return 0 } } },
+      { api: 'GetAce', configure: (state) => { state.functions.GetAce = () => { state.setLastError(5); return 0 } } },
+      { api: 'ConvertSidToStringSidW', configure: (state) => { state.functions.ConvertSidToStringSidW = () => { state.setLastError(5); return 0 } } },
+      { api: 'ConvertSidToStringSidW', configure: (state) => { state.koffi.decode.mockImplementation((value: unknown, offsetOrType?: unknown, maybeType?: unknown) => {
+        if (Buffer.isBuffer(value) && offsetOrType === 'str16') return 42
+        return state.security.decode(value, offsetOrType, maybeType)
+      }) } },
       { api: 'Unknown Windows Host registration failure', configure: (state) => { state.functions.GetFinalPathNameByHandleW = () => { throw 'native failure' } } },
     ]
     for (const item of cases) {
@@ -344,12 +369,12 @@ describe('Windows private create-new native file operation', () => {
     expect(unprefixedBindings.inspectExistingDirectory?.(path)).toMatchObject({ kind: 'file' })
 
     const doubleFree = world()
-    doubleFree.functions.ConvertSecurityDescriptorToStringSecurityDescriptorW = () => { doubleFree.setLastError(5); return 0 }
+    doubleFree.functions.ConvertSidToStringSidW = () => { doubleFree.setLastError(5); return 0 }
     doubleFree.functions.LocalFree = () => { doubleFree.setLastError(6); return 99n }
     const doubleFreeBindings = await loadWindowsHostRegistrationFileBindings({
       platform: 'win32', arch: 'x64', loadKoffi: async () => doubleFree.koffi,
     })
-    expect(() => doubleFreeBindings.inspectExistingDirectory?.(path)).toThrow('ConvertSecurityDescriptor')
+    expect(() => doubleFreeBindings.inspectExistingDirectory?.(path)).toThrow('ConvertSidToStringSidW')
   })
 
   it('validates security-descriptor allocation and private-directory creation failures', async () => {
