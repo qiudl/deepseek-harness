@@ -54,6 +54,7 @@ import {
   type RemoteEventId,
   type RemoteEventInvocationFrame,
   type RemoteEventReadyFrame,
+  type RemoteEventResult,
   type RemoteStreamFailure,
 } from './stream-protocol.ts'
 
@@ -69,7 +70,9 @@ export type {
   TypertRemoteEventOutcome,
   TypertRemoteEventSource,
 } from './types.ts'
-export type { RemoteEventHostInfo } from './stream-protocol.ts'
+export type {
+  RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventHostInfo, RemoteEventId, RemoteEventResult,
+} from './stream-protocol.ts'
 
 interface GatewayErrorOptions {
   readonly cause?: unknown
@@ -263,6 +266,17 @@ export class TypertGatewayService extends Service implements TypertGateway {
     }
   }
 
+  /**
+   * Settle one forwarded waterfall event without routing through the browser RPC carrier.
+   * @param result - The forwarded event result to settle.
+   */
+  respondRemoteEvent(result: RemoteEventResult): void {
+    const parsed = parseRemoteEventResult(result)
+    const client = this.remoteEventClients.get(parsed.clientId)
+    if (client === undefined) throw new Error('typert gateway: Remote event result identifies no active event stream')
+    this.receiveRemoteEventResult(client, parsed)
+  }
+
   private claimsEndpoint(endpoint: string): boolean {
     if (endpoint === REMOTE_EVENT_RESULT_ENDPOINT) return true
     const segments = endpoint.split('/')
@@ -357,11 +371,7 @@ export class TypertGatewayService extends Service implements TypertGateway {
     if (endpoint === REMOTE_EVENT_RESULT_ENDPOINT) {
       try {
         const result = parseRemoteEventResultPayload(payload)
-        const client = this.remoteEventClients.get(result.clientId)
-        if (client === undefined) {
-          throw new Error('typert gateway: Remote event result identifies no active event stream')
-        }
-        this.receiveRemoteEventResult(client, result)
+        this.respondRemoteEvent(result)
         return { ok: true, value: undefined }
       } catch (error) {
         return rpcFailure(error)

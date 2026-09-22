@@ -9,7 +9,7 @@ import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-re
 import { WindowsHostWorkerParentSupervisor } from '../src/windows-host-worker-parent-supervisor.ts'
 import { createWindowsWorkerStopFlag } from '../src/windows-worker-io-cancellation.ts'
 
-const installationId = 'slark-dsh-d3a7a33ed99e8ce5b4d3522d96336dffa8da2820'
+const installationId = 'slark-dsh-e3a7a33ed99e8ce5b4d3522d96336dffa8da2820'
 const endpointRegistrationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3126'
 
 async function captureFallback(promise: Promise<unknown>): Promise<WindowsHostProcessFallbackRequiredError> {

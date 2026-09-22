@@ -32,6 +32,8 @@ The transport is not JSON-RPC. A malformed line is a connection-fatal protocol v
 
 The negotiated `profile.extensions` method carries a Main-held lease and one inventory, prepare, commit, status, or cancel command. Prepare payloads are limited to 32,768 UTF-8 bytes; results contain only plans, bounded metadata, or durable receipt states. Plugin completion actions must be literal `install`, `update`, or `remove` strings; arrays and objects are rejected without coercion. Kind support belongs to the Host executor, so a decoded kind is not proof that installation is available. Skill inventory may include the boolean `skill_archives`; absence means that the caller cannot assume archive support. Archive plans carry URL and digest metadata within the same payload limit, not ZIP bytes.
 
+`profile.remote_session` binds a closed Session and approval command set to one Main-held view lease. Each command carries a separate UUID idempotency key; it cannot select an HTTP path, Profile root, credential, cookie, launch token, or arbitrary method. Prompt text, identifiers, titles, wait intervals, cursors, JSON depth, node counts, strings, and the complete frame are bounded. Decoding this method does not make it available: the Host must advertise its capability only after installing the lease-authorized worker executor.
+
 `profile.model_claim_inventory` carries a Main-held Account view lease and returns a source digest, at most 128 distinct provider candidates, credential presence, shared-reference flags, and counts of unmapped records. The codec rejects credential values, reference names, paths, and additional fields. This read-only inventory is not a claim confirmation or credential transfer authority.
 
 `profile.model_claim_confirm` rechecks the Account lease and a fresh source digest for one candidate with a present credential. It returns a one-use confirmation bound to the current Host connection and valid for 60 seconds. `profile.model_claim_apply` consumes that confirmation and rechecks the Account view through the claim transaction. Both results omit credential values and paths. A failed or interrupted write uses the separate same-Account recovery methods.
@@ -81,7 +83,7 @@ No direct invalidation; the protocol never contributes model context.
 
 ## Known Limitations and Deferred Work
 
-- **Operation set is bounded** — version 1 decodes `host.inspect`, account and local-only Profile provisioning/restore/open, Profile status/lease-close, migration export begin/read, extension commands, and common errors. Environment, session, approval, and upgrade operations require explicit protocol additions.
+- **Operation set is bounded** — version 1 decodes `host.inspect`, account and local-only Profile provisioning/restore/open, Profile status/lease-close, migration export begin/read, extension commands, remote Session commands, and common errors. The remote Session method remains unavailable until a Host executor advertises it; environment, attachment, and upgrade operations require explicit protocol additions.
 - **Transport enforcement is external** — the Unix-domain-socket carrier must stop reading at the byte cap and close on the first codec failure.
 - **Cryptographic policy is external** — key persistence, code-signature inspection, challenge signing and verification, replay storage, and key rotation belong to the Host identity and Desktop broker packages.
 

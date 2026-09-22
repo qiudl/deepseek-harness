@@ -7,7 +7,7 @@ import {
 import { resolveWindowsNamedPipePolicy } from '../src/windows-named-pipe-policy.ts'
 
 const policy = resolveWindowsNamedPipePolicy({
-  installationId: 'slark-dsh-d3a7a33ed99e8ce5b4d3522d96336dffa8da2820',
+  installationId: 'slark-dsh-e3a7a33ed99e8ce5b4d3522d96336dffa8da2820',
   endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3122',
   userSid: 'S-1-5-21-1000-2000-3000-1001',
 })

@@ -51,7 +51,7 @@ describe('Slark Desktop Hub entry', () => {
     expect(desktopExtensionBridge()).toBeUndefined()
     const complete = bridge()
     for (const key of ['hello', 'showHub', 'hideHub', 'onOpen'] as const) {
-      window.__SLARK_DSH_EXTENSIONS__ = { ...complete, [key]: undefined } as never
+      window.__SLARK_DSH_EXTENSIONS__ = { ...complete, [key]: undefined }
       expect(desktopExtensionBridge()).toBeUndefined()
     }
     window.__SLARK_DSH_EXTENSIONS__ = complete

@@ -1732,6 +1732,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the accepted title and durable event sequence.',
       },
       {
+        signature: '@Remote(\'delete\') delete(request: SessionDeleteRequest): Promise<SessionDeleteValue>',
+        description: 'Delete one Session from user-visible listings without deleting its immutable log. Active and queued Agent work is cancelled and drained before acknowledgement.',
+        parameters: [{ name: 'request', description: 'Session identity to hide durably.' }],
+        returns: 'deletion confirmation after live work reaches idle.',
+      },
+      {
         signature: '@Remote(\'fork\') fork(request: SessionForkRequest): Promise<SessionForkValue>',
         description: 'Fork one cold-readable completed-turn prefix into a new Session.',
         parameters: [{ name: 'request', description: 'source Session and optional event anchor.' }],
@@ -3073,6 +3079,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Register the sole application-selected forwarded-event source.',
         parameters: [{ name: 'source', description: 'stream factory installed by the Remote assembly.' }, { name: 'host', description: 'stable Host facts included in each Client generation\'s opening frame.' }],
         returns: 'disposer removing this source and cancelling its active streams.',
+      },
+      {
+        signature: 'respondRemoteEvent(result: RemoteEventResult): void',
+        description: 'Settle one forwarded waterfall event without routing through the browser RPC carrier.',
+        parameters: [{ name: 'result', description: 'The forwarded event result to settle.' }],
       },
       {
         signature: 'async invoke(request: InvokeRemoteRequest): Promise<unknown>',
@@ -5539,8 +5550,24 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface RemoteErrorDetailsMap {\n    \'gateway/bad-request\': {\n        readonly issues?: readonly object[];\n    };\n    \'gateway/cancelled\': {};\n    \'gateway/internal\': {};\n}',
   },
   {
+    name: 'RemoteEventClientId',
+    declaration: 'export type RemoteEventClientId = Branded<\'RemoteEventClientId\'>;',
+  },
+  {
     name: 'RemoteEventHostInfo',
     declaration: 'export interface RemoteEventHostInfo {\n    readonly home: string;\n}',
+  },
+  {
+    name: 'RemoteEventId',
+    declaration: 'export type RemoteEventId = Branded<\'RemoteEventId\'>;',
+  },
+  {
+    name: 'RemoteEventRejection',
+    declaration: 'export interface RemoteEventRejection {\n    readonly name: string;\n    readonly message: string;\n    readonly code?: string;\n    readonly details?: unknown;\n}',
+  },
+  {
+    name: 'RemoteEventResult',
+    declaration: 'export interface RemoteEventResult {\n    readonly clientId: RemoteEventClientId;\n    readonly eventId: RemoteEventId;\n    readonly outcome: {\n        readonly kind: \'next\';\n    } | {\n        readonly kind: \'result\';\n        readonly value?: unknown;\n    } | {\n        readonly kind: \'rejected\';\n        readonly error: RemoteEventRejection;\n    };\n}',
   },
   {
     name: 'RenderedDocumentBytes',
@@ -5753,6 +5780,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionCreateValue',
     declaration: 'export interface SessionCreateValue {\n    readonly sessionId: SessionId;\n    readonly agentPreset?: string;\n}',
+  },
+  {
+    name: 'SessionDeleteRequest',
+    declaration: 'export interface SessionDeleteRequest {\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'SessionDeleteValue',
+    declaration: 'export interface SessionDeleteValue {\n    readonly deleted: true;\n}',
   },
   {
     name: 'SessionEvent',

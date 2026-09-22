@@ -17,7 +17,7 @@ const registration: WindowsHostRegistration = Object.freeze({
   schema_version: 1,
   endpoint_registration_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3126',
   socket_path: String.raw`\\.\pipe\slark-dsh-host-v1-deadbeef`,
-  installation_id: 'slark-dsh-d3a7a33ed99e8ce5b4d3522d96336dffa8da2820',
+  installation_id: 'slark-dsh-e3a7a33ed99e8ce5b4d3522d96336dffa8da2820',
   installation_public_key: 'A'.repeat(43),
   executable_signature_digest: '1'.repeat(64),
 })

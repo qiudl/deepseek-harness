@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
+import { WorkspaceUnknownSessionError } from '@deepseek-ai/dsh-workspace'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent, ModelSelection as AgentModelSelection } from '@deepseek-ai/dsh-agent'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
@@ -39,6 +40,8 @@ import type {
   SessionCancelValue,
   SessionCreateRequest,
   SessionCreateValue,
+  SessionDeleteRequest,
+  SessionDeleteValue,
   SessionForkRequest,
   SessionForkValue,
   SessionPromptRequest,
@@ -192,6 +195,26 @@ export class SessionCommandController {
         {},
       )
     }
+  }
+
+  /**
+   * Durably hide one Session while preserving its append-only log.
+   * @param request - Session identity to remove from user-visible listings.
+   * @returns confirmation after archival and any attached Agent activity drain.
+   */
+  async delete(request: SessionDeleteRequest): Promise<SessionDeleteValue> {
+    try {
+      await this.ctx.workspaceRegistry.archiveSession(request.sessionId)
+    } catch (error) {
+      if (!(error instanceof WorkspaceUnknownSessionError)) throw error
+      throw new RemoteError('session/not-found', error.message, { sessionId: request.sessionId }, { cause: error })
+    }
+    const agent = this.ctx.agents.get(request.sessionId)
+    if (agent !== undefined) {
+      agent.cancel({ kind: 'user' })
+      await agent.whenIdle()
+    }
+    return { deleted: true }
   }
 
   /**

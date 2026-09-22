@@ -28,6 +28,7 @@ describe('Profile extension wire commands', () => {
     const scriptDigest = 'b'.repeat(64)
     const commit = frame({ action: 'commit', plan_id: randomUUID(), operation_id: randomUUID(), script_digest: scriptDigest })
     expect(encodeHostControlFrame(decode(commit))).toBe(`${JSON.stringify(commit)}\n`)
+    expect(() => decode(frame({ ...commit.params.command, script_digest: 'not-a-digest' }))).toThrow()
     const prepared = { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.extensions', result: {
       state: 'prepared', plan_id: randomUUID(), kind: 'plugin', digest: 'a'.repeat(64), expires_at: 2000,
       scripts: [{ name: 'postinstall', command: 'node build.js' }], script_digest: scriptDigest,
@@ -101,6 +102,43 @@ describe('Profile extension wire commands', () => {
       { ...receipt, reason: ['executor_failed'] },
       { ...receipt, reason: 'private_detail' },
     ]) expect(() => decode({ ...receiptFrame, result })).toThrow()
+  })
+
+  it('round-trips bounded lifecycle scripts and rejects incomplete or unsafe plans', () => {
+    const base = {
+      state: 'prepared',
+      plan_id: randomUUID(),
+      kind: 'plugin',
+      digest: 'a'.repeat(64),
+      expires_at: 2000,
+    }
+    const scripts = [
+      { name: 'preinstall', command: 'node verify.mjs' },
+      { name: 'install', command: 'pnpm install' },
+      { name: 'postinstall', command: 'node finish.mjs' },
+      { name: 'prepack', command: 'node prepack.mjs' },
+      { name: 'prepare', command: 'pnpm build' },
+      { name: 'postpack', command: 'node postpack.mjs' },
+    ]
+    const result = { ...base, scripts, script_digest: 'b'.repeat(64) }
+    const value = { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.extensions', result }
+    expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+
+    for (const malformed of [
+      { ...base, script_digest: 'b'.repeat(64) },
+      { ...base, scripts },
+      { ...base, scripts: [], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [...scripts, scripts[0]], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [null], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [{ name: 'install', command: 'ok', extra: true }], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [{ name: 1, command: 'ok' }], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [{ name: 'unknown', command: 'ok' }], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [{ name: 'install', command: 1 }], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [{ name: 'install', command: '' }], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [{ name: 'install', command: 'x'.repeat(4097) }], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [{ name: 'install', command: 'echo\u0000secret' }], script_digest: 'b'.repeat(64) },
+      { ...base, scripts: [{ name: 'install', command: 'ok' }], script_digest: 'bad' },
+    ]) expect(() => decode({ ...value, result: malformed })).toThrow()
   })
 })
 

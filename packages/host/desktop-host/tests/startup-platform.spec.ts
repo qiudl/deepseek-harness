@@ -25,7 +25,7 @@ function config(
     accountKeyringSha256: '1'.repeat(64),
     installationPrivateKeyPath: `${root}\\identity\\installation-private-key.pem`,
     installationPublicKey: 'A'.repeat(43),
-    installationId: 'slark-dsh-d3a7a33ed99e8ce5b4d3522d96336dffa8da2820',
+    installationId: 'slark-dsh-e3a7a33ed99e8ce5b4d3522d96336dffa8da2820',
     endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3126',
     hostInstanceId: '11111111-1111-4111-8111-111111111111',
     processNonce: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8',

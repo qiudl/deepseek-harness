@@ -18,7 +18,7 @@ The separation policy assigns changes as follows:
 | Mobile caller profile, engine/environment claims, capability advertisement, Slark identity/fs/shell adapters, cloud preset switches | Fork overlay: packages/slark*, bundle/slark-cloud, host/slark-identity |
 | Slark-specific value domains in Host/core/session/interaction source | Rejected by the required host-core-slark-sniff policy |
 
-The original baseline record names fork master `d85ecaff` (0.1.2-alpha.1) and upstream 0.1.3-alpha.1 head around `d347e703`. Its CI policy requires an input SHA rather than a moving ref. These are historical references, not the current runtime pin.
+The original baseline record names fork master `dsh-v0.1.2-alpha.1` (0.1.2-alpha.1) and upstream 0.1.3-alpha.1 head around the upstream 0.1.3-alpha.1 head. Its CI policy requires an input SHA rather than a moving ref. These are historical references, not the current runtime pin.
 
 ## Probes
 
@@ -32,4 +32,4 @@ The [Host/core workflow](../../../../.github/workflows/host-core-gate.yml) runs 
 
 ## Consequences
 
-The recorded local study on 2026-09-07 independently replayed 12 content commits onto `d347e703`: one applied cleanly and 11 conflicted. Conflicts concentrated in host/desktop-host, control-protocol, session-persistence-jsonl, core/session, core/agent-loop, apps/cli and documentation i18n. The record classifies the dominant work as semantic adaptation (class 2); the full D1 report remains governed by REQ-20260907-0016 section 4. These results do not establish today's mergeability or test status.
+The recorded local study on 2026-09-07 independently replayed 12 content commits onto the upstream 0.1.3-alpha.1 head: one applied cleanly and 11 conflicted. Conflicts concentrated in host/desktop-host, control-protocol, session-persistence-jsonl, core/session, core/agent-loop, apps/cli and documentation i18n. The record classifies the dominant work as semantic adaptation (class 2); the full D1 report remains governed by REQ-20260907-0016 section 4. These results do not establish today's mergeability or test status.

@@ -5,6 +5,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { RemoteEventHostInfo } from './stream-protocol.ts'
+import type { RemoteEventResult } from './stream-protocol.ts'
 
 /** One Remote method request after a carrier has decoded its envelope. */
 export interface InvokeRemoteRequest {
@@ -123,6 +124,9 @@ export type TypertGatewayErrorCode =
 export interface TypertGateway {
   /** Carrier adapter shared by WebSocket and in-process transports. */
   readonly wireStream: TypertGatewayWireStream
+
+  /** Settle one forwarded waterfall event from an authenticated in-process carrier. */
+  respondRemoteEvent(result: RemoteEventResult): void
 
   /**
    * Register the application-selected forwarded-event source.

@@ -38,7 +38,7 @@ Desktop obtains metadata before opening the system Save As dialog, then repeats 
 - Image and file export succeeds only for an exact durable reference in the addressed Session log, while page-originated requests to the export route fail.
 - Image viewing supports bounded zoom, pan, keyboard access, modal focus, and focus restoration without changing ordinary wheel scrolling.
 - Navigation and authority changes cancel active work and suppress stale results; cleanup reaches closed streams, file handles, helpers, and listeners.
-- macOS and Windows preserve the global permission denial, mark downloaded files with platform provenance, and pass the same protocol vectors.
+- macOS and Windows preserve the global permission denial, mark downloaded files with platform-of-origin metadata, and pass the same protocol vectors.
 
 ## Risks
 

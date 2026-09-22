@@ -33,7 +33,7 @@ import {
 import { WindowsHostClientWorkerTransportError } from '../src/windows-host-client-worker-transport.ts'
 import type { StartWindowsHostClientWorkerTransportOptions } from '../src/windows-host-client-worker-transport.ts'
 
-const installationId = 'slark-dsh-d3a7a33ed99e8ce5b4d3522d96336dffa8da2820'
+const installationId = 'slark-dsh-e3a7a33ed99e8ce5b4d3522d96336dffa8da2820'
 const endpointRegistrationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180'
 const socketPath = windowsNamedPipePath({ installationId, endpointRegistrationId })
 

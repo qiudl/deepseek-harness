@@ -44,7 +44,7 @@ The Host coordinator serializes operations per Profile. A retry after ledger com
 
 Before committed-marker verification or pending-target restoration, Host confirms that the active persistence generation still matches the recorded claim generation. A changed generation leaves the affected Profile pending rather than reading or restoring an obsolete target.
 
-The legacy default model is offered only after its provider is claimed and only when the target Profile has no personal default. The user explicitly confirms applying it. Existing Profile generations need provenance-aware inspection before any personal model request is enabled; if imported values cannot be distinguished from later personal edits, preserve the files and require an explicit resolution rather than deleting or silently trusting them. DSH workspace, sessions, and non-model actions remain available during this resolution.
+The legacy default model is offered only after its provider is claimed and only when the target Profile has no personal default. The user explicitly confirms applying it. Existing Profile generations need inspection that distinguishes imported values from later personal edits before any personal model request is enabled; if those values cannot be distinguished, preserve the files and require an explicit resolution rather than deleting or silently trusting them. DSH workspace, sessions, and non-model actions remain available during this resolution.
 
 ## Alternatives considered
 

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-09-18-person-profile-model-ownership.md
-2026-09-18-person-profile-model-ownership.md: 3cc8801526b77608ba3b426aa1562fd5b04968a9
+2026-09-18-person-profile-model-ownership.md: 9618678c379fa73c46fa50a7f82a34c169949c2e
 2026-09-18-person-profile-model-ownership.zh.md: e19ee818a203f35f7198297deb3653006125d040

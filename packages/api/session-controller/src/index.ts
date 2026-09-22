@@ -34,6 +34,8 @@ import type {
   SessionControlFrame,
   SessionCreateRequest,
   SessionCreateValue,
+  SessionDeleteRequest,
+  SessionDeleteValue,
   SessionFollowFrame,
   SessionFollowRequest,
   SessionForkRequest,
@@ -328,6 +330,17 @@ export class SessionController extends TypertRemoteService {
   @Remote('rename')
   rename(request: SessionRenameRequest): Promise<SessionRenameValue> {
     return this.commands.rename(request)
+  }
+
+  /**
+   * Delete one Session from user-visible listings without deleting its immutable log.
+   * Active and queued Agent work is cancelled and drained before acknowledgement.
+   * @param request - Session identity to hide durably.
+   * @returns deletion confirmation after live work reaches idle.
+   */
+  @Remote('delete')
+  delete(request: SessionDeleteRequest): Promise<SessionDeleteValue> {
+    return this.commands.delete(request)
   }
 
   /**

@@ -13,7 +13,7 @@ const connectionId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3122'
 const request = decodeHostControlFrame('{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3123","method":"host.inspect","params":{"challenge":"ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8","client_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3124","supported_versions":[1]}}\n')
 const response = decodeHostControlFrame('{"version":1,"type":"error","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3123","method":"host.inspect","error":{"code":"unavailable","retryable":true,"correlation_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3125"}}\n')
 const policy = resolveWindowsNamedPipePolicy({
-  installationId: 'slark-dsh-d3a7a33ed99e8ce5b4d3522d96336dffa8da2820',
+  installationId: 'slark-dsh-e3a7a33ed99e8ce5b4d3522d96336dffa8da2820',
   endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3126',
   userSid: 'S-1-5-21-1000-2000-3000-1001',
 })

@@ -71,4 +71,17 @@ describe('summary blank = conversation not started', () => {
     session.append('turn/start', { turn: 0 })
     expect(await listBlank(remote, session.id)).toBe(false)
   })
+
+  it('does not return Sessions in the registry-global archive set', async () => {
+    const { ctx, remote, attach } = await harness()
+    const visible = ctx.sessions.create()
+    const archived = ctx.sessions.create()
+    await attach(visible)
+    await attach(archived)
+    ctx.provide('workspaceRegistry', { archivedSessionIds: [archived.id] } as never)
+
+    const result = await remote.list({})
+    expect(result).toMatchObject({ ok: true })
+    if (result.ok) expect(result.value.items.map(item => item.sessionId)).toEqual([visible.id])
+  })
 })

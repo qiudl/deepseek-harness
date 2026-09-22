@@ -838,6 +838,14 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote('rename') rename(request: SessionRenameRequest): Promise<SessionRenameValue>
 
 /**
+ * Delete one Session from user-visible listings without deleting its immutable log.
+ * Active and queued Agent work is cancelled and drained before acknowledgement.
+ * @param request - Session identity to hide durably.
+ * @returns deletion confirmation after live work reaches idle.
+ */
+@Remote('delete') delete(request: SessionDeleteRequest): Promise<SessionDeleteValue>
+
+/**
  * Fork one cold-readable completed-turn prefix into a new Session.
  * @param request - source Session and optional event anchor.
  * @returns the new Session identity.

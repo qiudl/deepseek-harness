@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-07-B2-split-line-and-upgrade-baseline.md
-2026-09-07-B2-split-line-and-upgrade-baseline.md: 2c18249ebd458d01a66eac06f19201ece691af22
-2026-09-07-B2-split-line-and-upgrade-baseline.zh.md: 53ea42dec9a6ce5fefd648718a21fbf28667520e
+2026-09-07-B2-split-line-and-upgrade-baseline.md: ce032cb36535947f79702b30bc1cef1b26e08e5a
+2026-09-07-B2-split-line-and-upgrade-baseline.zh.md: ee67f2bd4a8327c83d59279decde97b36a1b84de

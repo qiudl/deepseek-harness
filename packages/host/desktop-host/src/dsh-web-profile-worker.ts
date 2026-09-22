@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
+import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
@@ -11,6 +12,7 @@ const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN',
+  'DSH_PROFILE_REMOTE_SESSION_TOKEN',
 ])
 
 /** Classified failure from the authenticated worker model endpoint. */
@@ -97,6 +99,7 @@ export class DshWebProfileWorkerFactory {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
     const modelToken = randomBytes(32).toString('base64url')
+    const remoteSessionToken = randomBytes(32).toString('base64url')
     const child = spawn(this.options.nodeExecutablePath, [
       this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
     ], {
@@ -108,12 +111,13 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
         DSH_PROFILE_MODEL_TOKEN: modelToken,
+        DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const activated = await this.waitForOrigin(child)
     this.generation += 1
-    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation, modelToken)
+    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation, modelToken, remoteSessionToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -170,6 +174,7 @@ export class DshWebProfileWorkerFactory {
     bootstrapCookie: { readonly name: string; readonly value: string },
     generation: number,
     modelToken: string,
+    remoteSessionToken: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -218,6 +223,9 @@ export class DshWebProfileWorkerFactory {
         }
         return { provider: value.provider, model: value.model, text: value.text }
       },
+      remoteSession: (command, signal) => this.remoteSession(
+        viewOrigin, remoteSessionToken, command, signal, () => requestedStop || settled,
+      ),
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
         if (requestedStop || settled) return
@@ -228,5 +236,31 @@ export class DshWebProfileWorkerFactory {
       },
       done,
     }
+  }
+
+  private async remoteSession(
+    viewOrigin: string,
+    token: string,
+    command: HostRemoteSessionCommand,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostRemoteSessionJson> {
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const response = await fetch(`${viewOrigin}/internal/desktop-remote-session`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(command),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
+    })
+    if (!response.ok) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
+    const body = await response.text()
+    if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')
+    let parsed: unknown
+    try { parsed = JSON.parse(body) } catch { throw new HostAuthorityError('unavailable') }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'value')) {
+      throw new HostAuthorityError('unavailable')
+    }
+    return (parsed as { value: HostRemoteSessionJson }).value
   }
 }

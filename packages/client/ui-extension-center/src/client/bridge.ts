@@ -5,10 +5,12 @@ export interface ExtensionBridgeError {
   readonly message: string
 }
 
+/** Success or failure returned by the isolated Desktop bridge. */
 export type ExtensionBridgeResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: ExtensionBridgeError }
 
+/** Restricted bridge that can reveal the existing Desktop Hub after Profile readiness. */
 export interface DesktopExtensionBridge {
   /** Prove that this renderer belongs to the active DSH Profile. */
   readonly hello: () => Promise<ExtensionBridgeResult<{ readonly protocol: number }>>
@@ -27,7 +29,10 @@ declare global {
   }
 }
 
-/** Resolve only the two capabilities needed by the navigation entry. */
+/**
+ * Resolve only the capabilities needed by the navigation entry.
+ * @returns The Desktop bridge, or undefined outside the isolated DSH Profile.
+ */
 export function desktopExtensionBridge(): DesktopExtensionBridge | undefined {
   const candidate = window.__SLARK_DSH_EXTENSIONS__
   if (candidate === undefined) return undefined

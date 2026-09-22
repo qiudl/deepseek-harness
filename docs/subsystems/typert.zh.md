@@ -183,6 +183,8 @@ type TypertGatewayErrorCode =
 interface TypertGateway {
   /** Carrier adapter shared by WebSocket and in-process transports. */
   readonly wireStream: TypertGatewayWireStream
+  /** Settle one forwarded waterfall event from an authenticated in-process carrier. */
+  respondRemoteEvent(result: RemoteEventResult): void
   /**
    * Register the application-selected forwarded-event source.
    * @param source - stream factory installed by the Remote assembly.
@@ -323,6 +325,12 @@ Resolve strict generated definitions or conservative SRC markers against current
  * @returns disposer removing this source and cancelling its active streams.
  */
 registerRemoteEvents( source: TypertRemoteEventSource, host: RemoteEventHostInfo, ): () => Promise<void>
+
+/**
+ * Settle one forwarded waterfall event without routing through the browser RPC carrier.
+ * @param result - The forwarded event result to settle.
+ */
+respondRemoteEvent(result: RemoteEventResult): void
 
 /**
  * Invoke one live Remote method through strict generated reflection or SRC markers.
