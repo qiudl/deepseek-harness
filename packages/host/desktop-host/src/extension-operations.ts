@@ -274,6 +274,7 @@ export class ProfileExtensionOperations {
     const revision = await this.executor.revision(profileId)
     this.assertOpen()
     if (authority() !== profileId) throw new Error('unauthorized')
+    if (!restores && this.blocked(profileId)) throw Error('busy')
     if (this.plans.size >= 128) throw new Error('busy')
     const plan: Plan = { planId: randomUUID(), profileId, kind, payload, revision,
       ...(restores && recoveryDigest ? { restores, recoveryDigest } : {}),

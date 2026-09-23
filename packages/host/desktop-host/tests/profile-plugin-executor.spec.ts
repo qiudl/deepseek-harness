@@ -618,6 +618,44 @@ it.each(['install', 'update', 'remove'] as const)('explicitly completes an inter
   await operations.dispose()
 })
 
+it('completes an already-installed exact npm target without overwriting later unrelated Profile state', async () => {
+  const f = fixture(); let commands = 0; let acknowledgements = 0
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0', keep: '1.0.0' },
+    dsh: { profile: { bundles: ['fixture', 'keep'] } } }), { mode: 0o600 })
+  const installed = join(f.web, 'node_modules/fixture'); mkdirSync(installed, { recursive: true, mode: 0o700 })
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    install: async () => {
+      commands++
+      writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '2.0.0', keep: '1.0.0' },
+        dsh: { profile: { bundles: ['fixture', 'keep'] } } }), { mode: 0o600 })
+      writeFileSync(join(installed, 'package.json'), JSON.stringify({ name: 'fixture', version: '2.0.0' }), { mode: 0o600 })
+      throw Error('interrupted after package manager completed')
+    },
+    acknowledge: async () => { acknowledgements++ },
+    togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }),
+    acknowledgeToggle: async () => {},
+  })
+  let operations = new ProfileExtensionOperations(f.store, executor, { now: Date.now })
+  const plan = await operations.prepare(f.authority, 'plugin', JSON.stringify({
+    action: 'update', packageName: 'fixture', spec: 'fixture@2.0.0',
+  })); const interruptedId = randomUUID()
+  operations.commit(f.authority, plan.planId, interruptedId); await operations.settled()
+  expect(operations.status(f.authority, interruptedId)).toMatchObject({ state: 'unknown', canComplete: true })
+  await operations.dispose(); operations = new ProfileExtensionOperations(f.store, executor, { now: Date.now })
+  writeFileSync(join(f.root, 'cordis.patch.yml'), 'unrelated: later\n', { mode: 0o600 })
+  const completion = await operations.prepare(f.authority, 'plugin', JSON.stringify({
+    action: 'complete-package', operationId: interruptedId,
+  })); const completionId = randomUUID()
+  operations.commit(f.authority, completion.planId, completionId); await operations.settled()
+  expect(operations.status(f.authority, completionId)).toMatchObject({
+    state: 'succeeded', recoveryMode: 'complete', restores: interruptedId,
+  })
+  expect(operations.status(f.authority, interruptedId)).toMatchObject({ state: 'unknown', completedBy: completionId })
+  expect(readFileSync(join(f.root, 'cordis.patch.yml'), 'utf8')).toBe('unrelated: later\n')
+  expect(commands).toBe(1); expect(acknowledgements).toBe(1)
+  await operations.dispose()
+})
+
 
 it('preserves unrelated dsh metadata when installation creates the first bundle registration', async () => {
   const f = fixture(); writeFileSync(f.manifest, JSON.stringify({ dsh: { note: 'keep' } }))

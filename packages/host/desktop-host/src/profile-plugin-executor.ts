@@ -361,13 +361,33 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     const bundles = profile === undefined ? undefined : record(profile).bundles
     if (bundles !== undefined && (!Array.isArray(bundles) || bundles.filter(name => name === evidence.packageName).length > 1)) throw Error('plugin_target_changed')
   }
+  /** A package manager may have reached the requested target before an acknowledgement was interrupted. */
+  private installedPackageTarget(profileId: string, evidence: PluginPackageRecovery): boolean {
+    if (evidence.action === 'remove' || !evidence.spec || evidence.spec.startsWith('github:')) return false
+    const expected = evidence.spec.slice(evidence.spec.lastIndexOf('@') + 1)
+    const manifest = this.manifest(profileId)
+    const dependency = manifest.dependencies ? record(manifest.dependencies)[evidence.packageName] : undefined
+    const profile = manifest.dsh ? record(manifest.dsh).profile : undefined
+    const bundles = profile === undefined ? undefined : record(profile).bundles
+    if (dependency !== expected || !Array.isArray(bundles)
+      || bundles.filter(name => name === evidence.packageName).length !== 1) return false
+    const installed = this.read(this.root(profileId), `profiles/web/node_modules/${evidence.packageName}/package.json`)
+    if (installed === null) return false
+    const installedManifest = record(JSON.parse(installed))
+    return installedManifest.name === evidence.packageName && installedManifest.version === expected
+  }
   /** @param profileId Authorized Profile. @param receipt Original package operation. @returns Intent and unrelated-state validation. */
   validatePluginCompletion(profileId: string, receipt: ExtensionReceipt): Promise<void> {
     return Promise.resolve().then(() => {
       if (receipt.profileId !== profileId || receipt.kind !== 'plugin' || !validPluginPackageRecovery(receipt.pluginPackage)) throw Error('invalid_recovery')
       const evidence = receipt.pluginPackage
       if (evidence.action === 'remove' && (!this.options.remove || !this.options.repair || !this.options.acknowledgeRemoval)) throw Error('upgrade_required')
-      this.checkPackageScope(profileId, evidence)
+      try { this.checkPackageScope(profileId, evidence) }
+      catch (error) {
+        // Completion is still safe when the exact npm target is already present: this path performs
+        // no package or configuration writes and only asks the running Profile to prove it loaded.
+        if (!this.installedPackageTarget(profileId, evidence)) throw error
+      }
     })
   }
   /**
@@ -380,6 +400,12 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     context.guard(); await this.validatePluginCompletion(profileId, receipt); context.guard()
     const evidence = receipt.pluginPackage
     if (!evidence) throw Error('invalid_recovery')
+    if (this.installedPackageTarget(profileId, evidence)) {
+      await this.options.acknowledge(profileId, evidence.packageName, context)
+      context.guard()
+      if (!this.installedPackageTarget(profileId, evidence)) throw Error('plugin_target_changed')
+      return { state: 'succeeded' }
+    }
     return this.runPackage(profileId, evidence, context, true)
   }
   private async runPackage(profileId: string, evidence: PluginPackageRecovery, context: Lifetime, completing: boolean): Promise<{ state: 'succeeded' }> {
