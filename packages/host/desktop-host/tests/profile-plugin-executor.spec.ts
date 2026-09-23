@@ -377,9 +377,10 @@ it('removes an installed bundle, clears its standalone toggle override and requi
   expect(readFileSync(file,'utf8')).toContain('!!js process.platform')
 })
 
-it('ignores an approval map that becomes empty after removing the target package', async () => {
+it('ignores target package policy entries that become empty after normalization', async () => {
   const f = fixture()
-  writeFileSync(join(f.web, 'pnpm-workspace.yaml'), 'allowBuilds:\n  fixture: true\n', { mode: 0o600 })
+  writeFileSync(join(f.web, 'pnpm-workspace.yaml'),
+    'allowBuilds:\n  fixture: true\nminimumReleaseAgeExclude:\n  - fixture\n  - fixture@1.0.0\n', { mode: 0o600 })
   writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
   const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
     acknowledge: async () => {}, togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }),
@@ -390,16 +391,17 @@ it('ignores an approval map that becomes empty after removing the target package
     { kind: 'plugin', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'succeeded' })
 })
 
-it.each(['null', 'fixture', '[]'])('rejects a non-object plugin build policy (%s)', async (policy) => {
-  const f = fixture()
-  writeFileSync(join(f.web, 'pnpm-workspace.yaml'), `${policy}\n`, { mode: 0o600 })
-  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
-  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
-    acknowledge: async () => {}, togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }),
-    acknowledgeToggle: async () => {}, remove: async () => {}, acknowledgeRemoval: async () => {} })
-  await expect(executor.execute(f.authority(), JSON.stringify({ action: 'remove', packageName: 'fixture' }),
-    { kind: 'plugin', signal: new AbortController().signal, guard() {} })).rejects.toThrow('invalid_plugin_policy')
-})
+it.each(['null', 'fixture', '[]', 'minimumReleaseAgeExclude: fixture', 'minimumReleaseAgeExclude:\n  - fixture@1.0.0\n  - 7'])(
+  'rejects a malformed plugin build policy (%s)', async (policy) => {
+    const f = fixture()
+    writeFileSync(join(f.web, 'pnpm-workspace.yaml'), `${policy}\n`, { mode: 0o600 })
+    writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+    const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+      acknowledge: async () => {}, togglePlan: () => ({ patch: '', previousExpected: [], previousDisabled: [], expected: [], disabled: [] }),
+      acknowledgeToggle: async () => {}, remove: async () => {}, acknowledgeRemoval: async () => {} })
+    await expect(executor.execute(f.authority(), JSON.stringify({ action: 'remove', packageName: 'fixture' }),
+      { kind: 'plugin', signal: new AbortController().signal, guard() {} })).rejects.toThrow('invalid_plugin_policy')
+  })
 
 it.each(['bundle remains', 'bundle metadata missing', 'acknowledgement drift'] as const)(
   'rejects an unconfirmed plugin removal when %s', async (mode) => {
@@ -638,6 +640,19 @@ it('normalizes non-local package scope and unordered metadata without changing i
   await expect(executor.execute(f.authority(), payload,
     { kind: 'plugin', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'succeeded' })
   expect(JSON.parse(readFileSync(rootManifest, 'utf8'))).toEqual({ a: true, z: { a: 2, b: 1 } })
+})
+
+it('allows the package runner to update the target minimum-release-age exception', async () => {
+  const f = fixture(); const workspace = join(f.web, 'pnpm-workspace.yaml')
+  writeFileSync(workspace, 'packages:\n  - .\nminimumReleaseAgeExclude:\n  - keep@1.0.0\n', { mode: 0o600 })
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    install: async () => {
+      writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+      writeFileSync(workspace, 'minimumReleaseAgeExclude:\n  - keep@1.0.0\n  - fixture@1.0.0\npackages:\n  - .\n')
+    }, acknowledge: async () => {},
+  })
+  await expect(executor.execute(f.authority(), payload,
+    { kind: 'plugin', signal: new AbortController().signal, guard() {} })).resolves.toEqual({ state: 'succeeded' })
 })
 
 
