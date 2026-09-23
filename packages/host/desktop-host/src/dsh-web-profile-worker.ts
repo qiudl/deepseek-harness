@@ -60,7 +60,17 @@ async function exchangeBootstrap(
 ): Promise<{ readonly name: string; readonly value: string }> {
   const response = await fetch(authenticatedUrl, { redirect: 'manual', signal })
   await response.body?.cancel()
-  if (response.status !== 303 || response.headers.get('location') !== '/') throw new HostAuthorityError('unavailable')
+  const location = response.headers.get('location')
+  let redirect: URL
+  try {
+    if (response.status !== 303 || location === null) throw new HostAuthorityError('unavailable')
+    redirect = new URL(location, authenticatedUrl)
+  } catch {
+    throw new HostAuthorityError('unavailable')
+  }
+  if (redirect.origin !== origin || redirect.pathname !== '/' || redirect.search || redirect.hash) {
+    throw new HostAuthorityError('unavailable')
+  }
   const cookies = response.headers.getSetCookie()
   if (cookies.length !== 1) throw new HostAuthorityError('unavailable')
   const cookie = cookies[0] as string

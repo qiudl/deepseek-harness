@@ -463,7 +463,7 @@ describe('dsh web Profile worker', () => {
         }
         if (url.searchParams.get('token') === 'must-stay-owner-only') {
           response.writeHead(303, {
-            location: '/',
+            location: './',
             'set-cookie': cookieName + '=' + cookieValue + '; Max-Age=60; Path=/; Expires=Wed, 01 Jan 2031 00:00:00 GMT; HttpOnly; SameSite=Strict',
           })
           response.end()
