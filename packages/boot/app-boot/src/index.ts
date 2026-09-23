@@ -727,6 +727,7 @@ const FIBER_DISPOSED = 4 as FiberState.DISPOSED
  */
 const requiredStartupEntryIds = new Set<string>([
   'agent-loop',
+  'desktop-host-startup',
   'webserver',
   'modules',
   'connection',

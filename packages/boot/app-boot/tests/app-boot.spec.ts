@@ -557,6 +557,7 @@ describe('installFailLoud', () => {
 describe('auditStartupEntries', () => {
   const requiredIds = [
     'agent-loop',
+    'desktop-host-startup',
     'webserver',
     'modules',
     'connection',
