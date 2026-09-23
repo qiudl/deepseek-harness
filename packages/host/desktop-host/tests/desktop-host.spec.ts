@@ -1,0 +1,1599 @@
+import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createConnection } from 'node:net'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import {
+  ApprovalAuthority,
+  ContextLeaseAuthority,
+  DesktopHost,
+  FileHostJournal,
+  HostAuthorityError,
+  HostRequestAuthorizer,
+  ProfileRegistry,
+  RestartingMigrationTarget,
+  ProfileWorkerSupervisor,
+  SessionCommandAuthority,
+  SingleHostLock,
+  UnixHostClient,
+  UnixHostServer,
+  acquireSingleHostLock,
+  discoverUnixHost,
+  personIndex,
+} from '../src/index.ts'
+import { discoverWindowsHost } from '../src/client.ts'
+import { windowsNamedPipePath } from '../src/windows-named-pipe-policy.ts'
+
+const dir = (): string => mkdtempSync(join(tmpdir(), 'dsh-desktop-host-'))
+const clock = { now: () => 1_000 }
+const bootstrapCookie = { name: `dsh-auth-${'a'.repeat(43)}`, value: `v1.${'b'.repeat(8)}.${'c'.repeat(43)}` }
+const stagingEnvironmentId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181'
+const productionEnvironmentId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3182'
+const unlockMaterial = Buffer.alloc(32, 9).toString('base64url')
+const slarkIssuer = 'https://accounts.dsh.colorbuyai.com'
+
+function accountToken(issuer: string, subject: string): string {
+  return Buffer.from(JSON.stringify({ issuer, subject }), 'utf8').toString('base64url')
+}
+
+function verifyTestAccountToken(token: string): { issuer: string; subject: string } {
+  const value = JSON.parse(Buffer.from(token, 'base64url').toString('utf8')) as Record<string, unknown>
+  if (typeof value.issuer !== 'string' || typeof value.subject !== 'string') throw new Error('invalid token')
+  return { issuer: value.issuer, subject: value.subject }
+}
+
+describe('person profile registry', () => {
+  it('persists only a device-keyed person index and Keychain handle', async () => {
+    const root = dir()
+    const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+    const profile = await registry.registerAccount({
+      issuer: 'https://account.deepseek.com', subject: 'opaque-user', keyHandle: 'keychain:item:1', unlockMaterial,
+    })
+    const state = readFileSync(join(root, 'profiles.json'), 'utf8')
+    expect(state).not.toContain('opaque-user')
+    expect(state).not.toContain('account.deepseek.com')
+    expect(state).not.toContain(unlockMaterial)
+    expect(state).toContain('keychain:item:1')
+    expect(await registry.resolveAccount({ issuer: 'https://account.deepseek.com', subject: 'opaque-user' })).toEqual(profile)
+    await expect(registry.resolveAccount({ issuer: 'https://other.example', subject: 'opaque-user' })).resolves.toBeNull()
+  })
+
+  it('keeps one local Profile key-unlocked, idempotent, and isolated from account binding', async () => {
+    const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 8), clock })
+    const local = await registry.createLocalAnonymous({ keyHandle: 'keychain:anonymous', unlockMaterial })
+    const restored = await registry.createLocalAnonymous({ keyHandle: 'keychain:anonymous', unlockMaterial })
+    expect(restored).toEqual(local)
+    expect(() => { registry.verifyUnlock(local, 'keychain:anonymous', unlockMaterial) }).not.toThrow()
+    expect(() => { registry.verifyUnlock(local, 'keychain:anonymous', Buffer.alloc(32, 8).toString('base64url')) })
+      .toThrow(/unauthorized/)
+    await expect(registry.bindAccount(local.profileId, { issuer: 'https://account.deepseek.com', subject: 'user' }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+  })
+
+  it('bootstraps, restores, and opens a local Profile without an Account token', async () => {
+    const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 10), clock })
+    const host = new DesktopHost({ registry, clock, runtimeGeneration: 5, ensureProfileWorker: async () => undefined })
+    const local = await host.bootstrapLocalProfile({ keyHandle: 'keychain:local', unlockMaterial, ownerId: 'owner-1' })
+    const opened = await host.openLocalProfile({ profileId: local.profileId, ownerId: 'owner-1' })
+    expect(opened.profileId).toBe(local.profileId)
+    host.revokeOwner('owner-1')
+    await expect(host.openLocalProfile({ profileId: local.profileId, ownerId: 'owner-1' }))
+      .rejects.toMatchObject({ code: 'profile_locked' })
+    await expect(host.restoreLocalProfile({ ...local, keyHandle: 'keychain:local', unlockMaterial, ownerId: 'owner-2' }))
+      .resolves.toEqual(local)
+  })
+
+  it('uses issuer-qualified, device-keyed HMAC indexes', () => {
+    const key = Buffer.alloc(32, 9)
+    expect(personIndex(key, { issuer: 'https://a.example', subject: 'same' }))
+      .not.toBe(personIndex(key, { issuer: 'https://b.example', subject: 'same' }))
+    expect(personIndex(key, { issuer: 'https://a.example', subject: 'same' })).toHaveLength(64)
+  })
+
+  it('rotates one current binding per environment without conflating equal cross-environment handles', async () => {
+    const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 2), clock })
+    const base = { issuer: 'https://account.deepseek.com', subject: 'same-person', keyHandle: 'keychain:same', unlockMaterial }
+    const staging = await registry.registerAccount({
+      ...base, authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'shared-handle', authorityBindingVersion: 1,
+    })
+    const production = await registry.registerAccount({
+      ...base, authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'shared-handle', authorityBindingVersion: 1,
+    })
+    expect(production.profileId).toBe(staging.profileId)
+    const rotated = await registry.registerAccount({
+      ...base, authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'rotated-handle', authorityBindingVersion: 2,
+    })
+    expect(rotated.bindingGeneration).toBe(production.bindingGeneration + 1)
+    expect(registry.resolveBinding(stagingEnvironmentId, 'shared-handle', 1)).toBeNull()
+    expect(registry.resolveBinding(stagingEnvironmentId, 'rotated-handle', 2)?.profileId).toBe(staging.profileId)
+    expect(registry.resolveBinding(productionEnvironmentId, 'shared-handle', 1)?.profileId).toBe(staging.profileId)
+    await expect(registry.registerAccount({
+      ...base, authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'old', authorityBindingVersion: 1,
+    })).rejects.toMatchObject({ code: 'stale' })
+    await expect(registry.registerAccount({
+      ...base, authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'conflict', authorityBindingVersion: 2,
+    })).rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('moves one bound Profile to a replacement Account issuer only with the same binding and unlock key', async () => {
+    const root = dir()
+    const key = Buffer.alloc(32, 4)
+    const registry = new ProfileRegistry({ root, deviceIndexKey: key, clock })
+    const legacy = await registry.registerAccount({
+      issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 1, keyHandle: 'keychain:same', unlockMaterial,
+    })
+
+    await expect(registry.registerAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 1, keyHandle: 'keychain:same', unlockMaterial,
+    })).rejects.toMatchObject({ code: 'stale' })
+    const replacement = await registry.registerAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 2, keyHandle: 'keychain:same', unlockMaterial,
+    })
+
+    expect(replacement.profileId).toBe(legacy.profileId)
+    await expect(registry.resolveAccount({
+      issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'same-person',
+    })).resolves.toBeNull()
+    await expect(registry.resolveAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+    })).resolves.toMatchObject({ profileId: legacy.profileId })
+
+    const restarted = new ProfileRegistry({ root, deviceIndexKey: key, clock })
+    await expect(restarted.registerAccount({
+      issuer: 'https://accounts.third.example', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 3, keyHandle: 'keychain:other', unlockMaterial,
+    })).rejects.toMatchObject({ code: 'profile_mismatch' })
+    await expect(restarted.registerAccount({
+      issuer: 'https://accounts.third.example', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 3, keyHandle: 'keychain:same',
+      unlockMaterial: Buffer.alloc(32, 8).toString('base64url'),
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(restarted.resolveAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+    })).resolves.toMatchObject({ profileId: legacy.profileId })
+  })
+
+  it('rejects symlink, hardlink, and malformed registry authority files', async () => {
+    const key = Buffer.alloc(32, 6)
+    const root = dir()
+    const registry = new ProfileRegistry({ root, deviceIndexKey: key, clock })
+    await registry.createLocalAnonymous({ keyHandle: 'keychain:one', unlockMaterial })
+    const path = join(root, 'profiles.json')
+    const backup = join(root, 'profiles.backup')
+    linkSync(path, backup)
+    expect(() => new ProfileRegistry({ root, deviceIndexKey: key, clock })).toThrow(HostAuthorityError)
+    unlinkSync(backup)
+    unlinkSync(path)
+    symlinkSync(join(root, 'missing'), path)
+    expect(() => new ProfileRegistry({ root, deviceIndexKey: key, clock })).toThrow(HostAuthorityError)
+    unlinkSync(path)
+    writeFileSync(path, '{"version":1,"profiles":[{"profileId":"forged"}]}\n', { mode: 0o600 })
+    expect(() => new ProfileRegistry({ root, deviceIndexKey: key, clock })).toThrow(HostAuthorityError)
+  })
+
+  it('does not publish a Profile in memory before durable persistence commits', async () => {
+    const registry = new ProfileRegistry({
+      root: dir(), deviceIndexKey: Buffer.alloc(32, 5), clock,
+      persistSnapshot: () => { throw new Error('injected persistence failure') },
+    })
+    await expect(registry.registerAccount({
+      issuer: 'https://account.deepseek.com', subject: 'not-durable', keyHandle: 'keychain:fail', unlockMaterial,
+    }))
+      .rejects.toThrow('injected persistence failure')
+    await expect(registry.resolveAccount({ issuer: 'https://account.deepseek.com', subject: 'not-durable' })).resolves.toBeNull()
+  })
+})
+
+describe('authenticated Unix transport', () => {
+  const recoveryKeyHandle = 'A'.repeat(43)
+  const recoveryPreflightDigest = 'a'.repeat(64)
+  const executableDigest = '1'.repeat(64)
+  const desktopDigest = '2'.repeat(64)
+  const uid = process.getuid?.() ?? 501
+  const keys = generateKeyPairSync('ed25519')
+  const publicKey = (keys.publicKey.export({ format: 'der', type: 'spki' }) as Buffer).subarray(-32).toString('base64url')
+  const identity = {
+    hostInstanceId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3120',
+    installationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3121',
+    installationPublicKey: publicKey,
+    installationPrivateKey: keys.privateKey,
+    processNonce: '_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q',
+    executableSignatureDigest: executableDigest,
+    runtimeGeneration: 5,
+    schemaGeneration: 1,
+  }
+
+  function signedSelector(domain: string, payload: unknown): string {
+    const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
+    const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), identity.installationPrivateKey).toString('base64url')
+    return `${encoded}.${signature}`
+  }
+
+  function signedEncodedSelector(domain: string, encoded: string): string {
+    const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), identity.installationPrivateKey).toString('base64url')
+    return `${encoded}.${signature}`
+  }
+
+  async function fixture(
+    createMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationExport']>,
+    createMigrationImport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationImport']>,
+    createLegacyMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createLegacyMigrationExport']>,
+    now: () => number = clock.now,
+    offlineRecovery = true,
+  ): Promise<{ server: UnixHostServer; host: DesktopHost; socketPath: string }> {
+    const root = dir()
+    const socketPath = join(root, 'host.sock')
+    const registry = new ProfileRegistry({ root: join(root, 'profiles'), deviceIndexKey: Buffer.alloc(32, 3), clock, keyHandleUnlocked: () => true })
+    await registry.registerAccount({
+      issuer: slarkIssuer, subject: 'u1', keyHandle: 'keychain:u1',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
+      unlockMaterial,
+    })
+    await registry.registerAccount({
+      issuer: slarkIssuer, subject: 'offline-recovery', keyHandle: recoveryKeyHandle, unlockMaterial,
+    })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => undefined,
+      ...(offlineRecovery ? {
+        inspectOfflineAccountProfile: async () => ({
+          state: 'recoverable' as const, compatibility: 'current' as const, persistenceGeneration: 11,
+          sessionCount: 86, pluginCount: 6, preflightDigest: recoveryPreflightDigest,
+        }),
+        ensureRecoveredProfileWorker: async () => undefined,
+      } : {}),
+      activateProfileView: async () => ({ origin: 'http://127.0.0.1:4123', generation: 7, bootstrapCookie }),
+    })
+    const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: identity.processNonce })
+    const server = new UnixHostServer({
+      socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
+      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity, host, now,
+      profilePersistenceGeneration: () => 1,
+      ...(createMigrationExport === undefined ? {} : { createMigrationExport }),
+      ...(createMigrationImport === undefined ? {} : { createMigrationImport }),
+      ...(createLegacyMigrationExport === undefined ? {} : { createLegacyMigrationExport }),
+    })
+    await server.start()
+    return { server, host, socketPath }
+  }
+
+  it('can retry the same server after its socket parent appears', async () => {
+    const root = dir()
+    const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: identity.processNonce })
+    const parent = join(root, 'late')
+    const socketPath = join(parent, 'host.sock')
+    const server = new UnixHostServer({
+      socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
+      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity,
+      host: {} as never, profilePersistenceGeneration: () => 1,
+    })
+    await expect(server.start()).rejects.toSatisfy((error: unknown) => error instanceof Error
+      && 'code' in error && typeof error.code === 'string' && /^(?:EACCES|ENOENT)$/u.test(error.code))
+    mkdirSync(parent)
+    await expect(server.start()).resolves.toBeUndefined()
+    await server.close()
+    await ownership.release()
+  })
+
+  it('advertises offline recovery only when both recovery adapters are installed', async () => {
+    const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, false)
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    expect(client.inspection.capabilities).not.toContain('profile.recovery_inspect')
+    expect(client.inspection.capabilities).not.toContain('profile.recover_offline_account')
+    expect(client.inspection.capabilities).not.toContain('profile.open_offline_account')
+    expect(client.inspection.capabilities).not.toContain('profile.recovery_status')
+    await expect(client.extensions({ viewLeaseId: randomUUID(), leaseGeneration: 1, runtimeGeneration: 5,
+      command: { action: 'inventory', kind: 'mcp' } })).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(client.isConnected()).toBe(true)
+    client.close()
+    await server.close()
+  })
+
+  it('verifies UID, installation key, executable digest, and serves the exact Desktop adapter', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    expect(await client.getProfileStatus({
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
+    })).toMatchObject({ state: 'ready', persistenceGeneration: 1 })
+    const [first, second] = await Promise.all([
+      client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1 }),
+      client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1 }),
+    ])
+    expect(second).toEqual(first)
+    const closeInput = {
+      viewLeaseId: first.viewLeaseId,
+      leaseGeneration: first.leaseGeneration,
+      runtimeGeneration: first.runtimeGeneration,
+    }
+    await Promise.all([
+      client.closeViewLease(closeInput),
+      client.closeViewLease(closeInput),
+    ])
+    client.close()
+    await server.close()
+  })
+
+  it('keeps the existing Profile when a newer binding replaces its Account issuer', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const current = await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
+      keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    const replacement = await client.ensureAccountProfile({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'u1',
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken('https://accounts.staging.dsh.colorbuyai.com', 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 2,
+      keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    expect(replacement.profileId).toBe(current.profileId)
+    client.close()
+    await server.close()
+  })
+
+  it('bootstraps, restores, and opens a local Profile through the Unix adapter without Account credentials', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const local = await client.bootstrapLocalProfile({ keyHandle: 'keychain:local-wire', unlockMaterial })
+    expect(local.persistenceGeneration).toBe(1)
+    const opened = await client.openLocalProfile({ profileSelector: local.profileSelector })
+    expect(opened.profileId).toBe(local.profileId)
+
+    client.close()
+    const restoredClient = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    await expect(restoredClient.restoreLocalProfile({
+      profileSelector: local.profileSelector, keyHandle: 'keychain:local-wire', unlockMaterial,
+    })).resolves.toMatchObject({ profileId: local.profileId, persistenceGeneration: 1 })
+    restoredClient.close()
+    await server.close()
+  })
+
+  it('recovers and opens an offline Account Profile through a domain-separated selector', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const inspected = await client.inspectOfflineAccountProfiles({ profileKeyHandles: [recoveryKeyHandle] })
+    expect(inspected.candidates).toEqual([expect.objectContaining({
+      state: 'recoverable', bindingCount: 0, sessionCount: 86, pluginCount: 6,
+      preflightDigest: recoveryPreflightDigest,
+    })])
+    const candidate = inspected.candidates[0]!
+    const operationId = randomUUID()
+    const recovered = await client.recoverOfflineAccountProfile({
+      profileKeyHandle: recoveryKeyHandle, profileUnlockMaterial: unlockMaterial,
+      recoveryOperationId: operationId, candidateId: candidate.candidateId,
+      preflightDigest: candidate.preflightDigest,
+    })
+    expect(recovered).toMatchObject({
+      state: 'offline_ready', accessScope: 'offline_local', persistenceGeneration: 11,
+    })
+    await expect(client.getOfflineAccountRecoveryStatus({ recoveryOperationId: operationId }))
+      .resolves.toEqual({ state: 'offline_ready' })
+    await expect(client.openOfflineAccountProfile({ profileSelector: recovered.profileSelector }))
+      .resolves.toMatchObject({ accessScope: 'offline_local' })
+    await expect(client.openLocalProfile({ profileSelector: recovered.profileSelector }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+
+    const connected = await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'), accountBindingHandle: 'binding:opaque',
+      authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    await expect(client.openOfflineAccountProfile({ profileSelector: connected.profileSelector }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    client.close()
+    await server.close()
+  })
+
+  it('reports an upgrade requirement locally before sending token-bearing ensure to an older Host', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const inspection = client.inspection as { capabilities: typeof client.inspection.capabilities }
+    inspection.capabilities = inspection.capabilities.filter(value => value !== 'profile.ensure_account_token')
+    await expect(client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'older-host-user', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'older-host-user'),
+      accountBindingHandle: 'binding:older-host', authorityBindingVersion: 1,
+      keyHandle: 'keychain:older-host', unlockMaterial,
+    })).rejects.toMatchObject({ code: 'upgrade_required' })
+    client.close()
+    await server.close()
+  })
+
+  it('rejects wrong UID, installation key, and executable digest', async () => {
+    const { server, socketPath } = await fixture()
+    const base = {
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest, now: clock.now,
+    }
+    const wrongUid = { ...base, attestPeer: async () => ({ uid: uid + 1, executableSignatureDigest: executableDigest }) }
+    await expect(UnixHostClient.connect(wrongUid))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+    await expect(UnixHostClient.connect({ ...base, trustedExecutableSignatureDigest: '3'.repeat(64), attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }) }))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+    const other = generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }) as Buffer
+    await expect(UnixHostClient.connect({ ...base, trustedInstallationPublicKey: other.subarray(-32).toString('base64url'), attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }) }))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+    await server.close()
+  })
+
+  it('consumes a view activation once on the authenticated lease connection', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    const opened = await client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1 })
+    const input = {
+      profileId: opened.profileId,
+      viewLeaseId: opened.viewLeaseId,
+      viewActivationHandle: opened.viewActivationHandle,
+      leaseGeneration: opened.leaseGeneration,
+      runtimeGeneration: opened.runtimeGeneration,
+    }
+    await expect(client.activateView(input)).resolves.toEqual({
+      origin: 'http://127.0.0.1:4123', activationGeneration: 7, expiresAt: opened.expiresAt, bootstrapCookie,
+    })
+    await expect(client.activateView(input)).rejects.toMatchObject({ code: 'stale' })
+    expect(client.isConnected()).toBe(true)
+    client.close()
+    expect(client.isConnected()).toBe(false)
+    await server.close()
+  })
+
+  it('provisions an empty-root Profile on first click, reuses one person, and isolates another', async () => {
+    const root = dir()
+    const socketPath = join(root, 'host.sock')
+    const unlocked = new Set<string>()
+    const started: string[] = []
+    const running = new Set<string>()
+    const registry = new ProfileRegistry({
+      root: join(root, 'profiles'), deviceIndexKey: Buffer.alloc(32, 3), clock,
+      keyHandleUnlocked: handle => unlocked.has(handle),
+    })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async (profile) => {
+        unlocked.add(profile.keyHandle)
+        if (!running.has(profile.profileId)) { running.add(profile.profileId); started.push(profile.profileId) }
+      },
+      activateProfileView: async () => ({ origin: 'http://127.0.0.1:4123', generation: 1, bootstrapCookie }),
+    })
+    const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: identity.processNonce })
+    const server = new UnixHostServer({
+      socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
+      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity, host, now: clock.now,
+      profilePersistenceGeneration: () => 1,
+    })
+    await server.start()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const first = await client.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a', keyHandle: 'keychain:a',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
+      authorityEnvironmentId: stagingEnvironmentId,
+      authorityBindingVersion: 1,
+      unlockMaterial,
+    })
+    const repeated = await client.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a', keyHandle: 'keychain:a',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
+      authorityEnvironmentId: stagingEnvironmentId,
+      authorityBindingVersion: 1,
+      unlockMaterial,
+    })
+    const production = await client.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a:prod', keyHandle: 'keychain:a',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
+      authorityEnvironmentId: productionEnvironmentId,
+      authorityBindingVersion: 1,
+      unlockMaterial,
+    })
+    const other = await client.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: 'person-b', accountBindingHandle: 'binding:b', keyHandle: 'keychain:b',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-b'),
+      authorityEnvironmentId: stagingEnvironmentId,
+      authorityBindingVersion: 1,
+      unlockMaterial,
+    })
+    expect(repeated).toEqual(first)
+    expect(production.profileId).toBe(first.profileId)
+    expect(production.profileSelector).not.toBe(first.profileSelector)
+    expect(other.profileId).not.toBe(first.profileId)
+    expect(started).toEqual([first.profileId, other.profileId])
+    await expect(client.restoreProfile({
+      profileSelector: first.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1,
+    })).resolves.toMatchObject({ profileId: first.profileId })
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    }))
+      .resolves.toMatchObject({ profileId: first.profileId })
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector, keyHandle: 'keychain:attacker', unlockMaterial,
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector,
+      keyHandle: 'keychain:a', unlockMaterial: Buffer.alloc(32, 8).toString('base64url'),
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+    await client.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: 'person-a', accountBindingHandle: 'binding:a:next', keyHandle: 'keychain:a',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person-a'),
+      authorityEnvironmentId: stagingEnvironmentId, authorityBindingVersion: 2, unlockMaterial,
+    })
+    await expect(client.restoreProfile({
+      profileSelector: first.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1,
+    })).rejects.toMatchObject({ code: 'stale' })
+    await expect(client.restoreProfile({
+      profileSelector: production.profileSelector, keyHandle: 'keychain:a', unlockMaterial,
+      authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1,
+    })).resolves.toMatchObject({ profileId: first.profileId })
+    await expect(client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a', authorityBindingVersion: 1 }))
+      .rejects.toMatchObject({ code: 'profile_locked' })
+    await expect(client.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:a:next', authorityBindingVersion: 2 }))
+      .resolves.toMatchObject({ profileId: first.profileId })
+    await expect(client.openProfile({ authorityEnvironmentId: productionEnvironmentId, accountBindingHandle: 'binding:a:prod', authorityBindingVersion: 1 }))
+      .resolves.toMatchObject({ profileId: first.profileId })
+    client.close(); await server.close()
+  })
+
+  it('rejects validly signed Profile selectors with malformed semantic payloads', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const valid = {
+      version: 1,
+      installation_id: identity.installationId,
+      profile_id: randomUUID(),
+      binding_generation: 1,
+      runtime_generation: identity.runtimeGeneration,
+      schema_generation: identity.schemaGeneration,
+    }
+    const malformed = [
+      { ...valid, extra: true },
+      { ...valid, version: 2 },
+      { ...valid, installation_id: randomUUID() },
+      { ...valid, profile_id: 1 },
+      { ...valid, binding_generation: 0 },
+      { ...valid, binding_generation: 1.5 },
+      { ...valid, runtime_generation: identity.runtimeGeneration + 1 },
+      { ...valid, schema_generation: identity.schemaGeneration + 1 },
+    ]
+    for (const payload of malformed) {
+      await expect(client.openLocalProfile({
+        profileSelector: signedSelector('dsh-profile-selector/v1', payload),
+      })).rejects.toMatchObject({ code: 'stale' })
+    }
+    for (const payload of ['null', '[]']) {
+      const encoded = Buffer.from(payload.padEnd(24)).toString('base64url')
+      await expect(client.openLocalProfile({
+        profileSelector: signedEncodedSelector('dsh-profile-selector/v1', encoded),
+      })).rejects.toMatchObject({ code: 'unauthorized' })
+    }
+    const encoded = Buffer.from('{'.padEnd(24)).toString('base64url')
+    await expect(client.openLocalProfile({
+      profileSelector: signedEncodedSelector('dsh-profile-selector/v1', encoded),
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(client.openOfflineAccountProfile({
+      profileSelector: signedSelector('dsh-profile-offline-selector/v1', { ...valid, access_scope: 'connected' }),
+    })).rejects.toMatchObject({ code: 'stale' })
+    client.close(); await server.close()
+  })
+
+  it('revokes only the disconnected connection unlock while another environment remains unlocked', async () => {
+    const { server, socketPath } = await fixture()
+    const connect = () => UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const staging = await connect()
+    const production = await connect()
+    await staging.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    await production.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: productionEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      accountBindingHandle: 'binding:production', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    staging.close()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    const replacement = await connect()
+    await expect(replacement.getProfileStatus({
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
+    })).resolves.toEqual({ state: 'locked' })
+    await expect(production.getProfileStatus({
+      authorityEnvironmentId: productionEnvironmentId,
+      accountBindingHandle: 'binding:production', authorityBindingVersion: 1,
+    })).resolves.toMatchObject({ state: 'ready' })
+    replacement.close(); production.close(); await server.close()
+  })
+
+  it('carries owner-bound semantic migration receipts and chunks', async () => {
+    const semantic = '3'.repeat(64)
+    const { server, socketPath } = await fixture((_ownerId, profileId) => {
+      const exportId = profileId.replaceAll('-', '').padEnd(48, '0')
+      return {
+        async inventory() { return { inventoryDigest: '7'.repeat(64), sourceGeneration: '4'.repeat(64), schemaVersion: 1, requiredMaxRecords: 1, requiredMaxBytes: 512 } },
+        async begin() { return { exportId, transferId: 'c'.repeat(48), transferDigest: 'd'.repeat(64), schemaVersion: 1, sourceGeneration: '4'.repeat(64), recordCount: 1, firstEventSequence: 0, lastEventSequence: 0, semanticDigest: semantic, chunkCount: 1 } },
+        read(input) {
+          if (input.exportId !== exportId) throw new Error('migration_export_not_found')
+          return { exportId, chunkIndex: 0, records: [{ collection: 'sessions', id: 'b'.repeat(32), sequence: 0, payloadDigest: '5'.repeat(64) }], chunkDigest: '6'.repeat(64), final: true }
+        },
+      }
+    })
+    const client = await UnixHostClient.connect({ socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now })
+    const profile = await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    const receipt = await client.beginMigrationExport({
+      sourceProfileSelector: profile.profileSelector,
+      expectedInventoryDigest: '7'.repeat(64), maxRecords: 10, maxBytes: 10_000,
+    })
+    await expect(client.getMigrationExportInventory({ sourceProfileSelector: profile.profileSelector }))
+      .resolves.toMatchObject({ inventoryDigest: '7'.repeat(64), requiredMaxRecords: 1 })
+    expect(receipt.semanticDigest).toBe(semantic)
+    const chunk = await client.readMigrationExport({
+      sourceProfileSelector: profile.profileSelector, exportId: receipt.exportId, chunkIndex: 0,
+    })
+    expect(chunk).toMatchObject({ final: true, records: [{ collection: 'sessions', sequence: 0 }] })
+    const other = await client.ensureAccountProfile({
+      issuer: 'https://accounts.other.example', subject: 'user-two', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken('https://accounts.other.example', 'user-two'),
+      accountBindingHandle: 'binding:other', authorityBindingVersion: 1, keyHandle: 'keychain:u2', unlockMaterial,
+    })
+    await expect(client.readMigrationExport({
+      sourceProfileSelector: other.profileSelector, exportId: receipt.exportId, chunkIndex: 0,
+    })).rejects.toMatchObject({ code: 'stale' })
+    client.close(); await server.close()
+  })
+
+  it('binds a legacy inventory authority to the authenticated connection and target Profile', async () => {
+    let now = 1_000
+    const exportId = 'a'.repeat(48)
+    const service = {
+      async inventory() {
+        return { inventoryDigest: '7'.repeat(64), sourceGeneration: '4'.repeat(64), schemaVersion: 1,
+          requiredMaxRecords: 1, requiredMaxBytes: 512 }
+      },
+      async begin() {
+        return { exportId, transferId: 'c'.repeat(48), transferDigest: 'd'.repeat(64), schemaVersion: 1,
+          sourceGeneration: '4'.repeat(64), recordCount: 1, firstEventSequence: 0, lastEventSequence: 0,
+          semanticDigest: '3'.repeat(64), chunkCount: 1 }
+      },
+      read() { return { exportId, chunkIndex: 0, records: [], chunkDigest: '6'.repeat(64), final: true } },
+    }
+    const { server, socketPath } = await fixture(undefined, undefined, () => service, () => now)
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: () => now,
+    })
+    const profile = await client.bootstrapLocalProfile({
+      keyHandle: 'keychain:legacy-local', unlockMaterial,
+    })
+    const proof = await client.getExistingMigrationSourceInventory({ targetProfileSelector: profile.profileSelector })
+    expect(proof.sourceInventoryAuthority).toMatch(/^[A-Za-z0-9_-]{43}$/u)
+    expect(proof.sourceInstallationId).toBe(identity.installationId)
+    const receipt = await client.beginMigrationExport({
+      sourceProfileSelector: profile.profileSelector,
+      sourceInventoryAuthority: proof.sourceInventoryAuthority,
+      expectedInventoryDigest: proof.inventoryDigest, maxRecords: proof.requiredMaxRecords, maxBytes: proof.requiredMaxBytes,
+    })
+    now = proof.expiresAt + 1
+    await expect(client.readMigrationExport({
+      sourceProfileSelector: profile.profileSelector,
+      sourceInventoryAuthority: proof.sourceInventoryAuthority,
+      exportId: receipt.exportId, chunkIndex: 0,
+    })).resolves.toMatchObject({ final: true })
+    await expect(client.beginMigrationExport({
+      sourceProfileSelector: profile.profileSelector,
+      sourceInventoryAuthority: proof.sourceInventoryAuthority,
+      expectedInventoryDigest: proof.inventoryDigest, maxRecords: 1, maxBytes: 512,
+    })).rejects.toMatchObject({ code: 'stale' })
+    await expect(client.beginMigrationExport({
+      sourceProfileSelector: profile.profileSelector,
+      sourceInventoryAuthority: 'A'.repeat(43),
+      expectedInventoryDigest: proof.inventoryDigest, maxRecords: 1, maxBytes: 512,
+    })).rejects.toMatchObject({ code: 'stale' })
+    client.close(); await server.close()
+  })
+
+  it('carries durable target stage, status, verify, and commit receipts without payload', async () => {
+    const importId = 'a'.repeat(48)
+    const semanticDigest = '3'.repeat(64)
+    const { server, socketPath } = await fixture(undefined, () => ({
+      async stage() { return { importId, version: 2, targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async status() { return { importId, version: 2, state: 'staged', targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async verify() { return { importId, version: 3, semanticDigest } },
+      async commit() { return { importId, version: 4, targetGeneration: 2 } },
+      async abort() { return { importId, version: 4 } },
+    }))
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const profile = await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    const staged = await client.stageMigrationImport({
+      transferId: 'b'.repeat(48), transferDigest: '4'.repeat(64),
+      sourceInstallationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190', sourceInventoryDigest: '5'.repeat(64),
+      sourceGeneration: '6'.repeat(64), sourceSchemaVersion: 1, targetGeneration: 2,
+      targetProfileSelector: profile.profileSelector, recordCount: 1, semanticDigest,
+    })
+    expect(staged).toEqual({ importId, stageVersion: 2 })
+    await expect(client.getMigrationImportStatus({
+      transferId: 'b'.repeat(48), targetGeneration: 2,
+      sourceInstallationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190', targetProfileSelector: profile.profileSelector,
+    }))
+      .resolves.toEqual({ importId, stageVersion: 2, state: 'staged' })
+    await expect(client.verifyMigrationImport({
+      importId, expectedStageVersion: 2, targetProfileSelector: profile.profileSelector,
+    }))
+      .resolves.toEqual({ stageVersion: 3, semanticDigest })
+    await expect(client.abortMigrationImport({
+      importId, expectedStageVersion: 3, targetProfileSelector: profile.profileSelector,
+    }))
+      .resolves.toEqual({ stageVersion: 4 })
+    await expect(client.commitMigrationImport({
+      importId, expectedStageVersion: 3, expectedCurrentGeneration: 1,
+      targetProfileSelector: profile.profileSelector,
+    }))
+      .resolves.toEqual({ stageVersion: 4, activeGeneration: 2 })
+    client.close(); await server.close()
+  })
+
+  it('maps migration export failures to bounded public authority codes', async () => {
+    const exportId = 'a'.repeat(48)
+    let failure: unknown = new Error('migration_export_busy')
+    const migrationExport = {
+      async inventory() { throw failure },
+      async begin() {
+        return { exportId, transferId: 'b'.repeat(48), transferDigest: 'c'.repeat(64), schemaVersion: 1,
+          sourceGeneration: 'd'.repeat(64), recordCount: 1, firstEventSequence: 0, lastEventSequence: 0,
+          semanticDigest: 'e'.repeat(64), chunkCount: 1 }
+      },
+      read() { return { exportId, chunkIndex: 0, records: [], chunkDigest: 'f'.repeat(64), final: true } },
+    }
+    const { server, socketPath } = await fixture(() => migrationExport)
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const profile = await client.bootstrapLocalProfile({ keyHandle: 'keychain:export-errors', unlockMaterial })
+    const cases: Array<[unknown, string]> = [
+      [new HostAuthorityError('busy'), 'busy'],
+      ['non-error', 'unavailable'],
+      [new Error('migration_export_busy'), 'busy'],
+      [new Error('migration_export_not_found'), 'stale'],
+      [new Error('migration_export_bounds_invalid'), 'unavailable'],
+      [new Error('migration_export_request_invalid'), 'unavailable'],
+      [new Error('migration_inventory_changed'), 'conflict'],
+      [new Error('migration_source_changed'), 'conflict'],
+      [new Error('migration_export_too_large'), 'conflict'],
+      [new Error('unexpected'), 'unavailable'],
+    ]
+    for (const [reason, code] of cases) {
+      failure = reason
+      await expect(client.getMigrationExportInventory({ sourceProfileSelector: profile.profileSelector }))
+        .rejects.toMatchObject({ code })
+    }
+    client.close(); await server.close()
+  })
+
+  it('maps migration import failures to bounded public authority codes', async () => {
+    const importId = 'a'.repeat(48)
+    const semanticDigest = 'b'.repeat(64)
+    let failure: unknown = new Error('migration_import_invalid')
+    const { server, socketPath } = await fixture(undefined, () => ({
+      async stage() { return { importId, version: 2, targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async status() { return { importId, version: 2, state: 'staged' as const, targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async verify() { return { importId, version: 3, semanticDigest } },
+      async commit() { return { importId, version: 4, targetGeneration: 2 } },
+      async abort() { throw failure },
+    }))
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const profile = await client.bootstrapLocalProfile({ keyHandle: 'keychain:import-errors', unlockMaterial })
+    const cases: Array<[unknown, string]> = [
+      ['non-error', 'unavailable'],
+      [new Error('migration_import_invalid'), 'unavailable'],
+      [new Error('migration_import_not_found'), 'stale'],
+      [new Error('migration_import_stale'), 'stale'],
+      [new Error('migration_import_conflict'), 'conflict'],
+      [new Error('migration_import_state'), 'conflict'],
+      [new Error('migration_import_generation_changed'), 'conflict'],
+      [new Error('migration_import_already_committed'), 'conflict'],
+      [new Error('migration_import_not_abortable'), 'conflict'],
+      [new Error('migration_import_mismatch'), 'unauthorized'],
+      [new Error('migration_import_unsafe'), 'unauthorized'],
+      [new Error('unexpected'), 'unavailable'],
+    ]
+    for (const [reason, code] of cases) {
+      failure = reason
+      await expect(client.abortMigrationImport({
+        importId, expectedStageVersion: 3, targetProfileSelector: profile.profileSelector,
+      })).rejects.toMatchObject({ code })
+    }
+    client.close(); await server.close()
+  })
+
+  it('distinguishes trusted stopped endpoints from unverified socket paths', async () => {
+    const root = dir()
+    const base = {
+      socketPath: join(root, 'missing.sock'), expectedUid: uid, trustedEndpoint: true as const,
+      endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180',
+      trustedInstallationId: identity.installationId, trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    }
+    expect(await discoverUnixHost(base)).toEqual({ state: 'stopped', code: 'trusted_host_not_running' })
+    expect(await discoverUnixHost({ ...base, endpointRegistrationId: 'invalid' }))
+      .toEqual({ state: 'unknown', code: 'transport_unavailable' })
+    symlinkSync(join(root, 'target'), base.socketPath)
+    expect(await discoverUnixHost(base)).toEqual({ state: 'unknown', code: 'host_unverified' })
+  })
+
+  it('discovers a running Unix Host and fails closed on protocol trust mismatch', async () => {
+    const { server, socketPath } = await fixture()
+    const base = {
+      socketPath, expectedUid: uid, trustedEndpoint: true as const,
+      endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180',
+      trustedInstallationId: identity.installationId, trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    }
+
+    const running = await discoverUnixHost(base)
+    expect(running.state).toBe('running')
+    if (running.state === 'running') running.client.close()
+    await expect(discoverUnixHost({ ...base, trustedInstallationId: randomUUID() }))
+      .resolves.toEqual({ state: 'unknown', code: 'host_unverified' })
+    await server.close()
+  })
+
+  it('discovers a Windows named-pipe Host through the same signed challenge protocol', async () => {
+    const { server, socketPath } = await fixture()
+    const endpointRegistrationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180'
+    const pipePath = windowsNamedPipePath({
+      installationId: identity.installationId,
+      endpointRegistrationId,
+    })
+    const result = await discoverWindowsHost({
+      platform: 'win32',
+      arch: 'x64',
+      socketPath: pipePath,
+      trustedEndpoint: true,
+      endpointRegistrationId,
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      now: clock.now,
+      connectSocket: () => createConnection(socketPath),
+    })
+    expect(result.state).toBe('running')
+    if (result.state === 'running') {
+      expect(result.inspection.installation_id).toBe(identity.installationId)
+      result.client.close()
+    }
+    await server.close()
+  })
+
+  it('fails closed before connecting when a Windows registration names the wrong pipe', async () => {
+    let connections = 0
+    const result = await discoverWindowsHost({
+      platform: 'win32',
+      arch: 'x64',
+      socketPath: String.raw`\\.\pipe\slark-dsh-host-v1-${'0'.repeat(64)}`,
+      trustedEndpoint: true,
+      endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180',
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      connectSocket: () => {
+        connections += 1
+        return createConnection(join(dir(), 'must-not-connect.sock'))
+      },
+    })
+    expect(result).toEqual({ state: 'unknown', code: 'host_unverified' })
+    expect(connections).toBe(0)
+  })
+
+  it('distinguishes a missing trusted Windows pipe from a failed signed challenge', async () => {
+    const endpointRegistrationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180'
+    const pipePath = windowsNamedPipePath({
+      installationId: identity.installationId,
+      endpointRegistrationId,
+    })
+    const base = {
+      platform: 'win32',
+      arch: 'x64',
+      socketPath: pipePath,
+      trustedEndpoint: true as const,
+      endpointRegistrationId,
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      now: clock.now,
+    }
+    expect(
+      await discoverWindowsHost({
+        ...base,
+        connectSocket: () => createConnection(join(dir(), 'missing.sock')),
+      }),
+    ).toEqual({ state: 'stopped', code: 'trusted_host_not_running' })
+
+    const { server, socketPath } = await fixture()
+    const otherKey = generateKeyPairSync('ed25519').publicKey
+      .export({ format: 'der', type: 'spki' }) as Buffer
+    expect(
+      await discoverWindowsHost({
+        ...base,
+        trustedInstallationPublicKey: otherKey.subarray(-32).toString('base64url'),
+        connectSocket: () => createConnection(socketPath),
+      }),
+    ).toEqual({ state: 'unknown', code: 'host_unverified' })
+    await server.close()
+  })
+
+  it('fences replay, expiry, and a restarted Host process nonce', () => {
+    const state = {
+      clientInstanceId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3111' as never,
+      hostInstanceId: identity.hostInstanceId as never,
+      processNonce: identity.processNonce as never,
+    }
+    const authority = new HostRequestAuthorizer(state, clock.now)
+    const params = {
+      client_instance_id: state.clientInstanceId, host_instance_id: state.hostInstanceId,
+      process_nonce: state.processNonce, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190' as never,
+      issued_at: 1_000, expires_at: 2_000,
+    }
+    authority.authorize(params)
+    expect(() =>{  authority.authorize(params) }).toThrow(HostAuthorityError)
+    expect(() =>{  new HostRequestAuthorizer({ ...state, processNonce: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8' as never }, clock.now).authorize(params) })
+      .toThrow(HostAuthorityError)
+    expect(() =>{  new HostRequestAuthorizer(state, () => 2_001).authorize({ ...params, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3191' as never }) })
+      .toThrow(HostAuthorityError)
+    expect(() =>{  new HostRequestAuthorizer(state, clock.now).authorize({ ...params, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3192' as never, issued_at: 1_500, expires_at: 1_400 }) })
+      .toThrow(HostAuthorityError)
+    expect(() =>{  new HostRequestAuthorizer(state, () => 40_001).authorize({ ...params, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3193' as never, expires_at: 50_000 }) })
+      .toThrow(HostAuthorityError)
+  })
+})
+
+describe('single Host ownership', () => {
+  it('rejects forged leases and validates every caller-owned identity field', async () => {
+    expect(() => { new SingleHostLock('/tmp/forged', {
+      pid: 1, uid: 1, processNonce: 'forged-0123456789', ownerId: 'forged',
+    }, Symbol('forged')) }).toThrow(HostAuthorityError)
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const base = { root, pid: 1, uid: statSync(root).uid, processNonce: 'nonce-0123456789abcdef' }
+    for (const options of [
+      { ...base, pid: 1.5 },
+      { ...base, uid: -1 },
+      { ...base, processNonce: 'short' },
+      { ...base, processNonce: 'x'.repeat(257) },
+      { ...base, processNonce: 'nonce-0123456789\n' },
+    ]) {
+      await expect(acquireSingleHostLock(options)).rejects.toMatchObject({ code: 'invalid_input' })
+    }
+  })
+
+  it('fails closed on malformed, shared, and permission-open lock records', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const path = join(root, 'host.lock')
+    writeFileSync(path, '{}\n', { mode: 0o600 })
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    writeFileSync(path, JSON.stringify({ pid: 1, uid, processNonce: 'old', ownerId: 'owner' }), { mode: 0o600 })
+    chmodSync(path, 0o666)
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    chmodSync(path, 0o600)
+    linkSync(path, join(root, 'shared.lock'))
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('uses the real liveness probe and makes release idempotent while fencing stale calls', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const owner = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: 'owner-0123456789abcdef' })
+    await expect(acquireSingleHostLock({ root, pid: process.pid + 1, uid, processNonce: 'other-0123456789abcdef' }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    await owner.release()
+    await expect(owner.release()).resolves.toBeUndefined()
+    expect(() => { owner.assertOwner() }).toThrow(HostAuthorityError)
+
+    const permission = Object.assign(new Error('not permitted'), { code: 'EPERM' })
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw permission })
+    onTestFinished(() => { kill.mockRestore() })
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 123, uid, processNonce: 'old', ownerId: 'old' }), { mode: 0o600 })
+    await expect(acquireSingleHostLock({ root, pid: 456, uid, processNonce: 'new-owner-0123456789' }))
+      .rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('fences a lock whose process nonce changes without relying on owner-id mismatch', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const owner = await acquireSingleHostLock({ root, pid: 1, uid, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
+    const path = join(root, 'host.lock')
+    const record = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    writeFileSync(path, JSON.stringify({ ...record, processNonce: 'changed-0123456789abcdef' }), { mode: 0o600 })
+    expect(() => { owner.assertOwner() }).toThrow(HostAuthorityError)
+  })
+
+  it('admits one owner and refuses a live competing owner', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const first = await acquireSingleHostLock({ root, pid: 111, uid, processNonce: 'nonce-a-0123456789', isProcessAlive: pid => pid === 111 })
+    await expect(acquireSingleHostLock({ root, pid: 222, uid, processNonce: 'nonce-b-0123456789', isProcessAlive: pid => pid === 111 }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    await first.release()
+  })
+
+  it('recovers a stale regular lock but refuses a symlink-shaped lock', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 111, uid, processNonce: 'old', ownerId: 'stale-owner' }), { mode: 0o600 })
+    const owner = await acquireSingleHostLock({ root, pid: 222, uid, processNonce: 'new-0123456789abcdef', isProcessAlive: () => false })
+    await owner.release()
+    symlinkSync(join(root, 'missing-target'), join(root, 'host.lock'))
+    await expect(acquireSingleHostLock({ root, pid: 333, uid, processNonce: 'newer-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('rejects unsafe process ids and refuses to unlink a swapped owner record', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    await expect(acquireSingleHostLock({ root, pid: -1, uid, processNonce: 'nonce-0123456789abcdef' }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    const owner = await acquireSingleHostLock({ root, pid: 123, uid, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
+    unlinkSync(join(root, 'host.lock'))
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid, processNonce: 'attacker-0123456789', ownerId: 'attacker' }), { mode: 0o600 })
+    await expect(owner.release()).rejects.toMatchObject({ code: 'stale' })
+    const replacedOwner: unknown = JSON.parse(readFileSync(join(root, 'host.lock'), 'utf8'))
+    expect(replacedOwner).toMatchObject({ ownerId: 'attacker' })
+  })
+})
+
+describe('session, approval, and context authority', () => {
+  it('fails closed on malformed journals and preserves every recovered terminal outcome', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const path = join(root, 'nested', 'journal.jsonl')
+    const journal = new FileHostJournal(path)
+    expect(journal.read()).toEqual([])
+    writeFileSync(path, '')
+    expect(journal.read()).toEqual([])
+    writeFileSync(path, '{}')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    writeFileSync(path, '{}\n')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    writeFileSync(path, 'not-json\n')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    expect(() => new FileHostJournal(root).read()).toThrow()
+
+    expect(() => {
+      journal.append({
+        kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'invalid',
+        payloadHash: 'a'.repeat(64), outcome: undefined, at: 1,
+      })
+    }).toThrow(HostAuthorityError)
+    expect(() => {
+      journal.append({
+        kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'large',
+        payloadHash: 'a'.repeat(64), outcome: 'x'.repeat(1024 * 1024), at: 1,
+      })
+    }).toThrow(HostAuthorityError)
+
+    writeFileSync(path, [
+      { kind: 'command_started', profileId: 'p', sessionId: 's', commandId: 'started', payloadHash: 'a'.repeat(64), at: 1 },
+      { kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'committed', payloadHash: 'b'.repeat(64), outcome: 42, at: 2 },
+      { kind: 'command_failed', profileId: 'p', sessionId: 's', commandId: 'failed', payloadHash: 'c'.repeat(64), at: 3 },
+    ].map(event => JSON.stringify(event)).join('\n') + '\n')
+    const authority = new SessionCommandAuthority(journal, clock)
+    expect(authority.outcome('p', 'started')).toEqual({ status: 'unknown' })
+    expect(authority.outcome('p', 'committed')).toEqual({ status: 'committed', value: 42 })
+    expect(authority.outcome('p', 'failed')).toEqual({ status: 'failed' })
+    expect(authority.outcome('p', 'missing')).toBeNull()
+    let executed = false
+    await expect(authority.run({ profileId: 'p', sessionId: 's', commandId: 'committed', payloadHash: 'b'.repeat(64) }, async () => {
+      executed = true
+    })).resolves.toEqual({ status: 'committed', value: 42 })
+    expect(executed).toBe(false)
+    await expect(authority.run({ profileId: 'p', sessionId: 's', commandId: 'failed', payloadHash: 'd'.repeat(64) }, async () => {}))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+  })
+
+  it('deduplicates active commands and records execution failure before admitting the next write', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const journal = new FileHostJournal(join(root, 'journal.jsonl'))
+    const authority = new SessionCommandAuthority(journal, clock)
+    const input = { profileId: 'p', sessionId: 's', commandId: 'active', payloadHash: 'a'.repeat(64) }
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const active = authority.run(input, async () => { await blocked; throw new Error('execution failed') })
+    expect(authority.run(input, async () => 'duplicate')).toBe(active)
+    await expect(authority.run({ ...input, payloadHash: 'b'.repeat(64) }, async () => 'conflict'))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+    await expect(authority.run({ ...input, commandId: 'invalid', payloadHash: 'A'.repeat(64) }, async () => 'invalid'))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    const next = authority.run({ ...input, commandId: 'next', payloadHash: 'c'.repeat(64) }, async () => 'next')
+    release()
+    await expect(active).rejects.toThrow('execution failed')
+    await expect(next).resolves.toEqual({ status: 'committed', value: 'next' })
+    expect(authority.outcome('p', 'active')).toEqual({ status: 'failed' })
+    await expect(authority.run(input, async () => 'must not run')).resolves.toEqual({ status: 'failed' })
+    await new Promise<void>(resolve => setImmediate(resolve))
+  })
+
+  it('serializes the same profile/session, permits other sessions, and recovers started commands as unknown', async () => {
+    const journal = new FileHostJournal(join(dir(), 'journal.jsonl'))
+    const authority = new SessionCommandAuthority(journal, clock)
+    const order: string[] = []
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const a = authority.run({ profileId: 'p1', sessionId: 's1', commandId: 'c1', payloadHash: 'a'.repeat(64) }, async () => {
+      order.push('a:start'); await blocked; order.push('a:end'); return { value: 1 }
+    })
+    const b = authority.run({ profileId: 'p1', sessionId: 's1', commandId: 'c2', payloadHash: 'b'.repeat(64) }, async () => { order.push('b'); return { value: 2 } })
+    const c = authority.run({ profileId: 'p1', sessionId: 's2', commandId: 'c3', payloadHash: 'c'.repeat(64) }, async () => { order.push('c'); return { value: 3 } })
+    await c
+    expect(order).toEqual(['a:start', 'c'])
+    release(); await Promise.all([a, b])
+    expect(order).toEqual(['a:start', 'c', 'a:end', 'b'])
+    await expect(authority.run({ profileId: 'p1', sessionId: 's1', commandId: 'c1', payloadHash: 'd'.repeat(64) }, async () => ({})))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+    journal.append({ kind: 'command_started', profileId: 'p1', sessionId: 's1', commandId: 'lost', payloadHash: 'e'.repeat(64), at: 1_000 })
+    expect(new SessionCommandAuthority(journal, clock).outcome('p1', 'lost')).toEqual({ status: 'unknown' })
+  })
+
+  it('CAS-rejects stale, mismatched, expired, and late approval decisions', () => {
+    const approvals = new ApprovalAuthority(clock)
+    approvals.request({ approvalId: 'a1', profileId: 'p1', payloadHash: 'a'.repeat(64), decisionVersion: 1, windowGeneration: 4, expiresAt: 2_000 })
+    expect(approvals.decide({ approvalId: 'a1', payloadHash: 'a'.repeat(64), expectedDecisionVersion: 1, windowGeneration: 4, decision: 'allow' })).toMatchObject({ decision: 'allow', decisionVersion: 2 })
+    expect(() => approvals.decide({ approvalId: 'a1', payloadHash: 'a'.repeat(64), expectedDecisionVersion: 1, windowGeneration: 4, decision: 'deny' }))
+      .toThrow(HostAuthorityError)
+  })
+
+  it('attaches enterprise authority only to a session lease and fences namespace epochs', () => {
+    const leases = new ContextLeaseAuthority(clock)
+    const lease = leases.attach({ profileId: 'p1', sessionId: 's1', environmentId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3120', bindingId: 'b1', membershipEpoch: 2, mappingEpoch: 3, policyEpoch: 4, expiresAt: 2_000 })
+    expect(leases.validate({ leaseId: lease.leaseId, profileId: 'p1', sessionId: 's1', environmentId: lease.environmentId, membershipEpoch: 2, mappingEpoch: 3, policyEpoch: 4 })).toEqual(lease)
+    expect(() => leases.validate({ leaseId: lease.leaseId, profileId: 'p1', sessionId: 's1', environmentId: lease.environmentId, membershipEpoch: 3, mappingEpoch: 3, policyEpoch: 4 })).toThrow(HostAuthorityError)
+    leases.detach(lease.leaseId)
+    expect(() => leases.validate({ leaseId: lease.leaseId, profileId: 'p1', sessionId: 's1', environmentId: lease.environmentId, membershipEpoch: 2, mappingEpoch: 3, policyEpoch: 4 })).toThrow(HostAuthorityError)
+  })
+})
+
+describe('worker and Desktop-only bundle', () => {
+  it('delegates migration staging and activates a committed generation', async () => {
+    const calls: string[] = []
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async (generation) => { calls.push(`prepare:${generation}`) },
+      importOwnerState: async (generation) => { calls.push(`owner:${generation}`) },
+      importSession: async (generation, header, events) => {
+        calls.push(`session:${generation}:${String(header.id)}:${String(events.length)}`)
+      },
+      semanticRecords: async (generation) => { calls.push(`records:${generation}`); return [] },
+      activeGeneration: async () => { calls.push('active'); return 4 },
+      commitGeneration: async (expected, next) => { calls.push(`commit:${expected}->${next}`) },
+      abortGeneration: async (generation) => { calls.push(`abort:${generation}`) },
+    }, async (generation) => { calls.push(`activate:${generation}`) })
+
+    await target.prepareEmptyGeneration(5)
+    await target.importOwnerState(5, { version: 1, documents: [] })
+    await target.importSession(5, { id: 'migrated' } as never, [])
+    expect(await target.semanticRecords(5)).toEqual([])
+    expect(await target.activeGeneration()).toBe(4)
+    await target.abortGeneration(5)
+    await target.commitGeneration(4, 5)
+
+    expect(calls).toEqual([
+      'prepare:5', 'owner:5', 'session:5:migrated:0', 'records:5', 'active',
+      'abort:5', 'commit:4->5', 'activate:5',
+    ])
+  })
+
+  it('rolls the active persistence pointer back when the replacement worker cannot start', async () => {
+    let active = 4
+    const commits: string[] = []
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async () => undefined,
+      importOwnerState: async () => undefined,
+      importSession: async () => undefined,
+      semanticRecords: async () => [],
+      activeGeneration: async () => active,
+      commitGeneration: async (expected, next) => {
+        if (active !== expected) throw new Error('generation changed')
+        commits.push(`${expected}->${next}`); active = next
+      },
+      abortGeneration: async () => undefined,
+    }, async (generation) => {
+      if (generation === 5) throw new Error('replacement worker failed')
+    })
+    await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement worker failed')
+    expect(active).toBe(4)
+    expect(commits).toEqual(['4->5', '5->4'])
+  })
+
+  it('preserves the replacement activation error when rollback activation also fails', async () => {
+    let active = 4
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async () => undefined,
+      importOwnerState: async () => undefined,
+      importSession: async () => undefined,
+      semanticRecords: async () => [],
+      activeGeneration: async () => active,
+      commitGeneration: async (expected, next) => {
+        expect(active).toBe(expected)
+        active = next
+      },
+      abortGeneration: async () => undefined,
+    }, async (generation) => {
+      throw new Error(generation === 5 ? 'replacement worker failed' : 'rollback worker failed')
+    })
+
+    await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement worker failed')
+    expect(active).toBe(4)
+  })
+
+  it('isolates worker inputs and waits for quiescence after closing notifications', async () => {
+    const events: string[] = []
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    const supervisor = new ProfileWorkerSupervisor(async (spec) => {
+      expect(spec.env).toEqual({})
+      expect(spec.pluginRoots).toEqual(['/profiles/p1/plugins'])
+      return { closeNotifications: () => events.push('closed'), abort: () => { events.push('aborted'); finish() }, done }
+    })
+    await supervisor.start({ profileId: 'p1', profileRoot: '/profiles/p1', credentialHandle: 'keychain:p1', pluginRoots: ['/profiles/p1/plugins'] })
+    await supervisor.dispose('p1')
+    expect(events).toEqual(['closed', 'aborted'])
+  })
+
+  it('keeps personal view leases Main-only and exposes no HTTP carrier', async () => {
+    const accountSubject = 'sensitive-account-subject-for-leak-check'
+    const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 3), clock, keyHandleUnlocked: () => true })
+    await registry.registerAccount({
+      issuer: 'https://account.deepseek.com', subject: accountSubject, keyHandle: 'keychain:u1',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u1',
+      authorityBindingVersion: 1, unlockMaterial,
+    })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken, ensureProfileWorker: async () => undefined,
+    })
+    await host.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: accountSubject,
+      accountAccessToken: accountToken('https://account.deepseek.com', accountSubject), keyHandle: 'keychain:u1',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u1',
+      authorityBindingVersion: 1, unlockMaterial, ownerId: 'connection-1',
+    })
+    const opened = await host.openProfile({
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u1',
+      authorityBindingVersion: 1, ownerId: 'connection-1',
+    })
+    expect(opened).toMatchObject({ runtimeGeneration: 5, leaseGeneration: 1 })
+    expect(opened).not.toHaveProperty('url')
+    expect(opened).not.toHaveProperty('token')
+    expect(JSON.stringify(opened)).not.toContain(accountSubject)
+  })
+
+  it('atomically extends an activated lease when the same owner reopens its Profile', async () => {
+    let now = 1_000
+    const leaseClock = { now: () => now }
+    const registry = new ProfileRegistry({
+      root: dir(), deviceIndexKey: Buffer.alloc(32, 4), clock: leaseClock,
+      keyHandleUnlocked: () => true,
+    })
+    await registry.registerAccount({
+      issuer: slarkIssuer, subject: 'lease-renewal', keyHandle: 'keychain:renewal',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:renewal',
+      authorityBindingVersion: 1, unlockMaterial,
+    })
+    const host = new DesktopHost({
+      registry, clock: leaseClock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => undefined,
+      activateProfileView: async () => ({
+        origin: 'http://127.0.0.1:4123', generation: 7, bootstrapCookie,
+      }),
+    })
+    await host.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'lease-renewal',
+      accountAccessToken: accountToken(slarkIssuer, 'lease-renewal'),
+      keyHandle: 'keychain:renewal', authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:renewal', authorityBindingVersion: 1,
+      unlockMaterial, ownerId: 'connection-renewal',
+    })
+    const input = {
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:renewal',
+      authorityBindingVersion: 1,
+      ownerId: 'connection-renewal',
+    }
+    const first = await host.openProfile(input)
+    await host.activateView({
+      profileId: first.profileId, viewLeaseId: first.viewLeaseId,
+      viewActivationHandle: first.viewActivationHandle, leaseGeneration: first.leaseGeneration,
+      runtimeGeneration: first.runtimeGeneration, ownerId: input.ownerId,
+    })
+
+    now += 20_000
+    const renewed = await host.openProfile(input)
+    expect(renewed).toMatchObject({
+      viewLeaseId: first.viewLeaseId,
+      leaseGeneration: first.leaseGeneration,
+      expiresAt: first.expiresAt + 20_000,
+    })
+    expect(renewed.viewActivationHandle).not.toBe(first.viewActivationHandle)
+  })
+
+  it('rejects invalid or mismatched Account authority before Profile registry mutation', async () => {
+    const registry = new ProfileRegistry({
+      root: dir(), deviceIndexKey: Buffer.alloc(32, 3), clock, keyHandleUnlocked: () => true,
+    })
+    let workerStarts = 0
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: (value) => {
+        if (value === 'invalid') throw new Error('invalid token')
+        return verifyTestAccountToken(value)
+      },
+      ensureProfileWorker: async () => { workerStarts += 1 },
+    })
+    const input = {
+      issuer: slarkIssuer,
+      subject: 'person',
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:person',
+      authorityBindingVersion: 1,
+      keyHandle: 'keychain:person',
+      unlockMaterial,
+      ownerId: 'connection-person',
+    }
+    await expect(host.ensureAccountProfile({ ...input, accountAccessToken: 'invalid' }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(host.ensureAccountProfile({
+      ...input,
+      accountAccessToken: accountToken(slarkIssuer, 'different-person'),
+    })).rejects.toMatchObject({ code: 'profile_mismatch' })
+    await expect(registry.resolveAccount({ issuer: slarkIssuer, subject: 'person' })).resolves.toBeNull()
+    expect(registry.resolveBinding(stagingEnvironmentId, 'binding:person', 1)).toBeNull()
+    expect(workerStarts).toBe(0)
+  })
+
+  it('preserves locked instead of collapsing it into unbound', async () => {
+    const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 4), clock })
+    await registry.registerAccount({ issuer: 'https://account.deepseek.com', subject: 'u2', keyHandle: 'keychain:u2', authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u2', authorityBindingVersion: 1, unlockMaterial })
+    const host = new DesktopHost({ registry, clock, runtimeGeneration: 5 })
+    expect(host.getProfileStatus({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u2', authorityBindingVersion: 1, ownerId: 'connection-2' })).toEqual({ state: 'locked' })
+    await expect(host.openProfile({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:u2', authorityBindingVersion: 1, ownerId: 'connection-2' }))
+      .rejects.toMatchObject({ code: 'profile_locked' })
+  })
+
+  it('rolls back a newly persisted Profile when its first worker cannot start', async () => {
+    const registry = new ProfileRegistry({
+      root: dir(), deviceIndexKey: Buffer.alloc(32, 4), clock, keyHandleUnlocked: () => true,
+    })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => { throw new Error('worker failed') },
+    })
+    await expect(host.ensureAccountProfile({
+      issuer: 'https://account.deepseek.com', subject: 'person', accountBindingHandle: 'binding:rollback', keyHandle: 'keychain:rollback',
+      accountAccessToken: accountToken('https://account.deepseek.com', 'person'),
+      authorityEnvironmentId: stagingEnvironmentId,
+      authorityBindingVersion: 1,
+      unlockMaterial,
+      ownerId: 'connection-rollback',
+    })).rejects.toThrow('worker failed')
+    expect(host.getProfileStatus({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:rollback', authorityBindingVersion: 1, ownerId: 'connection-rollback' })).toEqual({ state: 'unbound' })
+  })
+
+  it.each(['missing', 'failed'] as const)('preserves the original account registration when a replacement worker is %s', async (failure) => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const options = { root, deviceIndexKey: Buffer.alloc(32, 4), clock }
+    const registry = new ProfileRegistry(options)
+    const source = { issuer: slarkIssuer, subject: 'original-person' }
+    const target = { issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'replacement-person' }
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:preserve',
+      authorityBindingVersion: 1, keyHandle: 'keychain:preserve', unlockMaterial,
+    }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5, verifyAccountAccessToken: verifyTestAccountToken,
+      ...(failure === 'failed' ? { ensureProfileWorker: async () => { throw new Error('worker failed') } } : {}),
+    })
+    const input = {
+      ...target, ...binding, authorityBindingVersion: 2,
+      accountAccessToken: accountToken(target.issuer, target.subject), ownerId: 'connection-preserve',
+    }
+    await expect(host.ensureAccountProfile(input)).rejects.toThrow(failure === 'failed' ? 'worker failed' : 'unavailable')
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+    const restarted = new ProfileRegistry(options)
+    expect(await restarted.resolveAccount(source)).toEqual(original)
+    expect(await restarted.resolveAccount(target)).toBeNull()
+    const retry = new DesktopHost({
+      registry: restarted, clock, runtimeGeneration: 5, verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => {},
+    })
+    expect((await retry.ensureAccountProfile(input)).profileId).toBe(original.profileId)
+  })
+
+  it('does not undo a newer registration when an older replacement worker fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 4), clock })
+    const source = { issuer: slarkIssuer, subject: 'original-person' }
+    const target = { issuer: slarkIssuer, subject: 'replacement-person' }
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:concurrent',
+      authorityBindingVersion: 1, keyHandle: 'keychain:concurrent', unlockMaterial,
+    }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5, verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => {
+        await registry.registerAccount({ ...target, ...binding, authorityBindingVersion: 3 })
+        throw new Error('older worker failed')
+      },
+    })
+    await expect(host.ensureAccountProfile({
+      ...target, ...binding, authorityBindingVersion: 2,
+      accountAccessToken: accountToken(target.issuer, target.subject), ownerId: 'connection-concurrent',
+    })).rejects.toMatchObject({ code: 'stale' })
+    expect(registry.resolveBinding(stagingEnvironmentId, binding.accountBindingHandle, 3)?.profileId).toBe(original.profileId)
+  })
+
+  it('leaves an unchanged registration intact when worker preparation fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 4), clock })
+    const input = { issuer: slarkIssuer, subject: 'unchanged', keyHandle: 'keychain:unchanged', unlockMaterial }
+    const original = await registry.registerAccount(input)
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    await expect(registry.provisionAccount(input, async () => { throw new Error('worker failed') }))
+      .rejects.toThrow('worker failed')
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+    expect(await registry.resolveAccount(input)).toBe(original)
+  })
+
+  it('preserves unrelated profiles when a replacement worker fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const options = { root, deviceIndexKey: Buffer.alloc(32, 4), clock }
+    const registry = new ProfileRegistry(options)
+    const local = await registry.createLocalAnonymous({ keyHandle: 'keychain:independent', unlockMaterial })
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:preserve-others',
+      authorityBindingVersion: 1, keyHandle: 'keychain:preserve-others', unlockMaterial,
+    }
+    const source = { issuer: slarkIssuer, subject: 'source-with-neighbors' }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const neighbor = await registry.registerAccount({ issuer: slarkIssuer, subject: 'neighbor', keyHandle: 'keychain:neighbor', unlockMaterial })
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    await expect(registry.provisionAccount({
+      ...source, ...binding, subject: 'replacement-with-neighbors', authorityBindingVersion: 2,
+    }, async () => { throw new Error('worker failed') })).rejects.toThrow('worker failed')
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+    const restarted = new ProfileRegistry(options)
+    for (const profile of [local, original, neighbor]) expect(restarted.resolveProfile(profile.profileId)).toEqual(profile)
+  })
+
+  it('does not start a worker or alter the registry when replacement persistence fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const options = { root, deviceIndexKey: Buffer.alloc(32, 4), clock }
+    const registry = new ProfileRegistry(options)
+    const source = { issuer: slarkIssuer, subject: 'persist-source' }
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:persist-failure',
+      authorityBindingVersion: 1, keyHandle: 'keychain:persist-failure', unlockMaterial,
+    }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    const failing = new ProfileRegistry({ ...options, persistSnapshot: () => { throw new Error('write failed') } })
+    let workerStarts = 0
+    await expect(failing.provisionAccount({
+      ...source, ...binding, subject: 'persist-target', authorityBindingVersion: 2,
+    }, async () => { workerStarts += 1 })).rejects.toThrow('write failed')
+    expect(workerStarts).toBe(0)
+    expect(await failing.resolveAccount(source)).toEqual(original)
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+  })
+})

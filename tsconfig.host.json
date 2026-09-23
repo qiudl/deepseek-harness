@@ -451,6 +451,8 @@
     { "path": "./packages/lsp/tool-lsp" },
     { "path": "./apps/cli" },
     { "path": "./apps/desktop-host" },
-    { "path": "./apps/desktop/tsconfig.host.json" }
+    { "path": "./apps/desktop/tsconfig.host.json" },
+    { "path": "./packages/host/control-protocol" },
+    { "path": "./packages/host/desktop-host" }
   ]
 }

@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/FlashingChen/dsh-desktop-hub",
+  "commit": "dcbe815de1e4a6bff050715c63dcd21db8b70e5d",
+  "files": {
+    "src/core/mcp.ts": "058a8e12c2ff9799c02b44879c764a3e64fe981452f647cd6fd1fe407395bf11",
+    "LICENSE": "4cc7c9f3a8330786f5b4c848068090b1438050b34a85572d1d9be0798c2cdda8",
+    "src/core/skills.ts": "1bfb9e89aff63c55eb8d31a138d59b4551f55a3d5206862fa15e3e1ceb7a0b3b",
+    "src/core/plugins.ts": "3410af38f1729629787647efadb322b1d974b6cf67b7b2b6ebba04165b3b4be6"
+  }
+}
