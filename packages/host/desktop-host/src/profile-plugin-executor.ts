@@ -321,6 +321,13 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
         }
         if (!Object.keys(builds).length) delete copy.allowBuilds
       }
+      if (copy.minimumReleaseAgeExclude !== undefined) {
+        const exclusions = copy.minimumReleaseAgeExclude
+        if (!Array.isArray(exclusions) || exclusions.some(value => typeof value !== 'string')) throw Error('invalid_plugin_policy')
+        const unrelated = exclusions.filter(value => value !== name && !value.startsWith(`${name}@`))
+        if (unrelated.length) copy.minimumReleaseAgeExclude = unrelated
+        else delete copy.minimumReleaseAgeExclude
+      }
       return stable(copy)
     }
     const values: unknown[] = []
