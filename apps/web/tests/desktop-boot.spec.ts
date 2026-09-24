@@ -52,6 +52,56 @@ it('leaves browser failure presentation with the Web boot kernel', async () => {
   expect(boot.run).toHaveBeenCalledWith(undefined)
 })
 
+it('starts a remote Host through the same Web entry without local Host authority', async () => {
+  document.body.innerHTML = '<div id="root"></div>'
+  const gate = Promise.withResolvers<undefined>()
+  const loadBundle = vi.fn(async () => {})
+  const fetch = vi.fn()
+  const openStream = vi.fn()
+  const ready = vi.fn(async () => ({ injections: [], transport: { fetch, openStream, loadBundle } }))
+  vi.stubGlobal('__DSH_BOOT_READY__', gate)
+  vi.stubGlobal('dshDesktopBoot', undefined)
+  vi.stubGlobal('dshRemoteBoot', { ready })
+  vi.stubGlobal('__DSH_TRANSPORT__', undefined)
+  await import('../src/main.ts')
+  await gate.promise
+  expect(ready).toHaveBeenCalledOnce()
+  expect((globalThis as { __DSH_TRANSPORT__?: unknown }).__DSH_TRANSPORT__).toEqual({
+    fetch, openStream, loadBundle, ownsHost: false, remoteHost: true,
+  })
+  expect(boot.applyIndexInjections).toHaveBeenCalledWith([], loadBundle)
+  expect(boot.run).toHaveBeenCalledWith(undefined)
+})
+
+it('rejects remote boot readiness without installing a transport after carrier failure', async () => {
+  document.body.innerHTML = '<div id="root"></div>'
+  const gate = Promise.withResolvers<undefined>()
+  const failure = new Error('remote Host unavailable')
+  const rejected = expect(gate.promise).rejects.toBe(failure)
+  vi.stubGlobal('__DSH_BOOT_READY__', gate)
+  vi.stubGlobal('dshDesktopBoot', undefined)
+  vi.stubGlobal('dshRemoteBoot', { ready: async () => { throw failure } })
+  vi.stubGlobal('__DSH_TRANSPORT__', undefined)
+  await import('../src/main.ts')
+  await rejected
+  expect((globalThis as { __DSH_TRANSPORT__?: unknown }).__DSH_TRANSPORT__).toBeUndefined()
+  expect(boot.applyIndexInjections).not.toHaveBeenCalled()
+})
+
+it('rejects incomplete remote transport before applying Host injections', async () => {
+  document.body.innerHTML = '<div id="root"></div>'
+  const gate = Promise.withResolvers<undefined>()
+  const rejected = expect(gate.promise).rejects.toThrow('remote web: carrier requires fetch, openStream, and loadBundle')
+  vi.stubGlobal('__DSH_BOOT_READY__', gate)
+  vi.stubGlobal('dshDesktopBoot', undefined)
+  vi.stubGlobal('dshRemoteBoot', { ready: async () => ({ injections: [], transport: { fetch: vi.fn() } }) })
+  vi.stubGlobal('__DSH_TRANSPORT__', undefined)
+  await import('../src/main.ts')
+  await rejected
+  expect((globalThis as { __DSH_TRANSPORT__?: unknown }).__DSH_TRANSPORT__).toBeUndefined()
+  expect(boot.applyIndexInjections).not.toHaveBeenCalled()
+})
+
 it.each(['root', 'readiness'])('reports missing %s before client plugin startup', async (missing) => {
   if (missing !== 'root') document.body.innerHTML = '<div id="root"></div>'
   const failed = vi.fn(async () => {})

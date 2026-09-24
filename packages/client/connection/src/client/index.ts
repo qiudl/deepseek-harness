@@ -102,6 +102,8 @@ export interface ClientTransportHooks {
    * transport can set this; served pages never carry the global at all.
    */
   ownsHost?: boolean
+  /** This shell connects to another machine's Host; page localhost never grants Host-local privileges. */
+  remoteHost?: boolean
   /** HTTP origin of a shell-owned Host when its WebSocket uses a different page origin. */
   streamBaseUrl?: string
 }
@@ -136,6 +138,7 @@ export interface ConnectionHandle {
    * Whether the privileged surface is reachable: the page authority is
    * loopback, the transport declares the page owns the Host
    * ({@link ClientTransportHooks.ownsHost}), or the context is not a browser.
+   * A remote Host carrier overrides all three local classifications.
    */
   readonly isLoopback: boolean
   /** Current Remote event generation and the Host facts carried by its opening frame. */
@@ -245,7 +248,8 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
     publishState(undefined)
   }
   const handle: ConnectionHandle = {
-    isLoopback: transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    isLoopback: transport?.remoteHost === true ? false
+      : transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
     generation: {
       getSnapshot: () => generation,
       subscribe: (listener) => {
