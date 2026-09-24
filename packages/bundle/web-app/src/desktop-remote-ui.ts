@@ -2,6 +2,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
 
 const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog'])
 
@@ -9,21 +10,28 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Invoke only the three Session reads needed by the initial remote UI slice. */
+/** Invoke bounded Session reads and collect the current Profile's Web boot rows. */
 export class DesktopRemoteUiExecutor {
-  constructor(private readonly gateway: TypertGateway) {}
+  constructor(private readonly gateway: TypertGateway,
+    private readonly bootInjections: () => IndexInjection[]) {}
 
   /**
    * Dispatch an exact endpoint after validating the carrier payload.
    * @param endpoint - Canonical Remote endpoint.
    * @param payload - Decoded carrier payload with named arguments.
    * @param signal - Cancellation for this invocation.
-   * @returns The business result from the existing Profile gateway.
+   * @returns The current startup rows or a result from the existing Profile gateway.
    */
   async execute(endpoint: string, payload: unknown, signal: AbortSignal): Promise<unknown> {
-    if (!READ_ENDPOINTS.has(endpoint)) throw new Error('desktop remote UI: endpoint denied')
+    if (endpoint !== 'boot/injections' && !READ_ENDPOINTS.has(endpoint)) {
+      throw new Error('desktop remote UI: endpoint denied')
+    }
     if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args)) {
       throw new Error('desktop remote UI: invalid payload')
+    }
+    if (endpoint === 'boot/injections') {
+      if (Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
+      return { injections: this.bootInjections() }
     }
     const [namespace, method] = endpoint.split('/') as [string, string]
     return this.gateway.invoke({ namespace, method, args: payload.args, signal })

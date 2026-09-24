@@ -953,7 +953,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'session/list' | 'session/page' | 'session/modelCatalog'
+    readonly endpoint: 'boot/injections' | 'session/list' | 'session/page' | 'session/modelCatalog'
     readonly payload: { readonly args: HostRemoteSessionJson }
   }
 }

@@ -259,7 +259,8 @@ export function apply(ctx: Context, config: Config): void {
   const desktopRemoteUiToken = process.env.DSH_PROFILE_REMOTE_UI_TOKEN
   if (desktopRemoteUiToken && /^[A-Za-z0-9_-]{43}$/u.test(desktopRemoteUiToken)) {
     ctx.inject(['typertGateway'], (remoteCtx) => {
-      const executor = new DesktopRemoteUiExecutor(remoteCtx.typertGateway)
+      const executor = new DesktopRemoteUiExecutor(remoteCtx.typertGateway,
+        () => remoteCtx.webServer.collectIndexInjections())
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-ui',
         handler: (req, res) => handleDesktopRemoteUiRequest(req, res, desktopRemoteUiToken,

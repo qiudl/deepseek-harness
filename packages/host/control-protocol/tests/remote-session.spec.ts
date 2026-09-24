@@ -94,7 +94,10 @@ describe('Profile remote UI read wire commands', () => {
       endpoint, payload },
   })
 
-  it('accepts only the three bounded read endpoints', () => {
+  it('accepts only the bounded read endpoints and an empty boot selector', () => {
+    const boot = readFrame('boot/injections', { args: {} })
+    expect(encodeHostControlFrame(decode(boot))).toBe(`${JSON.stringify(boot)}\n`)
+    expect(() => decode(readFrame('boot/injections', { args: { profile: 'other' } }))).toThrow()
     for (const endpoint of ['session/list', 'session/page', 'session/modelCatalog']) {
       const value = readFrame(endpoint, { args: { _request: {} } })
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)

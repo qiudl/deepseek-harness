@@ -7,8 +7,14 @@ import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from '../src/de
 describe('Desktop remote UI read-only bridge', () => {
   it('dispatches only the exact M1 read endpoints with named Remote arguments', async () => {
     const invoke = vi.fn(async () => ({ items: [] }))
-    const executor = new DesktopRemoteUiExecutor({ invoke } as unknown as TypertGateway)
+    const boot = vi.fn(() => [{ kind: 'script' as const, placement: 'head' as const, text: 'boot()' }])
+    const executor = new DesktopRemoteUiExecutor({ invoke } as unknown as TypertGateway, boot)
     const signal = new AbortController().signal
+    await expect(executor.execute('boot/injections', { args: {} }, signal))
+      .resolves.toEqual({ injections: [{ kind: 'script', placement: 'head', text: 'boot()' }] })
+    expect(boot).toHaveBeenCalledOnce()
+    await expect(executor.execute('boot/injections', { args: { extra: true } }, signal))
+      .rejects.toThrow('invalid payload')
     await expect(executor.execute('session/list', { args: { _request: {} } }, signal))
       .resolves.toEqual({ items: [] })
     expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
@@ -21,7 +27,7 @@ describe('Desktop remote UI read-only bridge', () => {
   it('requires a private token, rejects forbidden endpoints and bounds input', async () => {
     const token = 'A'.repeat(43)
     const invoke = vi.fn(async () => ({ items: [] }))
-    const executor = new DesktopRemoteUiExecutor({ invoke } as unknown as TypertGateway)
+    const executor = new DesktopRemoteUiExecutor({ invoke } as unknown as TypertGateway, () => [])
     const server = createServer((req, res) => {
       void handleDesktopRemoteUiRequest(req, res, token, (endpoint, payload, signal) =>
         executor.execute(endpoint, payload, signal))

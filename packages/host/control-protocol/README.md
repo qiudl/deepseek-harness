@@ -34,7 +34,7 @@ The negotiated `profile.extensions` method carries a Main-held lease and one inv
 
 `profile.remote_session` binds a closed Session and approval command set to one Main-held view lease. Each command carries a separate UUID idempotency key; it cannot select an HTTP path, Profile root, credential, cookie, launch token, or arbitrary method. Prompt text, identifiers, titles, wait intervals, cursors, JSON depth, node counts, strings, and the complete frame are bounded. Decoding this method does not make it available: the Host must advertise its capability only after installing the lease-authorized worker executor.
 
-`profile.remote_ui_read` binds one of `session/list`, `session/page`, or `session/modelCatalog` to the same live view lease. The request contains only a bounded `args` object; it cannot name a URL, Profile path, cookie, or worker token. The result is capped by the 64 KiB control frame, so large pages and streaming events need a separate transport. The Host advertises this capability only with a worker executor installed.
+`profile.remote_ui_read` binds `boot/injections`, `session/list`, `session/page`, or `session/modelCatalog` to the same live view lease. The boot read requires empty `args` and returns the current Profile's structured startup rows; the other reads accept bounded `args`. No request can name a URL, Profile path, cookie, or worker token. The result is capped by the 64 KiB control frame, so large pages and streaming events need a separate transport. The Host advertises this capability only with a worker executor installed.
 
 `profile.model_claim_inventory` carries a Main-held Account view lease and returns a source digest, at most 128 distinct provider candidates, credential presence, shared-reference flags, and counts of unmapped records. The codec rejects credential values, reference names, paths, and additional fields. This read-only inventory is not a claim confirmation or credential transfer authority.
 
@@ -85,7 +85,7 @@ No direct invalidation; the protocol never contributes model context.
 
 ## Known Limitations and Deferred Work
 
-- **Operation set is bounded** — version 1 decodes `host.inspect`, account and local-only Profile provisioning/restore/open, Profile status/lease-close, migration export begin/read, extension commands, remote Session commands, three remote UI reads, and common errors. The remote methods remain unavailable until a Host executor advertises them; environment, attachment, and upgrade operations require explicit protocol additions.
+- **Operation set is bounded** — version 1 decodes `host.inspect`, account and local-only Profile provisioning/restore/open, Profile status/lease-close, migration export begin/read, extension commands, remote Session commands, four remote UI reads, and common errors. The remote methods remain unavailable until a Host executor advertises them; environment, attachment, and upgrade operations require explicit protocol additions.
 - **Transport enforcement is external** — the Unix-domain-socket carrier must stop reading at the byte cap and close on the first codec failure.
 - **Cryptographic policy is external** — key persistence, code-signature inspection, challenge signing and verification, replay storage, and key rotation belong to the Host identity and Desktop broker packages.
 
