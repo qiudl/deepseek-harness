@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
   RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventId, TypertGateway,
 } from '@deepseek-ai/dsh-api-gateway'
+import { HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 interface ApprovalCursor {
@@ -71,6 +72,7 @@ export class DesktopRemoteSessionExecutor {
     return await this.gateway.invoke({ namespace: 'session', method, args, signal }) as HostRemoteSessionJson
   }
 
+  /** Return a recent, ordered suffix that leaves space for the Host frame envelope. */
   private async history(sessionId: string, maxEvents: number, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     const lifetime = new AbortController()
     const combined = AbortSignal.any([signal, lifetime.signal])
@@ -84,7 +86,17 @@ export class DesktopRemoteSessionExecutor {
       if (first.done || !row(first.value) || first.value.type !== 'snapshot' || !Array.isArray(first.value.records)) {
         throw new Error('desktop remote session: invalid history snapshot')
       }
-      return { events: first.value.records as HostRemoteSessionJson[] }
+      const records = first.value.records as HostRemoteSessionJson[]
+      const events: HostRemoteSessionJson[] = []
+      const budget = HOST_CONTROL_MAX_FRAME_BYTES * 3 / 4
+      let bytes = Buffer.byteLength('{"events":[]}')
+      for (const record of records.toReversed()) {
+        const nextBytes = Buffer.byteLength(JSON.stringify(record)) + (events.length === 0 ? 0 : 1)
+        if (bytes + nextBytes > budget) break
+        events.unshift(record)
+        bytes += nextBytes
+      }
+      return { events }
     } finally {
       lifetime.abort()
       await iterator.return?.()
