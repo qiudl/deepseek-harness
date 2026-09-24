@@ -29,6 +29,8 @@ Use it when you assemble the browser application: `apps/web`'s Vite entry runs `
 
 Static application pages install `__DSH_BOOT_READY__` before the entry runs. The boot page renders immediately while `run()` waits; the page owner applies the Host rows with `applyIndexInjections` (also exported from `./injections`) and resolves the deferred after all scripts finish. A rejected deferred renders a boot failure unless the caller supplies `run(onFailure)` to present the error externally while retaining the loading page. Desktop uses this callback to request native recovery. Desktop and WebWorker share the injection interpreter; server-side `tapIndex` HTML transforms apply only to served documents.
 
+The bundled Cordis Loader calls `new Function` during startup, so an isolated static DSH page requires `script-src 'unsafe-eval'` in its Content Security Policy. The remote page must run on a dedicated origin without Slark login cookies and keep `connect-src` blocked; the parent MessagePort carries Host traffic. `apps/web/tests/remote-frame.spec.ts` exercises this policy in Chromium.
+
 The shell base styles apply automatic CJK/Latin spacing to ordinary content in supporting browsers. Semantic code and terminal, diff, read, and search output containers retain literal source spacing and column alignment; browsers without `text-autospace` support ignore both declarations.
 
 ### What boot looks like

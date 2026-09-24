@@ -29,6 +29,8 @@ kind: "package-library"
 
 静态应用页面在入口运行前安装 `__DSH_BOOT_READY__`。`run()` 等待期间会立即显示启动页；页面所有者通过 `applyIndexInjections`（也从 `./injections` 导出）应用 Host 注入项，并在所有脚本完成后兑现延迟对象。延迟对象拒绝时显示启动失败；若调用方提供 `run(onFailure)`，则由外部呈现错误并保留加载页。Desktop 使用该回调请求原生恢复。Desktop 与 WebWorker 共享注入解释器；服务端 `tapIndex` HTML 转换仅适用于服务端提供的文档。
 
+打包后的 Cordis Loader 在启动时调用 `new Function`，因此隔离的静态 DSH 页面需要在内容安全策略中设置 `script-src 'unsafe-eval'`。远程页面必须运行于不含 Slark 登录 cookie 的独立 origin，并阻断 `connect-src`；父页面的 MessagePort 承载 Host 流量。`apps/web/tests/remote-frame.spec.ts` 在 Chromium 中验证这项策略。
+
 外壳基础样式会在支持的浏览器中为普通内容自动添加中西文间距。语义化代码以及终端、diff、读取和搜索输出容器会保留源码中的原始间距和列对齐；不支持 `text-autospace` 的浏览器会忽略这两项声明。
 
 ### 启动过程是怎样的
