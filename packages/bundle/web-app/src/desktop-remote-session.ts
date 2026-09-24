@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
   RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventId, TypertGateway,
 } from '@deepseek-ai/dsh-api-gateway'
+import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 interface ApprovalCursor {
@@ -27,6 +28,37 @@ function row(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function historyText(value: unknown): string {
+  return Array.isArray(value)
+    ? value.map(part => row(part) ? part.text : undefined)
+      .filter((text): text is string => typeof text === 'string').join('\n')
+    : ''
+}
+
+/** Send only fields the Web timeline renders; internal Session records can exceed Host JSON depth. */
+function projectHistoryRecord(value: unknown): HostRemoteSessionJson | null {
+  const record = row(value) ? value : null
+  const event = row(record?.event) ? record.event : null
+  const data = row(event?.data) ? event.data : null
+  if (record?.type !== 'event' || !event || !Number.isSafeInteger(event.seq)
+    || typeof event.time !== 'number' || !Number.isFinite(event.time)) return null
+  let projected: HostRemoteSessionJson
+  if (event.type === 'user/message') {
+    projected = { content: [{ text: historyText(data?.content) }] }
+  } else if (event.type === 'assistant/message' || event.type === 'tool/result') {
+    const message = row(data?.message) ? data.message : null
+    projected = { message: { content: [{ text: historyText(message?.content) }] },
+      ...(event.type === 'tool/result' && data?.error !== undefined ? { error: true } : {}) }
+  } else if (event.type === 'tool/call') {
+    projected = { name: typeof data?.name === 'string' ? data.name : '',
+      arguments: typeof data?.arguments === 'string' ? data.arguments : '' }
+  } else if (event.type === 'turn/end') {
+    projected = { reason: typeof data?.reason === 'string' ? data.reason : '' }
+  } else return null
+  return { type: 'event', event: { type: event.type, seq: event.seq as number,
+    time: event.time, data: projected } }
+}
+
 /** Profile-local executor; all methods stay inside the already composed DSH worker. */
 export class DesktopRemoteSessionExecutor {
   private readonly cursors = new Map<string, ApprovalCursor>()
@@ -35,7 +67,7 @@ export class DesktopRemoteSessionExecutor {
   constructor(private readonly gateway: TypertGateway) {}
 
   /**
-   * Execute one bounded Session command in the composed Web Profile.
+   * Execute one bounded Session command using the Session Remote method parameter names.
    * @param command - The validated Host command.
    * @param signal - Cancellation for this command.
    * @returns The JSON response sent to the Desktop Host.
@@ -43,7 +75,7 @@ export class DesktopRemoteSessionExecutor {
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     switch (command.operation) {
       case 'session.list':
-        return this.invoke('list', { request: {} }, signal)
+        return this.invoke('list', { _request: {} }, signal)
       case 'session.create':
         return this.invoke('create', { request: {} }, signal)
       case 'session.prompt':
@@ -71,6 +103,7 @@ export class DesktopRemoteSessionExecutor {
     return await this.gateway.invoke({ namespace: 'session', method, args, signal }) as HostRemoteSessionJson
   }
 
+  /** Return a recent, ordered suffix that leaves space for the Host frame envelope. */
   private async history(sessionId: string, maxEvents: number, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     const lifetime = new AbortController()
     const combined = AbortSignal.any([signal, lifetime.signal])
@@ -84,7 +117,24 @@ export class DesktopRemoteSessionExecutor {
       if (first.done || !row(first.value) || first.value.type !== 'snapshot' || !Array.isArray(first.value.records)) {
         throw new Error('desktop remote session: invalid history snapshot')
       }
-      return { events: first.value.records as HostRemoteSessionJson[] }
+      const records = first.value.records
+      const events: HostRemoteSessionJson[] = []
+      const budget = HOST_CONTROL_MAX_FRAME_BYTES * 3 / 4
+      let bytes = Buffer.byteLength('{"events":[]}')
+      for (const raw of records.toReversed()) {
+        const record = projectHistoryRecord(raw)
+        if (!record) continue
+        const nextBytes = Buffer.byteLength(JSON.stringify(record)) + (events.length === 0 ? 0 : 1)
+        if (bytes + nextBytes > budget) break
+        try {
+          encodeHostControlFrame({ version: 1, type: 'result',
+            request_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+            method: 'profile.remote_session', result: { value: { events: [record, ...events] } } })
+        } catch { continue }
+        events.unshift(record)
+        bytes += nextBytes
+      }
+      return { events }
     } finally {
       lifetime.abort()
       await iterator.return?.()

@@ -2,9 +2,22 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 
 describe('Desktop remote Session bridge', () => {
+  it('uses the Session list gateway parameter name', async () => {
+    const invoke = vi.fn(async () => ({ items: [] }))
+    const executor = new DesktopRemoteSessionExecutor({ invoke } as unknown as TypertGateway)
+    const signal = new AbortController().signal
+    await expect(executor.execute({
+      operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+    }, signal)).resolves.toEqual({ items: [] })
+    expect(invoke).toHaveBeenCalledWith({
+      namespace: 'session', method: 'list', args: { _request: {} }, signal,
+    })
+  })
+
   it('maps closed commands onto the existing Session Remote service', async () => {
     const invoke = vi.fn(async () => ({ accepted: true }))
     const gateway = { invoke } as unknown as TypertGateway
@@ -39,6 +52,51 @@ describe('Desktop remote Session bridge', () => {
       session_id: 'session-1', max_events: 100,
     }, new AbortController().signal)).resolves.toMatchObject({ events: [{ type: 'event' }] })
     expect(returned).toHaveBeenCalledOnce()
+  })
+
+  it('keeps recent history within the Host control frame limit', async () => {
+    const older = { type: 'event', event: { type: 'user/message', seq: 1, time: 1,
+      data: { content: [{ type: 'text', text: 'x'.repeat(70_000) }] } } }
+    const recent = { type: 'event', event: { type: 'assistant/message', seq: 2, time: 2,
+      data: { message: { content: [{ type: 'text', text: 'recent reply' }] } } } }
+    const gateway = { stream: vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'snapshot', records: [older, recent] }
+      },
+    })) } as unknown as TypertGateway
+    const executor = new DesktopRemoteSessionExecutor(gateway)
+    const result = await executor.execute({
+      operation: 'session.history', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', max_events: 100,
+    }, new AbortController().signal)
+    expect((result as { events: typeof recent[] }).events.map(item => item.event.seq)).toEqual([2])
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(HOST_CONTROL_MAX_FRAME_BYTES)
+  })
+
+  it('projects display events and omits deep internal records before Host encoding', async () => {
+    const internal = { type: 'event', event: { type: 'request/header', seq: 1, time: 1,
+      data: { nested: { a: { b: { c: { d: { e: { f: { g: 'private' } } } } } } } } } }
+    const assistant = { type: 'event', event: { type: 'assistant/message', seq: 2, time: 2,
+      data: { message: { content: [{ type: 'text', text: 'visible reply' }],
+        privateMetadata: { nested: { a: { b: { c: { d: 'private' } } } } } } } } }
+    const gateway = { stream: vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'snapshot', records: [internal, assistant] }
+      },
+    })) } as unknown as TypertGateway
+    const executor = new DesktopRemoteSessionExecutor(gateway)
+    const result = await executor.execute({
+      operation: 'session.history', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', max_events: 100,
+    }, new AbortController().signal)
+    expect((result as { events: unknown[] }).events).toEqual([{ type: 'event', event: {
+      type: 'assistant/message', seq: 2, time: 2,
+      data: { message: { content: [{ text: 'visible reply' }] } },
+    } }])
+    expect(() => encodeHostControlFrame({
+      version: 1, type: 'result', request_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      method: 'profile.remote_session', result: { value: result },
+    })).not.toThrow()
   })
 
   it('requires the private bearer token even when a browser cookie is present', async () => {
