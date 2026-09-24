@@ -71,7 +71,7 @@ Each browser session composes its own agent from the shipped presets (the `stand
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 
-When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the bundle also serves one Host-only local text request. It snapshots the Profile's current default model and uses its credential service for a single user message without tools or a Session. The private token is never returned to the browser; requests are limited to 8 KiB, answers to 16 KiB, and execution to 60 seconds.
+When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the bundle also serves one Host-only local text request. It snapshots the Profile's current default model and uses its credential service for a single user message without tools or a Session. The private token is never returned to the browser; requests are limited to 8 KiB, answers to 16 KiB, and execution to 60 seconds. A separate token-authenticated local route executes bounded Desktop Session commands through the Profile's existing Session Remote methods; browser cookies cannot authorize it.
 
 <details>
 <summary>Implementation internals — click to expand</summary>

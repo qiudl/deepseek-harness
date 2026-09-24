@@ -5,6 +5,18 @@ import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 
 describe('Desktop remote Session bridge', () => {
+  it('uses the Session list gateway parameter name', async () => {
+    const invoke = vi.fn(async () => ({ items: [] }))
+    const executor = new DesktopRemoteSessionExecutor({ invoke } as unknown as TypertGateway)
+    const signal = new AbortController().signal
+    await expect(executor.execute({
+      operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+    }, signal)).resolves.toEqual({ items: [] })
+    expect(invoke).toHaveBeenCalledWith({
+      namespace: 'session', method: 'list', args: { _request: {} }, signal,
+    })
+  })
+
   it('maps closed commands onto the existing Session Remote service', async () => {
     const invoke = vi.fn(async () => ({ accepted: true }))
     const gateway = { invoke } as unknown as TypertGateway

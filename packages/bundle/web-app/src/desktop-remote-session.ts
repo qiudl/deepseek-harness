@@ -35,7 +35,7 @@ export class DesktopRemoteSessionExecutor {
   constructor(private readonly gateway: TypertGateway) {}
 
   /**
-   * Execute one bounded Session command in the composed Web Profile.
+   * Execute one bounded Session command using the Session Remote method parameter names.
    * @param command - The validated Host command.
    * @param signal - Cancellation for this command.
    * @returns The JSON response sent to the Desktop Host.
@@ -43,7 +43,7 @@ export class DesktopRemoteSessionExecutor {
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     switch (command.operation) {
       case 'session.list':
-        return this.invoke('list', { request: {} }, signal)
+        return this.invoke('list', { _request: {} }, signal)
       case 'session.create':
         return this.invoke('create', { request: {} }, signal)
       case 'session.prompt':
