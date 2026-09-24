@@ -25,6 +25,8 @@ The browser worker host: the whole harness plugin tree runs inside one dedicated
 
 The public npm package exposes the runtime library at its root, the self-contained browser Worker at `./worker`, and the page connector at `./client`. Deployments supply and serve the VFS image separately through the [packer](../webworker-packer/README.md); installing this library does not add a profile layer. The root also exports the module-proxy and replacement tables used by the packer.
 
+`WorkerTunnel` accepts a `TunnelEndpoint` with `postMessage`, message replies, and error notifications. An isolated remote page can adapt a trusted parent `MessagePort` to this interface and reuse its fetch, stream, and bundle transport. The parent must implement the same tunnel frames; this package does not authenticate or relay a remote Host connection.
+
 Three build artifacts and one source-owned process layer:
 
 - **`lib/index.js` (assembly library)** — `createWorkerHost`/`startWorkerHost` mount the base image and any ordered data overlays (`storage/`), install the module loader (`module-system/`) and the `process` shim, boot the tree through the image's own `dsh-app-boot`, and hand the tunnel its serving seams. Overlays may replace files only under `home/` and `workspace/`; they cannot replace the base manifest, configuration, or modules. The image layout contract (`image-layout.ts`: virtual root, config/manifest paths, empty directories, the `lowered` wrapper-contract gate) is shared with the packer. Boot patches force the deployment-shaped rows: frontend serving off, JSONL session logs on the plaintext path, preset roots onto the image's `config/agent-presets`.
