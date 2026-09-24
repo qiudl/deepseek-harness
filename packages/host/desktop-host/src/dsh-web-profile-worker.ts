@@ -13,6 +13,7 @@ const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
+  'DSH_PROFILE_REMOTE_UI_TOKEN',
 ])
 
 /** Classified failure from the authenticated worker model endpoint. */
@@ -100,6 +101,7 @@ export class DshWebProfileWorkerFactory {
     const root = realpathSync(spec.profileRoot)
     const modelToken = randomBytes(32).toString('base64url')
     const remoteSessionToken = randomBytes(32).toString('base64url')
+    const remoteUiToken = randomBytes(32).toString('base64url')
     const child = spawn(this.options.nodeExecutablePath, [
       this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
     ], {
@@ -112,12 +114,14 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
         DSH_PROFILE_MODEL_TOKEN: modelToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
+        DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const activated = await this.waitForOrigin(child)
     this.generation += 1
-    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation, modelToken, remoteSessionToken)
+    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
+      modelToken, remoteSessionToken, remoteUiToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -175,6 +179,7 @@ export class DshWebProfileWorkerFactory {
     generation: number,
     modelToken: string,
     remoteSessionToken: string,
+    remoteUiToken: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -226,6 +231,9 @@ export class DshWebProfileWorkerFactory {
       remoteSession: (command, signal) => this.remoteSession(
         viewOrigin, remoteSessionToken, command, signal, () => requestedStop || settled,
       ),
+      remoteUiRead: (endpoint, payload, signal) => this.remoteUiRead(
+        viewOrigin, remoteUiToken, endpoint, payload, signal, () => requestedStop || settled,
+      ),
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
         if (requestedStop || settled) return
@@ -262,5 +270,32 @@ export class DshWebProfileWorkerFactory {
       throw new HostAuthorityError('unavailable')
     }
     return (parsed as { value: HostRemoteSessionJson }).value
+  }
+
+  private async remoteUiRead(
+    viewOrigin: string,
+    token: string,
+    endpoint: string,
+    payload: unknown,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<unknown> {
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const response = await fetch(`${viewOrigin}/internal/desktop-remote-ui`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint, payload }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
+    })
+    if (!response.ok) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
+    const body = await response.text()
+    if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')
+    let parsed: unknown
+    try { parsed = JSON.parse(body) } catch { throw new HostAuthorityError('unavailable') }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'value')) {
+      throw new HostAuthorityError('unavailable')
+    }
+    return (parsed as { value: unknown }).value
   }
 }

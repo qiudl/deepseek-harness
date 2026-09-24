@@ -461,6 +461,15 @@ describe('dsh web Profile worker', () => {
             .end(JSON.stringify({ value: { items: [] } }))
           return
         }
+        if (url.pathname === '/internal/desktop-remote-ui') {
+          if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_REMOTE_UI_TOKEN) {
+            response.writeHead(403).end()
+            return
+          }
+          response.writeHead(200, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ value: { items: [] } }))
+          return
+        }
         if (url.searchParams.get('token') === 'must-stay-owner-only') {
           response.writeHead(303, {
             location: '/',
@@ -499,12 +508,15 @@ describe('dsh web Profile worker', () => {
     })
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-model-text`, { method: 'POST' })).status).toBe(403)
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-session`, { method: 'POST' })).status).toBe(403)
+    expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-ui`, { method: 'POST' })).status).toBe(403)
     await expect(worker.generateText?.('question', new AbortController().signal)).resolves.toEqual({
       provider: 'deepseek', model: 'chat', text: 'answer',
     })
     await expect(worker.remoteSession?.({
       operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
     }, new AbortController().signal)).resolves.toEqual({ items: [] })
+    await expect(worker.remoteUiRead?.('session/list', { args: { _request: {} } },
+      new AbortController().signal)).resolves.toEqual({ items: [] })
     worker.closeNotifications(); worker.abort()
     await expect(worker.done).resolves.toBeUndefined()
   })
@@ -515,6 +527,8 @@ describe('dsh web Profile worker', () => {
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
     })
     await expect(factory.create({ ...spec(root), env: { DSH_HOME: '/tmp/attacker' } }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_REMOTE_UI_TOKEN: 'attacker' } }))
       .rejects.toMatchObject({ code: 'invalid_input' })
   })
 
