@@ -2,6 +2,7 @@ import type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
   HostRemoteSessionCommand, HostRemoteSessionJson, ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
+  ProfileRemoteUiReadRequest, ProfileRemoteUiReadResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
   ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
   ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
@@ -637,6 +638,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileRemoteSessionRequest
+  | ProfileRemoteUiReadRequest
   | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
   | ProfileModelClaimRecoveryInventoryRequest
   | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest | ProfileModelClaimRetryRequest {
@@ -708,6 +710,20 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
       lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
       command: remoteSessionCommand(params.command),
+    } }
+  }
+  if (frame.method === 'profile.remote_ui_read') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
+    if (params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
+      && params.endpoint !== 'session/modelCatalog') reject()
+    const payload = record(params.payload)
+    exactKeys(payload, ['args'])
+    const args = remoteSessionJson(payload.args)
+    if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+      endpoint: params.endpoint, payload: { args },
     } }
   }
   if (frame.method === 'profile.extensions') {
@@ -907,6 +923,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileModelTextResult | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileRemoteSessionResult
+  | ProfileRemoteUiReadResult
   | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
   | ProfileModelClaimRecoveryInventoryResult
   | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult | ProfileModelClaimRetryResult {
@@ -992,6 +1009,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     } }
   }
   if (frame.method === 'profile.remote_session') {
+    exactKeys(result, ['value'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { value: remoteSessionJson(result.value) } }
+  }
+  if (frame.method === 'profile.remote_ui_read') {
     exactKeys(result, ['value'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { value: remoteSessionJson(result.value) } }

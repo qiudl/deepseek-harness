@@ -99,6 +99,20 @@ export class ProfileWorkerSupervisor {
   }
 
   /**
+   * Invoke a read in the active Profile worker without releasing its private token.
+   * @param profileId - Lease-selected Profile identity.
+   * @param endpoint - Exact read endpoint.
+   * @param payload - Bounded RPC arguments.
+   * @param signal - Request cancellation.
+   * @returns The worker's read projection.
+   */
+  async remoteUiRead(profileId: string, endpoint: string, payload: unknown, signal: AbortSignal): Promise<unknown> {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.remoteUiRead) throw new HostAuthorityError('unavailable')
+    return worker.remoteUiRead(endpoint, payload, signal)
+  }
+
+  /**
    * Stop notifications before cancellation, then await the child's exit.
    * @param profileId - worker owner to dispose.
    */

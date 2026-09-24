@@ -86,3 +86,30 @@ describe('Profile remote Session wire commands', () => {
     }
   })
 })
+
+describe('Profile remote UI read wire commands', () => {
+  const readFrame = (endpoint: string, payload: unknown) => ({
+    version: 1, type: 'request', request_id: randomUUID(), method: 'profile.remote_ui_read',
+    params: { ...auth(), view_lease_id: randomUUID(), lease_generation: 1, runtime_generation: 1,
+      endpoint, payload },
+  })
+
+  it('accepts only the three bounded read endpoints', () => {
+    for (const endpoint of ['session/list', 'session/page', 'session/modelCatalog']) {
+      const value = readFrame(endpoint, { args: { _request: {} } })
+      expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+    }
+    for (const endpoint of ['session/create', '/api/session/list', 'session/list?all=true']) {
+      expect(() => decode(readFrame(endpoint, { args: {} }))).toThrow()
+    }
+  })
+
+  it('rejects extra selectors, unsafe JSON, and overlarge results', () => {
+    expect(() => decode(readFrame('session/list', { args: {}, profile_root: '/tmp/other' }))).toThrow()
+    expect(() => decode(readFrame('session/list', { args: { ['__proto__']: '/tmp/other' } }))).toThrow()
+    const result = { version: 1, type: 'result', request_id: randomUUID(),
+      method: 'profile.remote_ui_read', result: { value: { items: [] } } }
+    expect(encodeHostControlFrame(decode(result))).toBe(`${JSON.stringify(result)}\n`)
+    expect(() => decode({ ...result, result: { value: 'x'.repeat(65_536) } })).toThrow()
+  })
+})

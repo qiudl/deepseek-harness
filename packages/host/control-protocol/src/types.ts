@@ -943,6 +943,30 @@ export interface ProfileRemoteSessionResult {
   readonly result: { readonly value: HostRemoteSessionJson }
 }
 
+/** Exact read RPC carried only by a live Host-owned Profile view lease. */
+export interface ProfileRemoteUiReadRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_read'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly endpoint: 'session/list' | 'session/page' | 'session/modelCatalog'
+    readonly payload: { readonly args: HostRemoteSessionJson }
+  }
+}
+
+/** One small read projection; the control channel rejects responses above 64 KiB. */
+export interface ProfileRemoteUiReadResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_read'
+  readonly result: { readonly value: HostRemoteSessionJson }
+}
+
 /** Inspect legacy model candidates through a token-verified Account view. */
 export interface ProfileModelClaimInventoryRequest {
   readonly version: 1
@@ -1125,6 +1149,8 @@ export interface ProfileModelClaimRetryResult {
 export type HostControlFrame =
   | ProfileRemoteSessionRequest
   | ProfileRemoteSessionResult
+  | ProfileRemoteUiReadRequest
+  | ProfileRemoteUiReadResult
   | ProfileExtensionsRequest
   | ProfileExtensionsResult
   | ProfileModelClaimInventoryRequest

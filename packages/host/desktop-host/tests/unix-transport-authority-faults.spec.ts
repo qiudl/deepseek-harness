@@ -165,6 +165,47 @@ describe('Unix transport authority failures', () => {
     client.close()
   })
 
+  it('keeps remote UI reads disabled without an executor and binds them to a live view lease', async () => {
+    const input = { ...opened, endpoint: 'session/list' as const, payload: { args: { _request: {} } } }
+    const unavailable = await authorityClient()
+    expect(unavailable.client.inspection.capabilities).not.toContain('profile.remote_ui_read')
+    await expect(unavailable.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    unavailable.client.close()
+
+    const host = fakeHost()
+    const remoteUiRead = vi.fn(async () => ({ sessions: [] }))
+    const { client } = await authorityClient({ host, remoteUiRead })
+    expect(client.inspection.capabilities).toContain('profile.remote_ui_read')
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteUiRead({ ...lease, endpoint: input.endpoint, payload: input.payload }))
+      .resolves.toEqual({ sessions: [] })
+    expect(vi.mocked(host).authorizeExtensionView.mock.calls).toHaveLength(2)
+    expect(remoteUiRead).toHaveBeenCalledWith(profileId, input.endpoint, input.payload, expect.any(AbortSignal))
+    client.close()
+  })
+
+  it('drops a remote UI response when the lease is revoked during worker execution', async () => {
+    const host = fakeHost()
+    vi.mocked(host).authorizeExtensionView.mockReturnValueOnce(profileId as never)
+      .mockImplementationOnce(() => { throw new HostAuthorityError('stale') })
+    const { client } = await authorityClient({ host, remoteUiRead: async () => ({ sessions: [] }) })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteUiRead({ ...lease, endpoint: 'session/list', payload: { args: {} } }))
+      .rejects.toMatchObject({ code: 'stale' })
+    client.close()
+  })
+
+  it('rejects oversized remote UI results before emitting a control frame', async () => {
+    const { client } = await authorityClient({ remoteUiRead: async () => ({ value: 'x'.repeat(65_536) }) })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteUiRead({ ...lease, endpoint: 'session/list', payload: { args: {} } }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    client.close()
+  })
+
   it('maps unavailable migration providers without exposing implementation failures', async () => {
     const absentExport = await authorityClient({ createMigrationExport: async () => undefined as never })
     const selector = await localSelector(absentExport.client)

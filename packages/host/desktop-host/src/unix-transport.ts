@@ -4,6 +4,7 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import type {
   HostExtensionCommand, HostExtensionResponse, HostExtensionKind, HostRemoteSessionCommand,
   HostRemoteSessionJson, ProfileExtensionsRequest, ProfileRemoteSessionRequest,
+  ProfileRemoteUiReadRequest,
   ProfileModelClaimInventoryRequest,
   ProfileModelClaimRecoveryInventoryRequest,
   ProfileModelClaimConfirmRequest, ProfileModelClaimApplyRequest,
@@ -109,6 +110,11 @@ export interface UnixHostServerOptions {
     command: HostRemoteSessionCommand,
     signal: AbortSignal,
   ) => Promise<HostRemoteSessionJson>
+  /** Invoke only an exact read RPC in the Profile selected by the live view lease. */
+  readonly remoteUiRead?: (
+    profileId: string, endpoint: ProfileRemoteUiReadRequest['params']['endpoint'],
+    payload: ProfileRemoteUiReadRequest['params']['payload'], signal: AbortSignal,
+  ) => Promise<unknown>
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
   readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
   /** Initial claims require a fresh, connection-owned confirmation and a live Account view. */
@@ -251,7 +257,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'generateModelText' | 'remoteSession'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1213,9 +1219,7 @@ export class HostControlAuthority {
             throw new HostAuthorityError('invalid_input')
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
-        } else if (frame.method === 'profile.remote_session') {
-          const execute = this.options.remoteSession
-          if (!execute) throw new HostAuthorityError('upgrade_required')
+        } else if (frame.method === 'profile.remote_session' || frame.method === 'profile.remote_ui_read') {
           const authority = () => {
             context.signal.throwIfAborted()
             return this.options.host.authorizeExtensionView({
@@ -1226,7 +1230,16 @@ export class HostControlAuthority {
             })
           }
           const profileId = authority()
-          const value = await execute(profileId, frame.params.command, context.signal)
+          let value: HostRemoteSessionJson
+          if (frame.method === 'profile.remote_session') {
+            const execute = this.options.remoteSession
+            if (!execute) throw new HostAuthorityError('upgrade_required')
+            value = await execute(profileId, frame.params.command, context.signal)
+          } else {
+            const execute = this.options.remoteUiRead
+            if (!execute) throw new HostAuthorityError('upgrade_required')
+            value = await execute(profileId, frame.params.endpoint, frame.params.payload, context.signal) as HostRemoteSessionJson
+          }
           if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
           const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { value } }
@@ -1315,6 +1328,7 @@ export class HostControlAuthority {
           ...capabilities,
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session'] : []),
+          ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
             ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
@@ -1994,6 +2008,33 @@ export class UnixHostClient {
   }
 
   /**
+   * Execute one bounded read through the lease-selected Profile worker.
+   * @param input - Live view lease, exact read endpoint, arguments, and cancellation.
+   * @returns A JSON projection small enough for the control frame.
+   */
+  async remoteUiRead(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly endpoint: ProfileRemoteUiReadRequest['params']['endpoint']
+    readonly payload: ProfileRemoteUiReadRequest['params']['payload']
+    readonly signal?: AbortSignal
+  }): Promise<HostRemoteSessionJson> {
+    if (!this.inspection.capabilities.includes('profile.remote_ui_read' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRemoteUiReadRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_ui_read', params: {
+        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+        runtime_generation: input.runtimeGeneration, endpoint: input.endpoint, payload: input.payload,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.value
+  }
+
+  /**
    * Inspect redacted legacy model candidates using a token-verified Account view.
    * @param input - Main-held view lease and optional cancellation.
    * @returns source digest and candidate metadata without credentials or paths.
@@ -2533,7 +2574,7 @@ export class UnixHostClient {
   }
 
   private async call(
-    request: ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileModelClaimInventoryRequest
+    request: ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest | ProfileModelClaimInventoryRequest
       | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
       | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
       | ProfileModelClaimRecoveryInventoryRequest
