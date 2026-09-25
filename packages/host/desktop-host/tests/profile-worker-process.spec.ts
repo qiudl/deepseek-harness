@@ -441,7 +441,8 @@ describe('dsh web Profile worker', () => {
       import { createServer } from 'node:http'
       const cookieName = 'dsh-auth-${'a'.repeat(43)}'
       const cookieValue = 'v1.${'b'.repeat(8)}.${'c'.repeat(43)}'
-      const server = createServer((request, response) => {
+      let assetReads = 0
+      const server = createServer(async (request, response) => {
         const url = new URL(request.url, 'http://127.0.0.1')
         if (url.pathname === '/internal/desktop-model-text') {
           if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_MODEL_TOKEN) {
@@ -466,6 +467,20 @@ describe('dsh web Profile worker', () => {
             response.writeHead(403).end()
             return
           }
+          const body = await new Promise(resolve => {
+            let text = ''
+            request.on('data', chunk => { text += chunk })
+            request.on('end', () => resolve(JSON.parse(text)))
+          })
+          if (body.endpoint === 'boot/injections') {
+            response.writeHead(200, { 'content-type': 'application/json' })
+              .end(JSON.stringify({ value: { injections: [
+                { kind: 'script-src', placement: 'head', src: '/plugins/??a/client.js&rev=1' },
+                { kind: 'script-preload', src: '/plugins/??large/client.js&rev=1' },
+                { kind: 'script-preload', src: '/plugins/??missing/client.js&rev=1' },
+              ] } }))
+            return
+          }
           response.writeHead(200, { 'content-type': 'application/json' })
             .end(JSON.stringify({ value: { items: [] } }))
           return
@@ -479,6 +494,20 @@ describe('dsh web Profile worker', () => {
           return
         }
         if (request.headers.cookie === cookieName + '=' + cookieValue) {
+          if (url.pathname === '/plugins/' && url.search === '??a/client.js&rev=1') {
+            assetReads++
+            response.writeHead(200, { 'content-type': 'text/javascript' })
+              .end(assetReads === 1 ? 'registered();' : 'changed();')
+            return
+          }
+          if (url.pathname === '/plugins/' && url.search === '??large/client.js&rev=1') {
+            response.writeHead(200, { 'content-type': 'text/javascript' }).end(Buffer.alloc(8 * 1024 * 1024 + 1))
+            return
+          }
+          if (url.pathname === '/plugins/' && url.search === '??missing/client.js&rev=1') {
+            response.writeHead(404).end()
+            return
+          }
           response.end(process.env.DSH_PROFILE_ID)
           return
         }
@@ -500,6 +529,7 @@ describe('dsh web Profile worker', () => {
       },
     })
     const worker = await factory.create(spec(root))
+    onTestFinished(async () => { worker.closeNotifications(); worker.abort(); await worker.done })
     expect(worker.viewOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u)
     expect(worker.viewOrigin).not.toContain('access_key')
     expect(JSON.stringify(worker)).not.toContain('must-stay-owner-only')
@@ -517,8 +547,22 @@ describe('dsh web Profile worker', () => {
     }, new AbortController().signal)).resolves.toEqual({ items: [] })
     await expect(worker.remoteUiRead?.('session/list', { args: { _request: {} } },
       new AbortController().signal)).resolves.toEqual({ items: [] })
-    worker.closeNotifications(); worker.abort()
-    await expect(worker.done).resolves.toBeUndefined()
+    await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 0 } },
+      new AbortController().signal)).resolves.toEqual({ bytes: Buffer.from('registered();').toString('base64url'), total: 13 })
+    await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 1 } },
+      new AbortController().signal)).resolves.toEqual({ bytes: Buffer.from('egistered();').toString('base64url'), total: 13 })
+    await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??b/client.js&rev=1', offset: 0 } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(worker.remoteUiRead?.('asset/read', { args: { url: 'https://evil.test/plugins/a.js', offset: 0 } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: -1 } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 14 } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??missing/client.js&rev=1', offset: 0 } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??large/client.js&rev=1', offset: 0 } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
   })
 
   it('rejects caller attempts to replace the selected DSH home', async () => {

@@ -714,13 +714,20 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.remote_ui_read') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
-    if (params.endpoint !== 'boot/injections' && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
+    if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read'
+      && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog') reject()
     const payload = record(params.payload)
     exactKeys(payload, ['args'])
     const args = remoteSessionJson(payload.args)
     if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()
+    if (params.endpoint === 'asset/read') {
+      const assetArgs = args as Record<string, unknown>
+      exactKeys(assetArgs, ['url', 'offset'])
+      if (typeof assetArgs.url !== 'string' || assetArgs.url.length > 2048 || assetArgs.url.length === 0
+        || !Number.isSafeInteger(assetArgs.offset) || (assetArgs.offset as number) < 0) reject()
+    }
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
       lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),

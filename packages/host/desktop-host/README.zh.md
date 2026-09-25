@@ -53,7 +53,7 @@ Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的
 
 远程 Session 执行是可选的 Host 依赖。安装执行器后，Host 才会广告 `profile.remote_session`，并只通过有效且绑定 owner 的 view lease 接受控制协议定义的封闭命令联合。Host 从该 lease 解出 Profile，转发连接取消，在异步执行完成后重新校验同一 lease，并让有界结果通过规范 wire codec 后才返回。没有执行器的 Host 不发布 capability，客户端会在发送命令前返回 `upgrade_required`。该执行缝不暴露浏览器 cookie、启动 token、Profile 路径或通用 HTTP 代理。
 
-远程 Web DSH 读取使用 `profile.remote_ui_read`，在调用 worker 前后校验同一绑定 owner 的租约。macOS 和 Windows Host 启动入口安装精确端点的 worker 执行器，worker 私有 Bearer token 始终留在 Host 内。超过 64 KiB 的结果会被控制帧拒绝。这只是有界读取通道，不是流或通用 Web API 隧道。
+远程 Web DSH 读取使用 `profile.remote_ui_read`，在调用 worker 前后校验同一绑定 owner 的租约。macOS 和 Windows Host 启动入口安装精确端点的 worker 执行器，worker 私有 Bearer token 始终留在 Host 内。对于 `asset/read`，Host 校验当前启动注入表，只用私有 cookie 读取其中列出的同源 `/plugins/` 脚本，要求 JavaScript 响应，将完整资源限制在 8 MiB，并从单个 worker 本机缓存返回 24 KiB 分块。超过 64 KiB 的结果会被控制帧拒绝。这只是有界读取通道，不是流或通用 Web API 隧道。
 
 账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。注册表出现并发变更时，回退被阻止并返回 `stale`。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
 
