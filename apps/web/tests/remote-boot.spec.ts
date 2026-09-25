@@ -37,7 +37,7 @@ it('refuses a remote page without a configured trusted parent', async () => {
 
 it('accepts one nonce-bound port only from the configured parent origin', async () => {
   vi.stubEnv('VITE_DSH_REMOTE_PARENT_ORIGIN', 'https://staging.ai.pipexerp.com')
-  const parent = { postMessage: vi.fn() }
+  const parent = { postMessage: vi.fn<(message: { nonce: string }, origin: string) => void>() }
   Object.defineProperty(window, 'parent', { configurable: true, value: parent })
   await import('../src/remote.ts')
   const [ready, origin] = parent.postMessage.mock.calls[0]!

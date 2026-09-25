@@ -716,12 +716,23 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
     if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
-      && params.endpoint !== 'session/modelCatalog') reject()
+      && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'settings/describe'
+      && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
+      && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog') reject()
     const payload = record(params.payload)
     exactKeys(payload, ['args'])
     const args = remoteSessionJson(payload.args)
     if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()
+    if ((params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
+      || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog')
+      && Object.keys(args).length !== 0) reject()
+    if (params.endpoint === 'credentials/describe') {
+      const credentialArgs = args as Record<string, unknown>
+      exactKeys(credentialArgs, ['refs'])
+      if (!Array.isArray(credentialArgs.refs) || credentialArgs.refs.length > 64
+        || !credentialArgs.refs.every((ref: unknown) => typeof ref === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(ref))) reject()
+    }
     if (params.endpoint === 'asset/read') {
       const assetArgs = args as Record<string, unknown>
       exactKeys(assetArgs, ['url', 'offset'])

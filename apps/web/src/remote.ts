@@ -2,7 +2,7 @@
 import { WorkerTunnel, type TunnelEndpoint } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
 
 const schema = 'dsh-remote-frame/v1'
-const expectedOrigin = import.meta.env.VITE_DSH_REMOTE_PARENT_ORIGIN
+const expectedOrigin: unknown = import.meta.env.VITE_DSH_REMOTE_PARENT_ORIGIN
 const gate = Promise.withResolvers<void>()
 ;(globalThis as { __DSH_BOOT_READY__?: PromiseWithResolvers<void> }).__DSH_BOOT_READY__ = gate
 void gate.promise.catch(() => {})

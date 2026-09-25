@@ -954,6 +954,8 @@ export interface ProfileRemoteUiReadRequest {
     readonly lease_generation: number
     readonly runtime_generation: number
     readonly endpoint: 'boot/injections' | 'asset/read' | 'session/list' | 'session/page' | 'session/modelCatalog'
+      | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
+      | 'credentials/describe' | 'permissionPresets/catalog'
     readonly payload: { readonly args: HostRemoteSessionJson }
   }
 }

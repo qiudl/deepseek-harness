@@ -18,10 +18,23 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('session/list', { args: { _request: {} } }, signal))
       .resolves.toEqual({ items: [] })
     expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
+    for (const endpoint of ['settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
+      'credentials/describe', 'permissionPresets/catalog']) {
+      const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] } : {}
+      await expect(executor.execute(endpoint, { args }, signal)).resolves.toEqual({ items: [] })
+      const [namespace, method] = endpoint.split('/')
+      expect(invoke).toHaveBeenCalledWith({ namespace, method, args, signal })
+    }
+    await expect(executor.execute('credentials/describe', { args: { refs: ['bad-ref'] } }, signal))
+      .rejects.toThrow('invalid payload')
+    await expect(executor.execute('settings/describe', { args: { path: '/private' } }, signal))
+      .rejects.toThrow('invalid payload')
     for (const endpoint of ['session/prompt', 'session/delete', 'workspace/create', 'llm/listProviders', '$events/result']) {
       await expect(executor.execute(endpoint, { args: {} }, signal)).rejects.toThrow('endpoint denied')
     }
-    expect(invoke).toHaveBeenCalledOnce()
+    await expect(executor.execute('dynamicCordisRunner/syncInspectManifest', { args: {} }, signal))
+      .rejects.toThrow('endpoint denied')
+    expect(invoke).toHaveBeenCalledTimes(6)
   })
 
   it('requires a private token, rejects forbidden endpoints and bounds input', async () => {
@@ -49,7 +62,10 @@ describe('Desktop remote UI read-only bridge', () => {
       await expect(response.json()).resolves.toEqual({ value: { items: [] } })
       expect(invoke).toHaveBeenCalledOnce()
     } finally {
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
     }
   })
 })

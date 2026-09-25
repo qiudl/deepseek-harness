@@ -4,7 +4,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
 
-const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog'])
+const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog',
+  'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
+  'credentials/describe', 'permissionPresets/catalog'])
+const STARTUP_ZERO_ARG = new Set(['settings/describe', 'agentPresets/list',
+  'dynamicCordisRunner/inventory', 'permissionPresets/catalog'])
+const CREDENTIAL_REF = /^[A-Za-z_][A-Za-z0-9_]*$/u
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -33,6 +38,15 @@ export class DesktopRemoteUiExecutor {
       if (Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
       return { injections: this.bootInjections() }
     }
+    if (STARTUP_ZERO_ARG.has(endpoint) && Object.keys(payload.args).length !== 0) {
+      throw new Error('desktop remote UI: invalid payload')
+    }
+    if (endpoint === 'credentials/describe' &&
+      (Object.keys(payload.args).length !== 1 || !Array.isArray(payload.args.refs) ||
+        payload.args.refs.length > 64 ||
+        !payload.args.refs.every(ref => typeof ref === 'string' && CREDENTIAL_REF.test(ref)))) {
+      throw new Error('desktop remote UI: invalid payload')
+    }
     const [namespace, method] = endpoint.split('/') as [string, string]
     return this.gateway.invoke({ namespace, method, args: payload.args, signal })
   }
@@ -59,7 +73,7 @@ export async function handleDesktopRemoteUiRequest(
     res.writeHead(403).end(); return
   }
   const controller = new AbortController()
-  res.once('close', () => controller.abort())
+  res.once('close', () => { controller.abort() })
   try {
     const chunks: Buffer[] = []
     let size = 0
