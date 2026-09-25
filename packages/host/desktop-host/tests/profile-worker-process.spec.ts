@@ -593,6 +593,15 @@ describe('dsh web Profile worker', () => {
             .end(JSON.stringify({ value: { items: [] } }))
           return
         }
+        if (url.pathname === '/internal/desktop-remote-ui-stream') {
+          if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_REMOTE_UI_TOKEN) {
+            response.writeHead(403).end()
+            return
+          }
+          response.writeHead(200, { 'content-type': 'application/x-ndjson' })
+            .end('{"type":"item","value":{"cursor":1}}\\n{"type":"end"}\\n')
+          return
+        }
         if (url.searchParams.get('token') === 'must-stay-owner-only') {
           response.writeHead(303, {
             location: '/',
@@ -647,6 +656,7 @@ describe('dsh web Profile worker', () => {
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-model-text`, { method: 'POST' })).status).toBe(403)
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-session`, { method: 'POST' })).status).toBe(403)
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-ui`, { method: 'POST' })).status).toBe(403)
+    expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-ui-stream`, { method: 'POST' })).status).toBe(403)
     await expect(worker.generateText?.('question', new AbortController().signal)).resolves.toEqual({
       provider: 'deepseek', model: 'chat', text: 'answer',
     })
@@ -655,6 +665,11 @@ describe('dsh web Profile worker', () => {
     }, new AbortController().signal)).resolves.toEqual({ items: [] })
     await expect(worker.remoteUiRead?.('session/list', { args: { _request: {} } },
       new AbortController().signal)).resolves.toEqual({ items: [] })
+    const events: unknown[] = []
+    for await (const event of worker.remoteUiStream!('session/follow', { args: {} }, new AbortController().signal)) {
+      events.push(event)
+    }
+    expect(events).toEqual([{ cursor: 1 }])
     await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 0 } },
       new AbortController().signal)).resolves.toEqual({ bytes: Buffer.from('registered();').toString('base64url'), total: 13 })
     await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 1 } },
