@@ -2002,9 +2002,7 @@ export class UnixHostClient {
         runtime_generation: input.runtimeGeneration, command: input.command,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return frame.result.value
+    return this.remoteProfileValue(request, input.signal)
   }
 
   /**
@@ -2029,7 +2027,13 @@ export class UnixHostClient {
         runtime_generation: input.runtimeGeneration, endpoint: input.endpoint, payload: input.payload,
       },
     }
-    const frame = await this.call(request, input.signal)
+    return this.remoteProfileValue(request, input.signal)
+  }
+
+  private async remoteProfileValue(
+    request: ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest, signal?: AbortSignal,
+  ): Promise<HostRemoteSessionJson> {
+    const frame = await this.call(request, signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     return frame.result.value
   }

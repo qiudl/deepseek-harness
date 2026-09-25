@@ -7,8 +7,20 @@ import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from '../src/desktop-remote-ui.ts'
 import { DesktopRemoteUiStreamExecutor, handleDesktopRemoteUiStreamRequest,
   writeDesktopRemoteUiStreamLine } from '../src/desktop-remote-ui-stream.ts'
+import { rejectDesktopRemotePrivateRequest, writeDesktopRemotePrivateResult } from '../src/desktop-remote-private-request.ts'
 
 describe('Desktop remote UI read-only bridge', () => {
+  it('does not rewrite ended private responses and bounds JSON results', () => {
+    const ended = { writableEnded: true, destroyed: false, writeHead: vi.fn() }
+    rejectDesktopRemotePrivateRequest(ended as unknown as ServerResponse)
+    expect(ended.writeHead).not.toHaveBeenCalled()
+    const destroyed = { writableEnded: false, destroyed: true, writeHead: vi.fn() }
+    rejectDesktopRemotePrivateRequest(destroyed as unknown as ServerResponse)
+    expect(destroyed.writeHead).not.toHaveBeenCalled()
+    expect(() => writeDesktopRemotePrivateResult(ended as unknown as ServerResponse, 'x'.repeat(512 * 1024)))
+      .toThrow('result too large')
+  })
+
   it('handles malformed input, early disconnect, and failed terminal writes', async () => {
     const token = 'A'.repeat(43)
     const body = Buffer.from(JSON.stringify({ endpoint: 'session/follow', payload: { args: { request: {
