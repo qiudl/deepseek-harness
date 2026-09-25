@@ -231,7 +231,9 @@ export function verifyDefaultProductIsolation(root: string): ProductIsolationRes
   if (selection !== undefined) {
     for (const name of selection.packages) {
       reference(name, PROFILE_SOURCE)
-      if (packages.get(name)?.manifest.dsh?.bundle?.patch === undefined) {
+      // The private Desktop Host is an executable profile, not a patch bundle.
+      if (name !== '@deepseek-ai/dsh-desktop-host'
+        && packages.get(name)?.manifest.dsh?.bundle?.patch === undefined) {
         failures.push(`${PROFILE_SOURCE}: default bundle ${name} must declare dsh.bundle.patch`)
       }
       if (optionalBundles.has(name)) failures.push(`${PROFILE_SOURCE}: optional bundle ${name} must not be a default bundle`)
