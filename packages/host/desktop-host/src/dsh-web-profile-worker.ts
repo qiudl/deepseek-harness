@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
 
 const execFileAsync = promisify(execFile)
 const REMOTE_UI_ASSET_MAX_BYTES = 8 * 1024 * 1024
@@ -239,6 +240,8 @@ export class DshWebProfileWorkerFactory {
           () => requestedStop || settled, assetCache)
         : this.remoteUiRead(viewOrigin, remoteUiToken, endpoint, payload, signal,
           () => requestedStop || settled),
+      remoteUiStream: (endpoint, payload, signal) => openRemoteUiWorkerStream(
+        viewOrigin, remoteUiToken, endpoint, payload, signal, () => requestedStop || settled),
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
         if (requestedStop || settled) return

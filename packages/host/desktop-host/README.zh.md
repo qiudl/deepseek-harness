@@ -55,6 +55,8 @@ Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的
 
 远程 Web DSH 读取使用 `profile.remote_ui_read`，在调用 worker 前后校验同一绑定 owner 的租约。macOS 和 Windows Host 启动入口安装精确端点的 worker 执行器，worker 私有 Bearer token 始终留在 Host 内。对于 `asset/read`，Host 校验当前启动注入表，只用私有 cookie 读取其中列出的同源 `/plugins/` 脚本，要求 JavaScript 响应，将完整资源限制在 8 MiB，并从单个 worker 本机缓存返回 24 KiB 分块。超过 64 KiB 的结果会被控制帧拒绝。这只是有界读取通道，不是流或通用 Web API 隧道。
 
+Profile worker 句柄还会读取其私有 `session/follow` NDJSON 路由。它只接受有界的事件项和明确的结束帧，调用方释放时取消 HTTP 读取，并拒绝格式错误、失败或不完整的流。这个本机读取端不会公布 Host 控制能力，也不会通过绑定 owner 的租约传送事件；流仍需独立的租约授权传输。
+
 账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。注册表出现并发变更时，回退被阻止并返回 `stale`。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
 
 恢复不含可选绑定字段的记录后再添加账号绑定时，Host 按注册表的规范字段顺序写入，使更新后的记录在 Host 重启后仍可读取。

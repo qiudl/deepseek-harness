@@ -113,6 +113,20 @@ export class ProfileWorkerSupervisor {
   }
 
   /**
+   * Open the active Profile worker's native Session event stream.
+   * @param profileId - Lease-selected Profile identity.
+   * @param endpoint - Exact Session-follow endpoint.
+   * @param payload - Validated Session-follow arguments.
+   * @param signal - Host-owned cancellation signal.
+   * @returns Native Session events until cancellation or end.
+   */
+  remoteUiStream(profileId: string, endpoint: string, payload: unknown, signal: AbortSignal): AsyncIterable<unknown> {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.remoteUiStream) throw new HostAuthorityError('unavailable')
+    return worker.remoteUiStream(endpoint, payload, signal)
+  }
+
+  /**
    * Stop notifications before cancellation, then await the child's exit.
    * @param profileId - worker owner to dispose.
    */

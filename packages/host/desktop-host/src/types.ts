@@ -111,6 +111,8 @@ export interface ProfileWorkerHandle {
   ) => Promise<HostRemoteSessionJson>
   /** Host-only, read-only Web DSH RPC; worker token never enters a view lease. */
   readonly remoteUiRead?: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>
+  /** Host-only native Session event stream; the reader owns cancellation. */
+  readonly remoteUiStream?: (endpoint: string, payload: unknown, signal: AbortSignal) => AsyncIterable<unknown>
 }
 
 /** Factory that starts one isolated profile worker. */

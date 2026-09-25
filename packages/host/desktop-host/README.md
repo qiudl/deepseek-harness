@@ -53,6 +53,8 @@ Remote Session execution is an optional Host dependency. When installed, `profil
 
 Remote Web DSH reads use `profile.remote_ui_read` with the same owner-bound lease checks before and after the worker call. macOS and Windows Host startup install the exact-endpoint worker executor; the worker's private bearer token stays inside the Host. For `asset/read`, the Host checks the current boot injection table, fetches only a listed same-origin `/plugins/` script with its private cookie, requires a JavaScript response, caps the complete asset at 8 MiB, and returns 24 KiB chunks from one worker-local cache. The control frame rejects responses above 64 KiB. This is a bounded read seam, not a stream or general Web API tunnel.
 
+The Profile worker handle also reads its private `session/follow` NDJSON route. It accepts only bounded item frames followed by an explicit end, cancels the HTTP reader on caller disposal, and rejects malformed, failed, or incomplete streams. This local reader does not advertise a Host control capability or carry events across the owner-bound lease; the stream requires a separate lease-authorized transport.
+
 Account provisioning preserves the exact prior registry row when worker preparation fails, including an issuer or subject replacement. A concurrent registry change prevents rollback and returns `stale`. A missing worker provider rejects before registration. These rules affect registry metadata only; they neither authorize a cloud identity migration nor move or delete Profile content.
 
 Adding an account binding after restoring a row without the optional binding field writes the canonical registry field order, so the updated row remains readable after Host restart.

@@ -73,6 +73,36 @@ it('forwards model text only to a live worker that owns the model capability', a
   await unsupported.disposeAll()
 })
 
+it('forwards native follow events only through a live Profile worker', async () => {
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  const signal = new AbortController().signal
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    async *remoteUiStream(endpoint: string, payload: unknown, received: AbortSignal) {
+      yield { endpoint, payload, sameSignal: received === signal }
+    },
+  }))
+  expect(() => workers.remoteUiStream(input.profileId, 'session/follow', {}, signal))
+    .toThrow('unavailable')
+  await workers.start(input)
+  const events: unknown[] = []
+  for await (const event of workers.remoteUiStream(input.profileId, 'session/follow', { args: {} }, signal)) {
+    events.push(event)
+  }
+  expect(events).toEqual([{ endpoint: 'session/follow', payload: { args: {} }, sameSignal: true }])
+  await workers.disposeAll()
+  expect(() => workers.remoteUiStream(input.profileId, 'session/follow', {}, signal))
+    .toThrow('unavailable')
+
+  const unsupported = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+  }))
+  await unsupported.start(input)
+  expect(() => unsupported.remoteUiStream(input.profileId, 'session/follow', {}, signal))
+    .toThrow('unavailable')
+  await unsupported.disposeAll()
+})
+
 it('refuses activation until every verified listener field is present', async () => {
   const handles = [
     {},
