@@ -31,6 +31,7 @@ import type {} from '@deepseek-ai/dsh-llm'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
+import { DesktopRemoteUiStreamExecutor, handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'web-app'
@@ -261,10 +262,16 @@ export function apply(ctx: Context, config: Config): void {
     ctx.inject(['typertGateway'], (remoteCtx) => {
       const executor = new DesktopRemoteUiExecutor(remoteCtx.typertGateway,
         () => remoteCtx.webServer.collectIndexInjections())
+      const streamExecutor = new DesktopRemoteUiStreamExecutor(remoteCtx.typertGateway)
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-ui',
         handler: (req, res) => handleDesktopRemoteUiRequest(req, res, desktopRemoteUiToken,
           (endpoint, payload, signal) => executor.execute(endpoint, payload, signal)),
+      }))
+      remoteCtx.effect(() => remoteCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-remote-ui-stream',
+        handler: (req, res) => handleDesktopRemoteUiStreamRequest(req, res, desktopRemoteUiToken,
+          (endpoint, payload, signal) => streamExecutor.open(endpoint, payload, signal)),
       }))
     })
   }
