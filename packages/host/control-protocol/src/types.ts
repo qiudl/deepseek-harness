@@ -943,6 +943,76 @@ export interface ProfileRemoteSessionResult {
   readonly result: { readonly value: HostRemoteSessionJson }
 }
 
+/** Exact read RPC carried only by a live Host-owned Profile view lease. */
+export interface ProfileRemoteUiReadRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_read'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly endpoint: 'boot/injections' | 'asset/read' | 'session/list' | 'session/page' | 'session/modelCatalog'
+      | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
+      | 'credentials/describe' | 'permissionPresets/catalog'
+    readonly payload: { readonly args: HostRemoteSessionJson }
+  }
+}
+
+/** One small read projection; the control channel rejects responses above 64 KiB. */
+export interface ProfileRemoteUiReadResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_read'
+  readonly result: { readonly value: HostRemoteSessionJson }
+}
+
+/** Only the native Session-follow stream may cross a live Profile view lease. */
+export type ProfileRemoteUiStreamCommand =
+  | {
+    readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'session/follow'
+    readonly payload: { readonly args: { readonly request: {
+      readonly address: { readonly kind: 'session'; readonly sessionId: string }
+        | {
+          readonly kind: 'subagent'
+          readonly parentSessionId: string
+          readonly childSessionId: string
+          readonly mode: 'one-shot' | 'continuable'
+        }
+      readonly maxMessages?: number
+      readonly assistantStream?: true
+    } } }
+  }
+  | { readonly action: 'poll' | 'close'; readonly stream_id: string }
+
+/** One short, lease-authorized stream control RPC. */
+export interface ProfileRemoteUiStreamRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_stream'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly command: ProfileRemoteUiStreamCommand
+  }
+}
+
+/** At most 16 KiB of one JSON event per frame; terminal errors carry no details. */
+export interface ProfileRemoteUiStreamResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_stream'
+  readonly result: { readonly type: 'opened' | 'idle' | 'end' | 'error' | 'closed' }
+    | { readonly type: 'chunk'; readonly bytes: string; readonly final: boolean }
+}
+
 /** Inspect legacy model candidates through a token-verified Account view. */
 export interface ProfileModelClaimInventoryRequest {
   readonly version: 1
@@ -1125,6 +1195,10 @@ export interface ProfileModelClaimRetryResult {
 export type HostControlFrame =
   | ProfileRemoteSessionRequest
   | ProfileRemoteSessionResult
+  | ProfileRemoteUiReadRequest
+  | ProfileRemoteUiReadResult
+  | ProfileRemoteUiStreamRequest
+  | ProfileRemoteUiStreamResult
   | ProfileExtensionsRequest
   | ProfileExtensionsResult
   | ProfileModelClaimInventoryRequest

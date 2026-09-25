@@ -1,11 +1,13 @@
 /** Host-only bridge from the Desktop worker to the existing Session Remote surface. */
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
   RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventId, TypertGateway,
 } from '@deepseek-ai/dsh-api-gateway'
 import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import { openDesktopRemotePrivateRequest, readDesktopRemotePrivateBody,
+  rejectDesktopRemotePrivateRequest, writeDesktopRemotePrivateResult } from './desktop-remote-private-request.ts'
 
 interface ApprovalCursor {
   readonly iterator: AsyncIterator<unknown>
@@ -228,30 +230,13 @@ export async function handleDesktopRemoteSessionRequest(
   token: string,
   execute: (command: HostRemoteSessionCommand, signal: AbortSignal) => Promise<HostRemoteSessionJson>,
 ): Promise<void> {
-  const supplied = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : ''
-  const expected = Buffer.from(token)
-  const actual = Buffer.from(supplied)
-  if (req.method !== 'POST' || !/^[A-Za-z0-9_-]{43}$/u.test(token)
-    || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-    res.writeHead(403).end(); return
-  }
-  const controller = new AbortController()
-  res.once('close', () => { controller.abort() })
+  const controller = openDesktopRemotePrivateRequest(req, res, token)
+  if (!controller) return
   try {
-    const chunks: Buffer[] = []
-    let size = 0
-    for await (const chunk of req as AsyncIterable<unknown>) {
-      if (!(chunk instanceof Uint8Array)) throw new Error('invalid body')
-      size += chunk.byteLength
-      if (size > 64 * 1024) throw new Error('body too large')
-      chunks.push(Buffer.from(chunk))
-    }
-    const command = JSON.parse(Buffer.concat(chunks).toString('utf8')) as HostRemoteSessionCommand
+    const command = await readDesktopRemotePrivateBody(req) as HostRemoteSessionCommand
     const value = await execute(command, controller.signal)
-    const body = JSON.stringify({ value })
-    if (Buffer.byteLength(body) > 512 * 1024) throw new Error('result too large')
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }).end(body)
+    writeDesktopRemotePrivateResult(res, value)
   } catch {
-    if (!res.writableEnded && !res.destroyed) res.writeHead(422, { 'cache-control': 'no-store' }).end()
+    rejectDesktopRemotePrivateRequest(res)
   }
 }

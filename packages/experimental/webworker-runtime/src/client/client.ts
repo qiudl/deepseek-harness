@@ -26,6 +26,16 @@ export interface BootPayload {
 /** Fetch-shaped transport the client tree consumes. */
 export type TunnelFetch = (input: URL | string, init?: RequestInit) => Promise<Response>
 
+/** Message endpoint supplied by either a Worker or an isolated parent frame. */
+export interface TunnelEndpoint {
+  /** Send one request or cancellation frame to the transport owner. */
+  postMessage(message: unknown, transfer?: Transferable[]): void
+  /** Subscribe to one transport reply. */
+  addEventListener(type: 'message', listener: (event: MessageEvent<ResponseFrame>) => void): void
+  /** Subscribe to terminal transport failures. */
+  addEventListener(type: 'error', listener: (event: ErrorEvent) => void): void
+}
+
 interface PendingUnary {
   resolve(response: Response): void
   reject(reason: Error): void
@@ -139,7 +149,7 @@ const NULL_BODY_STATUS = new Set([101, 204, 205, 304])
 
 /** The page half of the tunnel: one `fetch`-shaped face over `postMessage`. */
 export class WorkerTunnel {
-  private readonly worker: Worker
+  private readonly worker: TunnelEndpoint
   private nextId = 1
   private readonly unary = new Map<TunnelRequestId, PendingUnary>()
   private readonly bodyStreams = new Map<TunnelRequestId, ReadableStreamDefaultController<Uint8Array>>()
@@ -158,10 +168,10 @@ export class WorkerTunnel {
   private readonly releases = new Map<TunnelRequestId, () => void>()
 
   /**
-   * Attach to a spawned worker and start consuming response frames.
-   * @param worker - the host worker.
+   * Attach to an endpoint and start consuming response frames.
+   * @param worker - Worker or isolated parent-frame endpoint.
    */
-  constructor(worker: Worker) {
+  constructor(worker: TunnelEndpoint) {
     this.worker = worker
     worker.addEventListener('message', (event: MessageEvent<ResponseFrame>) => {
       this.receive(event.data)

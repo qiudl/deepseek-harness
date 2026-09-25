@@ -51,6 +51,15 @@ afterEach(() => {
 })
 
 describe('default product isolation', () => {
+  it('accepts the Desktop Host executable profile without treating it as a patch bundle', () => {
+    const root = fixture()
+    const host = '@deepseek-ai/dsh-desktop-host'
+    write(root, 'apps/desktop-host/package.json', { name: host, private: true })
+    write(root, profile, `export const PROFILE_TEMPLATES = { web: { bundles: ['${base}'] }, desktop: { bundles: ['${host}'] } }\n`
+      + `export const DEFAULT_PROFILE_BUNDLES = ['${base}']\n`)
+    expect(verifyDefaultProductIsolation(root).failures).toEqual([])
+  })
+
   it.each(['@deepseek-ai/libreoffice-kit'])(
     'accepts independently published %s but rejects unknown workspace packages', (name) => {
       const root = fixture()

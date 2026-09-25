@@ -86,3 +86,118 @@ describe('Profile remote Session wire commands', () => {
     }
   })
 })
+
+describe('Profile remote UI read wire commands', () => {
+  const readFrame = (endpoint: string, payload: unknown) => ({
+    version: 1, type: 'request', request_id: randomUUID(), method: 'profile.remote_ui_read',
+    params: { ...auth(), view_lease_id: randomUUID(), lease_generation: 1, runtime_generation: 1,
+      endpoint, payload },
+  })
+
+  it('accepts only the bounded read endpoints and an empty boot selector', () => {
+    const boot = readFrame('boot/injections', { args: {} })
+    expect(encodeHostControlFrame(decode(boot))).toBe(`${JSON.stringify(boot)}\n`)
+    expect(() => decode(readFrame('boot/injections', { args: { profile: 'other' } }))).toThrow()
+    const asset = readFrame('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 0 } })
+    expect(encodeHostControlFrame(decode(asset))).toBe(`${JSON.stringify(asset)}\n`)
+    expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: -1 } }))).toThrow()
+    expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: 0, path: '/' } }))).toThrow()
+    for (const endpoint of ['session/list', 'session/page', 'session/modelCatalog',
+      'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
+      'credentials/describe', 'permissionPresets/catalog']) {
+      const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] }
+        : endpoint.startsWith('session/') ? { _request: {} } : {}
+      const value = readFrame(endpoint, { args })
+      expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+    }
+    expect(() => decode(readFrame('credentials/describe', { args: { refs: ['bad-ref'] } }))).toThrow()
+    expect(() => decode(readFrame('settings/describe', { args: { path: '/private' } }))).toThrow()
+    for (const endpoint of ['session/create', '/api/session/list', 'session/list?all=true',
+      'dynamicCordisRunner/syncInspectManifest']) {
+      expect(() => decode(readFrame(endpoint, { args: {} }))).toThrow()
+    }
+  })
+
+  it('rejects extra selectors, unsafe JSON, and overlarge results', () => {
+    expect(() => decode(readFrame('session/list', { args: {}, profile_root: '/tmp/other' }))).toThrow()
+    expect(() => decode(readFrame('session/list', { args: null }))).toThrow()
+    expect(() => decode(readFrame('session/list', { args: [] }))).toThrow()
+    expect(() => decode(readFrame('session/list', { args: { ['__proto__']: '/tmp/other' } }))).toThrow()
+    const result = { version: 1, type: 'result', request_id: randomUUID(),
+      method: 'profile.remote_ui_read', result: { value: { items: [] } } }
+    expect(encodeHostControlFrame(decode(result))).toBe(`${JSON.stringify(result)}\n`)
+    expect(() => decode({ ...result, result: { value: 'x'.repeat(65_536) } })).toThrow()
+  })
+})
+
+describe('Profile remote UI stream wire commands', () => {
+  const streamFrame = (command: unknown) => ({
+    version: 1, type: 'request', request_id: randomUUID(), method: 'profile.remote_ui_stream',
+    params: { ...auth(), view_lease_id: randomUUID(), lease_generation: 1, runtime_generation: 1,
+      command },
+  })
+
+  it('accepts only bounded Session follow open, poll and close', () => {
+    const stream_id = randomUUID()
+    for (const command of [
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 100, assistantStream: true,
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'subagent', parentSessionId: 'parent-1', childSessionId: 'child-1', mode: 'one-shot' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'subagent', parentSessionId: 'parent-1', childSessionId: 'child-1', mode: 'continuable' },
+      } } } },
+      { action: 'poll', stream_id }, { action: 'close', stream_id },
+    ]) {
+      const value = streamFrame(command)
+      expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+    }
+    for (const command of [
+      { action: 'open', stream_id, endpoint: 'asset/read', payload: { args: {} } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: '../other' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 501,
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, arbitrary: true,
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'subagent', parentSessionId: 'parent-1', childSessionId: 'child-1', mode: 'invalid' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'other', sessionId: 'session-1' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, assistantStream: false,
+      } } } },
+      { action: 'poll', stream_id, profile_id: randomUUID() },
+      { action: 'close', stream_id: 'not-a-uuid' },
+      { action: 'arbitrary', stream_id },
+    ]) expect(() => decode(streamFrame(command))).toThrow()
+  })
+
+  it('accepts bounded chunks and denies result injection', () => {
+    const resultFrame = (result: unknown) => ({ version: 1, type: 'result', request_id: randomUUID(),
+      method: 'profile.remote_ui_stream', result })
+    for (const result of [{ type: 'opened' }, { type: 'idle' }, { type: 'end' },
+      { type: 'error' }, { type: 'closed' }, { type: 'chunk', bytes: 'SGVsbG8', final: true }]) {
+      const value = resultFrame(result)
+      expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+    }
+    for (const result of [{ type: 'chunk', bytes: '***', final: true },
+      { type: 'chunk', bytes: 'A'.repeat(22_000), final: false },
+      { type: 'chunk', bytes: Buffer.alloc(16_385).toString('base64url'), final: true },
+      { type: 'chunk', bytes: 'A', final: true },
+      { type: 'arbitrary' },
+      { type: 'error', detail: '/private/secret' }]) {
+      expect(() => decode(resultFrame(result))).toThrow()
+    }
+  })
+})

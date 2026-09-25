@@ -15,7 +15,7 @@ import { WorkerTunnel, type TunnelFetch } from './client.ts'
 import { applyIndexInjections } from './apply-injections.ts'
 import { choosePreviewSource } from './source-chooser.ts'
 
-export { WorkerTunnel, type TunnelFetch } from './client.ts'
+export { WorkerTunnel, type TunnelEndpoint, type TunnelFetch } from './client.ts'
 export { applyIndexInjections } from './apply-injections.ts'
 export { IMAGE_FILE_NAME } from '../image-layout.ts'
 export {

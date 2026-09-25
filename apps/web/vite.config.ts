@@ -80,6 +80,41 @@ function emitPreviewPage(): Plugin {
   }
 }
 
+/** Emit the same application entry behind the isolated remote bootstrap. */
+function emitRemotePage(): Plugin {
+  let bootstrapFile: string | undefined
+  let write = true
+  let written = false
+  let outputDirectory = ''
+  return {
+    name: 'dsh-emit-remote-page',
+    configResolved(config) {
+      write = config.build.write
+      outputDirectory = resolve(config.root, config.build.outDir)
+    },
+    buildStart() {
+      bootstrapFile = undefined
+      written = false
+    },
+    generateBundle(_options, bundle) {
+      if (!write) return
+      for (const item of Object.values(bundle)) {
+        if (item.type === 'chunk' && item.isEntry && item.name === 'remote-bootstrap') bootstrapFile = item.fileName
+      }
+      if (bootstrapFile === undefined) throw new Error('vite: remote bootstrap entry missing from the bundle')
+    },
+    writeBundle() { written = true },
+    async closeBundle() {
+      if (!write || !written || bootstrapFile === undefined) return
+      const page = await readFile(resolve(outputDirectory, 'index.html'), 'utf8')
+      const anchor = page.indexOf('<script type="module"')
+      if (anchor === -1) throw new Error('vite: built index.html lost its module entry tag')
+      const tag = `<script type="module" crossorigin src="./${bootstrapFile}"></script>`
+      await writeFile(resolve(outputDirectory, 'remote.html'), `${page.slice(0, anchor)}${tag}${page.slice(anchor)}`)
+    },
+  }
+}
+
 /**
  * Vendor-chunk membership, by exact npm package name — the heavy render
  * families (math, highlight, markdown) that change only on dependency bumps.
@@ -156,7 +191,7 @@ export default defineConfig({
   // directory, and the served index resolves identically from the site root.
   base: './',
   plugins: [
-    rejectStandaloneServe(), clientDocumentTitle(), react(), emitPreviewPage(),
+    rejectStandaloneServe(), clientDocumentTitle(), react(), emitPreviewPage(), emitRemotePage(),
     productWebBundleIsolation(src('../..'), src('.')),
   ],
   build: {
@@ -171,13 +206,15 @@ export default defineConfig({
         // module tag of one page into a single synthetic entry, and only a
         // separate input keeps the shared page chunks bootstrap-free.
         bootstrap: src('./src/preview.ts'),
+        'remote-bootstrap': src('./src/remote.ts'),
       },
       output: {
         // The worker-preview surface groups under dist/preview/ (the page
         // itself stays at dist/preview.html), so the published payload can
         // exclude it as one directory.
         entryFileNames(chunk): string {
-          return chunk.name === 'bootstrap' ? 'preview/[name]-[hash].js' : 'assets/[name]-[hash].js'
+          if (chunk.name === 'bootstrap') return 'preview/[name]-[hash].js'
+          return 'assets/[name]-[hash].js'
         },
         // Output layout: the two main chunks stay at assets/ root; lazy
         // @shikijs/langs grammar chunks group under assets/langs/; fonts

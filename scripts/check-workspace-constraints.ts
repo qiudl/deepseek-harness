@@ -150,6 +150,22 @@ function workspaceManifests(): WorkspaceManifest[] {
 const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   // Owned Worker bundles import this public bootstrap before their business entry.
   '@deepseek-ai/dsh-app-boot': ['lib/worker/profile-resolution-bootstrap.js'],
+  '@deepseek-ai/dsh-api-session-controller': ['protocol/dsh-host-actions-v1.schema.json'],
+  '@deepseek-ai/dsh-slark-desktop-host': [
+    'lib/windows-startup.js',
+    'lib/host-control-client.js',
+    'lib/windows-host-pipe-worker-entry.js',
+    'lib/windows-host-client-worker-entry.js',
+    'lib/windows-embedding-identity-entry.js',
+    'hub-upstream/LICENSE',
+    'hub-upstream/UPSTREAM.json',
+    'hub-upstream/mcp.mjs',
+    'hub-upstream/mcp.d.mts',
+    'hub-upstream/skills-codec.mjs',
+    'hub-upstream/skills-codec.d.mts',
+    'hub-upstream/plugin-command.mjs',
+    'hub-upstream/plugin-command.d.mts',
+  ],
   // Statically linked client libraries keep their stylesheets next to the emitted
   // JavaScript, which imports them by relative path: the compile shell runs
   // them through its own CSS pipeline, so the sheets are published artifacts.

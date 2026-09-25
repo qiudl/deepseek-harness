@@ -222,6 +222,7 @@
       "@deepseek-ai/dsh-client-ui-extension-center/client": ["./packages/client/ui-extension-center/src/client"],
       "@deepseek-ai/dsh-host-control-protocol": ["./packages/host/control-protocol/src"],
       "@deepseek-ai/dsh-slark-desktop-host": ["./packages/host/desktop-host/src"],
+      "@deepseek-ai/dsh-slark-desktop-host/startup": ["./packages/host/desktop-host/src/startup.ts"],
       "@deepseek-ai/dsh-client-ui-brand-official": ["./packages/client/ui-brand-official/src"],
       "@deepseek-ai/dsh-client-ui-approval": ["./packages/client/ui-approval/src"],
       "@deepseek-ai/dsh-client-ui-approval/client": ["./packages/client/ui-approval/src/client/index.ts"],

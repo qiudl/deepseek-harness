@@ -18,6 +18,8 @@ export type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
   HostRemoteSessionCommand, HostRemoteSessionJson, ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
+  ProfileRemoteUiReadRequest, ProfileRemoteUiReadResult,
+  ProfileRemoteUiStreamCommand, ProfileRemoteUiStreamRequest, ProfileRemoteUiStreamResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
   ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
   ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,

@@ -140,6 +140,7 @@
     "tests/workflow-run.e2e.ts"
   ],
   "references": [
+    { "path": "../../packages/client/connection/tsconfig.host.json" },
     { "path": "../../packages/experimental/auto-review" },
     {
       "path": "../../packages/client/store"

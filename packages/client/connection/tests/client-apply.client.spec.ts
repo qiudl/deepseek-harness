@@ -12,6 +12,7 @@ import {
   type RpcFetch,
   type ConnectionHandle,
   type ConnectionState,
+  installConnection,
 } from '../src/client/index.ts'
 
 type Win = {
@@ -123,6 +124,12 @@ describe('connection client apply', () => {
     expect((await mount()).isLoopback).toBe(true)
   })
 
+  it('installs the default browser carrier when no composition options are supplied', () => {
+    const ctx = new Context()
+    installConnection(ctx)
+    expect((ctx.get('connection') as ConnectionHandle).isLoopback).toBe(true)
+  })
+
   it('mounts ctx.connection and identifies a loopback page', async () => {
     ;(globalThis as Win).location = { hostname: 'localhost' }
     const handle = await mount()
@@ -131,6 +138,12 @@ describe('connection client apply', () => {
 
   it('reports non-loopback page authority through the connection handle', async () => {
     ;(globalThis as Win).location = { hostname: '192.0.2.20' }
+    expect((await mount()).isLoopback).toBe(false)
+  })
+
+  it('keeps a remote Host unprivileged even when its shell page is on localhost', async () => {
+    ;(globalThis as Win).location = { hostname: 'localhost' }
+    ;(globalThis as Win).__DSH_TRANSPORT__ = { remoteHost: true, ownsHost: false }
     expect((await mount()).isLoopback).toBe(false)
   })
 

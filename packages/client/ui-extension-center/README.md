@@ -54,6 +54,8 @@ None; this package neither assembles nor sends a provider request.
 
 The entry depends on Slark's Desktop bridge and is unavailable in a standalone DSH browser session. Plugin installation, activation, and configuration remain on the official DSH Plugins page.
 
+No runtime invariant companion is published because this navigation entry owns no independently observed cross-plugin state.
+
 - **Desktop-only entry** — no bridge or failed readiness handshake leaves the navigation row hidden.
 
 <a id="dev-note"></a>
