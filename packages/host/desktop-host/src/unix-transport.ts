@@ -4,7 +4,7 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import type {
   HostExtensionCommand, HostExtensionResponse, HostExtensionKind, HostRemoteSessionCommand,
   HostRemoteSessionJson, ProfileExtensionsRequest, ProfileRemoteSessionRequest,
-  ProfileRemoteUiReadRequest,
+  ProfileRemoteUiReadRequest, ProfileRemoteUiStreamRequest, ProfileRemoteUiStreamResult,
   ProfileModelClaimInventoryRequest,
   ProfileModelClaimRecoveryInventoryRequest,
   ProfileModelClaimConfirmRequest, ProfileModelClaimApplyRequest,
@@ -71,6 +71,7 @@ import type { DesktopHost } from './desktop-host.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
+import { RemoteUiStreamCursor } from './remote-ui-stream-cursor.ts'
 import type { SingleHostLock } from './single-instance.ts'
 
 /** Native peer evidence supplied by the embedding Desktop/Host process. */
@@ -115,6 +116,11 @@ export interface UnixHostServerOptions {
     profileId: string, endpoint: ProfileRemoteUiReadRequest['params']['endpoint'],
     payload: ProfileRemoteUiReadRequest['params']['payload'], signal: AbortSignal,
   ) => Promise<unknown>
+  /** Open only the native Session-follow stream in the lease-selected worker. */
+  readonly remoteUiStream?: (
+    profileId: string, endpoint: 'session/follow', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
+      { action: 'open' }>['payload'], signal: AbortSignal,
+  ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
   readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
   /** Initial claims require a fresh, connection-owned confirmation and a live Account view. */
@@ -258,6 +264,7 @@ export type HostControlAuthorityOptions = Pick<
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
+    | 'remoteUiStream'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -717,6 +724,17 @@ export class HostControlAuthority {
       readonly operationId: string
       readonly expiresAt: number
     }>()
+    const remoteUiStreams = new Map<string, {
+      readonly cursor: RemoteUiStreamCursor
+      readonly profileId: string
+      readonly viewLeaseId: string
+      readonly leaseGeneration: number
+      readonly runtimeGeneration: number
+    }>()
+    signal.addEventListener('abort', () => {
+      for (const entry of remoteUiStreams.values()) void entry.cursor.close()
+      remoteUiStreams.clear()
+    }, { once: true })
     const migrationExportEnabled = this.options.createMigrationExport !== undefined
     const migrationExportFor = async (
       selector: string,
@@ -1219,6 +1237,68 @@ export class HostControlAuthority {
             throw new HostAuthorityError('invalid_input')
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.remote_ui_stream') {
+          const command = frame.params.command
+          const revokeCursor = async () => {
+            const entry = remoteUiStreams.get(command.stream_id)
+            if (entry && entry.viewLeaseId === frame.params.view_lease_id
+              && entry.leaseGeneration === frame.params.lease_generation
+              && entry.runtimeGeneration === frame.params.runtime_generation) {
+              remoteUiStreams.delete(command.stream_id)
+              await entry.cursor.close()
+            }
+          }
+          const authority = () => {
+            context.signal.throwIfAborted()
+            try {
+              return this.options.host.authorizeExtensionView({
+                viewLeaseId: frame.params.view_lease_id as never,
+                leaseGeneration: frame.params.lease_generation,
+                runtimeGeneration: frame.params.runtime_generation, ownerId,
+              })
+            } catch (error) { void revokeCursor(); throw error }
+          }
+          const profileId = authority()
+          let result: ProfileRemoteUiStreamResult['result']
+          if (command.action === 'open') {
+            const execute = this.options.remoteUiStream
+            if (!execute) throw new HostAuthorityError('upgrade_required')
+            if (remoteUiStreams.has(command.stream_id) || remoteUiStreams.size >= 8) {
+              throw new HostAuthorityError('conflict')
+            }
+            const cursor = await RemoteUiStreamCursor.open(
+              cursorSignal => execute(profileId, command.endpoint, command.payload, cursorSignal), signal)
+            try {
+              if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
+              remoteUiStreams.set(command.stream_id, { cursor, profileId,
+                viewLeaseId: frame.params.view_lease_id,
+                leaseGeneration: frame.params.lease_generation,
+                runtimeGeneration: frame.params.runtime_generation })
+              result = { type: 'opened' }
+            } catch (error) { await cursor.close(); throw error }
+          } else {
+            const entry = remoteUiStreams.get(command.stream_id)
+            if (!entry || entry.profileId !== profileId || entry.viewLeaseId !== frame.params.view_lease_id
+              || entry.leaseGeneration !== frame.params.lease_generation
+              || entry.runtimeGeneration !== frame.params.runtime_generation) throw new HostAuthorityError('stale')
+            if (command.action === 'close') {
+              remoteUiStreams.delete(command.stream_id)
+              await entry.cursor.close()
+              result = { type: 'closed' }
+            } else {
+              result = entry.cursor.poll()
+              if (result.type === 'end' || result.type === 'error') {
+                remoteUiStreams.delete(command.stream_id)
+                await entry.cursor.close()
+              }
+            }
+          }
+          if (authority() !== profileId) {
+            await revokeCursor()
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result })
         } else if (frame.method === 'profile.remote_session' || frame.method === 'profile.remote_ui_read') {
           const authority = () => {
             context.signal.throwIfAborted()
@@ -1329,6 +1409,7 @@ export class HostControlAuthority {
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
+          ...(this.options.remoteUiStream ? ['profile.remote_ui_stream'] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
             ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
@@ -2030,6 +2111,32 @@ export class UnixHostClient {
     return this.remoteProfileValue(request, input.signal)
   }
 
+  /**
+   * Control a connection-owned native Session-follow cursor using short, lease-checked RPCs.
+   * @param input - Live view lease, exact stream command, and optional cancellation.
+   * @returns One bounded chunk, idle state, or terminal state without worker details.
+   */
+  async remoteUiStream(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: ProfileRemoteUiStreamRequest['params']['command']
+    readonly signal?: AbortSignal
+  }): Promise<ProfileRemoteUiStreamResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.remote_ui_stream' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRemoteUiStreamRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_ui_stream', params: {
+        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+        runtime_generation: input.runtimeGeneration, command: input.command,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
   private async remoteProfileValue(
     request: ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest, signal?: AbortSignal,
   ): Promise<HostRemoteSessionJson> {
@@ -2578,7 +2685,8 @@ export class UnixHostClient {
   }
 
   private async call(
-    request: ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest | ProfileModelClaimInventoryRequest
+    request: ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest
+      | ProfileRemoteUiStreamRequest | ProfileModelClaimInventoryRequest
       | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
       | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
       | ProfileModelClaimRecoveryInventoryRequest

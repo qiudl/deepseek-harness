@@ -17,7 +17,7 @@ describe('Desktop remote UI read-only bridge', () => {
     const destroyed = { writableEnded: false, destroyed: true, writeHead: vi.fn() }
     rejectDesktopRemotePrivateRequest(destroyed as unknown as ServerResponse)
     expect(destroyed.writeHead).not.toHaveBeenCalled()
-    expect(() => writeDesktopRemotePrivateResult(ended as unknown as ServerResponse, 'x'.repeat(512 * 1024)))
+    expect(() => { writeDesktopRemotePrivateResult(ended as unknown as ServerResponse, 'x'.repeat(512 * 1024)) })
       .toThrow('result too large')
   })
 

@@ -421,6 +421,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           authority: commandAuthority, workers, profileId, command, signal,
         }),
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
+        remoteUiStream: (profileId, endpoint, payload, signal) => workers.remoteUiStream(profileId, endpoint, payload, signal),
         ...(mcp && extensionOperations ? { extensions: { operations: extensionOperations, kinds: ['mcp'] as const,
           mcpRemove: true, mcpUpdate: true, inventory: (profileId: string) => mcp.inventory(profileId) } } : {}),
         profilePersistenceGeneration: () => 1,

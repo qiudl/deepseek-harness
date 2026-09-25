@@ -76,6 +76,8 @@ async function authorityClient(options: Partial<UnixHostServerOptions> = {}): Pr
   client: UnixHostClient
   lifetime: AbortController
   host: DesktopHost
+  session: ReturnType<HostControlAuthority['openSession']>
+  transport: HostClientFrameTransport
 }> {
   const host = options.host ?? fakeHost()
   const authority = new HostControlAuthority({
@@ -98,7 +100,7 @@ async function authorityClient(options: Partial<UnixHostServerOptions> = {}): Pr
     trustedExecutableSignatureDigest: identity.executableSignatureDigest,
     now: () => 1_000,
   }, transport)
-  return { client, lifetime, host }
+  return { client, lifetime, host, session, transport }
 }
 
 async function localSelector(client: UnixHostClient): Promise<string> {
@@ -165,6 +167,24 @@ describe('Unix transport authority failures', () => {
     client.close()
   })
 
+  it('rejects unadvertised remote methods even when a client sends a forged control request', async () => {
+    const { client, session } = await authorityClient()
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    const auth = () => (client as unknown as { auth(): Record<string, unknown> }).auth()
+    const common = () => ({ ...auth(), view_lease_id: lease.viewLeaseId as never,
+      lease_generation: lease.leaseGeneration, runtime_generation: lease.runtimeGeneration })
+    const sessionResult = await session.handleRequest({ version: 1, type: 'request', request_id: randomUUID() as never,
+      method: 'profile.remote_session', params: { ...common(),
+        command: { operation: 'session.list', command_id: randomUUID() as never } } } as never)
+    expect(sessionResult).toMatchObject({ type: 'error', error: { code: 'upgrade_required' } })
+    const readResult = await session.handleRequest({ version: 1, type: 'request', request_id: randomUUID() as never,
+      method: 'profile.remote_ui_read', params: { ...common(),
+        endpoint: 'session/list', payload: { args: {} } } } as never)
+    expect(readResult).toMatchObject({ type: 'error', error: { code: 'upgrade_required' } })
+    client.close()
+  })
+
   it('keeps remote UI reads disabled without an executor and binds them to a live view lease', async () => {
     const input = { ...opened, endpoint: 'session/list' as const, payload: { args: { _request: {} } } }
     const unavailable = await authorityClient()
@@ -197,12 +217,251 @@ describe('Unix transport authority failures', () => {
     client.close()
   })
 
+  it('drops a remote UI read when its lease selects a different Profile after worker execution', async () => {
+    const host = fakeHost()
+    vi.mocked(host).authorizeExtensionView.mockReturnValueOnce(profileId as never)
+      .mockReturnValueOnce(randomUUID() as never)
+    const { client } = await authorityClient({ host, remoteUiRead: async () => ({ sessions: [] }) })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteUiRead({ ...lease, endpoint: 'session/list', payload: { args: {} } }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    client.close()
+  })
+
+  it('rejects a remote UI read response with the wrong method', async () => {
+    const { client, transport } = await authorityClient({ remoteUiRead: async () => ({ sessions: [] }) })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    transport.call = async frame => ({ version: 1, type: 'result', request_id: frame.request_id,
+      method: 'profile.remote_session', result: { value: null } })
+    await expect(client.remoteUiRead({ ...lease, endpoint: 'session/list', payload: { args: {} } }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    client.close()
+  })
+
   it('rejects oversized remote UI results before emitting a control frame', async () => {
     const { client } = await authorityClient({ remoteUiRead: async () => ({ value: 'x'.repeat(65_536) }) })
     const selector = await localSelector(client)
     const lease = await client.openLocalProfile({ profileSelector: selector })
     await expect(client.remoteUiRead({ ...lease, endpoint: 'session/list', payload: { args: {} } }))
       .rejects.toMatchObject({ code: 'unavailable' })
+    client.close()
+  })
+
+  it('streams Session follow in short lease-authorized chunks and closes on connection loss', async () => {
+    const host = fakeHost()
+    let release!: (value: IteratorResult<unknown>) => void
+    const stopped = vi.fn()
+    const remoteUiStream = vi.fn((_profileId: string, _endpoint: string, _payload: unknown, signal: AbortSignal) => ({
+      async *[Symbol.asyncIterator]() {
+        try {
+          yield { event: 'message', text: '界'.repeat(10_000) }
+          await new Promise<IteratorResult<unknown>>((resolve) => {
+            release = resolve
+            signal.addEventListener('abort', () => { resolve({ done: true, value: undefined }) }, { once: true })
+          })
+        } finally { stopped() }
+      },
+    }))
+    const { client, lifetime } = await authorityClient({ host, remoteUiStream })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    const stream_id = randomUUID()
+    const request = { address: { kind: 'session' as const, sessionId: 'session-1' } }
+    await expect(client.remoteUiStream({ ...lease, command: { action: 'open', stream_id,
+      endpoint: 'session/follow', payload: { args: { request } } } })).resolves.toEqual({ type: 'opened' })
+    expect(remoteUiStream).toHaveBeenCalledWith(profileId, 'session/follow',
+      { args: { request } }, expect.any(AbortSignal))
+    const chunks: string[] = []
+    for (;;) {
+      const item = await client.remoteUiStream({ ...lease, command: { action: 'poll', stream_id } })
+      if (item.type === 'idle') { await Promise.resolve(); continue }
+      expect(item.type).toBe('chunk')
+      if (item.type !== 'chunk') break
+      chunks.push(item.bytes)
+      if (item.final) break
+    }
+    expect(Buffer.concat(chunks.map(chunk => Buffer.from(chunk, 'base64url'))).toString())
+      .toBe(JSON.stringify({ event: 'message', text: '界'.repeat(10_000) }))
+    expect(vi.mocked(host).authorizeExtensionView.mock.calls.length).toBeGreaterThan(2)
+    lifetime.abort()
+    release({ done: true, value: undefined })
+    await vi.waitFor(() => { expect(stopped).toHaveBeenCalledOnce() })
+    client.close()
+  })
+
+  it('revokes an open Session-follow cursor when its view lease becomes stale', async () => {
+    const host = fakeHost()
+    const stopped = vi.fn()
+    const { client } = await authorityClient({ host, remoteUiStream: (_profileId, _endpoint, _payload, signal) => ({
+      async *[Symbol.asyncIterator]() {
+        try {
+          await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
+        } finally { stopped() }
+      },
+    }) })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    const stream_id = randomUUID()
+    await client.remoteUiStream({ ...lease, command: { action: 'open', stream_id,
+      endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' },
+      } } } } })
+    vi.mocked(host).authorizeExtensionView.mockImplementation(() => { throw new HostAuthorityError('stale') })
+    await expect(client.remoteUiStream({ ...lease, command: { action: 'poll', stream_id } }))
+      .rejects.toMatchObject({ code: 'stale' })
+    await vi.waitFor(() => { expect(stopped).toHaveBeenCalledOnce() })
+    client.close()
+  })
+
+  it('keeps the native stream unavailable without an executor and refuses unknown cursors', async () => {
+    const absent = await authorityClient()
+    const selector = await localSelector(absent.client)
+    const lease = await absent.client.openLocalProfile({ profileSelector: selector })
+    await expect(absent.client.remoteUiStream({ ...lease, command: { action: 'poll', stream_id: randomUUID() } }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    const authorization = (absent.client as unknown as { auth(): Record<string, unknown> }).auth()
+    const denied = await absent.session.handleRequest({ version: 1, type: 'request', request_id: randomUUID() as never,
+      method: 'profile.remote_ui_stream', params: { ...authorization, view_lease_id: lease.viewLeaseId as never,
+        lease_generation: lease.leaseGeneration, runtime_generation: lease.runtimeGeneration,
+        command: { action: 'open', stream_id: randomUUID(), endpoint: 'session/follow',
+          payload: { args: { request: { address: { kind: 'session', sessionId: 'session-1' } } } } },
+      } } as never)
+    expect(denied).toMatchObject({ type: 'error', error: { code: 'upgrade_required' } })
+    absent.client.close()
+
+    const active = await authorityClient({ remoteUiStream: async function* () { /* no items */ } })
+    const activeSelector = await localSelector(active.client)
+    const activeLease = await active.client.openLocalProfile({ profileSelector: activeSelector })
+    await expect(active.client.remoteUiStream({ ...activeLease, command: { action: 'poll', stream_id: randomUUID() } }))
+      .rejects.toMatchObject({ code: 'stale' })
+    active.client.close()
+
+    const host = fakeHost()
+    vi.mocked(host).authorizeExtensionView.mockImplementation(() => { throw new HostAuthorityError('stale') })
+    const revoked = await authorityClient({ host, remoteUiStream: async function* () { /* no items */ } })
+    const revokedSelector = await localSelector(revoked.client)
+    const revokedLease = await revoked.client.openLocalProfile({ profileSelector: revokedSelector })
+    await expect(revoked.client.remoteUiStream({ ...revokedLease,
+      command: { action: 'poll', stream_id: randomUUID() } })).rejects.toMatchObject({ code: 'stale' })
+    revoked.client.close()
+  })
+
+  it('bounds a control connection to eight Session-follow cursors', async () => {
+    const { client } = await authorityClient({ remoteUiStream: async function* () { /* no items */ } })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    const open = (stream_id: string) => client.remoteUiStream({ ...lease, command: { action: 'open', stream_id,
+      endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' },
+      } } } } })
+    for (let index = 0; index < 8; index += 1) {
+      await expect(open(randomUUID())).resolves.toEqual({ type: 'opened' })
+    }
+    await expect(open(randomUUID())).rejects.toMatchObject({ code: 'conflict' })
+    client.close()
+  })
+
+  it('rejects a malformed response to a native stream request', async () => {
+    const { client, transport } = await authorityClient({ remoteUiStream: async function* () { /* no items */ } })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    transport.call = async frame => ({ version: 1, type: 'result', request_id: frame.request_id,
+      method: 'profile.remote_ui_read', result: { value: null } })
+    await expect(client.remoteUiStream({ ...lease, command: { action: 'poll', stream_id: randomUUID() } }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    client.close()
+  })
+
+  it('rejects duplicate Session-follow opens and permits explicit close', async () => {
+    const stopped = vi.fn()
+    const { client } = await authorityClient({ remoteUiStream: (_profileId, _endpoint, _payload, signal) => ({
+      async *[Symbol.asyncIterator]() {
+        try { await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => { resolve() }, { once: true })
+        }) } finally { stopped() }
+      },
+    }) })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    const stream_id = randomUUID()
+    const command = { action: 'open' as const, stream_id, endpoint: 'session/follow' as const,
+      payload: { args: { request: { address: { kind: 'session' as const, sessionId: 'session-1' } } } } }
+    await expect(client.remoteUiStream({ ...lease, command })).resolves.toEqual({ type: 'opened' })
+    await expect(client.remoteUiStream({ ...lease, command })).rejects.toMatchObject({ code: 'conflict' })
+    await expect(client.remoteUiStream({ ...lease, command: { action: 'close', stream_id } }))
+      .resolves.toEqual({ type: 'closed' })
+    await vi.waitFor(() => { expect(stopped).toHaveBeenCalledOnce() })
+    client.close()
+  })
+
+  it('propagates clean and failed worker stream endings without details', async () => {
+    for (const failure of [false, true]) {
+      const { client } = await authorityClient({ remoteUiStream: async function* () {
+        if (failure) throw new Error('private worker detail')
+      } })
+      const selector = await localSelector(client)
+      const lease = await client.openLocalProfile({ profileSelector: selector })
+      const stream_id = randomUUID()
+      await client.remoteUiStream({ ...lease, command: { action: 'open', stream_id,
+        endpoint: 'session/follow', payload: { args: { request: {
+          address: { kind: 'session', sessionId: 'session-1' },
+        } } } } })
+      let result: Awaited<ReturnType<typeof client.remoteUiStream>>
+      do {
+        result = await client.remoteUiStream({ ...lease, command: { action: 'poll', stream_id } })
+        if (result.type === 'idle') await Promise.resolve()
+      } while (result.type === 'idle')
+      expect(result).toEqual({ type: failure ? 'error' : 'end' })
+      client.close()
+    }
+  })
+
+  it('closes a newly opened cursor if its view changes during worker opening', async () => {
+    const host = fakeHost()
+    vi.mocked(host).authorizeExtensionView.mockReturnValueOnce(profileId as never)
+      .mockReturnValueOnce(randomUUID() as never)
+    const stopped = vi.fn()
+    const { client } = await authorityClient({ host, remoteUiStream: (_profileId, _endpoint, _payload, signal) => ({
+      async *[Symbol.asyncIterator]() {
+        try { await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => { resolve() }, { once: true })
+        }) } finally { stopped() }
+      },
+    }) })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteUiStream({ ...lease, command: { action: 'open', stream_id: randomUUID(),
+      endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' },
+      } } } } })).rejects.toMatchObject({ code: 'profile_mismatch' })
+    await vi.waitFor(() => { expect(stopped).toHaveBeenCalledOnce() })
+    client.close()
+  })
+
+  it('closes an existing cursor if its view changes during polling', async () => {
+    const host = fakeHost()
+    const stopped = vi.fn()
+    const { client } = await authorityClient({ host, remoteUiStream: (_profileId, _endpoint, _payload, signal) => ({
+      async *[Symbol.asyncIterator]() {
+        try { await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => { resolve() }, { once: true })
+        }) } finally { stopped() }
+      },
+    }) })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    const stream_id = randomUUID()
+    await client.remoteUiStream({ ...lease, command: { action: 'open', stream_id,
+      endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' },
+      } } } } })
+    vi.mocked(host).authorizeExtensionView.mockReturnValueOnce(profileId as never)
+      .mockReturnValueOnce(randomUUID() as never)
+    await expect(client.remoteUiStream({ ...lease, command: { action: 'poll', stream_id } }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    await vi.waitFor(() => { expect(stopped).toHaveBeenCalledOnce() })
     client.close()
   })
 

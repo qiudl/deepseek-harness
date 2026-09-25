@@ -3,6 +3,7 @@ import type {
   ProfileExtensionsRequest, ProfileExtensionsResult,
   HostRemoteSessionCommand, HostRemoteSessionJson, ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
   ProfileRemoteUiReadRequest, ProfileRemoteUiReadResult,
+  ProfileRemoteUiStreamCommand, ProfileRemoteUiStreamRequest, ProfileRemoteUiStreamResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
   ProfileModelClaimConfirmRequest, ProfileModelClaimConfirmResult,
   ProfileModelClaimApplyRequest, ProfileModelClaimApplyResult,
@@ -639,6 +640,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileRemoteSessionRequest
   | ProfileRemoteUiReadRequest
+  | ProfileRemoteUiStreamRequest
   | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
   | ProfileModelClaimRecoveryInventoryRequest
   | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest | ProfileModelClaimRetryRequest {
@@ -743,6 +745,53 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
       lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
       endpoint: params.endpoint, payload: { args },
+    } }
+  }
+  if (frame.method === 'profile.remote_ui_stream') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'command'])
+    const command = record(params.command)
+    const stream_id = uuid(command.stream_id)
+    let parsed: ProfileRemoteUiStreamCommand
+    if (command.action === 'poll' || command.action === 'close') {
+      exactKeys(command, ['action', 'stream_id'])
+      parsed = { action: command.action, stream_id }
+    } else if (command.action === 'open') {
+      exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload'])
+      if (command.endpoint !== 'session/follow') reject()
+      const payload = record(command.payload)
+      exactKeys(payload, ['args'])
+      const args = record(payload.args)
+      exactKeys(args, ['request'])
+      const request = record(args.request)
+      if (!Object.keys(request).every(key => ['address', 'maxMessages', 'assistantStream'].includes(key))) reject()
+      const address = record(request.address)
+      const sessionId = (value: unknown): string => {
+        if (typeof value !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u.test(value)) reject()
+        return value
+      }
+      let parsedAddress: Extract<ProfileRemoteUiStreamCommand, { action: 'open' }>['payload']['args']['request']['address']
+      if (address.kind === 'session') {
+        exactKeys(address, ['kind', 'sessionId'])
+        parsedAddress = { kind: 'session', sessionId: sessionId(address.sessionId) }
+      } else if (address.kind === 'subagent') {
+        exactKeys(address, ['kind', 'parentSessionId', 'childSessionId', 'mode'])
+        if (address.mode !== 'one-shot' && address.mode !== 'continuable') reject()
+        parsedAddress = { kind: 'subagent', parentSessionId: sessionId(address.parentSessionId),
+          childSessionId: sessionId(address.childSessionId), mode: address.mode }
+      } else reject()
+      if (request.maxMessages !== undefined && (!Number.isSafeInteger(request.maxMessages)
+        || (request.maxMessages as number) < 1 || (request.maxMessages as number) > 500)) reject()
+      if (request.assistantStream !== undefined && request.assistantStream !== true) reject()
+      parsed = { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: parsedAddress,
+        ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages as number }),
+        ...(request.assistantStream === undefined ? {} : { assistantStream: true as const }),
+      } } } }
+    } else reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
+      lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
+      command: parsed,
     } }
   }
   if (frame.method === 'profile.extensions') {
@@ -943,6 +992,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileViewActivateResult | ProfileModelTextResult | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileRemoteSessionResult
   | ProfileRemoteUiReadResult
+  | ProfileRemoteUiStreamResult
   | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
   | ProfileModelClaimRecoveryInventoryResult
   | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult | ProfileModelClaimRetryResult {
@@ -1036,6 +1086,21 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['value'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { value: remoteSessionJson(result.value) } }
+  }
+  if (frame.method === 'profile.remote_ui_stream') {
+    if (result.type === 'chunk') {
+      exactKeys(result, ['type', 'bytes', 'final'])
+      if (typeof result.bytes !== 'string' || result.bytes.length > 21_848
+        || !/^[A-Za-z0-9_-]+$/u.test(result.bytes) || typeof result.final !== 'boolean'
+        || Buffer.from(result.bytes, 'base64url').byteLength > 16_384
+        || Buffer.from(result.bytes, 'base64url').toString('base64url') !== result.bytes) reject()
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { type: 'chunk', bytes: result.bytes, final: result.final } }
+    }
+    exactKeys(result, ['type'])
+    if (result.type !== 'opened' && result.type !== 'idle' && result.type !== 'end'
+      && result.type !== 'error' && result.type !== 'closed') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method, result: { type: result.type } }
   }
   if (frame.method === 'profile.extensions') {
     return { version: 1, type: 'result', request_id, method: 'profile.extensions', result: extensionResponse(result) }
