@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -54,6 +55,113 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
+  it('rejects malformed remote responses and stopped reads at the private Host boundary', async () => {
+    let status = 200
+    let value = JSON.stringify({ value: { items: [] } })
+    const server = createServer((_request, response) => {
+      response.writeHead(status, { 'content-type': 'application/json' }).end(value)
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    onTestFinished(async () => { await new Promise<void>((resolve) => { server.close(() => { resolve() }) }) })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
+    const origin = `http://127.0.0.1:${address.port}`
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    }) as unknown as {
+      remoteSession(origin: string, token: string, command: object, signal: AbortSignal,
+        stopped: () => boolean): Promise<unknown>
+      remoteUiRead(origin: string, token: string, endpoint: string, payload: object,
+        signal: AbortSignal, stopped: () => boolean): Promise<unknown>
+    }
+    const signal = new AbortController().signal
+    const readers = [
+      (stopped: () => boolean) => factory.remoteSession(origin, 'token', { operation: 'session.list' }, signal, stopped),
+      (stopped: () => boolean) => factory.remoteUiRead(origin, 'token', 'session/list', { args: {} }, signal, stopped),
+    ]
+    for (const read of readers) {
+      await expect(read(() => true)).rejects.toMatchObject({ code: 'unavailable' })
+      status = 503
+      await expect(read(() => false)).rejects.toMatchObject({ code: 'unavailable' })
+      status = 200
+      value = 'x'.repeat(512 * 1024 + 1)
+      await expect(read(() => false)).rejects.toMatchObject({ code: 'unavailable' })
+      value = 'not-json'
+      await expect(read(() => false)).rejects.toMatchObject({ code: 'unavailable' })
+      for (const malformed of ['null', '[]', '{}', '{"value":null,"extra":true}']) {
+        value = malformed
+        await expect(read(() => false)).rejects.toMatchObject({ code: 'unavailable' })
+      }
+      value = JSON.stringify({ value: { items: [] } })
+      await expect(read(() => false)).resolves.toEqual({ items: [] })
+    }
+  })
+
+  it('fences plugin asset reads to boot-injected scripts and a live Host lease', async () => {
+    const asset = '/plugins/??a/client.js&rev=1'
+    let bootValue: unknown = { injections: [{ kind: 'script-src', src: asset }] }
+    const server = createServer((request, response) => {
+      if (request.url === '/internal/desktop-remote-ui') {
+        response.writeHead(200, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ value: bootValue }))
+      } else {
+        response.writeHead(200, { 'content-type': 'text/javascript' }).end('registered();')
+      }
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    onTestFinished(async () => { await new Promise<void>((resolve) => { server.close(() => { resolve() }) }) })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
+    const origin = `http://127.0.0.1:${address.port}`
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    }) as unknown as {
+      remoteUiAssetRead(origin: string, cookie: { name: string; value: string }, token: string,
+        payload: unknown, signal: AbortSignal, stopped: () => boolean,
+        cache: { current?: { url: string; bytes: Buffer } }): Promise<unknown>
+    }
+    const signal = new AbortController().signal
+    const read = (payload: unknown, stopped: () => boolean = () => false,
+      cache: { current?: { url: string; bytes: Buffer } } = {}, selectedSignal = signal) =>
+      factory.remoteUiAssetRead(origin, { name: 'cookie', value: 'private' }, 'token',
+        payload, selectedSignal, stopped, cache)
+    for (const payload of [null, {}, { args: null }, { args: { url: 'http://[', offset: 0 } }]) {
+      await expect(read(payload)).rejects.toMatchObject({ code: 'invalid_input' })
+    }
+    bootValue = null
+    await expect(read({ args: { url: asset, offset: 0 } })).rejects.toMatchObject({ code: 'unavailable' })
+    bootValue = { injections: [] }
+    await expect(read({ args: { url: asset, offset: 0 } })).rejects.toMatchObject({ code: 'invalid_input' })
+    bootValue = { injections: [{ kind: 'script-src', src: asset }] }
+    let calls = 0
+    await expect(read({ args: { url: asset, offset: 0 } }, () => ++calls === 2))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    calls = 0
+    await expect(read({ args: { url: asset, offset: 0 } }, () => ++calls === 3))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    const cache = { current: { url: asset, bytes: Buffer.from('registered();') } }
+    calls = 0
+    await expect(read({ args: { url: asset, offset: 0 } }, () => ++calls === 3, cache))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    const aborted = new AbortController()
+    calls = 0
+    await expect(read({ args: { url: asset, offset: 0 } }, () => {
+      if (++calls === 3) aborted.abort()
+      return false
+    }, cache, aborted.signal)).rejects.toMatchObject({ code: 'unavailable' })
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const requestUrl = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
+      if (requestUrl !== `${origin}${asset}`) return originalFetch(input, init)
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.error(new Error('asset stream failed')) },
+        cancel() { throw new Error('cancel failed') },
+      }), { status: 200, headers: { 'content-type': 'text/javascript' } }))
+    })
+    onTestFinished(() => { fetchSpy.mockRestore() })
+    await expect(read({ args: { url: asset, offset: 0 } })).rejects.toThrow('asset stream failed')
+  })
+
   it('rejects every malformed executable and Profile-owned launch field', async () => {
     expect(() => { new ProfileWorkerProcessFactory({ executablePath: 'node', arguments: () => [] }) }).toThrow()
     const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
