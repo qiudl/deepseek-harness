@@ -1,7 +1,7 @@
 /** Private Session-follow stream from one Profile's Gateway to its Desktop Host worker. */
-import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+import { openDesktopRemotePrivateRequest, readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
 const SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u
 
@@ -78,25 +78,10 @@ export async function handleDesktopRemoteUiStreamRequest(
   token: string,
   open: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<AsyncIterable<unknown>>,
 ): Promise<void> {
-  const supplied = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : ''
-  const expected = Buffer.from(token)
-  const actual = Buffer.from(supplied)
-  if (req.method !== 'POST' || !/^[A-Za-z0-9_-]{43}$/u.test(token)
-    || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-    res.writeHead(403).end(); return
-  }
-  const controller = new AbortController()
-  res.once('close', () => { controller.abort() })
+  const controller = openDesktopRemotePrivateRequest(req, res, token)
+  if (!controller) return
   try {
-    const chunks: Buffer[] = []
-    let size = 0
-    for await (const chunk of req as AsyncIterable<unknown>) {
-      if (!(chunk instanceof Uint8Array)) throw new Error('invalid body')
-      size += chunk.byteLength
-      if (size > 64 * 1024) throw new Error('body too large')
-      chunks.push(Buffer.from(chunk))
-    }
-    const request: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    const request = await readDesktopRemotePrivateBody(req)
     if (!record(request) || Object.keys(request).length !== 2 || request.endpoint !== 'session/follow' ||
       !followPayload(request.payload)) throw new Error('invalid stream request')
     const stream = await open('session/follow', request.payload, controller.signal)
