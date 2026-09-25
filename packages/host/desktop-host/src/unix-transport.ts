@@ -2126,11 +2126,12 @@ export class UnixHostClient {
     if (!this.inspection.capabilities.includes('profile.remote_ui_stream' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
+    const params: ProfileRemoteUiStreamRequest['params'] = {
+      ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+      runtime_generation: input.runtimeGeneration, command: input.command,
+    }
     const request: ProfileRemoteUiStreamRequest = {
-      version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_ui_stream', params: {
-        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
-        runtime_generation: input.runtimeGeneration, command: input.command,
-      },
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_ui_stream', params,
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
