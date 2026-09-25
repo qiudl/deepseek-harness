@@ -405,6 +405,8 @@ async function startWindowsDesktopHostApplicationWithTrust(
         ? new ProfileExtensionOperations(new WindowsExtensionReceipts({
           root: win32.join(config.root, 'control'), userSid, bindings, maximumBytes: config.maximumExtensionReceiptBytes,
         }), mcp, clock) : undefined
+      const remoteSession = (profileId: string, command: Parameters<typeof executeRemoteSessionCommand>[0]['command'], signal: AbortSignal) =>
+        executeRemoteSessionCommand({ authority: commandAuthority, workers, profileId, command, signal })
       const authority = new HostControlAuthority({
         identity: {
           hostInstanceId: config.hostInstanceId,
@@ -417,9 +419,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
-        remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({
-          authority: commandAuthority, workers, profileId, command, signal,
-        }),
+        remoteSession,
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
         remoteUiStream: (profileId, endpoint, payload, signal) => workers.remoteUiStream(profileId, endpoint, payload, signal),
         ...(mcp && extensionOperations ? { extensions: { operations: extensionOperations, kinds: ['mcp'] as const,
