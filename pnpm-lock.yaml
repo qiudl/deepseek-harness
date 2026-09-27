@@ -2276,6 +2276,18 @@ importers:
         specifier: workspace:~
         version: link:../../../vendor/cordis
 
+  packages/bundle/slark-desktop:
+    dependencies:
+      '@deepseek-ai/dsh-slark-collaboration-network':
+        specifier: workspace:*
+        version: link:../../slark/collaboration-network
+      '@deepseek-ai/dsh-slark-device-client':
+        specifier: workspace:*
+        version: link:../../slark/device-client
+      '@deepseek-ai/dsh-slark-identity':
+        specifier: workspace:*
+        version: link:../../host/slark-identity
+
   packages/bundle/web-app:
     dependencies:
       '@deepseek-ai/dsh-agent-instructions':
