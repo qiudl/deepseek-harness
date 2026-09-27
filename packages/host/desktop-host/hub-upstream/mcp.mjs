@@ -149,7 +149,7 @@ export function extractMcpServers(patchText) {
                 continue;
             for (const row of seq.items) {
                 const r = row;
-                const get = (k) => r?.items?.find((p) => p.key?.value === k)?.value;
+                const get = (k) => r?.items?.find(p => p.key?.value === k)?.value;
                 if (unwrap(get('name')) === MCP_PLUGIN) {
                     rows.push({
                         id: String(unwrap(get('id')) ?? ''),
@@ -183,7 +183,7 @@ export function replaceMcpRows(patchText, rows) {
             // 移除现有 MCP 行
             const keep = seq.items.filter((row) => {
                 const r = row;
-                const name = r?.items?.find((p) => p.key?.value === 'name')?.value;
+                const name = r?.items?.find(p => p.key?.value === 'name')?.value;
                 return unwrap(name) !== MCP_PLUGIN;
             });
             seq.items.length = 0;
@@ -202,7 +202,7 @@ export function replaceMcpRows(patchText, rows) {
         }
         else {
             const insertEntry = freshEntries[0];
-            const seq = insertEntry?.items?.find((p) => p.key?.value === 'insert')?.value;
+            const seq = insertEntry?.items?.find(p => p.key?.value === 'insert')?.value;
             if (seq?.items)
                 targetInsert.push(...seq.items);
         }
@@ -226,7 +226,7 @@ function findRowLocation(doc, id) {
                 continue;
             for (let i = 0; i < seq.items.length; i++) {
                 const row = seq.items[i];
-                const field = (k) => row?.items?.find((p) => p.key?.value === k)?.value;
+                const field = (k) => row?.items?.find(p => p.key?.value === k)?.value;
                 if (String(unwrap(field('id'))) === id && unwrap(field('name')) === MCP_PLUGIN) {
                     return { seq: seq.items, index: i };
                 }
@@ -241,7 +241,7 @@ function newRowNode(row) {
     if (fresh.errors.length > 0)
         throw new Error(`MCP 行序列化失败: ${fresh.errors[0].message}`);
     const entry = fresh.contents?.items?.[0];
-    const insert = entry?.items?.find((p) => p.key?.value === 'insert')?.value;
+    const insert = entry?.items?.find(p => p.key?.value === 'insert')?.value;
     const node = insert?.items?.[0];
     if (!node)
         throw new Error(`MCP 行序列化失败: ${row.id}`);
