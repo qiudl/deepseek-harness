@@ -8607,6 +8607,15 @@ importers:
       '@deepseek-ai/dsh-session-persistence-jsonl':
         specifier: workspace:^
         version: link:../../session/session-persistence-jsonl
+      '@deepseek-ai/dsh-slark-collaboration-network':
+        specifier: workspace:*
+        version: link:../../slark/collaboration-network
+      '@deepseek-ai/dsh-slark-device-client':
+        specifier: workspace:*
+        version: link:../../slark/device-client
+      '@deepseek-ai/dsh-slark-identity':
+        specifier: workspace:*
+        version: link:../slark-identity
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery
