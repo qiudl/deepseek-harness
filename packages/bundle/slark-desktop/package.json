@@ -1,0 +1,17 @@
+{
+  "name": "@deepseek-ai/dsh-slark-desktop",
+  "description": "M1 Desktop bundle: composes the Slark execution plugins into a local-execution DSH Host (REQ-20260915-0013)",
+  "version": "0.1.7-alpha.2",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": { ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" }, "./package.json": "./package.json" },
+  "files": ["lib/**/*.js", "lib/**/*.d.ts", "cordis.patch.yml"],
+  "license": "MIT",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "dependencies": {
+    "@deepseek-ai/dsh-slark-collaboration-network": "workspace:*",
+    "@deepseek-ai/dsh-slark-identity": "workspace:*",
+    "@deepseek-ai/dsh-slark-device-client": "workspace:*"
+  }
+}

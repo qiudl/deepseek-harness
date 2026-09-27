@@ -1,0 +1,32 @@
+# REQ-20260915-0013 M1 Desktop bundle. Applied after the base bundle in a profile's
+# dsh.profile.bundles. Adds the Slark execution plugins WITHOUT touching local
+# execution (no subprocess/sandbox/host-runner disables — the Desktop Host executes
+# the employee's own invocations locally, Phase0 D3). Config values are supplied at
+# deploy time via env (A4). All plugins are gated on SLARK_DSH_DESKTOP_V1 so an
+# unconfigured Host stays inert.
+
+- insert:
+    - id: slark-device
+      name: '@deepseek-ai/dsh-slark-device-client'
+      disabled: !!js process.env.SLARK_DSH_DESKTOP_V1 !== '1'
+      config:
+        gatewayUrl: !!js process.env.SLARK_DSH_GATEWAY_URL
+
+    - id: slark-identity
+      name: '@deepseek-ai/dsh-slark-identity'
+      disabled: !!js process.env.SLARK_DSH_DESKTOP_V1 !== '1'
+      inject: [slarkDevice]
+      config:
+        workspaceRoot: !!js process.env.SLARK_DSH_WORKSPACE_ROOT
+
+    - id: slark-collaboration-network
+      name: '@deepseek-ai/dsh-slark-collaboration-network'
+      disabled: !!js process.env.SLARK_DSH_DESKTOP_V1 !== '1'
+      inject: [agents, agentPresets, slarkIdentity]
+      config:
+        enabled: true
+        gatewayUrl: !!js process.env.SLARK_DSH_GATEWAY_URL
+        serviceToken: !!js process.env.SLARK_DSH_WORKER_SERVICE_TOKEN
+        workerId: !!js process.env.SLARK_DSH_WORKER_ID
+        formalAgents: !!js JSON.parse(process.env.SLARK_DSH_FORMAL_AGENTS || '[]')
+        leaseMs: 120000

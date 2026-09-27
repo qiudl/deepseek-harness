@@ -1,0 +1,10 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "lib/types" },
+  "include": ["src"],
+  "references": [
+    { "path": "../../slark/collaboration-network" },
+    { "path": "../../host/slark-identity" },
+    { "path": "../../slark/device-client" }
+  ]
+}
