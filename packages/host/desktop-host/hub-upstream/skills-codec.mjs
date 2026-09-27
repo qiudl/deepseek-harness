@@ -69,8 +69,8 @@ function safeZipRelPath(entryName) {
         return null;
     if (/^[A-Za-z]:/.test(norm))
         return null;
-    const parts = norm.split('/').filter((p) => p !== '' && p !== '.');
-    if (parts.some((p) => p === '..'))
+    const parts = norm.split('/').filter(p => p !== '' && p !== '.');
+    if (parts.some(p => p === '..'))
         return null;
     if (parts.length === 0)
         return null;
