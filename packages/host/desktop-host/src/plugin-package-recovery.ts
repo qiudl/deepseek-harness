@@ -1,4 +1,4 @@
-import { isPinnedPluginSpec } from './plugin-command.ts'
+import { isPinnedPluginSpec, pinnedSpecPackageName } from './plugin-command.ts'
 
 /** Immutable intent saved before invoking the package manager; contains no configuration bodies. */
 export interface PluginPackageRecovery {
@@ -19,7 +19,7 @@ export function validPluginPackageRecovery(input: unknown): input is PluginPacka
     && typeof row.packageName === 'string' && row.packageName.length <= 214
     && /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(row.packageName)
     && (row.action === 'remove' ? row.spec === undefined : typeof row.spec === 'string' && isPinnedPluginSpec(row.spec)
-      && (row.spec.startsWith('github:') || row.spec.slice(0, row.spec.lastIndexOf('@')) === row.packageName))
+      && (row.spec.startsWith('github:') || pinnedSpecPackageName(row.spec) === row.packageName))
     && typeof row.originalSpecDigest === 'string' && /^[0-9a-f]{64}$/u.test(row.originalSpecDigest)
     && typeof row.scopeDigest === 'string' && /^[0-9a-f]{64}$/u.test(row.scopeDigest)
     && Array.isArray(row.removedIds) && row.removedIds.length <= 128 && new Set(row.removedIds).size === row.removedIds.length

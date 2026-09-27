@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   pluginCommand: vi.fn(async (_input: unknown) => undefined),
   pluginRuntime: vi.fn(async () => undefined),
   pluginEntries: vi.fn(() => []),
+  composedIds: vi.fn((_layers: unknown, _overrides: unknown): ReadonlySet<string> => new Set<string>()),
   pluginTogglePlan: vi.fn((_layers: unknown, patch: string, _overrides: unknown, _name: string, enabled: boolean) => ({
     patch: enabled ? patch : '- id: startup-tool\n  disabled: true\n',
     previousExpected: [{ entryId: 'include:startup-tool', moduleName: 'startup-tool' }],
@@ -54,7 +55,7 @@ vi.mock('../src/plugin-command.ts', async importOriginal => ({
   runProfilePluginCommand: mocks.pluginCommand,
 }))
 vi.mock('../src/plugin-runtime-ack.ts', () => ({ waitForPluginRuntime: mocks.pluginRuntime }))
-vi.mock('../src/plugin-bundle-entries.ts', () => ({ pluginBundleEntries: mocks.pluginEntries }))
+vi.mock('../src/plugin-bundle-entries.ts', () => ({ pluginBundleEntries: mocks.pluginEntries, composedEntryIds: mocks.composedIds }))
 vi.mock('../src/plugin-toggle-plan.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../src/plugin-toggle-plan.ts')>(),
   planPluginToggle: mocks.pluginTogglePlan,
@@ -92,6 +93,8 @@ function accountToken(key: KeyObject, subject: string): string {
   return `${input}.${sign('sha256', Buffer.from(input, 'ascii'), { key, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`
 }
 
+const BUNDLED_ARCHIVE = Buffer.from('bundled duet archive')
+const BUNDLED_DIGEST = createHash('sha256').update(BUNDLED_ARCHIVE).digest('hex')
 function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject } {
   const root = mkdtempSync(join(tmpdir(), 'dsh-startup-composition-'))
   const artifact = join(root, 'runtime-artifact')
@@ -106,6 +109,11 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
     keys: [{ kid: 'fixture', publicJwk: account.publicKey.export({ format: 'jwk' }) }],
   })}\n`
   writeFileSync(artifact, 'fixture', { mode: 0o700 })
+  const bundledPluginsRoot = join(root, 'bundled-plugins'); mkdirSync(bundledPluginsRoot, { mode: 0o755 })
+  writeFileSync(join(bundledPluginsRoot, 'dsh-duet-0.3.0.tgz'), BUNDLED_ARCHIVE, { mode: 0o644 })
+  writeFileSync(join(bundledPluginsRoot, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1, plugins: [{
+    name: 'dsh-duet', version: '0.3.0', file: 'dsh-duet-0.3.0.tgz', sha256: BUNDLED_DIGEST,
+    repository: 'https://github.com/qiudl/dsh-duet.git', sourceSha: 'c'.repeat(40), entryIds: ['duplex-harness-control'] }] }), { mode: 0o644 })
   writeFileSync(deviceKey, Buffer.alloc(32, 7), { mode: 0o600 })
   writeFileSync(accountKeyringPath, keyring, { mode: 0o600 })
   writeFileSync(installationPrivateKeyPath,
@@ -121,6 +129,7 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
       nodeExecutablePath: artifact,
       dshEntrypointPath: artifact,
       pnpmEntrypointPath: artifact,
+      bundledPluginsRoot,
       deviceIndexKeyPath: deviceKey,
       accountKeyringPath,
       accountKeyringSha256: createHash('sha256').update(keyring).digest('hex'),
@@ -277,14 +286,14 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       dependencies: Record<string, string>
       dsh: { profile: { bundles: string[] } }
     }
-    const name = input.action === 'remove' ? input.spec : input.spec.slice(0, input.spec.lastIndexOf('@'))
+    const name = input.action === 'remove' ? input.spec : input.spec.replace(/^bundled:/u, '').slice(0, input.spec.replace(/^bundled:/u, '').lastIndexOf('@'))
     if (input.action === 'remove') {
       manifest.dependencies = Object.fromEntries(
         Object.entries(manifest.dependencies).filter(([packageName]) => packageName !== name),
       )
       manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(bundle => bundle !== name)
     } else {
-      manifest.dependencies[name] = '1.0.0'
+      manifest.dependencies[name] = input.spec.startsWith('bundled:') ? `file:.bundled-plugins/${BUNDLED_DIGEST}.tgz` : '1.0.0'
       if (!manifest.dsh.profile.bundles.includes(name)) manifest.dsh.profile.bundles.push(name)
     }
     writeFileSync(path, JSON.stringify(manifest), { mode: 0o600 })
@@ -310,6 +319,15 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await operations.settled()
   expect(operations.status(authority, interruptedId).state).toBe('unknown')
   await runOperation('plugin', JSON.stringify({ action: 'complete-package', operationId: interruptedId }))
+  mocks.composedIds.mockReturnValueOnce(new Set(['duplex-harness-control']))
+  await expect(operations.prepare(authority, 'plugin', JSON.stringify({ packageName: 'dsh-duet', spec: 'bundled:dsh-duet@0.3.0' })))
+    .rejects.toThrow('plugin_entry_conflict')
+  await expect(operations.prepare(authority, 'plugin', JSON.stringify({ packageName: 'dsh-duet', spec: 'bundled:dsh-duet@0.2.7' })))
+    .rejects.toThrow('bundled_plugin_unavailable')
+  await runOperation('plugin', JSON.stringify({ packageName: 'dsh-duet', spec: 'bundled:dsh-duet@0.3.0' }))
+  const bundledArchive = join(root, 'profiles', profile.profileId, 'profiles/web/.bundled-plugins', `${BUNDLED_DIGEST}.tgz`)
+  expect(mocks.pluginCommand).toHaveBeenLastCalledWith(expect.objectContaining({ spec: 'bundled:dsh-duet@0.3.0', archivePath: bundledArchive }))
+  expect(readFileSync(bundledArchive)).toEqual(BUNDLED_ARCHIVE)
   expect(mocks.mcpRuntime).toHaveBeenCalled()
   expect(mocks.skillRuntime).toHaveBeenCalled()
   expect(mocks.pluginRuntime).toHaveBeenCalled()

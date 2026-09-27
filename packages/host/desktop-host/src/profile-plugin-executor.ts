@@ -5,7 +5,8 @@ import { isAbsolute, join } from 'node:path'
 import type { ExtensionExecutor, ExtensionKind, ExtensionReceipt, PluginToggleRecovery } from './extension-operations.ts'
 import { removePluginToggleOverrides, type PluginTogglePlan } from './plugin-toggle-plan.ts'
 import { validPluginPackageRecovery, type PluginPackageRecovery } from './plugin-package-recovery.ts'
-import { isPinnedPluginSpec } from './plugin-command.ts'
+import { isPinnedPluginSpec, pinnedSpecPackageName } from './plugin-command.ts'
+import { parseBundledPluginSpec } from './bundled-plugins.ts'
 import type { PluginScriptApproval } from './plugin-script-preflight.ts'
 import { parse } from 'yaml'
 
@@ -14,6 +15,7 @@ interface PluginRemoveInput { action: 'remove'; packageName: string }
 interface PluginToggleInput { action: 'toggle'; packageName: string; enabled: boolean }
 interface PluginInput { packageName: string; spec: string }
 interface PluginUpdateInput extends PluginInput { action: 'update' }
+interface BundledPluginIdentity { readonly entryIds: readonly string[]; readonly dependency: string }
 interface ProfilePluginExecutorOptions {
   resolve(profileId: string): string
   uid: number
@@ -23,6 +25,10 @@ interface ProfilePluginExecutorOptions {
   remove?(this: void, profileRoot: string, packageName: string, context: Lifetime): Promise<void>
   acknowledgeRemoval?(this: void, profileId: string, entryIds: readonly string[], context: Lifetime): Promise<void>
   install(profileRoot: string, spec: string, context: Lifetime): Promise<void>
+  /** Embedding catalog for `bundled:` sources: inserted root entry IDs and recorded dependency; undefined when not shipped. */
+  bundledPlugin?(this: void, name: string, version: string): BundledPluginIdentity | undefined
+  /** Root entry IDs currently composed for the selected Profile, used to refuse colliding bundled patches. */
+  composedEntryIds?(this: void, profileId: string): ReadonlySet<string>
   inspectScripts?(packageName: string, spec: string): Promise<PluginScriptApproval | undefined>
   /** Must reload the selected worker and prove the installed bundle's contributions; CLI exit is insufficient. */
   acknowledge(profileId: string, packageName: string, context: Lifetime): Promise<void>
@@ -48,7 +54,7 @@ function input(payload: string): PluginInput | PluginToggleInput | PluginUpdateI
   }
   if (Object.keys(row).length !== 2 || typeof row.packageName !== 'string' || row.packageName.length > 214
     || !packageName.test(row.packageName) || typeof row.spec !== 'string' || !isPinnedPluginSpec(row.spec)
-    || (!row.spec.startsWith('github:') && row.spec.slice(0, row.spec.lastIndexOf('@')) !== row.packageName)) {
+    || (!row.spec.startsWith('github:') && pinnedSpecPackageName(row.spec) !== row.packageName)) {
     throw Error('invalid_plugin_input')
   }
   return { packageName: row.packageName, spec: row.spec }
@@ -91,6 +97,8 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
         this.read(this.root(profileId), 'profiles/web/cordis.patch.yml') ?? '')
       if (parsed.action === 'remove' && (!this.options.remove || !this.options.acknowledgeRemoval)) throw Error('upgrade_required')
       if (parsed.action === 'update' && plan.previousDisabled.length) throw Error('plugin_update_requires_enabled')
+      const bundled = parsed.action === 'update' ? parseBundledPluginSpec(parsed.spec) : undefined
+      if (bundled && !this.options.bundledPlugin?.(bundled.name, bundled.version)) throw Error('bundled_plugin_unavailable')
       return
     }
     for (const key of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
@@ -104,13 +112,24 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
         if (Array.isArray(bundles) && bundles.includes(parsed.packageName)) throw Error('plugin_already_installed')
       }
     }
+    this.validateBundled(profileId, parsed.spec)
+  }
+  private validateBundled(profileId: string, spec: string): void {
+    const bundled = parseBundledPluginSpec(spec)
+    if (!bundled) return
+    const { bundledPlugin, composedEntryIds } = this.options
+    if (!bundledPlugin || !composedEntryIds) throw Error('upgrade_required')
+    const plugin = bundledPlugin(bundled.name, bundled.version)
+    if (!plugin) throw Error('bundled_plugin_unavailable')
+    const composed = composedEntryIds(profileId)
+    if (plugin.entryIds.some(id => composed.has(id))) throw Error('plugin_entry_conflict')
   }
   /** Inspect immutable package metadata without mutating the selected Profile. */
   preflight(profileId: string, kind: ExtensionKind, payload: string): Promise<PluginScriptApproval | undefined> {
     if (kind !== 'plugin') return Promise.resolve(undefined)
     this.root(profileId)
     const parsed = input(payload)
-    if ('action' in parsed || !this.options.inspectScripts) return Promise.resolve(undefined)
+    if ('action' in parsed || !this.options.inspectScripts || parseBundledPluginSpec(parsed.spec)) return Promise.resolve(undefined)
     return this.options.inspectScripts(parsed.packageName, parsed.spec)
   }
   /** @param profileId Selected Profile. @returns Revision of package resolution, build policy and patch inputs. */
@@ -344,11 +363,18 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     if (!validPluginPackageRecovery(evidence)) throw Error('invalid_package_intent')
     return evidence
   }
+  /** @param spec Requested source. @returns Dependency value pnpm records for it, or undefined when it cannot be derived. */
+  private expectedDependency(spec: string | undefined): string | undefined {
+    if (spec === undefined) return undefined
+    const bundled = parseBundledPluginSpec(spec)
+    if (bundled) return this.options.bundledPlugin?.(bundled.name, bundled.version)?.dependency
+    return spec.startsWith('github:') ? spec : spec.slice(spec.lastIndexOf('@') + 1)
+  }
   private checkPackageScope(profileId: string, evidence: PluginPackageRecovery): void {
     if (this.packageScope(profileId, evidence.packageName, evidence.removedIds) !== evidence.scopeDigest) throw Error('plugin_scope_changed')
     const manifest = this.manifest(profileId)
     const current = manifest.dependencies ? record(manifest.dependencies)[evidence.packageName] ?? null : null
-    const expected = evidence.spec?.startsWith('github:') ? evidence.spec : evidence.spec?.slice(evidence.spec.lastIndexOf('@') + 1)
+    const expected = this.expectedDependency(evidence.spec)
     if (current !== null && createHash('sha256').update(JSON.stringify(current)).digest('hex') !== evidence.originalSpecDigest && current !== expected) throw Error('plugin_target_changed')
     const profile = manifest.dsh ? record(manifest.dsh).profile : undefined
     const bundles = profile === undefined ? undefined : record(profile).bundles
@@ -419,7 +445,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
       if (typeof record(manifest.dependencies)[evidence.packageName] !== 'string'
         || !Array.isArray(record(record(manifest.dsh).profile).bundles)
         || !(record(record(manifest.dsh).profile).bundles as unknown[]).includes(evidence.packageName)) throw Error('plugin_bundle_missing')
-      const expected = evidence.spec.startsWith('github:') ? evidence.spec : evidence.spec.slice(evidence.spec.lastIndexOf('@') + 1)
+      const expected = this.expectedDependency(evidence.spec)
       if (record(manifest.dependencies)[evidence.packageName] !== expected) throw Error('plugin_version_mismatch')
       const revision = await this.revision(profileId)
       context.checkpointPluginPackage?.({ ...evidence, stage: 'command_completed' })

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { pluginBundleEntries } from '../src/plugin-bundle-entries.ts'
+import { composedEntryIds, pluginBundleEntries } from '../src/plugin-bundle-entries.ts'
 const base = { packageName: 'base', patches: [{ insert: [{ id: 'existing', name: 'existing', config: { value: 1 } }] }] }
 it('uses effective composition to identify inserted and reconfigured plugin rows', () => {
   const bundle = { packageName: 'fixture', patches: [{ id: 'existing', config: { value: 2 } },
@@ -29,4 +29,8 @@ it('rejects duplicate entry identities instead of acknowledging an ambiguous run
     { id: 'existing', name: '@fixture/plugin' },
   ] }] }
   expect(() => pluginBundleEntries([base, bundle], [], 'fixture')).toThrow('plugin_entry_ambiguous')
+})
+it('lists the composed root entry IDs used to refuse colliding bundled plugins', () => {
+  const bundle = { packageName: 'fixture', patches: [{ insert: [{ id: 'added', name: '@fixture/plugin' }, { id: '', name: 'anonymous' }] }] }
+  expect([...composedEntryIds([base, bundle], [{ insert: [{ id: 'user', name: 'user' }] }])].sort()).toEqual(['added', 'existing', 'user'])
 })

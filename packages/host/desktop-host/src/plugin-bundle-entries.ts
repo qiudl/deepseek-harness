@@ -2,6 +2,15 @@ import { composeEntries, type ProfileLayer } from '@deepseek-ai/dsh-app-boot'
 
 type Layers = readonly Pick<ProfileLayer, 'packageName' | 'patches'>[]
 /**
+ * Root entry IDs the worker would compose now.
+ * @param layers Installed bundle layers. @param overrides Profile and home patches in runtime order.
+ * @returns IDs of composed root rows.
+ */
+export function composedEntryIds(layers: Layers, overrides: ProfileLayer['patches']): ReadonlySet<string> {
+  return new Set(composeEntries([...layers.map(layer => layer.patches), overrides]).flatMap(row => row.id ? [row.id] : []))
+}
+
+/**
  * Derive observable changed rows through the same ordered patch composition as the worker.
  * @param layers Installed bundle layers.
  * @param overrides Profile and home patches in runtime order.

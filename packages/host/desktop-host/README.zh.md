@@ -89,6 +89,8 @@ Markdown 文件导入接受 `{ name, markdown }`，保留原始字节、元数�
 
 可选启动字段 `pnpmEntrypointPath` 通过 `DSH_HOST_PNPM_ENTRYPOINT` 接收打包后的命令路径。启动流程校验此文件，并仅在字段存在时注册插件操作；旧版集成继续提供 MCP 和 Skill 操作。
 
+可选启动字段 `bundledPluginsRoot` 通过 `DSH_HOST_BUNDLED_PLUGINS_ROOT` 接收嵌入应用提供的目录，其中包含 `catalog.v1.json` 与插件安装包。清单使用精确结构，固定每个安装包的名称、版本、SHA-256、来源提交及其插入的根条目 ID；嵌入文件须归 Host 用户或 root 所有，且不得对同组或其他用户可写。清单缺失或损坏时只停用 `bundled:<名称>@<版本>` 来源，不会阻止启动。[内置来源](src/bundled-plugins.ts) 与其他插件来源一样经过确认、回执和加载确认。校验会拒绝清单中不存在的版本，以及条目 ID 已出现在 Profile 当前组合结果中的安装包。安装时重新计算摘要，并以不覆盖的方式复制到按内容寻址的 `profiles/web/.bundled-plugins/<sha256>.tgz`。随后以离线优先、不运行生命周期脚本的方式安装这个 Profile 内的相对路径文件，因此依赖记录为 `file:.bundled-plugins/<sha256>.tgz`，在 Profile 迁移和应用替换后仍然有效。
+
 可选[真实 worker 探测](tests/plugin-worker-live.spec.ts) 要求 CLI、Client 包和 Web 资源已构建。设置 `HOST_PLUGIN_LIVE_WORKER=1` 和 `SLARK_PLUGIN_ACCEPTANCE_ROOT` 后，[插件集成测试](tests/plugin-command-integration.spec.ts) 还通过 Unix socket 驱动真实 Slark broker、本地接口、桌面安装协调器和回执日志，从本地回环仓库安装插件，重启正式 Web worker，并验证其认证清单与更新的 worker 代次。测试替代了目录预检、确认和操作系统进程身份校验，不证明原生批准点击或签名应用。
 
 Windows 回执存储复用现有私有文件接口，原子替换有容量上限的记录集合。每次读取均核验 SID 所有权、受保护的 DACL、链接数量与重解析点证据；损坏或超限数据会拒绝访问，不会变成空历史。共享操作管理器将中断记录转为待核实，不会重放。嵌入应用提供正数 `maximumExtensionReceiptBytes` 后，Windows 启动端启用 MCP；省略该字段时扩展不可用。启用后支持 MCP 清单、安装、更新、移除及显式恢复，并在销毁 worker 和释放 Host 锁之前等待操作停止。

@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import { closeSync, constants, fsyncSync, lstatSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { buildPluginCommand } from '#hub-plugin-command'
+import { BUNDLED_ARCHIVE_DIRECTORY, bundledDependencySpec, parseBundledPluginSpec } from './bundled-plugins.ts'
 import { parseDocument } from 'yaml'
 
 /** Host-owned binaries and selected Profile; renderer input supplies only the immutable package spec. */
@@ -14,6 +15,8 @@ export interface ProfilePluginCommand {
   controlRoot: string
   uid: number
   spec: string
+  /** Profile-owned archive materialized from the embedding catalog; required exactly for `bundled:` sources. */
+  archivePath?: string
   action?: 'remove' | 'repair'
   /** Exact manifest identity approved by the second confirmation. */
   allowBuild?: string
@@ -27,7 +30,21 @@ const exactGit = /^github:([a-z0-9_.-]+)\/([a-z0-9_.-]+)#[a-f0-9]{40}$/iu
 /** @param spec Package source. @returns Whether the source pins an npm version or full Git commit. */
 export function isPinnedPluginSpec(spec: string): boolean {
   const git = exactGit.exec(spec)
-  return spec.length <= 256 && (exactNpm.test(spec) || !!git && [git[1], git[2]].every(part => part !== '.' && part !== '..'))
+  return spec.length <= 256 && (exactNpm.test(spec) || parseBundledPluginSpec(spec) !== undefined
+    || !!git && [git[1], git[2]].every(part => part !== '.' && part !== '..'))
+}
+/** @param spec Pinned npm or `bundled:` source (Git sources name no package). @returns Package name the source installs. */
+export function pinnedSpecPackageName(spec: string): string {
+  return parseBundledPluginSpec(spec)?.name ?? spec.slice(0, spec.lastIndexOf('@'))
+}
+function assertBundledArchive(input: ProfilePluginCommand): void {
+  const bundled = input.action === undefined && parseBundledPluginSpec(input.spec) !== undefined
+  if (bundled !== (input.archivePath !== undefined) || (bundled && input.allowBuild)) throw Error('invalid_plugin_command')
+  if (!input.archivePath) return
+  const directory = join(input.profileRoot, 'profiles', 'web', BUNDLED_ARCHIVE_DIRECTORY)
+  if (dirname(input.archivePath) !== directory || !/^[0-9a-f]{64}\.tgz$/u.test(basename(input.archivePath))) throw Error('invalid_plugin_command')
+  const stat = lstatSync(input.archivePath)
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.uid !== input.uid) throw Error('invalid_plugin_command')
 }
 function shellQuote(path: string): string { return `'${path.replaceAll("'", "'\\''")}'` }
 function assertPluginAuthority(guard: () => void): void {
@@ -70,6 +87,7 @@ export async function runProfilePluginCommand(input: ProfilePluginCommand): Prom
     const stat = lstatSync(path)
     if (!stat.isDirectory() || stat.uid !== input.uid || (stat.mode & 0o022) !== 0) throw Error('unsafe_plugin_directory')
   }
+  assertBundledArchive(input)
   for (const path of [input.nodeExecutablePath, input.dshEntrypointPath, input.pnpmEntrypointPath]) {
     if (!isAbsolute(path) || /[\x00-\x1f\x7f]/u.test(path) || !lstatSync(path).isFile()) throw Error('invalid_plugin_binary')
   }
@@ -88,7 +106,9 @@ export async function runProfilePluginCommand(input: ProfilePluginCommand): Prom
       const child = spawn(input.nodeExecutablePath, [input.dshEntrypointPath,
         ...(input.action === 'repair' ? ['plugin', '--profile', 'web', 'install', '--no-frozen-lockfile', '--ignore-scripts']
           : buildPluginCommand('web', input.action ?? 'add', input.action === 'remove'
-            ? [input.spec, '--config.ignore-scripts=true'] : [input.spec, '--save-exact', ...(input.allowBuild ? [] : ['--ignore-scripts'])]))], {
+            ? [input.spec, '--config.ignore-scripts=true']
+            : input.archivePath ? [bundledDependencySpec(basename(input.archivePath, '.tgz')), '--save-exact', '--ignore-scripts', '--prefer-offline']
+              : [input.spec, '--save-exact', ...(input.allowBuild ? [] : ['--ignore-scripts'])]))], {
         cwd: input.profileRoot, detached: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
         env: { PATH: `${shim}:${dirname(input.nodeExecutablePath)}:/usr/bin:/bin`, HOME: homedir(), DSH_HOME: input.profileRoot, CI: '1' },
       })

@@ -30,7 +30,8 @@ import { ProfilePluginExecutor } from './profile-plugin-executor.ts'
 import { runProfilePluginCommand } from './plugin-command.ts'
 import { inspectPluginScripts } from './plugin-script-preflight.ts'
 import { planPluginToggle } from './plugin-toggle-plan.ts'
-import { pluginBundleEntries } from './plugin-bundle-entries.ts'
+import { composedEntryIds, pluginBundleEntries } from './plugin-bundle-entries.ts'
+import { BundledPluginCatalog, bundledDependencySpec } from './bundled-plugins.ts'
 import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
 import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { readProfileSkillCatalog, readProfileSkillRuntime } from './skill-worker-client.ts'
@@ -103,6 +104,8 @@ export interface Config {
   readonly nodeExecutablePath: string
   readonly dshEntrypointPath: string
   readonly pnpmEntrypointPath?: string
+  /** Embedding directory with `catalog.v1.json` and verified plugin archives installable as `bundled:` sources. */
+  readonly bundledPluginsRoot?: string
   readonly deviceIndexKeyPath: string
   readonly accountKeyringPath: string
   readonly accountKeyringSha256: string
@@ -142,6 +145,7 @@ export const Config: z<Config> = z.object({
   nodeExecutablePath: z.string().required(),
   dshEntrypointPath: z.string().required(),
   pnpmEntrypointPath: z.string(),
+  bundledPluginsRoot: z.string(),
   deviceIndexKeyPath: z.string().required(),
   accountKeyringPath: z.string().required(),
   accountKeyringSha256: z.string().required(),
@@ -591,6 +595,7 @@ export async function startDesktopHostApplication(
       },
     })
     const pnpmEntrypointPath = config.pnpmEntrypointPath
+    const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, uid)
     const pluginExecutor = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
       uid,
       inspectScripts: (packageName, spec) => inspectPluginScripts({ packageName, spec }),
@@ -632,12 +637,32 @@ export async function startDesktopHostApplication(
         requiredProfile(registry, profileId)
         return join(root, 'profiles', profileId)
       },
-      install: (profileRoot, spec, context) => runProfilePluginCommand({
-        nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
-        pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec,
-        signal: context.signal, guard: context.guard,
-        ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
+      ...(bundledCatalog === undefined ? {} : {
+        bundledPlugin: (name: string, version: string) => {
+          const plugin = bundledCatalog.get(name, version)
+          return plugin && { entryIds: plugin.entryIds, dependency: bundledDependencySpec(plugin.sha256) }
+        },
+        composedEntryIds: (profileId: string) => {
+          requiredProfile(registry, profileId)
+          const profileRoot = join(root, 'profiles', profileId)
+          const loaded = loadProfileDirectory('dsh', join(profileRoot, 'profiles/web'), config.dshEntrypointPath)
+          const homePatch = join(profileRoot, 'cordis.patch.yml')
+          /* v8 ignore next -- ensureWorker materializes homePatch before any authorized extension operation. */
+          return composedEntryIds(loaded.layers, [...loaded.patches, ...(existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [])])
+        },
       }),
+      install: async (profileRoot, spec, context) => {
+        context.guard(); context.signal.throwIfAborted()
+        // A `bundled:` source requires the embedding catalog that validated it; other sources never yield an archive.
+        const archivePath = bundledCatalog?.archiveFor(spec, join(profileRoot, 'profiles/web'))
+        return runProfilePluginCommand({
+          nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+          pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec,
+          signal: context.signal, guard: context.guard,
+          ...(archivePath ? { archivePath } : {}),
+          ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
+        })
+      },
       acknowledge: async (profileId, packageName, context) => {
         context.guard(); context.signal.throwIfAborted()
         const profile = requiredProfile(registry, profileId)
