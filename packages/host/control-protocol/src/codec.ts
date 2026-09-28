@@ -128,6 +128,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<HostControlErrorCode>([
   'busy',
   'upgrade_required',
   'script_approval_required',
+  'extension_refused',
   'migration_required',
   'unavailable',
   'internal_error',

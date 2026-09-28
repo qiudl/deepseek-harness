@@ -370,6 +370,9 @@ describe('Unix transport authority failures', () => {
       [new HostAuthorityError('busy'), 'busy'], [new Error('expired'), 'stale'], [new Error('busy'), 'busy'],
       [new Error('idempotency_conflict'), 'idempotency_conflict'], [new Error('unauthorized'), 'unauthorized'],
       [new Error('upgrade_required'), 'upgrade_required'], [new Error('script_approval_required'), 'script_approval_required'],
+      // REQ-20260927-0001: definite extension refusals survive the wire instead of collapsing to unavailable.
+      [new Error('plugin_already_installed'), 'extension_refused'], [new Error('plugin_entry_conflict'), 'extension_refused'],
+      [new Error('bundled_plugin_unavailable'), 'extension_refused'],
       ['non-error', 'unavailable'], [new Error('other'), 'unavailable'],
     ]
     for (const [nextFailure, code] of failures) {

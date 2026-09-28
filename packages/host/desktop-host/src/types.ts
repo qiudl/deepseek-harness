@@ -33,6 +33,7 @@ export type HostAuthorityErrorCode =
   | 'busy'
   | 'upgrade_required'
   | 'script_approval_required'
+  | 'extension_refused'
   | 'unavailable'
   | 'profile_not_found'
   | 'profile_ambiguous'

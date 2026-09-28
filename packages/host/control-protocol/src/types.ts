@@ -66,6 +66,8 @@ export type HostControlErrorCode =
   | 'busy'
   | 'upgrade_required'
   | 'script_approval_required'
+  /** A definite extension validation refusal (already installed, entry conflict, unknown bundled version); never transient. */
+  | 'extension_refused'
   | 'migration_required'
   | 'unavailable'
   | 'internal_error'

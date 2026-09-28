@@ -553,6 +553,9 @@ function safeError(
   }
 }
 
+/** Executor validation errors that are final answers about the requested extension, not transient faults. */
+const EXTENSION_REFUSALS = new Set(['plugin_already_installed', 'plugin_entry_conflict', 'bundled_plugin_unavailable'])
+
 function authorityCode(error: unknown): HostControlErrorCode {
   if (!(error instanceof HostAuthorityError)) return 'internal_error'
   if (error.code === 'invalid_input') return 'invalid_frame'
@@ -571,6 +574,7 @@ function authorityCodeFromFrame(code: HostControlErrorCode): HostAuthorityErrorC
     case 'busy':
     case 'upgrade_required':
     case 'script_approval_required':
+    case 'extension_refused':
     case 'profile_not_found':
     case 'profile_ambiguous':
     case 'profile_integrity_failed':
@@ -1216,6 +1220,8 @@ export class HostControlAuthority {
               || code === 'upgrade_required' || code === 'script_approval_required') {
               throw new HostAuthorityError(code)
             }
+            // Keep definite refusals distinguishable from transport faults for callers that record them.
+            if (EXTENSION_REFUSALS.has(code)) throw new HostAuthorityError('extension_refused')
             throw new HostAuthorityError('invalid_input')
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
