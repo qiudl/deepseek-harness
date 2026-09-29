@@ -16,8 +16,9 @@ it('reloads the original Session answer and removes it when authority is revoked
     .mockResolvedValue({ ok: true, value: { items: [{ ...item, state: 'revoked',
       answer: null, failure_code: 'authority_changed' }], total: 1 } })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgentInvocations: list })
-  render(<AgentTaskDock {...{ sessionId: 'session-1' as SessionId,
-    t: (key: string) => key } as never} />)
+  const props = { sessionId: 'session-1' as SessionId,
+    t: (key: string) => key } as unknown as Parameters<typeof AgentTaskDock>[0]
+  render(<AgentTaskDock {...props} />)
   expect(await screen.findByText('Private answer')).toBeTruthy()
   window.dispatchEvent(new CustomEvent('dsh-slark-agent-admitted', { detail: 'session-1' }))
   await waitFor(() => { expect(screen.queryByText('Private answer')).toBeNull() })

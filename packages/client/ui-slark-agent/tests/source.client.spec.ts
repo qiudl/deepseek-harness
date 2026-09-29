@@ -59,7 +59,8 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
   const picked = registered.onPick({ candidate: rows[1]!, session, position: 'inline',
     via: 'menu', action: 'pick', span: { start: 0, end: 1, draftRev: 1 } })
   expect(picked).toMatchObject({ insert: { source: 'slark-agent', label: 'Test Agent' } })
-  if (!picked || !('insert' in picked)) throw new Error('Agent reference not inserted')
+  if (!picked || typeof picked !== 'object' || !('insert' in picked))
+    throw new Error('Agent reference not inserted')
   expect(JSON.parse(picked.insert.ref)).toMatchObject({ assignment_id: 'assignment-2', agent_id: 'agent-2' })
   expect(JSON.parse(picked.insert.ref).logical_key).toMatch(/^[0-9a-f-]{36}$/)
   draft = '@Test Agent question'
@@ -68,7 +69,8 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
   const outcome = await registered.matchEnter?.(session, draft, new AbortController().signal,
     { attachments: 0 })
   expect(outcome).toHaveProperty('claim')
-  if (!outcome || !('claim' in outcome)) throw new Error('Agent send was not claimed')
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome))
+    throw new Error('Agent send was not claimed')
   expect(await outcome.claim.submit('question', ctx, [])).toMatchObject({ kind: 'success' })
   expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
     session_id: session.sessionId, assignment_id: 'assignment-2', agent_id: 'agent-2',
