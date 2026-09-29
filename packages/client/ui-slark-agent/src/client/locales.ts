@@ -11,6 +11,11 @@ export const zh = {
   'submit.question': '请在 Agent 名称后输入问题。',
   'submit.changed': '输入内容已变化，请重新发送。',
   'submit.accepted': 'Agent 调用已受理，结果将在本会话显示。',
+  'task.title': 'Agent 任务',
+  'task.waiting': '等待答复',
+  'task.background': '后台执行中',
+  'task.done': '已完成',
+  'task.failed': '未完成',
 } satisfies Record<string, string>
 
 /** English copy. */
@@ -21,6 +26,11 @@ export const en = {
   'submit.question': 'Enter a question after the Agent name.',
   'submit.changed': 'The draft changed. Send again.',
   'submit.accepted': 'Agent invocation accepted. The result will appear in this session.',
+  'task.title': 'Agent tasks',
+  'task.waiting': 'Waiting for reply',
+  'task.background': 'Running in background',
+  'task.done': 'Completed',
+  'task.failed': 'Not completed',
 } satisfies Record<keyof typeof zh, string>
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

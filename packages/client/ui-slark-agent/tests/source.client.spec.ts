@@ -23,6 +23,7 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
     return () => { source = undefined }
   } })
   ctx.provide('locale', new LocaleRuntime(ctx))
+  ctx.provide('slots', { inject: () => () => undefined, register: () => () => undefined } as never)
   let draft = ''
   let occurrences: Array<{
     source: string

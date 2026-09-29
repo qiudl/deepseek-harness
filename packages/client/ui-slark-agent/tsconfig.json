@@ -8,6 +8,7 @@
     { "path": "../../api/session-controller/tsconfig.client.json" },
     { "path": "../ui-conversation" },
     { "path": "../ui-input-trigger" },
+    { "path": "../ui-renderer" },
     { "path": "../ui-slots" },
     { "path": "../../util/crypto" }
   ]

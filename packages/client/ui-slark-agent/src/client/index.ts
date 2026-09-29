@@ -3,12 +3,14 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { en, NS, zh } from './locales.ts'
+import { AgentTaskDock } from './AgentTaskDock.tsx'
 
 /** Required client services. */
-export const inject = ['inputTriggers', 'locale', 'sessions', 'conversation']
+export const inject = ['inputTriggers', 'locale', 'sessions', 'conversation', 'slots']
 
 interface AgentItem {
   assignment_id: string
@@ -33,6 +35,24 @@ interface DesktopAgentDirectory {
     question: string
   }): Promise<{ ok: true; value: { invocation_id: string; state: string } } |
     { ok: false; errorCode: string }>
+  enterpriseAgentInvocations?(input: { session_id: string }): Promise<
+    { ok: true; value: { items: DesktopAgentInvocation[]; total: number } } |
+    { ok: false; errorCode: string }>
+}
+
+/** Account-bound task summary returned by the trusted Desktop Host bridge. */
+export interface DesktopAgentInvocation {
+  invocation_id: string
+  project_id: string
+  session_id: string
+  agent_name: string
+  project_name: string
+  enterprise_name: string
+  state: string
+  answer: string | null
+  failure_code: string | null
+  created_at: string
+  terminal_at: string | null
 }
 
 declare global {
@@ -56,6 +76,10 @@ function parseReference(value: string): (AgentItem & { logical_key?: string }) |
 /** Register a stable-reference source; ordinary model serialization refuses the Agent chip. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-slark-agent: dictionaries')
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock', id: 'slark-agent-tasks', order: 25, locale: NS,
+    inject: sessionId => ({ sessionId }),
+  }, AgentTaskDock))
   const t = ctx.locale.bind(NS)
   const source: InputTriggerSource = {
     trigger: '@',
@@ -124,8 +148,9 @@ export function apply(ctx: ClientContext): void {
             agent_id: item.agent_id, publication_version: item.publication_version,
             question,
           })
-          return result.ok ? { kind: 'success', text: t('submit.accepted') }
-            : { kind: 'error', text: t('submit.unavailable') }
+          if (!result.ok) return { kind: 'error', text: t('submit.unavailable') }
+          window.dispatchEvent(new CustomEvent('dsh-slark-agent-admitted', { detail: session.sessionId }))
+          return { kind: 'success', text: t('submit.accepted') }
         },
       } }
     },
