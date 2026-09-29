@@ -1,6 +1,19 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-10-account-issuer-profile-continuity.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-10-account-issuer-profile-continuity.md
-2026-09-10-account-issuer-profile-continuity.md: 6c5a2df01caf96047c4bbc4d3a7dcb4b19977735
-2026-09-10-account-issuer-profile-continuity.zh.md: bfc00a91ca94164e64fb29ab301e4b6bbba4ad1c
+/agent-note-account-issuer-profile-continuity:
+  en: c39d40471d0eb145
+  zh: a28f6ec809d08c05
+/agent-note-account-issuer-profile-continuity/problem:
+  en: ae08a254c33a4a65
+  zh: f91ec7fa4c6ac7c1
+/agent-note-account-issuer-profile-continuity/decision:
+  en: f1c452c0b88ec212
+  zh: 47f2df5372127753
+/agent-note-account-issuer-profile-continuity/alternatives-considered:
+  en: c4106eca6df2edfb
+  zh: 3e2573c4355951fd
+/agent-note-account-issuer-profile-continuity/consequences:
+  en: 2a69e7b49d124962
+  zh: 143e8580e575a715

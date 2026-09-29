@@ -237,6 +237,24 @@ describe('FileJsonlMigrationExportSource', () => {
       .toHaveLength(1)
   })
 
+  it('completes a released parent catalog from the full legacy source inventory', async () => {
+    const root = await tempRoot('dsh-migration-export-related-')
+    const project = join(root, '_no-cwd')
+    for (const [id, header] of [
+      ['parent', { type: 'session', version: 0, id: 'parent', createdAt: 1, delegationDepth: 0 }],
+      ['child', { type: 'session', version: 0, id: 'child', createdAt: 2, delegationDepth: 1,
+        parentSession: 'parent', origin: 'subagent' }],
+    ] as const) {
+      const directory = join(project, id)
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      await writeFile(join(directory, 'session.jsonl'), `${JSON.stringify(header)}\n`, { mode: 0o600 })
+    }
+    const source = new FileJsonlMigrationExportSource(root, uid, { read: async () => ownerState })
+    const parent = await source.inspect(SessionId('parent'))
+    expect(parent.events.some(event => event.type === 'subagent/catalog'
+      && (event.data as { childId?: string }).childId === 'child')).toBe(true)
+  })
+
   it('decodes complete legacy zstd frames and rejects corrupt compressed input', async () => {
     const legacyHeader = { type: 'session', version: 0, id: 'compressed', createdAt: 1, delegationDepth: 0 }
     const root = await tempRoot('dsh-migration-export-zstd-')

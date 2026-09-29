@@ -39,7 +39,7 @@ export async function generateDesktopModelText(input: {
     ...selection,
     messages: [createUserMessage({
       content: [{ type: 'text', text: input.text }],
-      source: { kind: 'plugin', plugin: 'dsh-web-app' },
+      source: { kind: 'user' },
     })],
     maxTokens: 2048,
     signal: input.signal,

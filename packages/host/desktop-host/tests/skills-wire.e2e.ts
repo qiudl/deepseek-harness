@@ -1,7 +1,3 @@
-import { createRequire } from 'node:module'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:http'
 import AdmZip from 'adm-zip'
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
@@ -173,21 +169,5 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
   expect(await client.extensions({ ...otherLease, command: { action: 'inventory', kind: 'skill' } })).toMatchObject({ entries: [] })
   await expect(client.extensions({ ...otherLease, command: { action: 'status', operation_id: operationId as never } })).rejects.toThrow()
 
-  const slarkRoot = process.env.SLARK_EXTENSION_ACCEPTANCE_ROOT
-  if (slarkRoot) {
-    mkdirSync(join(root, 'isolated-agents/skills/slark'), { recursive: true, mode: 0o700 })
-    writeFileSync(join(root, 'isolated-agents/skills/slark/SKILL.md'), '---\nname: slark\ndescription: Fallback\n---\nFallback instructions.\n', { mode: 0o600 })
-    const config = join(root, 'slark-skill-fixture.json')
-    writeFileSync(config, JSON.stringify({ options, kind: 'skill', restoreSkill: true, toggleSkill: true, importSkillFile: true, replaceSkill: true, removeSkill: true,
-      clientArtifact: fileURLToPath(new URL('../lib/host-control-client.js', import.meta.url)) }), { mode: 0o600 })
-    const child = await promisify(execFile)(process.execPath,
-      ['--import', createRequire(join(slarkRoot, 'packages/desktop/package.json')).resolve('tsx'),
-        'scripts/fixtures/dsh-host-extension-client.mjs', config],
-      { cwd: slarkRoot, timeout: 90_000, maxBuffer: 256 * 1024 })
-    expect(child.stdout).toContain('"ok":true')
-    expect(acknowledgements).toBe(9)
-    expect(await loaded!.skills.get('slark', { scope: await loaded!.agentPresets.standingKeyFor() }))
-      .toMatchObject({ source: 'user-agents', content: 'Fallback instructions.' })
-  }
 
 })

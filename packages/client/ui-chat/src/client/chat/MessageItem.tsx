@@ -1,12 +1,8 @@
 import { Fragment, memo, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { MessageImageSource } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import {
-  cancelDesktopAttachmentSave, desktopAttachmentSaveAvailable, fileExtension, FileTypeIcon, fileSizeText, JsonBlock,
-  presentDesktopAttachmentSave, projectUserText, saveDesktopAttachment, StateDot,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { fileExtension, FileTypeIcon, fileSizeText, JsonBlock, projectUserText, StateDot, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
 import type { ModelRetryNode, TurnErrorNode, UserMessageNode } from '../contract/snapshot.ts'
 import { CompactionItem } from './CompactionItem.tsx'
@@ -19,60 +15,6 @@ type UserFile = Extract<UserMessageNode['content'][number], { type: 'file' }>
 type PresentedAttachment =
   | { readonly type: 'image'; readonly image: MessageImageSource }
   | { readonly type: 'file'; readonly file: UserFile['attachment'] }
-
-function MessageFile({ file, sessionId, t }: {
-  file: UserFile['attachment']
-  sessionId?: SessionId
-  t: ChatViewSlotProps['t']
-}) {
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
-  const [savePercent, setSavePercent] = useState<number | null>(null)
-  const canSave = sessionId !== undefined && desktopAttachmentSaveAvailable()
-  const meta = saveState === 'saving'
-    ? `${t('message.attachment.saving')}${savePercent === null ? '' : ` ${savePercent}%`}`
-    : saveState === 'saved'
-      ? t('message.attachment.saved')
-      : saveState === 'failed'
-        ? t('message.attachment.saveFailed')
-        : [fileExtension(file.name).toUpperCase().slice(0, 8), fileSizeText(file.bytes)]
-          .filter(Boolean).join(' ')
-  const body = (
-    <>
-      <FileTypeIcon path={file.name} className={css.fileIcon} />
-      <span className={css.fileContent}>
-        <span className={css.fileName}>{file.name}</span>
-        <span className={css.fileMeta} role={saveState === 'idle' ? undefined : 'status'}>{meta}</span>
-      </span>
-    </>
-  )
-  if (!canSave) return <span className={css.fileCard} title={file.name}>{body}</span>
-  return (
-    <button
-      type="button"
-      data-testid="attachment-btn-save"
-      className={`${css.fileCard} ${css.fileSave}`}
-      title={file.name}
-      aria-label={saveState === 'saving'
-        ? t('message.attachment.cancelSave', { name: file.name })
-        : t('message.attachment.save', { name: file.name })}
-      onClick={() => {
-        if (saveState === 'saving') {
-          void cancelDesktopAttachmentSave()
-          return
-        }
-        void presentDesktopAttachmentSave(onProgress => saveDesktopAttachment({
-          sessionId: String(sessionId), refType: 'file',
-          attachmentId: String(file.attachmentId), name: file.name,
-        }, onProgress), ({ state, percent }) => {
-          setSaveState(state)
-          setSavePercent(percent)
-        })
-      }}
-    >
-      {body}
-    </button>
-  )
-}
 
 function contentParts(content: readonly unknown[]): {
   text: string
@@ -110,6 +52,9 @@ function failureMessage(
   code: unknown,
   t: ChatViewSlotProps['t'],
 ): string {
+  if (code === 'ACCOUNT_SIGNED_OUT') return t('message.failure.accountSignedOut')
+  if (code === 'ACCOUNT_SIGN_IN_REQUIRED') return t('message.failure.accountSignInRequired')
+  if (code === 'QUOTA' || code === 'ACCOUNT_QUOTA') return t('message.failure.quota')
   return code === 'AUTH' ? t('message.failure.auth') : message
 }
 
@@ -162,7 +107,9 @@ function ModelRetryItem({ node, active, t }: {
     <details className={css.retryRow} data-active={active || undefined}>
       <summary className={css.retrySummary}>
         <span className={css.retryText} role="status">
-          {t('message.retry.status', { label, retry: node.retry, maximum, seconds })}
+          <TextShimmer active={active}>
+            {t('message.retry.status', { label, retry: node.retry, maximum, seconds })}
+          </TextShimmer>
         </span>
       </summary>
       <div className={css.retryDetails}>
@@ -188,7 +135,7 @@ function TurnErrorItem({ node, t }: {
     <div className={css.turnErrorRow} role="status">
       <StateDot state="error" className={css.turnErrorDot} />
       <div className={css.turnErrorCopy}>
-        <span className={css.turnErrorTitle}>{t('message.turnError')}</span>
+        <span className={css.turnErrorTitle}>{node.code === 'ACCOUNT_SIGNED_OUT' ? t('message.accountStopped') : t('message.turnError')}</span>
         <span className={css.turnErrorMessage}>{failureMessage(node.message, node.code, t)}</span>
       </div>
       {node.code !== undefined && <code className={css.turnErrorCode}>{node.code}</code>}
@@ -215,7 +162,6 @@ function TurnMaxTokensItem({ t }: {
 function UserStyleBubble({
   content, renderMessageImages, actions, pending = false, echo = false, referenceLabels = [], skillNames = [],
   previewAttachments, references, t,
-  saveSessionId,
 }: {
   content: readonly unknown[]
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
@@ -233,8 +179,6 @@ function UserStyleBubble({
   previewAttachments?: readonly PresentedAttachment[]
   references?: Pick<ChatNodeOwnerProps, 'openFile' | 'openSkill'>
   t: ChatViewSlotProps['t']
-  /** Present only for durable transcript attachments, never local echoes. */
-  saveSessionId?: SessionId
 }): ReactNode {
   const { text, attachments: contentAttachments, rest } = contentParts(content)
   const attachments = previewAttachments ?? contentAttachments
@@ -261,7 +205,16 @@ function UserStyleBubble({
                 </Fragment>
               )
               : (
-                <MessageFile key={`file:${index}`} file={attachment.file} t={t} {...saveSessionId === undefined ? {} : { sessionId: saveSessionId }} />
+                <span key={`file:${index}`} className={css.fileCard} title={attachment.file.name}>
+                  <FileTypeIcon path={attachment.file.name} className={css.fileIcon} />
+                  <span className={css.fileContent}>
+                    <span className={css.fileName}>{attachment.file.name}</span>
+                    <span className={css.fileMeta}>
+                      {[fileExtension(attachment.file.name).toUpperCase().slice(0, 8), fileSizeText(attachment.file.bytes)]
+                        .filter(Boolean).join(' ')}
+                    </span>
+                  </span>
+                </span>
               ))}
           </div>
         )}
@@ -365,7 +318,7 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }: 
 
 /** User and admitted-steering keyed Chat renderer. */
 export const UserMessageNodeView = memo(function UserMessageNodeView({
-  node, renderMessageImages, openFile, openSkill, t, sessionId,
+  node, renderMessageImages, openFile, openSkill, t,
 }: ChatNodeViewProps<'user' | 'steering'>) {
   const data = node.data
   return (
@@ -373,7 +326,6 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
       content={data.content}
       references={{ openFile, openSkill }}
       renderMessageImages={renderMessageImages}
-      saveSessionId={sessionId}
       {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
       {...data.skillNames === undefined ? {} : { skillNames: data.skillNames }}
       t={t}

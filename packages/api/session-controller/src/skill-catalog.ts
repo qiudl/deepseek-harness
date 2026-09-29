@@ -1,8 +1,7 @@
 /** Session-addressed, cold-readable skill catalog Remote. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-agent-presets/types'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-agent-preset-registry/types'
 import { SessionQueryError } from '@deepseek-ai/dsh-session-query'
 import { isSkillName, isUserInvocable } from '@deepseek-ai/dsh-skill'
 import type { ScopeKey } from '@deepseek-ai/dsh-scope'
@@ -36,7 +35,8 @@ export class SessionSkillCatalog extends TypertRemoteService {
   async inspectProfile(request: ProfileSkillInspectionRequest, signal: AbortSignal): Promise<ProfileSkillInspectionValue> {
     signal.throwIfAborted()
     if (!isSkillName(request.name) || request.name.length > 64) throw new RemoteError('gateway/internal', 'invalid skill name', {})
-    const { scope, registry } = await this.profileRegistry(signal)
+    await using profile = await this.profileRegistry(signal)
+    const { scope, registry } = profile
     const skill = await registry.get(request.name, { scope, signal })
     signal.throwIfAborted()
     if (!skill) return { skill: null }
@@ -57,7 +57,8 @@ export class SessionSkillCatalog extends TypertRemoteService {
   @Remote
   async profileCatalog(signal: AbortSignal): Promise<ProfileSkillCatalogValue> {
     signal.throwIfAborted()
-    const { scope, registry } = await this.profileRegistry(signal)
+    await using profile = await this.profileRegistry(signal)
+    const { scope, registry } = profile
     const snapshot = await registry.snapshot({ scope, signal })
     signal.throwIfAborted()
     return { complete: snapshot.complete, skills: snapshot.skills.map(skill => ({
@@ -114,7 +115,8 @@ export class SessionSkillCatalog extends TypertRemoteService {
       )
     }
 
-    const scope = await this.scopeFor(sessionId, agentPreset)
+    await using lease = live === undefined ? await this.scopeFor(agentPreset) : undefined
+    const scope = live ?? lease?.key
     try {
       const skills = (await skillRegistry.list({ cwd, scope })).filter(isUserInvocable)
       return {
@@ -135,24 +137,27 @@ export class SessionSkillCatalog extends TypertRemoteService {
   private async profileRegistry(signal: AbortSignal) {
     const presets = this.ctx.get('agentPresets')
     if (!presets) throw new RemoteError('gateway/internal', 'profile preset unavailable', {})
-    const scope = await presets.standingKeyFor()
-    signal.throwIfAborted()
-    const registry = this.ctx.get('skills')
-    if (!registry) throw new RemoteError('gateway/internal', 'profile skill registry unavailable', {})
-    return { scope, registry }
+    const lease = await presets.acquireScope()
+    try {
+      signal.throwIfAborted()
+      const registry = this.ctx.get('skills')
+      if (!registry) throw new RemoteError('gateway/internal', 'profile skill registry unavailable', {})
+      return { scope: lease.key, registry,
+        [Symbol.asyncDispose]: () => lease[Symbol.asyncDispose]() }
+    } catch (error) {
+      await lease[Symbol.asyncDispose]()
+      throw error
+    }
   }
 
   /** Resolve a live or standing preset scope without creating an Agent. */
   private async scopeFor(
-    sessionId: SessionId,
     agentPreset: string | undefined,
-  ): Promise<ScopeKey | undefined> {
-    const live = this.ctx.agents.get(sessionId)
-    if (live !== undefined) return live
+  ): Promise<({ key: ScopeKey } & AsyncDisposable) | undefined> {
     const presets = this.ctx.get('agentPresets')
     if (presets === undefined) return undefined
     try {
-      return await presets.standingKeyFor(agentPreset)
+      return await presets.acquireScope(agentPreset)
     } catch {
       // An unknown or unusable recorded preset falls back to the global registry.
       return undefined

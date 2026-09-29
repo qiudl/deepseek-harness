@@ -1,6 +1,25 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-18-person-profile-model-ownership.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-09-18-person-profile-model-ownership.md
-2026-09-18-person-profile-model-ownership.md: 9618678c379fa73c46fa50a7f82a34c169949c2e
-2026-09-18-person-profile-model-ownership.zh.md: e19ee818a203f35f7198297deb3653006125d040
+/agent-note-person-profile-ownership-of-legacy-model-credentials:
+  en: f2bf6cbd7d9c703c
+  zh: 3c3ebef26cb4eea7
+/agent-note-person-profile-ownership-of-legacy-model-credentials/problem:
+  en: 70ba49199134c01c
+  zh: 542425f836f7ec4d
+/agent-note-person-profile-ownership-of-legacy-model-credentials/proposal:
+  en: 3b743954b05750bd
+  zh: dbd22917ff7bfc49
+/agent-note-person-profile-ownership-of-legacy-model-credentials/proposal/claim-contract:
+  en: d686ba1ace112de4
+  zh: 5e87d0b6416073b8
+/agent-note-person-profile-ownership-of-legacy-model-credentials/alternatives-considered:
+  en: 4c8570605aaabd64
+  zh: 6bc681f0d75b5888
+/agent-note-person-profile-ownership-of-legacy-model-credentials/acceptance-criteria:
+  en: a84f1ceaa783c1e6
+  zh: 4345cbb80a74a48f
+/agent-note-person-profile-ownership-of-legacy-model-credentials/risks:
+  en: a200f4966bfafc8b
+  zh: 45979a74f0b4593d

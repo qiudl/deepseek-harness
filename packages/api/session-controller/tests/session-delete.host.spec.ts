@@ -59,7 +59,7 @@ describe('session.delete', () => {
 
   it('maps only a definite archive miss to session/not-found', async () => {
     const sessionId = sid('session-missing')
-    const commands = controller(() => Promise.reject(new WorkspaceUnknownSessionError(sessionId)))
+    const commands = controller(() => Promise.reject(new WorkspaceUnknownSessionError(sessionId, 'archive')))
 
     await expect(commands.delete({ sessionId })).rejects.toMatchObject({
       code: 'session/not-found',

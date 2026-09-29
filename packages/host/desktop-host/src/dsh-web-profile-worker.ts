@@ -16,6 +16,7 @@ const RESERVED_ENV = new Set([
   'DSH_PROFILE_MODEL_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
+  'DSH_SLARK_EMBEDDED',
 ])
 
 /** Classified failure from the authenticated worker model endpoint. */
@@ -117,6 +118,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_MODEL_TOKEN: modelToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
         DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
+        DSH_SLARK_EMBEDDED: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })

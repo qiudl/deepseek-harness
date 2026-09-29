@@ -147,7 +147,14 @@ export class DesktopRemoteSessionExecutor {
     if (id !== undefined && state === undefined) throw new Error('desktop remote session: stale approval cursor')
     if (state === undefined) {
       const abort = new AbortController()
-      const stream = await this.gateway.wireStream.open('$events', { args: {} }, abort.signal)
+      const uplink: AsyncIterable<unknown> = {
+        async *[Symbol.asyncIterator]() {
+          if (!abort.signal.aborted) {
+            await new Promise<void>(resolve => abort.signal.addEventListener('abort', () => resolve(), { once: true }))
+          }
+        },
+      }
+      const stream = await this.gateway.wireStream.open('$events', { args: {} }, uplink, undefined, abort.signal)
       const iterator = stream[Symbol.asyncIterator]()
       const ready = await iterator.next()
       if (ready.done || !row(ready.value) || ready.value.type !== 'ready' || typeof ready.value.clientId !== 'string') {
