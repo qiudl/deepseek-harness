@@ -35,6 +35,8 @@ Desktop Web bundle 会挂载本包的 Client 入口，无需额外配置。Deskt
 
 Client 入口仅在 `hello()` 返回受支持的 bridge 协议后注册本地化的侧边栏和面板 slot。点击入口时会选中承载面板并请求 bridge 显示 Hub；打开失败时清除选中状态。插件释放时移除两个 slot 和 bridge 监听器。
 
+**运行时不变量：**不发布 companion。bridge 握手与 slot 注册由同一个 Client 拥有；包内行为测试验证其清理。
+
 </details>
 
 -----

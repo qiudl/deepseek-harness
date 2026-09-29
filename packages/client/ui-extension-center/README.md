@@ -35,6 +35,8 @@ The Desktop Web bundle mounts this package's Client entry. No extra configuratio
 
 The Client entry registers localized sidebar and panel slots only after `hello()` returns the supported bridge protocol. Opening the row selects the backing panel and asks the bridge to show the Hub; a failed open clears the selection. Disposing the plugin removes both slots and the bridge listener.
 
+**Runtime invariant:** No companion is published. The bridge handshake and slot registration share one Client owner; their cleanup is verified by the package's behavior tests.
+
 </details>
 
 -----
