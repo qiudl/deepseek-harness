@@ -2,7 +2,7 @@
 
 The `ui-slark-agent` Client plugin reads assigned enterprise Agents through the Desktop Host bridge when an Account Profile is online. Each `@` candidate carries the assignment, project, Agent, enterprise, and publication version as a stable editor reference. Duplicate Agent names show their enterprise and project.
 
-The plugin row is disabled in the shipped Web bundle until staging service credentials and end-to-end acceptance are ready. A leading Agent chip and plain-text question claim Enter and submit one idempotent invocation through the Desktop Host. Its reference codec refuses ordinary model submission, so a selected Agent cannot silently become prompt text. The Desktop bridge supplies only safe directory summaries; Slark checks assignment authority again when admitting an invocation.
+The plugin row is enabled in the Web bundle, but it shows no Agent candidates until the current account's Slark Desktop directory confirms that invocation admission is available. A leading Agent chip and plain-text question claim Enter and submit one idempotent invocation through the Desktop Host. Its reference codec refuses ordinary model submission, so a selected Agent cannot silently become prompt text. The Desktop bridge supplies only safe directory summaries; Slark checks assignment authority again when admitting an invocation.
 
 ## Model Experience
 

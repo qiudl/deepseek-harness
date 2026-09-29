@@ -331,10 +331,9 @@
     - id: ui-reference
       name: '@deepseek-ai/dsh-client-ui-reference'
 
-    # REQ-20260929-0006: enable with employee invocation admission and receipt projection.
+    # REQ-20260929-0006: the live Desktop directory hides candidates until admission is ready.
     - id: ui-slark-agent
       name: '@deepseek-ai/dsh-client-ui-slark-agent'
-      disabled: true
 
     # Read-only active Schedule catalog. The shipped Web graph resolves the
     # client package but leaves it disabled; the explicit Schedule overlay

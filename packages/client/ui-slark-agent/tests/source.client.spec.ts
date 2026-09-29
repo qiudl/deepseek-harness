@@ -40,19 +40,22 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
   await fiber.await()
   if (!source) throw new Error('Slark Agent source did not register')
   const registered = source
-  const fetchDirectory = vi.fn(async () => ({ ok: true as const, items: [
+  const fetchDirectory = vi.fn(async () => ({ ok: true as const, invocationAvailable: true, items: [
     agent, { ...agent, assignment_id: 'assignment-2', agent_id: 'agent-2' },
   ] }))
   const invoke = vi.fn(async () => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
   Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgents: fetchDirectory,
     invokeEnterpriseAgent: invoke })
+  fetchDirectory.mockResolvedValueOnce({ ok: true, invocationAvailable: false, items: [agent] })
+  expect(await registered.candidates(session, { query: '', position: 'inline',
+    drilled: false, signal: new AbortController().signal })).toEqual([])
   const rows = await registered.candidates(session, { query: 'test', position: 'inline',
     drilled: false, signal: new AbortController().signal })
   expect(rows).toHaveLength(2)
   expect(rows[0]?.name).not.toBe(rows[1]?.name)
   expect(rows[0]?.description).toBe('Company / Project')
-  expect(fetchDirectory).toHaveBeenCalledOnce()
+  expect(fetchDirectory).toHaveBeenCalledTimes(2)
   const picked = registered.onPick({ candidate: rows[1]!, session, position: 'inline',
     via: 'menu', action: 'pick', span: { start: 0, end: 1, draftRev: 1 } })
   expect(picked).toMatchObject({ insert: { source: 'slark-agent', label: 'Test Agent' } })

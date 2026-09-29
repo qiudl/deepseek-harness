@@ -24,7 +24,9 @@ interface AgentItem {
 }
 
 interface DesktopAgentDirectory {
-  enterpriseAgents(): Promise<{ ok: true; items: AgentItem[] } | { ok: false; errorCode: string }>
+  enterpriseAgents(): Promise<
+    { ok: true; items: AgentItem[]; invocationAvailable: boolean } |
+    { ok: false; errorCode: string }>
   invokeEnterpriseAgent?(input: {
     session_id: string
     logical_key: string
@@ -90,7 +92,7 @@ export function apply(ctx: ClientContext): void {
       const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
       if (!host?.enterpriseAgents) return []
       const response = await host.enterpriseAgents()
-      if (!response.ok || signal.aborted) return []
+      if (!response.ok || !response.invocationAvailable || signal.aborted) return []
       const needle = query.trim().toLocaleLowerCase()
       return response.items.filter(item =>
         `${item.name} ${item.enterprise_name} ${item.project_name}`.toLocaleLowerCase().includes(needle),
