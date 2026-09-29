@@ -13,16 +13,19 @@
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
-  "dsh": { "client": { "inject": ["@deepseek-ai/dsh-client-locale", "@deepseek-ai/dsh-client-ui-input-trigger"], "platform": "web" } },
+  "dsh": { "client": { "inject": ["@deepseek-ai/dsh-api-session-controller", "@deepseek-ai/dsh-client-locale", "@deepseek-ai/dsh-client-ui-conversation", "@deepseek-ai/dsh-client-ui-input-trigger"], "platform": "web" } },
   "scripts": { "bundle": "tsdown", "watch": "tsdown --watch" },
   "license": "MIT",
   "peerDependencies": { "@deepseek-ai/cordis": "workspace:^" },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-client-locale": "workspace:^",
+    "@deepseek-ai/dsh-api-session-controller": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-conversation": "workspace:^",
     "@deepseek-ai/dsh-client-ui-input-trigger": "workspace:^",
     "@deepseek-ai/dsh-client-ui-slots": "workspace:^",
-    "@deepseek-ai/dsh-session": "workspace:^"
+    "@deepseek-ai/dsh-session": "workspace:^",
+    "@deepseek-ai/dsh-util-crypto": "workspace:^"
   },
   "files": ["lib/index.js", "lib/client.js", "lib/types/**/*.d.ts"]
 }

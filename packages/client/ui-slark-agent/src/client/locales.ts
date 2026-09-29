@@ -7,12 +7,20 @@ export const NS = 'slarkAgent'
 export const zh = {
   'section.agents': 'Slark 企业 Agent',
   'submit.unavailable': 'Slark Agent 调用尚未接通，请稍后重试。',
+  'submit.single': '每次只能向一个 Slark Agent 发送纯文本问题。',
+  'submit.question': '请在 Agent 名称后输入问题。',
+  'submit.changed': '输入内容已变化，请重新发送。',
+  'submit.accepted': 'Agent 调用已受理，结果将在本会话显示。',
 } satisfies Record<string, string>
 
 /** English copy. */
 export const en = {
   'section.agents': 'Slark enterprise Agents',
   'submit.unavailable': 'Slark Agent invocation is unavailable. Try again later.',
+  'submit.single': 'Send one text question to one Slark Agent at a time.',
+  'submit.question': 'Enter a question after the Agent name.',
+  'submit.changed': 'The draft changed. Send again.',
+  'submit.accepted': 'Agent invocation accepted. The result will appear in this session.',
 } satisfies Record<keyof typeof zh, string>
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

@@ -23,6 +23,18 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
     return () => { source = undefined }
   } })
   ctx.provide('locale', new LocaleRuntime(ctx))
+  let draft = ''
+  let occurrences: Array<{
+    source: string
+    ref: string
+    offset: number
+    length: number
+    clipboardText: string
+  }> = []
+  ctx.provide('sessions', { scope: () => ctx, scopeOf: () => session.sessionId } as never)
+  ctx.provide('conversation', { input: { for: () => ({ state: {
+    getSnapshot: () => ({ draft, occurrences }),
+  } }) } } as never)
   const fiber = ctx.plugin({ inject: [...inject], apply })
   await fiber.await()
   if (!source) throw new Error('Slark Agent source did not register')
@@ -30,7 +42,10 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
   const fetchDirectory = vi.fn(async () => ({ ok: true as const, items: [
     agent, { ...agent, assignment_id: 'assignment-2', agent_id: 'agent-2' },
   ] }))
-  Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgents: fetchDirectory })
+  const invoke = vi.fn(async () => ({ ok: true as const,
+    value: { invocation_id: 'invocation-1', state: 'accepted' } }))
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgents: fetchDirectory,
+    invokeEnterpriseAgent: invoke })
   const rows = await registered.candidates(session, { query: 'test', position: 'inline',
     drilled: false, signal: new AbortController().signal })
   expect(rows).toHaveLength(2)
@@ -42,6 +57,24 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
   expect(picked).toMatchObject({ insert: { source: 'slark-agent', label: 'Test Agent' } })
   if (!picked || !('insert' in picked)) throw new Error('Agent reference not inserted')
   expect(JSON.parse(picked.insert.ref)).toMatchObject({ assignment_id: 'assignment-2', agent_id: 'agent-2' })
+  expect(JSON.parse(picked.insert.ref).logical_key).toMatch(/^[0-9a-f-]{36}$/)
+  draft = '@Test Agent question'
+  occurrences = [{ source: 'slark-agent', ref: picked.insert.ref, offset: 0,
+    length: '@Test Agent'.length, clipboardText: '@Test Agent' }]
+  const outcome = await registered.matchEnter?.(session, draft, new AbortController().signal,
+    { attachments: 0 })
+  expect(outcome).toHaveProperty('claim')
+  if (!outcome || !('claim' in outcome)) throw new Error('Agent send was not claimed')
+  expect(await outcome.claim.submit('question', ctx, [])).toMatchObject({ kind: 'success' })
+  expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+    session_id: session.sessionId, assignment_id: 'assignment-2', agent_id: 'agent-2',
+    question: 'question',
+  }))
+  await expect(registered.matchEnter?.(session, draft, new AbortController().signal,
+    { attachments: 1 })).rejects.toThrow()
+  occurrences = [{ ...occurrences[0]!, source: 'reference' }]
+  expect(await registered.matchEnter?.(session, draft, new AbortController().signal,
+    { attachments: 0 })).toBeUndefined()
   await expect(registered.codec?.serialize(picked.insert.ref, new AbortController().signal))
     .rejects.toThrow()
   await fiber.dispose()
