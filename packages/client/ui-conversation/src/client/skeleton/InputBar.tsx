@@ -108,6 +108,10 @@ export const InputBar = memo(function InputBar({
       showToast(t('error.sessionInUse'))
       return
     }
+    if (error.code === 'agent-preset/not-found') {
+      showToast(t('error.sessionPresetMissing', { preset: String(error.details.agentPreset ?? '') }))
+      return
+    }
     showToast(error.code === 'session/attachment-invalid' || error.code === 'subagent/attachment-invalid'
       ? attachmentErrorText(t, error.details.reason, imageLimits)
       : `${error.message} (${error.code})`)

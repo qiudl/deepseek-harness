@@ -218,6 +218,9 @@ export class ApiSessionAgentController {
       if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
         return { error: new RemoteError('session/writer-held', error.message, { sessionId }) }
       }
+      if (error instanceof RemoteError && error.code === 'agent-preset/not-found') {
+        return { error }
+      }
       return {
         error: new RemoteError(
           'gateway/internal',

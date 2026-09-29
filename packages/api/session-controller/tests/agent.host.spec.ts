@@ -9,6 +9,7 @@ import SessionStore, { SESSION_FORMAT_VERSION, SessionLogOffset, SessionId } fro
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -257,6 +258,30 @@ describe('ApiSession Agent lookup and recovery', () => {
     await expect(agents.resolveAgent(meta.id)).resolves.toMatchObject({
       error: { code: 'gateway/internal' },
     })
+  })
+
+  it('preserves a missing historical preset error without attempting to resume under another preset', async () => {
+    const { ctx, agents } = await harness()
+    const meta = { ...header('legacy-preset'), agentPreset: 'data-agent' }
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: () => Promise.resolve({ meta, events: [] }),
+    })
+    const resolve = vi.fn(() => Promise.reject(new RemoteError(
+      'agent-preset/not-found', 'data-agent is unavailable',
+      { agentPreset: 'data-agent', available: ['standard'] },
+    )))
+    ctx.provide('agentPresets', { resolve } as never)
+    const resume = vi.spyOn(ctx.agents, 'resume')
+
+    await expect(agents.resolveAgent(meta.id)).resolves.toMatchObject({
+      error: {
+        code: 'agent-preset/not-found',
+        details: { agentPreset: 'data-agent', available: ['standard'] },
+      },
+    })
+    expect(resolve).toHaveBeenCalledWith('data-agent')
+    expect(resume).not.toHaveBeenCalled()
   })
 
   it('retains resume diagnostics without a persistence service', async () => {
