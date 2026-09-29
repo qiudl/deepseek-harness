@@ -456,6 +456,19 @@ describe('image draft rail', () => {
     expect(other.view.getByRole('alert').textContent).toContain('boom (gateway/internal)')
   })
 
+  it('guides a user to a new session when its historical preset is missing', () => {
+    const result = bench({
+      promptError: {
+        op: 'send',
+        error: new RemoteError('agent-preset/not-found', 'raw host error', {
+          agentPreset: 'data-agent', available: ['standard'],
+        }),
+      },
+    })
+    expect(result.view.getByRole('alert').textContent)
+      .toContain('此会话使用的 data-agent 模式已不可用，无法在原会话中继续发送。请保留原会话，新建会话并选择可用模式。')
+  })
+
   it('marks the attachment slot unavailable while the composer is locked', () => {
     const result = bench({ addFiles: vi.fn(() => null), inert: true })
     expect(attachmentOwner(result.slotCalls).canAcceptDrop).toBe(false)
