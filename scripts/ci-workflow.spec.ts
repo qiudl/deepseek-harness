@@ -664,9 +664,7 @@ describe('bubblewrap preparation script', () => {
     const script = readFileSync(resolve(root, 'scripts/prepare-ci-bubblewrap.sh'), 'utf8')
     const url = /^readonly BUBBLEWRAP_URL="([^"]+)"$/mu.exec(script)?.[1]
 
-    expect(url).toMatch(
-      /^https:\/\/launchpad\.net\/ubuntu\/\+source\/bubblewrap\/[^/]+\/\+build\/\d+\/\+files\/bubblewrap_[^/]+_amd64\.deb$/u,
-    )
+    expect(url).toBe('https://launchpad.net/~ubuntu-security-proposed/+archive/ubuntu/ppa/+build/33605876/+files/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb')
     // Ubuntu removes superseded versions from its live package pool.
     expect(script).not.toMatch(/https?:\/\/[^/'"\s]+\/ubuntu(?:-ports)?\/pool\//u)
   })

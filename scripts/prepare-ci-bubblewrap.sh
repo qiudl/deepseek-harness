@@ -6,7 +6,7 @@ set -euo pipefail
 # verify that payload before extracting it into the ephemeral runner directory.
 readonly BUBBLEWRAP_VERSION='0.9.0-1ubuntu0.3'
 readonly BUBBLEWRAP_SHA256='2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094'
-readonly BUBBLEWRAP_URL="https://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"
+readonly BUBBLEWRAP_URL="https://launchpad.net/~ubuntu-security-proposed/+archive/ubuntu/ppa/+build/33605876/+files/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"
 
 : "${RUNNER_TEMP:?prepare-ci-bubblewrap requires RUNNER_TEMP}"
 : "${GITHUB_PATH:?prepare-ci-bubblewrap requires GITHUB_PATH}"
