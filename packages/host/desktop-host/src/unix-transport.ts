@@ -937,7 +937,10 @@ export class UnixHostClient {
     }, options.now ?? Date.now, frame.result)
   }
 
-  /** Report only local transport liveness; authority is still rechecked by every operation. */
+  /**
+   * Report only local transport liveness; authority is still rechecked by every operation.
+   * @returns whether the local transport channel remains connected.
+   */
   isConnected(): boolean { return this.channel.isConnected() }
 
   /**

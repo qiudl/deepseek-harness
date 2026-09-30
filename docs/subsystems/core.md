@@ -681,6 +681,23 @@ withoutInitiator<T>(operation: () => T): T
 setFactory(factory: AgentFactory): () => void
 
 /**
+ * Register one plugin-owned durable session-scope namespace.
+ * @param id - provider-owned namespace identity; duplicate registration is rejected.
+ * @param provider - the provider that admits sessions within this namespace.
+ * @returns the effect disposer that removes this exact provider registration.
+ */
+registerScopeProvider(id: SessionScopeProviderId, provider: SessionScopeProvider): () => void
+
+/**
+ * Fail-closed execution admission for a persisted scope. The exact provider
+ * must remain registered for the whole await.
+ * @param scope - persisted provider reference, or undefined for an unscoped session.
+ * @param agentCtx - unpublished agent context owned by the creation transaction.
+ * @param signal - cancellation signal supplied to the scope provider.
+ */
+async admitSessionScope( scope: SessionScopeRef | undefined, agentCtx: Context, signal: AbortSignal, ): Promise<void>
+
+/**
  * Create and publish a new agent through the registered factory.
  * Distinct from {@link register} (which records an already-constructed
  * agent): this constructs the agent and its session. Rejects if no factory is
@@ -777,6 +794,8 @@ list(): Agent[]
  */
 roots(): Agent[]
 ```
+
+Types: [SessionScopeProviderId](session.md) · [SessionScopeRef](session.md)
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
 
@@ -1126,3 +1145,15 @@ One session committed a different agent preset to its durable log. Consumers inv
 
 Source: [`packages/preset/agent-presets/src/types.ts`](../../packages/preset/agent-presets/src/types.ts)
 <!-- END GENERATED cordis-surface -->
+
+## Session scope admission
+
+A registered provider admits and composes an unpublished agent using its durable session scope. [Sessions](session.md) owns the scope record types.
+
+```ts type-equiv
+/** Plugin-owned admission logic for one durable session-scope namespace. */
+interface SessionScopeProvider {
+  /** Admit and compose an unpublished agent under an opaque durable reference. */
+  admit(scope: SessionScopeRef, agentCtx: Context, signal: AbortSignal): Promise<void> | void
+}
+```

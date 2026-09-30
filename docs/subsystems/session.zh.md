@@ -1074,3 +1074,29 @@ Types: [Scoped](scope.zh.md)
 
 Source: [`packages/core/session/src/index.ts`](../../packages/core/session/src/index.ts)
 <!-- END GENERATED cordis-surface -->
+## 持久化会话作用域
+
+提供方解释不透明引用，并负责其授权和生命周期语义。核心保留作用域记录，不解释其内容。
+
+```ts type-equiv
+/** Identifies the plugin-owned namespace that can interpret a session scope reference. */
+type SessionScopeProviderId = Branded<'SessionScopeProviderId'>
+```
+
+```ts type-equiv
+/** An opaque, provider-owned reference within one session scope namespace. */
+type SessionScopeReference = Branded<'SessionScopeReference'>
+```
+
+```ts type-equiv
+/**
+ * Durable, provider-neutral routing metadata for one session. Core preserves
+ * this value but never interprets `ref`; the named plugin provider owns its
+ * authorization and lifecycle semantics.
+ */
+interface SessionScopeRef {
+  readonly provider: SessionScopeProviderId
+  readonly ref: SessionScopeReference
+  readonly schemaVersion: number
+}
+```

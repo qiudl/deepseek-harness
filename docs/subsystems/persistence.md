@@ -86,6 +86,8 @@ interface SessionHeader {
    * would replay history the model can no longer act on.
    */
   readonly agentPreset?: string
+  /** Optional plugin-owned scope identity that must survive resume and fork. */
+  readonly scope?: SessionScopeRef
 }
 ```
 
@@ -118,6 +120,7 @@ interface CreateSessionOptions {
     readonly origin?: 'subagent'
     readonly delegationDepth?: number
     readonly agentPreset?: string
+    readonly scope?: SessionScopeRef
   }
 }
 ```
