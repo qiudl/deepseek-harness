@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 
@@ -8,6 +9,38 @@ const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{
 const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
+  it('routes explicit fork GitHub failover while retaining upstream and self-hosted pools', () => {
+    const workflow = loadWorkflow('.github/workflows/ci.yml')
+    const linux = ['node-24', 'node-24-coverage', 'node-24-consumers', 'all-checks-passed']
+    const windows = ['windows-build', 'windows-coverage', 'windows-native-tests', 'windows-observational']
+    for (const jobName of [...linux, ...windows]) {
+      const job = workflowJob(workflow, jobName)
+      const selector = job['runs-on']
+      if (typeof selector !== 'string') throw new TypeError(`${jobName} must define a runner expression`)
+      const isWindows = windows.includes(jobName)
+      const defaultPool = isWindows ? 'dsh-windows-2025-16core'
+        : jobName === 'all-checks-passed' ? 'ubuntu-latest' : 'dsh-ubuntu-24-04-16core'
+      for (const repository of ['qiudl/deepseek-harness', 'deepseek-ai/deepseek-harness']) {
+        for (const mode of ['', 'github', 'selfhosted']) {
+          for (const author of ['qiudl', 'dependabot[bot]']) {
+            // Evaluate the trusted YAML's actual boolean selector with GitHub's string/array values.
+            const actual: unknown = runInNewContext(selector.trim().slice(3, -2), {
+              github: { repository, event: { pull_request: { user: { login: author } } } },
+              vars: { DSH_CI_FAILOVER_LINUX: mode, DSH_CI_FAILOVER_WINDOWS: mode },
+              fromJSON: JSON.parse,
+            }, { timeout: 100 })
+            const expected = repository === 'qiudl/deepseek-harness' && mode === 'github'
+              ? isWindows ? 'windows-2025' : 'ubuntu-24.04'
+              : mode === 'selfhosted' && author !== 'dependabot[bot]'
+                ? isWindows ? ['self-hosted', 'dsh-win-ci', 'windows'] : ['self-hosted', 'linux', 'x64', 'vm-backup']
+                : defaultPool
+            expect(actual, `${jobName}: ${repository}/${mode}/${author}`).toEqual(expected)
+          }
+        }
+      }
+    }
+  })
+
   it('isolates every pnpm action setup destination per runner', () => {
     const files = ['.github/workflows/ci.yml', '.github/workflows/ci-master.yml']
     const setups: Array<{ jobName: string; step: unknown }> = []
