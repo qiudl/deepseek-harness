@@ -51,6 +51,7 @@ export interface DesktopAgentInvocation {
   project_name: string
   enterprise_name: string
   state: string
+  question: string | null
   answer: string | null
   failure_code: string | null
   created_at: string

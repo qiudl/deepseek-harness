@@ -46,7 +46,14 @@ export function AgentTaskDock({ sessionId, t }: Props) {
         <small>{item.invocation_id} · {item.state === 'succeeded' ? t('task.done')
           : item.state === 'accepted' || item.state === 'running'
             ? old ? t('task.background') : t('task.waiting') : t('task.failed')}</small>
-        {item.answer !== null && <div style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{item.answer}</div>}
+        {item.question != null && <div style={{ marginTop: 6 }}>
+          <strong>{t('task.question')}</strong>
+          <div style={{ whiteSpace: 'pre-wrap' }}>{item.question}</div>
+        </div>}
+        {item.answer !== null && <div style={{ marginTop: 6 }}>
+          <strong>{t('task.answer')}</strong>
+          <div style={{ whiteSpace: 'pre-wrap' }}>{item.answer}</div>
+        </div>}
       </div>
     })}
   </section>
