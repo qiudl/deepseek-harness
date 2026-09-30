@@ -9,6 +9,32 @@ const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{
 const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
+  it('bounds fork GitHub replay concurrency without changing other runner limits', () => {
+    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-24-consumers')
+    if (!isRecord(job.env)) throw new TypeError('consumer job must define concurrency settings')
+    for (const repository of ['qiudl/deepseek-harness', 'deepseek-ai/deepseek-harness']) {
+      for (const mode of ['', 'github', 'selfhosted']) {
+        for (const author of ['qiudl', 'dependabot[bot]']) {
+          const forkGitHub = repository === 'qiudl/deepseek-harness' && mode === 'github'
+          const defaults = {
+            DSH_GATE_CONCURRENCY: '10',
+            DSH_WEB_SNAPSHOT_WORKERS: '6',
+            DSH_SNAPSHOT_MAX_CONCURRENCY: mode === 'selfhosted' && author !== 'dependabot[bot]' ? '12' : '32',
+          }
+          for (const [key, fallback] of Object.entries(defaults)) {
+            const expression = job.env[key]
+            if (typeof expression !== 'string') throw new TypeError(`${key} must define a string expression`)
+            const actual: unknown = runInNewContext(expression.trim().slice(3, -2), {
+              github: { repository, event: { pull_request: { user: { login: author } } } },
+              vars: { DSH_CI_FAILOVER_LINUX: mode },
+            })
+            expect(actual, `${repository}/${mode}/${author}/${key}`).toBe(forkGitHub ? '2' : fallback)
+          }
+        }
+      }
+    }
+  })
+
   it('routes explicit fork GitHub failover while retaining upstream and self-hosted pools', () => {
     const workflow = loadWorkflow('.github/workflows/ci.yml')
     const linux = ['node-24', 'node-24-coverage', 'node-24-consumers', 'all-checks-passed']
