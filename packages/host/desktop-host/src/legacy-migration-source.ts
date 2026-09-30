@@ -251,6 +251,9 @@ async function ownerState(root: string, uid: number): Promise<MigrationOwnerStat
       || entry.name === 'storages' && entry.isDirectory()
       || entry.name === 'profiles' && entry.isDirectory()
       || entry.name === 'host' && entry.isDirectory()
+      // The bundled duet plugin writes owner-local traces here. They stay in the legacy home;
+      // this migration neither reads nor imports them into the new profile.
+      || entry.name === 'dsh-duet' && entry.isDirectory()
       || ['settings.yaml', '.credentials.yaml', '.anonymous-user-id', 'package.json', 'cordis.yml', 'pnpm-workspace.yaml']
         .includes(entry.name) && entry.isFile()
     if (!admitted || entry.isSymbolicLink()) throw new Error('legacy_migration_source_unknown_entry')
