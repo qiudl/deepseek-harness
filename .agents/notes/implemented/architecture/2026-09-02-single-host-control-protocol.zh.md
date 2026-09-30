@@ -36,6 +36,8 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 第 5 轮发现两个可靠性缺陷：直接 parser 调用没有 keyring 字节上限，且 bundle patch 会加载 startup subpath，但该 subpath 缺少源码 alias。Parser 现在拥有与 startup 相同的 16 KiB 限制，`tsconfig.base.json` 也将 startup export 映射到源码。第 6 轮没有在 token 校验、密钥固定、滚动兼容、授权顺序、错误映射或凭据留存方面发现新缺陷。
 
+Desktop broker 从独立的 `lib/host-control-client.js` bundle 导入 `@deepseek-ai/dsh-desktop-host/client`。发布内容独立于 Host startup bundle 包含该已声明产物；包文件约束接受此精确客户端路径，并继续拒绝未声明的发布文件。
+
 ## Alternatives considered
 
 **复用 SDK JSON-RPC carrier。** 它是会跳过畸形行、且不拥有安装身份的 Agent Runtime stdio 协议，无法执行本地 supervisor 所需的连接级致命认证。

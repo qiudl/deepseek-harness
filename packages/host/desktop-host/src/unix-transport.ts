@@ -100,7 +100,7 @@ interface MigrationExportInventoryProof {
 }
 
 /** Owner-connection-scoped target import service; payload and paths remain inside the Host. */
-export interface MigrationImportService {
+interface MigrationImportService {
   stage(input: {
     readonly transferId: string
     readonly transferDigest: string
