@@ -141,7 +141,9 @@ it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', a
   expect(await registered.candidates(session, { ...options, signal: aborted.signal })).toEqual([])
   const rows = await registered.candidates(session, { ...options, query: 'company' })
   expect(rows).toHaveLength(1)
-  expect(registered.onPick({ candidate: { ...rows[0]!, value: undefined }, session,
+  const missingValue = { ...rows[0]! }
+  Reflect.deleteProperty(missingValue, 'value')
+  expect(registered.onPick({ candidate: missingValue, session,
     position: 'inline', via: 'menu', action: 'pick',
     span: { start: 0, end: 1, draftRev: 1 } })).toBeUndefined()
   const pick = (value: string) => registered.onPick({ candidate: { ...rows[0]!, value },

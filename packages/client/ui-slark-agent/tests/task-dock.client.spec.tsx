@@ -42,9 +42,9 @@ it('shows waiting, background, and failed tasks after refresh', async () => {
   const interval = vi.spyOn(window, 'setInterval').mockImplementation((fn, delay, ...args) => {
     if (delay === 3_000) {
       tick = fn as () => void
-      return 1
+      return 1 as unknown as ReturnType<typeof setInterval>
     }
-    return actualSetInterval(fn, delay, ...args)
+    return actualSetInterval(fn, delay, ...args) as unknown as ReturnType<typeof setInterval>
   })
   const clear = vi.spyOn(window, 'clearInterval')
   const props = { sessionId: 'session-1' as SessionId,
