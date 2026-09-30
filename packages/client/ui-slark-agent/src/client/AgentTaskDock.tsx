@@ -36,7 +36,8 @@ export function AgentTaskDock({ sessionId, t }: Props) {
   }, [sessionId])
   if (items.length === 0) return null
   return <section aria-label={t('task.title')} style={{ border: '1px solid #aaa', borderRadius: 8,
-    padding: 10, maxHeight: 240, overflow: 'auto', background: 'var(--surface, #fff)' }}>
+    padding: 10, maxHeight: 240, overflow: 'auto', flexShrink: 0,
+    background: 'var(--surface, #fff)' }}>
     <strong>{t('task.title')}</strong>
     {items.map((item) => {
       const old = now - Date.parse(item.created_at) >= 120_000
