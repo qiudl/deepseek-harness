@@ -452,9 +452,14 @@ describe('agent scope lifecycle', () => {
     const { ctx, loopFiber } = await harnessWithLoop()
     let unloaded = false
     let setupCalls = 0
+    let scopeFiber: Fiber | undefined
+    const published: string[] = []
+    ctx.on('session/created', () => void published.push('session/created'))
+    ctx.on('agent/created', () => void published.push('agent/created'))
     ctx.on('internal/plugin', (fiber) => {
       if (unloaded || fiber.name !== 'scope') return
       unloaded = true
+      scopeFiber = fiber
       void loopFiber.dispose()
     })
 
@@ -465,7 +470,10 @@ describe('agent scope lifecycle', () => {
     })
     await expect(creating).rejects.toThrow(/agent loop is not active/)
     await loopFiber.dispose()
-    expect(setupCalls).toBe(1)
+    expect(unloaded).toBe(true)
+    expect(setupCalls).toBe(0)
+    expect(scopeFiber?.uid).toBeNull()
+    expect(published).toEqual([])
     expect(ctx.agents.get(SessionId('factory-scope-race-s'))).toBeUndefined()
     expect(ctx.sessions.get(SessionId('factory-scope-race-s'))).toBeUndefined()
 

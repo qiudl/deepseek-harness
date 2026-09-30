@@ -328,11 +328,15 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
       const created = await ctx.terminals.spawn(agent, { type: 'shell', name: 'main', cwd: root })
       expect(created.motd).toContain('dsh> ')
 
+      const stateReady = 'PWSH_STATE_READY'
+      const setupCommand = '$env:KEEP = "ok"; Set-Location /; Write-Output ("PWSH_" + "STATE_READY")'
+      expect(setupCommand).not.toContain(stateReady)
       const first = ctx.terminals.startSend(agent, created.sessionId, {
-        text: '$env:KEEP = "ok"; Set-Location /',
+        text: setupCommand,
         submit: true,
       })
-      expect((await first.done).waitReason).toBe('stdin_read')
+      await waitForOutput(first, stateReady)
+      expectReadyForNextSend((await first.done).waitReason)
       const second = ctx.terminals.startSend(agent, created.sessionId, {
         text: 'Write-Output "keep=$env:KEEP secret=$env:DSH_TEST_SECRET"',
         submit: true,
