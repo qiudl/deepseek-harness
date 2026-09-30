@@ -12,6 +12,7 @@ const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id
   name: 'Test Agent', publication_version: 2 }
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__')
 })
 
@@ -85,4 +86,122 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
     .rejects.toThrow()
   await fiber.dispose()
   expect(source).toBeUndefined()
+})
+
+it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', async () => {
+  const ctx = new Context()
+  let source: InputTriggerSource | undefined
+  let slotSession: unknown
+  ctx.provide('inputTriggers', { registerSource(value: InputTriggerSource) {
+    source = value
+    return () => { source = undefined }
+  } })
+  ctx.provide('locale', new LocaleRuntime(ctx))
+  ctx.provide('slots', { inject: (_name: string, register: () => () => void) => register(),
+    register: (config: { inject: (sessionId: string) => unknown }) => {
+      slotSession = config.inject(session.sessionId)
+      return () => undefined
+    } } as never)
+  let draft = '@Test Agent question'
+  let occurrences: Array<{
+    source: string
+    ref: string
+    offset: number
+    length: number
+    clipboardText: string
+  }> = []
+  let scoped = true
+  let currentSession = session.sessionId
+  ctx.provide('sessions', { scope: () => scoped ? ctx : undefined,
+    scopeOf: () => currentSession } as never)
+  ctx.provide('conversation', { input: { for: () => ({ state: {
+    getSnapshot: () => ({ draft, occurrences }),
+  } }) } } as never)
+  const fiber = ctx.plugin({ inject: [...inject], apply })
+  await fiber.await()
+  if (!source) throw new Error('Slark Agent source did not register')
+  const registered = source
+  expect(slotSession).toEqual({ sessionId: session.sessionId })
+  const options = { query: '', position: 'inline' as const, drilled: false,
+    signal: new AbortController().signal }
+  vi.stubGlobal('window', undefined)
+  expect(await registered.candidates(session, options)).toEqual([])
+  vi.unstubAllGlobals()
+  expect(await registered.candidates(session, options)).toEqual([])
+  const directory = vi.fn(async () => ({ ok: true as const, invocationAvailable: true,
+    items: [agent] }))
+  const invoke = vi.fn(async () => ({ ok: true as const,
+    value: { invocation_id: 'invocation-1', state: 'accepted' } }))
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgents: directory,
+    invokeEnterpriseAgent: invoke })
+  directory.mockResolvedValueOnce({ ok: true, invocationAvailable: false, items: [agent] })
+  expect(await registered.candidates(session, options)).toEqual([])
+  const aborted = new AbortController()
+  aborted.abort()
+  expect(await registered.candidates(session, { ...options, signal: aborted.signal })).toEqual([])
+  const rows = await registered.candidates(session, { ...options, query: 'company' })
+  expect(rows).toHaveLength(1)
+  expect(registered.onPick({ candidate: { ...rows[0]!, value: undefined }, session,
+    position: 'inline', via: 'menu', action: 'pick',
+    span: { start: 0, end: 1, draftRev: 1 } })).toBeUndefined()
+  const pick = (value: string) => registered.onPick({ candidate: { ...rows[0]!, value },
+    session, position: 'inline', via: 'menu', action: 'pick',
+    span: { start: 0, end: 1, draftRev: 1 } })
+  expect(pick('{')).toBeUndefined()
+  expect(pick('[]')).toBeUndefined()
+  expect(pick('{}')).toBeUndefined()
+  const picked = pick(rows[0]!.value!)
+  if (!picked || typeof picked !== 'object' || !('insert' in picked))
+    throw new Error('Agent reference not inserted')
+  const mention = { source: 'slark-agent', ref: picked.insert.ref, offset: 0,
+    length: '@Test Agent'.length, clipboardText: '@Test Agent' }
+  occurrences = [mention]
+  scoped = false
+  expect(await registered.matchEnter?.(session, draft, options.signal,
+    { attachments: 0 })).toBeUndefined()
+  scoped = true
+  occurrences = [{ ...mention, offset: 1 }]
+  expect(await registered.matchEnter?.(session, draft, options.signal,
+    { attachments: 0 })).toBeUndefined()
+  occurrences = [mention]
+  expect(await registered.matchEnter?.(session, 'other draft', options.signal,
+    { attachments: 0 })).toBeUndefined()
+  occurrences = [{ ...mention, ref: JSON.stringify({ ...agent, logical_key: 'bad key' }) }]
+  await expect(registered.matchEnter?.(session, draft, options.signal,
+    { attachments: 0 })).rejects.toThrow()
+  occurrences = [mention]
+  draft = '@Test Agent'
+  await expect(registered.matchEnter?.(session, draft, options.signal,
+    { attachments: 0 })).rejects.toThrow()
+  draft = '@Test Agent question'
+  occurrences = [mention, { ...mention, source: 'reference' }]
+  await expect(registered.matchEnter?.(session, draft, options.signal,
+    { attachments: 0 })).rejects.toThrow()
+  occurrences = [mention]
+  const claim = async () => {
+    const result = await registered.matchEnter?.(session, draft, options.signal,
+      { attachments: 0 })
+    if (!result || typeof result !== 'object' || !('claim' in result))
+      throw new Error('Agent send was not claimed')
+    return result.claim
+  }
+  const first = await claim()
+  currentSession = 'other-session' as SessionId
+  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
+  currentSession = session.sessionId
+  draft = '@Test Agent changed'
+  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
+  draft = '@Test Agent question'
+  occurrences = [{ ...mention, ref: 'changed' }]
+  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
+  occurrences = [mention]
+  expect(await first.submit('changed', ctx, [])).toMatchObject({ kind: 'error' })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgents: directory })
+  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgents: directory,
+    invokeEnterpriseAgent: vi.fn(async () => ({ ok: false, errorCode: 'revoked' })) })
+  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
+  expect(registered.codec?.clipboardText?.(mention.ref)).toBe('@Test Agent')
+  expect(registered.codec?.clipboardText?.('{')).toBe('@')
+  await fiber.dispose()
 })
