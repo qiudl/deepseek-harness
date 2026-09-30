@@ -1,3 +1,4 @@
+import { migrationOwnerStateObject as object } from './migration-owner-state-validation.ts'
 import { createHash, randomBytes } from 'node:crypto'
 import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
@@ -11,12 +12,6 @@ async function syncDirectory(path: string): Promise<void> {
   try { await handle.sync() } finally { await handle.close() }
 }
 
-function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('migration_owner_state_invalid')
-  }
-  return value as Record<string, unknown>
-}
 
 /** Paths consumed by the settings and credentials schema owners for one active generation. */
 export interface AppliedMigrationOwnerState {

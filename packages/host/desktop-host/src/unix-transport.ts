@@ -251,6 +251,73 @@ interface ProfileSelectorPayload {
   readonly schema_generation: number
 }
 
+function inventoryResult(proof: MigrationExportInventoryProof) {
+  return {
+    inventory_digest: proof.inventoryDigest as never,
+    source_generation: proof.sourceGeneration as never,
+    schema_version: proof.schemaVersion,
+    required_max_records: proof.requiredMaxRecords,
+    required_max_bytes: proof.requiredMaxBytes,
+  }
+}
+
+function profileBindingParams(input: {
+  readonly authorityEnvironmentId: string
+  readonly accountBindingHandle: string
+  readonly authorityBindingVersion: number
+}) {
+  return {
+    authority_environment_id: input.authorityEnvironmentId as never,
+    account_binding_handle: input.accountBindingHandle as never,
+    authority_binding_version: input.authorityBindingVersion,
+  }
+}
+
+function migrationImportParams(input: {
+  readonly importId: string
+  readonly expectedStageVersion: number
+  readonly targetProfileSelector: string
+}) {
+  return {
+    import_id: input.importId as never,
+    expected_stage_version: input.expectedStageVersion,
+    target_profile_selector: input.targetProfileSelector,
+  }
+}
+
+function profileUnlockInput(params: Pick<ProfileRestoreRequest['params'],
+  'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version'
+  | 'profile_key_handle' | 'profile_unlock_material'>, ownerId: string) {
+  return {
+    authorityEnvironmentId: params.authority_environment_id,
+    accountBindingHandle: params.account_binding_handle,
+    authorityBindingVersion: params.authority_binding_version,
+    keyHandle: params.profile_key_handle,
+    unlockMaterial: params.profile_unlock_material,
+    ownerId,
+  }
+}
+
+function readyProfileResult(identity: HostIdentity, profile: {
+  readonly profileId: string
+  readonly bindingGeneration: number
+}) {
+  return {
+    state: 'ready' as const,
+    profile_id: profile.profileId as never,
+    profile_selector: mintProfileSelector(identity, profile.profileId, profile.bindingGeneration),
+  }
+}
+
+function sendReadyProfile(channel: FrameChannel, identity: HostIdentity,
+  request: ProfileEnsureRequest | ProfileRestoreRequest,
+  profile: { readonly profileId: string; readonly bindingGeneration: number }): void {
+  channel.send({
+    version: 1, type: 'result', request_id: request.request_id, method: request.method,
+    result: readyProfileResult(identity, profile),
+  })
+}
+
 function mintProfileSelector(identity: HostIdentity, profileId: string, bindingGeneration: number): string {
   const payload: ProfileSelectorPayload = {
     version: 1, installation_id: identity.installationId, profile_id: profileId, binding_generation: bindingGeneration,
@@ -598,11 +665,7 @@ export class UnixHostServer {
               source_inventory_authority: authority as never,
               source_installation_id: this.options.identity.installationId as never,
               expires_at: expiresAt,
-              inventory_digest: proof.inventoryDigest as never,
-              source_generation: proof.sourceGeneration as never,
-              schema_version: proof.schemaVersion,
-              required_max_records: proof.requiredMaxRecords,
-              required_max_bytes: proof.requiredMaxBytes,
+              ...inventoryResult(proof),
             } })
           } catch (error) { channel.send(safeError(migrationCode(error), frame)) }
         } else if (frame.method === 'migration.export_snapshot.inventory') {
@@ -612,11 +675,7 @@ export class UnixHostServer {
             )
             const proof = await migrationExport.inventory(lifetime.signal)
             channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result: {
-              inventory_digest: proof.inventoryDigest as never,
-              source_generation: proof.sourceGeneration as never,
-              schema_version: proof.schemaVersion,
-              required_max_records: proof.requiredMaxRecords,
-              required_max_bytes: proof.requiredMaxBytes,
+              ...inventoryResult(proof),
             } })
           } catch (error) { channel.send(safeError(migrationCode(error), frame)) }
         } else if (frame.method === 'migration.export_snapshot.begin') {
@@ -731,38 +790,16 @@ export class UnixHostServer {
           const profile = await this.options.host.ensureAccountProfile({
             accountAccessToken: frame.params.account_access_token,
             issuer: frame.params.account_issuer, subject: frame.params.account_subject,
-            authorityEnvironmentId: frame.params.authority_environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
-            keyHandle: frame.params.profile_key_handle,
-            unlockMaterial: frame.params.profile_unlock_material,
-            ownerId,
+            ...profileUnlockInput(frame.params, ownerId),
           })
-          channel.send({
-            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: {
-              state: 'ready', profile_id: profile.profileId as never,
-              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
-            },
-          })
+          sendReadyProfile(channel, this.options.identity, frame, profile)
         } else if (frame.method === 'profile.restore') {
           const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
           const profile = await this.options.host.restoreProfile({
             profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation,
-            authorityEnvironmentId: frame.params.authority_environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
-            keyHandle: frame.params.profile_key_handle,
-            unlockMaterial: frame.params.profile_unlock_material,
-            ownerId,
+            ...profileUnlockInput(frame.params, ownerId),
           })
-          channel.send({
-            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: {
-              state: 'ready', profile_id: profile.profileId as never,
-              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
-            },
-          })
+          sendReadyProfile(channel, this.options.identity, frame, profile)
         } else if (frame.method === 'profile.status') {
           const status = this.options.host.getProfileStatus({
             authorityEnvironmentId: frame.params.authority_environment_id,
@@ -960,9 +997,7 @@ export class UnixHostClient {
       request_id: requestId(),
       method: 'profile.status',
       params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
+        ...this.auth(), ...profileBindingParams(input),
       },
     }
     const frame = await this.call(request, input.signal)
@@ -995,16 +1030,13 @@ export class UnixHostClient {
     const request: ProfileEnsureRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
       params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
+        ...this.auth(), ...profileBindingParams(input),
         account_access_token: input.accountAccessToken,
         account_issuer: input.issuer, account_subject: input.subject, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
   }
 
@@ -1025,15 +1057,12 @@ export class UnixHostClient {
     const request: ProfileRestoreRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.restore',
       params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
+        ...this.auth(), ...profileBindingParams(input),
         profile_selector: input.profileSelector, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
   }
 
@@ -1054,9 +1083,7 @@ export class UnixHostClient {
       request_id: requestId(),
       method: 'profile.open',
       params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
+        ...this.auth(), ...profileBindingParams(input),
       },
     }
     const frame = await this.call(request, input.signal)
@@ -1097,8 +1124,7 @@ export class UnixHostClient {
         lease_generation: input.leaseGeneration, runtime_generation: input.runtimeGeneration,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return {
       origin: frame.result.origin,
       activationGeneration: frame.result.activation_generation,
@@ -1154,8 +1180,7 @@ export class UnixHostClient {
           ? {} : { source_inventory_authority: input.sourceInventoryAuthority as never }),
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return {
       inventoryDigest: frame.result.inventory_digest,
       sourceGeneration: frame.result.source_generation,
@@ -1185,8 +1210,7 @@ export class UnixHostClient {
       method: 'migration.existing_source.inventory',
       params: { ...this.auth(), target_profile_selector: input.targetProfileSelector },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return {
       sourceInventoryAuthority: frame.result.source_inventory_authority,
       sourceInstallationId: frame.result.source_installation_id,
@@ -1224,8 +1248,7 @@ export class UnixHostClient {
         max_bytes: input.maxBytes,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return {
       exportId: frame.result.export_id,
       transferId: frame.result.transfer_id,
@@ -1264,8 +1287,7 @@ export class UnixHostClient {
         chunk_index: input.chunkIndex,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return {
       exportId: frame.result.export_id,
       chunkIndex: frame.result.chunk_index,
@@ -1310,8 +1332,7 @@ export class UnixHostClient {
         record_count: input.recordCount, semantic_digest: input.semanticDigest as never,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return { importId: frame.result.import_id, stageVersion: frame.result.stage_version }
   }
 
@@ -1339,8 +1360,7 @@ export class UnixHostClient {
         target_profile_selector: input.targetProfileSelector,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return { importId: frame.result.import_id, stageVersion: frame.result.stage_version, state: frame.result.state }
   }
 
@@ -1358,12 +1378,10 @@ export class UnixHostClient {
     const request: MigrationImportVerifyRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'migration.import_snapshot.verify',
       params: {
-        ...this.auth(), import_id: input.importId as never, expected_stage_version: input.expectedStageVersion,
-        target_profile_selector: input.targetProfileSelector,
+        ...this.auth(), ...migrationImportParams(input),
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return { stageVersion: frame.result.stage_version, semanticDigest: frame.result.semantic_digest }
   }
 
@@ -1387,8 +1405,7 @@ export class UnixHostClient {
         target_profile_selector: input.targetProfileSelector,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return { stageVersion: frame.result.stage_version, activeGeneration: frame.result.active_generation }
   }
 
@@ -1406,17 +1423,23 @@ export class UnixHostClient {
     const request: MigrationImportAbortRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'migration.import_snapshot.abort',
       params: {
-        ...this.auth(), import_id: input.importId as never, expected_stage_version: input.expectedStageVersion,
-        target_profile_selector: input.targetProfileSelector,
+        ...this.auth(), ...migrationImportParams(input),
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const frame = await this.callResult(request, input.signal)
     return { stageVersion: frame.result.stage_version }
   }
 
   /** Close the local connection; Host revokes every lease it minted. */
   close(): void { this.channel.socket.destroy() }
+
+  private async callResult<T extends Exclude<Extract<HostControlFrame, { type: 'request' }>, HostInspectRequest>>(
+    request: T, signal?: AbortSignal,
+  ): Promise<Extract<HostControlFrame, { type: 'result'; method: T['method'] }>> {
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame as Extract<HostControlFrame, { type: 'result'; method: T['method'] }>
+  }
 
   private auth(): Pick<
     ProfileStatusRequest['params'],

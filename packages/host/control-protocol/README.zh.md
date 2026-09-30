@@ -46,6 +46,7 @@ kind: "package-reference"
 | `decodeHostControlFrame(source)` | 严格解析并规范化恰好一帧。 |
 | `encodeHostControlFrame(frame)` | 运行时校验并发出恰好一帧规范数据。 |
 | `encodeHostInspectSignaturePayload(request, response)` | 生成由黄金向量固定的域隔离签名字节。 |
+| `canonicalMigrationJson(value, invalidValueError?)` | 对迁移载荷按键排序，省略值为 undefined 的对象字段，并保留调用方的不支持值错误标识。 |
 | `HostControlProtocolError` | 带稳定 code 的脱敏本地失败。 |
 | `HOST_CONTROL_MAX_FRAME_BYTES` | 传输共享缓冲上限。 |
 

@@ -23,6 +23,15 @@ async function syncDirectory(path: string): Promise<void> {
   try { await handle.sync() } finally { await handle.close() }
 }
 
+async function ensurePrivateRoot(root: string, expectedUid: number, errorCode: string): Promise<void> {
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  const metadata = await lstat(root)
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== expectedUid
+    || (metadata.mode & 0o077) !== 0) {
+    throw new Error(errorCode)
+  }
+}
+
 function validateBundle(bundle: MigrationOwnerTransferBundle): void {
   if (
     !Number.isSafeInteger(bundle.schemaVersion) || bundle.schemaVersion < 0
@@ -139,12 +148,7 @@ export class FileOwnerMigrationTransferStore {
   }
 
   private async ensureRoot(): Promise<void> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const metadata = await lstat(this.root)
-    if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
-      || (metadata.mode & 0o077) !== 0) {
-      throw new Error('migration_transfer_root_unsafe')
-    }
+    await ensurePrivateRoot(this.root, this.expectedUid, 'migration_transfer_root_unsafe')
   }
 }
 
@@ -527,12 +531,7 @@ export class FileOwnerMigrationImportJournal {
   }
 
   private async ensureRoot(): Promise<void> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const metadata = await lstat(this.root)
-    if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
-      || (metadata.mode & 0o077) !== 0) {
-      throw new Error('migration_import_journal_unsafe')
-    }
+    await ensurePrivateRoot(this.root, this.expectedUid, 'migration_import_journal_unsafe')
   }
 }
 

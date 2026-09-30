@@ -10,15 +10,21 @@ export interface CanonicalMigrationRecord {
   readonly payloadDigest: string
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+/**
+ * Encode migration JSON with sorted keys and omitted undefined object fields.
+ * @param value - JSON-compatible migration payload.
+ * @param invalidValueError - owner-specific error for unsupported values.
+ * @returns deterministic JSON text for migration digests.
+ */
+export function canonicalMigrationJson(value: unknown, invalidValueError = 'migration_canonical_non_json_value'): string {
+  if (Array.isArray(value)) return `[${value.map(item => canonicalMigrationJson(item, invalidValueError)).join(',')}]`
   if (typeof value === 'object' && value !== null) {
     const record = value as Record<string, unknown>
     return `{${Object.keys(record).sort().filter(key => record[key] !== undefined)
-      .map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+      .map(key => `${JSON.stringify(key)}:${canonicalMigrationJson(record[key], invalidValueError)}`).join(',')}}`
   }
   if (value === undefined || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
-    throw new Error('migration_canonical_non_json_value')
+    throw new Error(invalidValueError)
   }
   return JSON.stringify(value)
 }
@@ -31,7 +37,7 @@ function canonicalJson(value: unknown): string {
 export function canonicalMigrationRecords(records: readonly CanonicalMigrationRecord[]): string {
   const sorted = [...records].sort((left, right) => left.collection.localeCompare(right.collection, 'en')
     || left.id.localeCompare(right.id, 'en') || left.sequence - right.sequence)
-  return canonicalJson(sorted)
+  return canonicalMigrationJson(sorted)
 }
 
 /**

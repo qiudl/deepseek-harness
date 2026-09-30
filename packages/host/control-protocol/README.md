@@ -43,6 +43,7 @@ The public key in an answer is not trust by itself. The Desktop broker must matc
 | `decodeHostControlFrame(source)` | Strictly parse and normalize exactly one frame. |
 | `encodeHostControlFrame(frame)` | Runtime-validate and emit exactly one canonical frame. |
 | `encodeHostInspectSignaturePayload(request, response)` | Produce the domain-separated signing bytes pinned by the golden vector. |
+| `canonicalMigrationJson(value, invalidValueError?)` | Encode migration payloads with sorted keys, omit undefined object fields, and retain the caller-owned unsupported-value error. |
 | `HostControlProtocolError` | Sanitized local failure with a stable code. |
 | `HOST_CONTROL_MAX_FRAME_BYTES` | Shared transport buffering ceiling. |
 

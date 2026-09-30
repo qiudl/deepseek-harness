@@ -6,7 +6,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto'
-import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol'
+import { canonicalMigrationJson, migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type {
   SessionInspection, SessionPersistenceRevision, SessionPersistenceSnapshot,
@@ -104,16 +104,7 @@ interface RetainedExport {
 }
 
 function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (typeof value === 'object' && value !== null) {
-    const record = value as Record<string, unknown>
-    return `{${Object.keys(record).sort().filter(key => record[key] !== undefined)
-      .map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
-  }
-  if (value === undefined || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
-    throw new Error('migration_export_non_json_value')
-  }
-  return JSON.stringify(value)
+  return canonicalMigrationJson(value, 'migration_export_non_json_value')
 }
 
 function digest(value: unknown): string {

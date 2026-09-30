@@ -7,6 +7,7 @@ import {
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
+  canonicalMigrationJson,
   canonicalMigrationRecords,
   migrationSemanticDigest,
 } from '../src/index.ts'
@@ -125,6 +126,15 @@ describe('Main-only Profile operations', () => {
 })
 
 describe('cross-repository migration digest vector', () => {
+  it('canonicalizes nested JSON and preserves the caller-owned invalid-value error', () => {
+    expect(canonicalMigrationJson({ z: undefined, b: [null, { z: true, a: 1 }], a: 'value' }))
+      .toBe('{"a":"value","b":[null,{"a":1,"z":true}]}')
+    for (const value of [undefined, () => undefined, Symbol('unsupported'), 1n]) {
+      expect(() => canonicalMigrationJson([value])).toThrow('migration_canonical_non_json_value')
+      expect(() => canonicalMigrationJson({ nested: [value] }, 'migration_export_non_json_value'))
+        .toThrow('migration_export_non_json_value')
+    }
+  })
   it('sorts records and object keys before hashing', () => {
     const records = [
       { collection: 'sessions' as const, id: 'a'.repeat(32), sequence: 0, payloadDigest: '1'.repeat(64) },
