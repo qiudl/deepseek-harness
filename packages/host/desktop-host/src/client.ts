@@ -8,4 +8,4 @@ export type {
   UnixPeerEvidence,
 } from './unix-transport.ts'
 export type { ProfileOpenResult } from './types.ts'
-export { canonicalMigrationRecords, migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+export { canonicalMigrationRecords, migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol'

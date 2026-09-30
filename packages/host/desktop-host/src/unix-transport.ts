@@ -33,14 +33,14 @@ import type {
   MigrationImportStageRequest,
   MigrationImportStatusRequest,
   MigrationImportVerifyRequest,
-} from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+} from '@deepseek-ai/dsh-host-control-protocol'
 import {
   HOST_CONTROL_MAX_FRAME_BYTES,
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
   migrationProfileSelectorHash,
-} from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+} from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostAuthorityErrorCode, PersonProfileId, ProfileOpenResult, ProfileViewLeaseId } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import type { DesktopHost } from './desktop-host.ts'

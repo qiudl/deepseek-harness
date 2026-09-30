@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-02-single-host-control-protocol.md
-2026-09-02-single-host-control-protocol.md: 734c6087ad8d021d3f33ffb221282f88376da685
-2026-09-02-single-host-control-protocol.zh.md: e52385d7a31212a2dbb22859b82343e2a0fa5cb3
+2026-09-02-single-host-control-protocol.md: 5b0c37ff8768d94f90c139b34abdb162ae3a1f84
+2026-09-02-single-host-control-protocol.zh.md: 8bc08c6a0c488c0ed3e8ad7116297aee180bb643

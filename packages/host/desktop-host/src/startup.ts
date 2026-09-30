@@ -11,14 +11,14 @@ import {
   FileOwnerMigrationImportJournal,
   FileOwnerMigrationTransferStore,
   OwnerMigrationImportService,
-} from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
+} from '@deepseek-ai/dsh-session-persistence-jsonl'
 import {
   JsonlMigrationExportService,
   type MigrationOwnerStateBundle,
-} from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
+} from '@deepseek-ai/dsh-session-persistence-jsonl'
 import {
   FileJsonlMigrationExportSource,
-} from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export-source.ts'
+} from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { DesktopHost } from './desktop-host.ts'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'

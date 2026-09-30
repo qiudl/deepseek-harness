@@ -2,7 +2,7 @@ import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseDocument } from 'yaml'
-import { migrationOwnerStateRecords, type MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
+import { migrationOwnerStateRecords, type MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import type { AppliedMigrationOwnerState } from './migration-owner-state-applicator.ts'
 
 async function readOwnerYaml(path: string, uid: number): Promise<unknown> {

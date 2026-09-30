@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import {
   migrationOwnerStateRecords,
   type MigrationOwnerStateBundle,
-} from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
+} from '@deepseek-ai/dsh-session-persistence-jsonl'
 
 async function syncDirectory(path: string): Promise<void> {
   const handle = await open(path, 'r')

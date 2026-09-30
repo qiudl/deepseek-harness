@@ -38,6 +38,8 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 Desktop broker 从独立的 `lib/host-control-client.js` bundle 导入 `@deepseek-ai/dsh-desktop-host/client`。发布内容独立于 Host startup bundle 包含该已声明产物；包文件约束接受此精确客户端路径，并继续拒绝未声明的发布文件。
 
+Host 类型声明通过依赖包的公开入口引用协议和 JSONL 迁移类型。因此，消费者可在 NodeNext 下解析已发布声明，无需编译依赖源码或启用 TypeScript 源扩展名导入。
+
 ## Alternatives considered
 
 **复用 SDK JSON-RPC carrier。** 它是会跳过畸形行、且不拥有安装身份的 Agent Runtime stdio 协议，无法执行本地 supervisor 所需的连接级致命认证。
