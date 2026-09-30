@@ -1,13 +1,69 @@
-# Slark Agent mentions
+---
+description: "Mention an assigned Slark enterprise Agent from a DSH Session in Slark Desktop and read the task result in that Session."
+kind: "package-reference"
+---
+# @deepseek-ai/dsh-client-ui-slark-agent
 
 English | [中文](README.zh.md)
 
-The `ui-slark-agent` Client plugin reads assigned enterprise Agents through the Desktop Host bridge when an Account Profile is online. Each `@` candidate carries the assignment, project, Agent, enterprise, and publication version as a stable editor reference. Duplicate Agent names show their enterprise and project.
+## Summary
 
-The plugin row is enabled in the Web bundle, but it shows no Agent candidates until the current account's Slark Desktop directory confirms that invocation admission is available. A leading Agent chip and plain-text question claim Enter and submit one idempotent invocation through the Desktop Host. Its reference codec refuses ordinary model submission, so a selected Agent cannot silently become prompt text. The Desktop bridge supplies only safe directory summaries; Slark checks assignment authority again when admitting an invocation.
+Type `@` in a DSH Session inside Slark Desktop to find assigned enterprise Agents. Select an Agent and send a plain-text question to create a Slark task; its result appears in the same Session. The list requires an online Account Profile and a Desktop bridge that confirms invocation is available.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Understand the implementation](#understand-the-implementation)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+-----
+
+<a id="use-this-package"></a>
+## Use this package
+
+The Web bundle mounts this package without extra configuration. Type `@` in Slark Desktop, select an Agent under Slark enterprise Agents, and send a plain-text question with the Agent chip at the start. Agents with the same name show their enterprise and project. The task strip displays the result in the originating Session and marks unfinished work as background work after 120 seconds.
+
+-----
+
+<a id="understand-the-implementation"></a>
+## Understand the implementation
+
+<details>
+<summary>Implementation internals — click to expand</summary>
+
+The Client source reads account-bound assignments from the Desktop bridge. Each editor chip retains the assignment, project, Agent, enterprise, and publication version; Slark checks assignment authority again when admitting the invocation. The source claims Enter for a leading Agent chip and question, and its reference codec refuses ordinary model submission. The Desktop bridge supplies only directory summaries. No companion is published.
+
+</details>
+
+-----
+
+<a id="model-experience"></a>
 
 ## Model Experience
 
-The session task strip reloads account-bound receipts from Slark, displays the answer in the originating Session, and labels unfinished work as background work after 120 seconds. Slark's task center lists the same durable invocations. Ordinary DSH model input still handles unclaimed `@` references.
+None, as Agent mentions go through the Slark Desktop bridge and do not enter the ordinary DSH model request.
 
-**Runtime invariant:** No companion is published. This source registers into the existing input trigger service and owns no independent Host relationship.
+#### KV Cache effect
+
+None; this plugin does not assemble or send a DSH provider request.
+
+## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
+
+Agent mentions require the current account's Slark Desktop bridge to report invocation available. Ordinary `@` references remain available when that bridge is absent.
+
+- **Desktop-only directory** — a standalone DSH browser session cannot list or invoke Slark Agents.
+- **Question format** — the Agent chip must lead a plain-text question.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>
