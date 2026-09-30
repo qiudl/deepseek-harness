@@ -81,6 +81,20 @@ describe('submit-machine: plain × enter', () => {
     expect(m.state.phase).toBe('adjudicating')
   })
 
+  it('leading "@" can be claimed while an ordinary reference still falls through', () => {
+    const claimed = new SubmitMachine()
+    const attempt = enterAdjudicating(claimed, '@Agent question')
+    const fx = claimed.dispatch({ type: 'adjudicated', attempt, outcome: { claim: {
+      name: 'slark-agent', token: '@Agent ', submit: async () => ({ kind: 'success' }),
+    } } })
+    expect(effectAt(fx, 0, 'begin-submit').args).toBe('question')
+    const ordinary = new SubmitMachine()
+    const ordinaryAttempt = enterAdjudicating(ordinary, '@file note')
+    const fallthrough = ordinary.dispatch({ type: 'adjudicated', attempt: ordinaryAttempt,
+      outcome: undefined })
+    expect(effectAt(fallthrough, 0, 'default-sink').draft).toBe('@file note')
+  })
+
   it('leading is judged after trim including newlines', () => {
     const m = new SubmitMachine()
     const fx = m.dispatch({ type: 'enter', mode: 'queue', draft: ' \n /goal x' })

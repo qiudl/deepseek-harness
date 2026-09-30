@@ -151,7 +151,7 @@ export class SubmitMachine {
     }
     const trimmed = draft.trim()
     if (trimmed === '') return []
-    if (trimmed.startsWith('/')) {
+    if (trimmed.startsWith('/') || trimmed.startsWith('@')) {
       const attempt = this.beginAttempt(mode, draft)
       this.phase = 'adjudicating'
       return [{ type: 'adjudicate', attempt, draft }]

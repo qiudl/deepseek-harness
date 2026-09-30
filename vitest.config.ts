@@ -380,6 +380,8 @@ export default defineConfig({
         'packages/client/ui-commands/src/index.ts',
         'packages/client/ui-skill/src/index.ts',
         'packages/client/ui-input-trigger/src/index.ts',
+        // Client-only Slark Agent mentions keep an inert Host entry for plugin loading.
+        'packages/client/ui-slark-agent/src/index.ts',
         'packages/client/ui-subagent/src/index.ts',
         'packages/client/ui-commands/src/client/popup.ts',
         'packages/client/ui-commands/src/client/directory.ts',

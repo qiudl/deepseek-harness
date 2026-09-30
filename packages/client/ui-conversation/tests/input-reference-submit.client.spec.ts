@@ -82,6 +82,7 @@ describe('reference submission', () => {
       .mockResolvedValueOnce({ kind: 'error', text: 'snapshot unavailable' })
       .mockResolvedValueOnce({ kind: 'success' })
     const inputTriggers = {
+      adjudicate: async () => undefined,
       serializeReference,
       track: vi.fn(),
       lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
@@ -99,11 +100,9 @@ describe('reference submission', () => {
     })
 
     shell.submit('queue')
-    // Optimistic commit: the composer clears at enter and stays unlocked
-    // while the detached flight runs.
-    expect(shell.snapshot.phase).toBe('plain')
-    expect(shell.snapshot.draft).toBe('')
+    // An @ source may claim the line; an ordinary reference settles to the sink.
     await vi.waitFor(() => {
+      expect(sink).toHaveBeenCalledTimes(1)
       expect(shell.snapshot.draft).toBe(`${mention} `)
     })
     expect(sink).toHaveBeenNthCalledWith(1, mention, [], 'queue', expect.any(AbortSignal))
@@ -117,7 +116,6 @@ describe('reference submission', () => {
     })
 
     shell.submit('queue')
-    expect(shell.snapshot.draft).toBe('')
     await vi.waitFor(() => {
       expect(sink).toHaveBeenNthCalledWith(2, mention, [], 'queue', expect.any(AbortSignal))
     })
@@ -128,6 +126,7 @@ describe('reference submission', () => {
   it('blocks submission and retains the chip when its owner cannot serialize it', async () => {
     const sink = vi.fn()
     const inputTriggers = {
+      adjudicate: async () => undefined,
       serializeReference: () => Promise.reject(new Error('reference codec unavailable')),
       track: vi.fn(),
       lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
@@ -142,6 +141,7 @@ describe('reference submission', () => {
     shell.submit()
     // The serializer rejection restores the optimistic commit with its chip.
     await vi.waitFor(() => {
+      expect(shell.notices.getSnapshot()).toMatchObject({ level: 'error' })
       expect(shell.snapshot.draft).toBe(`${mention} `)
     })
     expect(sink).not.toHaveBeenCalled()
