@@ -205,6 +205,23 @@ const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   // The JSONL backend resolves its private verification Worker relative to
   // import.meta.url; it is shipped without a public package subpath.
   '@deepseek-ai/dsh-session-persistence-jsonl': ['lib/worker.cjs'],
+  // Slark's Host publishes a standalone control client, Windows worker entries,
+  // and the pinned Hub upstream assets consumed by those entries.
+  '@deepseek-ai/dsh-slark-desktop-host': [
+    'lib/windows-startup.js',
+    'lib/host-control-client.js',
+    'lib/windows-host-pipe-worker-entry.js',
+    'lib/windows-host-client-worker-entry.js',
+    'lib/windows-embedding-identity-entry.js',
+    'hub-upstream/LICENSE',
+    'hub-upstream/UPSTREAM.json',
+    'hub-upstream/mcp.mjs',
+    'hub-upstream/mcp.d.mts',
+    'hub-upstream/skills-codec.mjs',
+    'hub-upstream/skills-codec.d.mts',
+    'hub-upstream/plugin-command.mjs',
+    'hub-upstream/plugin-command.d.mts',
+  ],
   // The argv-prefix runner entry ships beside the lib as its own bundle;
   // sandbox-local resolves it through the package's ./runner export. tsdown
   // also shares its generated FFI code through a hashed runtime chunk.

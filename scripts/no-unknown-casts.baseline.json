@@ -90,6 +90,9 @@
   "apps/web/tests/onboarding-deepseek-config.e2e.ts": {
     "326597b335539db945b2e3b7c86638d40849d2077c0a5670d064e45486f4e407": 2
   },
+  "apps/web/tests/remote-frame.spec.ts": {
+    "326597b335539db945b2e3b7c86638d40849d2077c0a5670d064e45486f4e407": 1
+  },
   "apps/web/tests/scaffold.ts": {
     "3d845108a2e6928c911c093813f3d6a1cdd510ef148f3515cb852a254a7aa14d": 1
   },
@@ -226,6 +229,9 @@
     "65a8ca744226b51c6d14cca4d9b98aeb74b36fddce821aa5a3ea00c3b01d5aed": 1,
     "d381c9934a9225f359ab85e75d8823e512d0bf3500c9523ab22fc83d400b8f39": 1
   },
+  "packages/api/session-controller/tests/attachment-export.host.spec.ts": {
+    "4e6289bbcd36e12927fd2ac87dc09b4de8ac884f2a0041af58383a0144b8b9b1": 1
+  },
   "packages/api/session-controller/tests/commands-create-fork.host.spec.ts": {
     "9910c2717b4be0b1d931a81447639094b314012297de3133d0557df9d2f76401": 1,
     "d961dc67779f636692251bbcf8c152c886f273e0f821202e9d13a4ee4ed063f7": 1,
@@ -273,6 +279,9 @@
     "526a22860f8bc330caf4a3f28a28948de5c04b4e17125f04b3738808cfbd4e3e": 1,
     "9d54088afe33da8176bd4898a775c5a5181111a52a8f682ca300ade28684feac": 1,
     "a6a04773270367c3ea0f54b577d3f766ff738afb6702e09caac1b3fa66a7397d": 1
+  },
+  "packages/api/session-controller/tests/session-delete.host.spec.ts": {
+    "8ba23d5deb0f1000985ac08632e8f215beffced520277e17cfe3c2b953db4c4b": 1
   },
   "packages/api/session-controller/tests/session-fork.host.spec.ts": {
     "dbbb38fac6189a3be6f7c29f8df6ef34679f5956c168d08d4f058b5d66b24089": 1
@@ -383,6 +392,22 @@
   },
   "packages/bundle/web-app/tests/browser-open.spec.ts": {
     "2e78263d16d54ccfd8d322bcdf1bf738bd8134e15c24063ece9a1d1b52f4ebd9": 1
+  },
+  "packages/bundle/web-app/tests/desktop-model.spec.ts": {
+    "46197efe57255c9d92d64476470c89d0602c7333bf98ad75509bf43c1b357a3b": 4,
+    "57e8f499037b103dec934e669557fed5e77ec93c1ca0e079196ed6365b9799dc": 2,
+    "8d1a12cbaaca534622ce68780e7eff658012782e0614d4efba713c182a122850": 2,
+    "a39244e911c01d6c05812a25d761fe4701959b75ef011ec1c6de25d9d55f7856": 4
+  },
+  "packages/bundle/web-app/tests/desktop-remote-session.spec.ts": {
+    "0657e53b24da1135a93b366dedf0762e53e52f0d3e408b760c2e8dfcd84b8726": 1,
+    "2279af24fde8e5056e20888770206beb3817a77e3cce86fdda014dc153ccd434": 1,
+    "3b96c89c973caa07e49fabb1083348139e30eb91ae93992906bf5b1e63a4169f": 1,
+    "6df1598dd1553dfce39ef41d2f2158cf54f3ef1f86cb748407bb75bb34aecad9": 1,
+    "88d1a05b59450b07163a09e96d93927156a75ba205b8bea83c345dd0b377acce": 2
+  },
+  "packages/bundle/web-app/tests/desktop-remote-ui.spec.ts": {
+    "88d1a05b59450b07163a09e96d93927156a75ba205b8bea83c345dd0b377acce": 2
   },
   "packages/bundle/web-app/tests/document-conversion.e2e.ts": {
     "743a7488a765c578e607d08ba6bdcf6f2f2971f67b05a42d5097aad2458134a1": 1
@@ -618,6 +643,12 @@
   },
   "packages/client/ui-plan/tests/plan-resource.client.spec.ts": {
     "fa53d5cd55d87b522c83a98968e3a2bf933b1cc1b84d2f009e79d6c702099786": 1
+  },
+  "packages/client/ui-primitives/src/attachment-save.ts": {
+    "ae673f8775aa89ebe8eec9169852b08a9294eeb3a26f32f8b43394b2d4f6dd5f": 1
+  },
+  "packages/client/ui-primitives/src/clipboard.ts": {
+    "ae673f8775aa89ebe8eec9169852b08a9294eeb3a26f32f8b43394b2d4f6dd5f": 1
   },
   "packages/client/ui-primitives/tests/highlight-viewport.client.spec.tsx": {
     "6061de0a1e01547eb1abf9d4e1b5fa79fda112fa35dda980775491123413dcce": 1
@@ -1315,6 +1346,151 @@
   "packages/hooks/hooks-codex/tests/bridge.spec.ts": {
     "bced8a97654435422589a4bdd1b46b5147d4120cd5b496dcf055c453494ce0ab": 1
   },
+  "packages/host/control-protocol/src/codec.ts": {
+    "e941ee9320fe4d2fc699606b2b7d7d93900fc398eb12a6413476fc0cb2202a8c": 1
+  },
+  "packages/host/desktop-host/src/account-access-token.ts": {
+    "d3b6dad64b3538d5889bda2b5951b807880cbe039d6128f64c63afc7971b2a42": 1
+  },
+  "packages/host/desktop-host/src/command-journal-event.ts": {
+    "487a58a6269113d4cbfd31915a9abdbf016e672be9a2af2c6d5d57b087d0b011": 1
+  },
+  "packages/host/desktop-host/src/legacy-claim-marker.ts": {
+    "487a58a6269113d4cbfd31915a9abdbf016e672be9a2af2c6d5d57b087d0b011": 1,
+    "7585ceb4984aa18938280086d1c6a745d0dfeea1b529c5b0ddf4e38d23e964cd": 1
+  },
+  "packages/host/desktop-host/src/legacy-claim-projection.ts": {
+    "173039827a6b504d018203e79f8a726ba7c524b7f55f91e1115405009f52ace5": 1
+  },
+  "packages/host/desktop-host/src/legacy-claim-recovery.ts": {
+    "c5b7f9612ef9e94ebaef19ea788ca6f5f576674b1e701f3db6e4776f25ced401": 1
+  },
+  "packages/host/desktop-host/src/legacy-claim-store.ts": {
+    "7585ceb4984aa18938280086d1c6a745d0dfeea1b529c5b0ddf4e38d23e964cd": 1
+  },
+  "packages/host/desktop-host/src/macos-peer-attestor.ts": {
+    "f2c2503a51ddb0204b0828cfba77c78358b57c8d2e60991747b6503d75506d84": 1,
+    "f54aec5ce83774ae747ff8c080a8d0c424d4af927f40d18ce5cdd1da5c7ce3fa": 1
+  },
+  "packages/host/desktop-host/src/session-command.ts": {
+    "173039827a6b504d018203e79f8a726ba7c524b7f55f91e1115405009f52ace5": 1,
+    "e3b3858336ae260253abe549d2b763f5087ab4e8650f4eb5b323339eff0a6ce4": 1
+  },
+  "packages/host/desktop-host/src/unix-transport.ts": {
+    "17d17bcdb08cae26c2313e58015e3c7d37c407bbd75f52c62746e0b1d9620107": 1,
+    "21441ae53402e461d802c2d503a7a5ed66d34e3b10776fb632f540babaeb23c7": 1
+  },
+  "packages/host/desktop-host/src/windows-authenticode-native.ts": {
+    "f2c2503a51ddb0204b0828cfba77c78358b57c8d2e60991747b6503d75506d84": 1
+  },
+  "packages/host/desktop-host/src/windows-embedding-identity.ts": {
+    "487a58a6269113d4cbfd31915a9abdbf016e672be9a2af2c6d5d57b087d0b011": 1
+  },
+  "packages/host/desktop-host/src/windows-host-client-worker-entry.ts": {
+    "addefd11baca5ad135b1df9d5b1d9f046e7d3fa640b42f5a3e415ddd2a23353d": 1
+  },
+  "packages/host/desktop-host/src/windows-host-journal.ts": {
+    "e3b3858336ae260253abe549d2b763f5087ab4e8650f4eb5b323339eff0a6ce4": 2
+  },
+  "packages/host/desktop-host/src/windows-host-pipe-worker-bridge.ts": {
+    "ebfa56674d7ce18b2d8c11e4bc69bf5993f7aa2770a08e7ea888af56253da6ed": 1
+  },
+  "packages/host/desktop-host/src/windows-host-pipe-worker-entry.ts": {
+    "addefd11baca5ad135b1df9d5b1d9f046e7d3fa640b42f5a3e415ddd2a23353d": 1
+  },
+  "packages/host/desktop-host/src/windows-host-worker-bridge.ts": {
+    "e538f1f3d9dadee6079b7ae4f6063b9106492e8c15c246a30c0c36f44215d593": 1
+  },
+  "packages/host/desktop-host/src/windows-koffi.ts": {
+    "f2c2503a51ddb0204b0828cfba77c78358b57c8d2e60991747b6503d75506d84": 1
+  },
+  "packages/host/desktop-host/src/worker-runtime-response.ts": {
+    "3731644758b2a2bcc522000c131faf6cb3654e9f19e01c27e29dd7a033f2849e": 1
+  },
+  "packages/host/desktop-host/tests/account-access-token.spec.ts": {
+    "c9da2bbd63d402c70f1ef8ac2bc892a22ad9fda0222c548916ee3399b2642ba4": 2
+  },
+  "packages/host/desktop-host/tests/extensions-wire.spec.ts": {
+    "ca2f63e543857b184897cdef4fe85cf018ebf50b47439568b3b5d55b0a2b6da5": 1
+  },
+  "packages/host/desktop-host/tests/macos-default-bindings.spec.ts": {
+    "c148ec23925e54c9bf0e0969b881a154e651bfbeb0d861e564895797eb57fa3a": 1,
+    "f6971702d461d014b5f2daefd896ff1b8360e57e9ada69ebcc6470eec8cef5fe": 1
+  },
+  "packages/host/desktop-host/tests/mcp-loader-composition.spec.ts": {
+    "ca2f63e543857b184897cdef4fe85cf018ebf50b47439568b3b5d55b0a2b6da5": 1
+  },
+  "packages/host/desktop-host/tests/mcp-runtime-ack.spec.ts": {
+    "2628886da0d90f295da042af8fc53e0c9022539182513793f55d72e77bd440a7": 1,
+    "3efc2a850fb8609e5d9a4adc17b419e6d1127e1e3b32e5d1777d0c29600972e3": 1
+  },
+  "packages/host/desktop-host/tests/profile-extension-executor.spec.ts": {
+    "214d9fa5c63ffd6e759942d522cc4f5a9e82afe06bc365a9ba762c7f55c4ec5a": 1,
+    "62f1284a74906d498926abfe9436970f253c229e686cebc909275ac24fadf838": 1,
+    "65e4b98c1de712d42126078ac52be561b0208237ab77cca82557f8cb9b9ba68c": 1,
+    "7b386920e806b68101e982cb61604be8a2faf09ecca9f1787c59c736bea40809": 1,
+    "e2e76e553be9f4dd1b91a69c1daf87cc052f3ea95bf63931dcafe6dd82739eb8": 1
+  },
+  "packages/host/desktop-host/tests/profile-skill-executor.spec.ts": {
+    "5ded30395f3d8174bbbeb8f40492e085b87bd22d2f153dec3f6ec4b21429ac99": 1
+  },
+  "packages/host/desktop-host/tests/profile-worker-process.spec.ts": {
+    "0c5372710adecd9676e9dfe2b1a045ba7030484697143b21a0ded4ed8c15d4be": 1,
+    "15a6475b824ba96f136bbdada8b9e745049d28dcbf099c76f3e0ec8db10932a9": 1,
+    "19953deac3eb733749fafdad26d3073b460cd17cefa72b543fa61dd9c557ccfe": 1,
+    "2b288b0f2cde5f2791caa5dc06c48999c5a5fda66b46ecd9a96c0edda4ec4a05": 1,
+    "7241db2781fe642e975595562a2e29cb65186bb3f85c70926527bf9767b37c41": 1,
+    "981d5e235a7d2a9776808b3e70aa8adbbd14f3b5e00631fdf6e17d4e8d35a6fc": 1,
+    "9c8a2d823c424815c00052c079d903218f6483a500122b84fbdb91fe992cc271": 1,
+    "a130eda5d9ce1facf43cfd0eae7558d3ab0fcefa851a14c93935a737ff5be31b": 1,
+    "c148ec23925e54c9bf0e0969b881a154e651bfbeb0d861e564895797eb57fa3a": 4,
+    "c3971f03c12dfbaa46a76d08cb5a44df2ae3ff03b777fd809cdfa52d971dfec3": 2,
+    "d8b5b62347c0cdf9f687d125882e208c0ead53eca6d639819bb7568faabe1e3f": 1,
+    "e324f01c770b209152a062d647b6d618cab97339459f283bb5c1a526a40d2f9f": 1,
+    "f87258473b42b1e1d9d970b2060e1e99bbeb7b34acd14f497a12ac9904771b3c": 1
+  },
+  "packages/host/desktop-host/tests/remote-session-command.spec.ts": {
+    "9dae0e14badc9fd3ab730b8fadea03f2fc2f973f033e5b50cf746fa109ae51fe": 2
+  },
+  "packages/host/desktop-host/tests/startup-composition.spec.ts": {
+    "5b113b373c06e28f0fd1f8d6fa2e6d62e207a635f64fd018be29ac1af4190722": 1,
+    "7f411fa0c30114e853b2f6219865902ac1b808ab33b4484cbddcd8f8f808f72c": 2
+  },
+  "packages/host/desktop-host/tests/startup-platform.spec.ts": {
+    "44ad47dde99ddc45317f3aa7e1cc5570e7872dbfd244ef8c51f082cfe728bc84": 1,
+    "a973ca70955fca286a9e73b9b50ed77664b7de5b91bc9e480368e537ec21bb91": 1,
+    "b7e51442c87a386eda9328800df5253f0b04e91a591038eb5648ef74b6625cf4": 1
+  },
+  "packages/host/desktop-host/tests/startup-safety.spec.ts": {
+    "3f1553e6a9f43c1d7cea683e4de4f4ab0a82103868e3cdde3ea892fc78e4f1bd": 1,
+    "4abbe9495c7fb38c68bc22b5446f3864d12f4a09e932f782816c69e42b043628": 1
+  },
+  "packages/host/desktop-host/tests/unix-transport-authority-faults.spec.ts": {
+    "68e48ed624d6656661bf61d09a49552259ac2ca2f399ff34a76dad38d7746564": 1,
+    "b304adf4a73322cac3c466e597405111efdc1197db5b121fce07b5055c6a76f9": 1,
+    "c4baa46e2b4ace66ec66dd34ce92fed2e3080773e89b445915f6d34d342ca8b9": 1
+  },
+  "packages/host/desktop-host/tests/unix-transport-client.spec.ts": {
+    "4e649323cce1f2552010e91c2b23602b5b56878ea73e610d17ffbf3fdd59fd85": 2
+  },
+  "packages/host/desktop-host/tests/unix-transport-frame-channel.spec.ts": {
+    "cab35a8f2b6b336c4ba9402153e9b30f67c602cf6194b5354eae193e61d0d046": 1,
+    "f54aec5ce83774ae747ff8c080a8d0c424d4af927f40d18ce5cdd1da5c7ce3fa": 1
+  },
+  "packages/host/desktop-host/tests/unix-transport-server-faults.spec.ts": {
+    "50c500154dc8e72f6a1c19de959c5cfe488033cd6843bff45af44b2b86bac002": 1,
+    "71fa45c63f1d2dc12e6a4da1120a9ca227ef1b1ffbce510cd0d8847d85f278c0": 3,
+    "8997765fe22f4933a2ab7f2e57d58152a1ba0d3fd18b7b8a838cdad73da91506": 2,
+    "d0b71047a9fd70ae336261a10ceca9fa50e40954c121ffb01c98d07c30ee53c1": 1,
+    "dffa253babd099d02517dd7f07a3f1285e500fe9d5fe5217fa2de2770df33f84": 1
+  },
+  "packages/host/desktop-host/tests/windows-peer-attestor.spec.ts": {
+    "f8ec99ad0c09612ad70069e706852288677ea5bcaad1e5fe0936f9098cb070a8": 1
+  },
+  "packages/host/desktop-host/tests/windows-startup.spec.ts": {
+    "a973ca70955fca286a9e73b9b50ed77664b7de5b91bc9e480368e537ec21bb91": 1,
+    "b487af130b8c2e05c411ebd5f922d7007eb7f23a6210c1bf8acdfe188b80ff15": 1
+  },
   "packages/host/directory-picker-auto/tests/loader-composition.spec.ts": {
     "923a65f07e42e49412ff5a8b2f7ff681e37ed1d07bfbf2187b3672b11685edd1": 1
   },
@@ -1702,6 +1878,10 @@
     "971ec45a1146ab52f2fb13f75b782d5d35c0fb2ddba1fb9ccab14cc54f7291d5": 1,
     "ef4116378fb5517f45dfbaaa41578cf75f6ac22149bb0c9c1d4b92ed25803368": 1
   },
+  "packages/session/session-persistence-jsonl/src/migration-export-source.ts": {
+    "5202aa91f1b7e9142d7e469c887c25c176778180940ec6cf2a54be9bf198edc5": 1,
+    "e3b3858336ae260253abe549d2b763f5087ab4e8650f4eb5b323339eff0a6ce4": 1
+  },
   "packages/session/session-persistence-jsonl/src/zstd-private-decoder.ts": {
     "c1cb4d27d38bd746057fb10e2fb032f55d4a5541b9b4a3580876a6e9dd4083cc": 1
   },
@@ -2021,16 +2201,17 @@
     "f5b7ed19aea21153c86ef4e2596f39d1b667b3b8a1d1ba2b2a2a95bf90869b58": 1
   },
   "packages/terminal/terminal-bash/tests/index.spec.ts": {
-    "2878860b606c2614696f97227e4e580a65b1ae1680b6261f233163cd8b838ee0": 1,
+    "1cc6767be26ad3a9a5b6fbbdd037020f0079aa6c46854738bee92ec9e86d9ffd": 1,
     "30c8c859832405858e95a7de1493488b75a9030e3baa8fcaf3647e071bd5bbf1": 1,
+    "396ac796db7410a83bfd955d18982a8ee712ae1749af50bc6c2f2a61af68e300": 1,
+    "3e245cb4a9a09850afc1324924bf20005978604e42173c7af270185bf140a5a1": 1,
     "6d3dc24d166f2c9d373b869b5e9810906741932830e4b7f695014bc121e6ab24": 1,
-    "9112a2d5c1256fa954c76768f4135294dd6a6a4ffd13871fab2e54d90a894e90": 1,
+    "7cfe39848021eb9111835aa0e32fce4cfc3442e5615bdcf0834e3f38ecc3dca0": 1,
     "9890d3018d70b3a93d39d6c12b2a56c3011e77d38cd6b34919e93ba526360c6e": 2,
-    "9f84551b52cab038fe0cb49c70862fcd68d5008c8f32d8f43b8c6bfaea694f66": 1,
-    "ad770543b1406f728aa6a91fc8ede6bf3a6b6a2b76b32870151d77ffd28c6711": 1,
+    "b181f8eea607f31f8e8aa386197680ca911c588a1b0330fca30f9a533bf8fef9": 1,
     "b33f57d0f6305110b507b0caa10a49574fa86ed9fcd41992e6a7b9aec8db9769": 1,
     "b35ecf6f26fe1f37a664a8845e319f31d8e53a954f8fa0b882cbca3bbef70f15": 1,
-    "cd1ee4add9efb17e75b8490177dbe86cb0c4de4d5db404650376de3841be180a": 1
+    "d07b73b324983c167a5dfd9fc7725816b503e7971f5fc970f08c307b61072b0e": 1
   },
   "packages/terminal/terminal-bash/tests/session.spec.ts": {
     "18212835b0bf110a8b3694aa4ddc90a710b10321ee133aeaeaa86c305642a474": 1,

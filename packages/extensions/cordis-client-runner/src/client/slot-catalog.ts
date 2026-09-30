@@ -3877,7 +3877,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
       'client-ui-workspace ArchiveSessionMenuItem id \'archive\'',
     ],
     replaceRisk: 'none',
-    example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    const copyLabel = \'Copy Session ID\' // Localize in the contributing package.\n    ctx.slots.inject(\'sidebar.workspaces.session.menu.item\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.session.menu.item\', id: \'copy-session-id\', order: 500 },\n      ({ sessionId, useMenuOpenState }) => {\n        const [, setMenuOpen] = useMenuOpenState()\n        return React.createElement(\n          \'button\',\n          { type: \'button\', role: \'menuitem\', onClick: () => { setMenuOpen(false); void navigator.clipboard.writeText(sessionId) } },\n          copyLabel,\n        )\n      },\n    ))\n  },\n}',
+    example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    const copyLabel = \'Copy Session ID\' // Localize in the contributing package.\n    ctx.slots.inject(\'sidebar.workspaces.session.menu.item\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.session.menu.item\', id: \'copy-session-id\', order: 500 },\n      ({ sessionId, useMenuOpenState }) => {\n        const [, setMenuOpen] = useMenuOpenState()\n        return React.createElement(\n          \'button\',\n          { type: \'button\', role: \'menuitem\', onClick: () => { setMenuOpen(false); void writeClipboard(sessionId) } },\n          copyLabel,\n        )\n      },\n    ))\n  },\n}',
     source: 'packages/client/ui-workspace/src/client/contract/slots.ts:166',
   },
   {

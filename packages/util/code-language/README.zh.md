@@ -14,6 +14,7 @@ kind: "package-library"
 ## 目录
 
 - [语言选择](#language-selection)
+- [模型体验](#model-experience)
 - [已知限制与暂缓事项](#known-limitations-and-deferred-work)
 - [开发备注](#dev-note)
 
@@ -27,6 +28,15 @@ kind: "package-library"
 该集合按常见源码、配置、脚本、数据与标记扩展名精选，并非完整语言登记表。没有对应 grammar 的扩展名映射到最接近的 grammar（`properties` 映射到 `ini`，该 grammar 自带 `properties` alias）；证书与锁文件扩展名（`pem`、`crt`、`key`、`cer`、`lock`）不列入表。CSV 映射为 `csv`；预览注册表将专用查看器排在 Code 之前，因此 Spreadsheet 仍是它的默认预览。`readLangHintForPath` 在同一张表上做投影：已录制的会话已经持有该后缀的值时返回该持久化短 id，其余后缀返回该语言的短名（`powershell`→`ps1`），无法识别的后缀返回 `undefined`——持久化字段因此只有一种风格，即短名；对 `kotlin`、`swift`、`yaml`、`json` 等语言，短名与 grammar id 相同；而 `tsx`、`tf`、`tfvars`、`gradle` 这些后缀本身的名字更准确，保留其自身名字。消费方若希望 Client 高亮器真正分词，仍取决于该 grammar 已在其中注册——没有加载 grammar 的 id 会按纯文本渲染，而不是报错。
 
 -----
+
+<a id="model-experience"></a>
+## 模型体验
+
+间接影响：read 工具可把文件路径对应的语言提示写入工具结果。
+
+#### KV Cache effect
+
+此表不改变请求前缀；消费方可能在工具结果中包含语言提示。
 
 ## 已知限制与暂缓事项
 

@@ -332,7 +332,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/skill/skill-office
       '@deepseek-ai/dsh-slark-desktop-host':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../packages/host/desktop-host
       '@deepseek-ai/dsh-terminal':
         specifier: workspace:*
@@ -742,7 +742,7 @@ importers:
         specifier: workspace:~
         version: link:../../vendor/group
       '@deepseek-ai/dsh-client-connection':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../packages/client/connection
       '@deepseek-ai/dsh-client-modules':
         specifier: workspace:*
@@ -2357,7 +2357,7 @@ importers:
   packages/bundle/web-app:
     dependencies:
       '@deepseek-ai/dsh-agent-default-model':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../core/agent-default-model
       '@deepseek-ai/dsh-agent-instructions':
         specifier: workspace:*
@@ -2375,7 +2375,7 @@ importers:
         specifier: workspace:*
         version: link:../../api/account-controller
       '@deepseek-ai/dsh-api-gateway':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../api/gateway
       '@deepseek-ai/dsh-api-job-controller':
         specifier: workspace:*
@@ -2495,7 +2495,7 @@ importers:
         specifier: workspace:*
         version: link:../../client/ui-renderer
       '@deepseek-ai/dsh-client-ui-schedule':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../client/ui-schedule
       '@deepseek-ai/dsh-client-ui-session':
         specifier: workspace:*
@@ -2606,7 +2606,7 @@ importers:
         specifier: workspace:*
         version: link:../../context/file-reference-local
       '@deepseek-ai/dsh-host-control-protocol':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../host/control-protocol
       '@deepseek-ai/dsh-host-directory-picker-auto':
         specifier: workspace:*
@@ -2636,7 +2636,7 @@ importers:
         specifier: workspace:*
         version: link:../../util/launch-environment
       '@deepseek-ai/dsh-llm':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../llm/llm
       '@deepseek-ai/dsh-message-feedback':
         specifier: workspace:*
@@ -9007,28 +9007,28 @@ importers:
   packages/host/control-protocol:
     devDependencies:
       '@deepseek-ai/cordis':
-        specifier: workspace:^
+        specifier: workspace:~
         version: link:../../../vendor/cordis
       '@deepseek-ai/dsh-brand':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../util/brand
 
   packages/host/desktop-host:
     dependencies:
       '@deepseek-ai/dsh-app-boot':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../boot/app-boot
       '@deepseek-ai/dsh-brand':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../util/brand
       '@deepseek-ai/dsh-host-control-protocol':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../control-protocol
       '@deepseek-ai/dsh-session':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../core/session
       '@deepseek-ai/dsh-session-persistence-jsonl':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../session/session-persistence-jsonl
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery
@@ -9044,22 +9044,22 @@ importers:
         version: 2.9.0
     devDependencies:
       '@deepseek-ai/cordis':
-        specifier: workspace:^
+        specifier: workspace:~
         version: link:../../../vendor/cordis
       '@deepseek-ai/dsh-api-session-controller':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../api/session-controller
       '@deepseek-ai/dsh-llm':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../llm/llm
       '@deepseek-ai/dsh-skill':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../skill/skill
       '@deepseek-ai/dsh-skill-filesystem':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../skill/skill-filesystem
       '@deepseek-ai/dsh-tools':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../core/tools
       '@types/adm-zip':
         specifier: 0.5.7
@@ -11022,7 +11022,7 @@ importers:
   packages/session/session-persistence-jsonl:
     dependencies:
       '@deepseek-ai/dsh-host-control-protocol':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../host/control-protocol
       '@deepseek-ai/dsh-llm':
         specifier: workspace:*
@@ -11034,7 +11034,7 @@ importers:
         specifier: workspace:*
         version: link:../session-format-catalog
       '@deepseek-ai/dsh-session-format-v2-to-v3':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../session-format-v2-to-v3
       '@deepseek-ai/dsh-session-format-v3-to-v4':
         specifier: workspace:*

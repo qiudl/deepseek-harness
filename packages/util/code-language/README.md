@@ -14,6 +14,7 @@ The repository's one file-extension to syntax-highlighting language table, share
 ## Table of Contents
 
 - [Language selection](#language-selection)
+- [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
 
@@ -27,6 +28,15 @@ The table lives in [`src/index.ts`](src/index.ts). Each key is a canonical langu
 The set is curated for common source, config, script, data, and markup extensions rather than mirroring a full language registry. Extensions with no matching grammar map to the nearest one (`properties` to `ini`, whose registration carries the `properties` alias); certificate and lock extensions (`pem`, `crt`, `key`, `cer`, `lock`) stay unlisted. CSV maps to `csv`; preview registries place specialized viewers before Code so Spreadsheet remains its default preview. `readLangHintForPath` is a projection over this table: a suffix whose value a recorded session already holds returns that persisted short id, any other suffix returns its language's short name (`powershell` to `ps1`), and an unrecognized suffix returns `undefined` — so the persisted field holds one style, a short name; for `kotlin`, `swift`, `yaml`, `json`, and similar that name is also the grammar id, and the suffixes whose own name is the better label (`tsx`, `tf`, `tfvars`, `gradle`) keep it. A consumer that needs the Client highlighter to actually tokenize a language still depends on that grammar being registered there — an id without a loaded grammar renders as plain text rather than failing.
 
 -----
+
+<a id="model-experience"></a>
+## Model Experience
+
+Indirectly, through the read tool that renders a language hint for a file path.
+
+#### KV Cache effect
+
+The table does not change the request prefix; a consumer may include its hint in a tool result.
 
 ## Known Limitations and Deferred Work
 

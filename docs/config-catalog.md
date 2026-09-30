@@ -184,7 +184,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-api-gateway`
 
 - `inject`: `typert`
-- `source`: [`packages/api/gateway/src/index.ts:145`](../packages/api/gateway/src/index.ts)
+- `source`: [`packages/api/gateway/src/index.ts:148`](../packages/api/gateway/src/index.ts)
 
 ```ts config-catalog
 /** Gateway transport configuration. */
@@ -221,8 +221,8 @@ export interface Config {
 
 ## `@deepseek-ai/dsh-api-session-controller`
 
-- `inject`: `agentDefaultModel` · `agents` · `attachments` · `fileUploads` · `fs` · `llm` · `sessions` · `sessionProjections` · `sessionQuery` · `typert` · `workspaceRegistry`
-- `source`: [`packages/api/session-controller/src/index.ts:79`](../packages/api/session-controller/src/index.ts)
+- `inject`: `agentDefaultModel` · `agents` · `attachments` · `connection` · `fileUploads` · `fs` · `llm` · `sessions` · `sessionProjections` · `sessionQuery` · `typert` · `workspaceRegistry`
+- `source`: [`packages/api/session-controller/src/index.ts:82`](../packages/api/session-controller/src/index.ts)
 
 ```ts config-catalog
 /** Session Controller deployment policy. */
@@ -4098,7 +4098,7 @@ export interface WebRuntimeConfig {
 ## `@deepseek-ai/dsh-web-app`
 
 - `inject`: `webServer`
-- `source`: [`packages/bundle/web-app/src/index.ts:44`](../packages/bundle/web-app/src/index.ts)
+- `source`: [`packages/bundle/web-app/src/index.ts:49`](../packages/bundle/web-app/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config: composed deployment settings plus per-invocation command-line values. */
@@ -4463,6 +4463,7 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 | `@deepseek-ai/dsh-experimental-webworker-runtime` | — | [`packages/experimental/webworker-runtime/src/index.ts`](../packages/experimental/webworker-runtime/src/index.ts) |
 | `@deepseek-ai/dsh-home-paths` | — | [`packages/util/home-paths/src/index.ts`](../packages/util/home-paths/src/index.ts) |
 | `@deepseek-ai/dsh-hook-protocol` | — | [`packages/hooks/hook-protocol/src/index.ts`](../packages/hooks/hook-protocol/src/index.ts) |
+| `@deepseek-ai/dsh-host-control-protocol` | — | [`packages/host/control-protocol/src/index.ts`](../packages/host/control-protocol/src/index.ts) |
 | `@deepseek-ai/dsh-http-proxy` | — | [`packages/util/http-proxy/src/index.ts`](../packages/util/http-proxy/src/index.ts) |
 | `@deepseek-ai/dsh-launch-environment` | — | [`packages/util/launch-environment/src/index.ts`](../packages/util/launch-environment/src/index.ts) |
 | `@deepseek-ai/dsh-lazy-require` | — | [`packages/util/lazy-require/src/index.ts`](../packages/util/lazy-require/src/index.ts) |
@@ -4487,6 +4488,7 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 | `@deepseek-ai/dsh-session-snapshot` | — | [`packages/test-support/session-snapshot/src/index.ts`](../packages/test-support/session-snapshot/src/index.ts) |
 | `@deepseek-ai/dsh-session-telemetry` | — | [`packages/session/session-telemetry/src/index.ts`](../packages/session/session-telemetry/src/index.ts) |
 | `@deepseek-ai/dsh-session-title-llm` | — | [`packages/session/session-title-llm/src/index.ts`](../packages/session/session-title-llm/src/index.ts) |
+| `@deepseek-ai/dsh-slark-desktop-host` | — | [`packages/host/desktop-host/src/index.ts`](../packages/host/desktop-host/src/index.ts) |
 | `@deepseek-ai/dsh-subagent-in-process-driver` | — | [`packages/subagent/subagent-in-process-driver/src/index.ts`](../packages/subagent/subagent-in-process-driver/src/index.ts) |
 | `@deepseek-ai/dsh-timeout` | — | [`packages/util/timeout/src/index.ts`](../packages/util/timeout/src/index.ts) |
 | `@deepseek-ai/dsh-typert-generator` | — | [`packages/typert/generator/src/index.ts`](../packages/typert/generator/src/index.ts) |

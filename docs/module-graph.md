@@ -283,6 +283,7 @@ flowchart TD
     pkg_tool_call_timeout_policy["tool-call-timeout-policy"]
   end
   subgraph group_host["packages/host"]
+    pkg_host_control_protocol["host-control-protocol"]
     pkg_host_directory_picker["host-directory-picker"]
     pkg_host_directory_picker_auto["host-directory-picker-auto"]
     pkg_host_directory_picker_browse["host-directory-picker-browse"]
@@ -292,6 +293,7 @@ flowchart TD
     pkg_host_plugin_inventory["host-plugin-inventory"]
     pkg_host_product_telemetry_otel["host-product-telemetry-otel"]
     pkg_host_webserver["host-webserver"]
+    pkg_slark_desktop_host["slark-desktop-host"]
   end
   subgraph group_identity["packages/identity"]
     pkg_anonymous_user_id["anonymous-user-id"]
@@ -441,6 +443,7 @@ flowchart TD
   pkg_credentials --> pkg_invariants
   pkg_experimental_inspector --> pkg_client_modules
   pkg_experimental_inspector --> pkg_host_webserver
+  pkg_host_control_protocol --> pkg_brand
   pkg_host_directory_picker_auto --> pkg_client_ui_directory_picker_browse
   pkg_host_directory_picker_auto --> pkg_client_ui_directory_picker_native
   pkg_host_directory_picker_auto --> pkg_host_directory_picker_browse
@@ -1475,6 +1478,7 @@ flowchart TD
 | [`host-directory-picker-native`](../packages/host/directory-picker-native) | `host` | — |
 | [`host-open-in-app`](../packages/host/open-in-app) | `host` | — |
 | [`host-webserver`](../packages/host/webserver) | `host` | — |
+| [`slark-desktop-host`](../packages/host/desktop-host) | `host` | — |
 | [`invariants`](../packages/runtime-diagnostics/invariants) | `runtime-diagnostics` | — |
 | [`session-format`](../packages/session/session-format) | `session` | — |
 | [`session-format-v0-to-v1`](../packages/session/session-format-v0-to-v1) | `session` | — |
@@ -1494,6 +1498,7 @@ flowchart TD
 | [`computer-use`](../packages/computer-use/computer-use) | `computer-use` | [`brand`](../packages/util/brand) |
 | [`credentials`](../packages/credentials/credentials) | `credentials` | [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`experimental-inspector`](../packages/experimental/inspector) | `experimental` | [`client-modules`](../packages/client/modules), [`host-webserver`](../packages/host/webserver) |
+| [`host-control-protocol`](../packages/host/control-protocol) | `host` | [`brand`](../packages/util/brand) |
 | [`host-directory-picker-auto`](../packages/host/directory-picker-auto) | `host` | [`client-ui-directory-picker-browse`](../packages/client/ui-directory-picker-browse), [`client-ui-directory-picker-native`](../packages/client/ui-directory-picker-native), [`host-directory-picker-browse`](../packages/host/directory-picker-browse), [`host-directory-picker-native`](../packages/host/directory-picker-native), [`host-webserver`](../packages/host/webserver) |
 | [`anonymous-user-id`](../packages/identity/anonymous-user-id) | `identity` | [`brand`](../packages/util/brand), [`home-paths`](../packages/util/home-paths) |
 | [`lsp`](../packages/lsp/lsp) | `lsp` | [`brand`](../packages/util/brand), [`llm`](../packages/llm/llm) |
