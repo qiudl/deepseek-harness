@@ -1,8 +1,9 @@
+import { migrationOwnerStateObject as object } from './migration-owner-state-validation.ts'
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseDocument } from 'yaml'
-import { migrationOwnerStateRecords, type MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
+import { migrationOwnerStateRecords, type MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import type { AppliedMigrationOwnerState } from './migration-owner-state-applicator.ts'
 
 async function readOwnerYaml(path: string, uid: number): Promise<unknown> {
@@ -23,12 +24,6 @@ async function readOwnerYaml(path: string, uid: number): Promise<unknown> {
   } finally { await handle.close() }
 }
 
-function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('migration_owner_state_invalid')
-  }
-  return value as Record<string, unknown>
-}
 
 /** Quiesced schema-owner view over one active, mutable materialized generation. */
 export class MaterializedMigrationOwnerStateSource {

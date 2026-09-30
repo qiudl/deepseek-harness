@@ -283,6 +283,17 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the disposer that clears the factory slot. The exact Cordis effect disposer (single-shot): composite (generator) effects may yield it directly — exact identity nests the teardown in order.',
       },
       {
+        signature: 'registerScopeProvider(id: SessionScopeProviderId, provider: SessionScopeProvider): () => void',
+        description: 'Register one plugin-owned durable session-scope namespace.',
+        parameters: [{ name: 'id', description: 'provider-owned namespace identity; duplicate registration is rejected.' }, { name: 'provider', description: 'the provider that admits sessions within this namespace.' }],
+        returns: 'the effect disposer that removes this exact provider registration.',
+      },
+      {
+        signature: 'async admitSessionScope( scope: SessionScopeRef | undefined, agentCtx: Context, signal: AbortSignal, ): Promise<void>',
+        description: 'Fail-closed execution admission for a persisted scope. The exact provider must remain registered for the whole await.',
+        parameters: [{ name: 'scope', description: 'persisted provider reference, or undefined for an unscoped session.' }, { name: 'agentCtx', description: 'unpublished agent context owned by the creation transaction.' }, { name: 'signal', description: 'cancellation signal supplied to the scope provider.' }],
+      },
+      {
         signature: 'async create(options: CreateAgentOptions): Promise<AgentHandle>',
         description: 'Create and publish a new agent through the registered factory. Distinct from register (which records an already-constructed agent): this constructs the agent and its session. Rejects if no factory is registered or creation/setup fails. The resolved AgentHandle lets the owner tear down exactly this agent.',
         parameters: [{ name: 'options', description: 'shared identity, session seed/metadata, and agent options.' }],
@@ -3792,7 +3803,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CreateAgentOptions',
-    declaration: 'export interface CreateAgentOptions {\n    readonly sessionId: SessionId;\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly seedLength?: number;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n    };\n    readonly seed?: readonly SessionEvent[];\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
+    declaration: 'export interface CreateAgentOptions {\n    readonly sessionId: SessionId;\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly seedLength?: number;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n        readonly scope?: SessionScopeRef;\n    };\n    readonly seed?: readonly SessionEvent[];\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
   },
   {
     name: 'CreateGoalRequest',
@@ -3804,7 +3815,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CreateSessionOptions',
-    declaration: 'export interface CreateSessionOptions {\n    readonly seed?: readonly SessionEvent[];\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly createdAt?: number;\n        readonly seedLength?: number;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n    };\n}',
+    declaration: 'export interface CreateSessionOptions {\n    readonly seed?: readonly SessionEvent[];\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly createdAt?: number;\n        readonly seedLength?: number;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n        readonly scope?: SessionScopeRef;\n    };\n}',
   },
   {
     name: 'CreateTeamTaskRequest',
@@ -4884,7 +4895,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionHeader',
-    declaration: 'export interface SessionHeader {\n    readonly version: number;\n    readonly id: SessionId;\n    readonly createdAt: number;\n    readonly cwd?: string;\n    readonly parentSession?: SessionId;\n    readonly seedLength?: number;\n    readonly origin?: \'subagent\';\n    readonly delegationDepth?: number;\n    readonly agentPreset?: string;\n}',
+    declaration: 'export interface SessionHeader {\n    readonly version: number;\n    readonly id: SessionId;\n    readonly createdAt: number;\n    readonly cwd?: string;\n    readonly parentSession?: SessionId;\n    readonly seedLength?: number;\n    readonly origin?: \'subagent\';\n    readonly delegationDepth?: number;\n    readonly agentPreset?: string;\n    readonly scope?: SessionScopeRef;\n}',
   },
   {
     name: 'SessionHistoryRecord',
@@ -5045,6 +5056,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionResultRange',
     declaration: 'export interface SessionResultRange {\n    from?: number;\n    to?: number;\n}',
+  },
+  {
+    name: 'SessionScopeProvider',
+    declaration: 'export interface SessionScopeProvider {\n    admit(scope: SessionScopeRef, agentCtx: Context, signal: AbortSignal): Promise<void> | void;\n}',
+  },
+  {
+    name: 'SessionScopeProviderId',
+    declaration: 'export type SessionScopeProviderId = Branded<\'SessionScopeProviderId\'>;',
+  },
+  {
+    name: 'SessionScopeRef',
+    declaration: 'export interface SessionScopeRef {\n    readonly provider: SessionScopeProviderId;\n    readonly ref: SessionScopeReference;\n    readonly schemaVersion: number;\n}',
+  },
+  {
+    name: 'SessionScopeReference',
+    declaration: 'export type SessionScopeReference = Branded<\'SessionScopeReference\'>;',
   },
   {
     name: 'SessionSearchCursor',

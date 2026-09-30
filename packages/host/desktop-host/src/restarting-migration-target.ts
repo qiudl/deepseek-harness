@@ -1,10 +1,10 @@
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type {
   MigrationImportTarget,
-} from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
+} from '@deepseek-ai/dsh-session-persistence-jsonl'
 import type {
   MigrationOwnerStateBundle,
-} from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
+} from '@deepseek-ai/dsh-session-persistence-jsonl'
 
 /** Adds worker cutover and compensating active-generation rollback around a durable migration target. */
 export class RestartingMigrationTarget implements MigrationImportTarget {

@@ -7,8 +7,8 @@ import {
   JsonlMigrationExportService,
   type MigrationOwnerStateBundle,
   type MigrationOwnerTransferBundle,
-} from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
-import { FileJsonlMigrationExportSource } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export-source.ts'
+} from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { FileJsonlMigrationExportSource } from '@deepseek-ai/dsh-session-persistence-jsonl'
 
 const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 const REF = /^[A-Za-z_][A-Za-z0-9_]*$/u

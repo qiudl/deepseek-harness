@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { matchesGlob, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const root = resolve(import.meta.dirname, '..')
@@ -30,8 +30,9 @@ describe('Desktop runtime package imports', () => {
     ) as { exports?: Record<string, { default?: string }>; files?: string[] }
     expect(manifest.exports?.['./errors']?.default).toBe('./lib/types/errors.js')
     expect(manifest.exports?.['./revision']?.default).toBe('./lib/types/revision.js')
-    expect(manifest.files).toContain('lib/types/errors.js')
-    expect(manifest.files).toContain('lib/types/revision.js')
+    for (const entrypoint of ['lib/types/errors.js', 'lib/types/revision.js']) {
+      expect(manifest.files?.some(pattern => matchesGlob(entrypoint, pattern))).toBe(true)
+    }
 
     const format = readFileSync(
       resolve(root, 'packages/session/session-persistence-jsonl/src/format.ts'),

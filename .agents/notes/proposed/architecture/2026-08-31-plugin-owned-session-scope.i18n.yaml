@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-31-plugin-owned-session-scope.md
-2026-08-31-plugin-owned-session-scope.md: 32f756e33300ac22c135cc5ed65a184252bdcb0a
-2026-08-31-plugin-owned-session-scope.zh.md: a8d8d7faed206411d9b60444f1db600768bfe722
+2026-08-31-plugin-owned-session-scope.md: 392209059f163ff056a72a8c1e79f4a36ffdc510
+2026-08-31-plugin-owned-session-scope.zh.md: 08a3ab1361b55d3691f2c3bbe088dd4f1afa9d95

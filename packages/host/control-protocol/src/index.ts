@@ -12,7 +12,7 @@ export {
   encodeHostInspectSignaturePayload,
 } from './codec.ts'
 export type { HostControlProtocolFailure } from './codec.ts'
-export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.ts'
+export { canonicalMigrationJson, canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.ts'
 export type { CanonicalMigrationRecord } from './migration-canonical.ts'
 export type {
   HostControlCapability,

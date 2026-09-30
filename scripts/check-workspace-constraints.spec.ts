@@ -1,9 +1,12 @@
 /** Experimental-package publication and dependency constraints. */
 
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   checkExperimentalDependencyIsolation,
   checkExperimentalManifest,
+  checkWorkspaceManifest,
+  type PackageManifest,
   expectedDshPackageFiles,
   type WorkspaceManifest,
 } from './check-workspace-constraints.ts'
@@ -87,5 +90,44 @@ describe('package payload constraints', () => {
       'cordis.patch.yml',
       'lib/types/**/*.d.ts',
     ])
+  })
+})
+
+
+describe('Host client publication', () => {
+  it('ships the declared independent Host control client', () => {
+    expect(expectedDshPackageFiles({
+      name: '@deepseek-ai/dsh-desktop-host',
+      exports: { './client': { default: './lib/host-control-client.js' } },
+    })).toContain('lib/host-control-client.js')
+  })
+
+  it('does not accept an unknown client artifact', () => {
+    expect(expectedDshPackageFiles({
+      name: '@deepseek-ai/dsh-desktop-host',
+      exports: { './client': { default: './lib/unowned-client.js' } },
+    })).not.toContain('lib/unowned-client.js')
+  })
+})
+
+
+describe('Host client exact payload validation', () => {
+  const dir = 'packages/host/desktop-host'
+  const manifest = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8')) as PackageManifest
+
+  it('accepts the current declared payload', () => {
+    expect(checkWorkspaceManifest({ dir, manifest })).toEqual([])
+  })
+
+  it('rejects omission of the standalone client', () => {
+    const files = manifest.files!.filter(file => file !== 'lib/host-control-client.js')
+    expect(checkWorkspaceManifest({ dir, manifest: { ...manifest, files } }))
+      .toContainEqual(expect.stringContaining('package.json files must be'))
+  })
+
+  it('rejects extra unowned runtime files', () => {
+    const files = [...manifest.files!, 'lib/unowned-client.js']
+    expect(checkWorkspaceManifest({ dir, manifest: { ...manifest, files } }))
+      .toContainEqual(expect.stringContaining('package.json files must be'))
   })
 })

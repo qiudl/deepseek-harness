@@ -36,6 +36,10 @@ Round 4 found four Account-authority defects: token expiry could precede issuanc
 
 Round 5 found two reliability defects: direct parser callers had no keyring byte bound, and the startup subpath lacked a source alias even though the bundle patch loads it. The parser owns the same 16 KiB limit as startup, and `tsconfig.base.json` maps the startup export to source. Round 6 found no new defect in token validation, key pinning, rolling compatibility, authorization order, error mapping, or credential retention.
 
+The Desktop broker imports `@deepseek-ai/dsh-desktop-host/client` from the standalone `lib/host-control-client.js` bundle. The published payload includes that declared artifact independently of the Host startup bundle; the package-file constraint accepts this exact client path and retains rejection of undeclared payload files.
+
+Host declaration files reference the protocol and JSONL migration types through their dependency packages’ public entry points. Consumers therefore resolve published declarations under NodeNext without compiling dependency source files or enabling TypeScript source-extension imports.
+
 ## Alternatives considered
 
 **Reuse the SDK JSON-RPC carrier.** It is an agent-runtime stdio protocol that skips malformed lines and does not own installation identity, so it cannot enforce connection-fatal local supervisor authentication.

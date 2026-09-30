@@ -1070,3 +1070,29 @@ Types: [Scoped](scope.md)
 
 Source: [`packages/core/session/src/index.ts`](../../packages/core/session/src/index.ts)
 <!-- END GENERATED cordis-surface -->
+## Durable session scope
+
+The provider interprets the opaque reference and owns its authorization and lifecycle semantics. Core preserves the scope record without interpreting it.
+
+```ts type-equiv
+/** Identifies the plugin-owned namespace that can interpret a session scope reference. */
+type SessionScopeProviderId = Branded<'SessionScopeProviderId'>
+```
+
+```ts type-equiv
+/** An opaque, provider-owned reference within one session scope namespace. */
+type SessionScopeReference = Branded<'SessionScopeReference'>
+```
+
+```ts type-equiv
+/**
+ * Durable, provider-neutral routing metadata for one session. Core preserves
+ * this value but never interprets `ref`; the named plugin provider owns its
+ * authorization and lifecycle semantics.
+ */
+interface SessionScopeRef {
+  readonly provider: SessionScopeProviderId
+  readonly ref: SessionScopeReference
+  readonly schemaVersion: number
+}
+```

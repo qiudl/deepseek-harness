@@ -1,22 +1,17 @@
+import { migrationOwnerStateObject as object } from './migration-owner-state-validation.ts'
 import { createHash, randomBytes } from 'node:crypto'
 import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import {
   migrationOwnerStateRecords,
   type MigrationOwnerStateBundle,
-} from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
+} from '@deepseek-ai/dsh-session-persistence-jsonl'
 
 async function syncDirectory(path: string): Promise<void> {
   const handle = await open(path, 'r')
   try { await handle.sync() } finally { await handle.close() }
 }
 
-function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('migration_owner_state_invalid')
-  }
-  return value as Record<string, unknown>
-}
 
 /** Paths consumed by the settings and credentials schema owners for one active generation. */
 export interface AppliedMigrationOwnerState {

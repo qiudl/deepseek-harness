@@ -238,6 +238,10 @@ export const EVENT_WALK_EXEMPTIONS: Record<string, string> = {
  */
 export const LINK_MAP: Readonly<Record<string, string>> = {
   Agent: 'core.md',
+  SessionScopeProvider: 'core.md',
+  SessionScopeProviderId: 'session.md',
+  SessionScopeReference: 'session.md',
+  SessionScopeRef: 'session.md',
   AgentCancelCause: 'core.md',
   AgentFactory: 'core.md',
   AgentHandle: 'core.md',

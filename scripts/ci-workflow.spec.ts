@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 
@@ -8,6 +9,64 @@ const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{
 const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
+  it('bounds fork GitHub replay concurrency without changing other runner limits', () => {
+    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-24-consumers')
+    if (!isRecord(job.env)) throw new TypeError('consumer job must define concurrency settings')
+    for (const repository of ['qiudl/deepseek-harness', 'deepseek-ai/deepseek-harness']) {
+      for (const mode of ['', 'github', 'selfhosted']) {
+        for (const author of ['qiudl', 'dependabot[bot]']) {
+          const forkGitHub = repository === 'qiudl/deepseek-harness' && mode === 'github'
+          const defaults = {
+            DSH_GATE_CONCURRENCY: '10',
+            DSH_WEB_SNAPSHOT_WORKERS: '6',
+            DSH_SNAPSHOT_MAX_CONCURRENCY: mode === 'selfhosted' && author !== 'dependabot[bot]' ? '12' : '32',
+          }
+          for (const [key, fallback] of Object.entries(defaults)) {
+            const expression = job.env[key]
+            if (typeof expression !== 'string') throw new TypeError(`${key} must define a string expression`)
+            const actual: unknown = runInNewContext(expression.trim().slice(3, -2), {
+              github: { repository, event: { pull_request: { user: { login: author } } } },
+              vars: { DSH_CI_FAILOVER_LINUX: mode },
+            })
+            expect(actual, `${repository}/${mode}/${author}/${key}`).toBe(forkGitHub ? '2' : fallback)
+          }
+        }
+      }
+    }
+  })
+
+  it('routes explicit fork GitHub failover while retaining upstream and self-hosted pools', () => {
+    const workflow = loadWorkflow('.github/workflows/ci.yml')
+    const linux = ['node-24', 'node-24-coverage', 'node-24-consumers', 'all-checks-passed']
+    const windows = ['windows-build', 'windows-coverage', 'windows-native-tests', 'windows-observational']
+    for (const jobName of [...linux, ...windows]) {
+      const job = workflowJob(workflow, jobName)
+      const selector = job['runs-on']
+      if (typeof selector !== 'string') throw new TypeError(`${jobName} must define a runner expression`)
+      const isWindows = windows.includes(jobName)
+      const defaultPool = isWindows ? 'dsh-windows-2025-16core'
+        : jobName === 'all-checks-passed' ? 'ubuntu-latest' : 'dsh-ubuntu-24-04-16core'
+      for (const repository of ['qiudl/deepseek-harness', 'deepseek-ai/deepseek-harness']) {
+        for (const mode of ['', 'github', 'selfhosted']) {
+          for (const author of ['qiudl', 'dependabot[bot]']) {
+            // Evaluate the trusted YAML's actual boolean selector with GitHub's string/array values.
+            const actual: unknown = runInNewContext(selector.trim().slice(3, -2), {
+              github: { repository, event: { pull_request: { user: { login: author } } } },
+              vars: { DSH_CI_FAILOVER_LINUX: mode, DSH_CI_FAILOVER_WINDOWS: mode },
+              fromJSON: JSON.parse,
+            }, { timeout: 100 })
+            const expected = repository === 'qiudl/deepseek-harness' && mode === 'github'
+              ? isWindows ? 'windows-2025' : 'ubuntu-24.04'
+              : mode === 'selfhosted' && author !== 'dependabot[bot]'
+                ? isWindows ? ['self-hosted', 'dsh-win-ci', 'windows'] : ['self-hosted', 'linux', 'x64', 'vm-backup']
+                : defaultPool
+            expect(actual, `${jobName}: ${repository}/${mode}/${author}`).toEqual(expected)
+          }
+        }
+      }
+    }
+  })
+
   it('isolates every pnpm action setup destination per runner', () => {
     const files = ['.github/workflows/ci.yml', '.github/workflows/ci-master.yml']
     const setups: Array<{ jobName: string; step: unknown }> = []
@@ -569,13 +628,12 @@ describe('Issue lifecycle workflow', () => {
     const lifecycleJob = workflowJob(lifecycle, 'lifecycle')
     if (!Array.isArray(lifecycleJob.steps)) throw new TypeError('Issue lifecycle job must define steps')
 
-    // The job has no job-level `if`, so it is listed on every pull_request /
-    // pull_request_review event and reports success instead of a gray skip. The
+    // The upstream job excludes the ai-proj-governed Slark fork. Its
     // write-capable steps are gated at step level so approved/commented reviews
     // never mint a Project/Issue App token nor touch the board.
     expect(lifecycle.on).toHaveProperty('pull_request')
     expect(lifecycle.on).toHaveProperty('pull_request_review')
-    expect(lifecycleJob.if).toBeUndefined()
+    expect(lifecycleJob.if).toBe("github.repository != 'qiudl/deepseek-harness'")
     // Keep the subscription-type gates: issue-lifecycle does not re-subscribe
     // ready_for_review (issue-policy owns that) and only reacts to submitted
     // review events.

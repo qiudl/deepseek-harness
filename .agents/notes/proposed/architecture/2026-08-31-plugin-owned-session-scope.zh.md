@@ -1,6 +1,6 @@
-# Agent Note：插件拥有的持久 Session Scope
+# Agent Note: 插件拥有的持久 Session Scope
 
-状态：提议
+Status: proposed
 
 [English](2026-08-31-plugin-owned-session-scope.md) | 中文
 
@@ -17,6 +17,12 @@
 核心只拥有持久传输、Provider 注册、生命周期顺序与失败关闭。Provider 插件拥有引用解释、授权、远程调用、作用域工具/提示词组合以及兼容策略。方案不引入环境式“当前账号”或 Host 全局可变身份。
 
 SQLite 的 Session 元数据按列存储，因此物理 schema 从 19 提升为 20，避免旧二进制静默丢弃新字段。事件行 codec 与 Session 日志格式不变；预发布 `SESSION_FORMAT_VERSION` 仍保持 0。
+
+## 考虑过的替代方案
+
+**仅保存在进程中的身份。** 恢复会丢失仅保存在内存中的身份，因此准入不能依赖它。
+
+**核心内的产品专属身份。** 核心内的账号、租户或员工字段会排斥其他提供方，并违反插件架构。
 
 ## 验收标准
 

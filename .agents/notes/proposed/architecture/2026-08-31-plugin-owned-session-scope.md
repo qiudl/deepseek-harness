@@ -18,6 +18,12 @@ Core owns only durable transport, provider registration, lifecycle ordering, and
 
 SQLite advances its physical schema from 19 to 20 because its Session metadata is columnar and older binaries must not silently discard the new field. The event-row codec and session log format remain unchanged; the pre-release `SESSION_FORMAT_VERSION` remains 0.
 
+## Alternatives considered
+
+**Process-only identity.** Resume loses identity held only in memory, so admission cannot rely on it.
+
+**Product-specific core identity.** Account, tenant, or employee fields in core exclude other providers and violate the plugin architecture.
+
 ## Acceptance criteria
 
 - Scope metadata is lossless JSON, immutable after creation, preserved by JSONL and SQLite, and inherited by fork.
