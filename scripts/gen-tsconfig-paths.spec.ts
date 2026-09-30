@@ -13,6 +13,20 @@ import {
 const root = resolve(import.meta.dirname, '..')
 
 describe('generated tsconfig package aliases', () => {
+  it('keeps public session subpaths on the source module identities', async () => {
+    const [ranges, sourceRanges, errors, sourceErrors, revision, sourceRevision] = await Promise.all([
+      import('@deepseek-ai/dsh-session/seq-ranges'),
+      import('../packages/core/session/src/seq-ranges.ts'),
+      import('@deepseek-ai/dsh-session-persistence/errors'),
+      import('../packages/session/session-persistence/src/errors.ts'),
+      import('@deepseek-ai/dsh-session-persistence/revision'),
+      import('../packages/session/session-persistence/src/revision.ts'),
+    ])
+    expect(ranges.encodeSeqRanges).toBe(sourceRanges.encodeSeqRanges)
+    expect(errors.SessionFormatUnsupportedError).toBe(sourceErrors.SessionFormatUnsupportedError)
+    expect(revision.SessionPersistenceRevision).toBe(sourceRevision.SessionPersistenceRevision)
+  })
+
   it('maps each package to its own source directory', () => {
     const aliases = collectPackageAliases()
     expect(aliases.length).toBeGreaterThan(100)
