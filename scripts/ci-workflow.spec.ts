@@ -14,6 +14,20 @@ const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{
 const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
+  it.each(['node-24', 'node-24-coverage', 'node-24-consumers'])(
+    '%s uses available GitHub runners for the Slark fork without changing upstream defaults', (name) => {
+      const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), name)
+      const evaluate = (repository: string, mode: string) => evaluateRunsOn(job['runs-on'], {
+        vars: { DSH_CI_FAILOVER_LINUX: mode },
+        github: { repository },
+      })
+      expect(evaluate('qiudl/deepseek-harness', 'github')).toBe('ubuntu-24.04')
+      expect(evaluate('deepseek-ai/deepseek-harness', 'github')).toBe('dsh-ubuntu-24-04-16core')
+      expect(evaluate('another/fork', 'github')).toBe('dsh-ubuntu-24-04-16core')
+      expect(evaluate('qiudl/deepseek-harness', '')).toBe('dsh-ubuntu-24-04-16core')
+    },
+  )
+
   it('prepares confinement before Node compatibility smokes', () => {
     const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-compat')
     if (!Array.isArray(job.steps)) throw new TypeError('Node compatibility job must define steps')
