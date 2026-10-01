@@ -186,6 +186,28 @@ export class TypertGatewayService extends Service implements TypertGateway {
   private remoteEvents: RegisteredRemoteEventSource | undefined
   private readonly remoteEventClients = new Map<RemoteEventClientId, RemoteEventClient>()
   private readonly pendingRemoteEvents = new Map<RemoteEventId, PendingRemoteEvent>()
+  private browserAdmission: {
+    readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined
+    readonly eventResult: (sessionId: string) => (() => void) | undefined
+    readonly localControlStatus?: (sessionId: string) => unknown
+    readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown
+  } | undefined
+
+  /**
+   * Install one Profile-owned browser admission policy for this Gateway generation.
+   * @param admission - callbacks that hold a browser write through settlement.
+   * @returns disposer removing this exact policy.
+   */
+  registerBrowserAdmission(admission: {
+    readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined
+    readonly eventResult: (sessionId: string) => (() => void) | undefined
+    readonly localControlStatus?: (sessionId: string) => unknown
+    readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown
+  }): () => void {
+    if (this.browserAdmission) throw new Error('typert gateway: browser admission already registered')
+    this.browserAdmission = admission
+    return () => { if (this.browserAdmission === admission) this.browserAdmission = undefined }
+  }
 
   /**
    * Register the Gateway against the active Typert registry.
@@ -269,16 +291,19 @@ export class TypertGatewayService extends Service implements TypertGateway {
   /**
    * Settle one forwarded waterfall event without routing through the browser RPC carrier.
    * @param result - The forwarded event result to settle.
+   * @param source - trusted direct Host call or authenticated browser RPC.
    */
-  respondRemoteEvent(result: RemoteEventResult): void {
+  respondRemoteEvent(result: RemoteEventResult, source: 'host' | 'browser' = 'host'): void {
     const parsed = parseRemoteEventResult(result)
     const client = this.remoteEventClients.get(parsed.clientId)
     if (client === undefined) throw new Error('typert gateway: Remote event result identifies no active event stream')
-    this.receiveRemoteEventResult(client, parsed)
+    this.receiveRemoteEventResult(client, parsed, source)
   }
 
   private claimsEndpoint(endpoint: string): boolean {
     if (endpoint === REMOTE_EVENT_RESULT_ENDPOINT) return true
+    if ((endpoint === 'session/localControlStatus' || endpoint === 'session/localControlTakeover') &&
+      this.browserAdmission?.localControlStatus && this.browserAdmission.localControlTakeover) return true
     const segments = endpoint.split('/')
     if (segments.length !== 2 || segments[0] === '' || segments[1] === '') return false
     if (this.ctx.typert.local.get(endpoint) !== undefined || this.ctx.typert.local.hasSeen(endpoint)) return true
@@ -368,10 +393,29 @@ export class TypertGatewayService extends Service implements TypertGateway {
     payload: unknown,
     signal: AbortSignal,
   ): Promise<ConnectionRpcResult> {
+    if (endpoint === 'session/localControlStatus' || endpoint === 'session/localControlTakeover') {
+      try {
+        const request = remoteRequest(endpoint, payload, signal)
+        const args = request.args
+        if (typeof args.sessionId !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u.test(args.sessionId)) {
+          throw new Error('desktop session control: invalid Session id')
+        }
+        if (endpoint === 'session/localControlStatus') {
+          if (Object.keys(args).length !== 1 || !this.browserAdmission?.localControlStatus) throw new Error('desktop session control unavailable')
+          return { ok: true, value: this.browserAdmission.localControlStatus(args.sessionId) }
+        }
+        if (Object.keys(args).length !== 2 || !Number.isSafeInteger(args.expectedEpoch) ||
+          (args.expectedEpoch as number) < 1 || !this.browserAdmission?.localControlTakeover) {
+          throw new Error('desktop session control: invalid takeover request')
+        }
+        return { ok: true, value: this.browserAdmission.localControlTakeover(args.sessionId,
+          args.expectedEpoch as number) }
+      } catch (error) { return rpcFailure(error) }
+    }
     if (endpoint === REMOTE_EVENT_RESULT_ENDPOINT) {
       try {
         const result = parseRemoteEventResultPayload(payload)
-        this.respondRemoteEvent(result)
+        this.respondRemoteEvent(result, 'browser')
         return { ok: true, value: undefined }
       } catch (error) {
         return rpcFailure(error)
@@ -532,21 +576,27 @@ export class TypertGatewayService extends Service implements TypertGateway {
   private receiveRemoteEventResult(
     client: RemoteEventClient,
     result: ReturnType<typeof parseRemoteEventResult>,
+    source: 'host' | 'browser',
   ): void {
     const pending = this.pendingRemoteEvents.get(result.eventId)
     // Settlement and Client replacement may race the result request. Results
     // from a completed event or a superseded delivery are idempotent no-ops.
     if (pending === undefined || !pending.deliveries.has(client)) return
-    this.removeRemoteEventDelivery(pending, client)
-    if (result.outcome.kind === 'result') {
-      this.settleRemoteEvent(pending, {
-        kind: 'result',
-        value: result.outcome.value,
-      })
-    } else if (result.outcome.kind === 'rejected') {
-      this.cancelRemoteEvent(pending, restoreRemoteEventRejection(result.outcome.error))
-    } else if (pending.deliveries.size === 0) {
-      this.settleRemoteEvent(pending, { kind: 'next' })
+    const release = source === 'browser' ? this.browserAdmission?.eventResult(pending.frame.agentId) : undefined
+    try {
+      this.removeRemoteEventDelivery(pending, client)
+      if (result.outcome.kind === 'result') {
+        this.settleRemoteEvent(pending, {
+          kind: 'result',
+          value: result.outcome.value,
+        })
+      } else if (result.outcome.kind === 'rejected') {
+        this.cancelRemoteEvent(pending, restoreRemoteEventRejection(result.outcome.error))
+      } else if (pending.deliveries.size === 0) {
+        this.settleRemoteEvent(pending, { kind: 'next' })
+      }
+    } finally {
+      release?.()
     }
   }
 
@@ -594,7 +644,10 @@ export class TypertGatewayService extends Service implements TypertGateway {
 
   private async invokeRpc(endpoint: string, payload: unknown, signal: AbortSignal): Promise<ConnectionRpcResult> {
     try {
-      const value = await this.invoke(remoteRequest(endpoint, payload, signal))
+      const request = remoteRequest(endpoint, payload, signal)
+      const release = this.browserAdmission?.invoke(endpoint, request.args)
+      let value: unknown
+      try { value = await this.invoke(request) } finally { release?.() }
       // A void or explicitly absent business result carries no `value` field;
       // JSON has no `undefined`, and the envelope's optional slot is the one
       // representation of absence that both args and results already use.

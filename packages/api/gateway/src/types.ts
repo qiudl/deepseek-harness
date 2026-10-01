@@ -125,6 +125,18 @@ export interface TypertGateway {
   /** Carrier adapter shared by WebSocket and in-process transports. */
   readonly wireStream: TypertGatewayWireStream
 
+  /**
+   * Admit browser-origin writes and approval replies before their final Host operation.
+   * @param admission - callbacks that hold a browser write through settlement.
+   * @returns disposer removing this exact policy.
+   */
+  registerBrowserAdmission(admission: {
+    readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined
+    readonly eventResult: (sessionId: string) => (() => void) | undefined
+    readonly localControlStatus?: (sessionId: string) => unknown
+    readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown
+  }): () => void
+
   /** Settle one forwarded waterfall event from an authenticated in-process carrier. */
   respondRemoteEvent(result: RemoteEventResult): void
 

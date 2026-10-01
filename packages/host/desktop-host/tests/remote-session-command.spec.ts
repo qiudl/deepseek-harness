@@ -14,6 +14,8 @@ describe('remote Session command authority', () => {
         operation: 'session.cancel' as const,
         command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
         session_id: 'session-1',
+        control: { controller_id: '123e4567-e89b-42d3-a456-426614174001',
+          generation: '123e4567-e89b-42d3-a456-426614174002', epoch: 1 },
       },
     }
     await expect(executeRemoteSessionCommand(input)).resolves.toEqual({ accepted: true })

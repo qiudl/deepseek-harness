@@ -8,11 +8,11 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Read only native Session-follow items from the selected local Profile worker.
+ * Read only native Session, Workspace, and forwarded event items from the selected local Profile worker.
  * @param origin - Verified loopback origin of the active worker.
  * @param token - Private worker bearer token.
- * @param endpoint - Exact Session-follow method.
- * @param payload - Validated Session-follow arguments.
+ * @param endpoint - Exact allowed follow method.
+ * @param payload - Validated follow arguments.
  * @param signal - Host-owned cancellation signal.
  * @param stopped - Whether the selected Profile worker has stopped.
  * @returns Session events until the worker sends an explicit end frame.
@@ -21,7 +21,8 @@ export async function* openRemoteUiWorkerStream(
   origin: string, token: string, endpoint: string, payload: unknown,
   signal: AbortSignal, stopped: () => boolean,
 ): AsyncGenerator {
-  if (stopped() || endpoint !== 'session/follow') throw new HostAuthorityError('unavailable')
+  if (stopped() || (endpoint !== 'session/follow' && endpoint !== 'workspace/follow' && endpoint !== '$events'))
+    throw new HostAuthorityError('unavailable')
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
     const response = await fetch(`${origin}/internal/desktop-remote-ui-stream`, {

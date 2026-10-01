@@ -32,6 +32,7 @@ import { ConversationRoot } from './skeleton/ConversationRoot.tsx'
 import { ConversationContent } from './skeleton/ConversationContent.tsx'
 import { ConversationPanel } from './skeleton/ConversationPanel.tsx'
 import { ConversationSession, ConversationSessionHeader } from './skeleton/ConversationSession.tsx'
+import { LocalSessionTakeover } from './skeleton/LocalSessionTakeover.tsx'
 import { InputBar } from './skeleton/InputBar.tsx'
 import { todoDockEntry } from './skeleton/TodoPanel.tsx'
 import { resolveActiveView } from './view-selection.ts'
@@ -422,6 +423,11 @@ export function apply(ctx: Context, config: Config = Config({})): void {
     yield registerConversationHeader()
     yield registerComposerBar()
   })
+
+  slots.inject('conversation.session.header.actions', () => slots.register({
+    name: 'conversation.session.header.actions', id: 'local-session-takeover',
+    order: 30, locale: NS,
+  }, LocalSessionTakeover))
 
   ctx.plugin(ConversationController, {
     input: inputHub,

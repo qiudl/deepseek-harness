@@ -646,6 +646,18 @@ describe('Typert Remote streams', () => {
     expect(firstFrame).not.toHaveProperty('deliveryId')
     expect(secondFrame).not.toHaveProperty('deliveryId')
 
+    const unregisterAdmission = ctx.typertGateway.registerBrowserAdmission({
+      invoke() {},
+      eventResult(sessionId) {
+        expect(sessionId).toBe('agent-1')
+        throw new Error('browser control lost')
+      },
+    })
+    await expect(sendEventResult(second, secondFrame, { kind: 'result', value: 'not-admitted' }))
+      .rejects.toThrow('browser control lost')
+    expect(pending.resolve).not.toHaveBeenCalled()
+    unregisterAdmission()
+
     await sendEventResult(second, secondFrame, {
       kind: 'result', value: 'allowed',
     })

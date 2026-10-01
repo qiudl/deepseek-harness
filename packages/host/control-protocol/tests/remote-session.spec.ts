@@ -18,23 +18,38 @@ describe('Profile remote Session wire commands', () => {
   it('round-trips the closed command set', () => {
     const sessionId = 'session-0123456789abcdef'
     const commandId = randomUUID()
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
     for (const command of [
+      { operation: 'control.status', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID() },
+      { operation: 'control.acquire', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), takeover: false },
+      { operation: 'control.acquire', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), takeover: true, expected_epoch: 1 },
+      { operation: 'control.renew', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
+      { operation: 'control.release', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
       { operation: 'session.list', command_id: commandId },
       { operation: 'session.create', command_id: commandId },
+      { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1' },
+      { operation: 'remote.event.respond', command_id: commandId, session_id: sessionId,
+        control, client_id: randomUUID(), event_id: randomUUID(), outcome: 'allowed-once' },
       { operation: 'session.history', command_id: commandId, session_id: sessionId, max_events: 100 },
-      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, mode: 'queue',
+      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, control, mode: 'queue',
         content: [{ type: 'text', text: 'hello\nworld' }], client_time_zone: 'Europe/Belgrade' },
-      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, mode: 'queue',
+      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, control, mode: 'queue',
         content: [{ type: 'text', text: 'without time zone' }] },
-      { operation: 'session.cancel', command_id: commandId, session_id: sessionId },
-      { operation: 'session.rename', command_id: commandId, session_id: sessionId, title: 'Remote session' },
-      { operation: 'session.delete', command_id: commandId, session_id: sessionId },
+      { operation: 'session.cancel', command_id: commandId, session_id: sessionId, control },
+      { operation: 'session.rename', command_id: commandId, session_id: sessionId, control,
+        title: 'Remote session' },
+      { operation: 'session.delete', command_id: commandId, session_id: sessionId, control },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000 },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000, cursor: 'approval-cursor-1' },
       { operation: 'approval.respond', command_id: commandId, session_id: sessionId,
-        approval_id: 'approval-1', outcome: 'allowed-once', operation_digest: 'a'.repeat(64) },
+        control, approval_id: 'approval-1', outcome: 'allowed-once', operation_digest: 'a'.repeat(64) },
       { operation: 'approval.respond', command_id: commandId, session_id: sessionId,
-        approval_id: 'approval-1', outcome: 'rejected' },
+        control, approval_id: 'approval-1', outcome: 'rejected' },
     ]) {
       const value = frame(command)
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
@@ -46,6 +61,10 @@ describe('Profile remote Session wire commands', () => {
     for (const command of [
       { operation: 'api.proxy', command_id: id, path: '/api/settings.describe' },
       { operation: 'session.list', command_id: id, profile_root: '/another-user' },
+      { operation: 'session.create', command_id: id, cwd: '/tmp/escape' },
+      { operation: 'session.create', command_id: id, workspace_id: '../escape' },
+      { operation: 'remote.event.respond', command_id: id, session_id: 'session-1',
+        client_id: randomUUID(), event_id: randomUUID(), outcome: 'always-allow' },
       { operation: 'session.history', command_id: id, session_id: '', max_events: 100 },
       { operation: 'session.history', command_id: id, session_id: 'session-1', max_events: 101 },
       { operation: 'session.prompt', command_id: id, session_id: 'session-1', mode: 'now',
@@ -140,6 +159,8 @@ describe('Profile remote UI stream wire commands', () => {
   it('accepts only bounded Session follow open, poll and close', () => {
     const stream_id = randomUUID()
     for (const command of [
+      { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: {} } },
+      { action: 'open', stream_id, endpoint: '$events', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 100, assistantStream: true,
       } } } },
@@ -158,6 +179,8 @@ describe('Profile remote UI stream wire commands', () => {
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
     }
     for (const command of [
+      { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: { path: '/tmp' } } },
+      { action: 'open', stream_id, endpoint: '$events', payload: { args: { all: true } } },
       { action: 'open', stream_id, endpoint: 'asset/read', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: '../other' },

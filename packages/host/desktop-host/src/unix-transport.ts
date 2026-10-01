@@ -116,9 +116,9 @@ export interface UnixHostServerOptions {
     profileId: string, endpoint: ProfileRemoteUiReadRequest['params']['endpoint'],
     payload: ProfileRemoteUiReadRequest['params']['payload'], signal: AbortSignal,
   ) => Promise<unknown>
-  /** Open only the native Session-follow stream in the lease-selected worker. */
+  /** Open only native read streams in the lease-selected worker. */
   readonly remoteUiStream?: (
-    profileId: string, endpoint: 'session/follow', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
+    profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
       { action: 'open' }>['payload'], signal: AbortSignal,
   ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
@@ -1407,9 +1407,12 @@ export class HostControlAuthority {
         capabilities: [
           ...capabilities,
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
-          ...(this.options.remoteSession ? ['profile.remote_session'] : []),
+          ...(this.options.remoteSession ? ['profile.remote_session',
+            'profile.remote_session.workspace_create', 'profile.remote_session.event_result',
+            'profile.remote_session.control_lease'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
-          ...(this.options.remoteUiStream ? ['profile.remote_ui_stream'] : []),
+          ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
+            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events'] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
             ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),

@@ -1,7 +1,8 @@
 import type {
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
-  HostRemoteSessionCommand, HostRemoteSessionJson, ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
+  HostRemoteSessionCommand, HostRemoteSessionControlProof, HostRemoteSessionJson,
+  ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
   ProfileRemoteUiReadRequest, ProfileRemoteUiReadResult,
   ProfileRemoteUiStreamCommand, ProfileRemoteUiStreamRequest, ProfileRemoteUiStreamResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
@@ -435,12 +436,56 @@ function extensionCommand(value: unknown): HostExtensionCommand {
   return reject()
 }
 
+function remoteSessionControlProof(value: unknown): HostRemoteSessionControlProof {
+  const claim = record(value)
+  exactKeys(claim, ['controller_id', 'generation', 'epoch'])
+  if (!Number.isSafeInteger(claim.epoch) || (claim.epoch as number) < 1) reject()
+  return { controller_id: uuid(claim.controller_id), generation: uuid(claim.generation),
+    epoch: claim.epoch as number }
+}
+
 function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   const command = record(value)
   const command_id = uuid(command.command_id) as HostControlRequestId
-  if (command.operation === 'session.list' || command.operation === 'session.create') {
+  if (command.operation === 'control.status') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'controller_id'])
+    return { operation: 'control.status', command_id, session_id: remoteIdentifier(command.session_id),
+      controller_id: uuid(command.controller_id) }
+  }
+  if (command.operation === 'control.acquire') {
+    const withEpoch = 'expected_epoch' in command
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'controller_id', 'takeover',
+      ...(withEpoch ? ['expected_epoch'] : [])])
+    if (typeof command.takeover !== 'boolean' || (withEpoch &&
+      (!Number.isSafeInteger(command.expected_epoch) || (command.expected_epoch as number) < 1))) reject()
+    return { operation: 'control.acquire', command_id, session_id: remoteIdentifier(command.session_id),
+      controller_id: uuid(command.controller_id), takeover: command.takeover,
+      ...(withEpoch ? { expected_epoch: command.expected_epoch as number } : {}) }
+  }
+  if (command.operation === 'control.renew' || command.operation === 'control.release') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'controller_id', 'generation', 'epoch'])
+    if (!Number.isSafeInteger(command.epoch) || (command.epoch as number) < 1) reject()
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      controller_id: uuid(command.controller_id), generation: uuid(command.generation),
+      epoch: command.epoch as number }
+  }
+  if (command.operation === 'session.list') {
     exactKeys(command, ['operation', 'command_id'])
-    return { operation: command.operation, command_id }
+    return { operation: 'session.list', command_id }
+  }
+  if (command.operation === 'session.create') {
+    const withWorkspace = 'workspace_id' in command
+    exactKeys(command, ['operation', 'command_id', ...(withWorkspace ? ['workspace_id'] : [])])
+    return { operation: 'session.create', command_id,
+      ...(withWorkspace ? { workspace_id: remoteIdentifier(command.workspace_id) } : {}) }
+  }
+  if (command.operation === 'remote.event.respond') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'client_id', 'event_id', 'outcome'])
+    if (command.outcome !== 'allowed-once' && command.outcome !== 'rejected' && command.outcome !== 'next') reject()
+    return { operation: 'remote.event.respond', command_id,
+      session_id: remoteIdentifier(command.session_id), control: remoteSessionControlProof(command.control),
+      client_id: remoteIdentifier(command.client_id),
+      event_id: remoteIdentifier(command.event_id), outcome: command.outcome }
   }
   if (command.operation === 'session.history') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'max_events'])
@@ -451,7 +496,7 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   }
   if (command.operation === 'session.prompt') {
     const withTimeZone = 'client_time_zone' in command
-    exactKeys(command, ['operation', 'command_id', 'session_id', 'mode', 'content',
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'mode', 'content',
       ...(withTimeZone ? ['client_time_zone'] : [])])
     if (command.mode !== 'queue' || !Array.isArray(command.content)
       || command.content.length < 1 || command.content.length > 16) reject()
@@ -462,17 +507,18 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
       return { type: 'text' as const, text: wireText(part.text, 32_768, true) }
     })
     return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
-      mode: 'queue', content,
+      control: remoteSessionControlProof(command.control), mode: 'queue', content,
       ...(withTimeZone ? { client_time_zone: wireText(command.client_time_zone, 128) } : {}) }
   }
   if (command.operation === 'session.cancel' || command.operation === 'session.delete') {
-    exactKeys(command, ['operation', 'command_id', 'session_id'])
-    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id) }
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control'])
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      control: remoteSessionControlProof(command.control) }
   }
   if (command.operation === 'session.rename') {
-    exactKeys(command, ['operation', 'command_id', 'session_id', 'title'])
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'title'])
     return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
-      title: wireText(command.title, 256) }
+      control: remoteSessionControlProof(command.control), title: wireText(command.title, 256) }
   }
   if (command.operation === 'approval.poll') {
     const withCursor = 'cursor' in command
@@ -484,11 +530,12 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   }
   if (command.operation === 'approval.respond') {
     const withDigest = 'operation_digest' in command
-    exactKeys(command, ['operation', 'command_id', 'session_id', 'approval_id', 'outcome',
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'approval_id', 'outcome',
       ...(withDigest ? ['operation_digest'] : [])])
     if ((command.outcome !== 'allowed-once' && command.outcome !== 'rejected')
       || (command.outcome === 'allowed-once') !== withDigest) reject()
     return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      control: remoteSessionControlProof(command.control),
       approval_id: remoteIdentifier(command.approval_id), outcome: command.outcome,
       ...(withDigest ? { operation_digest: digest(command.operation_digest) } : {}) }
   }
@@ -757,36 +804,40 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       parsed = { action: command.action, stream_id }
     } else if (command.action === 'open') {
       exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload'])
-      if (command.endpoint !== 'session/follow') reject()
       const payload = record(command.payload)
       exactKeys(payload, ['args'])
       const args = record(payload.args)
-      exactKeys(args, ['request'])
-      const request = record(args.request)
-      if (!Object.keys(request).every(key => ['address', 'maxMessages', 'assistantStream'].includes(key))) reject()
-      const address = record(request.address)
-      const sessionId = (value: unknown): string => {
-        if (typeof value !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u.test(value)) reject()
-        return value
-      }
-      let parsedAddress: Extract<ProfileRemoteUiStreamCommand, { action: 'open' }>['payload']['args']['request']['address']
-      if (address.kind === 'session') {
-        exactKeys(address, ['kind', 'sessionId'])
-        parsedAddress = { kind: 'session', sessionId: sessionId(address.sessionId) }
-      } else if (address.kind === 'subagent') {
-        exactKeys(address, ['kind', 'parentSessionId', 'childSessionId', 'mode'])
-        if (address.mode !== 'one-shot' && address.mode !== 'continuable') reject()
-        parsedAddress = { kind: 'subagent', parentSessionId: sessionId(address.parentSessionId),
-          childSessionId: sessionId(address.childSessionId), mode: address.mode }
-      } else reject()
-      if (request.maxMessages !== undefined && (!Number.isSafeInteger(request.maxMessages)
+      if (command.endpoint === 'workspace/follow' || command.endpoint === '$events') {
+        exactKeys(args, [])
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: { args: {} } }
+      } else if (command.endpoint === 'session/follow') {
+        exactKeys(args, ['request'])
+        const request = record(args.request)
+        if (!Object.keys(request).every(key => ['address', 'maxMessages', 'assistantStream'].includes(key))) reject()
+        const address = record(request.address)
+        const sessionId = (value: unknown): string => {
+          if (typeof value !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u.test(value)) reject()
+          return value
+        }
+        let parsedAddress: Extract<ProfileRemoteUiStreamCommand, { endpoint: 'session/follow' }>['payload']['args']['request']['address']
+        if (address.kind === 'session') {
+          exactKeys(address, ['kind', 'sessionId'])
+          parsedAddress = { kind: 'session', sessionId: sessionId(address.sessionId) }
+        } else if (address.kind === 'subagent') {
+          exactKeys(address, ['kind', 'parentSessionId', 'childSessionId', 'mode'])
+          if (address.mode !== 'one-shot' && address.mode !== 'continuable') reject()
+          parsedAddress = { kind: 'subagent', parentSessionId: sessionId(address.parentSessionId),
+            childSessionId: sessionId(address.childSessionId), mode: address.mode }
+        } else reject()
+        if (request.maxMessages !== undefined && (!Number.isSafeInteger(request.maxMessages)
         || (request.maxMessages as number) < 1 || (request.maxMessages as number) > 500)) reject()
-      if (request.assistantStream !== undefined && request.assistantStream !== true) reject()
-      parsed = { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
-        address: parsedAddress,
-        ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages as number }),
-        ...(request.assistantStream === undefined ? {} : { assistantStream: true as const }),
-      } } } }
+        if (request.assistantStream !== undefined && request.assistantStream !== true) reject()
+        parsed = { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+          address: parsedAddress,
+          ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages as number }),
+          ...(request.assistantStream === undefined ? {} : { assistantStream: true as const }),
+        } } } }
+      } else reject()
     } else reject()
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
