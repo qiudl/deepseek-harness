@@ -89,6 +89,13 @@ export interface ModelSelection {
   readonly reasoningEffort?: string
 }
 
+/** Host-inspected workspace ownership and next model choice; not an authorization token. */
+export interface WorkspaceModelSelection {
+  readonly workspaceId: WorkspaceId
+  readonly sessionId: SessionId
+  readonly selection: ModelSelection
+}
+
 /** Host fold state for durable model selection. */
 export interface ModelSelectionProjectionState {
   /** Selection consumed by the latest recorded model request. */

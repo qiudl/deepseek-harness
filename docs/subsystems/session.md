@@ -770,6 +770,18 @@ resolveAgent(sessionId: SessionId): Promise<ApiSessionAgentResult>
 inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspection>
 
 /**
+ * Capture workspace membership and the next model choice for a trusted Host caller.
+ * Does not resume an Agent, append events, or invoke a provider. This Host-only
+ * read supplies neither account authentication nor an executable adapter snapshot.
+ * @param sessionId - ordinary Session identity registered under the workspace.
+ * @param workspaceId - registry UUID; filesystem paths are not identities.
+ * @param signal - optional cancellation, checked before and after asynchronous reads.
+ * @returns an immutable minimal selection captured after membership revalidation.
+ * @throws when the workspace is absent, ownership changes, or the caller cancels.
+ */
+async inspectWorkspaceModelSelection( sessionId: SessionId, workspaceId: WorkspaceId, signal?: AbortSignal, ): Promise<WorkspaceModelSelection>
+
+/**
  * Read all visible Session rows without resuming an Agent.
  * @param _request - reserved empty list request.
  * @param signal - cancellation for persistence reads.
@@ -902,7 +914,7 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote({ mode: 'stream' }) control(signal: AbortSignal): AsyncIterable<SessionControlFrame>
 ```
 
-Types: [SessionId](core.md) · [SessionInspection](persistence.md) · [SessionSearchRequest](session-query.md)
+Types: [SessionId](core.md) · [SessionInspection](persistence.md) · [SessionSearchRequest](session-query.md) · [WorkspaceId](workspace.md)
 
 Source: [`packages/api/session-controller/src/index.ts`](../../packages/api/session-controller/src/index.ts)
 

@@ -15,6 +15,7 @@ import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-ses
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-typert-registry'
 import type { ModelSelection } from './types.ts'
+import { resolveModelSelection } from './model-selection-projection.ts'
 
 /** Cold Session identity absent from persistence. */
 export class ApiSessionNotFound extends Error {}
@@ -294,19 +295,9 @@ export class ApiSessionAgentController {
     const selection: InstalledSelection = {
       get current(): AgentModelSelection {
         if (picked !== undefined) return picked
-        const loggedHeader = agent.session.requestHeader()
-        if (loggedHeader === undefined) return defaultModel.currentSelection()
-        const logged = loggedHeader.config
-        return {
-          provider: logged.provider,
-          model: logged.model,
-          // An effort the adapter defaulted is not a conversation choice: restoring
-          // it as one would make an unchanged default read as a request change.
-          ...(logged.reasoningEffort === undefined
-            || loggedHeader.adapterDefaults?.reasoningEffort === true
-            ? {}
-            : { reasoningEffort: logged.reasoningEffort }),
-        }
+        return agentModelSelection(resolveModelSelection(
+          null, agent.session.requestHeader(), () => defaultModel.currentSelection(),
+        ))
       },
       set current(next: AgentModelSelection) {
         picked = next
@@ -323,6 +314,19 @@ export class ApiSessionAgentController {
     installModelSelection(agent.ctx, selection)
     this.selections.set(agent, selection)
     return selection
+  }
+
+  /**
+   * Read live selection without installing a model reference or activating the Agent.
+   * @param agent - already-live Agent whose next choice is inspected.
+   * @returns installed choice, durable pending intent, or the current default.
+   */
+  inspectSelectionFor(agent: Agent): ModelSelection {
+    const installed = this.selections.get(agent)
+    if (installed !== undefined) return installed.current
+    const state = this.ctx.sessionProjections.stateOf(agent.session, 'modelSelection')
+    if (state === undefined) throw new Error('api-session: required modelSelection projection is not registered')
+    return resolveModelSelection(state.pending, agent.session.requestHeader(), () => this.ctx.agentDefaultModel.currentSelection())
   }
 
   /**

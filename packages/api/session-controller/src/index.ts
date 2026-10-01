@@ -6,12 +6,14 @@ import z from '@deepseek-ai/schemastery'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, openNativePath, revealNativePath } from '@deepseek-ai/dsh-native-command'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import { foldRequestHeader, type SessionId } from '@deepseek-ai/dsh-session'
+import { realpathNormalize, type WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import {
   ApiSessionAgentController,
+  hasApiSessionSubagentOwner,
   inspectApiSession,
   type ApiSessionAgentResult,
 } from './agent.ts'
@@ -21,7 +23,7 @@ import { SessionHistoryController } from './history.ts'
 import { SessionFileReferences } from './file-references.ts'
 import { ApiSessionList } from './list.ts'
 import { buildModelCatalog } from './catalog.ts'
-import { installModelSelectionProjection } from './model-selection-projection.ts'
+import { foldModelSelection, installModelSelectionProjection, resolveModelSelection } from './model-selection-projection.ts'
 import { SessionSkillCatalog } from './skill-catalog.ts'
 import { installAttachmentExport } from './attachment-export.ts'
 import { SessionMediaReferences } from './media-references.ts'
@@ -56,6 +58,7 @@ import type {
   SessionSelectModelValue,
   SessionUpdateQueueRequest,
   SessionUpdateQueueValue,
+  WorkspaceModelSelection,
 } from './types.ts'
 
 export type * from './types.ts'
@@ -217,6 +220,69 @@ export class SessionController extends TypertRemoteService {
       })
     }
     return inspectApiSession(this.ctx, sessionId, signal)
+  }
+
+  /**
+   * Capture workspace membership and the next model choice for a trusted Host caller.
+   * Does not resume an Agent, append events, or invoke a provider. This Host-only
+   * read supplies neither account authentication nor an executable adapter snapshot.
+   * @param sessionId - ordinary Session identity registered under the workspace.
+   * @param workspaceId - registry UUID; filesystem paths are not identities.
+   * @param signal - optional cancellation, checked before and after asynchronous reads.
+   * @returns an immutable minimal selection captured after membership revalidation.
+   * @throws when the workspace is absent, ownership changes, or the caller cancels.
+   */
+  async inspectWorkspaceModelSelection(
+    sessionId: SessionId,
+    workspaceId: WorkspaceId,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceModelSelection> {
+    signal?.throwIfAborted()
+    const workspace = this.ctx.workspaceRegistry.get(workspaceId)
+    if (workspace === undefined) throw new Error('collaboration_workspace_not_found')
+    const mismatch = () => new Error('collaboration_session_workspace_mismatch')
+    if (!workspace.sessionIds.includes(sessionId)
+      || this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId)) throw mismatch()
+    const attached = this.ctx.sessions.get(sessionId)
+    const inspection = attached === undefined
+      ? await this.inspect(sessionId, signal)
+      : { meta: attached.header, events: [] }
+    signal?.throwIfAborted()
+    if (inspection.meta.id !== sessionId || inspection.meta.cwd === undefined
+      || inspection.meta.origin === 'subagent') throw mismatch()
+    let cwd: string
+    try {
+      cwd = await realpathNormalize(inspection.meta.cwd)
+    } catch {
+      signal?.throwIfAborted()
+      throw mismatch()
+    }
+    signal?.throwIfAborted()
+    if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace
+      || !workspace.sessionIds.includes(sessionId) || cwd !== workspace.path
+      || this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId)
+      || this.ctx.sessions.get(sessionId) !== attached) throw mismatch()
+    const agent = this.ctx.agents.get(sessionId)
+    if (hasApiSessionSubagentOwner(this.ctx, { header: inspection.meta }, agent)
+      || (agent !== undefined && (agent.session !== attached || agent.session.header !== inspection.meta))) throw mismatch()
+    const state = attached === undefined
+      ? foldModelSelection(inspection.events)
+      : this.ctx.sessionProjections.stateOf(attached, 'modelSelection')
+    if (state === undefined) throw new Error('api-session: required modelSelection projection is not registered')
+    const choice = agent === undefined
+      ? resolveModelSelection(
+        state.pending,
+        attached?.requestHeader() ?? foldRequestHeader(inspection.events),
+        () => this.ctx.agentDefaultModel.currentSelection(),
+      )
+      : this.agents.inspectSelectionFor(agent)
+    // Copy only public choice fields even if a Host integration supplies extra settings.
+    const selection = Object.freeze({
+      provider: choice.provider,
+      model: choice.model,
+      ...(choice.reasoningEffort === undefined ? {} : { reasoningEffort: choice.reasoningEffort }),
+    })
+    return Object.freeze({ workspaceId, sessionId, selection })
   }
 
   /**

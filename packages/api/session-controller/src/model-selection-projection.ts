@@ -1,7 +1,7 @@
 /** Durable model-selection intent and request-use projection. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { EpochHeader, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { z } from 'zod'
 import type {
@@ -72,6 +72,40 @@ function sameSelection(left: ModelSelection | null, right: ModelSelection | null
     && left.provider === right.provider
     && left.model === right.model
     && left.reasoningEffort === right.reasoningEffort)
+}
+
+/**
+ * Reconstruct selection intent without attaching a Session or installing a projection.
+ * @param events - committed events in log order.
+ * @returns pending intent and the last consumed selection.
+ */
+export function foldModelSelection(events: readonly SessionEvent[]): ModelSelectionProjectionState {
+  let state: ModelSelectionProjectionState = { lastUsed: null, pending: null }
+  for (const event of events) state = applyModelSelectionProjection(state, event)
+  return state
+}
+
+/**
+ * Resolve the choice used by the next prompt, excluding adapter-owned defaults.
+ * @param pending - unconsumed explicit selection, if any.
+ * @param header - latest committed request configuration.
+ * @param fallback - current Host default, read only for a blank Session.
+ * @returns the next choice, excluding adapter-owned reasoning effort from the header.
+ */
+export function resolveModelSelection(
+  pending: ModelSelection | null,
+  header: EpochHeader | undefined,
+  fallback: () => ModelSelection,
+): ModelSelection {
+  if (pending !== null) return pending
+  if (header === undefined) return fallback()
+  return {
+    provider: header.config.provider,
+    model: header.config.model,
+    ...(header.config.reasoningEffort === undefined || header.adapterDefaults?.reasoningEffort === true
+      ? {}
+      : { reasoningEffort: String(header.config.reasoningEffort) }),
+  }
 }
 
 /**

@@ -1677,6 +1677,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the current attached state or persisted header and event prefix.',
       },
       {
+        signature: 'async inspectWorkspaceModelSelection( sessionId: SessionId, workspaceId: WorkspaceId, signal?: AbortSignal, ): Promise<WorkspaceModelSelection>',
+        description: 'Capture workspace membership and the next model choice for a trusted Host caller. Does not resume an Agent, append events, or invoke a provider. This Host-only read supplies neither account authentication nor an executable adapter snapshot.',
+        parameters: [{ name: 'sessionId', description: 'ordinary Session identity registered under the workspace.' }, { name: 'workspaceId', description: 'registry UUID; filesystem paths are not identities.' }, { name: 'signal', description: 'optional cancellation, checked before and after asynchronous reads.' }],
+        returns: 'an immutable minimal selection captured after membership revalidation.',
+        throws: ['when the workspace is absent, ownership changes, or the caller cancels.'],
+      },
+      {
         signature: '@Remote(\'list\') async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>',
         description: 'Read all visible Session rows without resuming an Agent.',
         parameters: [{ name: '_request', description: 'reserved empty list request.' }, { name: 'signal', description: 'cancellation for persistence reads.' }],
@@ -7260,6 +7267,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkspaceInsertSessionBeforeRequest',
     declaration: 'export interface WorkspaceInsertSessionBeforeRequest {\n    readonly workspaceId: WorkspaceId;\n    readonly sessionId: SessionId;\n    readonly beforeSessionId?: SessionId;\n}',
+  },
+  {
+    name: 'WorkspaceModelSelection',
+    declaration: 'export interface WorkspaceModelSelection {\n    readonly workspaceId: WorkspaceId;\n    readonly sessionId: SessionId;\n    readonly selection: ModelSelection;\n}',
   },
   {
     name: 'WorkspaceOrderValue',
