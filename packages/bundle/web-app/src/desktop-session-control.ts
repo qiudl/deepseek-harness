@@ -26,6 +26,14 @@ export type DesktopSessionControlState =
   | { readonly outcome: 'uncontrolled'; readonly generation: string; readonly epoch: number }
   | { readonly outcome: 'controlled' | 'held_elsewhere' | 'epoch_stale'; readonly claim: DesktopSessionClaim }
 
+/** A stale remote proof was rejected before the Session mutation ran. */
+export class DesktopSessionControlLostError extends Error {
+  constructor() {
+    super('desktop session control: control lost')
+    this.name = 'DesktopSessionControlLostError'
+  }
+}
+
 /** Final, process-local authority for one Profile's Session writes. */
 export class DesktopSessionControl {
   /** Random process generation that invalidates every claim on restart. */
@@ -152,7 +160,7 @@ export class DesktopSessionControl {
   assertWrite(sessionId: string, claim: DesktopSessionCredential): void {
     const current = this.claims.get(sessionId)
     if (!current || !this.matches(current, claim) || current.expiresAt <= this.now()) {
-      throw new Error('desktop session control: control lost')
+      throw new DesktopSessionControlLostError()
     }
   }
 

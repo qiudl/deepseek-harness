@@ -293,7 +293,11 @@ export class DshWebProfileWorkerFactory {
       body: JSON.stringify(payload),
       signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
     })
-    if (!response.ok) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
+    if (!response.ok) {
+      await response.body?.cancel()
+      throw new HostAuthorityError(route === 'desktop-remote-session' && response.status === 409
+        ? 'conflict' : 'unavailable')
+    }
     const body = await response.text()
     if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')
     let parsed: unknown

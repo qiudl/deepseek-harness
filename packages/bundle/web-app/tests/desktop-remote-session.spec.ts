@@ -198,6 +198,38 @@ describe('Desktop remote Session bridge', () => {
     }
   })
 
+  it('returns a distinct status when a stale remote proof loses control', async () => {
+    const token = 'A'.repeat(43)
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'session-1')
+    const observed = control.browserStatus('session-1')
+    if (!('claim' in observed)) throw new Error('missing remote claim')
+    expect(control.takeoverBrowser('session-1', observed.claim.epoch).outcome).toBe('controlled')
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor({ invoke } as unknown as TypertGateway,
+      undefined, control)
+    const server = createServer((req, res) => {
+      void handleDesktopRemoteSessionRequest(req, res, token,
+        (command, signal) => executor.execute(command, signal))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const response = await fetch(origin, { method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ operation: 'session.cancel',
+          command_id: '123e4567-e89b-42d3-a456-426614174000',
+          session_id: 'session-1', control: proof }) })
+      expect(response.status).toBe(409)
+      expect(invoke).not.toHaveBeenCalled()
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
+    }
+  })
+
   it('binds an approval response to its projected operation digest', async () => {
     async function* events() {
       yield { type: 'ready', clientId: 'client-1', host: { home: '/hidden' } }
