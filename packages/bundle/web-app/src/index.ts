@@ -30,6 +30,7 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
+import { DesktopSessionControl } from './desktop-session-control.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
@@ -249,7 +250,12 @@ export function apply(ctx: Context, config: Config): void {
   const remoteApprovalEvents = new DesktopRemoteApprovalEvents()
   if (desktopRemoteSessionToken && /^[A-Za-z0-9_-]{43}$/u.test(desktopRemoteSessionToken)) {
     ctx.inject(['typertGateway'], (remoteCtx) => {
-      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents)
+      const control = new DesktopSessionControl()
+      remoteCtx.effect(() => remoteCtx.typertGateway.registerBrowserAdmission({
+        invoke: (endpoint, args) => control.admitBrowserInvoke(endpoint, args),
+        eventResult: sessionId => control.admitBrowserWrite(sessionId),
+      }), 'web-app: Desktop browser Session admission')
+      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents, control)
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
         handler: (req, res) => handleDesktopRemoteSessionRequest(

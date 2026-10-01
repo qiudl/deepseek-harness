@@ -877,8 +877,37 @@ export type HostRemoteSessionJson =
   | readonly HostRemoteSessionJson[]
   | { readonly [key: string]: HostRemoteSessionJson }
 
+/** Opaque-to-browser claim returned by the selected Profile and retained by the daemon. */
+export interface HostRemoteSessionControlProof {
+  readonly controller_id: string
+  readonly generation: string
+  readonly epoch: number
+}
+
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | {
+    readonly operation: 'control.status'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly controller_id: string
+  }
+  | {
+    readonly operation: 'control.acquire'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly controller_id: string
+    readonly takeover: boolean
+    readonly expected_epoch?: number
+  }
+  | {
+    readonly operation: 'control.renew' | 'control.release'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly controller_id: string
+    readonly generation: string
+    readonly epoch: number
+  }
   | { readonly operation: 'session.list'; readonly command_id: HostControlRequestId }
   | { readonly operation: 'session.create'
     readonly command_id: HostControlRequestId
@@ -886,6 +915,7 @@ export type HostRemoteSessionCommand =
   | { readonly operation: 'remote.event.respond'
     readonly command_id: HostControlRequestId
     readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
     readonly client_id: string
     readonly event_id: string
     readonly outcome: 'allowed-once' | 'rejected' | 'next' }
@@ -899,6 +929,7 @@ export type HostRemoteSessionCommand =
     readonly operation: 'session.prompt'
     readonly command_id: HostControlRequestId
     readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
     readonly mode: 'queue'
     readonly content: readonly { readonly type: 'text'; readonly text: string }[]
     readonly client_time_zone?: string
@@ -907,11 +938,13 @@ export type HostRemoteSessionCommand =
     readonly operation: 'session.cancel' | 'session.delete'
     readonly command_id: HostControlRequestId
     readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
   }
   | {
     readonly operation: 'session.rename'
     readonly command_id: HostControlRequestId
     readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
     readonly title: string
   }
   | {
@@ -924,6 +957,7 @@ export type HostRemoteSessionCommand =
     readonly operation: 'approval.respond'
     readonly command_id: HostControlRequestId
     readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
     readonly approval_id: string
     readonly outcome: 'allowed-once' | 'rejected'
     readonly operation_digest?: HostControlSha256

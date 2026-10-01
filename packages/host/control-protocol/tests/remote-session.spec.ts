@@ -18,26 +18,38 @@ describe('Profile remote Session wire commands', () => {
   it('round-trips the closed command set', () => {
     const sessionId = 'session-0123456789abcdef'
     const commandId = randomUUID()
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
     for (const command of [
+      { operation: 'control.status', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID() },
+      { operation: 'control.acquire', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), takeover: false },
+      { operation: 'control.acquire', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), takeover: true, expected_epoch: 1 },
+      { operation: 'control.renew', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
+      { operation: 'control.release', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
       { operation: 'session.list', command_id: commandId },
       { operation: 'session.create', command_id: commandId },
       { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1' },
       { operation: 'remote.event.respond', command_id: commandId, session_id: sessionId,
-        client_id: randomUUID(), event_id: randomUUID(), outcome: 'allowed-once' },
+        control, client_id: randomUUID(), event_id: randomUUID(), outcome: 'allowed-once' },
       { operation: 'session.history', command_id: commandId, session_id: sessionId, max_events: 100 },
-      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, mode: 'queue',
+      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, control, mode: 'queue',
         content: [{ type: 'text', text: 'hello\nworld' }], client_time_zone: 'Europe/Belgrade' },
-      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, mode: 'queue',
+      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, control, mode: 'queue',
         content: [{ type: 'text', text: 'without time zone' }] },
-      { operation: 'session.cancel', command_id: commandId, session_id: sessionId },
-      { operation: 'session.rename', command_id: commandId, session_id: sessionId, title: 'Remote session' },
-      { operation: 'session.delete', command_id: commandId, session_id: sessionId },
+      { operation: 'session.cancel', command_id: commandId, session_id: sessionId, control },
+      { operation: 'session.rename', command_id: commandId, session_id: sessionId, control,
+        title: 'Remote session' },
+      { operation: 'session.delete', command_id: commandId, session_id: sessionId, control },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000 },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000, cursor: 'approval-cursor-1' },
       { operation: 'approval.respond', command_id: commandId, session_id: sessionId,
-        approval_id: 'approval-1', outcome: 'allowed-once', operation_digest: 'a'.repeat(64) },
+        control, approval_id: 'approval-1', outcome: 'allowed-once', operation_digest: 'a'.repeat(64) },
       { operation: 'approval.respond', command_id: commandId, session_id: sessionId,
-        approval_id: 'approval-1', outcome: 'rejected' },
+        control, approval_id: 'approval-1', outcome: 'rejected' },
     ]) {
       const value = frame(command)
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)

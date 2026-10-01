@@ -1065,6 +1065,32 @@ describe('TypertGatewayService', () => {
     expect(connection.handler).toBeUndefined()
   })
 
+  it('checks browser admission before invoking a Session write and releases the policy', async () => {
+    const ctx = new Context().extend({ fixtureScope: 'rpc-caller' })
+    await ctx.plugin(TypertRegistry)
+    await ctx.plugin(FakeConnectionService)
+    await ctx.plugin(TypertGatewayService)
+    await ctx.plugin(GoalService)
+    registerAgentLookup(ctx, { id: 'agent-1' })
+    registerStrict(ctx, [createDescriptor()])
+    const handler = rawConnection(ctx).handler
+    if (!handler) throw new Error('missing RPC handler')
+    const service = rawGoalService(ctx)
+    const unregister = ctx.typertGateway.registerBrowserAdmission({
+      invoke(endpoint) { if (endpoint === 'goals/create') throw new Error('browser write denied') },
+      eventResult() {},
+    })
+    const payload = { args: { agentId: 'agent-1', request: { title: 'ship' } } }
+    const denied = await handler('goals/create', payload, new AbortController().signal)
+    expect(denied).toMatchObject({ ok: false, error: { message: 'browser write denied' } })
+    expect(service.calls).toEqual([])
+    unregister()
+    const admitted = await handler('goals/create', payload, new AbortController().signal)
+    expect(admitted).toEqual({ ok: true,
+      value: { agentId: 'agent-1', title: 'ship', scope: 'rpc-caller' } })
+    expect(service.calls).toEqual(['create'])
+  })
+
   it('claims and validates in-process Remote event results for the active Client generation', async () => {
     const ctx = new Context()
     await ctx.plugin(TypertRegistry)
