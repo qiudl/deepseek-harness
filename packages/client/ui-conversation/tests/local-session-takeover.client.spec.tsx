@@ -80,4 +80,29 @@ describe('Desktop local Session takeover', () => {
     await waitFor(() => { expect(screen.queryByRole('button', { name: zh['control.remoteHeld'] })).toBeNull() })
     expect(confirm).not.toHaveBeenCalled()
   })
+
+  it('abandons confirmation when its conversation is closed', async () => {
+    const pending = Promise.withResolvers<Response>()
+    let requests = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      requests += 1
+      if (requests === 2) return pending.promise
+      return new Response(JSON.stringify({ result: { ok: true, value:
+        { outcome: 'held_elsewhere', claim: { kind: 'remote', epoch: 5 } },
+      } }), { status: 200 })
+    }))
+    const confirm = vi.fn(() => true)
+    vi.stubGlobal('confirm', confirm)
+    const view = render(<LocalSessionTakeover {...({ sessionId: 'session-1', t: makeTranslate(zh) } as
+      Parameters<typeof LocalSessionTakeover>[0])} />)
+    fireEvent.click(await screen.findByRole('button', { name: zh['control.remoteHeld'] }))
+    await waitFor(() => { expect(requests).toBe(2) })
+    view.unmount()
+    pending.resolve(new Response(JSON.stringify({ result: { ok: true, value:
+      { outcome: 'held_elsewhere', claim: { kind: 'remote', epoch: 5 } },
+    } }), { status: 200 }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(confirm).not.toHaveBeenCalled()
+    expect(requests).toBe(2)
+  })
 })

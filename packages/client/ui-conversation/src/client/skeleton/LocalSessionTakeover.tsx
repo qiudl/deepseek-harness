@@ -58,7 +58,7 @@ export function LocalSessionTakeover({ sessionId, t }: Props) {
     }
     const timer = window.setInterval(refresh, 3_000)
     refresh()
-    return () => { active = false; window.clearInterval(timer) }
+    return () => { active = false; actionVersion.current += 1; window.clearInterval(timer) }
   }, [sessionId])
   if (epoch === null && !failed) return null
   return (
