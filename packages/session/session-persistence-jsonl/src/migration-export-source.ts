@@ -147,6 +147,7 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         if (directoryNames.includes(LEASE_FILENAME)) await this.checkedLeaseFile(join(sessionPath, LEASE_FILENAME))
         const generations = ordinaryGenerations.length > 0 ? ordinaryGenerations : compressedGenerations
         const selected = generations.sort((left, right) => right.version - left.version)[0]
+        /* v8 ignore next -- validation established a nonempty locally built array, with no async boundary before selection. */
         if (!selected) throw new Error('migration_export_source_unsafe')
         pending.push(await this.readLog(join(sessionPath, selected.name), compressedGenerations.length > 0,
           selected.version, signal))
