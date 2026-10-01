@@ -113,6 +113,35 @@ describe('PiAiAdapter provider routing', () => {
     expect(second.requests).toHaveLength(0)
   })
 
+  it('captures a DeepSeek explicit credential without native auth lookups after preparation', async () => {
+    const first = await mockServer([{ events: textEvents }]), second = await mockServer([])
+    let providers = { deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: first.url } }
+    let key = 'snapshot-first-key', reads = 0
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['deepseek'], new PiAiAdapter({ profiles: () => resolveProfiles(providers), resolveApiKey: () => { reads++; return Promise.resolve(key) }, auth: memoryAuth() }))
+    try {
+      const prepared = await ctx.llm.prepareSnapshot({ provider: 'deepseek', model: 'deepseek-v4-flash' }, new AbortController().signal)
+      expect(reads).toBe(1)
+      expect(first.requests).toHaveLength(0)
+      providers = { deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: second.url } }; key = 'snapshot-second-key'
+      for await (const _chunk of prepared.stream({ ...prepared.config, messages: [] })) { /* consume */ }
+      expect(reads).toBe(1)
+      expect(first.headers[0]?.authorization).toBe('Bearer snapshot-first-key')
+      expect(second.requests).toHaveLength(0)
+      expect(JSON.stringify(prepared.snapshot)).not.toContain('snapshot-first-key')
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('refuses a complete snapshot when pi-ai would need ambient or native auth', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['deepseek'], new PiAiAdapter({ profiles: () => resolveProfiles({ deepseek: {} }), resolveApiKey: () => Promise.resolve(undefined), auth: memoryAuth() }))
+    try {
+      await expect(ctx.llm.prepareSnapshot({ provider: 'deepseek', model: 'deepseek-v4-flash' }, new AbortController().signal)).rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
+    } finally { await ctx.fiber.dispose() }
+  })
+
   it('merges profile headers with Harness attribution winning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {

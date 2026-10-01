@@ -3,7 +3,8 @@
 import { hostname } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { errorChain } from '@deepseek-ai/dsh-llm'
+import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, openNativePath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import { foldRequestHeader, type SessionId } from '@deepseek-ai/dsh-session'
@@ -128,6 +129,7 @@ export class SessionController extends TypertRemoteService {
     super(ctx, 'sessionController', { namespace: 'session' })
     // Host identity reads use the owning Profile's registry, never a caller's Cordis scope.
     this.inspectWorkspaceModelSelection = this.inspectWorkspaceModelSelection.bind(this)
+    this.prepareWorkspaceModelSnapshot = this.prepareWorkspaceModelSnapshot.bind(this)
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
     this.commands = new SessionCommandController(ctx, this.agents, process.cwd())
@@ -285,6 +287,41 @@ export class SessionController extends TypertRemoteService {
       ...(choice.reasoningEffort === undefined ? {} : { reasoningEffort: choice.reasoningEffort }),
     })
     return Object.freeze({ workspaceId, sessionId, selection })
+  }
+
+  /**
+   * Prepare the source Session's next model under this Profile's registry. Recheck
+   * workspace/session ownership and selection after credential preparation. The
+   * returned call is process-local and one-shot; this does not issue Source authority,
+   * resume an Agent, append events, or send a model request. No Remote method is exposed.
+   * @param sessionId - ordinary Session registered under this workspace.
+   * @param workspaceId - WorkspaceRegistry UUID.
+   * @param signal - owning Host operation's cancellation, retained through dispatch.
+   * @returns workspace/session identities and the captured executable model call.
+   * @throws on ownership/selection change, unsupported capture, preparation failure or cancellation.
+   */
+  async prepareWorkspaceModelSnapshot(
+    sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal,
+  ): Promise<Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; prepared: PreparedLlmSnapshotCall }>> {
+    signal.throwIfAborted()
+    const workspace = this.ctx.workspaceRegistry.get(workspaceId)
+    const session = this.ctx.sessions.get(sessionId)
+    const selected = await this.inspectWorkspaceModelSelection(sessionId, workspaceId, signal)
+    const prepared = await this.ctx.llm.prepareSnapshot({
+      provider: selected.selection.provider,
+      model: selected.selection.model,
+      ...selected.selection.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(selected.selection.reasoningEffort) },
+    }, signal)
+    const current = await this.inspectWorkspaceModelSelection(sessionId, workspaceId, signal)
+    if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== session) {
+      throw new Error('collaboration_session_workspace_mismatch')
+    }
+    if (current.selection.provider !== selected.selection.provider || current.selection.model !== selected.selection.model ||
+      current.selection.reasoningEffort !== selected.selection.reasoningEffort) {
+      throw new Error('collaboration_model_selection_changed')
+    }
+    signal.throwIfAborted()
+    return Object.freeze({ workspaceId, sessionId, prepared })
   }
 
   /**

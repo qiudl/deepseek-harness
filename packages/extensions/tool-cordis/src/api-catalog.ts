@@ -1347,6 +1347,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a prepared config and its registration-bound stream entry point.',
       },
       {
+        signature: 'async prepareSnapshot(config: LlmCallConfig, signal: AbortSignal): Promise<PreparedLlmSnapshotCall>',
+        description: 'Prepare an executable configuration without sending a model request. The adapter captures its connection and credential; ordinary prepareCall remains unchanged. Each successful preparation receives a distinct decimal generation. Its fingerprint identifies the captured registration, not configuration contents or signed software. Neither identity survives as an executable handle across process restart.',
+        parameters: [{ name: 'config', description: 'provider/model route and request controls, copied before any await.' }, { name: 'signal', description: 'owning operation\'s cancellation, retained through eventual dispatch.' }],
+        returns: 'frozen public metadata and a registration-bound, one-shot stream handle.',
+        throws: ['on unsupported capture, invalid config, preparation failure, or cancellation.'],
+      },
+      {
         signature: 'stream(options: GenerateOptions): AsyncIterable<StreamChunk>',
         description: 'Stream one model call as raw chunks (token-level deltas). Replay state is retained only when the same adapter instance owns its historical provider and the target provider. Final adapter selection remains fixed through asynchronous exact-model resolution and dispatch. Adapter selection, dispatch, and iteration failures become terminal `error` or `aborted` finish chunks; middleware, nested-call, cleanup, and consumer failures remain thrown.',
         parameters: [{ name: 'options', description: 'the full request; `options.provider` selects the adapter.' }],
@@ -1682,6 +1689,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'sessionId', description: 'ordinary Session identity registered under the workspace.' }, { name: 'workspaceId', description: 'registry UUID; filesystem paths are not identities.' }, { name: 'signal', description: 'optional cancellation, checked before and after asynchronous reads.' }],
         returns: 'an immutable minimal selection captured after membership revalidation.',
         throws: ['when the workspace is absent, ownership changes, or the caller cancels.'],
+      },
+      {
+        signature: 'async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal, ): Promise<Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; prepared: PreparedLlmSnapshotCall }>>',
+        description: 'Prepare the source Session\'s next model under this Profile\'s registry. Recheck workspace/session ownership and selection after credential preparation. The returned call is process-local and one-shot; this does not issue Source authority, resume an Agent, append events, or send a model request. No Remote method is exposed.',
+        parameters: [{ name: 'sessionId', description: 'ordinary Session registered under this workspace.' }, { name: 'workspaceId', description: 'WorkspaceRegistry UUID.' }, { name: 'signal', description: 'owning Host operation\'s cancellation, retained through dispatch.' }],
+        returns: 'workspace/session identities and the captured executable model call.',
+        throws: ['on ownership/selection change, unsupported capture, preparation failure or cancellation.'],
       },
       {
         signature: '@Remote(\'list\') async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>',
@@ -5006,7 +5020,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmAdapter',
-    declaration: 'export abstract class LlmAdapter {\n    providerInfo(provider: string): LlmProviderInfo;\n    providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined;\n    imageRequestPricing(_provider: string, _model: string): LlmImageRequestPricing | undefined;\n    listModels(_provider: string): Promise<readonly LlmModelInfo[]>;\n    resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall>;\n    abstract stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+    declaration: 'export abstract class LlmAdapter {\n    providerInfo(provider: string): LlmProviderInfo;\n    providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined;\n    imageRequestPricing(_provider: string, _model: string): LlmImageRequestPricing | undefined;\n    listModels(_provider: string): Promise<readonly LlmModelInfo[]>;\n    resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall>;\n    prepareSnapshot(_provider: string, _model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall>;\n    abstract stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+  },
+  {
+    name: 'LlmAdapterFingerprint',
+    declaration: 'export type LlmAdapterFingerprint = Branded<\'LlmAdapterFingerprint\'>;',
   },
   {
     name: 'LlmAttemptId',
@@ -5023,6 +5041,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'LlmConfigurableProvider',
     declaration: 'export interface LlmConfigurableProvider {\n    provider: string;\n    displayName: string;\n    settingsNs: string;\n    settingsPath: readonly string[];\n    declared?: boolean;\n    error?: string;\n}',
+  },
+  {
+    name: 'LlmConfigurationGeneration',
+    declaration: 'export type LlmConfigurationGeneration = Branded<\'LlmConfigurationGeneration\'>;',
   },
   {
     name: 'LlmDiscoveredModel',
@@ -5070,7 +5092,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmRuntime',
-    declaration: 'export class LlmRuntime extends TypertRemoteService {\n    constructor(ctx: Context);\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    @Remote\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    @Remote\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest, signal?: AbortSignal) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest, signal?: AbortSignal): Promise<LlmDiscoveredModel[]>;\n    @Remote(\'discoverModels\')\n    async remoteDiscoverModels(settingsNs: string, request: LlmModelDiscoveryRequest, signal: AbortSignal): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    imageRequestPricing(provider: string, model: string): LlmImageRequestPricing | undefined;\n    fileRequestText(ref: FileAttachmentRef): string;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<LlmCallConfig>;\n    async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>;\n    stream(options: GenerateOptions) /* …truncated — full shape in source */',
+    declaration: 'export class LlmRuntime extends TypertRemoteService {\n    constructor(ctx: Context);\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    @Remote\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    @Remote\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest, signal?: AbortSignal) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest, signal?: AbortSignal): Promise<LlmDiscoveredModel[]>;\n    @Remote(\'discoverModels\')\n    async remoteDiscoverModels(settingsNs: string, request: LlmModelDiscoveryRequest, signal: AbortSignal): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    imageRequestPricing(provider: string, model: string): LlmImageRequestPricing | undefined;\n    fileRequestText(ref: FileAttachmentRef): string;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<LlmCallConfig>;\n    async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>;\n    async prepareSnapshot(config: Ll /* …truncated — full shape in source */',
   },
   {
     name: 'LspHover',
@@ -5371,6 +5393,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PreparedLlmCall',
     declaration: 'export interface PreparedLlmCall {\n    readonly config: LlmCallConfig;\n    readonly retryPolicy: ResolvedRetryPolicy;\n    readonly context?: LlmModelContext;\n    readonly inputModalities?: readonly ModelModality[];\n    readonly systemPromptUpdate?: SystemPromptUpdate;\n    readonly adapterDefaults: LlmCallConfigAdapterDefaults;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+  },
+  {
+    name: 'PreparedLlmSnapshotCall',
+    declaration: 'export interface PreparedLlmSnapshotCall extends PreparedLlmCall {\n    readonly snapshot: Readonly<{\n        provider: string;\n        model: string;\n        reasoning_effort?: LlmCallConfig[\'reasoningEffort\'];\n        configuration_generation: LlmConfigurationGeneration;\n        adapter_fingerprint: LlmAdapterFingerprint;\n    }>;\n}',
   },
   {
     name: 'PreparedReferencedMessage',

@@ -163,6 +163,15 @@ export class ChatCompletionsAdapter extends LlmAdapter {
     })
   }
 
+  override async prepareSnapshot(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    signal?.throwIfAborted()
+    const connection = this.config.options()
+    const info = modelInfo(connection, provider, model)
+    const apiKey = await this.config.resolveApiKey(connection)
+    signal?.throwIfAborted()
+    return { model: info, stream: options => this.streamWithConnection(options, connection, apiKey) }
+  }
+
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     return this.streamWithConnection(options, this.config.options())
   }
@@ -170,6 +179,7 @@ export class ChatCompletionsAdapter extends LlmAdapter {
   private async * streamWithConnection(
     options: GenerateOptions,
     connection: DeepSeekConnectionOptions,
+    capturedKey?: string,
   ): AsyncIterable<StreamChunk> {
     // One resolution per stream call: connection facts and the credential
     // freeze here and hold for this whole request, so an in-flight stream
@@ -194,7 +204,7 @@ export class ChatCompletionsAdapter extends LlmAdapter {
         )
       }
     }
-    const apiKey = await this.config.resolveApiKey(connection)
+    const apiKey = capturedKey ?? await this.config.resolveApiKey(connection)
     const userId = this.config.resolveUserId()
     const consumer = new AbortController()
     const upstream = options.signal === undefined

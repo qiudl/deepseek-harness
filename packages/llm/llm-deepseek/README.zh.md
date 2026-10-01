@@ -103,6 +103,8 @@ Files 模式通过 `maxRequestFilesBytes` 与 `maxImagesPerRequest` 限制保留
 
 连接事实通过可选 settings 与凭据 seam 每次操作重新读取一次。用户设置文档中的 `llm-deepseek:` 分节无需重启即可覆盖任何字段；违反 schema 之外约束的快照会保留最后有效事实并记录失败。API 密钥从提供端点、图片与 Files 策略及空闲预算的同一快照按流调用解析，因此被拒绝的设置代际不会贡献其中任何事实。图片请求在请求时解析附件服务，因此加载顺序不会冻结图片可用性。
 
+两个协议都实现[完整 LLM 快照准备](../llm/README.zh.md)：`prepareSnapshot()` 在返回前解析实际密钥，并将其与捕获的协议、端点及默认值保存在一起。后续设置或凭据轮换影响新的准备，已持有调用仍通过捕获的连接发送。普通 stream 及 `prepareCall()` 的凭据解析时点保持不变。
+
 ### 提供方专用请求字段
 
 两种协议中，存在 `ctx.deepseekLlmApiExtensions` 时，适配器都会在 `fetch` 前根据确切序列化基础请求准备已注册顶层字段。准备或字段冲突在 HTTP 前失败；2xx 响应后，适配器会在消费 SSE（Server-Sent Events）前接受每项已捕获贡献。传输与非 2xx 失败不会接受它们。随产品交付的组合用它提供默认启用的增量 `dsh_session_log` 字段和默认启用的活跃 `dsh_plugin_packages` 清单；两者都留在模型输入之外。

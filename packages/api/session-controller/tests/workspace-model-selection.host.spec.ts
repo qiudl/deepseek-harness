@@ -8,7 +8,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import SessionStore, { Session, SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionId, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { describe, expect, it, vi } from 'vitest'
@@ -20,13 +21,14 @@ const event = (type: string, data: unknown, seq: number) => ({ type, data, seq: 
 const used = event('request/header', { header: { config: { provider: 'used', model: 'model-used', reasoningEffort: ReasoningEffortId('high') }, adapterDefaults: { reasoningEffort: true } }, reason: 'initial' }, 0)
 const pending = event('model/selection', { provider: 'next', model: 'model-next', reasoningEffort: 'max' }, 1)
 
-async function harness(events: readonly SessionEvent[] = [used, pending]) {
+async function harness(events: readonly SessionEvent[] = [used, pending], adapter?: LlmAdapter) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-model-inspection-'))
   const cwd = await realpath(directory)
   const meta: SessionHeader = { version: SESSION_FORMAT_VERSION, id: sessionId, cwd, createdAt: 1, isSeeded: false }
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)
+  if (adapter !== undefined) { await ctx.plugin(LlmRuntime); ctx.llm.registerAdapter(['next'], adapter) }
   let selection = { provider: 'default', model: 'model-default' }
   let member = true
   const archivedSessionIds: SessionId[] = []
@@ -42,6 +44,59 @@ async function harness(events: readonly SessionEvent[] = [used, pending]) {
     dispose: async () => { await ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }) },
   }
 }
+
+class SnapshotAdapter extends LlmAdapter {
+  prepare = () => Promise.resolve()
+  override async prepareSnapshot(provider: string, model: string): Promise<PreparedAdapterCall> {
+    await this.prepare()
+    return { model: { provider, id: model, name: model, reasoning: { efforts: [{ id: ReasoningEffortId('max'), name: 'Max' }] } }, stream: options => this.stream(options) }
+  }
+  async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
+}
+
+describe('Host workspace prepared model snapshot', () => {
+  it('prepares the cold Session choice through the real runtime without activating or appending', async () => {
+    const h = await harness([used, pending], new SnapshotAdapter())
+    try {
+      const call = await h.controller.prepareWorkspaceModelSnapshot(sessionId, workspaceId, new AbortController().signal)
+      expect(call.workspaceId).toBe(workspaceId)
+      expect(call.prepared.snapshot).toMatchObject({ provider: 'next', model: 'model-next', reasoning_effort: 'max' })
+      expect(h.resume).not.toHaveBeenCalled()
+      expect(h.ctx.sessions.get(sessionId)).toBeUndefined()
+      expect(h.inspect).toHaveBeenCalledTimes(2)
+    } finally { await h.dispose() }
+  })
+  it('rejects workspace membership lost during preparation', async () => {
+    const adapter = new SnapshotAdapter(), h = await harness([used, pending], adapter)
+    adapter.prepare = async () => { h.detach() }
+    try {
+      await expect(h.controller.prepareWorkspaceModelSnapshot(sessionId, workspaceId, new AbortController().signal)).rejects.toThrow('collaboration_session_workspace_mismatch')
+    } finally { await h.dispose() }
+  })
+  it('rejects a source model selection changed during preparation', async () => {
+    const adapter = new SnapshotAdapter(), h = await harness([used, pending], adapter)
+    adapter.prepare = () => {
+      h.inspect.mockResolvedValue({ meta: h.meta, events: [used], inheritedEventCount: SessionLogOffset(0) })
+      return Promise.resolve()
+    }
+    try {
+      await expect(h.controller.prepareWorkspaceModelSnapshot(sessionId, workspaceId, new AbortController().signal)).rejects.toThrow('collaboration_model_selection_changed')
+    } finally { await h.dispose() }
+  })
+  it('prepares an attached Session from a different Cordis consumer scope without appending', async () => {
+    const h = await harness([], new SnapshotAdapter())
+    try {
+      const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } })
+      session.append('model/selection', { provider: 'next', model: 'model-next', reasoningEffort: 'max' })
+      const seq = session.seq
+      const consumer = h.ctx.extend({})
+      const call = await consumer.sessionController.prepareWorkspaceModelSnapshot(sessionId, workspaceId, new AbortController().signal)
+      expect(call.prepared.snapshot.provider).toBe('next')
+      expect(session.seq).toBe(seq)
+      expect(h.resume).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+})
 
 describe('Host workspace model inspection', () => {
   it('reads pending choice from a cold Session without resuming or appending', async () => {

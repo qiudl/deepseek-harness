@@ -56,6 +56,8 @@ for await (const chunk of ctx.llm.stream({
 
 After a successful mount, `ctx.llm.listProviders()` reports the registered routes in registration order.
 
+`prepareSnapshot(config, signal)` prepares a one-shot call whose adapter has already captured its connection and resolved credential. It copies config before asynchronous work and retains the owning cancellation signal through dispatch. The frozen public `snapshot` contains provider, model, optional effective reasoning effort, a decimal preparation generation, and a SHA-256 registration fingerprint; it contains no credential. Each successful preparation gets a distinct generation, even for equal settings. The fingerprint identifies a runtime registration, changes on route replacement or restart, and does not attest software or hash configuration secrets. Adapters without complete capture reject with `PREPARED_SNAPSHOT_UNSUPPORTED`; ordinary `prepareCall()` keeps its existing behavior. Prepared handles are process-local and cannot be reconstructed from public metadata after a restart.
+
 ### What you can do
 
 - **Stream one model call** — `ctx.llm.stream(options)` yields raw chunks (token-level deltas) for any registered provider and model; consumers assemble them with `BlockAssembler`.

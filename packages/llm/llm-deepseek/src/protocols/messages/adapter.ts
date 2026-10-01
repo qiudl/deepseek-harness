@@ -57,15 +57,23 @@ export class DeepSeekMessagesAdapter extends LlmAdapter {
     const connection = this.dependencies.connection()
     return Promise.resolve({ model: modelInfo(connection, provider, model), stream: options => this.generate(options, connection) })
   }
+  override async prepareSnapshot(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    signal?.throwIfAborted()
+    const connection = this.dependencies.connection()
+    const info = modelInfo(connection, provider, model)
+    const apiKey = await this.dependencies.apiKey(connection)
+    signal?.throwIfAborted()
+    return { model: info, stream: options => this.generate(options, connection, apiKey) }
+  }
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     return this.generate(options, this.dependencies.connection())
   }
 
-  private async * generate(options: GenerateOptions, connection: Connection): AsyncGenerator<StreamChunk> {
+  private async * generate(options: GenerateOptions, connection: Connection, capturedKey?: string): AsyncGenerator<StreamChunk> {
     const consumer = new AbortController()
     const signal = options.signal === undefined ? consumer.signal : AbortSignal.any([consumer.signal, options.signal])
     using watchdog = idleWatchdog(signal, connection.streamIdleTimeoutMs, 'MESSAGES_IDLE')
-    const iterator = this.request(options, connection, watchdog.signal, () => { watchdog.pulse() })
+    const iterator = this.request(options, connection, watchdog.signal, () => { watchdog.pulse() }, capturedKey)
     try {
       while (true) {
         const next = await watchdog.next(iterator)
@@ -87,12 +95,13 @@ export class DeepSeekMessagesAdapter extends LlmAdapter {
 
   private async * request(
     options: GenerateOptions, connection: Connection, signal: AbortSignal, activity: () => void,
+    capturedKey?: string,
   ): AsyncGenerator<StreamChunk> {
     signal.throwIfAborted()
     const { messages, versions } = await prepareImages(
       options.messages, connection, options.model, this.dependencies.attachments(), this.dependencies.imageAccess, signal,
     )
-    const key = await this.dependencies.apiKey(connection)
+    const key = capturedKey ?? await this.dependencies.apiKey(connection)
     const files = new RequestFiles(this.dependencies.files(), { baseURL: connection.baseURL, apiKey: key, protocol: 'messages' },
       connection.filePolicy, connection.filesApiTimeoutMs, signal, activity)
     let inline = false

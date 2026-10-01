@@ -477,6 +477,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   LspQueryResult: 'lsp.md',
   LlmAdapter: 'llm-streaming.md',
   PreparedLlmCall: 'llm-streaming.md',
+  PreparedLlmSnapshotCall: 'llm-streaming.md',
   PreparedDeepSeekLlmApiExtensions: 'llm-streaming.md',
   LlmRuntime: 'llm-streaming.md',
   StreamChunk: 'llm-streaming.md',

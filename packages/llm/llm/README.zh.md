@@ -56,6 +56,8 @@ for await (const chunk of ctx.llm.stream({
 
 挂载成功后，`ctx.llm.listProviders()` 会按注册顺序报告已注册路由。
 
+`prepareSnapshot(config, signal)` 准备一次性调用，适配器已捕获连接及解析后的凭据。它在异步工作前复制 config，并将所属操作的取消信号保留到发送。冻结的公开 `snapshot` 包含 provider、model、可选有效推理强度、十进制准备代次及 SHA-256 注册指纹，不含凭据。每次成功准备都会取得不同代次，即使设置相同。指纹标识运行时注册，路由替换或重启后变化，不证明软件身份，也不对配置密钥计算摘要。不支持完整捕获的适配器以 `PREPARED_SNAPSHOT_UNSUPPORTED` 拒绝；普通 `prepareCall()` 保留现有行为。准备句柄仅在当前进程有效，重启后不能从公开元数据重建。
+
 ### 你可以做什么
 
 - **流式发起一次模型调用**——`ctx.llm.stream(options)` 为任何已注册提供方与模型产出原始分片（token 级增量）；消费方用 `BlockAssembler` 组装。

@@ -323,6 +323,32 @@ export class PiAiAdapter extends LlmAdapter {
     })
   }
 
+  override async prepareSnapshot(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    signal?.throwIfAborted()
+    const snapshot = this.current()
+    const profile = this.profileOf(snapshot, provider)
+    const resolved = this.modelOf(snapshot, provider, model)
+    if (provider !== 'deepseek' || resolved.api !== 'openai-completions') {
+      throw new LlmError('pi-ai route cannot capture a complete prepared snapshot', 'PREPARED_SNAPSHOT_UNSUPPORTED')
+    }
+    const apiKey = await this.config.resolveApiKey(provider, profile)
+    signal?.throwIfAborted()
+    if (!apiKey?.trim()) {
+      throw new LlmError('pi-ai snapshot requires an explicit resolved credential', 'PREPARED_SNAPSHOT_UNSUPPORTED')
+    }
+    // This audited wire route consumes the explicit key directly. Models.streamSimple
+    // would resolve native auth again, after the source configuration was frozen.
+    const owner = snapshot.models.getProvider(provider)
+    if (owner === undefined) {
+      throw new LlmError('pi-ai snapshot provider is unavailable', 'PREPARED_SNAPSHOT_UNSUPPORTED')
+    }
+    const dispatch = owner.streamSimple.bind(owner)
+    return {
+      model: this.modelInfo(snapshot, provider, model),
+      stream: options => this.streamWithSnapshot(options, snapshot, { apiKey, dispatch }),
+    }
+  }
+
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     return this.streamWithSnapshot(options, this.current())
   }
@@ -330,6 +356,7 @@ export class PiAiAdapter extends LlmAdapter {
   private async * streamWithSnapshot(
     options: GenerateOptions,
     snapshot: PiAiSnapshot,
+    captured?: { apiKey: string; dispatch: Models['streamSimple'] },
   ): AsyncIterable<StreamChunk> {
     if (options.stop !== undefined) {
       throw new LlmError('llm-pi-ai does not support GenerateOptions.stop', 'UNSUPPORTED_OPTION')
@@ -345,7 +372,7 @@ export class PiAiAdapter extends LlmAdapter {
       model,
       options.reasoningEffort ?? profile.reasoning,
     )
-    const apiKey = await this.config.resolveApiKey(options.provider, profile)
+    const apiKey = captured === undefined ? await this.config.resolveApiKey(options.provider, profile) : captured.apiKey
 
     const consumer = new AbortController()
     const upstream = options.signal === undefined
@@ -377,7 +404,7 @@ export class PiAiAdapter extends LlmAdapter {
             maxBytes: profile.requestImageMaxBytes,
           },
         }, onReplayDegrade)
-      const events = snapshot.models.streamSimple(model, context, {
+      const streamOptions = {
         ...profileOptions(profile, reasoning, apiKey),
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
@@ -386,7 +413,10 @@ export class PiAiAdapter extends LlmAdapter {
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
         headers: requestHeaders(profile.headers),
-      })
+      }
+      const events = captured === undefined
+        ? snapshot.models.streamSimple(model, context, streamOptions)
+        : captured.dispatch(model, context, streamOptions)
       const iterator = toStreamChunks(events, model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]()
       let exhausted = false
       try {

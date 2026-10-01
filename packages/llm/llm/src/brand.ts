@@ -12,6 +12,11 @@
 
 import { brandString, type Branded } from '@deepseek-ai/dsh-brand'
 
+/** Decimal identity of one complete configuration preparation within a runtime. */
+export type LlmConfigurationGeneration = Branded<'LlmConfigurationGeneration'>
+/** SHA-256 identity of one registration, distinct across replacement and runtime restart. */
+export type LlmAdapterFingerprint = Branded<'LlmAdapterFingerprint'>
+
 /** Stable identity carried by one message across inbox, log, and model-request boundaries. */
 export type MessageId = Branded<'MessageId'>
 

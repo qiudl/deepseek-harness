@@ -17,6 +17,23 @@ async function endpoint(...args: Parameters<typeof server>) {
 }
 const chat = 'data: {"choices":[{"delta":{"content":"Chat answer"}}]}\n\n'
   + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+it.each(['messages', 'chat-completions'] as const)('captures the actual credential and endpoint before snapshot dispatch: %s', async (protocol) => {
+  const first = await endpoint(protocol === 'messages' ? undefined : response => response.end(chat))
+  const second = await endpoint()
+  let connection = resolveAdapterOptions({ protocol, baseURL: first.url, maxTokens: 12 })
+  let key = 'private-first-key'
+  let reads = 0
+  const llm = new DeepSeekAdapter({ options: () => connection, resolveApiKey: () => { reads++; return Promise.resolve(key) }, resolveUserId: () => 'user' as AnonymousUserId, prepareExtensions: () => Promise.resolve({ fields: {}, accept: () => Promise.resolve() }) })
+  const prepared = await llm.prepareSnapshot('deepseek-official', MODEL, new AbortController().signal)
+  expect(reads).toBe(1)
+  expect(first.requests).toHaveLength(0)
+  connection = resolveAdapterOptions({ protocol, baseURL: second.url, maxTokens: 24 })
+  key = 'private-second-key'
+  await chunks(prepared.stream(options()))
+  expect(reads).toBe(1)
+  expect(first.requests[0]).toMatchObject({ headers: protocol === 'messages' ? { 'x-api-key': 'private-first-key' } : { authorization: 'Bearer private-first-key' } })
+  expect(second.requests).toHaveLength(0)
+})
 function adapter(connection: () => DeepSeekConnectionOptions) {
   return new DeepSeekAdapter({
     options: connection,

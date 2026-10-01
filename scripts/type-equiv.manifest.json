@@ -450,6 +450,11 @@
     },
     {
       "doc": "docs/subsystems/llm-streaming.md",
+      "symbol": "PreparedLlmSnapshotCall",
+      "source": "packages/llm/llm/src/index.ts"
+    },
+    {
+      "doc": "docs/subsystems/llm-streaming.md",
       "symbol": "LlmAdapter",
       "source": "packages/llm/llm/src/index.ts",
       "projection": "public-api"

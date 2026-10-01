@@ -783,6 +783,22 @@ interface PreparedLlmCall {
 }
 ```
 
+`ctx.llm.prepareSnapshot(config, signal)` additionally captures the adapter connection and resolved credential before returning a one-shot `PreparedLlmSnapshotCall`. Unsupported adapters reject with `PREPARED_SNAPSHOT_UNSUPPORTED`. The owning cancellation signal remains effective through dispatch. Public metadata contains no credential: `configuration_generation` is a distinct decimal identity for each successful preparation in one runtime, and `adapter_fingerprint` identifies a registration, not its configuration contents or software authenticity. These identities cannot recreate an executable handle after process restart. Request messages and the existing `llm/stream` waterfall remain dispatch-time inputs; this snapshot does not grant Host authority or prove journal persistence.
+
+```ts type-equiv
+/** One-shot call with its connection and credential already captured by the adapter. */
+interface PreparedLlmSnapshotCall extends PreparedLlmCall {
+  /** Non-secret identity of this exact preparation; not a Host authentication proof. */
+  readonly snapshot: Readonly<{
+    provider: string
+    model: string
+    reasoning_effort?: LlmCallConfig['reasoningEffort']
+    configuration_generation: LlmConfigurationGeneration
+    adapter_fingerprint: LlmAdapterFingerprint
+  }>
+}
+```
+
 ```ts public-api
 /**
  * Provider-wire adapter for the harness message and stream vocabulary. Register implementations
@@ -845,6 +861,16 @@ declare abstract class LlmAdapter {
    * @returns model metadata and a one-generation stream entry point.
    */
   async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall>;
+  /**
+   * Capture connection settings and the resolved credential before returning a call.
+   * The default rejects; implementations must never fall back to dynamic credentials.
+   * @param _provider - registered provider route.
+   * @param _model - exact model id.
+   * @param _signal - preparation cancellation; captured streams honor their request signal.
+   * @returns metadata and dispatch bound to the captured configuration and credential.
+   * @throws PREPARED_SNAPSHOT_UNSUPPORTED when this adapter cannot capture those facts.
+   */
+  prepareSnapshot(_provider: string, _model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall>;
   /**
    * Stream one model call as raw chunks. The only required method.
    * @param options - the fully-assembled request; implementations must honor `options.signal`.
@@ -1030,6 +1056,19 @@ async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<Ll
  * @returns a prepared config and its registration-bound stream entry point.
  */
 async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>
+
+/**
+ * Prepare an executable configuration without sending a model request. The adapter
+ * captures its connection and credential; ordinary prepareCall remains unchanged.
+ * Each successful preparation receives a distinct decimal generation. Its fingerprint
+ * identifies the captured registration, not configuration contents or signed software.
+ * Neither identity survives as an executable handle across process restart.
+ * @param config - provider/model route and request controls, copied before any await.
+ * @param signal - owning operation's cancellation, retained through eventual dispatch.
+ * @returns frozen public metadata and a registration-bound, one-shot stream handle.
+ * @throws on unsupported capture, invalid config, preparation failure, or cancellation.
+ */
+async prepareSnapshot(config: LlmCallConfig, signal: AbortSignal): Promise<PreparedLlmSnapshotCall>
 
 /**
  * Stream one model call as raw chunks (token-level deltas). Replay state is

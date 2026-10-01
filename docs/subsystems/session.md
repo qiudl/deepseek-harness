@@ -782,6 +782,19 @@ inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspectio
 async inspectWorkspaceModelSelection( sessionId: SessionId, workspaceId: WorkspaceId, signal?: AbortSignal, ): Promise<WorkspaceModelSelection>
 
 /**
+ * Prepare the source Session's next model under this Profile's registry. Recheck
+ * workspace/session ownership and selection after credential preparation. The
+ * returned call is process-local and one-shot; this does not issue Source authority,
+ * resume an Agent, append events, or send a model request. No Remote method is exposed.
+ * @param sessionId - ordinary Session registered under this workspace.
+ * @param workspaceId - WorkspaceRegistry UUID.
+ * @param signal - owning Host operation's cancellation, retained through dispatch.
+ * @returns workspace/session identities and the captured executable model call.
+ * @throws on ownership/selection change, unsupported capture, preparation failure or cancellation.
+ */
+async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal, ): Promise<Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; prepared: PreparedLlmSnapshotCall }>>
+
+/**
  * Read all visible Session rows without resuming an Agent.
  * @param _request - reserved empty list request.
  * @param signal - cancellation for persistence reads.
@@ -914,7 +927,7 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote({ mode: 'stream' }) control(signal: AbortSignal): AsyncIterable<SessionControlFrame>
 ```
 
-Types: [SessionId](core.md) · [SessionInspection](persistence.md) · [SessionSearchRequest](session-query.md) · [WorkspaceId](workspace.md)
+Types: [PreparedLlmSnapshotCall](llm-streaming.md) · [SessionId](core.md) · [SessionInspection](persistence.md) · [SessionSearchRequest](session-query.md) · [WorkspaceId](workspace.md)
 
 Source: [`packages/api/session-controller/src/index.ts`](../../packages/api/session-controller/src/index.ts)
 
