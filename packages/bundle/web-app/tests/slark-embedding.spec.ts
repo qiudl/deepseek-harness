@@ -17,3 +17,20 @@ it('disables upstream account only in a Slark Profile worker', () => {
     expect(evaluate({ process: { env: {} } }, expression!), id).toBe(false)
   }
 })
+
+it.each([
+  ['desktop', undefined, false],
+  ['web', undefined, true],
+  ['web', '0', true],
+  ['web', '1', false],
+] as const)('preserves sidebar Browser availability for %s / Slark %s', (profile, embedded, disabled) => {
+  const rows = loadOverlayPatches('slark-embedding', fileURLToPath(new URL('../cordis.patch.yml', import.meta.url)))
+    .flatMap(patch => patch.insert ?? [])
+  const row = rows.find(candidate => candidate.id === 'ui-sidebar-browser')
+  const expression = (row?.disabled as { __jsExpr?: string } | undefined)?.__jsExpr
+  expect(expression).toBeTypeOf('string')
+  expect(evaluate({
+    ctx: { get: (key: string) => key === 'profileContext' ? { name: profile } : undefined },
+    process: { env: { DSH_SLARK_EMBEDDED: embedded } },
+  }, expression!)).toBe(disabled)
+})

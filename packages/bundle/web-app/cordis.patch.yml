@@ -276,10 +276,11 @@
     - id: ui-sidebar-documentpreview
       name: '@deepseek-ai/dsh-client-ui-sidebar-documentpreview'
 
-    # Web profiles opt in; Desktop retains sandboxed HTTP(S) Browser tabs.
+    # Slark embeds the web Profile in its signed Desktop carrier.
+    # Other web profiles still opt in; Desktop retains HTTP(S) Browser tabs.
     - id: ui-sidebar-browser
       name: '@deepseek-ai/dsh-client-ui-sidebar-browser'
-      disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"
+      disabled: !!js "ctx.get('profileContext')?.name !== 'desktop' && process.env.DSH_SLARK_EMBEDDED !== '1'"
 
     - id: ui-sidebar-terminal
       name: '@deepseek-ai/dsh-client-ui-sidebar-terminal'
