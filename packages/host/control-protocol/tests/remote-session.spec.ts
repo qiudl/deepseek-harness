@@ -21,6 +21,9 @@ describe('Profile remote Session wire commands', () => {
     for (const command of [
       { operation: 'session.list', command_id: commandId },
       { operation: 'session.create', command_id: commandId },
+      { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1' },
+      { operation: 'remote.event.respond', command_id: commandId, session_id: sessionId,
+        client_id: randomUUID(), event_id: randomUUID(), outcome: 'allowed-once' },
       { operation: 'session.history', command_id: commandId, session_id: sessionId, max_events: 100 },
       { operation: 'session.prompt', command_id: commandId, session_id: sessionId, mode: 'queue',
         content: [{ type: 'text', text: 'hello\nworld' }], client_time_zone: 'Europe/Belgrade' },
@@ -46,6 +49,10 @@ describe('Profile remote Session wire commands', () => {
     for (const command of [
       { operation: 'api.proxy', command_id: id, path: '/api/settings.describe' },
       { operation: 'session.list', command_id: id, profile_root: '/another-user' },
+      { operation: 'session.create', command_id: id, cwd: '/tmp/escape' },
+      { operation: 'session.create', command_id: id, workspace_id: '../escape' },
+      { operation: 'remote.event.respond', command_id: id, session_id: 'session-1',
+        client_id: randomUUID(), event_id: randomUUID(), outcome: 'always-allow' },
       { operation: 'session.history', command_id: id, session_id: '', max_events: 100 },
       { operation: 'session.history', command_id: id, session_id: 'session-1', max_events: 101 },
       { operation: 'session.prompt', command_id: id, session_id: 'session-1', mode: 'now',
@@ -140,6 +147,8 @@ describe('Profile remote UI stream wire commands', () => {
   it('accepts only bounded Session follow open, poll and close', () => {
     const stream_id = randomUUID()
     for (const command of [
+      { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: {} } },
+      { action: 'open', stream_id, endpoint: '$events', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 100, assistantStream: true,
       } } } },
@@ -158,6 +167,8 @@ describe('Profile remote UI stream wire commands', () => {
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
     }
     for (const command of [
+      { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: { path: '/tmp' } } },
+      { action: 'open', stream_id, endpoint: '$events', payload: { args: { all: true } } },
       { action: 'open', stream_id, endpoint: 'asset/read', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: '../other' },

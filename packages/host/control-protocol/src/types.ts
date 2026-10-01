@@ -879,7 +879,16 @@ export type HostRemoteSessionJson =
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
-  | { readonly operation: 'session.list' | 'session.create'; readonly command_id: HostControlRequestId }
+  | { readonly operation: 'session.list'; readonly command_id: HostControlRequestId }
+  | { readonly operation: 'session.create'
+    readonly command_id: HostControlRequestId
+    readonly workspace_id?: string }
+  | { readonly operation: 'remote.event.respond'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly client_id: string
+    readonly event_id: string
+    readonly outcome: 'allowed-once' | 'rejected' | 'next' }
   | {
     readonly operation: 'session.history'
     readonly command_id: HostControlRequestId
@@ -969,7 +978,7 @@ export interface ProfileRemoteUiReadResult {
   readonly result: { readonly value: HostRemoteSessionJson }
 }
 
-/** Only the native Session-follow stream may cross a live Profile view lease. */
+/** Only selected native read streams may cross a live Profile view lease. */
 export type ProfileRemoteUiStreamCommand =
   | {
     readonly action: 'open'
@@ -987,6 +996,14 @@ export type ProfileRemoteUiStreamCommand =
       readonly assistantStream?: true
     } } }
   }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'workspace/follow'
+    readonly payload: { readonly args: Record<string, never> } }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: '$events'
+    readonly payload: { readonly args: Record<string, never> } }
   | { readonly action: 'poll' | 'close'; readonly stream_id: string }
 
 /** One short, lease-authorized stream control RPC. */

@@ -31,7 +31,8 @@ import type {} from '@deepseek-ai/dsh-llm'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
-import { DesktopRemoteUiStreamExecutor, handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
+import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
+  handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'web-app'
@@ -245,9 +246,10 @@ export function apply(ctx: Context, config: Config): void {
     })
   }
   const desktopRemoteSessionToken = process.env.DSH_PROFILE_REMOTE_SESSION_TOKEN
+  const remoteApprovalEvents = new DesktopRemoteApprovalEvents()
   if (desktopRemoteSessionToken && /^[A-Za-z0-9_-]{43}$/u.test(desktopRemoteSessionToken)) {
     ctx.inject(['typertGateway'], (remoteCtx) => {
-      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway)
+      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents)
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
         handler: (req, res) => handleDesktopRemoteSessionRequest(
@@ -262,7 +264,7 @@ export function apply(ctx: Context, config: Config): void {
     ctx.inject(['typertGateway'], (remoteCtx) => {
       const executor = new DesktopRemoteUiExecutor(remoteCtx.typertGateway,
         () => remoteCtx.webServer.collectIndexInjections())
-      const streamExecutor = new DesktopRemoteUiStreamExecutor(remoteCtx.typertGateway)
+      const streamExecutor = new DesktopRemoteUiStreamExecutor(remoteCtx.typertGateway, remoteApprovalEvents)
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-ui',
         handler: (req, res) => handleDesktopRemoteUiRequest(req, res, desktopRemoteUiToken,

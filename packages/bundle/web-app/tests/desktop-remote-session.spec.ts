@@ -6,6 +6,17 @@ import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 
 describe('Desktop remote Session bridge', () => {
+  it('creates a remote Session in the requested Host workspace', async () => {
+    const invoke = vi.fn(async () => ({ sessionId: 'session-2' }))
+    const executor = new DesktopRemoteSessionExecutor({ invoke } as unknown as TypertGateway)
+    const signal = new AbortController().signal
+    await expect(executor.execute({ operation: 'session.create',
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      workspace_id: 'workspace-1' }, signal)).resolves.toEqual({ sessionId: 'session-2' })
+    expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'create',
+      args: { request: { workspaceId: 'workspace-1' } }, signal })
+  })
+
   it('uses the Session list gateway parameter name', async () => {
     const invoke = vi.fn(async () => ({ items: [] }))
     const executor = new DesktopRemoteSessionExecutor({ invoke } as unknown as TypertGateway)
