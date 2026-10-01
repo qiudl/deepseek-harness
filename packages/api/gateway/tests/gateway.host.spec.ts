@@ -1213,6 +1213,37 @@ describe('TypertGatewayService', () => {
     expect(service.calls).toEqual(['create'])
   })
 
+  it('exposes local Session takeover only through the active browser admission', async () => {
+    const ctx = new Context()
+    await ctx.plugin(TypertRegistry)
+    await ctx.plugin(FakeConnectionService)
+    await ctx.plugin(TypertGatewayService)
+    const connection = rawConnection(ctx)
+    const handler = connection.handler
+    if (!handler) throw new Error('missing RPC handler')
+    expect(connection.matches?.('session/localControlStatus')).toBe(false)
+    const observed: unknown[] = []
+    const unregister = ctx.typertGateway.registerBrowserAdmission({
+      invoke() {}, eventResult() {},
+      localControlStatus(sessionId) { observed.push(sessionId); return { outcome: 'held_elsewhere', epoch: 3 } },
+      localControlTakeover(sessionId, epoch) {
+        observed.push([sessionId, epoch]); return { outcome: 'controlled', epoch: 4 }
+      },
+    })
+    expect(connection.matches?.('session/localControlStatus')).toBe(true)
+    expect(await handler('session/localControlStatus', { args: { sessionId: 'session-1' } },
+      new AbortController().signal)).toEqual({ ok: true, value: { outcome: 'held_elsewhere', epoch: 3 } })
+    expect((await handler('session/localControlTakeover', { args: {
+      sessionId: 'session-1', expectedEpoch: 0,
+    } }, new AbortController().signal)).ok).toBe(false)
+    expect(await handler('session/localControlTakeover', { args: {
+      sessionId: 'session-1', expectedEpoch: 3,
+    } }, new AbortController().signal)).toEqual({ ok: true, value: { outcome: 'controlled', epoch: 4 } })
+    expect(observed).toEqual(['session-1', ['session-1', 3]])
+    unregister()
+    expect(connection.matches?.('session/localControlTakeover')).toBe(false)
+  })
+
   it('claims and validates in-process Remote event results for the active Client generation', async () => {
     const ctx = new Context()
     await ctx.plugin(TypertRegistry)

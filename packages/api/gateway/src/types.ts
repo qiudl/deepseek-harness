@@ -148,6 +148,8 @@ export interface TypertGateway {
   registerBrowserAdmission(admission: {
     readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined
     readonly eventResult: (sessionId: string) => (() => void) | undefined
+    readonly localControlStatus?: (sessionId: string) => unknown
+    readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown
   }): () => void
 
   /** Settle one forwarded waterfall event from an authenticated in-process carrier. */

@@ -79,6 +79,8 @@ When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the 
 
 When the Desktop remote Session route is active, its Profile keeps one control claim per Session. Browser Session writes implicitly claim local control while the Session is unclaimed; a remote controller uses explicit acquire and compare-and-swap takeover. The Profile checks remote claims on every supported mutation and approval reply, checks local browser writes and event replies at the Gateway, and holds admitted writes until they settle. Control claims expire after 30 seconds without renewal and are invalid after Profile restart. The daemon and Slark Server must exchange the Profile claim before the remote browser can use these commands.
 
+When a remote client owns the current Session, the Desktop browser shows a takeover action in the Session header. It reads the current Profile epoch again, asks the user to confirm, and submits a compare-and-swap takeover through the authenticated browser Gateway. The user then resends the retained draft. The action is absent without the Desktop remote Session route.
+
 Remote `session.create` forwards only an optional Workspace ID to the selected Profile. The Profile resolves that ID against its own registry; caller-supplied paths do not cross the Host command protocol. Native approval results use the pending `$events` generation and must match its Session ID.
 
 <details>

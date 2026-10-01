@@ -3394,7 +3394,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'registerBrowserAdmission(admission: { readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined readonly eventResult: (sessionId: string) => (() => void) | undefined }): () => void',
+        signature: 'registerBrowserAdmission(admission: { readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined readonly eventResult: (sessionId: string) => (() => void) | undefined readonly localControlStatus?: (sessionId: string) => unknown readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown }): () => void',
         description: 'Install one Profile-owned browser admission policy for this Gateway generation.',
         parameters: [{ name: 'admission', description: 'callbacks that hold a browser write through settlement.' }],
         returns: 'disposer removing this exact policy.',

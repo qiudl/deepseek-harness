@@ -221,6 +221,8 @@ export class TypertGatewayService extends Service implements TypertGateway {
   private browserAdmission: {
     readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined
     readonly eventResult: (sessionId: string) => (() => void) | undefined
+    readonly localControlStatus?: (sessionId: string) => unknown
+    readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown
   } | undefined
 
   /**
@@ -231,6 +233,8 @@ export class TypertGatewayService extends Service implements TypertGateway {
   registerBrowserAdmission(admission: {
     readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined
     readonly eventResult: (sessionId: string) => (() => void) | undefined
+    readonly localControlStatus?: (sessionId: string) => unknown
+    readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown
   }): () => void {
     if (this.browserAdmission) throw new Error('typert gateway: browser admission already registered')
     this.browserAdmission = admission
@@ -345,6 +349,8 @@ export class TypertGatewayService extends Service implements TypertGateway {
 
   private claimsEndpoint(endpoint: string): boolean {
     if (endpoint === REMOTE_EVENT_RESULT_ENDPOINT) return true
+    if ((endpoint === 'session/localControlStatus' || endpoint === 'session/localControlTakeover') &&
+      this.browserAdmission?.localControlStatus && this.browserAdmission.localControlTakeover) return true
     const segments = endpoint.split('/')
     if (segments.length !== 2 || segments[0] === '' || segments[1] === '') return false
     if (this.ctx.typert.local.get(endpoint) !== undefined || this.ctx.typert.local.hasSeen(endpoint)) return true
@@ -448,6 +454,25 @@ export class TypertGatewayService extends Service implements TypertGateway {
     signal: AbortSignal,
     peer: PeerScope,
   ): Promise<ConnectionRpcResult> {
+    if (endpoint === 'session/localControlStatus' || endpoint === 'session/localControlTakeover') {
+      try {
+        const request = remoteRequest(endpoint, payload, signal)
+        const args = request.args
+        if (typeof args.sessionId !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u.test(args.sessionId)) {
+          throw new Error('desktop session control: invalid Session id')
+        }
+        if (endpoint === 'session/localControlStatus') {
+          if (Object.keys(args).length !== 1 || !this.browserAdmission?.localControlStatus) throw new Error('desktop session control unavailable')
+          return { ok: true, value: this.browserAdmission.localControlStatus(args.sessionId) }
+        }
+        if (Object.keys(args).length !== 2 || !Number.isSafeInteger(args.expectedEpoch) ||
+          (args.expectedEpoch as number) < 1 || !this.browserAdmission?.localControlTakeover) {
+          throw new Error('desktop session control: invalid takeover request')
+        }
+        return { ok: true, value: this.browserAdmission.localControlTakeover(args.sessionId,
+          args.expectedEpoch as number) }
+      } catch (error) { return rpcFailure(error) }
+    }
     if (endpoint === REMOTE_EVENT_RESULT_ENDPOINT) {
       try {
         const result = parseRemoteEventResultPayload(payload)
