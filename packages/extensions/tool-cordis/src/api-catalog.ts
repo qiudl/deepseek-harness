@@ -3394,15 +3394,21 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'registerBrowserAdmission(admission: { readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined readonly eventResult: (sessionId: string) => (() => void) | undefined }): () => void',
+        description: 'Install one Profile-owned browser admission policy for this Gateway generation.',
+        parameters: [{ name: 'admission', description: 'callbacks that hold a browser write through settlement.' }],
+        returns: 'disposer removing this exact policy.',
+      },
+      {
         signature: 'registerRemoteEvents( source: TypertRemoteEventSource, host: RemoteEventHostInfo, ): () => Promise<void>',
         description: 'Register the sole application-selected forwarded-event source.',
         parameters: [{ name: 'source', description: 'stream factory installed by the Remote assembly.' }, { name: 'host', description: 'stable Host facts included in each Client generation\'s opening frame.' }],
         returns: 'disposer removing this source and cancelling its active streams.',
       },
       {
-        signature: 'respondRemoteEvent(result: RemoteEventResult): void',
+        signature: 'respondRemoteEvent(result: RemoteEventResult, source: \'host\' | \'browser\' = \'host\'): void',
         description: 'Settle one forwarded waterfall event without routing through the browser RPC carrier.',
-        parameters: [{ name: 'result', description: 'The forwarded event result to settle.' }],
+        parameters: [{ name: 'result', description: 'The forwarded event result to settle.' }, { name: 'source', description: 'trusted direct Host call or authenticated browser RPC.' }],
       },
       {
         signature: 'async invoke(request: InvokeRemoteRequest): Promise<unknown>',

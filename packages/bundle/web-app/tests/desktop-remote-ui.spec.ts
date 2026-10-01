@@ -157,7 +157,9 @@ describe('Desktop remote UI read-only bridge', () => {
     await iterator.next()
     const command = { operation: 'remote.event.respond' as const,
       command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
-      session_id: 'session-1', client_id: 'client-1', event_id: 'event-1', outcome: 'allowed-once' as const }
+      session_id: 'session-1', control: { controller_id: '123e4567-e89b-42d3-a456-426614174001',
+        generation: '123e4567-e89b-42d3-a456-426614174002', epoch: 1 },
+      client_id: 'client-1', event_id: 'event-1', outcome: 'allowed-once' as const }
     expect(() => { approvals.respond(gateway, { ...command, session_id: 'session-2' }) }).toThrow()
     approvals.respond(gateway, command)
     expect(respondRemoteEvent).toHaveBeenCalledWith({ clientId: 'client-1', eventId: 'event-1',
