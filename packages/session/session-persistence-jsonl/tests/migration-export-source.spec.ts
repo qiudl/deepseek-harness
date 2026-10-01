@@ -107,6 +107,17 @@ describe('SchemaAwareMigrationOwnerStateSource', () => {
 })
 
 describe('FileJsonlMigrationExportSource', () => {
+  it('preserves current-format parent and child identities alongside their events', async () => {
+    const { source, target } = await fixture()
+    const child = { ...header, id: SessionId('export-child'), parentSession: header.id }
+    await target.importSession(4, child, events)
+    const snapshots = await source.listSnapshots()
+    expect(snapshots).toHaveLength(2)
+    expect(snapshots.map(snapshot => snapshot.header.id).sort()).toEqual(['export-child', 'export-source'])
+    expect(snapshots.find(snapshot => snapshot.header.id === child.id)?.header.parentSession).toBe(header.id)
+    expect((await source.inspect(child.id)).events).toEqual(events)
+    expect((await source.inspect(header.id)).events).toEqual(events)
+  })
   it('reads stable snapshots, cloned owner state, inspections, revisions, and inventory digests', async () => {
     const { source, target } = await fixture()
     await target.importSession(4, { ...header, id: SessionId('a-first') }, [])
