@@ -133,21 +133,23 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
           const version = parseGenerationLogFilename(name, 'none')
           return version === undefined ? [] : [{ name, version }]
         })
-        const legacyZstd = names.filter(name => parseGenerationLogFilename(name, 'zstd') !== undefined)
+        const compressedGenerations = names.flatMap((name) => {
+          const version = parseGenerationLogFilename(name, 'zstd')
+          return version === undefined ? [] : [{ name, version }]
+        })
         const metadata = names.filter(name => name === 'migration-records.json')
-        if (ordinaryGenerations.length + legacyZstd.length + metadata.length !== names.length
-          || ordinaryGenerations.length + legacyZstd.length < 1
-          || (ordinaryGenerations.length > 0 && legacyZstd.length > 0)
-          || (legacyZstd.length > 0 && JSON.stringify(legacyZstd) !== JSON.stringify(['session.jsonl.zstd']))) {
+        if (ordinaryGenerations.length + compressedGenerations.length + metadata.length !== names.length
+          || ordinaryGenerations.length + compressedGenerations.length < 1
+          || (ordinaryGenerations.length > 0 && compressedGenerations.length > 0)) {
           throw new Error('migration_export_source_unsafe')
         }
         for (const name of names) await this.checkedRegularFile(join(sessionPath, name))
         if (directoryNames.includes(LEASE_FILENAME)) await this.checkedLeaseFile(join(sessionPath, LEASE_FILENAME))
-        const selected = ordinaryGenerations.length > 0
-          ? ordinaryGenerations.sort((left, right) => right.version - left.version)[0]?.name
-          : legacyZstd[0]
-        const selectedName = selected as string
-        pending.push(await this.readLog(join(sessionPath, selectedName), legacyZstd.length > 0, signal))
+        const generations = ordinaryGenerations.length > 0 ? ordinaryGenerations : compressedGenerations
+        const selected = generations.sort((left, right) => right.version - left.version)[0]
+        if (!selected) throw new Error('migration_export_source_unsafe')
+        pending.push(await this.readLog(join(sessionPath, selected.name), compressedGenerations.length > 0,
+          selected.version, signal))
       }
     }
     const ids = new Set<string>()
@@ -180,7 +182,7 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     return rows.sort((left, right) => left.header.id.localeCompare(right.header.id, 'en'))
   }
 
-  private async readLog(path: string, zstd: boolean, signal?: AbortSignal): Promise<Stored | HistoricalStored> {
+  private async readLog(path: string, zstd: boolean, generationVersion: number, signal?: AbortSignal): Promise<Stored | HistoricalStored> {
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
     try {
       const before = await handle.stat({ bigint: true })
@@ -214,6 +216,14 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         } finally { decoder.close() }
         plaintext = Buffer.concat(decodedFrames, decodedBytes)
       }
+      const newline = plaintext.indexOf(0x0A)
+      let physicalHeader: { version?: unknown } | null
+      try {
+        physicalHeader = JSON.parse(plaintext.subarray(0, newline < 0 ? plaintext.length : newline).toString('utf8')) as { version?: unknown } | null
+      } catch {
+        throw new Error('migration_export_source_corrupt')
+      }
+      if (physicalHeader?.version !== generationVersion) throw new Error('migration_export_source_corrupt')
       let decoded: ReturnType<typeof scanLog>
       try {
         decoded = scanLog(plaintext)
