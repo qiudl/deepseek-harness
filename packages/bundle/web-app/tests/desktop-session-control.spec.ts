@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DesktopSessionControl } from '../src/desktop-session-control.ts'
+import { DesktopSessionControl, DesktopSessionControlBusyError } from '../src/desktop-session-control.ts'
 
 describe('Desktop Session control authority', () => {
   it('admits local browser writes until a remote client explicitly takes over', () => {
@@ -65,5 +65,22 @@ describe('Desktop Session control authority', () => {
     const restarted = new DesktopSessionControl(() => now, 5_000)
     restarted.acquire('session-1', owner, { takeover: false })
     expect(() => { restarted.assertWrite('session-1', state.claim) }).toThrow('control lost')
+  })
+
+  it('bounds expired claims without ever reusing an old proof', () => {
+    let now = 0
+    const control = new DesktopSessionControl(() => now, 5_000, 2)
+    const owner = { kind: 'remote' as const, id: 'web-1' }
+    const first = control.acquire('session-1', owner, { takeover: false })
+    if (!('claim' in first)) throw new Error('missing first claim')
+    control.acquire('session-2', owner, { takeover: false })
+    expect(() => control.acquire('session-3', owner, { takeover: false }))
+      .toThrow(DesktopSessionControlBusyError)
+    now += 5_000
+    const replacement = control.acquire('session-1', owner, { takeover: false })
+    if (!('claim' in replacement)) throw new Error('missing replacement claim')
+    expect(replacement.claim.epoch).toBeGreaterThan(first.claim.epoch)
+    expect(() => { control.assertWrite('session-1', first.claim) }).toThrow('control lost')
+    expect(control.renew('session-1', first.claim).outcome).toBe('epoch_stale')
   })
 })
