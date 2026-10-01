@@ -1,5 +1,5 @@
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 /** Stable profile id that reveals no account or environment identifier. */
 export type PersonProfileId = Branded<'PersonProfileId'>
@@ -105,6 +105,11 @@ export interface ProfileWorkerHandle {
     readonly model: string
     readonly text: string
   }>
+  /** Host-only Session choice inspection; no source proof or executable configuration. */
+  readonly inspectWorkspaceModelSelection?: (
+    target: HostWorkspaceModelSelectionTarget,
+    signal: AbortSignal,
+  ) => Promise<HostWorkspaceModelSelection>
   /** Host-only closed Session command; no worker token enters a view lease. */
   readonly remoteSession?: (
     command: HostRemoteSessionCommand,

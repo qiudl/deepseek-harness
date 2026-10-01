@@ -71,6 +71,8 @@ dsh --profile web --no-open --port 8080
 <a id="understand-the-implementation"></a>
 ## 理解实现
 
+`DSH_PROFILE_WORKSPACE_MODEL_TOKEN` 仅在隔离 Profile worker 中启用 `/internal/desktop-workspace-model-selection`。入口接受最多 2 KiB 的注册表工作区/Session 目标，交给仅供 Host 使用的 Session Controller 读取，不激活 Agent 或调用模型。浏览器 Cookie 不能授权此入口。失败不含异常详情；响应禁止缓存，仅包含已校验的选择字段。该读取不提供 Source 凭据或已准备的配置快照。
+
 隔离的 Desktop Profile worker 提供 `DSH_PROFILE_MODEL_TOKEN` 时，本包还提供仅供 Host 使用的本机文本请求。它读取 Profile 当前默认模型，并用该 Profile 的凭据服务处理一条用户消息，不启用工具，也不创建 Session。私有令牌不返回浏览器；请求最多 8 KiB，回答最多 16 KiB，执行最多 60 秒。另一条使用令牌认证的本机路由通过 Profile 现有的 Session Remote 方法执行有界 Desktop Session 命令；浏览器 Cookie 不能授权此路由。会话历史只投影 Web 可见的消息、工具和回合字段，并按 Host 控制帧预算返回近期且顺序不变的记录后缀；内部、更早或过大的记录会被省略。第三条仅供 Host 使用的路由由 `DSH_PROFILE_REMOTE_UI_TOKEN` 启用，通过现有 Gateway 接受精确的 Session 和启动读取，请求与响应均有上限。启动读取包括脱敏设置、预设清单、无源码的插件清单、无密钥值的凭据状态和权限选项；凭据引用有数量及格式校验。`dynamicCordisRunner/syncInspectManifest` 会修改 Host 状态，因此仍被拒绝。启动读取只返回当前结构化注入项，不提供任意 URL 内容；浏览器父页面仍须在执行远程脚本前认证并校验资源字节。这只是远程 Web UI 的内部构件，不是浏览器公共 API 或完整远程传输；实时流与写操作仍需单独的租约授权桥接。
 
 <details>

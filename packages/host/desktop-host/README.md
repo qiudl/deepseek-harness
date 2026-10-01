@@ -47,6 +47,8 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 ## Profile and execution authority
 
+`profile.workspace_model_selection` resolves the Profile from this connection’s token-verified Account binding and rechecks it after reading. The supervisor discards replies from disposed or replaced workers. macOS and Windows startup install the reader; older Hosts omit its capability. A separate random worker token authorizes the private HTTP endpoint, whose complete response is bounded while streaming. The result does not authorize Source registration, planning or task execution.
+
 Desktop model text requests require a token-verified connected Account grant owned by the requesting Host connection. The Host checks that grant before and after the worker call without changing the visible Profile view lease, forwards cancellation, and returns only a classified failure or bounded text. Each worker receives a random private token for its local endpoint; ordinary browser cookies cannot authorize that endpoint.
 
 Remote Session execution is an optional Host dependency. When installed, `profile.remote_session` is advertised and accepts only the control protocol's closed command union through a live owner-bound view lease. The Host resolves the Profile from that lease, forwards connection cancellation, rechecks the same lease after the awaited executor call, and validates the bounded result through the canonical wire codec before returning it. Hosts without the executor omit the capability, and the client returns `upgrade_required` without sending a command. This seam does not expose browser cookies, launch tokens, Profile paths, or a generic HTTP proxy.

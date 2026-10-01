@@ -28,6 +28,8 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
+import type {} from '@deepseek-ai/dsh-api-session-controller'
+import { handleDesktopWorkspaceModelSelectionRequest } from './desktop-workspace-model-selection.ts'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
@@ -240,6 +242,21 @@ export function apply(ctx: Context, config: Config): void {
             selection: () => modelCtx.agentDefaultModel.currentSelection(),
             stream: options => modelCtx.llm.stream(options),
           })),
+      }))
+    })
+  }
+  const workspaceModelToken = process.env.DSH_PROFILE_WORKSPACE_MODEL_TOKEN
+  if (workspaceModelToken && /^[A-Za-z0-9_-]{43}$/u.test(workspaceModelToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-workspace-model-selection',
+        handler: (req, res) => handleDesktopWorkspaceModelSelectionRequest(req, res, workspaceModelToken,
+          async (target, signal) => {
+            const result = await sessionCtx.sessionController.inspectWorkspaceModelSelection(target.session_id, target.workspace_id, signal)
+            return { workspace_id: result.workspaceId, session_id: result.sessionId,
+              provider: result.selection.provider, model: result.selection.model,
+              ...result.selection.reasoningEffort === undefined ? {} : { reasoning_effort: result.selection.reasoningEffort } }
+          }),
       }))
     })
   }

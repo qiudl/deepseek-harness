@@ -33,6 +33,8 @@ import type {
   ProfileOpenRequest,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
+  HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
+  ProfileWorkspaceModelSelectionRequest,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -98,6 +100,12 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** Read effective choice only in the Account-authorized Profile worker. */
+  readonly inspectWorkspaceModelSelection?: (
+    profileId: string,
+    target: HostWorkspaceModelSelectionTarget,
+    signal: AbortSignal,
+  ) => Promise<HostWorkspaceModelSelection>
   /** Call the Profile worker without exposing its private model token to Desktop. */
   readonly generateModelText?: (profileId: string, text: string, signal: AbortSignal) => Promise<{
     readonly provider: string
@@ -257,7 +265,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1250,6 +1258,26 @@ export class HostControlAuthority {
           const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { value } }
           channel.send(decodeHostControlFrame(encodeHostControlFrame(response)))
+        } else if (frame.method === 'profile.workspace_model_selection') {
+          const inspect = this.options.inspectWorkspaceModelSelection
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const account = {
+            authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId,
+          }
+          context.signal.throwIfAborted()
+          const profileId = this.options.host.authorizeAccountModelText(account)
+          const target = { workspace_id: frame.params.workspace_id, session_id: frame.params.session_id }
+          const result = await inspect(profileId, target, context.signal)
+          context.signal.throwIfAborted()
+          if (this.options.host.authorizeAccountModelText(account) !== profileId
+            || result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+            request_id: frame.request_id, method: frame.method, result })))
         } else if (frame.method === 'profile.model_text') {
           const generate = this.options.generateModelText
           if (!generate) throw new HostAuthorityError('upgrade_required')
@@ -1333,6 +1361,7 @@ export class HostControlAuthority {
         capabilities: [
           ...capabilities,
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
+          ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
@@ -1955,6 +1984,32 @@ export class UnixHostClient {
         account_binding_handle: input.accountBindingHandle as never,
         authority_binding_version: input.authorityBindingVersion,
         text: input.text },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Inspect a Session choice through this connection's verified Account binding.
+   * @param input - Main-held Account binding, registry identities and cancellation.
+   * @returns Minimum effective choice; no Source proof or prepared configuration. Old Hosts reject before reading.
+   */
+  async inspectWorkspaceModelSelection(input: HostWorkspaceModelSelectionTarget & {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly signal?: AbortSignal
+  }): Promise<HostWorkspaceModelSelection> {
+    if (!this.inspection.capabilities.includes('profile.workspace_model_selection' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileWorkspaceModelSelectionRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.workspace_model_selection',
+      params: { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        workspace_id: input.workspace_id, session_id: input.session_id },
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
@@ -2590,7 +2645,7 @@ export class UnixHostClient {
       | ProfileOpenRequest | ProfileOpenLocalRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-      | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest
+      | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest
       | MigrationImportStageRequest | MigrationImportStatusRequest | MigrationImportVerifyRequest

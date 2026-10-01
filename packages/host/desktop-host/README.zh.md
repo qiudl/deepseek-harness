@@ -49,6 +49,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
 
+`profile.workspace_model_selection` 从当前连接已验证令牌的 Account 绑定解出 Profile，并在读取后重新校验。监管器丢弃已销毁或替换 worker 的响应。macOS 和 Windows 启动组合安装读取器；旧 Host 不发布此能力。独立随机 worker 令牌授权私有 HTTP 入口，完整响应在流式读取时有上限。结果不授权 Source 登记、规划或任务执行。
+
 Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
 
 远程 Session 执行是可选的 Host 依赖。安装执行器后，Host 才会广告 `profile.remote_session`，并只通过有效且绑定 owner 的 view lease 接受控制协议定义的封闭命令联合。Host 从该 lease 解出 Profile，转发连接取消，在异步执行完成后重新校验同一 lease，并让有界结果通过规范 wire codec 后才返回。没有执行器的 Host 不发布 capability，客户端会在发送命令前返回 `upgrade_required`。该执行缝不暴露浏览器 cookie、启动 token、Profile 路径或通用 HTTP 代理。

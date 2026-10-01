@@ -1,5 +1,5 @@
 import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
-import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
 
 interface StartProfileWorkerInput {
@@ -79,6 +79,31 @@ export class ProfileWorkerSupervisor {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.generateText) throw new HostAuthorityError('unavailable')
     return worker.generateText(text, signal)
+  }
+
+  /**
+   * Read the selected worker and discard replies after its generation is disposed.
+   * @param profileId - Account Profile resolved by the Host authority.
+   * @param target - Registry workspace and Session identities.
+   * @param signal - Owning connection cancellation.
+   * @returns The effective choice; unavailable, replaced, mismatched or cancelled reads reject.
+   */
+  async inspectWorkspaceModelSelection(
+    profileId: string,
+    target: HostWorkspaceModelSelectionTarget,
+    signal: AbortSignal,
+  ): Promise<HostWorkspaceModelSelection> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.inspectWorkspaceModelSelection) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.inspectWorkspaceModelSelection(target, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
+    return result
   }
 
   /**

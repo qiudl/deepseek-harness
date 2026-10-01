@@ -10,6 +10,7 @@ export {
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
+  parseHostWorkspaceModelSelectionTarget, parseHostWorkspaceModelSelection,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
 export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.js'
@@ -51,6 +52,8 @@ export type {
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
+  HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
+  ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileLeaseCloseRequest,

@@ -417,6 +417,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
+        inspectWorkspaceModelSelection: (profileId, target, signal) => workers.inspectWorkspaceModelSelection(profileId, target, signal),
         remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({
           authority: commandAuthority, workers, profileId, command, signal,
         }),

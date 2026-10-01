@@ -46,6 +46,8 @@ The negotiated `profile.extensions` method carries a Main-held lease and one inv
 
 ## Challenge authentication
 
+`profile.workspace_model_selection` accepts a verified Account binding, workspace registry UUID and Session id. Its exact result contains those identities, provider/model (up to 256 UTF-8 bytes each), and optional reasoning effort (up to 128 bytes). Caller-selected models, Profile paths and extra response fields are rejected. The result is a read-only choice, not an executable adapter snapshot or Source proof; availability requires an advertised Host executor.
+
 `profile.model_text` accepts an Account binding already verified on the same Host connection and one nonempty text input of at most 8 KiB. It does not open or change a visible Profile view lease. A complete result contains the selected provider, model, and at most 16 KiB of answer text; a rejected result contains one classified code, including distinct `cancelled` and `timeout` outcomes. The method carries no API Key, tool request, Session id, or raw provider error.
 
 `encodeHostInspectSignaturePayload(request, response)` returns the exact UTF-8 bytes signed with the installation Ed25519 key. The domain-separated statement binds the request id, Desktop client id, challenge, selected version, Host and installation ids, installation public key, generations, process nonce, capabilities, and executable digest.

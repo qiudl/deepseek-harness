@@ -435,6 +435,41 @@ export interface ProfileViewActivateResult {
   }
 }
 
+/** Registry identities requested through the authenticated Host connection. */
+export interface HostWorkspaceModelSelectionTarget {
+  readonly workspace_id: Branded<'WorkspaceId'>
+  readonly session_id: Branded<'SessionId'>
+}
+
+/** Read-only effective choice; it is not an executable configuration snapshot or Source proof. */
+export interface HostWorkspaceModelSelection extends HostWorkspaceModelSelectionTarget {
+  readonly provider: string
+  readonly model: string
+  readonly reasoning_effort?: string
+}
+
+/** Inspect a Session only in the Profile selected by a verified Account binding. */
+export interface ProfileWorkspaceModelSelectionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_model_selection'
+  readonly params: HostAuthorizedParams & HostWorkspaceModelSelectionTarget & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+  }
+}
+
+/** Minimal selection fields; no message, path, provider configuration, or worker token. */
+export interface ProfileWorkspaceModelSelectionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_model_selection'
+  readonly result: HostWorkspaceModelSelection
+}
+
 /** One bounded text request authorized by this connection's verified Account grant. */
 export interface ProfileModelTextRequest {
   readonly version: 1
@@ -1197,6 +1232,8 @@ export type HostControlFrame =
   | ProfileRecoveryStatusResult
   | ProfileViewActivateRequest
   | ProfileViewActivateResult
+  | ProfileWorkspaceModelSelectionRequest
+  | ProfileWorkspaceModelSelectionResult
   | ProfileModelTextRequest
   | ProfileModelTextResult
   | ProfileLeaseCloseRequest

@@ -126,6 +126,8 @@ export class SessionController extends TypertRemoteService {
    */
   constructor(ctx: Context, config: Config, internals: SessionControllerInternals = {}) {
     super(ctx, 'sessionController', { namespace: 'session' })
+    // Host identity reads use the owning Profile's registry, never a caller's Cordis scope.
+    this.inspectWorkspaceModelSelection = this.inspectWorkspaceModelSelection.bind(this)
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
     this.commands = new SessionCommandController(ctx, this.agents, process.cwd())

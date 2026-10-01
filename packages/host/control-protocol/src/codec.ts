@@ -37,6 +37,8 @@ import type {
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
+  HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
+  ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -632,12 +634,48 @@ function extensionResponse(result: Record<string, unknown>): HostExtensionRespon
   }
 }
 
+function selectionIdentity(value: unknown, maximumBytes: number): string {
+  if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value, 'utf8') > maximumBytes) reject()
+  return value
+}
+
+/**
+ * Validate the complete worker HTTP target using the control wire's identity rules.
+ * @param value - Untrusted parsed JSON.
+ * @returns Detached registry identities; extra fields, paths and oversized IDs throw.
+ */
+export function parseHostWorkspaceModelSelectionTarget(value: unknown): HostWorkspaceModelSelectionTarget {
+  const target = record(value)
+  exactKeys(target, ['workspace_id', 'session_id'])
+  return {
+    workspace_id: uuid(target.workspace_id) as HostWorkspaceModelSelectionTarget['workspace_id'],
+    session_id: selectionIdentity(target.session_id, 256) as HostWorkspaceModelSelectionTarget['session_id'],
+  }
+}
+
+/**
+ * Validate a minimum worker selection response; secrets and configuration are rejected.
+ * @param value - Untrusted parsed JSON.
+ * @returns Detached selection fields bounded in UTF-8 bytes; invalid results throw.
+ */
+export function parseHostWorkspaceModelSelection(value: unknown): HostWorkspaceModelSelection {
+  const result = record(value)
+  exactKeys(result, ['workspace_id', 'session_id', 'provider', 'model',
+    ...Object.hasOwn(result, 'reasoning_effort') ? ['reasoning_effort'] : []])
+  return {
+    ...parseHostWorkspaceModelSelectionTarget({ workspace_id: result.workspace_id, session_id: result.session_id }),
+    provider: selectionIdentity(result.provider, 256), model: selectionIdentity(result.model, 256),
+    ...Object.hasOwn(result, 'reasoning_effort') ? { reasoning_effort: selectionIdentity(result.reasoning_effort, 128) } : {},
+  }
+}
+
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
+  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileModelTextRequest
+  | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileRemoteSessionRequest
   | ProfileRemoteUiReadRequest
   | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
@@ -903,6 +941,17 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       },
     }
   }
+  if (frame.method === 'profile.workspace_model_selection') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
+      'account_binding_handle', 'authority_binding_version', 'workspace_id', 'session_id'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params),
+      authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      ...parseHostWorkspaceModelSelectionTarget({ workspace_id: params.workspace_id, session_id: params.session_id }),
+    } }
+  }
   if (frame.method === 'profile.model_text') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
       'account_binding_handle', 'authority_binding_version', 'text'])
@@ -941,7 +990,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileModelTextResult | ProfileLeaseCloseResult | ProfileExtensionsResult
+  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileModelTextResult
+  | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileRemoteSessionResult
   | ProfileRemoteUiReadResult
   | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
@@ -1160,6 +1210,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['closed'])
     if (result.closed !== true) reject()
     return { version: 1, type: 'result', request_id, method: 'profile.lease_close', result: { closed: true } }
+  }
+  if (frame.method === 'profile.workspace_model_selection') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostWorkspaceModelSelection(result) }
   }
   if (frame.method === 'profile.model_text') {
     if (result.state === 'rejected') {
