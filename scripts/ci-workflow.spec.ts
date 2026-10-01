@@ -660,13 +660,14 @@ describe('Runtime and LLM e2e Blacksmith routing', () => {
 })
 
 describe('bubblewrap preparation script', () => {
-  it('pins bubblewrap to a recorded Launchpad build and excludes Ubuntu pool downloads', () => {
+  it('pins bubblewrap to a recorded Launchpad build with a checksum-gated official fallback', () => {
     const script = readFileSync(resolve(root, 'scripts/prepare-ci-bubblewrap.sh'), 'utf8')
     const url = /^readonly BUBBLEWRAP_URL="([^"]+)"$/mu.exec(script)?.[1]
 
     expect(url).toBe('https://launchpad.net/~ubuntu-security-proposed/+archive/ubuntu/ppa/+build/33605876/+files/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb')
-    // Ubuntu removes superseded versions from its live package pool.
-    expect(script).not.toMatch(/https?:\/\/[^/'"\s]+\/ubuntu(?:-ports)?\/pool\//u)
+    expect(script).toContain('readonly BUBBLEWRAP_ARCHIVE_URL="https://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"')
+    expect(script).toContain("readonly BUBBLEWRAP_SHA256='2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094'")
+    expect(script.indexOf('sha256sum --check --status')).toBeLessThan(script.indexOf('dpkg-deb --extract'))
   })
 })
 
@@ -1026,6 +1027,20 @@ describe('Weighted approval workflow', () => {
 })
 
 describe('Issue lifecycle workflow', () => {
+  it.each(['qiudl/deepseek-harness', 'deepseek-harness/deepseek-harness', 'deepseek-ai/deepseek-harness'])(
+    'limits the organization Project exception to the Slark fork (%s)', (repository) => {
+      const github = {
+        repository, event_name: 'pull_request_review',
+        event: { review: { state: 'changes_requested' }, action: 'submitted', changes: {} },
+      }
+      for (const [file, job] of [['issue-policy.yml', 'policy'], ['issue-lifecycle.yml', 'lifecycle']] as const) {
+        const condition = workflowJob(loadWorkflow('.github/workflows/' + file), job).if
+        expect(condition).toBeTypeOf('string')
+        expect(runInNewContext(String(condition), { github }, { timeout: 1000 }))
+          .toBe(repository !== 'qiudl/deepseek-harness')
+      }
+    },
+  )
   it('allocates lifecycle runners only for events that can change the board', () => {
     const lifecycle = loadWorkflow('.github/workflows/issue-lifecycle.yml')
     const policy = loadWorkflow('.github/workflows/issue-policy.yml')
@@ -1076,7 +1091,7 @@ describe('Issue lifecycle workflow', () => {
     expect(preflightStep?.run).toContain('if [ -f .github/issue-management/selective-preflight.json ]; then')
     expect(preflightStep?.run).toContain('node .github/issue-management/policy.mjs pr-preflight')
     expect(preflightStep?.if).toBeUndefined()
-    expect(policyJob.if).toBeUndefined()
+    expect(policyJob.if).toBe("github.repository != 'qiudl/deepseek-harness'")
     expect(validateStep?.if).toBe("${{ steps.preflight.outputs.legacy-automated != 'true' }}")
 
     expect(tokenStep).toMatchObject({
