@@ -254,6 +254,8 @@ export function apply(ctx: Context, config: Config): void {
       remoteCtx.effect(() => remoteCtx.typertGateway.registerBrowserAdmission({
         invoke: (endpoint, args) => control.admitBrowserInvoke(endpoint, args),
         eventResult: sessionId => control.admitBrowserWrite(sessionId),
+        localControlStatus: sessionId => control.browserStatus(sessionId),
+        localControlTakeover: (sessionId, expectedEpoch) => control.takeoverBrowser(sessionId, expectedEpoch),
       }), 'web-app: Desktop browser Session admission')
       const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents, control)
       remoteCtx.effect(() => remoteCtx.webServer.register({

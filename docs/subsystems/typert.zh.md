@@ -191,6 +191,8 @@ interface TypertGateway {
   registerBrowserAdmission(admission: {
     readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined
     readonly eventResult: (sessionId: string) => (() => void) | undefined
+    readonly localControlStatus?: (sessionId: string) => unknown
+    readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown
   }): () => void
   /** Settle one forwarded waterfall event from an authenticated in-process carrier. */
   respondRemoteEvent(result: RemoteEventResult): void
@@ -332,7 +334,7 @@ Resolve strict generated definitions or conservative SRC markers against current
  * @param admission - callbacks that hold a browser write through settlement.
  * @returns disposer removing this exact policy.
  */
-registerBrowserAdmission(admission: { readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined readonly eventResult: (sessionId: string) => (() => void) | undefined }): () => void
+registerBrowserAdmission(admission: { readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined readonly eventResult: (sessionId: string) => (() => void) | undefined readonly localControlStatus?: (sessionId: string) => unknown readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown }): () => void
 
 /**
  * Register the sole application-selected forwarded-event source.

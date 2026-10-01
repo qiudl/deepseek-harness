@@ -57,6 +57,28 @@ export class DesktopSessionControl {
   }
 
   /**
+   * Describe a Session from the authenticated Desktop browser's point of view.
+   * @param sessionId - selected Session.
+   * @returns local browser control state.
+   */
+  browserStatus(sessionId: string): DesktopSessionControlState {
+    return this.status(sessionId, this.browser)
+  }
+
+  /**
+   * Explicit, compare-and-swap takeover after the Desktop user confirms the observed owner.
+   * @param sessionId - selected Session.
+   * @param expectedEpoch - owner epoch seen before the confirmation.
+   * @returns current control outcome.
+   */
+  takeoverBrowser(sessionId: string, expectedEpoch: number): DesktopSessionControlState {
+    if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 1) {
+      throw new TypeError('desktop session control: invalid expected epoch')
+    }
+    return this.acquire(sessionId, this.browser, { takeover: true, expectedEpoch })
+  }
+
+  /**
    * Atomically acquire or explicitly take over one Session.
    * @param sessionId - selected Session.
    * @param caller - requesting owner.
