@@ -439,9 +439,22 @@ function extensionCommand(value: unknown): HostExtensionCommand {
 function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   const command = record(value)
   const command_id = uuid(command.command_id) as HostControlRequestId
-  if (command.operation === 'session.list' || command.operation === 'session.create') {
+  if (command.operation === 'session.list') {
     exactKeys(command, ['operation', 'command_id'])
-    return { operation: command.operation, command_id }
+    return { operation: 'session.list', command_id }
+  }
+  if (command.operation === 'session.create') {
+    const withWorkspace = 'workspace_id' in command
+    exactKeys(command, ['operation', 'command_id', ...(withWorkspace ? ['workspace_id'] : [])])
+    return { operation: 'session.create', command_id,
+      ...(withWorkspace ? { workspace_id: remoteIdentifier(command.workspace_id) } : {}) }
+  }
+  if (command.operation === 'remote.event.respond') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'client_id', 'event_id', 'outcome'])
+    if (command.outcome !== 'allowed-once' && command.outcome !== 'rejected' && command.outcome !== 'next') reject()
+    return { operation: 'remote.event.respond', command_id,
+      session_id: remoteIdentifier(command.session_id), client_id: remoteIdentifier(command.client_id),
+      event_id: remoteIdentifier(command.event_id), outcome: command.outcome }
   }
   if (command.operation === 'session.history') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'max_events'])
@@ -758,36 +771,40 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       parsed = { action: command.action, stream_id }
     } else if (command.action === 'open') {
       exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload'])
-      if (command.endpoint !== 'session/follow') reject()
       const payload = record(command.payload)
       exactKeys(payload, ['args'])
       const args = record(payload.args)
-      exactKeys(args, ['request'])
-      const request = record(args.request)
-      if (!Object.keys(request).every(key => ['address', 'maxMessages', 'assistantStream'].includes(key))) reject()
-      const address = record(request.address)
-      const sessionId = (value: unknown): string => {
-        if (typeof value !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u.test(value)) reject()
-        return value
-      }
-      let parsedAddress: Extract<ProfileRemoteUiStreamCommand, { action: 'open' }>['payload']['args']['request']['address']
-      if (address.kind === 'session') {
-        exactKeys(address, ['kind', 'sessionId'])
-        parsedAddress = { kind: 'session', sessionId: sessionId(address.sessionId) }
-      } else if (address.kind === 'subagent') {
-        exactKeys(address, ['kind', 'parentSessionId', 'childSessionId', 'mode'])
-        if (address.mode !== 'one-shot' && address.mode !== 'continuable') reject()
-        parsedAddress = { kind: 'subagent', parentSessionId: sessionId(address.parentSessionId),
-          childSessionId: sessionId(address.childSessionId), mode: address.mode }
-      } else reject()
-      if (request.maxMessages !== undefined && (!Number.isSafeInteger(request.maxMessages)
+      if (command.endpoint === 'workspace/follow' || command.endpoint === '$events') {
+        exactKeys(args, [])
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: { args: {} } }
+      } else if (command.endpoint === 'session/follow') {
+        exactKeys(args, ['request'])
+        const request = record(args.request)
+        if (!Object.keys(request).every(key => ['address', 'maxMessages', 'assistantStream'].includes(key))) reject()
+        const address = record(request.address)
+        const sessionId = (value: unknown): string => {
+          if (typeof value !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u.test(value)) reject()
+          return value
+        }
+        let parsedAddress: Extract<ProfileRemoteUiStreamCommand, { endpoint: 'session/follow' }>['payload']['args']['request']['address']
+        if (address.kind === 'session') {
+          exactKeys(address, ['kind', 'sessionId'])
+          parsedAddress = { kind: 'session', sessionId: sessionId(address.sessionId) }
+        } else if (address.kind === 'subagent') {
+          exactKeys(address, ['kind', 'parentSessionId', 'childSessionId', 'mode'])
+          if (address.mode !== 'one-shot' && address.mode !== 'continuable') reject()
+          parsedAddress = { kind: 'subagent', parentSessionId: sessionId(address.parentSessionId),
+            childSessionId: sessionId(address.childSessionId), mode: address.mode }
+        } else reject()
+        if (request.maxMessages !== undefined && (!Number.isSafeInteger(request.maxMessages)
         || (request.maxMessages as number) < 1 || (request.maxMessages as number) > 500)) reject()
-      if (request.assistantStream !== undefined && request.assistantStream !== true) reject()
-      parsed = { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
-        address: parsedAddress,
-        ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages as number }),
-        ...(request.assistantStream === undefined ? {} : { assistantStream: true as const }),
-      } } } }
+        if (request.assistantStream !== undefined && request.assistantStream !== true) reject()
+        parsed = { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+          address: parsedAddress,
+          ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages as number }),
+          ...(request.assistantStream === undefined ? {} : { assistantStream: true as const }),
+        } } } }
+      } else reject()
     } else reject()
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,

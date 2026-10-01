@@ -6,8 +6,8 @@ import type {
 } from '@deepseek-ai/dsh-api-gateway'
 import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
-
 import { handleDesktopRemoteJsonRequest } from './desktop-remote-ui.ts'
+import type { DesktopRemoteApprovalEvents } from './desktop-remote-ui-stream.ts'
 
 interface ApprovalCursor {
   readonly iterator: AsyncIterator<unknown>
@@ -66,7 +66,8 @@ export class DesktopRemoteSessionExecutor {
   private readonly cursors = new Map<string, ApprovalCursor>()
   private readonly approvals = new Map<string, PendingApproval>()
 
-  constructor(private readonly gateway: TypertGateway) {}
+  constructor(private readonly gateway: TypertGateway,
+    private readonly remoteApprovals?: DesktopRemoteApprovalEvents) {}
 
   /**
    * Execute one bounded Session command using the Session Remote method parameter names.
@@ -76,10 +77,15 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     switch (command.operation) {
+      case 'remote.event.respond':
+        if (!this.remoteApprovals) throw new Error('desktop remote UI: approval events unavailable')
+        this.remoteApprovals.respond(this.gateway, command)
+        return { accepted: true }
       case 'session.list':
         return this.invoke('list', { _request: {} }, signal)
       case 'session.create':
-        return this.invoke('create', { request: {} }, signal)
+        return this.invoke('create', { request: command.workspace_id === undefined
+          ? {} : { workspaceId: command.workspace_id } }, signal)
       case 'session.prompt':
         return this.invoke('prompt', { request: {
           requestId: command.command_id, sessionId: command.session_id, mode: command.mode,

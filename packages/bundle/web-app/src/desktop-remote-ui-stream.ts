@@ -1,6 +1,7 @@
-/** Private Session-follow stream from one Profile's Gateway to its Desktop Host worker. */
+/** Private native read streams from one Profile's Gateway to its Desktop Host worker. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+import type { HostRemoteSessionCommand } from '@deepseek-ai/dsh-host-control-protocol'
 import { openDesktopRemotePrivateRequest, readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
 const SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u
@@ -28,18 +29,80 @@ function followPayload(value: unknown): value is { args: Record<string, unknown>
     (request.assistantStream === undefined || request.assistantStream === true)
 }
 
-/** Opens only the selected Profile's native Session event stream. */
+/** Binds each pending approval to the Session named by the Host event stream. */
+export class DesktopRemoteApprovalEvents {
+  private readonly clients = new Map<string, Map<string, string>>()
+
+  /**
+   * Track one event generation until its stream closes.
+   * @param source - Selected Profile's forwarded event stream.
+   * @returns Frames with pending approvals registered for this generation.
+   */
+  async *observe(source: AsyncIterable<unknown>): AsyncGenerator<unknown> {
+    let clientId: string | undefined
+    try {
+      for await (const value of source) {
+        if (record(value) && value.type === 'ready' && typeof value.clientId === 'string') {
+          clientId = value.clientId
+          this.clients.set(clientId, new Map())
+        } else if (clientId && record(value) && value.type === 'waterfall' &&
+          value.event === 'approval/request' && typeof value.eventId === 'string' &&
+          typeof value.agentId === 'string') {
+          const pending = this.clients.get(clientId)
+          if (pending && pending.size >= 32) throw new Error('desktop remote UI: too many pending approvals')
+          pending?.set(value.eventId, value.agentId)
+        } else if (clientId && record(value) && value.type === 'cancel' && typeof value.eventId === 'string') {
+          this.clients.get(clientId)?.delete(value.eventId)
+        }
+        yield value
+      }
+    } finally {
+      if (clientId) this.clients.delete(clientId)
+    }
+  }
+
+  /**
+   * Refuse a result unless this live event generation issued it for the same Session.
+   * @param gateway - Selected Profile's event response sender.
+   * @param command - Validated result for one pending event.
+   */
+  respond(gateway: TypertGateway,
+    command: Extract<HostRemoteSessionCommand, { operation: 'remote.event.respond' }>): void {
+    const pending = this.clients.get(command.client_id)
+    if (!pending || pending.get(command.event_id) !== command.session_id) {
+      throw new Error('desktop remote UI: approval event is no longer pending for this Session')
+    }
+    gateway.respondRemoteEvent({ clientId: command.client_id as never, eventId: command.event_id as never,
+      outcome: command.outcome === 'next' ? { kind: 'next' } :
+        { kind: 'result', value: command.outcome } })
+    pending.delete(command.event_id)
+  }
+}
+
+/** Opens only the selected Profile's native Session, Workspace, and forwarded event streams. */
 export class DesktopRemoteUiStreamExecutor {
-  constructor(private readonly gateway: TypertGateway) {}
+  constructor(private readonly gateway: TypertGateway,
+    private readonly approvals?: DesktopRemoteApprovalEvents) {}
 
   /**
    * Open the selected Profile's native Session event stream without granting another Gateway endpoint.
-   * @param endpoint - Only `session/follow` is accepted.
-   * @param payload - Validated named SessionFollowRequest arguments.
+   * @param endpoint - `session/follow`, `workspace/follow`, or `$events`.
+   * @param payload - Validated arguments for the selected stream.
    * @param signal - Host-owned cancellation signal.
    * @returns Gateway events until cancellation or normal completion.
    */
   async open(endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
+    if (endpoint === '$events') {
+      if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args) ||
+        Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
+      const stream = await this.gateway.wireStream.open('$events', { args: {} }, signal)
+      return this.approvals ? this.approvals.observe(stream) : stream
+    }
+    if (endpoint === 'workspace/follow') {
+      if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args) ||
+        Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
+      return this.gateway.stream({ namespace: 'workspace', method: 'follow', args: {}, signal })
+    }
     if (endpoint !== 'session/follow') throw new Error('desktop remote UI: endpoint denied')
     if (!followPayload(payload)) throw new Error('desktop remote UI: invalid payload')
     return this.gateway.stream({ namespace: 'session', method: 'follow', args: payload.args, signal })
@@ -82,9 +145,13 @@ export async function handleDesktopRemoteUiStreamRequest(
   if (!controller) return
   try {
     const request = await readDesktopRemotePrivateBody(req)
-    if (!record(request) || Object.keys(request).length !== 2 || request.endpoint !== 'session/follow' ||
-      !followPayload(request.payload)) throw new Error('invalid stream request')
-    const stream = await open('session/follow', request.payload, controller.signal)
+    if (!record(request) || Object.keys(request).length !== 2 ||
+      (request.endpoint !== 'session/follow' && request.endpoint !== 'workspace/follow' && request.endpoint !== '$events') ||
+      (request.endpoint === 'session/follow' ? !followPayload(request.payload) :
+        !record(request.payload) || Object.keys(request.payload).length !== 1 ||
+        !record(request.payload.args) || Object.keys(request.payload.args).length !== 0))
+      throw new Error('invalid stream request')
+    const stream = await open(request.endpoint, request.payload, controller.signal)
     controller.signal.throwIfAborted()
     res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
     for await (const value of stream) {

@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from '../src/desktop-remote-ui.ts'
-import { DesktopRemoteUiStreamExecutor, handleDesktopRemoteUiStreamRequest,
+import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor, handleDesktopRemoteUiStreamRequest,
   writeDesktopRemoteUiStreamLine } from '../src/desktop-remote-ui-stream.ts'
 import { rejectDesktopRemotePrivateRequest, writeDesktopRemotePrivateResult } from '../src/desktop-remote-private-request.ts'
 
@@ -128,6 +128,42 @@ describe('Desktop remote UI read-only bridge', () => {
       parentSessionId: 'parent', childSessionId: 'child', mode: 'continuable' } } } }, signal))
       .resolves.toBeDefined()
     expect(stream).toHaveBeenCalledTimes(2)
+  })
+
+  it('opens a Workspace baseline stream only with empty arguments', async () => {
+    const stream = vi.fn(async () => (async function* () { yield { type: 'baseline', value: { items: [] } } })())
+    const executor = new DesktopRemoteUiStreamExecutor({ stream } as unknown as TypertGateway)
+    const signal = new AbortController().signal
+    const opened = await executor.open('workspace/follow', { args: {} }, signal)
+    await expect(opened[Symbol.asyncIterator]().next()).resolves.toEqual({
+      value: { type: 'baseline', value: { items: [] } }, done: false,
+    })
+    expect(stream).toHaveBeenCalledWith({ namespace: 'workspace', method: 'follow', args: {}, signal })
+    await expect(executor.open('workspace/follow', { args: { path: '/tmp' } }, signal)).rejects.toThrow('invalid payload')
+  })
+
+  it('accepts approval results only for a pending event in the same Session', async () => {
+    const respondRemoteEvent = vi.fn()
+    const gateway = { wireStream: { open: vi.fn(async () => (async function* () {
+      yield { type: 'ready', clientId: 'client-1', host: { home: '/home/user' } }
+      yield { type: 'waterfall', event: 'approval/request', eventId: 'event-1',
+        agentId: 'session-1', request: { toolName: 'bash' } }
+    })()) }, respondRemoteEvent } as unknown as TypertGateway
+    const approvals = new DesktopRemoteApprovalEvents()
+    const executor = new DesktopRemoteUiStreamExecutor(gateway, approvals)
+    const source = await executor.open('$events', { args: {} }, new AbortController().signal)
+    const iterator = source[Symbol.asyncIterator]()
+    await iterator.next()
+    await iterator.next()
+    const command = { operation: 'remote.event.respond' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', client_id: 'client-1', event_id: 'event-1', outcome: 'allowed-once' as const }
+    expect(() => approvals.respond(gateway, { ...command, session_id: 'session-2' })).toThrow()
+    approvals.respond(gateway, command)
+    expect(respondRemoteEvent).toHaveBeenCalledWith({ clientId: 'client-1', eventId: 'event-1',
+      outcome: { kind: 'result', value: 'allowed-once' } })
+    expect(() => approvals.respond(gateway, command)).toThrow()
+    await iterator.return?.()
   })
 
   it('streams through a private token and rejects browser cookies', async () => {
