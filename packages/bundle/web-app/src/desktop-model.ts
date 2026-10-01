@@ -82,6 +82,21 @@ export async function generateDesktopModelText(input: {
 }
 
 /**
+ * Authenticate a Host worker POST request with its private bearer token.
+ * @param req - Incoming local request; browser cookies have no authority.
+ * @param token - Parent-owned random Profile token.
+ * @returns Whether the method, token format and constant-time comparison match.
+ */
+export function isDesktopBearerRequest(req: IncomingMessage, token: string): boolean {
+  const authorization = req.headers.authorization
+  const supplied = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
+  const expected = Buffer.from(token)
+  const actual = Buffer.from(supplied)
+  return req.method === 'POST' && /^[A-Za-z0-9_-]{43}$/u.test(token)
+    && actual.length === expected.length && timingSafeEqual(actual, expected)
+}
+
+/**
  * Handle the Host-only worker request. The random token never enters a browser response.
  * @param req - local worker HTTP request.
  * @param res - local worker HTTP response.
@@ -98,12 +113,7 @@ export async function handleDesktopModelRequest(
     readonly text: string
   }>,
 ): Promise<void> {
-  const authorization = req.headers.authorization
-  const supplied = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
-  const expected = Buffer.from(token)
-  const actual = Buffer.from(supplied)
-  if (req.method !== 'POST' || !/^[A-Za-z0-9_-]{43}$/u.test(token)
-    || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+  if (!isDesktopBearerRequest(req, token)) {
     res.writeHead(403).end()
     return
   }

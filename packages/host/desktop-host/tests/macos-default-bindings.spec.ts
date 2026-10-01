@@ -1,10 +1,10 @@
+import { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
-import type { ChildProcess } from 'node:child_process'
 
 interface ExecResult { readonly stdout: string; readonly stderr: string }
 
@@ -167,11 +167,13 @@ it.each(['https://example.com/', '//example.com/', '/other', './?token=fixture',
   const stderr = new PassThrough()
   onTestFinished(() => { stdout.destroy(); stderr.destroy() })
   const kill = vi.fn(() => true)
-  const child = Object.assign(new EventEmitter(), { pid: 42, stdout, stderr, kill }) as unknown as ChildProcess
+  const child = Object.assign(new ChildProcess(), { pid: 42, stdout, stderr, kill })
   const factory = new DshWebProfileWorkerFactory({
     nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath, attestListener: async () => undefined,
   })
-  const pending = (factory as unknown as { waitForOrigin(child: ChildProcess): Promise<unknown> }).waitForOrigin(child)
+  const waitForOrigin: unknown = Reflect.get(factory, 'waitForOrigin')
+  if (typeof waitForOrigin !== 'function') throw new TypeError('Worker factory must define waitForOrigin')
+  const pending: unknown = Reflect.apply(waitForOrigin, factory, [child])
   stdout.write('dsh web: http://127.0.0.1:4123/?token=fixture\n')
   await expect(pending).rejects.toBeInstanceOf(HostAuthorityError)
   expect(fetch).toHaveBeenCalledTimes(1)
