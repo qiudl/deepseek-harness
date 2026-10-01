@@ -7,7 +7,7 @@ import type {
 import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { DesktopRemoteApprovalEvents } from './desktop-remote-ui-stream.ts'
-import { DesktopSessionControl, DesktopSessionControlLostError,
+import { DesktopSessionControl, DesktopSessionControlBusyError, DesktopSessionControlLostError,
   type DesktopSessionControlState } from './desktop-session-control.ts'
 import { openDesktopRemotePrivateRequest, readDesktopRemotePrivateBody,
   rejectDesktopRemotePrivateRequest, writeDesktopRemotePrivateResult } from './desktop-remote-private-request.ts'
@@ -283,6 +283,10 @@ export async function handleDesktopRemoteSessionRequest(
   } catch (error) {
     if (error instanceof DesktopSessionControlLostError && !res.writableEnded && !res.destroyed) {
       res.writeHead(409, { 'cache-control': 'no-store' }).end()
+      return
+    }
+    if (error instanceof DesktopSessionControlBusyError && !res.writableEnded && !res.destroyed) {
+      res.writeHead(429, { 'cache-control': 'no-store' }).end()
       return
     }
     rejectDesktopRemotePrivateRequest(res)

@@ -278,7 +278,8 @@ export class DshWebProfileWorkerFactory {
     if (!response.ok) {
       await response.body?.cancel()
       throw new HostAuthorityError(route === 'desktop-remote-session' && response.status === 409
-        ? 'conflict' : 'unavailable')
+        ? 'conflict' : route === 'desktop-remote-session' && response.status === 429
+          ? 'busy' : 'unavailable')
     }
     const body = await response.text()
     if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')

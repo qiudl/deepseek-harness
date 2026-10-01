@@ -566,12 +566,17 @@ describe('dsh web Profile worker', () => {
             response.writeHead(403).end()
             return
           }
-          if ((await new Promise(resolve => {
+          const body = await new Promise(resolve => {
             let body = ''
             request.on('data', chunk => { body += chunk })
             request.on('end', () => resolve(body))
-          })).includes('session.cancel')) {
+          })
+          if (body.includes('session.cancel')) {
             response.writeHead(409).end()
+            return
+          }
+          if (body.includes('control.acquire')) {
+            response.writeHead(429).end()
             return
           }
           response.writeHead(200, { 'content-type': 'application/json' })
@@ -676,6 +681,10 @@ describe('dsh web Profile worker', () => {
       session_id: 'session-1', control: { controller_id: '123e4567-e89b-42d3-a456-426614174001',
         generation: '123e4567-e89b-42d3-a456-426614174002', epoch: 1 },
     }, new AbortController().signal)).rejects.toMatchObject({ code: 'conflict' })
+    await expect(worker.remoteSession?.({
+      operation: 'control.acquire', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', controller_id: '123e4567-e89b-42d3-a456-426614174001', takeover: false,
+    }, new AbortController().signal)).rejects.toMatchObject({ code: 'busy' })
     await expect(worker.remoteUiRead?.('session/list', { args: { _request: {} } },
       new AbortController().signal)).resolves.toEqual({ items: [] })
     const events: unknown[] = []

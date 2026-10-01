@@ -34,18 +34,31 @@ export class DesktopSessionControlLostError extends Error {
   }
 }
 
+/** The Profile cannot admit another controlled Session within its memory bound. */
+export class DesktopSessionControlBusyError extends Error {
+  constructor() {
+    super('desktop session control: capacity reached')
+    this.name = 'DesktopSessionControlBusyError'
+  }
+}
+
 /** Final, process-local authority for one Profile's Session writes. */
 export class DesktopSessionControl {
   /** Random process generation that invalidates every claim on restart. */
   readonly generation = randomUUID()
   private readonly claims = new Map<string, DesktopSessionClaim>()
   private readonly activeWrites = new Map<string, number>()
+  /** Profile-wide monotonic value prevents proof reuse after an expired Session entry is pruned. */
+  private lastEpoch = 0
   private readonly browser = { kind: 'local' as const, id: 'desktop-browser' }
 
   constructor(private readonly now: () => number = Date.now,
-    private readonly ttlMs = 30_000) {
+    private readonly ttlMs = 30_000, private readonly maxClaims = 1024) {
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 5_000 || ttlMs > 120_000) {
       throw new RangeError('desktop session control: invalid lease duration')
+    }
+    if (!Number.isSafeInteger(maxClaims) || maxClaims < 1 || maxClaims > 4096) {
+      throw new RangeError('desktop session control: invalid claim capacity')
     }
   }
 
@@ -98,6 +111,7 @@ export class DesktopSessionControl {
     readonly expectedEpoch?: number
   }): DesktopSessionControlState {
     this.validateSessionId(sessionId)
+    this.pruneExpiredClaims()
     const previous = this.claims.get(sessionId)
     const now = this.now()
     const active = previous && (previous.expiresAt > now || (this.activeWrites.get(sessionId) ?? 0) > 0)
@@ -114,8 +128,10 @@ export class DesktopSessionControl {
         return { outcome: 'held_elsewhere', claim: active }
       }
     }
+    if ((!previous && this.claims.size >= this.maxClaims) ||
+        !Number.isSafeInteger(this.lastEpoch + 1)) throw new DesktopSessionControlBusyError()
     const claim: DesktopSessionClaim = { ...caller, generation: this.generation,
-      epoch: (previous?.epoch ?? 0) + 1, expiresAt: now + this.ttlMs }
+      epoch: ++this.lastEpoch, expiresAt: now + this.ttlMs }
     this.claims.set(sessionId, claim)
     return { outcome: 'controlled', claim }
   }
@@ -213,6 +229,15 @@ export class DesktopSessionControl {
 
   private sameOwner(a: DesktopSessionController, b: DesktopSessionController): boolean {
     return a.kind === b.kind && a.id === b.id
+  }
+
+  private pruneExpiredClaims(): void {
+    const now = this.now()
+    for (const [sessionId, claim] of this.claims) {
+      if (claim.expiresAt <= now && (this.activeWrites.get(sessionId) ?? 0) === 0) {
+        this.claims.delete(sessionId)
+      }
+    }
   }
 
   private validateSessionId(sessionId: string): void {
