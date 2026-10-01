@@ -23,7 +23,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用此包
 
-在具有 Loader 和 `profileContext` 的 profile 应用中挂载此服务。它没有配置字段。
+在具有 Loader 和 `profileContext` 的 profile 应用中挂载此服务。
 
 ```yaml
 - id: config-editor
@@ -31,6 +31,10 @@ kind: "package-reference"
 ```
 
 使用 [settings](../../settings/settings/README.zh.md) 提供只编辑即时字段的表单。编辑完整配置的调用方可使用 `ctx.configEditor.edit()`；普通字段保留 Loader 的正常生命周期。
+
+嵌入式 Host 将可选字段 `ownerSettingsPath` 设置为可变迁移代际设置文件的绝对路径。此模式将旧设置节合并到组合后的插件配置上，映射已改名的设置节，并将修改写回同一文件，供重启、旧配置认领和迁移导出读取。文件必须是仅属主可访问、单硬链接、不超过 16 MiB 的普通文件，且 YAML 各节必须是对象。文件缺失或不安全时拒绝启动；编辑器不会重命名源文件。写入保留未安装插件的设置节以及未编辑字段的凭据。应用失败时恢复之前的文件和 Loader 配置。
+
+Host 模式只应用和编辑 volatile Config 字段。已存储的普通字段或未识别字段保留在文档中，但不能重定向 Host 拥有的凭据、存储或配置路径。设置版本包含 owner 覆盖项，因此旧表单不能覆盖另一次修改。
 
 <a id="understand-the-implementation"></a>
 ## 理解实现
@@ -66,7 +70,7 @@ kind: "package-reference"
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- 编辑写入当前 profile patch。Home patch 和命令行 overlay 参与优先级解析，但不作为写入目标。
+- 默认编辑写入当前 profile patch。Home patch 和命令行 overlay 参与优先级解析，但不作为写入目标。设置 `ownerSettingsPath` 后，Host 设置覆盖这些层，且该文件是唯一设置写入目标。
 - 完整配置覆盖保留普通字段，但会在 profile 层固定其当前原始值。
 - 仅可编辑 profile 根 Include 拥有且可唯一定位的条目。
 

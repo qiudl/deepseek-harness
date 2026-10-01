@@ -12,9 +12,17 @@ import Hmr from '@deepseek-ai/dsh-hmr'
 import DefaultModel from '@deepseek-ai/dsh-agent-default-model'
 import Settings from '../src/index.ts'
 
-export async function configurationFixture(options: { schema?: z; apply?: (ctx: Context, config: unknown) => void; hmr?: boolean } = {}) {
+export async function configurationFixture(options: {
+  schema?: z
+  apply?: (ctx: Context, config: unknown) => void
+  hmr?: boolean
+  ownerSettings?: Record<string, unknown>
+  ownerSettingsConfigPath?: string
+} = {}) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'settings-config-')))
   const dir = join(home, 'profiles', 'test')
+  const ownerSettingsPath = join(home, 'owner-settings.yaml')
+  if (options.ownerSettings !== undefined) writeFileSync(ownerSettingsPath, JSON.stringify(options.ownerSettings), { mode: 0o600 })
   onTestFinished(() => { rmSync(home, { recursive: true, force: true }) })
   initProfile(dir, ['test-bundle'])
   const bundle = join(dir, 'node_modules', 'test-bundle')
@@ -22,7 +30,7 @@ export async function configurationFixture(options: { schema?: z; apply?: (ctx: 
   writeFileSync(join(home, 'package.json'), '{"name":"test-installation"}\n')
   writeFileSync(join(bundle, 'package.json'), JSON.stringify({ name: 'test-bundle', version: '1.0.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } }))
   writeFileSync(join(bundle, 'cordis.patch.yml'), JSON.stringify([{ insert: [
-    { id: 'config-editor', name: 'cordis:editor' },
+    { id: 'config-editor', name: 'cordis:editor', config: options.ownerSettings === undefined ? {} : { ownerSettingsPath: options.ownerSettingsConfigPath ?? ownerSettingsPath } },
     { id: 'settings', name: 'cordis:settings' },
     { id: 'default-model', name: 'cordis:model', config: { provider: 'test', model: 'original' } },
     { id: 'first', name: 'cordis:probe', config: { ordinary: 'fixed', token: 'private' } },
@@ -54,5 +62,5 @@ export async function configurationFixture(options: { schema?: z; apply?: (ctx: 
     }
     return ctx
   }
-  return { ctx: await start(), profile, home, start }
+  return { ctx: await start(), profile, home, start, ownerSettingsPath }
 }

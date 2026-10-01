@@ -23,7 +23,7 @@ Save plugin configuration in the active profile’s patch and apply it immediate
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount this service in a profile application with Loader and `profileContext`. It has no configuration fields.
+Mount this service in a profile application with Loader and `profileContext`.
 
 ```yaml
 - id: config-editor
@@ -31,6 +31,10 @@ Mount this service in a profile application with Loader and `profileContext`. It
 ```
 
 Use [settings](../../settings/settings/README.md) for forms restricted to live fields. Callers that edit complete configuration can use `ctx.configEditor.edit()`; ordinary fields retain Loader’s normal lifecycle.
+
+The embedded Host sets optional `ownerSettingsPath` to its absolute, mutable migration-generation settings file. This mode merges released sections over composed plugin configs, maps renamed sections, and saves edits back to that same file for restart, legacy claims, and migration export. Files must be regular, owner-only, singly linked, at most 16 MiB, and valid YAML object sections. Missing or unsafe files reject activation; the editor never renames the source. Writes preserve unavailable sections and secrets outside the edited fields. Failed application restores the previous file and Loader configuration.
+
+Host mode applies and edits only volatile Config fields. Stored ordinary or unrecognized fields remain in the document but cannot redirect Host-owned credentials, storage, or configuration paths. Settings revisions include the owner override, so a stale form cannot overwrite another edit.
 
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
@@ -66,7 +70,7 @@ Consumers that change request prefixes determine cache effects.
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- Edits target the active profile patch. Home patches and command-line overlays are read for precedence but are not write targets.
+- By default edits target the active profile patch. Home patches and command-line overlays are read for precedence but are not write targets. With `ownerSettingsPath`, the Host settings override those layers and are the sole settings write target.
 - A complete config override preserves ordinary fields but pins their current raw values at the profile layer.
 - Only uniquely addressed entries owned by the profile’s root Include are editable.
 

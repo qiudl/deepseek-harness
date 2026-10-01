@@ -150,7 +150,9 @@ export class DesktopRemoteSessionExecutor {
       const uplink: AsyncIterable<unknown> = {
         async *[Symbol.asyncIterator]() {
           if (!abort.signal.aborted) {
-            await new Promise<void>(resolve => abort.signal.addEventListener('abort', () => resolve(), { once: true }))
+            await new Promise<void>((resolve) => {
+              abort.signal.addEventListener('abort', () => { resolve() }, { once: true })
+            })
           }
         },
       }

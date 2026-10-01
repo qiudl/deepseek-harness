@@ -121,7 +121,7 @@ it('rejects non-JSON inputs and invalid array paths without changing the patch',
 it('refuses missing entries and ordinary-only plugin forms', async () => {
   const { ctx } = await fixture({ hmr: false })
   await expect(ctx.settings.update('missing', {})).rejects.toThrow('No configurable')
-  await expect(ctx.settings.update('config-editor', {})).rejects.toThrow('No configurable')
+  await expect(ctx.settings.update('config-editor', {})).rejects.toThrow('no volatile fields')
   const entry = ctx.configEditor.entries().find(entry => entry.options.id === 'first')!
   await entry.update({ disabled: true })
   await expect(ctx.configEditor.edit(entry, () => ({}))).rejects.toThrow()

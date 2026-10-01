@@ -73,7 +73,7 @@ kind: "package-reference"
 
 会话 id 在使用前被单射转义为一个安全路径段（无遍历、无冲突）。规范化 cwd 让项目目录保持可读、便于导航；规范化相同的 cwd 字符串共享项目目录，而会话 id 仍选择不同会话目录。运行时操作选择数值最高的规范 generation，格式拒绝诊断会点名该绝对路径，让操作者能找到构建拒绝解读的原始日志。
 
-迁移导出同样从原始或 Zstandard 存储中选择最高 generation，包括已发布 V3 写入器的 `session.v3.jsonl.zstd`。导出校验所选 header 与文件名的版本一致，仅解码格式目录中登记的格式，且不写入源文件。混合编码、未知格式及损坏的后继文件均拒绝导出，不会回退到保留的前代文件。`tests/fixtures/released-v3-old-writer.jsonl.zstd` 回归夹具由已签名的 `0.1.6-alpha.2` 基线写入器生成并读回验证，其来源记录包含源 SHA 和内容摘要。
+迁移导出同样从原始或 Zstandard 存储中选择最高 generation，包括已发布 V3 写入器的 `session.v3.jsonl.zstd`。导出校验所选 header 与文件名的版本一致，仅解码格式目录中登记的格式，且不写入源文件。混合编码、未知格式及损坏的后继文件均拒绝导出，不会回退到保留的前代文件。`tests/fixtures/released-v3-old-writer.jsonl.zstd` 回归夹具由已签名的 `0.1.6-alpha.2` 基线写入器生成并读回验证，其来源记录包含写入器 SHA 和内容摘要。
 
 ### 持久性与崩溃语义
 

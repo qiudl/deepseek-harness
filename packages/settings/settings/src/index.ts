@@ -240,6 +240,8 @@ export class SettingsForms extends Service {
    * composition rejects is logged and remains only in the renamed file. */
   private async importLegacyDocument(): Promise<void> {
     const profile = this.ownerContext.profileContext
+    // The embedded Host owns migration and retains its mutable document for export and rollback.
+    if (this.ownerContext.configEditor.documentPath !== profile.patchPath) return
     const path = join(profile.home, 'settings.yaml')
     if (!existsSync(path)) return
     const imported = `${path}.imported`
@@ -308,7 +310,7 @@ export class SettingsForms extends Service {
       const form = volatileForm(schema)
       if (form === undefined) return []
       active.add(entry.id)
-      const raw = JSON.stringify([entry.fiber.uid, schema.toJSON(), entry.options.config ?? {}])
+      const raw = JSON.stringify([entry.fiber.uid, schema.toJSON(), entry.options.config ?? {}, override])
       const autoGenerate = this.presentations.get(entry.fiber)?.auto ?? true
       const previous = this.revisions.get(entry.id)
       const revision = previous === undefined ? 0 : previous.revision + Number(previous.raw !== raw)

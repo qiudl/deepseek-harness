@@ -1,6 +1,6 @@
 /** Profile-owned configuration edits, serialized with Loader hot reload. */
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { Context, FiberState, Service, resolveConfig } from '@deepseek-ai/cordis'
 import { entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
@@ -10,12 +10,28 @@ import type {} from '@deepseek-ai/dsh-hmr'
 import { composeEntries, loadProfileDirectory, readProfilePatches, reconcileProfilePatches } from '@deepseek-ai/dsh-app-boot'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { isMap, isSeq, parseDocument, Scalar, visit } from 'yaml'
+import z from '@deepseek-ai/schemastery'
+import {
+  mergeOwnerSettings, ownerSettingsOverride, ownerSettingsSection, ownerSettingsValues,
+  readOwnerSettings, replaceOwnerSettingsSection, updateOwnerSettingsValues,
+} from './owner-settings.ts'
+
+function settingsSchema(fiber: Entry['fiber']): z | undefined {
+  const schema = fiber?.runtime?.Config
+  return schema !== undefined && 'toJSON' in schema ? schema as z : undefined
+}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Persistent edits to the active profile's plugin configuration. */
     configEditor: ConfigEditor
   }
+}
+
+/** Optional mutable settings authority supplied by an embedded Host. */
+export interface Config {
+  /** Absolute path to the owner-only settings file in the active migration generation. */
+  ownerSettingsPath?: string
 }
 
 function flatten(rows: EntryOptions[]): EntryOptions[] {
@@ -25,13 +41,30 @@ function flatten(rows: EntryOptions[]): EntryOptions[] {
 /** Persist complete raw configs and apply them through the normal Loader path. */
 export class ConfigEditor extends Service {
   static inject = ['loader', 'profileContext']
+  static Config = z.object({ ownerSettingsPath: z.string() })
+  private validatingEntry: Entry | undefined
 
-  constructor(private readonly ownerContext: Context) {
+  constructor(private readonly ownerContext: Context, private readonly options: Config = {}) {
     super(ownerContext, 'configEditor')
+    if (options.ownerSettingsPath === undefined) return
+    if (!isAbsolute(options.ownerSettingsPath)) {
+      throw new Error('Owner settings path must be absolute')
+    }
+    readOwnerSettings(options.ownerSettingsPath)
+    const path = options.ownerSettingsPath
+    const validationTarget = (): Entry | undefined => this.validatingEntry
+    ownerContext.on('internal/config', function (_raw, next) {
+      const raw: unknown = next()
+      if (this.entry === undefined || this.entry === validationTarget()
+        || this.entry.parent.tree.ctx.fiber.entry?.id !== 'include') return raw
+      const stored = ownerSettingsSection(readOwnerSettings(path).sections, this.entry.options.id)
+      const section = ownerSettingsValues(settingsSchema(this), stored)
+      return Object.keys(section).length === 0 ? raw : mergeOwnerSettings(raw, section)
+    }, { global: true })
   }
 
-  /** The profile patch edited by this service. */
-  get documentPath(): string { return this.ownerContext.profileContext.patchPath }
+  /** The profile patch, or the Host-owned mutable settings document when configured. */
+  get documentPath(): string { return this.options.ownerSettingsPath ?? this.ownerContext.profileContext.patchPath }
 
   /** Addressable profile rows; nested Includes have independent configuration ownership.
    * @returns Active entries with unique profile patch ids.
@@ -50,6 +83,14 @@ export class ConfigEditor extends Service {
     const profile = this.ownerContext.profileContext
     const loaded = loadProfileDirectory('dsh', profile.dir, profile.installAnchor)
     const entries = this.entries()
+    if (this.options.ownerSettingsPath !== undefined) {
+      const { sections } = readOwnerSettings(this.options.ownerSettingsPath)
+      const base = new Map(flatten(composeEntries([readProfilePatches('dsh', profile)])).map(row => [row.id, row.config]))
+      return entries.map(entry => ({ entry,
+        inherited: structuredClone((base.get(entry.options.id) ?? {}) as Record<string, unknown>),
+        override: ownerSettingsValues(settingsSchema(entry.fiber), ownerSettingsSection(sections, entry.options.id)),
+      }))
+    }
     // An own config key can replace inherited config even when its value is undefined.
     const overridden = new Set(loaded.patches.filter(patch => patch.insert === undefined && Object.hasOwn(patch, 'config')).map(patch => patch.id))
     const composed = new Map<string, EntryOptions>()
@@ -95,6 +136,10 @@ export class ConfigEditor extends Service {
         const beforePatches = readProfilePatches('dsh', this.ownerContext.profileContext)
         await reconcileProfilePatches(this.ownerContext.root, beforePatches, 'dsh')
         if (!this.entries().includes(entry)) throw new Error('Configuration entry changed during reload')
+        if (this.options.ownerSettingsPath !== undefined) {
+          await this.editOwnerSettings(entry, change, beforePatches, this.options.ownerSettingsPath, entry.fiber)
+          return
+        }
         const current = structuredClone((entry.options.config ?? {}) as Record<string, unknown>)
         const inherited = this.inherited(entry, loadProfileDirectory('dsh', this.ownerContext.profileContext.dir, this.ownerContext.profileContext.installAnchor))
         const next = change(current, inherited)
@@ -151,6 +196,47 @@ export class ConfigEditor extends Service {
     }
     const hmr = this.ownerContext.get('hmr')
     await (hmr === undefined ? run() : hmr.runExclusive(run))
+  }
+
+  private async editOwnerSettings(
+    entry: Entry,
+    change: (current: Record<string, unknown>, inherited: Record<string, unknown>) => Record<string, unknown>,
+    beforePatches: PatchOptions[],
+    path: string,
+    fiber: NonNullable<Entry['fiber']>,
+  ): Promise<void> {
+    const before = readOwnerSettings(path)
+    const base = flatten(composeEntries([beforePatches])).find(row => row.id === entry.options.id)
+    const inherited = structuredClone((base?.config ?? {}) as Record<string, unknown>)
+    const schema = settingsSchema(fiber)
+    const previous = ownerSettingsSection(before.sections, entry.options.id)
+    const current = mergeOwnerSettings(inherited, ownerSettingsValues(schema, previous)) as Record<string, unknown>
+    const next = change(current, inherited)
+    if (fiber.state !== FiberState.ACTIVE) throw new Error('Configuration plugin is no longer active')
+    if (!isDeepStrictEqual(next, mergeOwnerSettings(inherited, ownerSettingsValues(schema, next)))) {
+      throw new Error('Owner settings edits may change only volatile Config fields')
+    }
+    this.validatingEntry = entry
+    try {
+      const resolved: unknown = fiber.ctx.waterfall(fiber, 'internal/config', next, () => next)
+      resolveConfig(fiber.runtime as NonNullable<typeof fiber.runtime>, resolved)
+    } finally { this.validatingEntry = undefined }
+    const values = updateOwnerSettingsValues(schema, previous, ownerSettingsOverride(inherited, next))
+    const document = yaml.dump(replaceOwnerSettingsSection(before.sections, entry.options.id, values))
+    await writeFileAtomic(path, document, { mode: 0o600 })
+    try {
+      // The raw Loader row can be unchanged while its external settings changed.
+      // noSave keeps Cordis' update hook from persisting a second configuration authority.
+      fiber.update(inherited, true)
+      await fiber.await()
+      await reconcileProfilePatches(this.ownerContext.root, beforePatches, 'dsh', [entry.options.id])
+    } catch (error) {
+      await writeFileAtomic(path, before.text, { mode: 0o600 })
+      fiber.update(inherited, true)
+      await fiber.await()
+      await reconcileProfilePatches(this.ownerContext.root, beforePatches, 'dsh', [entry.options.id])
+      throw error
+    }
   }
 }
 
