@@ -39,6 +39,8 @@ import type {
   ProfileViewActivateResult,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
+  HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
+  ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -669,12 +671,73 @@ export function parseHostWorkspaceModelSelection(value: unknown): HostWorkspaceM
   }
 }
 
+/**
+ * Read an exact server challenge without evaluating accessors.
+ * @param value - Registration operation, audience, expiry and challenged Account.
+ * @returns Detached, frozen challenge; the server must still persist and consume it.
+ */
+export function parseHostCollaborationRegistrationChallenge(value: unknown): HostCollaborationRegistrationChallenge {
+  const challenge = registrationRecord(value)
+  exactKeys(challenge, ['registration_request_id', 'challenge_id', 'challenge_nonce', 'expires_at',
+    'audience', 'environment_id', 'account_issuer', 'account_subject'])
+  const audience = accountIssuer(challenge.audience)
+  return Object.freeze({
+    registration_request_id: uuid(challenge.registration_request_id) as HostCollaborationRegistrationChallenge['registration_request_id'],
+    challenge_id: uuid(challenge.challenge_id) as HostCollaborationRegistrationChallenge['challenge_id'],
+    challenge_nonce: nonce(challenge.challenge_nonce), expires_at: generation(challenge.expires_at), audience,
+    environment_id: uuid(challenge.environment_id) as HostAuthorityEnvironmentId,
+    account_issuer: accountIssuer(challenge.account_issuer),
+    account_subject: uuid(challenge.account_subject) as HostCollaborationRegistrationChallenge['account_subject'],
+  })
+}
+
+function registrationRecord(value: unknown): Record<string, unknown> {
+  const result = record(value)
+  if (Object.getPrototypeOf(result) !== Object.prototype || Object.getOwnPropertySymbols(result).length) reject()
+  if (Object.values(Object.getOwnPropertyDescriptors(result)).some(descriptor => !descriptor.enumerable || !('value' in descriptor))) reject()
+  return result
+}
+
+/**
+ * Read the signed installation/process fields; this validates fields, not signature trust.
+ * @param value - Host registration assertion received over an authenticated carrier.
+ * @returns Detached, deeply frozen assertion without vault or credential fields.
+ */
+export function parseHostCollaborationRegistrationAssertion(value: unknown): HostCollaborationRegistrationAssertion {
+  const result = registrationRecord(value)
+  exactKeys(result, ['schema_version', 'challenge', 'installation_id', 'installation_public_key',
+    'host_instance_id', 'process_nonce', 'signature'])
+  if (result.schema_version !== 2) reject()
+  const installation_id = uuid(result.installation_id) as InstallationId
+  const host_instance_id = uuid(result.host_instance_id) as HostInstanceId
+  if (installation_id === (host_instance_id as string)) reject()
+  return Object.freeze({ schema_version: 2,
+    challenge: parseHostCollaborationRegistrationChallenge(result.challenge),
+    installation_id, installation_public_key: publicKey(result.installation_public_key),
+    host_instance_id, process_nonce: nonce(result.process_nonce), signature: signature(result.signature),
+  })
+}
+
+/**
+ * Encode the fixed-order UTF-8 registration tuple with a distinct signing domain.
+ * @param value - Exact assertion; its signature is excluded from the signed bytes.
+ * @returns Bytes for Ed25519 signing/verification; no I/O or trust decision.
+ */
+export function encodeHostCollaborationRegistrationSignaturePayload(value: HostCollaborationRegistrationAssertion): Buffer {
+  const result = parseHostCollaborationRegistrationAssertion(value), challenge = result.challenge
+  return Buffer.from(`dsh-collaboration-host-registration/v2\0${JSON.stringify([
+    result.schema_version, challenge.registration_request_id, challenge.challenge_id, challenge.challenge_nonce,
+    challenge.expires_at, challenge.audience, challenge.environment_id, challenge.account_issuer, challenge.account_subject,
+    result.installation_id, result.installation_public_key, result.host_instance_id, result.process_nonce,
+  ])}`, 'utf8')
+}
+
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileModelTextRequest
+  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest | ProfileModelTextRequest
   | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileRemoteSessionRequest
   | ProfileRemoteUiReadRequest
@@ -952,6 +1015,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...parseHostWorkspaceModelSelectionTarget({ workspace_id: params.workspace_id, session_id: params.session_id }),
     } }
   }
+  if (frame.method === 'profile.collaboration_registration') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      challenge: parseHostCollaborationRegistrationChallenge(params.challenge),
+    } }
+  }
   if (frame.method === 'profile.model_text') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
       'account_binding_handle', 'authority_binding_version', 'text'])
@@ -990,7 +1061,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileModelTextResult
+  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult | ProfileModelTextResult
   | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileRemoteSessionResult
   | ProfileRemoteUiReadResult
@@ -1214,6 +1285,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
   if (frame.method === 'profile.workspace_model_selection') {
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: parseHostWorkspaceModelSelection(result) }
+  }
+  if (frame.method === 'profile.collaboration_registration') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostCollaborationRegistrationAssertion(result) }
   }
   if (frame.method === 'profile.model_text') {
     if (result.state === 'rejected') {

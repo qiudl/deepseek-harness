@@ -470,6 +470,51 @@ export interface ProfileWorkspaceModelSelectionResult {
   readonly result: HostWorkspaceModelSelection
 }
 
+/** Server challenge bound to one collaboration registration operation and Account. */
+export interface HostCollaborationRegistrationChallenge {
+  readonly registration_request_id: Branded<'CollaborationRegistrationRequestId'>
+  readonly challenge_id: Branded<'CollaborationRegistrationChallengeId'>
+  readonly challenge_nonce: HostControlNonce
+  readonly expires_at: number
+  readonly audience: string
+  readonly environment_id: HostAuthorityEnvironmentId
+  readonly account_issuer: string
+  readonly account_subject: Branded<'AccountSubject'>
+}
+
+/** Installation signature over the challenge and current Host process; grants no Source authority. */
+export interface HostCollaborationRegistrationAssertion {
+  readonly schema_version: 2
+  readonly challenge: HostCollaborationRegistrationChallenge
+  readonly installation_id: InstallationId
+  readonly installation_public_key: HostControlPublicKey
+  readonly host_instance_id: HostInstanceId
+  readonly process_nonce: HostControlNonce
+  readonly signature: HostControlSignature
+}
+
+/** Sign only after this connection has verified the challenged Account and binding. */
+export interface ProfileCollaborationRegistrationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_registration'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostCollaborationRegistrationChallenge
+  }
+}
+
+/** Exact signed registration assertion without paths, vault handles or credentials. */
+export interface ProfileCollaborationRegistrationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_registration'
+  readonly result: HostCollaborationRegistrationAssertion
+}
+
 /** One bounded text request authorized by this connection's verified Account grant. */
 export interface ProfileModelTextRequest {
   readonly version: 1
@@ -1234,6 +1279,8 @@ export type HostControlFrame =
   | ProfileViewActivateResult
   | ProfileWorkspaceModelSelectionRequest
   | ProfileWorkspaceModelSelectionResult
+  | ProfileCollaborationRegistrationRequest
+  | ProfileCollaborationRegistrationResult
   | ProfileModelTextRequest
   | ProfileModelTextResult
   | ProfileLeaseCloseRequest

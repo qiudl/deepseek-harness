@@ -35,6 +35,8 @@ import type {
   ProfileViewActivateRequest,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest,
+  HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
+  ProfileCollaborationRegistrationRequest,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -58,6 +60,9 @@ import {
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
+  encodeHostCollaborationRegistrationSignaturePayload,
+  parseHostCollaborationRegistrationChallenge,
+  parseHostCollaborationRegistrationAssertion,
   migrationProfileSelectorHash,
 } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
 import type {
@@ -1258,6 +1263,30 @@ export class HostControlAuthority {
           const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { value } }
           channel.send(decodeHostControlFrame(encodeHostControlFrame(response)))
+        } else if (frame.method === 'profile.collaboration_registration') {
+          const challenge = frame.params.challenge
+          context.signal.throwIfAborted()
+          const now = clock()
+          if (challenge.expires_at <= now || challenge.expires_at - now > 300_000) {
+            throw new HostAuthorityError('stale')
+          }
+          this.options.host.authorizeCollaborationRegistration({
+            authorityEnvironmentId: challenge.environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId, issuer: challenge.account_issuer, subject: challenge.account_subject,
+          })
+          const identity = this.options.identity
+          const unsigned: HostCollaborationRegistrationAssertion = {
+            schema_version: 2, challenge, installation_id: identity.installationId as InstallationId,
+            installation_public_key: identity.installationPublicKey as HostControlPublicKey,
+            host_instance_id: identity.hostInstanceId as HostInstanceId,
+            process_nonce: identity.processNonce as HostControlNonce, signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = sign(null, encodeHostCollaborationRegistrationSignaturePayload(unsigned),
+            privateKeyObject(identity.installationPrivateKey)).toString('base64url') as HostControlSignature
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { ...unsigned, signature } })
         } else if (frame.method === 'profile.workspace_model_selection') {
           const inspect = this.options.inspectWorkspaceModelSelection
           if (!inspect) throw new HostAuthorityError('upgrade_required')
@@ -1360,6 +1389,7 @@ export class HostControlAuthority {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
+          'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session'] : []),
@@ -2017,6 +2047,47 @@ export class UnixHostClient {
   }
 
   /**
+   * Request and verify a registration signature without changing the visible Profile lease.
+   * @param input - Main-held Account binding, server challenge and cancellation.
+   * @returns Frozen assertion verified against the inspected installation and process; no server enrollment.
+   */
+  async attestCollaborationRegistration(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostCollaborationRegistrationChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationRegistrationAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostCollaborationRegistrationChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.collaboration_registration' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileCollaborationRegistrationRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_registration',
+      params: { ...this.auth(), account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion, challenge },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostCollaborationRegistrationAssertion(frame.result)
+    if (!this.isConnected() || JSON.stringify(result.challenge) !== JSON.stringify(challenge)
+      || result.installation_id !== this.inspection.installation_id
+      || result.installation_public_key !== this.inspection.installation_public_key
+      || result.host_instance_id !== this.inspection.host_instance_id
+      || result.process_nonce !== this.inspection.process_nonce
+      || result.challenge.expires_at <= this.now()
+      || !verify(null, encodeHostCollaborationRegistrationSignaturePayload(result),
+        publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /**
    * Execute a negotiated extension command using a Main-held lease; no target paths cross the socket.
    * @param input - lease, runtime generation, bounded command and optional cancellation.
    * @returns a prepared plan, sanitized inventory or durable receipt; old Hosts reject before mutation.
@@ -2645,7 +2716,8 @@ export class UnixHostClient {
       | ProfileOpenRequest | ProfileOpenLocalRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-      | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest
+      | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
+      | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest
       | MigrationImportStageRequest | MigrationImportStatusRequest | MigrationImportVerifyRequest
