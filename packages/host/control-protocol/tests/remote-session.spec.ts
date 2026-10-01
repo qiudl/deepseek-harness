@@ -95,6 +95,9 @@ describe('Profile remote UI read wire commands', () => {
   })
 
   it('accepts only the bounded read endpoints and an empty boot selector', () => {
+    for (const args of [null, false, 0, '', 'selector', []]) {
+      expect(() => decode(readFrame('session/list', { args }))).toThrow()
+    }
     const boot = readFrame('boot/injections', { args: {} })
     expect(encodeHostControlFrame(decode(boot))).toBe(`${JSON.stringify(boot)}\n`)
     expect(() => decode(readFrame('boot/injections', { args: { profile: 'other' } }))).toThrow()

@@ -1,5 +1,30 @@
-import { expect, it } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+
+it('forwards remote reads only to the live Profile worker and rejects missing capabilities', async () => {
+  const remoteSession = vi.fn(async () => ({ items: [] }))
+  const remoteUiRead = vi.fn(async () => ({ injections: [] }))
+  const supported = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession, remoteUiRead,
+  }))
+  const unsupported = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  onTestFinished(async () => { await supported.disposeAll(); await unsupported.disposeAll() })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  const command = { operation: 'session.list' as const, command_id: '123e4567-e89b-42d3-a456-426614174000' as never }
+  const signal = new AbortController().signal
+  const calls = (workers: ProfileWorkerSupervisor) => [
+    workers.remoteSession('profile', command, signal), workers.remoteUiRead('profile', 'boot/injections', { args: {} }, signal),
+  ]
+  for (const result of calls(supported)) await expect(result).rejects.toMatchObject({ code: 'unavailable' })
+  await supported.start(input)
+  await expect(Promise.all(calls(supported))).resolves.toEqual([{ items: [] }, { injections: [] }])
+  expect(remoteSession).toHaveBeenCalledWith(command, signal)
+  expect(remoteUiRead).toHaveBeenCalledWith('boot/injections', { args: {} }, signal)
+  await unsupported.start(input)
+  for (const result of calls(unsupported)) await expect(result).rejects.toMatchObject({ code: 'unavailable' })
+  await supported.disposeAll()
+  for (const result of calls(supported)) await expect(result).rejects.toMatchObject({ code: 'unavailable' })
+})
 
 it('coalesces concurrent ensures and waits for an in-flight start before disposal', async () => {
   let start!: () => void; let done!: () => void; let count = 0; let aborted = false
