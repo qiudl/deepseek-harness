@@ -38,7 +38,7 @@ export class DesktopRemoteApprovalEvents {
    * @param source - Selected Profile's forwarded event stream.
    * @returns Frames with pending approvals registered for this generation.
    */
-  async *observe(source: AsyncIterable<unknown>): AsyncGenerator<unknown> {
+  async *observe(source: AsyncIterable<unknown>): AsyncGenerator {
     let clientId: string | undefined
     try {
       for await (const value of source) {
