@@ -125,6 +125,22 @@ it.each([en, zh])('shows a temporary copy failure without interrupting sign-in',
   }
 })
 
+it.each([en, zh])('keeps sign-in active when the host throws while accessing its clipboard', async (copy) => {
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  try {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, get: () => { throw new Error('Host clipboard unavailable') } })
+    const props = mount({ id, phase: 'waiting-browser', authorizeUrl: 'https://platform.deepseek.com/dsh/authorize?state=example' }, copy)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: copy.copyLink })) })
+    expect(screen.getByRole('dialog', { name: copy.browserTitle })).toBeTruthy()
+    expect(screen.getByRole('button', { name: copy.copyFailed })).toBeTruthy()
+    expect(props.cancel).not.toHaveBeenCalled()
+    expect(props.start).not.toHaveBeenCalled()
+  } finally {
+    if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  }
+})
+
 it.each([en, zh])('shows an error during an active attempt and waits for cancellation before retrying', async (copy) => {
   const props = mount({ id, phase: 'waiting-browser' }, copy)
   cleanup()

@@ -1,11 +1,12 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import type {
   HostControlCapability,
+  HostControlFrame,
   HostExtensionKind,
   HostRemoteSessionCommand,
   ProfileEnsureRequest,
 } from '@deepseek-ai/dsh-host-control-protocol'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { DesktopHost } from '../src/desktop-host.ts'
 import type { ProfileExtensionOperations } from '../src/extension-operations.ts'
 import { HostAuthorityError } from '../src/types.ts'
@@ -72,7 +73,10 @@ function fakeHost(): DesktopHost {
   } as unknown as DesktopHost
 }
 
-async function authorityClient(options: Partial<UnixHostServerOptions> = {}): Promise<{
+async function authorityClient(
+  options: Partial<UnixHostServerOptions> = {},
+  reply?: (frame: HostControlFrame) => HostControlFrame,
+): Promise<{
   client: UnixHostClient
   lifetime: AbortController
   host: DesktopHost
@@ -88,7 +92,10 @@ async function authorityClient(options: Partial<UnixHostServerOptions> = {}): Pr
   const lifetime = new AbortController()
   const session = authority.openSession(ownerId, lifetime.signal)
   const transport: HostClientFrameTransport = {
-    call: frame => session.handleRequest(frame),
+    call: async (frame) => {
+      const result = await session.handleRequest(frame)
+      return reply ? reply(result) : result
+    },
     isConnected: () => !lifetime.signal.aborted,
     close: () => { lifetime.abort(); session.close() },
   }
@@ -106,6 +113,50 @@ async function localSelector(client: UnixHostClient): Promise<string> {
 }
 
 describe('Unix transport authority failures', () => {
+  it('rejects absent executors even when a client has stale capability flags', async () => {
+    const { client } = await authorityClient()
+    onTestFinished(() => { client.close() })
+    expect(Reflect.set(client.inspection, 'capabilities', [...client.inspection.capabilities,
+      'profile.remote_session', 'profile.remote_ui_read'])).toBe(true)
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteSession({ ...lease,
+      command: { operation: 'session.list', command_id: randomUUID() as never },
+    })).rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.remoteUiRead({ ...lease, endpoint: 'session/list', payload: { args: {} } }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+  })
+
+  it('rejects a changed Profile identity after a remote executor finishes', async () => {
+    const host = fakeHost()
+    const { client } = await authorityClient({ host, remoteSession: async () => ({}), remoteUiRead: async () => ({}) })
+    onTestFinished(() => { client.close() })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    for (const operation of ['session', 'ui']) {
+      vi.mocked(host).authorizeExtensionView.mockReturnValueOnce(profileId as never).mockReturnValueOnce(randomUUID() as never)
+      const response = operation === 'session'
+        ? client.remoteSession({ ...lease, command: { operation: 'session.list', command_id: randomUUID() as never } })
+        : client.remoteUiRead({ ...lease, endpoint: 'session/list', payload: { args: {} } })
+      await expect(response).rejects.toMatchObject({ code: 'profile_mismatch' })
+    }
+  })
+
+  it('rejects a remote result whose method belongs to another command', async () => {
+    const { client } = await authorityClient({ remoteSession: async () => ({}), remoteUiRead: async () => ({}) }, (frame) => {
+      if (frame.type === 'result' && (frame.method === 'profile.remote_session' || frame.method === 'profile.remote_ui_read')) {
+        return { ...frame, method: frame.method === 'profile.remote_session' ? 'profile.remote_ui_read' : 'profile.remote_session' }
+      }
+      return frame
+    })
+    onTestFinished(() => { client.close() })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    await expect(client.remoteSession({ ...lease, command: { operation: 'session.list', command_id: randomUUID() as never } }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(client.remoteUiRead({ ...lease, endpoint: 'session/list', payload: { args: {} } }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
   it('advertises and executes remote session commands only through a live owned view lease', async () => {
     const command: HostRemoteSessionCommand = {
       operation: 'session.list', command_id: randomUUID() as never,
