@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { onTestFinished } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import z from '@deepseek-ai/schemastery'
 import Timer from '@deepseek-ai/cordis-plugin-timer'
 import { boot, initProfile, readProfilePatches, type ProfileContext } from '@deepseek-ai/dsh-app-boot'
@@ -14,10 +15,12 @@ import Settings from '../src/index.ts'
 
 export async function configurationFixture(options: {
   schema?: z
-  apply?: (ctx: Context, config: unknown) => void
+  apply?: (ctx: Context, config: unknown) => void | Promise<void>
   hmr?: boolean
   ownerSettings?: Record<string, unknown>
   ownerSettingsConfigPath?: string
+  editorLast?: boolean
+  disabledProbe?: boolean
 } = {}) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'settings-config-')))
   const dir = join(home, 'profiles', 'test')
@@ -29,13 +32,16 @@ export async function configurationFixture(options: {
   mkdirSync(bundle, { recursive: true })
   writeFileSync(join(home, 'package.json'), '{"name":"test-installation"}\n')
   writeFileSync(join(bundle, 'package.json'), JSON.stringify({ name: 'test-bundle', version: '1.0.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } }))
-  writeFileSync(join(bundle, 'cordis.patch.yml'), JSON.stringify([{ insert: [
+  const entries: EntryOptions[] = [
     { id: 'config-editor', name: 'cordis:editor', config: options.ownerSettings === undefined ? {} : { ownerSettingsPath: options.ownerSettingsConfigPath ?? ownerSettingsPath } },
     { id: 'settings', name: 'cordis:settings' },
     { id: 'default-model', name: 'cordis:model', config: { provider: 'test', model: 'original' } },
     { id: 'first', name: 'cordis:probe', config: { ordinary: 'fixed', token: 'private' } },
     { id: 'second', name: 'cordis:probe', config: { ordinary: 'second' } },
-  ] }]))
+  ]
+  if (options.editorLast) entries.push(entries.shift()!)
+  if (options.disabledProbe) entries.push({ id: 'disabled', name: 'cordis:probe', disabled: true })
+  writeFileSync(join(bundle, 'cordis.patch.yml'), JSON.stringify([{ insert: entries }]))
   writeFileSync(join(dir, 'cordis.yml'), '[]\n')
   const profile: ProfileContext = {
     name: 'test', startedBundles: ['test-bundle'], dir, patchPath: join(dir, 'cordis.patch.yml'),

@@ -80,7 +80,7 @@ describe.skipIf(MODE === 'record')('web e2e: compact Tool details', () => {
     await compareOrRefreshGolden(UI_EXPECTED, snapshot, MODE)
     await page.setViewportSize({ width: 360, height: 800 })
     const card = page.locator('[data-chat-call-id] [data-tool="schedule_create"]')
-    expect(await card.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await expect.poll(() => card.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
     const reminders = page.locator('[data-tool="schedule_list"]')
     await scrollIntoView(reminders)
     const list = reminders.getByRole('list').first()

@@ -9,6 +9,43 @@ import { configurationFixture } from './configuration-fixture.ts'
 // The embedded settings file uses POSIX owner permissions; Windows retains its separately pinned runtime.
 const nativeIt = it.skipIf(process.platform === 'win32')
 
+nativeIt('loads owner defaults when the consumer precedes the configuration editor', async () => {
+  const { ctx, start } = await configurationFixture({ editorLast: true, hmr: false, ownerSettings: {
+    'default-model': { provider: 'test', model: 'owner' },
+  } })
+  expect(ctx.agentDefaultModel.currentSelection()).toEqual({ provider: 'test', model: 'owner' })
+  await ctx.fiber.dispose()
+  const restarted = await start()
+  expect(restarted.agentDefaultModel.currentSelection()).toEqual({ provider: 'test', model: 'owner' })
+})
+
+nativeIt('refreshes an active consumer when the owner editor is reactivated', async () => {
+  const { ctx, ownerSettingsPath } = await configurationFixture({ ownerSettings: {
+    'default-model': { provider: 'test', model: 'owner' },
+  } })
+  const editor = [...ctx.loader.entries()].find(entry => entry.options.id === 'config-editor')!
+  await editor.update({ disabled: true })
+  await ctx.loader.await()
+  writeFileSync(ownerSettingsPath, JSON.stringify({ 'default-model': { provider: 'test', model: 'restored' } }), { mode: 0o600 })
+  await editor.update({ disabled: false })
+  await ctx.loader.await()
+  expect(ctx.agentDefaultModel.currentSelection()).toEqual({ provider: 'test', model: 'restored' })
+})
+
+nativeIt('does not restart disabled or failed consumers while restoring owner settings', async () => {
+  const { ctx, ownerSettingsPath } = await configurationFixture({ editorLast: true, disabledProbe: true,
+    ownerSettings: { first: { count: 5 }, disabled: { count: 6 } },
+    apply: async () => {
+      await new Promise(resolve => setTimeout(resolve, 1))
+      throw new Error('fixture consumer activation failed')
+    },
+  })
+  expect([...ctx.loader.entries()].find(entry => entry.options.id === 'disabled')!.fiber).toBeUndefined()
+  expect(ctx.logger.buffer.some(row => row.args.some(value => value instanceof Error
+    && value.message === 'fixture consumer activation failed'))).toBe(true)
+  expect(parse(readFileSync(ownerSettingsPath, 'utf8'))).toEqual({ first: { count: 5 }, disabled: { count: 6 } })
+})
+
 nativeIt('refuses a relative owner settings path at activation', async () => {
   const { ctx } = await configurationFixture({ ownerSettings: {}, ownerSettingsConfigPath: 'relative.yaml', hmr: false })
   expect(ctx.get('configEditor')).toBeUndefined()

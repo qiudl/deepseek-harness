@@ -61,6 +61,21 @@ export class ConfigEditor extends Service {
       const section = ownerSettingsValues(settingsSchema(this), stored)
       return Object.keys(section).length === 0 ? raw : mergeOwnerSettings(raw, section)
     }, { global: true })
+    // Bundle row order does not determine activation order. Consumers that started
+    // before this service need the same owner overlay as subsequently loaded rows.
+    for (const entry of this.entries()) {
+      if (entry.fiber === undefined) continue
+      const stored = ownerSettingsSection(readOwnerSettings(path).sections, entry.options.id)
+      if (Object.keys(ownerSettingsValues(settingsSchema(entry.fiber), stored)).length === 0) continue
+      if (entry.fiber.state === FiberState.ACTIVE) entry.fiber.update(entry.options.config, true)
+      else {
+        const stop = ownerContext.on('internal/status', (fiber) => {
+          if (fiber !== entry.fiber || fiber.state !== FiberState.ACTIVE) return
+          stop()
+          fiber.update(entry.options.config, true)
+        }, { global: true })
+      }
+    }
   }
 
   /** The profile patch, or the Host-owned mutable settings document when configured. */
