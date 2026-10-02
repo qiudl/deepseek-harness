@@ -5,6 +5,9 @@ import { webcrypto } from 'node:crypto'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { installAssembledBootEnv, mountAssembledApp } from './assembled-boot.ts'
+type WorkspaceRequest = { workspace_id: string
+  operation: { kind: 'get' | 'apply' | 'projects' | 'agents'
+    selected_project_ids?: readonly string[] } }
 
 const EXPECTED = join(process.cwd(), 'apps/web/tests/expected/slark-agent-composer/natural-language.expected.txt')
 
@@ -85,4 +88,56 @@ it('shows the project space, retries an edited inline task, and renders its repl
   expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
   observations.push(`question=${accepted?.question}`, `reply=${dock.textContent}`, 'ordinary-model-prompts=0', 'draft=empty')
   await expect(observations.join('\n') + '\n').toMatchFileSnapshot(EXPECTED)
+})
+
+it('saves multiple Slark spaces in the built collaboration area and never invokes the legacy Agent entry', async () => {
+  let selected: readonly string[] = [], version = 0
+  const legacy = vi.fn()
+  const bridge = vi.fn(async ({ workspace_id, operation }: WorkspaceRequest) => {
+    if (operation.kind === 'apply') { selected = operation.selected_project_ids ?? []; version++ }
+    if (operation.kind === 'get' || operation.kind === 'apply') return { ok: true,
+      value: { workspace_id, version: String(version), selected_project_ids: selected } }
+    if (operation.kind === 'projects') return { ok: true, value: { items: [
+      { project_id: 'product', project_name: 'Product' }, { project_id: 'engineering', project_name: 'Engineering' },
+    ], next_cursor: null } }
+    return { ok: true, value: { items: selected.length ? [{ project_id: 'product', project_name: 'Product',
+      agent_id: 'guide', agent_name: 'Guide', available: false, capability_snapshot: 'a'.repeat(64),
+      reason_code: 'executor_unavailable' }] : [], next_cursor: null, scope_version: String(version) } }
+  })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true,
+    collaborationWorkspace: bridge, enterpriseAgents: legacy, invokeEnterpriseAgent: legacy })
+  const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'] })
+  remote.mock.unary('fileReferences/list', { ok: true, value: [] })
+  remote.mock.unary('sessionReferenceResolver/candidates', { ok: true, value: [] })
+  const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
+  const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
+  if (!start) throw Error('fixture Workspace action missing')
+  fireEvent.click(start)
+  const panel = await screen.findByRole('region', { name: 'Slark collaboration' }, { timeout: 10_000 })
+  fireEvent.click(within(panel).getByTestId('slark-scope-toggle'))
+  fireEvent.click(await within(panel).findByRole('checkbox', { name: 'Product' }))
+  fireEvent.click(within(panel).getByRole<HTMLInputElement>('checkbox', { name: 'Engineering' }))
+  fireEvent.click(within(panel).getByTestId('slark-scope-apply'))
+  await within(panel).findByText('Guide · Product')
+  const observations = [
+    `region=${panel.getAttribute('aria-label')}`,
+    `selected=${selected.join(',')}`,
+    `agent=${within(panel).getByText('Guide · Product').textContent}`,
+    `availability=${within(panel).getByText('Read-only').textContent}`,
+  ]
+  fireEvent.click(within(panel).getByTestId('slark-scope-clear'))
+  fireEvent.click(within(panel).getByTestId('slark-scope-cancel'))
+  fireEvent.click(within(panel).getByTestId('slark-scope-toggle'))
+  expect((within(panel).getByRole<HTMLInputElement>('checkbox', { name: 'Product' })).checked).toBe(true)
+  expect(bridge.mock.calls.filter(([x]) => x.operation.kind === 'apply')).toHaveLength(1)
+  observations.push(`cancel-retains=${selected.join(',')}`)
+  const input = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
+  if (!input) throw Error('composer missing')
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => '@Gui' } })
+  await waitFor(() => { expect(input.textContent).toBe('@Gui') })
+  await waitFor(() => { expect(screen.queryByRole('option', { name: /Guide · Product/ })).toBeNull() })
+  expect(legacy).not.toHaveBeenCalled(); expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
+  observations.push(`legacy-calls=${legacy.mock.calls.length}`)
+  await expect(observations.join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
+    'apps/web/tests/expected/slark-agent-composer/project-scope.expected.txt'))
 })

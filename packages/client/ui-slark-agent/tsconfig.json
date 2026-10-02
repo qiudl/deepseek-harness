@@ -1,15 +1,42 @@
 {
   "extends": "../../../tsconfig.base.client.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "lib/types" },
-  "include": ["src"],
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
   "references": [
-    { "path": "../../../vendor/cordis" },
-    { "path": "../locale" },
-    { "path": "../../api/session-controller/tsconfig.client.json" },
-    { "path": "../ui-conversation" },
-    { "path": "../ui-input-trigger" },
-    { "path": "../ui-renderer" },
-    { "path": "../ui-slots" },
-    { "path": "../../util/crypto" }
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../locale"
+    },
+    {
+      "path": "../../api/session-controller/tsconfig.client.json"
+    },
+    {
+      "path": "../ui-conversation"
+    },
+    {
+      "path": "../ui-input-trigger"
+    },
+    {
+      "path": "../ui-renderer"
+    },
+    {
+      "path": "../ui-slots"
+    },
+    {
+      "path": "../../util/crypto"
+    },
+    {
+      "path": "../../api/workspace-controller/tsconfig.client.json"
+    },
+    {
+      "path": "../ui-primitives"
+    }
   ]
 }

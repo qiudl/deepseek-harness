@@ -1,6 +1,7 @@
 /** DSH `@` source for the live, employee-assigned Slark Agent directory. */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
+import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -8,6 +9,10 @@ import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { en, NS, zh } from './locales.ts'
 import { AgentTaskDock } from './AgentTaskDock.tsx'
+import { ProjectScopeModel } from './project-scope.ts'
+import type { WorkspaceBridge } from './project-scope.ts'
+import { ProjectScopeDock } from './ProjectScopeDock.tsx'
+import type { ProjectScopeInjected } from './ProjectScopeDock.tsx'
 
 /** Required client services. */
 export const inject = ['inputTriggers', 'locale', 'sessions', 'conversation', 'slots']
@@ -23,7 +28,8 @@ interface AgentItem {
   publication_version: number
 }
 
-interface DesktopAgentDirectory {
+interface DesktopAgentDirectory extends WorkspaceBridge {
+  collaborationScopeAvailable?: boolean
   enterpriseAgents(): Promise<
     { ok: true; items: AgentItem[]; invocationAvailable: boolean } |
     { ok: false; errorCode: string }>
@@ -90,6 +96,26 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.input.dock', id: 'slark-agent-tasks', order: 25, locale: NS,
     inject: sessionId => ({ sessionId }),
   }, AgentTaskDock))
+  const scopeModels = new Map<string, { model: ProjectScopeModel; bindings: ProjectScopeInjected }>()
+  ctx.inject(['workspaces'], (scopeCtx) => {
+    if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return
+    scopeCtx.effect(() => () => { scopeModels.forEach(({ model }) => { model.dispose() }); scopeModels.clear() },
+      'ui-slark-agent: scope projections')
+    scopeCtx.slots.inject('conversation.input.dock', () => scopeCtx.slots.register({
+      name: 'conversation.input.dock', id: 'slark-project-scope', order: 20, locale: NS,
+      inject: (sessionId) => {
+        let entry = scopeModels.get(sessionId)
+        if (!entry) {
+          const model = new ProjectScopeModel(sessionId, scopeCtx.workspaces.list, () => window.__DSH_DESKTOP_HOST__)
+          entry = { model, bindings: { hooks: { slarkScope: model }, refreshScope: () => model.refresh(),
+            applyScope: selected => model.apply(selected), loadProjects: () => model.loadProjects(),
+            loadAgents: () => model.loadAgents() } }
+          scopeModels.set(sessionId, entry)
+        }
+        return entry.bindings
+      },
+    }, ProjectScopeDock))
+  })
   const t = ctx.locale.bind(NS)
   const source: InputTriggerSource = {
     trigger: '@',
@@ -99,6 +125,10 @@ export function apply(ctx: ClientContext): void {
     matchEnterPosition: 'anywhere',
     async candidates(_session, { query, signal }) {
       const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
+      if (host?.collaborationScopeAvailable) {
+        // The v2 directory is read-only until its own executor is connected. No legacy fallback.
+        return []
+      }
       if (!host?.enterpriseAgents) return []
       const response = await host.enterpriseAgents()
       if (!response.ok || !response.invocationAvailable || signal.aborted) return []
@@ -114,6 +144,7 @@ export function apply(ctx: ClientContext): void {
       }))
     },
     onPick({ candidate }) {
+      if (typeof window !== 'undefined' && window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return undefined
       if (candidate.value === undefined) return undefined
       const item = parseReference(candidate.value)
       if (!item) return undefined
@@ -129,6 +160,7 @@ export function apply(ctx: ClientContext): void {
       const state = ctx.conversation.input.for(scoped).state.getSnapshot()
       const matches = state.occurrences.filter(occ => occ.source === 'slark-agent')
       if (matches.length === 0 || state.draft.trim() !== line) return undefined
+      if (window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) throw new Error(t('scope.executorPending'))
       if (matches.length !== 1 || state.occurrences.length !== 1 || envelope.attachments > 0) {
         throw new Error(t('submit.single'))
       }
@@ -171,6 +203,7 @@ export function apply(ctx: ClientContext): void {
             return { kind: 'error', text: t('submit.changed') }
           }
           const host = window.__DSH_DESKTOP_HOST__
+          if (host?.collaborationScopeAvailable) return { kind: 'error', text: t('scope.executorPending') }
           if (!host?.invokeEnterpriseAgent) return { kind: 'error', text: t('submit.unavailable') }
           const result = await host.invokeEnterpriseAgent({
             session_id: session.sessionId, logical_key: invocationKey,
