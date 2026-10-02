@@ -6,6 +6,8 @@
 
 export {
   parseHostCollaborationSourceTarget, parseHostCollaborationSourceDescriptor,
+  parseHostCollaborationSourceSnapshot,
+  parseHostCollaborationSourceSnapshotChunk,
   parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion, encodeHostSourceAuthorityPayload,
   HOST_CONTROL_MAX_FRAME_BYTES,
   HostControlProtocolError,
@@ -33,6 +35,7 @@ export type {
   ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
   ProfileModelClaimRetryRequest, ProfileModelClaimRetryResult,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor,
+  HostCollaborationSourceSnapshot, ProfileSourceSnapshotRequest, ProfileSourceSnapshotResult,
   HostSourceAuthorityChallenge, HostSourceAuthorityAssertion, ProfileSourceAuthorityRequest, ProfileSourceAuthorityResult,
   HostControlCapability,
   HostControlClientInstanceId,

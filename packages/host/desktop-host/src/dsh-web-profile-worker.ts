@@ -3,8 +3,8 @@ import { randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
-import { parseHostWorkspaceModelSelection, parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostWorkspaceModelSelection, parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
@@ -238,6 +238,9 @@ export class DshWebProfileWorkerFactory {
         }
         return { provider: value.provider, model: value.model, text: value.text }
       },
+      readCollaborationSourceSnapshot: (target, signal) => this.readCollaborationSourceSnapshot(
+        viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
+      ),
       inspectCollaborationSource: (target, signal) => this.inspectCollaborationSource(
         viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
       ),
@@ -312,13 +315,54 @@ export class DshWebProfileWorkerFactory {
     signal: AbortSignal,
     stopped: () => boolean,
   ): Promise<HostCollaborationSourceDescriptor> {
-    signal.throwIfAborted()
+    return this.readSource(viewOrigin,token,target,signal,stopped,'/internal/desktop-collaboration-source',8192,parseHostCollaborationSourceDescriptor,result=>result)
+  }
+
+  private readCollaborationSourceSnapshot(
+    viewOrigin: string,
+    token: string,
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostCollaborationSourceSnapshot> {
+    return this.readSource(
+      viewOrigin,
+      token,
+      target,
+      signal,
+      stopped,
+      '/internal/desktop-collaboration-source-snapshot',
+      2 * 1024 * 1024,
+      parseHostCollaborationSourceSnapshot,
+      result => result.descriptor,
+    )
+  }
+
+  private async readSource<T>(
+    viewOrigin: string,
+    token: string,
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+    stopped: () => boolean,
+    path: string,
+    maxBytes: number,
+    parse: (value: unknown) => T,
+    coordinates: (value: T) => HostCollaborationSourceTarget,
+  ): Promise<T> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    active.throwIfAborted()
     if (stopped()) throw new HostAuthorityError('unavailable')
-    const response = await fetch(`${viewOrigin}/internal/desktop-collaboration-source`, {
-      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(target), signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+    const response = await fetch(`${viewOrigin}${path}`, {
+      method: 'POST',
+      redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target),
+      signal: active,
     })
-    if (!response.ok || !response.body) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
+    if (!response.ok || !response.body) {
+      await response.body?.cancel()
+      throw new HostAuthorityError('unavailable')
+    }
     const reader = response.body.getReader()
     try {
       const chunks: Uint8Array[] = []
@@ -327,14 +371,21 @@ export class DshWebProfileWorkerFactory {
         const chunk = await reader.read()
         if (chunk.done) break
         bytes += chunk.value.byteLength
-        if (bytes > 8192) throw new HostAuthorityError('unavailable')
+        if (bytes > maxBytes) throw new HostAuthorityError('unavailable')
         chunks.push(chunk.value)
       }
-      signal.throwIfAborted()
+      active.throwIfAborted()
       if (stopped()) throw new HostAuthorityError('unavailable')
-      const result = parseHostCollaborationSourceDescriptor(JSON.parse(Buffer.concat(chunks).toString('utf8')))
-      if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id
-        || result.source_message_id !== target.source_message_id || result.source_revision !== target.source_revision) {
+      const result = parse(
+        JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))),
+      )
+      const selected = coordinates(result)
+      if (
+        selected.workspace_id !== target.workspace_id ||
+        selected.session_id !== target.session_id ||
+        selected.source_message_id !== target.source_message_id ||
+        selected.source_revision !== target.source_revision
+      ) {
         throw new HostAuthorityError('profile_mismatch')
       }
       return result
@@ -342,7 +393,7 @@ export class DshWebProfileWorkerFactory {
       if (error instanceof HostAuthorityError || signal.aborted) throw error
       throw new HostAuthorityError('unavailable')
     } finally {
-      await reader.cancel()
+      void reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }
   }

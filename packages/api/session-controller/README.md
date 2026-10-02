@@ -90,6 +90,8 @@ No direct effect; model requests remain owned by the Agent and LLM packages.
 
 `inspectCollaborationSource(target, signal)` reads the original committed Source through the owning Profile’s registry and journal. It returns only the original coordinates and SHA-256 of the full RFC 8785 snapshot, including the first journal commit. Missing records, lost membership, extra metadata, cancellation and Profile disposal reject. Reads serialize with accepted captures without preparing a model or restoring a call; late journal opens remain owned until disposal. The private worker HTTP reader consumes this Host-only method.
 
+`readCollaborationSourceSnapshot(target, signal)` applies the same Profile ownership, serial journal read and cancellation checks, returning the detached frozen original snapshot. `inspectCollaborationSource` derives its descriptor from this read. The private worker validates journal content with `parseCollaborationSourceSnapshot`; no Remote export, model preparation, Session event or executable-call restoration is added.
+
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>

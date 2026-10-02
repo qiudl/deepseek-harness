@@ -1,6 +1,66 @@
 import { expect, it } from 'vitest'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 
+it('discards full Source content after worker replacement and rejects reads after disposal or cancellation', async () => {
+  const target = {
+    workspace_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+    session_id: 'session' as never,
+    source_message_id: 'message',
+    source_revision: '1',
+  }
+  const capsule = { descriptor: { ...target, snapshot_digest: 'a'.repeat(64) }, snapshot_json: '{}' }
+  let enter!: () => void,
+    release!: () => void,
+    generation = 0
+  const started = new Promise<void>((resolve) => {
+    enter = resolve
+  })
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const current = ++generation
+    return {
+      closeNotifications() {},
+      abort() {},
+      done: Promise.resolve(),
+      readCollaborationSourceSnapshot: async () => {
+        if (current === 1)
+          await new Promise<void>((resolve) => {
+            release = resolve
+            enter()
+          })
+        return capsule
+      },
+    }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  try {
+    await workers.start(input)
+    const pending = workers.readCollaborationSourceSnapshot(
+      input.profileId,
+      target,
+      new AbortController().signal,
+    )
+    const denied = expect(pending).rejects.toMatchObject({ code: 'stale' })
+    await started
+    await workers.dispose(input.profileId)
+    await workers.start(input)
+    release()
+    await denied
+    expect(
+      await workers.readCollaborationSourceSnapshot(input.profileId, target, new AbortController().signal),
+    ).toEqual(capsule)
+    await expect(
+      workers.readCollaborationSourceSnapshot(input.profileId, target, AbortSignal.abort()),
+    ).rejects.toThrow()
+    await workers.disposeAll()
+    await expect(
+      workers.readCollaborationSourceSnapshot(input.profileId, target, new AbortController().signal),
+    ).rejects.toThrow()
+  } finally {
+    release?.()
+    await workers.disposeAll()
+  }
+})
+
 it('coalesces concurrent ensures and waits for an in-flight start before disposal', async () => {
   let start!: () => void; let done!: () => void; let count = 0; let aborted = false
   const ready = new Promise<void>((resolve) => { start = resolve })

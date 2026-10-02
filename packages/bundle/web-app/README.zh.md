@@ -129,6 +129,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 <a id="model-experience"></a>
 `DSH_PROFILE_SOURCE_TOKEN` 在隔离 Profile worker 中启用 `/internal/desktop-collaboration-source`。私有 POST 接受最多 2 KiB 的精确原始 Source 坐标，返回已有 journal 记录的已校验描述符。浏览器 Cookie、调用方模型或提交字段、缺失 Source 和丢失的 Session 归属都会被拒绝。响应禁止缓存、隐藏异常详情，不含消息正文或可执行调用；签名由父 Native Host 负责。
 
+同一私有令牌另启用 `/internal/desktop-collaboration-source-snapshot`。精确坐标定位所属 Profile 的已有 journal 快照，并严格校验嵌套元数据及内容摘要。响应为描述符与原始 Source JSON，不含凭据或可执行句柄。浏览器 Cookie 不授予路由访问权；归属缺失、journal 损坏和读取失败均返回隐藏详情的拒绝。父 Host 读取完整有界响应，再经固定控制协议分块传输。
+
 ## 模型体验
 
 ### Harness 源码与 Web 表层上下文

@@ -1,8 +1,9 @@
 /** Private worker HTTP read for the authenticated Desktop Host. */
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { describeCollaborationSource, parseCollaborationSourceSnapshot } from '@deepseek-ai/dsh-api-session-controller'
 import {
-  parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceTarget,
+  parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceTarget, parseHostCollaborationSourceSnapshot,
   type HostCollaborationSourceTarget,
 } from '@deepseek-ai/dsh-host-control-protocol'
 
@@ -19,21 +20,69 @@ export async function handleDesktopCollaborationSourceRequest(
   token: string,
   inspect: (target: HostCollaborationSourceTarget, signal: AbortSignal) => Promise<unknown>,
 ): Promise<void> {
+  return handle(req,res,token,inspect,parseHostCollaborationSourceDescriptor,result=>result)
+}
+/**
+ * Return original journal content only to its authenticated parent Host.
+ * @param req - Exact original coordinates, bounded to 2 KiB.
+ * @param res - Noncacheable response containing at most 1 MiB of Source JSON.
+ * @param token - Worker-only Source capability; browser cookies do not grant access.
+ * @param read - Profile-local reader with current Session ownership checks.
+ */
+export async function handleDesktopCollaborationSourceSnapshotRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  read: (target: HostCollaborationSourceTarget, signal: AbortSignal) => Promise<unknown>,
+): Promise<void> {
+  return handle(
+    req,
+    res,
+    token,
+    read,
+    (value) => {
+      const snapshot = parseCollaborationSourceSnapshot(value)
+      return parseHostCollaborationSourceSnapshot({
+        descriptor: describeCollaborationSource(snapshot),
+        snapshot_json: JSON.stringify(snapshot),
+      })
+    },
+    result => result.descriptor,
+  )
+}
+async function handle<T>(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  inspect: (target: HostCollaborationSourceTarget, signal: AbortSignal) => Promise<unknown>,
+  parse: (value: unknown) => T,
+  coordinates: (value: T) => HostCollaborationSourceTarget,
+): Promise<void> {
   const authorization = req.headers.authorization
   const actual = Buffer.from(authorization?.startsWith('Bearer ') ? authorization.slice(7) : '')
   const expected = Buffer.from(token)
-  if (req.method !== 'POST' || !/^[A-Za-z0-9_-]{43}$/u.test(token)
-    || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+  if (
+    req.method !== 'POST' ||
+    !/^[A-Za-z0-9_-]{43}$/u.test(token) ||
+    actual.length !== expected.length ||
+    !timingSafeEqual(actual, expected)
+  ) {
     res.writeHead(403).end()
     return
   }
   const controller = new AbortController()
-  const close = () => { controller.abort() }
-  const timer = setTimeout(() => { controller.abort(); req.destroy() }, 10_000)
+  const close = () => {
+    controller.abort()
+  }
+  const timer = setTimeout(() => {
+    controller.abort()
+    req.destroy()
+  }, 10_000)
   res.once('close', close)
   const send = (status: number, value: unknown) => {
     if (!res.destroyed && !res.writableEnded) {
-      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res
+        .writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         .end(JSON.stringify(value))
     }
   }
@@ -54,10 +103,16 @@ export async function handleDesktopCollaborationSourceRequest(
     }
     try {
       controller.signal.throwIfAborted()
-      const result = parseHostCollaborationSourceDescriptor(await inspect(target, controller.signal))
+      const result = parse(await inspect(target, controller.signal))
       controller.signal.throwIfAborted()
-      if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id
-        || result.source_message_id !== target.source_message_id || result.source_revision !== target.source_revision) throw Error('mismatch')
+      const selected = coordinates(result)
+      if (
+        selected.workspace_id !== target.workspace_id ||
+        selected.session_id !== target.session_id ||
+        selected.source_message_id !== target.source_message_id ||
+        selected.source_revision !== target.source_revision
+      )
+        throw Error('mismatch')
       send(200, result)
     } catch {
       send(422, { error: 'unavailable' })

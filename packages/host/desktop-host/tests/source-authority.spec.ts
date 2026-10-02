@@ -62,12 +62,17 @@ async function fixture() {
     ...target,
     snapshot_digest: 'a'.repeat(64),
   })
+  let read=async(profileId:string,target:Parameters<typeof inspect>[1],signal:AbortSignal)=>({
+    descriptor:await inspect(profileId,target,signal),snapshot_json:JSON.stringify({ ...target,original_message:'@Guide · 项目😀\r\n',active_mentions:[],
+      model_snapshot:{ provider:'p',model:'m',configuration_generation:'1',adapter_fingerprint:'b'.repeat(64) },host_journal_commit:{ journal_id:'j',commit_version:'1',content_digest:'c'.repeat(64) } }),
+  })
   const authority = new HostControlAuthority({
     identity,
     host,
     profilePersistenceGeneration: () => 1,
     now: clock.now,
     inspectCollaborationSource: (profileId, target, signal) => inspect(profileId, target, signal),
+    readCollaborationSourceSnapshot:(profileId,target,signal)=>read(profileId,target,signal),
   })
   const ownerId = randomUUID(),
     lifetime = new AbortController()
@@ -134,8 +139,104 @@ async function fixture() {
     setInspect: (callback: typeof inspect) => {
       inspect = callback
     },
+    setRead:(callback:typeof read)=>{read=callback},
   }
 }
+const snapshotInput = (f: Awaited<ReturnType<typeof fixture>>) => ({
+  ...f.input,
+  accountIssuer: f.account.issuer,
+  accountSubject: f.account.subject,
+  workspace_id: f.challenge.workspace_id,
+  session_id: f.challenge.session_id,
+  source_message_id: f.challenge.source_message_id,
+  source_revision: f.challenge.source_revision,
+})
+it('reads original Source content only after verified Account grants and rechecks revocation after the worker returns', async () => {
+  const f = await fixture(),
+    input = snapshotInput(f)
+  await expect(f.client.readCollaborationSourceSnapshot(input)).rejects.toMatchObject({
+    code: 'unauthorized',
+  })
+  await f.grant()
+  const result = await f.client.readCollaborationSourceSnapshot(input)
+  expect((JSON.parse(result.snapshot_json) as { original_message: string }).original_message).toBe('@Guide · 项目😀\r\n')
+  expect(result.descriptor.source_message_id).toBe(input.source_message_id)
+  for (const change of [
+    { accountSubject: randomUUID() },
+    { accountIssuer: 'https://other.example.test' },
+    { authorityBindingVersion: 2 },
+  ])
+    await expect(f.client.readCollaborationSourceSnapshot({ ...input, ...change })).rejects.toThrow()
+  f.setRead(async (_profile, target) => {
+    f.host.revokeOwner(f.ownerId)
+    return {
+      descriptor: { ...target, snapshot_digest: 'a'.repeat(64) },
+      snapshot_json: JSON.stringify({
+        ...target,
+        original_message: 'x',
+        active_mentions: [],
+        model_snapshot: {},
+        host_journal_commit: {},
+      }),
+    }
+  })
+  await expect(f.client.readCollaborationSourceSnapshot(input)).rejects.toThrow()
+})
+it('reads large escaped Source content through multiple bounded byte chunks without mixing journal revisions', async () => {
+  const f = await fixture()
+  await f.grant()
+  const input = snapshotInput(f)
+  const original = '\u0001'.repeat(32760) + '😀'
+  f.setRead(async (_profile, target) => ({
+    descriptor: { ...target, snapshot_digest: 'a'.repeat(64) },
+    snapshot_json: JSON.stringify({
+      ...target,
+      original_message: original,
+      active_mentions: [],
+      model_snapshot: {},
+      host_journal_commit: {},
+    }),
+  }))
+  const result = await f.client.readCollaborationSourceSnapshot(input)
+  expect((JSON.parse(result.snapshot_json) as { original_message: string }).original_message).toBe(original)
+  const frames = f.seen.filter(
+    frame => frame.type === 'request' && frame.method === 'profile.source_snapshot',
+  )
+  expect(frames.length).toBeGreaterThan(1)
+  for (const frame of frames) expect(Buffer.byteLength(encodeHostControlFrame(frame))).toBeLessThan(65536)
+  f.alter(frame =>
+    frame.type === 'result' && frame.method === 'profile.source_snapshot' && frame.result.offset > 0
+      ? {
+        ...frame,
+        result: {
+          ...frame.result,
+          descriptor: { ...frame.result.descriptor, snapshot_digest: 'b'.repeat(64) },
+        },
+      }
+      : frame,
+  )
+  await expect(f.client.readCollaborationSourceSnapshot(input)).rejects.toThrow()
+})
+it('refuses missing Source read capability and replies after connection replacement', async () => {
+  const f = await fixture()
+  await f.grant()
+  const input = snapshotInput(f)
+  f.alter((frame) => {
+    f.client.close()
+    return frame
+  })
+  await expect(f.client.readCollaborationSourceSnapshot(input)).rejects.toThrow()
+  const old = await fixture()
+  ;(old.client.inspection.capabilities as string[]).splice(
+    (old.client.inspection.capabilities as string[]).indexOf('profile.source_snapshot'),
+    1,
+  )
+  const before = old.seen.length
+  await expect(old.client.readCollaborationSourceSnapshot(snapshotInput(old))).rejects.toMatchObject({
+    code: 'upgrade_required',
+  })
+  expect(old.seen.length).toBe(before)
+})
 
 it('signs the committed Source digest only on an Account-verified connection and checks the actual Profile worker', async () => {
   const f = await fixture()

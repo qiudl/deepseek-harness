@@ -12,7 +12,7 @@ import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { DshWebProfileWorkerFactory } from '@deepseek-ai/dsh-slark-desktop-host'
-import type { HostCollaborationSourceTarget, HostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
 import { mkdtemp, realpath, rm, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -116,13 +116,22 @@ it('loads the Source owners from cordis.yml and reads the committed journal thro
   }) as unknown as {
     inspectCollaborationSource(origin: string, token: string, target: HostCollaborationSourceTarget, signal: AbortSignal,
       stopped: () => boolean): Promise<HostCollaborationSourceDescriptor>
+    readCollaborationSourceSnapshot(
+      origin: string, token: string, target: HostCollaborationSourceTarget, signal: AbortSignal,
+      stopped: () => boolean,
+    ): Promise<HostCollaborationSourceSnapshot>
   }
   const result = await factory.inspectCollaborationSource(origin, token, target, new AbortController().signal, () => false)
   expect(result).toEqual(await ctx.sessionController.inspectCollaborationSource(target, new AbortController().signal))
+  const full=await factory.readCollaborationSourceSnapshot(origin,token,target,new AbortController().signal,()=>false)
+  expect(full.descriptor).toEqual(result);expect(JSON.parse(full.snapshot_json)).toEqual(first.snapshot)
+  expect(full.snapshot_json).not.toMatch(/prepared|api_key|unlockMaterial/)
+  expect((await fetch(`${origin}/internal/desktop-collaboration-source-snapshot`,{ method:'POST',headers:{ cookie:'dsh-auth=browser' },body:JSON.stringify(target) })).status).toBe(403)
   expect((await fetch(`${origin}/internal/desktop-collaboration-source`, { method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body: JSON.stringify(target) })).status).toBe(403)
   await expect(factory.inspectCollaborationSource(origin, token, { ...target, source_message_id: 'missing' }, new AbortController().signal, () => false)).rejects.toThrow()
   await workspace.detachSession(sessionId)
   await expect(factory.inspectCollaborationSource(origin, token, target, new AbortController().signal, () => false)).rejects.toThrow()
+  await expect(factory.readCollaborationSourceSnapshot(origin,token,target,new AbortController().signal,()=>false)).rejects.toThrow()
   expect(session.seq).toBe(seq)
   expect(ctx.agents.get(sessionId)).toBeUndefined()
   expect(prepared).toHaveBeenCalledTimes(1)

@@ -68,7 +68,7 @@ export type * from './types.ts'
 export { ApiSessionNotFound } from './agent.ts'
 export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
-export { openCollaborationSourceJournal } from './collaboration-source-journal.ts'
+export { openCollaborationSourceJournal, describeCollaborationSource, parseCollaborationSourceSnapshot } from './collaboration-source-journal.ts'
 export type {
   CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal, CollaborationSourceInput,
   CollaborationSourceCoordinates,
@@ -153,6 +153,7 @@ export class SessionController extends TypertRemoteService {
     this.inspectWorkspaceModelSelection = this.inspectWorkspaceModelSelection.bind(this)
     this.prepareWorkspaceModelSnapshot = this.prepareWorkspaceModelSnapshot.bind(this)
     this.captureCollaborationSource = this.captureCollaborationSource.bind(this)
+    this.readCollaborationSourceSnapshot = this.readCollaborationSourceSnapshot.bind(this)
     this.inspectCollaborationSource = this.inspectCollaborationSource.bind(this)
     ctx.effect(() => async () => {
       this.collaborationLifetime.abort(new DOMException('Profile source capture disposed', 'AbortError'))
@@ -432,6 +433,16 @@ export class SessionController extends TypertRemoteService {
   async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise<
     CollaborationSourceCoordinates & { readonly snapshot_digest: string }
   > {
+    return describeCollaborationSource(await this.readCollaborationSourceSnapshot(target, signal))
+  }
+
+  /**
+   * Read the original committed content for the authenticated parent Host without model preparation.
+   * @param target - Exact Source identity; content, model and commit overrides are rejected.
+   * @param signal - Caller cancellation combined with Profile disposal.
+   * @returns Original frozen journal snapshot after current Session and Workspace ownership checks; no executable handle.
+   */
+  async readCollaborationSourceSnapshot(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise<CollaborationSourceSnapshot> {
     const captured = parseCollaborationSourceCoordinates(target)
     const ownedSignal = AbortSignal.any([signal, this.collaborationLifetime.signal])
     ownedSignal.throwIfAborted()
@@ -455,7 +466,7 @@ export class SessionController extends TypertRemoteService {
         throw new Error('collaboration_session_workspace_mismatch')
       }
       ownedSignal.throwIfAborted()
-      return describeCollaborationSource(snapshot)
+      return snapshot
     })
     this.collaborationCaptureTail = operation.then(() => {}, () => {})
     return wait(operation)

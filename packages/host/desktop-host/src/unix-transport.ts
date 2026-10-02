@@ -36,6 +36,7 @@ import type {
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
   ProfileSourceAuthorityRequest,
+  ProfileSourceSnapshotRequest, HostCollaborationSourceSnapshot,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
@@ -65,6 +66,7 @@ import {
   encodeHostInspectSignaturePayload,
   encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
   encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
+  parseHostCollaborationSourceSnapshot, parseHostCollaborationSourceSnapshotChunk, parseHostCollaborationSourceTarget,
   encodeHostCollaborationRegistrationSignaturePayload,
   parseHostCollaborationRegistrationChallenge,
   parseHostCollaborationRegistrationAssertion,
@@ -138,6 +140,10 @@ export interface UnixHostServerOptions {
     target: HostCollaborationSourceTarget,
     signal: AbortSignal,
   ) => Promise<HostCollaborationSourceDescriptor>
+  /** Original Source JSON from the verified Account Profile; no prepared or credential fields. */
+  readonly readCollaborationSourceSnapshot?: (
+    profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationSourceSnapshot>
   /** Call the Profile worker without exposing its private model token to Desktop. */
   readonly generateModelText?: (profileId: string, text: string, signal: AbortSignal) => Promise<{
     readonly provider: string
@@ -297,7 +303,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1331,6 +1337,58 @@ export class HostControlAuthority {
             method: frame.method,
             result: { ...unsigned, signature },
           })
+        } else if (frame.method === 'profile.source_snapshot') {
+          const read = this.options.readCollaborationSourceSnapshot
+          if (!read) throw new HostAuthorityError('upgrade_required')
+          const account = {
+            authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId,
+            issuer: frame.params.account_issuer,
+            subject: frame.params.account_subject,
+          }
+          const authorize = collaborationReadAuthorizer(
+            this.options.host,
+            account,
+            frame.params.expires_at,
+            context.signal,
+            clock,
+          )
+          const profileId = authorize(),
+            target = parseHostCollaborationSourceTarget(
+              Object.fromEntries(
+                ['workspace_id', 'session_id', 'source_message_id', 'source_revision'].map(key => [
+                  key,
+                  frame.params[key as keyof typeof frame.params],
+                ]),
+              ),
+            )
+          const source = parseHostCollaborationSourceSnapshot(await read(profileId, target, context.signal)),
+            d = source.descriptor
+          if (
+            authorize() !== profileId ||
+            d.workspace_id !== target.workspace_id ||
+            d.session_id !== target.session_id ||
+            d.source_message_id !== target.source_message_id ||
+            d.source_revision !== target.source_revision
+          )
+            throw new HostAuthorityError('profile_mismatch')
+          const bytes = Buffer.from(source.snapshot_json, 'utf8'),
+            offset = frame.params.offset
+          if (offset >= bytes.byteLength) throw new HostAuthorityError('invalid_input')
+          channel.send({
+            version: 1,
+            type: 'result',
+            request_id: frame.request_id,
+            method: frame.method,
+            result: {
+              descriptor: d,
+              offset,
+              total_bytes: bytes.byteLength,
+              chunk_base64url: bytes.subarray(offset, offset + 32768).toString('base64url'),
+            },
+          })
         } else if (frame.method === 'profile.source_authority') {
           const inspect = this.options.inspectCollaborationSource
           if (!inspect) throw new HostAuthorityError('upgrade_required')
@@ -1504,6 +1562,7 @@ export class HostControlAuthority {
           'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.inspectCollaborationSource ? ['profile.source_authority'] : []),
+          ...(this.options.readCollaborationSourceSnapshot ? ['profile.source_snapshot'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
@@ -2270,6 +2329,96 @@ export class UnixHostClient {
   }
 
   /**
+   * Read original journal content through bounded chunks under this verified Account and current peer.
+   * @param input - Main-held binding and Source coordinates; no content or model overrides.
+   * @returns Original JSON capsule after consistent descriptor, length, coordinates, UTF-8 and connection checks.
+   */
+  async readCollaborationSourceSnapshot(
+    input: HostCollaborationSourceTarget & {
+      readonly authorityEnvironmentId: string
+      readonly accountBindingHandle: string
+      readonly authorityBindingVersion: number
+      readonly accountIssuer: string
+      readonly accountSubject: string
+      readonly signal?: AbortSignal
+    },
+  ): Promise<HostCollaborationSourceSnapshot> {
+    const signal = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(15_000)])
+    signal.throwIfAborted()
+    const target = parseHostCollaborationSourceTarget({
+      workspace_id: input.workspace_id,
+      session_id: input.session_id,
+      source_message_id: input.source_message_id,
+      source_revision: input.source_revision,
+    })
+    const account = {
+      authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never,
+      authority_binding_version: input.authorityBindingVersion,
+      account_issuer: input.accountIssuer,
+      account_subject: input.accountSubject,
+    }
+    if (!this.inspection.capabilities.includes('profile.source_snapshot' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const peer = [
+      this.inspection.installation_id,
+      this.inspection.installation_public_key,
+      this.inspection.host_instance_id,
+      this.inspection.process_nonce,
+    ]
+    const parts: Buffer[] = []
+    let offset = 0,
+      total: number | undefined,
+      descriptor: HostCollaborationSourceDescriptor | undefined
+    do {
+      signal.throwIfAborted()
+      const request: ProfileSourceSnapshotRequest = {
+        version: 1,
+        type: 'request',
+        request_id: requestId(),
+        method: 'profile.source_snapshot',
+        params: { ...this.auth(), ...account, offset, ...target },
+      }
+      const frame = await this.call(request, signal)
+      signal.throwIfAborted()
+      if (
+        frame.type !== 'result' ||
+        frame.method !== request.method ||
+        !this.isConnected() ||
+        JSON.stringify(peer) !==
+          JSON.stringify([
+            this.inspection.installation_id,
+            this.inspection.installation_public_key,
+            this.inspection.host_instance_id,
+            this.inspection.process_nonce,
+          ])
+      )
+        throw new HostAuthorityError('unavailable')
+      const chunk = parseHostCollaborationSourceSnapshotChunk(frame.result),
+        d = chunk.descriptor
+      if (
+        chunk.offset !== offset ||
+        (total !== undefined && chunk.total_bytes !== total) ||
+        (descriptor !== undefined && JSON.stringify(d) !== JSON.stringify(descriptor)) ||
+        d.workspace_id !== target.workspace_id ||
+        d.session_id !== target.session_id ||
+        d.source_message_id !== target.source_message_id ||
+        d.source_revision !== target.source_revision
+      )
+        throw new HostAuthorityError('profile_mismatch')
+      total = chunk.total_bytes
+      descriptor = d
+      const part = Buffer.from(chunk.chunk_base64url, 'base64url')
+      parts.push(part)
+      offset += part.byteLength
+    } while (offset < total)
+    return parseHostCollaborationSourceSnapshot({
+      descriptor,
+      snapshot_json: new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts, offset)),
+    })
+  }
+
+  /**
    * Request and verify a registration signature without changing the visible Profile lease.
    * @param input - Main-held Account binding, server challenge and cancellation.
    * @returns Frozen assertion verified against the inspected installation and process; no server enrollment.
@@ -2940,7 +3089,7 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
-      | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest
+      | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileSourceSnapshotRequest
       | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest

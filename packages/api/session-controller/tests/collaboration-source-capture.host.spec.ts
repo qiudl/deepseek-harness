@@ -308,6 +308,17 @@ describe('Profile-owned collaboration Source capture', () => {
 
 
 describe('Profile-owned committed Source reads', () => {
+  it('reads the original full snapshot privately without releasing another prepared call', async () => {
+    const h = await harness(),signal=new AbortController().signal
+    const first=await h.controller.captureCollaborationSource(h.source(),signal)
+    const target={ workspace_id:h.workspace.id,session_id:h.sessionId,source_message_id:'message-1',source_revision:'1' }
+    const result=await h.controller.readCollaborationSourceSnapshot(target,signal)
+    expect(result).toEqual(first.snapshot);expect(Object.isFrozen(result.model_snapshot)).toBe(true)
+    expect(result).not.toHaveProperty('prepared');expect(h.prepare).toHaveBeenCalledTimes(1)
+    await h.workspace.detachSession(h.sessionId)
+    await expect(h.controller.readCollaborationSourceSnapshot(target,signal)).rejects.toThrow('collaboration_session_workspace_mismatch')
+    expect(h.stream).not.toHaveBeenCalled();expect(h.resume).not.toHaveBeenCalled()
+  })
   it('reads the complete immutable digest without preparing or resuming on retry/restart', async () => {
     const h = await harness()
     const signal = new AbortController().signal

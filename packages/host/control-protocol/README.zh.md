@@ -54,6 +54,8 @@ kind: "package-reference"
 
 `profile.workspace_authority` 仅在授权 Profile 读取器确认归属后，签署服务器 nonce、Account/environment 及注册表工作区/Session 目标。读取后再次核验 Account 授权和五分钟有效期。独立签名域 `dsh-collaboration-workspace-authority/v1` 绑定完整目标及当前安装/进程，登记签名不能替代。此证明仅说明读取时的归属，不证明 Source 内容、journal 持久性或 prepared 模型配置。服务器必须认证其挑战，并在重新核验当前 Host/Account 的同一事务中消费。
 
+`profile.source_snapshot` 在已验证的 Account 绑定下私有读取已有 Source，接受精确工作区/Session/消息/版本，另带 issuer/subject 与字节偏移。每次响应包含原描述符、偏移、总字节数（最多 1 MiB）及规范 base64url 分块；分块恰为剩余字节数与 32 KiB 中的较小值。现有 64 KiB 单帧上限保持不变。客户端限制全程 15 秒，跨块固定当前 peer 与描述符，完成严格 UTF-8 解码后校验含八字段的不透明 Source 封装。消费者校验嵌套内容；云端 seal 与 Native 签名验证完整摘要。读取不准备模型或返回可执行调用。
+
 `profile.model_text` 接受同一 Host 连接上已验证的 Account 绑定，以及一条最多 8 KiB 的非空文本；它不会打开或改变可见 Profile 的视图租约。成功结果包含所选提供方、模型和最多 16 KiB 的回答；拒绝结果只包含分类错误码，其中 `cancelled` 与 `timeout` 分别表示取消与超时。该方法不传输 API Key、工具请求、Session id 或提供方原始错误。
 
 `encodeHostInspectSignaturePayload(request, response)` 返回由安装级 Ed25519 密钥签名的精确 UTF-8 字节。带域隔离的声明绑定 request id、Desktop client id、challenge、选定版本、Host 与安装 id、安装公钥、generation、process nonce、capability 和可执行文件摘要。

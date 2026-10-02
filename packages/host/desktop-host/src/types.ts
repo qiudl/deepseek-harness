@@ -1,5 +1,5 @@
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 /** Stable profile id that reveals no account or environment identifier. */
 export type PersonProfileId = Branded<'PersonProfileId'>
@@ -115,6 +115,10 @@ export interface ProfileWorkerHandle {
     target: HostCollaborationSourceTarget,
     signal: AbortSignal,
   ) => Promise<HostCollaborationSourceDescriptor>
+  /** Original journal content for Main cloud admission; never carried by a view lease. */
+  readonly readCollaborationSourceSnapshot?: (
+    target: HostCollaborationSourceTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationSourceSnapshot>
   /** Host-only closed Session command; no worker token enters a view lease. */
   readonly remoteSession?: (
     command: HostRemoteSessionCommand,

@@ -815,6 +815,14 @@ async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortS
 async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise< CollaborationSourceCoordinates & { readonly snapshot_digest: string } >
 
 /**
+ * Read the original committed content for the authenticated parent Host without model preparation.
+ * @param target - Exact Source identity; content, model and commit overrides are rejected.
+ * @param signal - Caller cancellation combined with Profile disposal.
+ * @returns Original frozen journal snapshot after current Session and Workspace ownership checks; no executable handle.
+ */
+async readCollaborationSourceSnapshot(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise<CollaborationSourceSnapshot>
+
+/**
  * Read all visible Session rows without resuming an Agent.
  * @param _request - reserved empty list request.
  * @param signal - cancellation for persistence reads.

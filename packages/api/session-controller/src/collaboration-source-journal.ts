@@ -80,6 +80,16 @@ export function parseCollaborationSourceInput(value: unknown): CollaborationSour
   if (!result.success) throw new Error('collaboration_source_journal_invalid')
   return freeze(result.data)
 }
+/**
+ * Validate persisted Source JSON without importing provider configuration or executable calls.
+ * @param value - Full journal snapshot returned over the private worker transport.
+ * @returns Detached frozen snapshot with verified journal content digest; no authority grant.
+ */
+export function parseCollaborationSourceSnapshot(value: unknown): CollaborationSourceSnapshot {
+  const result = snapshotSchema.safeParse(value)
+  if (!result.success) throw new Error('collaboration_source_journal_invalid')
+  return freeze(result.data)
+}
 function bodyOf(value: CollaborationSourceSnapshot): CollaborationSourceBody {
   const { host_journal_commit: _commit, ...body } = value
   return body

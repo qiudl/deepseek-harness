@@ -565,6 +565,25 @@ export interface HostCollaborationSourceTarget extends HostWorkspaceModelSelecti
 export interface HostCollaborationSourceDescriptor extends HostCollaborationSourceTarget {
   readonly snapshot_digest: string
 }
+/** Main-only bounded journal JSON. Consumers must validate the complete Source schema and digest before admission. */
+export interface HostCollaborationSourceSnapshot {
+  readonly descriptor: HostCollaborationSourceDescriptor
+  readonly snapshot_json: string
+}
+/** Read original Source content through this connection's verified Account; never accepts content overrides. */
+export interface ProfileSourceSnapshotRequest extends Omit<ProfileWorkspaceModelSelectionRequest, 'method' | 'params'> {
+  readonly method: 'profile.source_snapshot'
+  readonly params: ProfileWorkspaceModelSelectionRequest['params'] & HostCollaborationSourceTarget & {
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly offset: number
+  }
+}
+/** Original Source payload without prepared calls, provider configuration, or unlock material. */
+export interface ProfileSourceSnapshotResult extends Omit<ProfileWorkspaceModelSelectionResult, 'method' | 'result'> {
+  readonly method: 'profile.source_snapshot'
+  readonly result: Readonly<{ descriptor:HostCollaborationSourceDescriptor;offset:number;total_bytes:number;chunk_base64url:string }>
+}
 /** Server nonce bound to one Source and current registered Host epoch. */
 export interface HostSourceAuthorityChallenge extends HostWorkspaceAuthorityChallenge, HostCollaborationSourceDescriptor {
   readonly host_epoch: string
@@ -1358,6 +1377,8 @@ export type HostControlFrame =
   | ProfileWorkspaceAuthorityResult
   | ProfileSourceAuthorityRequest
   | ProfileSourceAuthorityResult
+  | ProfileSourceSnapshotRequest
+  | ProfileSourceSnapshotResult
   | ProfileModelTextRequest
   | ProfileModelTextResult
   | ProfileLeaseCloseRequest

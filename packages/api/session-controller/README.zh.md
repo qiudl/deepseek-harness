@@ -90,6 +90,8 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 
 `inspectCollaborationSource(target, signal)` 通过所属 Profile 的注册表与 journal 读取原始持久 Source，仅返回原坐标及完整 RFC 8785 快照的 SHA-256，摘要包含首次 journal 提交标识。记录不存在、归属丢失、附加元数据、取消和 Profile 销毁都会拒绝。读取与已接受的捕获串行执行，不准备模型或恢复调用；延迟打开的 journal 由 Profile 持有至销毁。私有 worker HTTP 读取器调用这一仅供 Host 使用的方法。
 
+`readCollaborationSourceSnapshot(target, signal)` 使用相同 Profile 归属、串行 journal 读取与取消检查，返回独立冻结的原始快照。`inspectCollaborationSource` 从该读取结果生成描述符。私有 worker 通过 `parseCollaborationSourceSnapshot` 校验 journal 内容；不新增 Remote 导出、模型准备、Session 事件或可执行调用恢复。
+
 ## 已知限制与延期工作
 
 <a id="known-limitations-and-deferred-work"></a>

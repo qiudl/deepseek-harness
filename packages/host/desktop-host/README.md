@@ -107,6 +107,8 @@ No runtime invariant companion is published: filesystem and wire commit points v
 
 `profile.source_authority` resolves this connection’s verified Account Profile and reads a committed Source descriptor through the supervisor and a dedicated random worker token. Startup installs this reader on macOS and Windows. Missing readers omit the capability; replaced workers, mismatched coordinates/digest, expired challenges or changed Account grants refuse signing. The client verifies the exact challenge, pinned installation/process and Source signature. This operation neither captures a message nor prepares a model; cloud consumption and chat dispatch remain separate.
 
+`profile.source_snapshot` uses the same current Account and Profile worker reader to transfer original journal content privately. The worker bearer route validates the complete persisted Source, while the supervisor rejects disposed or replaced workers. Fixed 32 KiB byte chunks preserve the existing control-frame budget; the client checks coordinates, consistent descriptor/length, complete UTF-8, cancellation and the inspected peer across a bounded read. It returns original content and redacted model/commit metadata, without credentials, model preparation or a restored call. Startup composes the reader on macOS and Windows; real chat capture and dispatch remain separate.
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.
