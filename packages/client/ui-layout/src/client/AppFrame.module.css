@@ -74,6 +74,13 @@
   overflow: hidden;
 }
 
+/* Keep the resident panel bounded by the column so its child owns scrolling. */
+.mainPanel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* macOS desktop: the frame goes transparent so window vibrancy reaches the
    sidebar column, which keeps only a translucent tint; the centre paints the
    base background itself to stay opaque. The sidebar/centre separator moves
