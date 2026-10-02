@@ -50,6 +50,16 @@ const chunk = { exportId: 'export-1', chunkIndex: 0, records: [
     payloadDigest: '6'.repeat(64) },
 ], chunkDigest: '7'.repeat(64), final: true }
 
+function clientAuthorization(client: UnixHostClient): Record<string, unknown> {
+  const auth: unknown = Reflect.get(client, 'auth')
+  if (typeof auth !== 'function') throw new Error('missing test client authorization')
+  const value: unknown = Reflect.apply(auth, client, [])
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('invalid test client authorization')
+  }
+  return value as Record<string, unknown>
+}
+
 function fakeHost(): DesktopHost {
   return {
     supportsOfflineAccountRecovery: () => true,
@@ -222,7 +232,7 @@ describe('Unix transport authority failures', () => {
     const { client, session } = await authorityClient()
     const selector = await localSelector(client)
     const lease = await client.openLocalProfile({ profileSelector: selector })
-    const auth = () => (client as unknown as { auth(): Record<string, unknown> }).auth()
+    const auth = () => clientAuthorization(client)
     const common = () => ({ ...auth(), view_lease_id: lease.viewLeaseId as never,
       lease_generation: lease.leaseGeneration, runtime_generation: lease.runtimeGeneration })
     const sessionResult = await session.handleRequest({ version: 1, type: 'request', request_id: randomUUID() as never,
@@ -372,7 +382,7 @@ describe('Unix transport authority failures', () => {
     const lease = await absent.client.openLocalProfile({ profileSelector: selector })
     await expect(absent.client.remoteUiStream({ ...lease, command: { action: 'poll', stream_id: randomUUID() } }))
       .rejects.toMatchObject({ code: 'upgrade_required' })
-    const authorization = (absent.client as unknown as { auth(): Record<string, unknown> }).auth()
+    const authorization = clientAuthorization(absent.client)
     const denied = await absent.session.handleRequest({ version: 1, type: 'request', request_id: randomUUID() as never,
       method: 'profile.remote_ui_stream', params: { ...authorization, view_lease_id: lease.viewLeaseId as never,
         lease_generation: lease.leaseGeneration, runtime_generation: lease.runtimeGeneration,

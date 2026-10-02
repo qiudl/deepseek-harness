@@ -2,10 +2,15 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+
 import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
   type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 import { DesktopSessionControl } from '../src/desktop-session-control.ts'
+
+function gatewayFixture(fields: object): TypertGateway {
+  return Object.assign({} as TypertGateway, fields)
+}
 
 function remoteProof(control: DesktopSessionControl, sessionId: string): HostRemoteSessionControlProof {
   const controller_id = '123e4567-e89b-42d3-a456-426614174001'
@@ -16,7 +21,7 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 
 describe('Desktop remote Session bridge', () => {
   it('answers control operations from the selected Profile authority', async () => {
-    const gateway = { invoke: vi.fn() } as unknown as TypertGateway
+    const gateway = gatewayFixture({ invoke: vi.fn() })
     const control = new DesktopSessionControl(() => 1_000, 5_000)
     const executor = new DesktopRemoteSessionExecutor(gateway, undefined, control)
     const signal = new AbortController().signal
@@ -38,7 +43,7 @@ describe('Desktop remote Session bridge', () => {
   })
   it('creates a remote Session in the requested Host workspace', async () => {
     const invoke = vi.fn(async () => ({ sessionId: 'session-2' }))
-    const executor = new DesktopRemoteSessionExecutor({ invoke } as unknown as TypertGateway)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
     const signal = new AbortController().signal
     await expect(executor.execute({ operation: 'session.create',
       command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
@@ -49,7 +54,7 @@ describe('Desktop remote Session bridge', () => {
 
   it('uses the Session list gateway parameter name', async () => {
     const invoke = vi.fn(async () => ({ items: [] }))
-    const executor = new DesktopRemoteSessionExecutor({ invoke } as unknown as TypertGateway)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
     const signal = new AbortController().signal
     await expect(executor.execute({
       operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
@@ -61,7 +66,7 @@ describe('Desktop remote Session bridge', () => {
 
   it('maps closed commands onto the existing Session Remote service', async () => {
     const invoke = vi.fn(async () => ({ accepted: true }))
-    const gateway = { invoke } as unknown as TypertGateway
+    const gateway = gatewayFixture({ invoke })
     const control = new DesktopSessionControl()
     const executor = new DesktopRemoteSessionExecutor(gateway, undefined, control)
     const proof = remoteProof(control, 'session-1')
@@ -89,7 +94,7 @@ describe('Desktop remote Session bridge', () => {
     const pending = Promise.withResolvers<{ accepted: true }>()
     const invoke = vi.fn(() => pending.promise)
     const control = new DesktopSessionControl()
-    const executor = new DesktopRemoteSessionExecutor({ invoke } as unknown as TypertGateway,
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
       undefined, control)
     const proof = remoteProof(control, 'session-1')
     const writing = executor.execute({ operation: 'session.cancel',
@@ -118,7 +123,7 @@ describe('Desktop remote Session bridge', () => {
       } }] } })),
       return: returned,
     }
-    const gateway = { stream: vi.fn(async () => ({ [Symbol.asyncIterator]: () => iterator })) } as unknown as TypertGateway
+    const gateway = gatewayFixture({ stream: vi.fn(async () => ({ [Symbol.asyncIterator]: () => iterator })) })
     const executor = new DesktopRemoteSessionExecutor(gateway)
     await expect(executor.execute({
       operation: 'session.history', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
@@ -132,11 +137,11 @@ describe('Desktop remote Session bridge', () => {
       data: { content: [{ type: 'text', text: 'x'.repeat(70_000) }] } } }
     const recent = { type: 'event', event: { type: 'assistant/message', seq: 2, time: 2,
       data: { message: { content: [{ type: 'text', text: 'recent reply' }] } } } }
-    const gateway = { stream: vi.fn(async () => ({
+    const gateway = gatewayFixture({ stream: vi.fn(async () => ({
       async *[Symbol.asyncIterator]() {
         yield { type: 'snapshot', records: [older, recent] }
       },
-    })) } as unknown as TypertGateway
+    })) })
     const executor = new DesktopRemoteSessionExecutor(gateway)
     const result = await executor.execute({
       operation: 'session.history', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
@@ -152,11 +157,11 @@ describe('Desktop remote Session bridge', () => {
     const assistant = { type: 'event', event: { type: 'assistant/message', seq: 2, time: 2,
       data: { message: { content: [{ type: 'text', text: 'visible reply' }],
         privateMetadata: { nested: { a: { b: { c: { d: 'private' } } } } } } } } }
-    const gateway = { stream: vi.fn(async () => ({
+    const gateway = gatewayFixture({ stream: vi.fn(async () => ({
       async *[Symbol.asyncIterator]() {
         yield { type: 'snapshot', records: [internal, assistant] }
       },
-    })) } as unknown as TypertGateway
+    })) })
     const executor = new DesktopRemoteSessionExecutor(gateway)
     const result = await executor.execute({
       operation: 'session.history', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
@@ -206,7 +211,7 @@ describe('Desktop remote Session bridge', () => {
     if (!('claim' in observed)) throw new Error('missing remote claim')
     expect(control.takeoverBrowser('session-1', observed.claim.epoch).outcome).toBe('controlled')
     const invoke = vi.fn()
-    const executor = new DesktopRemoteSessionExecutor({ invoke } as unknown as TypertGateway,
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
       undefined, control)
     const server = createServer((req, res) => {
       void handleDesktopRemoteSessionRequest(req, res, token,
@@ -237,9 +242,9 @@ describe('Desktop remote Session bridge', () => {
         request: { toolName: 'bash', reason: 'run command' } }
     }
     const respondRemoteEvent = vi.fn()
-    const gateway = {
+    const gateway = gatewayFixture({
       wireStream: { open: vi.fn(async () => events()) }, respondRemoteEvent,
-    } as unknown as TypertGateway
+    })
     const control = new DesktopSessionControl()
     const executor = new DesktopRemoteSessionExecutor(gateway, undefined, control)
     const proof = remoteProof(control, 'session-1')

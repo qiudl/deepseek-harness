@@ -190,7 +190,7 @@ export class DesktopSessionControl {
     if (!BROWSER_SESSION_WRITES.has(endpoint)) return
     const request = args.request
     if (typeof request !== 'object' || request === null || Array.isArray(request)) return
-    const sessionId = Reflect.get(request, 'sessionId') as unknown
+    const sessionId: unknown = Reflect.get(request, 'sessionId')
     if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return
     return this.admitBrowserWrite(sessionId)
   }

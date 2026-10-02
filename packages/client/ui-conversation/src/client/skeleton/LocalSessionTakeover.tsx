@@ -7,7 +7,7 @@ type Props = PropsRuntime<'conversation.session.header.actions'> & PropsLocale<'
 type ControlState = { outcome: string; claim?: { kind: string; epoch: number } }
 
 async function controlRpc(endpoint: string, args: Record<string, unknown>): Promise<ControlState> {
-  const response = await fetch(`/api/session/${endpoint}`, {
+  const response = await fetch(`api/session/${endpoint}`, {
     method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'client-request', rpcId: `local-control-${Date.now()}-${Math.random()}`,
       method: `session/${endpoint}`, payload: { args } }),

@@ -30,7 +30,7 @@ export async function readDesktopRemotePrivateBody(req: IncomingMessage): Promis
     if (size > 64 * 1024) throw new Error('body too large')
     chunks.push(Buffer.from(chunk))
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
 /**

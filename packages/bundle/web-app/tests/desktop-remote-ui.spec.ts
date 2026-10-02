@@ -4,20 +4,29 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from '../src/desktop-remote-ui.ts'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor, handleDesktopRemoteUiStreamRequest,
   writeDesktopRemoteUiStreamLine } from '../src/desktop-remote-ui-stream.ts'
 import { rejectDesktopRemotePrivateRequest, writeDesktopRemotePrivateResult } from '../src/desktop-remote-private-request.ts'
 
+function gatewayFixture(fields: object): TypertGateway {
+  return Object.assign({} as TypertGateway, fields)
+}
+
+function responseFixture<T extends object>(value: T): T & ServerResponse {
+  return value as T & ServerResponse
+}
+
 describe('Desktop remote UI read-only bridge', () => {
   it('does not rewrite ended private responses and bounds JSON results', () => {
     const ended = { writableEnded: true, destroyed: false, writeHead: vi.fn() }
-    rejectDesktopRemotePrivateRequest(ended as unknown as ServerResponse)
+    rejectDesktopRemotePrivateRequest(responseFixture(ended))
     expect(ended.writeHead).not.toHaveBeenCalled()
     const destroyed = { writableEnded: false, destroyed: true, writeHead: vi.fn() }
-    rejectDesktopRemotePrivateRequest(destroyed as unknown as ServerResponse)
+    rejectDesktopRemotePrivateRequest(responseFixture(destroyed))
     expect(destroyed.writeHead).not.toHaveBeenCalled()
-    expect(() => { writeDesktopRemotePrivateResult(ended as unknown as ServerResponse, 'x'.repeat(512 * 1024)) })
+    expect(() => { writeDesktopRemotePrivateResult(responseFixture(ended), 'x'.repeat(512 * 1024)) })
       .toThrow('result too large')
   })
 
@@ -29,7 +38,7 @@ describe('Desktop remote UI read-only bridge', () => {
     const request = (chunks: unknown[]) => ({
       method: 'POST', headers: { authorization: `Bearer ${token}` },
       async *[Symbol.asyncIterator]() { for (const chunk of chunks) yield chunk },
-    }) as unknown as IncomingMessage
+    }) as IncomingMessage
     const response = () => {
       const res = Object.assign(new EventEmitter(), {
         destroyed: false, writableEnded: false, headersSent: false, status: 0,
@@ -41,30 +50,30 @@ describe('Desktop remote UI read-only bridge', () => {
       return res
     }
     const invalid = response()
-    await handleDesktopRemoteUiStreamRequest(request(['not bytes']), invalid as unknown as ServerResponse,
+    await handleDesktopRemoteUiStreamRequest(request(['not bytes']), responseFixture(invalid),
       token, async () => { throw new Error('unexpected open') })
     expect(invalid.status).toBe(422)
 
     const disconnected = response()
-    await handleDesktopRemoteUiStreamRequest(request([body]), disconnected as unknown as ServerResponse,
+    await handleDesktopRemoteUiStreamRequest(request([body]), responseFixture(disconnected),
       token, async () => (async function* () { disconnected.emit('close') })())
     expect(disconnected.status).toBe(200)
     expect(disconnected.write).not.toHaveBeenCalled()
     expect(disconnected.writableEnded).toBe(false)
 
     const destroyed = response()
-    await handleDesktopRemoteUiStreamRequest(request([body]), destroyed as unknown as ServerResponse,
+    await handleDesktopRemoteUiStreamRequest(request([body]), responseFixture(destroyed),
       token, async () => { destroyed.destroy(); throw new Error('closed') })
     expect(destroyed.status).toBe(0)
 
     const ended = response()
-    await handleDesktopRemoteUiStreamRequest(request([body]), ended as unknown as ServerResponse,
+    await handleDesktopRemoteUiStreamRequest(request([body]), responseFixture(ended),
       token, async () => { ended.end(); throw new Error('ended') })
     expect(ended.status).toBe(0)
 
     const failed = response()
     failed.write.mockImplementation(() => { throw new Error('write failed') })
-    await handleDesktopRemoteUiStreamRequest(request([body]), failed as unknown as ServerResponse,
+    await handleDesktopRemoteUiStreamRequest(request([body]), responseFixture(failed),
       token, async () => (async function* () { throw new Error('gateway failed') })())
     expect(failed.status).toBe(200)
     expect(failed.destroyed).toBe(true)
@@ -73,7 +82,7 @@ describe('Desktop remote UI read-only bridge', () => {
   it('bounds NDJSON events and waits for writer drain or close', async () => {
     const writer = new EventEmitter() as EventEmitter & { write: ReturnType<typeof vi.fn> }
     writer.write = vi.fn(() => true)
-    const res = writer as unknown as ServerResponse
+    const res = responseFixture(writer)
     await writeDesktopRemoteUiStreamLine(res, { type: 'end' })
     expect(writer.write).toHaveBeenCalledWith('{"type":"end"}\n')
     await expect(writeDesktopRemoteUiStreamLine(res, { value: 'x'.repeat(512 * 1024) }))
@@ -91,7 +100,7 @@ describe('Desktop remote UI read-only bridge', () => {
 
   it('opens only a bounded native Session follow request', async () => {
     const stream = vi.fn(async () => (async function* () { yield { type: 'snapshot' } })())
-    const executor = new DesktopRemoteUiStreamExecutor({ stream } as unknown as TypertGateway)
+    const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))
     const signal = new AbortController().signal
     const payload = { args: { request: { address: { kind: 'session', sessionId: 'session-1' },
       maxMessages: 50, assistantStream: true } } }
@@ -132,7 +141,7 @@ describe('Desktop remote UI read-only bridge', () => {
 
   it('opens a Workspace baseline stream only with empty arguments', async () => {
     const stream = vi.fn(async () => (async function* () { yield { type: 'baseline', value: { items: [] } } })())
-    const executor = new DesktopRemoteUiStreamExecutor({ stream } as unknown as TypertGateway)
+    const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))
     const signal = new AbortController().signal
     const opened = await executor.open('workspace/follow', { args: {} }, signal)
     await expect(opened[Symbol.asyncIterator]().next()).resolves.toEqual({
@@ -144,11 +153,11 @@ describe('Desktop remote UI read-only bridge', () => {
 
   it('accepts approval results only for a pending event in the same Session', async () => {
     const respondRemoteEvent = vi.fn()
-    const gateway = { wireStream: { open: vi.fn(async () => (async function* () {
+    const gateway = gatewayFixture({ wireStream: { open: vi.fn(async () => (async function* () {
       yield { type: 'ready', clientId: 'client-1', host: { home: '/home/user' } }
       yield { type: 'waterfall', event: 'approval/request', eventId: 'event-1',
         agentId: 'session-1', request: { toolName: 'bash' } }
-    })()) }, respondRemoteEvent } as unknown as TypertGateway
+    })()) }, respondRemoteEvent })
     const approvals = new DesktopRemoteApprovalEvents()
     const executor = new DesktopRemoteUiStreamExecutor(gateway, approvals)
     const source = await executor.open('$events', { args: {} }, new AbortController().signal)
@@ -277,7 +286,7 @@ describe('Desktop remote UI read-only bridge', () => {
   it('dispatches only the exact M1 read endpoints with named Remote arguments', async () => {
     const invoke = vi.fn(async () => ({ items: [] }))
     const boot = vi.fn(() => [{ kind: 'script' as const, placement: 'head' as const, text: 'boot()' }])
-    const executor = new DesktopRemoteUiExecutor({ invoke } as unknown as TypertGateway, boot)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), boot)
     const signal = new AbortController().signal
     await expect(executor.execute('boot/injections', { args: {} }, signal))
       .resolves.toEqual({ injections: [{ kind: 'script', placement: 'head', text: 'boot()' }] })
@@ -309,7 +318,7 @@ describe('Desktop remote UI read-only bridge', () => {
   it('requires a private token, rejects forbidden endpoints and bounds input', async () => {
     const token = 'A'.repeat(43)
     const invoke = vi.fn(async () => ({ items: [] }))
-    const executor = new DesktopRemoteUiExecutor({ invoke } as unknown as TypertGateway, () => [])
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
     const server = createServer((req, res) => {
       void handleDesktopRemoteUiRequest(req, res, token, (endpoint, payload, signal) =>
         executor.execute(endpoint, payload, signal))
