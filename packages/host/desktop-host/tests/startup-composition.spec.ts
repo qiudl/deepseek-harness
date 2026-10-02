@@ -249,7 +249,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const remoteUiStream = serverOptions.remoteUiStream
   if (!remoteUiStream) throw new Error('missing remote UI stream owner')
   expect(() => remoteUiStream(profile.profileId, 'session/follow', { args: {} },
-    new AbortController().signal)).toThrowError(expect.objectContaining({ code: 'unavailable' }))
+    new AbortController().signal)).toThrow(expect.objectContaining({ code: 'unavailable' }))
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'mcp')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'skill')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'plugin')).toEqual([])
