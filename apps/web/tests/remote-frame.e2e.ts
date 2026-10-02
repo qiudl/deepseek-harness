@@ -66,7 +66,10 @@ it('boots the stock DSH entry through one cross-origin parent port and rejects a
     })
     const page = await context.newPage()
     await page.goto(parentOrigin)
-    await expect.poll(() => page.evaluate(() => (window as unknown as { requests: number }).requests)).toBe(1)
+    await expect.poll(() => page.evaluate(() => {
+      const requests: unknown = Reflect.get(window, 'requests')
+      return typeof requests === 'number' ? requests : undefined
+    })).toBe(1)
     const child = page.frameLocator('#dsh')
     await expect.poll(() => child.locator('body').innerText()).toContain('window.__ModuleLoader__ bootstrap facade is missing')
     expect(await child.locator('body').evaluate(() => document.cookie)).toBe('')
