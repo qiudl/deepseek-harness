@@ -305,3 +305,76 @@ describe('Profile-owned collaboration Source capture', () => {
     } finally { await h.dispose() }
   })
 })
+
+
+describe('Profile-owned committed Source reads', () => {
+  it('reads the complete immutable digest without preparing or resuming on retry/restart', async () => {
+    const h = await harness()
+    const signal = new AbortController().signal
+    const first = await h.controller.captureCollaborationSource(h.source(), signal)
+    const target = { workspace_id: h.workspace.id, session_id: h.sessionId, source_message_id: 'message-1', source_revision: '1' }
+    const result = await h.controller.inspectCollaborationSource(target, signal)
+    expect(result).toMatchObject(target)
+    expect(result.snapshot_digest).toMatch(/^[a-f0-9]{64}$/)
+    expect(result.snapshot_digest).not.toBe(first.snapshot.host_journal_commit.content_digest)
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(h.prepare).toHaveBeenCalledTimes(1)
+    await h.dispose()
+    const next = await harness(h.root, h.cwd)
+    try {
+      expect(await next.controller.inspectCollaborationSource({ ...target, workspace_id: next.workspace.id }, signal)).toEqual(result)
+      expect(next.prepare).not.toHaveBeenCalled()
+      expect(next.resume).not.toHaveBeenCalled()
+      expect(next.stream).not.toHaveBeenCalled()
+    } finally { await next.dispose() }
+  })
+  it('rejects missing Sources and detached Sessions without a model request', async () => {
+    const h = await harness()
+    const signal = new AbortController().signal
+    const target = { workspace_id: h.workspace.id, session_id: h.sessionId, source_message_id: 'message-1', source_revision: '1' }
+    await expect(h.controller.inspectCollaborationSource(target, signal)).rejects.toThrow('collaboration_source_not_found')
+    expect(h.prepare).not.toHaveBeenCalled()
+    await h.controller.captureCollaborationSource(h.source(), signal)
+    await h.workspace.detachSession(h.sessionId)
+    await expect(h.controller.inspectCollaborationSource(target, signal)).rejects.toThrow('collaboration_session_workspace_mismatch')
+  })
+  it('rejects extra metadata, invalid coordinates and cancelled or disposed readers', async () => {
+    const h = await harness()
+    const target = { workspace_id: h.workspace.id, session_id: h.sessionId, source_message_id: 'message-1', source_revision: '1' }
+    for (const change of [{ model_snapshot: {} }, { source_revision: '0' }, { source_message_id: '../bad' }]) {
+      await expect(h.controller.inspectCollaborationSource({ ...target, ...change }, new AbortController().signal)).rejects.toThrow()
+    }
+    await expect(h.controller.inspectCollaborationSource(target, AbortSignal.abort())).rejects.toThrow()
+    await h.dispose()
+    await expect(h.controller.inspectCollaborationSource(target, new AbortController().signal)).rejects.toThrow()
+  })
+})
+
+
+it('cancels Source capture or read during a noncooperative journal open and drains late ownership on disposal', async () => {
+  for (const mode of ['capture', 'read'] as const) {
+    const h = await harness(), cancellation = new AbortController()
+    const open = h.backend.kv.open.bind(h.backend.kv)
+    let enter!: () => void, release!: () => void
+    const started = new Promise<void>((resolve) => { enter = resolve })
+    h.backend.kv.open = async (descriptor) => {
+      if (descriptor.name === 'collaboration_source_v2') await new Promise<void>((resolve) => { release = resolve; enter() })
+      return open(descriptor)
+    }
+    const target = { workspace_id: h.workspace.id, session_id: h.sessionId, source_message_id: 'message-1', source_revision: '1' }
+    const operation = mode === 'capture' ? h.controller.captureCollaborationSource(h.source(), cancellation.signal)
+      : h.controller.inspectCollaborationSource(target, cancellation.signal)
+    let settled = false
+    const observed = operation.catch((error: unknown) => { expect(error).toMatchObject({ message: 'journal-open-cancel' }); settled = true })
+    try {
+      await started
+      cancellation.abort(new Error('journal-open-cancel'))
+      await vi.waitFor(() => { expect(settled).toBe(true) }, { timeout: 200, interval: 10 })
+      release()
+      await observed
+      await h.dispose()
+      expect(h.prepare).not.toHaveBeenCalled()
+      expect(h.stream).not.toHaveBeenCalled()
+    } finally { release?.(); await observed; await h.dispose() }
+  }
+})

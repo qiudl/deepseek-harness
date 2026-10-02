@@ -34,6 +34,8 @@ import type {
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
+  HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
+  ProfileSourceAuthorityRequest,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
@@ -62,6 +64,7 @@ import {
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
   encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
+  encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
   encodeHostCollaborationRegistrationSignaturePayload,
   parseHostCollaborationRegistrationChallenge,
   parseHostCollaborationRegistrationAssertion,
@@ -81,6 +84,22 @@ import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
 import type { SingleHostLock } from './single-instance.ts'
+
+function collaborationReadAuthorizer(
+  host: DesktopHost,
+  account: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0],
+  expiresAt: number,
+  signal: AbortSignal,
+  clock: () => number,
+): () => string {
+  return () => {
+    signal.throwIfAborted()
+    const now = clock()
+    if (expiresAt <= now || expiresAt - now > 300_000) throw new HostAuthorityError('stale')
+    host.authorizeCollaborationRegistration(account)
+    return host.authorizeAccountModelText(account)
+  }
+}
 
 /** Native peer evidence supplied by the embedding Desktop/Host process. */
 export interface UnixPeerEvidence { readonly uid: number; readonly executableSignatureDigest: string }
@@ -113,6 +132,12 @@ export interface UnixHostServerOptions {
     target: HostWorkspaceModelSelectionTarget,
     signal: AbortSignal,
   ) => Promise<HostWorkspaceModelSelection>
+  /** Read a committed Source digest in the Account-authorized Profile worker. */
+  readonly inspectCollaborationSource?: (
+    profileId: string,
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+  ) => Promise<HostCollaborationSourceDescriptor>
   /** Call the Profile worker without exposing its private model token to Desktop. */
   readonly generateModelText?: (profileId: string, text: string, signal: AbortSignal) => Promise<{
     readonly provider: string
@@ -272,7 +297,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1277,12 +1302,7 @@ export class HostControlAuthority {
             issuer: c.account_issuer,
             subject: c.account_subject,
           }
-          const authorize = () => {
-            context.signal.throwIfAborted()
-            if (c.expires_at <= clock() || c.expires_at - clock() > 300_000) throw new HostAuthorityError('stale')
-            this.options.host.authorizeCollaborationRegistration(account)
-            return this.options.host.authorizeAccountModelText(account)
-          }
+          const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
           const profileId = authorize()
           const target = { workspace_id: c.workspace_id, session_id: c.session_id }
           const result = await inspect(profileId, target, context.signal)
@@ -1302,6 +1322,50 @@ export class HostControlAuthority {
           const signature = sign(
             null,
             encodeHostWorkspaceAuthorityPayload(unsigned),
+            privateKeyObject(identity.installationPrivateKey),
+          ).toString('base64url') as HostControlSignature
+          channel.send({
+            version: 1,
+            type: 'result',
+            request_id: frame.request_id,
+            method: frame.method,
+            result: { ...unsigned, signature },
+          })
+        } else if (frame.method === 'profile.source_authority') {
+          const inspect = this.options.inspectCollaborationSource
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const account = {
+            authorityEnvironmentId: c.environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId,
+            issuer: c.account_issuer,
+            subject: c.account_subject,
+          }
+          const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
+          const profileId = authorize()
+          const target = { workspace_id: c.workspace_id, session_id: c.session_id,
+            source_message_id: c.source_message_id, source_revision: c.source_revision }
+          const result = await inspect(profileId, target, context.signal)
+          if (authorize() !== profileId || result.workspace_id !== target.workspace_id || result.session_id !== target.session_id
+            || result.source_message_id !== target.source_message_id || result.source_revision !== target.source_revision
+            || result.snapshot_digest !== c.snapshot_digest) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          const identity = this.options.identity
+          const unsigned: HostSourceAuthorityAssertion = {
+            schema_version: 1,
+            challenge: c,
+            installation_id: identity.installationId as InstallationId,
+            installation_public_key: identity.installationPublicKey as HostControlPublicKey,
+            host_instance_id: identity.hostInstanceId as HostInstanceId,
+            process_nonce: identity.processNonce as HostControlNonce,
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = sign(
+            null,
+            encodeHostSourceAuthorityPayload(unsigned),
             privateKeyObject(identity.installationPrivateKey),
           ).toString('base64url') as HostControlSignature
           channel.send({
@@ -1439,6 +1503,7 @@ export class HostControlAuthority {
           ...capabilities,
           'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
+          ...(this.options.inspectCollaborationSource ? ['profile.source_authority'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
@@ -2150,6 +2215,61 @@ export class UnixHostClient {
   }
 
   /**
+   * Obtain an installation signature only after the authorized worker confirms its persisted Source digest.
+   * @param input - Verified Account binding and server challenge; no caller Source or model metadata.
+   * @returns Exact Source assertion after current installation/process, expiry and signature checks.
+   */
+  async attestSourceAuthority(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostSourceAuthorityChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostSourceAuthorityAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostSourceAuthorityChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.source_authority' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileSourceAuthorityRequest = {
+      version: 1,
+      type: 'request',
+      request_id: requestId(),
+      method: 'profile.source_authority',
+      params: {
+        ...this.auth(),
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        challenge,
+      },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostSourceAuthorityAssertion(frame.result)
+    if (
+      !this.isConnected() ||
+      JSON.stringify(result.challenge) !== JSON.stringify(challenge) ||
+      result.installation_id !== this.inspection.installation_id ||
+      result.installation_public_key !== this.inspection.installation_public_key ||
+      result.host_instance_id !== this.inspection.host_instance_id ||
+      result.process_nonce !== this.inspection.process_nonce ||
+      challenge.expires_at <= this.now() ||
+      challenge.expires_at - this.now() > 300_000 ||
+      !verify(
+        null,
+        encodeHostSourceAuthorityPayload(result),
+        publicKeyObject(this.inspection.installation_public_key),
+        Buffer.from(result.signature, 'base64url'),
+      )
+    ) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /**
    * Request and verify a registration signature without changing the visible Profile lease.
    * @param input - Main-held Account binding, server challenge and cancellation.
    * @returns Frozen assertion verified against the inspected installation and process; no server enrollment.
@@ -2820,7 +2940,7 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
-      | ProfileWorkspaceAuthorityRequest
+      | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest
       | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest

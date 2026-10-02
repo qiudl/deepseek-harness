@@ -103,3 +103,33 @@ it('does not retain a failed start and reports worker shutdown failures', async 
   await workers.ensure(input)
   await expect(workers.disposeAll()).rejects.toBe(shutdownError)
 })
+
+
+it('discards a committed Source reply after its worker is disposed or replaced', async () => {
+  let release!: () => void, enter!: () => void
+  const started = new Promise<void>((resolve) => { enter = resolve })
+  const target = { workspace_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'source-session' as never,
+    source_message_id: 'message-1', source_revision: '1' }
+  const descriptor = { ...target, snapshot_digest: 'a'.repeat(64) }
+  let generation = 0
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const current = ++generation
+    return { closeNotifications() {}, abort() {}, done: Promise.resolve(), inspectCollaborationSource: async () => {
+      if (current === 1) await new Promise<void>((resolve) => { release = resolve; enter() })
+      return descriptor
+    } }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  try {
+    await workers.start(input)
+    const pending = workers.inspectCollaborationSource(input.profileId, target, new AbortController().signal)
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'stale' })
+    await started
+    await workers.dispose(input.profileId)
+    await workers.start(input)
+    release()
+    await rejected
+    expect(await workers.inspectCollaborationSource(input.profileId, target, new AbortController().signal)).toEqual(descriptor)
+    await expect(workers.inspectCollaborationSource(input.profileId, target, AbortSignal.abort())).rejects.toThrow()
+  } finally { release?.(); await workers.disposeAll() }
+})

@@ -88,6 +88,8 @@ None, as invoked Agent commands own any model-visible effect.
 
 No direct effect; model requests remain owned by the Agent and LLM packages.
 
+`inspectCollaborationSource(target, signal)` reads the original committed Source through the owning Profile’s registry and journal. It returns only the original coordinates and SHA-256 of the full RFC 8785 snapshot, including the first journal commit. Missing records, lost membership, extra metadata, cancellation and Profile disposal reject. Reads serialize with accepted captures without preparing a model or restoring a call; late journal opens remain owned until disposal. The private worker HTTP reader consumes this Host-only method.
+
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>

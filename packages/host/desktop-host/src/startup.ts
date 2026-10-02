@@ -728,6 +728,7 @@ export async function startDesktopHostApplication(
       host,
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       inspectWorkspaceModelSelection: (profileId, target, signal) => workers.inspectWorkspaceModelSelection(profileId, target, signal),
+      inspectCollaborationSource: (profileId, target, signal) => workers.inspectCollaborationSource(profileId, target, signal),
       remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({
         authority: commandAuthority, workers, profileId, command, signal,
       }),

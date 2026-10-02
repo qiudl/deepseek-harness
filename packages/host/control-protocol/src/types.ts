@@ -556,6 +556,38 @@ export interface ProfileWorkspaceAuthorityResult {
   readonly result: HostWorkspaceAuthorityAssertion
 }
 
+/** Persistent Source identity within one Profile; no caller model or journal metadata. */
+export interface HostCollaborationSourceTarget extends HostWorkspaceModelSelectionTarget {
+  readonly source_message_id: string
+  readonly source_revision: string
+}
+/** Profile journal observation; the digest covers the complete committed Source snapshot. */
+export interface HostCollaborationSourceDescriptor extends HostCollaborationSourceTarget {
+  readonly snapshot_digest: string
+}
+/** Server nonce bound to one Source and current registered Host epoch. */
+export interface HostSourceAuthorityChallenge extends HostWorkspaceAuthorityChallenge, HostCollaborationSourceDescriptor {
+  readonly host_epoch: string
+}
+/** Installation signature for committed Source contents; no target execution grant. */
+export interface HostSourceAuthorityAssertion extends Omit<HostWorkspaceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostSourceAuthorityChallenge
+}
+/** Account-verified, Main-only persistent Source observation and signature. */
+export interface ProfileSourceAuthorityRequest extends Omit<ProfileWorkspaceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.source_authority'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostSourceAuthorityChallenge
+  }
+}
+/** Signed Source coordinates and full snapshot digest, without message content. */
+export interface ProfileSourceAuthorityResult extends Omit<ProfileWorkspaceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.source_authority'
+  readonly result: HostSourceAuthorityAssertion
+}
+
 /** One bounded text request authorized by this connection's verified Account grant. */
 export interface ProfileModelTextRequest {
   readonly version: 1
@@ -1324,6 +1356,8 @@ export type HostControlFrame =
   | ProfileCollaborationRegistrationResult
   | ProfileWorkspaceAuthorityRequest
   | ProfileWorkspaceAuthorityResult
+  | ProfileSourceAuthorityRequest
+  | ProfileSourceAuthorityResult
   | ProfileModelTextRequest
   | ProfileModelTextResult
   | ProfileLeaseCloseRequest

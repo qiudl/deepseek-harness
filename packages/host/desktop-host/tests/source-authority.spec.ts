@@ -1,0 +1,233 @@
+import { generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { expect, it, onTestFinished } from 'vitest'
+import {
+  decodeHostControlFrame,
+  encodeHostControlFrame,
+  encodeHostSourceAuthorityPayload,
+} from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
+import { DesktopHost } from '../src/desktop-host.ts'
+import { ProfileRegistry } from '../src/profile-registry.ts'
+import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
+
+async function fixture() {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
+  onTestFinished(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+  const time = { value: 1000 }
+  const clock = { now: () => time.value }
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+  const binding = {
+    authorityEnvironmentId: randomUUID(),
+    accountBindingHandle: 'binding:registration',
+    authorityBindingVersion: 1,
+  }
+  const account = {
+    issuer: 'https://accounts.example.test',
+    subject: randomUUID(),
+    keyHandle: 'keychain:registration',
+    unlockMaterial: Buffer.alloc(32, 9).toString('base64url'),
+    ...binding,
+  }
+  const profile = await registry.registerAccount(account)
+  const host = new DesktopHost({
+    registry,
+    clock,
+    runtimeGeneration: 5,
+    ensureProfileWorker: async () => undefined,
+    verifyAccountAccessToken: (token) => {
+      if (token !== 'valid-token') throw Error('invalid')
+      return { issuer: account.issuer, subject: account.subject }
+    },
+  })
+  const keys = generateKeyPairSync('ed25519')
+  const publicKey = (keys.publicKey.export({ format: 'der', type: 'spki' }) as Buffer).subarray(-32).toString('base64url')
+  const identity = {
+    hostInstanceId: randomUUID(),
+    installationId: randomUUID(),
+    installationPublicKey: publicKey,
+    installationPrivateKey: keys.privateKey,
+    processNonce: 'A'.repeat(43),
+    executableSignatureDigest: '1'.repeat(64),
+    runtimeGeneration: 5,
+    schemaGeneration: 1,
+  }
+  let inspect = async (_profileId: string,
+    target: { workspace_id: string; session_id: string; source_message_id: string; source_revision: string },
+    _signal: AbortSignal) => ({
+    ...target,
+    snapshot_digest: 'a'.repeat(64),
+  })
+  const authority = new HostControlAuthority({
+    identity,
+    host,
+    profilePersistenceGeneration: () => 1,
+    now: clock.now,
+    inspectCollaborationSource: (profileId, target, signal) => inspect(profileId, target, signal),
+  })
+  const ownerId = randomUUID(),
+    lifetime = new AbortController()
+  const session = authority.openSession(ownerId, lifetime.signal)
+  const seen: HostControlFrame[] = []
+  let alter: ((frame: HostControlFrame) => HostControlFrame | Promise<HostControlFrame>) | undefined
+  const client = await UnixHostClient.connectAuthenticatedTransport(
+    {
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: identity.executableSignatureDigest,
+      now: clock.now,
+    },
+    {
+      call: async (frame) => {
+        seen.push(frame)
+        const answer = decodeHostControlFrame(
+          encodeHostControlFrame(await session.handleRequest(decodeHostControlFrame(encodeHostControlFrame(frame)))),
+        )
+        return alter ? alter(answer) : answer
+      },
+      isConnected: () => !lifetime.signal.aborted,
+      close: () => {
+        lifetime.abort()
+        session.close()
+      },
+    },
+  )
+  onTestFinished(() => {
+    client.close()
+  })
+  const challenge = {
+    request_id: randomUUID() as never,
+    challenge_nonce: 'A'.repeat(43) as never,
+    expires_at: 2000,
+    audience: 'https://slark.example.test',
+    environment_id: binding.authorityEnvironmentId as never,
+    account_issuer: account.issuer,
+    account_subject: account.subject as never,
+    workspace_id: randomUUID() as never,
+    session_id: 'source-session' as never,
+    source_message_id: 'message-1', source_revision: '1', snapshot_digest: 'a'.repeat(64), host_epoch: '1',
+  }
+  const input = { ...binding, challenge }
+  const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
+  return {
+    host,
+    account,
+    profile,
+    ownerId,
+    client,
+    grant,
+    seen,
+    session,
+    identity,
+    authority,
+    keys,
+    challenge,
+    input,
+    time,
+    alter: (callback: typeof alter) => {
+      alter = callback
+    },
+    setInspect: (callback: typeof inspect) => {
+      inspect = callback
+    },
+  }
+}
+
+it('signs the committed Source digest only on an Account-verified connection and checks the actual Profile worker', async () => {
+  const f = await fixture()
+  await expect(f.client.attestSourceAuthority(f.input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  f.setInspect(async (profileId, target) => {
+    expect(profileId).toBe(f.profile.profileId)
+    expect(target).toEqual({ workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id, source_message_id: 'message-1', source_revision: '1' })
+    return { ...target, snapshot_digest: 'a'.repeat(64) }
+  })
+  const result = await f.client.attestSourceAuthority(f.input)
+  expect(result.challenge).toEqual(f.challenge)
+  expect(
+    verify(null, encodeHostSourceAuthorityPayload(result), f.keys.publicKey, Buffer.from(result.signature, 'base64url')),
+  ).toBe(true)
+  expect(Object.isFrozen(result.challenge)).toBe(true)
+})
+it('denies missing/foreign/archived sessions reported by the registry reader', async () => {
+  const f = await fixture()
+  await f.grant()
+  f.setInspect(async () => {
+    throw Error('collaboration_session_workspace_mismatch')
+  })
+  await expect(f.client.attestSourceAuthority(f.input)).rejects.toThrow()
+  f.setInspect(async (_profileId, target) => ({ ...target, session_id: 'foreign', snapshot_digest: 'a'.repeat(64) }))
+  await expect(f.client.attestSourceAuthority(f.input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+})
+it('rechecks Account and challenge expiry after a delayed worker read', async () => {
+  for (const mode of ['revoke', 'expire', 'cancel'] as const) {
+    const f = await fixture()
+    await f.grant()
+    const cancellation = new AbortController()
+    f.setInspect(async (_profile, target) => {
+      if (mode === 'revoke') f.host.revokeOwner(f.ownerId)
+      if (mode === 'expire') f.time.value = 2000
+      if (mode === 'cancel') cancellation.abort()
+      return { ...target, snapshot_digest: 'a'.repeat(64) }
+    })
+    await expect(f.client.attestSourceAuthority({ ...f.input, signal: cancellation.signal })).rejects.toThrow()
+  }
+})
+it('rejects another Account or environment before reading the Profile', async () => {
+  const f = await fixture()
+  await f.grant()
+  let calls = 0
+  f.setInspect(async (_profile, target) => {
+    calls++
+    return { ...target, snapshot_digest: 'a'.repeat(64) }
+  })
+  for (const change of [
+    { account_subject: randomUUID() as never },
+    { account_issuer: 'https://other.example.test' },
+    { environment_id: randomUUID() as never },
+  ]) {
+    await expect(f.client.attestSourceAuthority({ ...f.input, challenge: { ...f.challenge, ...change } })).rejects.toThrow()
+  }
+  expect(calls).toBe(0)
+})
+it('rejects signed replies for another workspace, Session, challenge or Host process', async () => {
+  const f = await fixture()
+  await f.grant()
+  for (const change of [
+    { workspace_id: randomUUID() as never },
+    { session_id: 'foreign' as never },
+    { source_message_id: 'message-2' }, { source_revision: '2' }, { snapshot_digest: 'b'.repeat(64) }, { host_epoch: '2' },
+    { request_id: randomUUID() as never },
+    { challenge_nonce: ('B'.repeat(42) + 'A') as never },
+  ]) {
+    f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.source_authority') return frame
+      const result = { ...frame.result, challenge: { ...frame.result.challenge, ...change } }
+      result.signature = sign(null, encodeHostSourceAuthorityPayload(result), f.keys.privateKey).toString('base64url') as never
+      return { ...frame, result }
+    })
+    await expect(f.client.attestSourceAuthority(f.input)).rejects.toThrow()
+  }
+})
+it('refuses an absent capability and pre-cancelled calls without another frame', async () => {
+  const f = await fixture()
+  await f.grant()
+  await expect(f.client.attestSourceAuthority({ ...f.input, signal: AbortSignal.abort() })).rejects.toThrow()
+  const before = f.seen.length
+  const capabilities = f.client.inspection.capabilities as string[]
+  capabilities.splice(capabilities.indexOf('profile.source_authority'), 1)
+  await expect(f.client.attestSourceAuthority(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.length).toBe(before)
+})
+
+it('refuses a Source digest or coordinate mismatch from the private worker', async () => {
+  const f = await fixture(); await f.grant()
+  for (const change of [{ snapshot_digest: 'b'.repeat(64) }, { source_message_id: 'other' }, { source_revision: '2' }]) {
+    f.setInspect(async (_profile, target) => ({ ...target, snapshot_digest: 'a'.repeat(64), ...change }))
+    await expect(f.client.attestSourceAuthority(f.input)).rejects.toThrow()
+  }
+})

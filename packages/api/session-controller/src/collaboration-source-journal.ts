@@ -45,7 +45,8 @@ export type CollaborationSourceInput = Omit<CollaborationSourceBody, 'model_snap
 /** Source envelope with the journal entry's immutable first-commit identity. This is not an authorization proof. */
 export type CollaborationSourceSnapshot = DeepReadonly<z.infer<typeof rawSnapshotSchema>>
 type DeepReadonly<T> = T extends object ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> } : T
-type Coordinates = Pick<CollaborationSourceBody, 'workspace_id' | 'session_id' | 'source_message_id' | 'source_revision'>
+/** Immutable original Source identity for Host journal reads. */
+export type CollaborationSourceCoordinates = Pick<CollaborationSourceBody, 'workspace_id' | 'session_id' | 'source_message_id' | 'source_revision'>
 
 function validBody(value: CollaborationSourceBody): boolean {
   if (Object.hasOwn(value.model_snapshot, 'reasoning_effort') && value.model_snapshot.reasoning_effort === undefined) return false
@@ -101,12 +102,33 @@ function freeze<T>(value: T): T {
   }
   return value
 }
-function keyOf(value: Coordinates): string {
+function keyOf(value: CollaborationSourceCoordinates): string {
   return hash(JSON.stringify([value.workspace_id, value.session_id, value.source_message_id, value.source_revision]))
 }
 const coordinatesSchema = z.strictObject({
   workspace_id: fields.workspace_id, session_id: id, source_message_id: id, source_revision: version(),
 })
+/**
+ * Validate a queued Host-only read target without accepting model or journal metadata.
+ * @param value - Exact Source coordinates.
+ * @returns Detached frozen coordinates.
+ */
+export function parseCollaborationSourceCoordinates(value: unknown): CollaborationSourceCoordinates {
+  const result = coordinatesSchema.safeParse(value)
+  if (!result.success) throw new Error('collaboration_source_journal_invalid')
+  return freeze(result.data)
+}
+/**
+ * Describe a committed journal entry; the complete digest includes its first-commit identity.
+ * @param snapshot - Validated immutable record returned by this Profile's journal.
+ * @returns Frozen coordinates and RFC 8785 SHA-256 of the full snapshot, not just its body.
+ */
+export function describeCollaborationSource(snapshot: CollaborationSourceSnapshot):
+CollaborationSourceCoordinates & { readonly snapshot_digest: string } {
+  return Object.freeze({ workspace_id: snapshot.workspace_id, session_id: snapshot.session_id,
+    source_message_id: snapshot.source_message_id, source_revision: snapshot.source_revision,
+    snapshot_digest: hash(canonicalJson(snapshot)) })
+}
 // Authoritative data uses single layout: the JSON per-record backend intentionally
 // treats malformed or foreign-version files as disposable cache misses.
 const spec = defineDomain({ name: 'collaboration_source_v2', version: 1,
@@ -128,7 +150,7 @@ export interface CollaborationSourceJournal {
    * @param identity - Source coordinates within the owning Profile.
    * @returns the original frozen snapshot, or undefined.
    */
-  read(identity: Coordinates): CollaborationSourceSnapshot | undefined
+  read(identity: CollaborationSourceCoordinates): CollaborationSourceSnapshot | undefined
   /** @returns a read-only snapshot iterator for recovery; enumeration never executes a task. */
   sources(): IterableIterator<CollaborationSourceSnapshot>
   /** @returns resolution after accepted writes drain and the domain closes. */

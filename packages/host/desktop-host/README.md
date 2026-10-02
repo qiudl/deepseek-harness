@@ -105,6 +105,8 @@ MCP configuration parsing and runtime acknowledgement share one executor across 
 
 No runtime invariant companion is published: filesystem and wire commit points validate owned state, while lease and crash behavior are covered by integration tests.
 
+`profile.source_authority` resolves this connection’s verified Account Profile and reads a committed Source descriptor through the supervisor and a dedicated random worker token. Startup installs this reader on macOS and Windows. Missing readers omit the capability; replaced workers, mismatched coordinates/digest, expired challenges or changed Account grants refuse signing. The client verifies the exact challenge, pinned installation/process and Source signature. This operation neither captures a message nor prepares a model; cloud consumption and chat dispatch remain separate.
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.

@@ -58,6 +58,8 @@ The negotiated `profile.extensions` method carries a Main-held lease and one inv
 
 The public key in an answer is not trust by itself. The Desktop broker must match it to its authenticated installation record and independently compare the peer executable's code-signing digest before accepting the signature. A migration flow may establish that record only through its explicit consent and verification policy; ordinary connection must never silently trust a new key.
 
+`profile.source_authority` accepts an exact server challenge containing the Account/environment, original Source coordinates, full snapshot digest and registered Host epoch. Its dedicated UTF-8 signing domain is `dsh-collaboration-source-authority/v1`, NUL and a fixed-order JSON tuple. The authorized Profile must confirm a durable matching journal entry before signing; membership or registration signatures cannot substitute. The response contains no message, credentials or executable call. The cloud must authenticate and consume its nonce atomically with the snapshot and current Account/Host checks; the signature grants no target execution permission.
+
 ## API
 
 | Export | Role |

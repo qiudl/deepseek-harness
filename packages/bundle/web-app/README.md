@@ -127,6 +127,8 @@ Read these pages when you want to go deeper into the shared core, the browser re
 -----
 
 <a id="model-experience"></a>
+`DSH_PROFILE_SOURCE_TOKEN` enables `/internal/desktop-collaboration-source` in the isolated Profile worker. Its private POST accepts at most 2 KiB of exact original Source coordinates and returns a validated descriptor of the existing journal entry. It rejects browser-cookie access, caller model/commit fields, missing Sources and lost Session membership. Replies are noncacheable, sanitized and contain no message content or executable call; signing belongs to the parent Native Host.
+
 ## Model Experience
 
 ### Harness-source and Web-surface context

@@ -9,8 +9,8 @@ import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, openNativePath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
-import { openCollaborationSourceJournal, parseCollaborationSourceInput } from './collaboration-source-journal.ts'
-import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot } from './collaboration-source-journal.ts'
+import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates, describeCollaborationSource } from './collaboration-source-journal.ts'
+import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot, CollaborationSourceCoordinates } from './collaboration-source-journal.ts'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -71,6 +71,7 @@ export { SessionSkillCatalog } from './skill-catalog.ts'
 export { openCollaborationSourceJournal } from './collaboration-source-journal.ts'
 export type {
   CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal, CollaborationSourceInput,
+  CollaborationSourceCoordinates,
 } from './collaboration-source-journal.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -94,6 +95,18 @@ export interface SessionControllerInternals {
   readonly revealPath?: (path: string, signal: AbortSignal) => Promise<void>
   /** Native handoff availability probe. */
   readonly canOpenPath?: () => boolean
+}
+
+// Read cancellation releases the queue; accepted journal writes still drain before disposal.
+async function waitForCollaborationSourceRead<T>(read: Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort!: () => void
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    onAbort = () => { reject(signal.reason instanceof Error ? signal.reason : new DOMException('Source read cancelled', 'AbortError')) }
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try { return await Promise.race([read, cancelled]) }
+  finally { signal.removeEventListener('abort', onAbort) }
 }
 
 /** Host service backing the generated `ctx.remote.session` namespace. */
@@ -140,6 +153,7 @@ export class SessionController extends TypertRemoteService {
     this.inspectWorkspaceModelSelection = this.inspectWorkspaceModelSelection.bind(this)
     this.prepareWorkspaceModelSnapshot = this.prepareWorkspaceModelSnapshot.bind(this)
     this.captureCollaborationSource = this.captureCollaborationSource.bind(this)
+    this.inspectCollaborationSource = this.inspectCollaborationSource.bind(this)
     ctx.effect(() => async () => {
       this.collaborationLifetime.abort(new DOMException('Profile source capture disposed', 'AbortError'))
       await this.collaborationCaptureTail
@@ -357,17 +371,7 @@ export class SessionController extends TypertRemoteService {
     const captured = parseCollaborationSourceInput(input)
     const ownedSignal = AbortSignal.any([signal, this.collaborationLifetime.signal])
     ownedSignal.throwIfAborted()
-    // Pending reads/preparation can be abandoned; an accepted durable write must drain.
-    const waitForRead = async <T>(read: Promise<T>): Promise<T> => {
-      let onAbort!: () => void
-      const cancelled = new Promise<never>((_resolve, reject) => {
-        onAbort = () => { reject(ownedSignal.reason instanceof Error ? ownedSignal.reason : new DOMException('Source capture cancelled', 'AbortError')) }
-        if (ownedSignal.aborted) onAbort()
-        else ownedSignal.addEventListener('abort', onAbort, { once: true })
-      })
-      try { return await Promise.race([read, cancelled]) }
-      finally { ownedSignal.removeEventListener('abort', onAbort) }
-    }
+    const waitForRead = <T>(read: Promise<T>) => waitForCollaborationSourceRead(read, ownedSignal)
     const sessionId = SessionId(captured.session_id), workspaceId = WorkspaceId(captured.workspace_id)
     const operation = this.collaborationCaptureTail.then(async () => {
       ownedSignal.throwIfAborted()
@@ -386,7 +390,7 @@ export class SessionController extends TypertRemoteService {
         if (facility === undefined) throw new Error('collaboration_source_journal_unavailable')
         this.collaborationJournal = openCollaborationSourceJournal(facility)
       }
-      const journal = await this.collaborationJournal
+      const journal = await waitForRead(this.collaborationJournal)
       ownedSignal.throwIfAborted()
       const previous = journal.read(captured)
       if (previous !== undefined) {
@@ -417,6 +421,44 @@ export class SessionController extends TypertRemoteService {
     })
     this.collaborationCaptureTail = operation.then(() => {}, () => {})
     return operation
+  }
+
+  /**
+   * Read one durable Source from the owning Profile without model preparation or Agent activation.
+   * @param target - Exact original Source identity; caller metadata is rejected.
+   * @param signal - Caller cancellation combined with Profile disposal.
+   * @returns Frozen identity and digest of the full original snapshot; missing records or changed membership reject.
+   */
+  async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise<
+    CollaborationSourceCoordinates & { readonly snapshot_digest: string }
+  > {
+    const captured = parseCollaborationSourceCoordinates(target)
+    const ownedSignal = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    ownedSignal.throwIfAborted()
+    const wait = <T>(read: Promise<T>) => waitForCollaborationSourceRead(read, ownedSignal)
+    const operation = this.collaborationCaptureTail.then(async () => {
+      ownedSignal.throwIfAborted()
+      const workspaceId = WorkspaceId(captured.workspace_id), sessionId = SessionId(captured.session_id)
+      const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
+      await wait(this.inspectWorkspaceModelSelection(sessionId, workspaceId, ownedSignal))
+      if (this.collaborationJournal === undefined) {
+        const facility = this.ctx.get('storageDomain')
+        if (facility === undefined) throw new Error('collaboration_source_journal_unavailable')
+        this.collaborationJournal = openCollaborationSourceJournal(facility)
+      }
+      const journal = await wait(this.collaborationJournal)
+      ownedSignal.throwIfAborted()
+      const snapshot = journal.read(captured)
+      if (snapshot === undefined) throw new Error('collaboration_source_not_found')
+      await wait(this.inspectWorkspaceModelSelection(sessionId, workspaceId, ownedSignal))
+      if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== session) {
+        throw new Error('collaboration_session_workspace_mismatch')
+      }
+      ownedSignal.throwIfAborted()
+      return describeCollaborationSource(snapshot)
+    })
+    this.collaborationCaptureTail = operation.then(() => {}, () => {})
+    return wait(operation)
   }
 
   /**

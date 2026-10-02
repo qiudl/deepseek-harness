@@ -1,5 +1,5 @@
 import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
-import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
 
 interface StartProfileWorkerInput {
@@ -101,6 +101,32 @@ export class ProfileWorkerSupervisor {
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
     if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
+    return result
+  }
+
+  /**
+   * Read the selected worker and discard replies after its generation is disposed.
+   * @param profileId - Account Profile resolved by the Host authority.
+   * @param target - Original Source coordinates.
+   * @param signal - Owning connection cancellation.
+   * @returns The committed digest; unavailable, replaced, mismatched or cancelled reads reject.
+   */
+  async inspectCollaborationSource(
+    profileId: string,
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+  ): Promise<HostCollaborationSourceDescriptor> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.inspectCollaborationSource) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.inspectCollaborationSource(target, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id
+      || result.source_message_id !== target.source_message_id || result.source_revision !== target.source_revision) {
       throw new HostAuthorityError('profile_mismatch')
     }
     return result

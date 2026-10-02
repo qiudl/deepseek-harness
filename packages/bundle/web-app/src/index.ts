@@ -29,6 +29,7 @@ import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
+import { handleDesktopCollaborationSourceRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopWorkspaceModelSelectionRequest } from './desktop-workspace-model-selection.ts'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
@@ -242,6 +243,16 @@ export function apply(ctx: Context, config: Config): void {
             selection: () => modelCtx.agentDefaultModel.currentSelection(),
             stream: options => modelCtx.llm.stream(options),
           })),
+      }))
+    })
+  }
+  const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
+  if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-source',
+        handler: (req, res) => handleDesktopCollaborationSourceRequest(req, res, sourceToken,
+          (target, signal) => sessionCtx.sessionController.inspectCollaborationSource(target, signal)),
       }))
     })
   }

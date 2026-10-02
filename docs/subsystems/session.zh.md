@@ -799,6 +799,26 @@ async inspectWorkspaceModelSelection( sessionId: SessionId, workspaceId: Workspa
 async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal, ): Promise<Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; prepared: PreparedLlmSnapshotCall }>>
 
 /**
+ * Capture user content under this Profile's registry and actual prepared model.
+ * Persist before returning the process-local call. Duplicate/restarted input returns
+ * only its original snapshot, never a new executable handle or a model request.
+ * This Host-only queued operation has no Remote endpoint and grants no cloud authority.
+ * @param input - exact Source coordinates, raw text and trusted classified mentions; no model or commit fields.
+ * @param signal - caller cancellation, combined with the owning Profile lifetime through dispatch.
+ * @returns first durable capture with its one-shot call, or original non-executable recovery.
+ * @throws on invalid input, unavailable journal, changed ownership/selection, conflict or cancellation.
+ */
+async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise< | Readonly<{ kind: 'captured'; snapshot: CollaborationSourceSnapshot; prepared: PreparedLlmSnapshotCall }> | Readonly<{ kind: 'recovered'; snapshot: CollaborationSourceSnapshot }> >
+
+/**
+ * Read one durable Source from the owning Profile without model preparation or Agent activation.
+ * @param target - Exact original Source identity; caller metadata is rejected.
+ * @param signal - Caller cancellation combined with Profile disposal.
+ * @returns Frozen identity and digest of the full original snapshot; missing records or changed membership reject.
+ */
+async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise< CollaborationSourceCoordinates & { readonly snapshot_digest: string } >
+
+/**
  * Read all visible Session rows without resuming an Agent.
  * @param _request - reserved empty list request.
  * @param signal - cancellation for persistence reads.
