@@ -18,7 +18,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import * as AppBoot from '@deepseek-ai/dsh-app-boot'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import type { WebServer, WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import { WebServer, type WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { TypertGatewayService } from '@deepseek-ai/dsh-api-gateway'
 import AgentDefaultModel from '@deepseek-ai/dsh-agent-default-model'
@@ -79,20 +79,20 @@ function stageDist(): string {
 function fakeHttpServer(host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1'): { server: WebServer; seat: () => unknown; routes: Map<string, WebRoute> } {
   let fallback: unknown
   const routes = new Map<string, WebRoute>()
-  const server = {
-    host,
-    port: 4567,
-    registerFallback: (handler: unknown) => {
-      fallback = handler
-      return () => { fallback = undefined }
-    },
-    renderIndex: (html: string) => html,
-    collectIndexInjections: () => [{ kind: 'script', placement: 'head', text: 'fixtureBoot()' }],
-    register: (route: WebRoute) => {
-      routes.set(route.path, route)
-      return () => { routes.delete(route.path) }
-    },
-  } as unknown as WebServer
+  const serviceCtx = new Context()
+  onTestFinished(() => serviceCtx.fiber.dispose())
+  const server = new WebServer(serviceCtx, { host, port: 4567 })
+  Object.defineProperty(server, 'port', { configurable: true, value: 4567 })
+  vi.spyOn(server, 'registerFallback').mockImplementation((handler) => {
+    fallback = handler
+    return () => { fallback = undefined }
+  })
+  vi.spyOn(server, 'renderIndex').mockImplementation(html => html)
+  vi.spyOn(server, 'collectIndexInjections').mockReturnValue([{ kind: 'script', placement: 'head', text: 'fixtureBoot()' }])
+  vi.spyOn(server, 'register').mockImplementation((route) => {
+    routes.set(route.path, route)
+    return () => { routes.delete(route.path) }
+  })
   return { server, seat: () => fallback, routes }
 }
 
