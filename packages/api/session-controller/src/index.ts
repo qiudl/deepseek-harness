@@ -66,6 +66,10 @@ export type * from './types.ts'
 export { ApiSessionNotFound } from './agent.ts'
 export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
+export { openCollaborationSourceJournal } from './collaboration-source-journal.ts'
+export type {
+  CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal,
+} from './collaboration-source-journal.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {

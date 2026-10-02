@@ -20,7 +20,8 @@
     "src/list.ts",
     "src/media-references.ts",
     "src/model-selection-projection.ts",
-    "src/skill-catalog.ts"
+    "src/skill-catalog.ts",
+    "src/collaboration-source-journal.ts"
   ],
   "references": [
     { "path": "../../../vendor/cordis" },
@@ -51,6 +52,7 @@
     { "path": "../../util/values" },
     { "path": "../../typert/protocol" },
     { "path": "../../typert/registry" },
-    { "path": "../../workspace/workspace" }
+    { "path": "../../workspace/workspace" },
+    { "path": "../../storage/storage-domain" }
   ]
 }

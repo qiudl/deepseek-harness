@@ -37,6 +37,10 @@ Client 列表刷新保留未变化的行对象，并在顺序和值均相同时�
 
 `prepareWorkspaceModelSnapshot(sessionId, workspaceId, signal)` 使用该来源选择准备完整 [LLM 快照](../../llm/llm/README.zh.md)，随后重验归属与选择。准备期间发生变化会被拒绝，返回工作区/会话身份与当前进程的一次性调用。这个仅供 Host 使用的方法采用提供服务的 Profile 上下文，不暴露 Remote 入口，不激活 Agent，不写 Session 事件，准备阶段不发送模型请求。调用方负责取消、Source 认证及 journal；元数据不是授权证明。
 
+可信 Profile 协调器可以从本 Host 包导入 `openCollaborationSourceJournal`，传入自己配置的 `storageDomain` form。独立的 `collaboration_source_v2` 领域在规划前保存 Source 原文、已分类的 mention 及 prepared 模型元数据。`capture` 在持久化后返回脱离输入且深度冻结的快照；相同重试返回原条目 UUID 和首次提交版本，相同工作区/会话/消息/revision 下内容变化则拒绝。该领域不追加普通 Session 事件，也不发送模型请求。
+
+journal 最多保留 128 条尚未路由的 Source，不会为了接收新来源而淘汰原记录。写入确认失败后，调用方必须关闭并重新打开 journal，按原身份核对结果。损坏数据、未知持久版本、被改动的内容摘要和不匹配的记录键会令打开失败，同时保留原有字节。调用方必须在捕获前校验 Account 和工作区归属、分类主动 mention，并提供实际 prepared 元数据；journal 不认证这些事实。
+
 Client 适配器提供 `SessionEventStream`，即绑定到一个普通 Session 或 direct subagent address 的 Gateway `RemoteJournalStream`。它在读取首个 page 前打开 follow，只发布连续的 `replace`、`prepend`、`append` 与 `settle-assistant` 变更，并通过 tail page 修复重连或 seq 缺口。向后分页有两个动词：`loadOlder()` 拉一页 50 条消息，而 `loadThrough(seq)`——轮次跳转加载器——按每页 200 条消息循环拉取直到窗口覆盖目标 seq，重复调用会下调共享目标，遇到无进展的页即停止，忙碌状态复用同一个 `loadingOlder` 快照位。Web 适配器显式选择接收无 cursor 的 Assistant frame：每个 opening 携带活跃 attempt 的 `startedAfterSeq`、`nextIndex` 与紧凑 stream，每个 stream member 都成为排在持久 cursor 之间的 Client-only `assistant/live-chunk` 条目。Host 会随该 baseline 捕获 follower 本地到达序号，并抑制该 cut 及之前的 buffered frame；replacement Agent 可以从 revision 一重新开始。活跃 opening 之后到达的持久 `assistant/message` 或 `assistant/attempt` 只有在其 seq 晚于 `startedAfterSeq` 且轮次与步骤匹配时才会保持暂存；匹配的 end type、seq 与 index 会发布一个具名 settlement delta，删除该 attempt 的瞬态 row、加入持久条目，并保留同一步骤中更早的 retry。已知 attempt 的 revision、密集 index 或 settlement 缺口会重新打开 follow；若 controller 错过 start，则忽略 unknown-attempt frame，并正常发布其持久 settlement。Abandoned end 会发布不含持久条目的 settlement delta，使瞬态 row 立即退出。持久缺口修复 page 不携带 Assistant baseline，因此 held notification 会重新打开 follow 一次，以取得配对的 page 与 baseline。每条历史 record 只覆盖自身的事件 seq。业务、persistence 或无法恢复的连续性错误会终止 stream，只有物理载体断开才触发自动恢复。`SessionControlStream` 是 Gateway `RemoteSnapshotStream`；每代都以完整的进程本地 baseline 开始，因此重连会替换 jobs 和 projection 状态，而不会把瞬态值当作 durable event。每次 Host generation 就绪时，同步的 Client 订阅会先清除保留的投影值及其水位，再刷新查询并重新打开 control stream，其中也包括 control baseline 中没有列出的 Session。首次 control stream 会等待 generation 就绪，确保其 opening 值不会先于旧状态清理到达。上一代尚未完成的 list 响应无法重新发布这些值。同一 generation 内，延迟到达的 control baseline 不能覆盖或清除较新的 list、history 或 live 值。持久 `inbox` 投影通过与其他投影相同的冷读取和重连路径传输两份待处理列表。Client Agent 上下文提供独立 [`fileUpload`](../../client/file-upload/README.zh.md) 服务使用的身份；Session 对象提供生命周期、prompt、queue 与历史操作，不提供文件传输。
 
 Session 对象还承载本地提交回显：`session.beginSubmission` 在调用方序列化与提示词之前，同步把一条回显写入 `SessionSnapshot.pendingSubmissions`，会话 UI 因此能在点击提交的当帧显示消息。回显按顺序存放图片预览与持久文件引用。Session 根据当前运行状态与请求的投递模式推导其 `transcript`、`queued` 或 `steering` 位置，并在序列化期间保留该位置。提示词的 `requestId` 是关联标识：Host 把它回显为 durable user source 的 `rpcId`，`inbox` 投影中的待处理消息也保留同一 source。回显在观察到其 durable event 或 queue occurrence 后延迟一个动画帧退休，带标识的提示词失败或被放弃时立即退休，销毁时按 failed 退休。每次退休恰好触发一次 `onRetire`；observed 退休还会携带有序的持久附件引用，让 composer 释放成功卡片并保留失败草稿。回显只存在于 Client 内存；刷新与重连只从持久事件重建会话。
@@ -91,6 +95,7 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 - follow 恢复失败会对调用方可见，而不会无限重试。
 - 浏览器原始字节上传使用一次不带断点续传偏移的流式 HTTP 请求；重试会从第零字节重新传输整个文件。
 - 文件引用补全使用共享 Agent lookup，因此可能恢复冷 Session；`skills/list` 目录是不激活 Agent 的 skill 元数据读取路径。
+- 协同 Source 捕获目前是 Host 库基础方法。聊天路由、云端 Source 授权、持久 route/outbox 状态转换与 Source 退休尚未挂载。恢复枚举不恢复可执行模型句柄，也不派发任务。
 
 
 <a id="dev-note"></a>
