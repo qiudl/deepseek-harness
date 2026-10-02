@@ -11,6 +11,7 @@ export {
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
   parseHostWorkspaceModelSelectionTarget, parseHostWorkspaceModelSelection,
+  parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion, encodeHostWorkspaceAuthorityPayload,
   parseHostCollaborationRegistrationChallenge, parseHostCollaborationRegistrationAssertion,
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
@@ -56,6 +57,7 @@ export type {
   ProfileViewActivateResult,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
+  HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
   ProfileModelTextRequest,

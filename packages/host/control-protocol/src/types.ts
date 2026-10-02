@@ -515,6 +515,47 @@ export interface ProfileCollaborationRegistrationResult {
   readonly result: HostCollaborationRegistrationAssertion
 }
 
+/** Server nonce bound to Account and one registry workspace/ordinary Session. */
+export interface HostWorkspaceAuthorityChallenge extends HostWorkspaceModelSelectionTarget {
+  readonly request_id: HostControlRequestId
+  readonly challenge_nonce: HostControlNonce
+  readonly expires_at: number
+  readonly audience: string
+  readonly environment_id: HostAuthorityEnvironmentId
+  readonly account_issuer: string
+  readonly account_subject: Branded<'AccountSubject'>
+}
+/** Installation signature for registry ownership only; no Source/journal/model dispatch grant. */
+export interface HostWorkspaceAuthorityAssertion {
+  readonly schema_version: 1
+  readonly challenge: HostWorkspaceAuthorityChallenge
+  readonly installation_id: InstallationId
+  readonly installation_public_key: HostControlPublicKey
+  readonly host_instance_id: HostInstanceId
+  readonly process_nonce: HostControlNonce
+  readonly signature: HostControlSignature
+}
+/** Account-verified, Main-only workspace ownership read and signature. */
+export interface ProfileWorkspaceAuthorityRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_authority'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostWorkspaceAuthorityChallenge
+  }
+}
+/** Signed workspace/Session ownership without model choice or message content. */
+export interface ProfileWorkspaceAuthorityResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_authority'
+  readonly result: HostWorkspaceAuthorityAssertion
+}
+
 /** One bounded text request authorized by this connection's verified Account grant. */
 export interface ProfileModelTextRequest {
   readonly version: 1
@@ -1281,6 +1322,8 @@ export type HostControlFrame =
   | ProfileWorkspaceModelSelectionResult
   | ProfileCollaborationRegistrationRequest
   | ProfileCollaborationRegistrationResult
+  | ProfileWorkspaceAuthorityRequest
+  | ProfileWorkspaceAuthorityResult
   | ProfileModelTextRequest
   | ProfileModelTextResult
   | ProfileLeaseCloseRequest

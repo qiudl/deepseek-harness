@@ -33,6 +33,7 @@ import type {
   ProfileOpenRequest,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
+  HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
@@ -60,6 +61,7 @@ import {
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
+  encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
   encodeHostCollaborationRegistrationSignaturePayload,
   parseHostCollaborationRegistrationChallenge,
   parseHostCollaborationRegistrationAssertion,
@@ -1263,6 +1265,52 @@ export class HostControlAuthority {
           const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { value } }
           channel.send(decodeHostControlFrame(encodeHostControlFrame(response)))
+        } else if (frame.method === 'profile.workspace_authority') {
+          const inspect = this.options.inspectWorkspaceModelSelection
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const account = {
+            authorityEnvironmentId: c.environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId,
+            issuer: c.account_issuer,
+            subject: c.account_subject,
+          }
+          const authorize = () => {
+            context.signal.throwIfAborted()
+            if (c.expires_at <= clock() || c.expires_at - clock() > 300_000) throw new HostAuthorityError('stale')
+            this.options.host.authorizeCollaborationRegistration(account)
+            return this.options.host.authorizeAccountModelText(account)
+          }
+          const profileId = authorize()
+          const target = { workspace_id: c.workspace_id, session_id: c.session_id }
+          const result = await inspect(profileId, target, context.signal)
+          if (authorize() !== profileId || result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          const identity = this.options.identity
+          const unsigned: HostWorkspaceAuthorityAssertion = {
+            schema_version: 1,
+            challenge: c,
+            installation_id: identity.installationId as InstallationId,
+            installation_public_key: identity.installationPublicKey as HostControlPublicKey,
+            host_instance_id: identity.hostInstanceId as HostInstanceId,
+            process_nonce: identity.processNonce as HostControlNonce,
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = sign(
+            null,
+            encodeHostWorkspaceAuthorityPayload(unsigned),
+            privateKeyObject(identity.installationPrivateKey),
+          ).toString('base64url') as HostControlSignature
+          channel.send({
+            version: 1,
+            type: 'result',
+            request_id: frame.request_id,
+            method: frame.method,
+            result: { ...unsigned, signature },
+          })
         } else if (frame.method === 'profile.collaboration_registration') {
           const challenge = frame.params.challenge
           context.signal.throwIfAborted()
@@ -1391,7 +1439,7 @@ export class HostControlAuthority {
           ...capabilities,
           'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
-          ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection'] : []),
+          ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
@@ -2044,6 +2092,61 @@ export class UnixHostClient {
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     return frame.result
+  }
+
+  /**
+   * Prove registry membership through this connection's Account-authorized Profile.
+   * @param input - Main-held binding, server nonce/target and cancellation.
+   * @returns Installation-verified membership assertion; no journal or prepared-model authorization.
+   */
+  async attestWorkspaceAuthority(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostWorkspaceAuthorityChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostWorkspaceAuthorityAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostWorkspaceAuthorityChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.workspace_authority' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileWorkspaceAuthorityRequest = {
+      version: 1,
+      type: 'request',
+      request_id: requestId(),
+      method: 'profile.workspace_authority',
+      params: {
+        ...this.auth(),
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        challenge,
+      },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostWorkspaceAuthorityAssertion(frame.result)
+    if (
+      !this.isConnected() ||
+      JSON.stringify(result.challenge) !== JSON.stringify(challenge) ||
+      result.installation_id !== this.inspection.installation_id ||
+      result.installation_public_key !== this.inspection.installation_public_key ||
+      result.host_instance_id !== this.inspection.host_instance_id ||
+      result.process_nonce !== this.inspection.process_nonce ||
+      challenge.expires_at <= this.now() ||
+      challenge.expires_at - this.now() > 300_000 ||
+      !verify(
+        null,
+        encodeHostWorkspaceAuthorityPayload(result),
+        publicKeyObject(this.inspection.installation_public_key),
+        Buffer.from(result.signature, 'base64url'),
+      )
+    ) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
   }
 
   /**
@@ -2717,6 +2820,7 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
+      | ProfileWorkspaceAuthorityRequest
       | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest

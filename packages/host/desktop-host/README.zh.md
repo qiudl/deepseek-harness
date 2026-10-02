@@ -51,6 +51,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `profile.workspace_model_selection` 从当前连接已验证令牌的 Account 绑定解出 Profile，并在读取后重新校验。监管器丢弃已销毁或替换 worker 的响应。macOS 和 Windows 启动组合安装读取器；旧 Host 不发布此能力。独立随机 worker 令牌授权私有 HTTP 入口，完整响应在流式读取时有上限。结果不授权 Source 登记、规划或任务执行。
 
+`profile.workspace_authority` 使用同一授权读取器签发安装级归属证明，不打开视图、不追加 Session 事件、不发送模型请求。客户端核验准确挑战、当前安装/进程、有效期和签名。未安装读取器时不发布此能力。服务器的 nonce、消费及 Source 校验仍须独立完成，见[协议](../control-protocol/README.zh.md#challenge-authentication)。
+
 `profile.collaboration_registration` 使用当前连接已验证的 Account grant 和安装私钥，将服务器挑战与当前 Host 进程一起签名。客户端按已核验的安装身份验证签名，检查全部挑战/进程字段及有效期，返回冻结证明。Unix 与 Windows 共用这套 authority/client 方法。它不启动 worker、不打开视图租约、不修改 Profile/Session 数据。Slark 私有 Host broker 持有独立连接并负责取消；服务器挑战持久层、公钥登记及操作对账不属于该方法。
 
 Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
