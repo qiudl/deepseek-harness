@@ -68,6 +68,28 @@ const claimOf = (token: string): CommandClaim =>
 /** One microtask hop: lets settled candidate promises flow into the store. */
 const tick = () => Promise.resolve()
 
+it('polls non-leading Enter only for an opted-in source and preserves registration precedence', async () => {
+  const ordinary = vi.fn(async () => undefined)
+  const inline = vi.fn(async () => ({ claim: claimOf('请 @Guide 检查') }))
+  const later = vi.fn(async () => undefined)
+  const source = (name: string, matchEnter: NonNullable<InputTriggerSource['matchEnter']>, anywhere = false): InputTriggerSource => ({
+    trigger: '@', name, candidates: async () => [], onPick: () => undefined, matchEnter,
+    ...(anywhere ? { matchEnterPosition: 'anywhere' as const } : {}),
+  })
+  const { controller, root } = controllerBench([source('ordinary', ordinary), source('inline', inline, true),
+    source('later', later, true)])
+  await root.plugin(() => {})
+  try {
+    expect(await controller.adjudicate('请 @Guide 检查', new AbortController().signal, { attachments: 0 }))
+      .toHaveProperty('claim')
+    expect(ordinary).not.toHaveBeenCalled()
+    expect(inline).toHaveBeenCalledTimes(1)
+    expect(later).not.toHaveBeenCalled()
+    await controller.adjudicate('@file note', new AbortController().signal, { attachments: 0 })
+    expect(ordinary).toHaveBeenCalledTimes(1)
+  } finally { await root.fiber.dispose() }
+})
+
 /** Direct controller bench: real scope tag + live roster array. */
 function controllerBench(sources: InputTriggerSource[] = [], key = 'a') {
   const root = new Context()

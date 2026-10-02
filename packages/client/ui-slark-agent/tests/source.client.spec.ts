@@ -4,6 +4,7 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { afterEach, expect, it, vi } from 'vitest'
+import { webcrypto } from 'node:crypto'
 import { apply, inject } from '../src/client/index.ts'
 
 const session = { sessionId: 'test-session' as SessionId }
@@ -17,6 +18,7 @@ afterEach(() => {
 })
 
 it('shows same-name Agents by stable identity and blocks ordinary model submission', async () => {
+  vi.stubGlobal('crypto', webcrypto)
   const ctx = new Context()
   let source: InputTriggerSource | undefined
   ctx.provide('inputTriggers', { registerSource(value: InputTriggerSource) {
@@ -59,23 +61,27 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
   expect(fetchDirectory).toHaveBeenCalledTimes(2)
   const picked = registered.onPick({ candidate: rows[1]!, session, position: 'inline',
     via: 'menu', action: 'pick', span: { start: 0, end: 1, draftRev: 1 } })
-  expect(picked).toMatchObject({ insert: { source: 'slark-agent', label: 'Test Agent' } })
+  expect(picked).toMatchObject({ insert: { source: 'slark-agent', label: 'Test Agent · Project',
+    clipboardText: '@Test Agent · Project' } })
   if (!picked || typeof picked !== 'object' || !('insert' in picked))
     throw new Error('Agent reference not inserted')
   expect(JSON.parse(picked.insert.ref)).toMatchObject({ assignment_id: 'assignment-2', agent_id: 'agent-2' })
-  expect(JSON.parse(picked.insert.ref).logical_key).toMatch(/^[0-9a-f-]{36}$/)
+  expect((JSON.parse(picked.insert.ref) as { logical_key: string }).logical_key).toMatch(/^[0-9a-f-]{36}$/)
   draft = '@Test Agent question'
-  occurrences = [{ source: 'slark-agent', ref: picked.insert.ref, offset: 0,
+  const legacy = JSON.parse(picked.insert.ref) as { logical_key: string; logical_key_version?: number }
+  Reflect.deleteProperty(legacy, 'logical_key_version')
+  occurrences = [{ source: 'slark-agent', ref: JSON.stringify(legacy), offset: 0,
     length: '@Test Agent'.length, clipboardText: '@Test Agent' }]
   const outcome = await registered.matchEnter?.(session, draft, new AbortController().signal,
     { attachments: 0 })
   expect(outcome).toHaveProperty('claim')
   if (!outcome || typeof outcome !== 'object' || !('claim' in outcome))
     throw new Error('Agent send was not claimed')
-  expect(await outcome.claim.submit('question', ctx, [])).toMatchObject({ kind: 'success' })
+  expect(await outcome.claim.submit('', ctx, [])).toMatchObject({ kind: 'success' })
   expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
     session_id: session.sessionId, assignment_id: 'assignment-2', agent_id: 'agent-2',
     question: 'question',
+    logical_key: legacy.logical_key,
   }))
   await expect(registered.matchEnter?.(session, draft, new AbortController().signal,
     { attachments: 1 })).rejects.toThrow()
@@ -89,6 +95,7 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
 })
 
 it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', async () => {
+  vi.stubGlobal('crypto', webcrypto)
   const ctx = new Context()
   let source: InputTriggerSource | undefined
   let slotSession: unknown
@@ -152,6 +159,7 @@ it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', a
   expect(pick('{')).toBeUndefined()
   expect(pick('[]')).toBeUndefined()
   expect(pick('{}')).toBeUndefined()
+  expect(pick(JSON.stringify({ ...agent, logical_key_version: 3 }))).toBeUndefined()
   const picked = pick(rows[0]!.value!)
   if (!picked || typeof picked !== 'object' || !('insert' in picked))
     throw new Error('Agent reference not inserted')
@@ -189,21 +197,22 @@ it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', a
   }
   const first = await claim()
   currentSession = 'other-session' as SessionId
-  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
+  expect(await first.submit('', ctx, [])).toMatchObject({ kind: 'error' })
   currentSession = session.sessionId
   draft = '@Test Agent changed'
-  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
+  expect(await first.submit('', ctx, [])).toMatchObject({ kind: 'error' })
   draft = '@Test Agent question'
   occurrences = [{ ...mention, ref: 'changed' }]
-  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
+  expect(await first.submit('', ctx, [])).toMatchObject({ kind: 'error' })
   occurrences = [mention]
   expect(await first.submit('changed', ctx, [])).toMatchObject({ kind: 'error' })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgents: directory })
-  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
+  expect(await first.submit('', ctx, [])).toMatchObject({ kind: 'error' })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgents: directory,
     invokeEnterpriseAgent: vi.fn(async () => ({ ok: false, errorCode: 'revoked' })) })
-  expect(await first.submit('question', ctx, [])).toMatchObject({ kind: 'error' })
-  expect(registered.codec?.clipboardText?.(mention.ref)).toBe('@Test Agent')
+  expect(await first.submit('', ctx, [])).toMatchObject({ kind: 'error' })
+  expect(registered.codec?.clipboardText?.(mention.ref)).toBe('@Test Agent · Project')
+  expect(registered.codec?.clipboardText?.(JSON.stringify({ ...agent, project_name: undefined }))).toBe('@Test Agent')
   expect(registered.codec?.clipboardText?.('{')).toBe('@')
   await fiber.dispose()
 })

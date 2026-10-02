@@ -33,6 +33,8 @@ The composer surface keeps focus while the menu is open: rows pick on mousedown,
 
 A source may implement `openReference(session, reference)` to open a draft reference without submitting it. Acceptance may precede asynchronous catalog loading. Chips route by source name; editable tokens route through the current source lexicon. Returning `false`, a missing source, or a disposed controller leaves the editor gesture unchanged.
 
+Enter hooks normally participate only when their trigger leads the trimmed draft. A source can declare `matchEnterPosition: 'anywhere'` to inspect structured references elsewhere in the sentence; it must still decide whether it owns the submission. Registration order and the first accepted outcome remain unchanged. The composer requests adjudication for drafts containing structured references, while ordinary text keeps its immediate default-send path.
+
 -----
 
 <a id="understand-the-implementation"></a>

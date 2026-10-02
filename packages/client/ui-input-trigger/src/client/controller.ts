@@ -376,7 +376,7 @@ export class InputTriggerController {
    * Enter last adjudication: polls sources' matchEnter in registration
    * order, first non-undefined wins. The outcome returns to the caller (the
    * input machine applies it inside the same submit attempt — no event).
-   * @param line - trimmed draft; the leading char selects the trigger roster.
+   * @param line - trimmed draft; non-leading hooks require the source's explicit position opt-in.
    * @param signal - attempt-scoped abort from the input machine.
    * @param envelope - non-text submission state accompanying the draft.
    * @returns the winning outcome or undefined (default sink). Rejects when a
@@ -389,7 +389,8 @@ export class InputTriggerController {
       if (signal.aborted) {
         throw signal.reason instanceof Error ? signal.reason : new Error('slash adjudication aborted')
       }
-      if (src.matchEnter === undefined || !line.startsWith(src.trigger)) continue
+      if (src.matchEnter === undefined ||
+        (src.matchEnterPosition !== 'anywhere' && !line.startsWith(src.trigger))) continue
       const outcome = await src.matchEnter(projection, line, signal, envelope)
       if (outcome !== undefined) return outcome
     }

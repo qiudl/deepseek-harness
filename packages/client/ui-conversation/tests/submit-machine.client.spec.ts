@@ -47,6 +47,22 @@ function staleAttempt(): SubmitAttempt {
 }
 
 describe('submit-machine: plain × enter', () => {
+  it('adjudicates inline references and releases an attempt-bound claim after failure', () => {
+    const m = new SubmitMachine(), draft = '请 @Guide 检查'
+    const attempt = effectAt(m.dispatch({ type: 'enter', mode: 'queue', draft,
+      adjudicateReferences: true }), 0, 'adjudicate').attempt
+    const claim: CommandClaim = { name: 'slark-agent', token: draft, retainOnFailure: false,
+      submit: async () => ({ kind: 'error' }) }
+    const fx = m.dispatch({ type: 'adjudicated', attempt, outcome: { claim } })
+    expect(effectAt(fx, 0, 'begin-submit').args).toBe('')
+    m.dispatch({ type: 'submit-settled', attempt, ok: false, draft })
+    expect(m.state.phase).toBe('plain')
+    expect(m.state.claim).toBeUndefined()
+    const retry = m.dispatch({ type: 'enter', mode: 'queue', draft: `${draft}并给出建议`,
+      adjudicateReferences: true })
+    expect(effectAt(retry, 0, 'adjudicate').attempt.seq).toBeGreaterThan(attempt.seq)
+  })
+
   it('empty and whitespace-only drafts produce nothing', () => {
     const m = new SubmitMachine()
     expect(m.dispatch({ type: 'enter', mode: 'queue', draft: '' })).toEqual([])

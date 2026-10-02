@@ -23,7 +23,7 @@ Type `@` in a DSH Session inside Slark Desktop to find assigned enterprise Agent
 <a id="use-this-package"></a>
 ## Use this package
 
-The Web bundle mounts this package without extra configuration. Type `@` in Slark Desktop, select an Agent under Slark enterprise Agents, and send a plain-text question with the Agent chip at the start. Agents with the same name show their enterprise and project. The task strip displays the result in the originating Session and marks unfinished work as background work after 120 seconds.
+The Web bundle mounts this package without extra configuration. Type `@` in Slark Desktop, select an Agent under Slark enterprise Agents, and send a plain-text task or question. The selected chip may appear anywhere in the sentence and displays `Agent · Project space`; the candidate description also shows its enterprise. For example, select Guide in the sentence `Please @Guide · qiu-slark check the login problem`. The task strip displays the result in the originating Session and marks unfinished work as background work after 120 seconds.
 
 -----
 
@@ -33,7 +33,7 @@ The Web bundle mounts this package without extra configuration. Type `@` in Slar
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The Client source reads account-bound assignments from the Desktop bridge. Each editor chip retains the assignment, project, Agent, enterprise, and publication version; Slark checks assignment authority again when admitting the invocation. The source claims Enter for a leading Agent chip and question, and its reference codec refuses ordinary model submission. The Desktop bridge supplies only directory summaries. No companion is published.
+The Client source reads account-bound assignments from the Desktop bridge. Each editor chip retains the assignment, project, Agent, enterprise, and publication version; Slark checks assignment authority again when admitting the invocation. The source claims the complete draft for one structured Agent chip, removes only that chip from the question, and refuses ordinary model serialization. Failed submissions retain the draft and re-adjudicate on retry. New references bind their admission key to the question with Web Crypto SHA-256, so unchanged retries reuse the key and edited questions receive a new key; legacy references retain their original keys and chip text. Missing Web Crypto refuses the submission. The Desktop bridge supplies only directory summaries. No companion is published.
 
 </details>
 
@@ -56,7 +56,8 @@ None; this plugin does not assemble or send a DSH provider request.
 Agent mentions require the current account's Slark Desktop bridge to report invocation available. Ordinary `@` references remain available when that bridge is absent.
 
 - **Desktop-only directory** — a standalone DSH browser session cannot list or invoke Slark Agents.
-- **Question format** — the Agent chip must lead a plain-text question.
+- **Single target** — one explicitly selected Agent and a nonempty text question per send; multiple mentions, mixed references, and attachments are refused.
+- **Collaboration 2.0 pending** — this improves the existing single-target entry. Workspace project-space selection and model planning across targets are not connected here; planning failures cannot fall back to this entry.
 
 <a id="dev-note"></a>
 ### Dev Note

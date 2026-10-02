@@ -152,7 +152,7 @@ export interface ReferenceCodec {
  *
  * Space/enter adjudication rides the optional match hooks: implementing one
  * IS the participation claim — the pipeline polls each implementing source
- * with the leading token; the first non-undefined answer wins (registration
+ * with the leading token (Enter sources may opt in to any position); the first non-undefined answer wins (registration
  * order); no claimant → default sink. The hooks split because their timing
  * budgets differ: space fires mid-keystroke and must answer synchronously
  * from hot state, while enter may await the source's own warmup.
@@ -165,6 +165,8 @@ export interface InputTriggerSource {
   readonly order?: number
   /** Whether the menu renders the source-title row; defaults to true. */
   readonly showGroupTitle?: boolean
+  /** Enter hooks poll leading triggers by default; opt in to handle structured references elsewhere in the draft. */
+  readonly matchEnterPosition?: 'leading' | 'anywhere'
   candidates(session: ClientSessionContext, req: CandidateRequest): Promise<readonly InputTriggerCandidate[]>
   /**
    * Synchronous breadcrumb rendered above this source's group, re-polled on

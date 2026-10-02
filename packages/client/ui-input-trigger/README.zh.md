@@ -35,6 +35,8 @@ kind: "package-reference"
 
 -----
 
+Enter 钩子默认只在去除首尾空白后的草稿以其触发符开头时参与。来源可声明 `matchEnterPosition: 'anywhere'`，检查句中其他位置的结构化引用，但仍须自行判断是否拥有该提交。注册顺序和首个有效结果优先的规则保持不变。输入框会为含结构化引用的草稿请求裁决，普通文字保持立即默认发送路径。
+
 <a id="understand-the-implementation"></a>
 ## 理解实现
 

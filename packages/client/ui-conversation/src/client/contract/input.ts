@@ -42,6 +42,8 @@ export interface CommandClaim {
   readonly token: string
   readonly hint?: string
   readonly attachments?: boolean
+  /** Set false for a draft-bound claim that must be adjudicated again after a failed submission. */
+  readonly retainOnFailure?: false
   /**
    * Submit the claimed command.
    * @param args - command text after the claimed token.
@@ -286,8 +288,8 @@ export type InputEvent =
   | { readonly type: 'draft-changed'; readonly draft: string }
   /** The editor applied a claim-token replacement: enter claimed. */
   | { readonly type: 'claim'; readonly claim: CommandClaim }
-  /** Enter submission with the current clipboard projection. */
-  | { readonly type: 'enter'; readonly mode: InputSubmitMode; readonly draft: string }
+  /** Enter submission; structured references opt in to adjudication even when the draft starts with ordinary text. */
+  | { readonly type: 'enter'; readonly mode: InputSubmitMode; readonly draft: string; readonly adjudicateReferences?: true }
   | { readonly type: 'adjudicated'; readonly attempt: SubmitAttempt; readonly outcome: PickOutcome }
   | { readonly type: 'adjudication-failed'; readonly attempt: SubmitAttempt; readonly message: string }
   /** Settlement carries the live clipboard projection for suffix-retention and claim re-entry decisions. */
