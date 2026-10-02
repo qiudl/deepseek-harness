@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
 import { isDesktopBearerRequest } from './desktop-model.ts'
+import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
 const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog',
   'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
@@ -94,15 +95,7 @@ export async function handleDesktopRemoteJsonRequest(
   const controller = new AbortController()
   res.once('close', () => { controller.abort() })
   try {
-    const chunks: Buffer[] = []
-    let size = 0
-    for await (const chunk of req as AsyncIterable<unknown>) {
-      if (!(chunk instanceof Uint8Array)) throw new Error('invalid body')
-      size += chunk.byteLength
-      if (size > 64 * 1024) throw new Error('body too large')
-      chunks.push(Buffer.from(chunk))
-    }
-    const request: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    const request = await readDesktopRemotePrivateBody(req)
     const value = await execute(request, controller.signal)
     const body = JSON.stringify({ value })
     if (Buffer.byteLength(body) > 512 * 1024) throw new Error('result too large')
