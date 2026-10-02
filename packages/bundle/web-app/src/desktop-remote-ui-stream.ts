@@ -95,7 +95,8 @@ export class DesktopRemoteUiStreamExecutor {
     if (endpoint === '$events') {
       if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args) ||
         Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
-      const stream = await this.gateway.wireStream.open('$events', { args: {} }, signal)
+      const noUplink: AsyncIterable<unknown> = { async *[Symbol.asyncIterator]() {} }
+      const stream = await this.gateway.wireStream.open('$events', { args: {} }, noUplink, undefined, signal)
       return this.approvals ? this.approvals.observe(stream) : stream
     }
     if (endpoint === 'workspace/follow') {

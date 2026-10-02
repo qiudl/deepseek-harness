@@ -730,9 +730,10 @@ export class TypertGatewayService extends Service implements TypertGateway {
     try {
       const request = remoteRequest(endpoint, payload, signal, peer)
       const release = this.browserAdmission?.invoke(endpoint, request.args)
+      let prepared: PreparedInvocation
       let value: unknown
       try {
-        const prepared = await this.prepareInvocation(request, new AbortController())
+        prepared = await this.prepareInvocation(request, new AbortController())
         value = await this.invokePrepared(prepared)
       } finally { release?.() }
       // A void or explicitly absent business result carries no `value` field;
