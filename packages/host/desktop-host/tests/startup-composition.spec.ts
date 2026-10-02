@@ -246,6 +246,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   }, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
   await expect(serverOptions.remoteUiRead?.(profile.profileId, 'boot/injections', { args: {} },
     new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+  expect(() => serverOptions.remoteUiStream?.(profile.profileId, 'session/follow', { args: {} },
+    new AbortController().signal)).toThrowError(expect.objectContaining({ code: 'unavailable' }))
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'mcp')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'skill')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'plugin')).toEqual([])
