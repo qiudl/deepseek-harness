@@ -1,15 +1,15 @@
 ---
-description: "Host 侧包映射：Desktop 控制协议与权威、Web GUI 服务器、工作区目录选择、open-in-app 路由和插件清单。"
+description: "Web GUI Host 侧的包映射：HTTP 与 SPA 服务器、工作区目录选择实现、open-in-app 启动路由、插件清单投影和显式产品事件上报。"
 kind: "package-group"
 ---
 
-# host/ — Host 侧包
+# host/ — Web GUI 宿主侧
 
 [English](README.md) | 中文
 
 ## 概述
 
-`host/` 组提供 Desktop 到 Host 的控制线协议与单 Host 权威，以及 Web GUI 的普通 HTTP 服务器、服务已构建 Web 壳的 SPA dist 服务器、带原生／浏览／自适应组合包的工作区目录选择 seam、open-in-app 的应用探测与启动路由，以及只读的插件清单投影。这十个包都是产品包；浏览器传输位于 [`client/`](../client/README.zh.md)，组合应用是 [`apps/cli`](../../apps/cli/README.zh.md)，它启动 [`dsh-base` 组合包](../bundle/base/cordis.patch.yml) 来提供 `apps/web/` 下的 Web 应用。Desktop Host 不拥有 HTTP listener；选择器后端可在共享 seam 后互相替换。
+`host/` 组提供 Web GUI 的普通 HTTP 服务器、服务已构建 Web 壳的 SPA dist 服务器、带原生／浏览／自适应组合包的工作区目录选择 seam、open-in-app 的应用探测与启动路由，只读的插件清单投影以及显式产品事件上报。这些包都是产品包；浏览器传输位于 [`client/`](../client/README.zh.md)，组合应用是 [`apps/cli`](../../apps/cli/README.zh.md)，它启动 [`dsh-base` 组合包](../bundle/base/cordis.patch.yml) 来提供 `apps/web/` 下的 Web 应用。选择器后端可在共享 seam 后互相替换。
 
 ## 目录
 
@@ -22,7 +22,7 @@ kind: "package-group"
 <a id="packages"></a>
 ## 包
 
-十个包分别承担 Host 侧角色；各包的 README 拥有自己的约定与配置。
+各包分别承担 Host 角色；各包的 README 拥有自己的约定与配置。
 
 | 包 | 职责 | ctx 键 |
 |---|---|---|
@@ -34,8 +34,7 @@ kind: "package-group"
 | [`directory-picker-auto/`](directory-picker-auto/README.zh.md) | 在启动时挂载匹配后端的宿主自适应选择器 | 挂载一个后端 |
 | [`open-in-app/`](open-in-app/README.zh.md) | 在已安装应用中打开 workspace 目录的应用探测、图标与启动路由 | 消费 `ctx.webServer` |
 | [`plugin-inventory/`](plugin-inventory/README.zh.md) | 当前 Loader 条目的只读投影 | Remote `pluginInventory/list` |
-| [`control-protocol/`](control-protocol/README.zh.md) | Desktop 到单 Host 的严格身份协商与控制帧编解码 | 零 I/O 库 |
-| [`desktop-host/`](desktop-host/README.zh.md) | Person Profile、会话、租约、worker 与已认证 Unix 传输权威 | 仅 Main 的本地 SDK |
+| [`product-telemetry-otel/`](product-telemetry-otel/README.zh.md) | 通过 OTLP/HTTP 显式上报产品使用事件 | `ctx.productTelemetry` |
 
 -----
 
@@ -47,6 +46,7 @@ kind: "package-group"
 - [HTTP 服务器子系统](../../docs/subsystems/web-server.zh.md)——webserver 的路由、匹配顺序与配置。
 - [工作区子系统](../../docs/subsystems/workspace.zh.md)——目录选择器所喂给的工作区记录。
 - [Web 配置树启动与传输分层](../../.agents/notes/implemented/architecture/2026-07-24-web-config-tree-boot-and-transport-layering.zh.md)——Web 传输各层的所有权。
+- [产品埋点](../../docs/subsystems/product-telemetry.zh.md)——显式提交分析事件。
 
 <a id="dev-note"></a>
 ## 开发备注

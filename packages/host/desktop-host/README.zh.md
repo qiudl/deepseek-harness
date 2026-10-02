@@ -9,7 +9,7 @@ kind: "package-bundle"
 
 ## 概述
 
-本包提供 Desktop Main 使用的本机 DSH Host 权威。它让 issuer-qualified Person Profile 独立于 Slark 环境，串行化同一会话命令，围栏审批与环境上下文租约，监管相互隔离的 Profile worker，并提供 owner-only 的已认证 Unix socket。Host 控制组件不拥有 HTTP listener；产品组合会启动既有 `dsh web` worker，由 Host 自行兑换一次性启动 URL，并且只向可信 Main 返回已校验的 loopback origin 与 HttpOnly Cookie 名称／值。启动 token 和文件系统路径都不会进入 Renderer。
+本机 DSH Host 服务于 Desktop Main。它让 issuer-qualified Person Profile 独立于 Slark 环境，串行化同一会话命令，围栏审批与环境上下文租约，监管相互隔离的 Profile worker，并提供 owner-only 的已认证 Unix socket。Host 控制组件不拥有 HTTP listener；其组合会启动既有 `dsh web` worker，由 Host 自行兑换一次性启动 URL，并且只向可信 Main 返回已校验的 loopback origin 与 HttpOnly Cookie 名称／值。启动 token 和文件系统路径都不会进入 Renderer。启动认证重定向必须精确为 `/` 或 `./`；其他目标会在使用 Cookie 之前被拒绝。
 
 ## 目录
 
@@ -48,6 +48,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
+
+仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
 
 Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
 

@@ -16,6 +16,7 @@ const RESERVED_ENV = new Set([
   'DSH_PROFILE_MODEL_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
+  'DSH_SLARK_EMBEDDED',
 ])
 
 /** Classified failure from the authenticated worker model endpoint. */
@@ -63,7 +64,8 @@ async function exchangeBootstrap(
 ): Promise<{ readonly name: string; readonly value: string }> {
   const response = await fetch(authenticatedUrl, { redirect: 'manual', signal })
   await response.body?.cancel()
-  if (response.status !== 303 || response.headers.get('location') !== '/') throw new HostAuthorityError('unavailable')
+  const location = response.headers.get('location')
+  if (response.status !== 303 || (location !== '/' && location !== './')) throw new HostAuthorityError('unavailable')
   const cookies = response.headers.getSetCookie()
   if (cookies.length !== 1) throw new HostAuthorityError('unavailable')
   const cookie = cookies[0] as string
@@ -117,6 +119,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_MODEL_TOKEN: modelToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
         DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
+        DSH_SLARK_EMBEDDED: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -258,23 +261,7 @@ export class DshWebProfileWorkerFactory {
     signal: AbortSignal,
     stopped: () => boolean,
   ): Promise<HostRemoteSessionJson> {
-    if (stopped()) throw new HostAuthorityError('unavailable')
-    const response = await fetch(`${viewOrigin}/internal/desktop-remote-session`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(command),
-      signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
-    })
-    if (!response.ok) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
-    const body = await response.text()
-    if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')
-    let parsed: unknown
-    try { parsed = JSON.parse(body) } catch { throw new HostAuthorityError('unavailable') }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
-      || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'value')) {
-      throw new HostAuthorityError('unavailable')
-    }
-    return (parsed as { value: HostRemoteSessionJson }).value
+    return await this.remoteJson(viewOrigin, token, 'desktop-remote-session', command, signal, stopped) as HostRemoteSessionJson
   }
 
   private async remoteUiRead(
@@ -285,11 +272,22 @@ export class DshWebProfileWorkerFactory {
     signal: AbortSignal,
     stopped: () => boolean,
   ): Promise<unknown> {
+    return this.remoteJson(viewOrigin, token, 'desktop-remote-ui', { endpoint, payload }, signal, stopped)
+  }
+
+  private async remoteJson(
+    viewOrigin: string,
+    token: string,
+    route: 'desktop-remote-session' | 'desktop-remote-ui',
+    payload: unknown,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<unknown> {
     if (stopped()) throw new HostAuthorityError('unavailable')
-    const response = await fetch(`${viewOrigin}/internal/desktop-remote-ui`, {
+    const response = await fetch(`${viewOrigin}/internal/${route}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ endpoint, payload }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
     })
     if (!response.ok) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }

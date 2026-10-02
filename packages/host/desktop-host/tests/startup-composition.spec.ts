@@ -241,6 +241,11 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(serverOptions.generateModelText?.(profile.profileId, 'question', new AbortController().signal))
     .resolves.toEqual({ provider: 'deepseek', model: 'deepseek-chat', text: 'answer: question' })
   expect(generateText).toHaveBeenCalledWith('question', expect.any(AbortSignal))
+  await expect(serverOptions.remoteSession?.(profile.profileId, {
+    operation: 'session.list', command_id: randomUUID() as never,
+  }, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+  await expect(serverOptions.remoteUiRead?.(profile.profileId, 'boot/injections', { args: {} },
+    new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'mcp')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'skill')).toEqual([])
   expect(await serverOptions.extensions?.inventory(profile.profileId, 'plugin')).toEqual([])

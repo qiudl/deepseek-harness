@@ -1978,8 +1978,7 @@ export class UnixHostClient {
     }
     const request: ProfileExtensionsRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.extensions', params: {
-        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
-        runtime_generation: input.runtimeGeneration, command: input.command,
+        ...this.leaseCommandParams(input),
       },
     }
     const frame = await this.call(request, input.signal)
@@ -2004,8 +2003,7 @@ export class UnixHostClient {
     }
     const request: ProfileRemoteSessionRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_session', params: {
-        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
-        runtime_generation: input.runtimeGeneration, command: input.command,
+        ...this.leaseCommandParams(input),
       },
     }
     const frame = await this.call(request, input.signal)
@@ -2561,6 +2559,18 @@ export class UnixHostClient {
       authority_environment_id: input.authorityEnvironmentId as never,
       account_binding_handle: input.accountBindingHandle as never,
       authority_binding_version: input.authorityBindingVersion,
+    }
+  }
+
+  private leaseCommandParams<T>(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: T
+  }) {
+    return {
+      ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+      runtime_generation: input.runtimeGeneration, command: input.command,
     }
   }
 

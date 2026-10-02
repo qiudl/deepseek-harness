@@ -1,0 +1,17 @@
+- id: session-persistence-jsonl
+  config:
+    root: "{{persistenceRoot}}"
+    compression: none
+- id: storage-json
+  config:
+    root: "{{storageRoot}}"
+- id: settings
+  config:
+    path: "{{settingsPath}}"
+    dshHome: "{{profileRoot}}"
+    watch: false
+- id: credentials
+  config:
+    path: "{{credentialsPath}}"
+    dshHome: "{{profileRoot}}"
+    watch: false

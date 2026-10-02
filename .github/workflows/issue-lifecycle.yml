@@ -33,7 +33,9 @@ concurrency:
 jobs:
   lifecycle:
     name: Issue lifecycle
+    # REQ-20260929-0002: upstream Project automation does not own this fork.
     if: >-
+      github.repository != 'qiudl/deepseek-harness' &&
       (github.event_name != 'pull_request_review' || github.event.review.state == 'changes_requested') &&
       (github.event_name != 'pull_request' || github.event.action != 'edited' || github.event.changes.body != null)
     runs-on: ubuntu-latest

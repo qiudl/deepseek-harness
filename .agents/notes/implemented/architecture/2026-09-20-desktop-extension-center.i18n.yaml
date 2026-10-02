@@ -1,6 +1,19 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-20-desktop-extension-center.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-20-desktop-extension-center.md
-2026-09-20-desktop-extension-center.md: 7da29e298c8500b59a154930cc1f810c8965f18a
-2026-09-20-desktop-extension-center.zh.md: cb9870820e2cf26bf4f5876ccd25e6caa4cb9bea
+/agent-note-desktop-extension-center-belongs-to-dsh-navigation:
+  en: 050214753484a49b
+  zh: 4fc10f8d075c4cec
+/agent-note-desktop-extension-center-belongs-to-dsh-navigation/problem:
+  en: 41cacad17492a662
+  zh: d5fd9ead78ad6e5e
+/agent-note-desktop-extension-center-belongs-to-dsh-navigation/decision:
+  en: a263436cd4b4d5e5
+  zh: a2a9469f676eea36
+/agent-note-desktop-extension-center-belongs-to-dsh-navigation/alternatives-considered:
+  en: d5b60c07985dd993
+  zh: ecbad7e334c2da97
+/agent-note-desktop-extension-center-belongs-to-dsh-navigation/consequences:
+  en: f6a8a8bbc95542da
+  zh: f4772ba6efc42b04

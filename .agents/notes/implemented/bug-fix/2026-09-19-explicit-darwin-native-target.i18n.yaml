@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-19-explicit-darwin-native-target.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-19-explicit-darwin-native-target.md
-2026-09-19-explicit-darwin-native-target.md: 054f15cd288ca3019ec5859438ff6fdc9785d679
-2026-09-19-explicit-darwin-native-target.zh.md: 2730d7799d9af77c065ecf27ac50f55a0dd77cb6
+/agent-note-explicit-darwin-native-target:
+  en: 76f7986ac432ba76
+  zh: 8c8a273684b09a8a
+/agent-note-explicit-darwin-native-target/problem:
+  en: 728eaae9b13843ee
+  zh: c4f6ddf3fa75a93f
+/agent-note-explicit-darwin-native-target/decision:
+  en: 4f3a3329ebe3d4da
+  zh: 71139447785850aa
+/agent-note-explicit-darwin-native-target/alternatives-considered:
+  en: 9fc8ab28c04bf9bd
+  zh: 6531cf1f952f739c
+/agent-note-explicit-darwin-native-target/consequences:
+  en: b14ba71488ced82b
+  zh: c7fbcf0c8cc0a55d
+/agent-note-explicit-darwin-native-target/verification:
+  en: 72ab8a2c20798508
+  zh: 92a669ed0a4b61fe

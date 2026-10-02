@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This package owns the machine-local DSH Host authority used by Desktop Main. It keeps issuer-qualified Person Profiles outside Slark environments, serializes same-session commands, fences approvals and environment context leases, supervises isolated Profile workers, and exposes an owner-only authenticated Unix socket. The Host control component owns no HTTP listener. Its product composition starts the existing `dsh web` worker, exchanges the one-use launch URL itself, and returns only a verified loopback origin plus an HttpOnly cookie name/value to trusted Main; neither the launch token nor a filesystem path reaches Renderer.
+The machine-local DSH Host serves Desktop Main. It keeps issuer-qualified Person Profiles outside Slark environments, serializes same-session commands, fences approvals and environment context leases, supervises isolated Profile workers, and exposes an owner-only authenticated Unix socket. The Host control component owns no HTTP listener. Its composition starts the existing `dsh web` worker, exchanges the one-use launch URL itself, and returns only a verified loopback origin plus an HttpOnly cookie name/value to trusted Main; neither the launch token nor a filesystem path reaches Renderer. Bootstrap redirects must be exactly `/` or `./`; other redirect targets are rejected before cookie use.
 
 ## Table of Contents
 
@@ -46,6 +46,8 @@ Client cancellation retains a thread handle transferred after startup cancellati
 The connection starts with `host.inspect`: Desktop supplies a fresh challenge and verifies the installation Ed25519 signature, trusted installation id and key, peer UID, executable signature digest, Host process nonce, and runtime generation. Later frames repeat the client, Host, and process identities and carry a 30-second-bounded single-use JTI.
 
 ## Profile and execution authority
+
+Existing-only preflight accepts the exact current worker patch or the released `settings` owner layout, with every persistence, storage, credential, and settings path still bound to the inspected generation. It does not rewrite either layout during inspection. Worker startup selects the current `config-editor` owner layout after authorization; changed or redirected released patches remain rejected.
 
 Desktop model text requests require a token-verified connected Account grant owned by the requesting Host connection. The Host checks that grant before and after the worker call without changing the visible Profile view lease, forwards cancellation, and returns only a classified failure or bounded text. Each worker receives a random private token for its local endpoint; ordinary browser cookies cannot authorize that endpoint.
 

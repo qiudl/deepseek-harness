@@ -7,6 +7,8 @@ import type { MigrationOwnerStateBundle } from '../src/migration-export.ts'
 
 const fsFaults = vi.hoisted(() => ({
   changeLog: false,
+  changeFinalLog: false,
+  logChecks: 0,
   escapeProject: false,
 }))
 const zstdFaults = vi.hoisted(() => ({ tooLarge: false }))
@@ -15,6 +17,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
+    lstat: async (path: string, options: { bigint: true }) => {
+      const metadata = await actual.lstat(path, options)
+      if (fsFaults.changeFinalLog && path.endsWith('.jsonl') && ++fsFaults.logChecks === 2) {
+        return { ...metadata, mtimeNs: metadata.mtimeNs + 1n }
+      }
+      return metadata
+    },
     open: async (path: string, flags: number) => {
       const handle = await actual.open(path, flags)
       if (fsFaults.changeLog && path.endsWith('.jsonl')) {
@@ -86,6 +95,8 @@ async function sourceFixture(compressed = false) {
 
 afterEach(async () => {
   fsFaults.changeLog = false
+  fsFaults.changeFinalLog = false
+  fsFaults.logChecks = 0
   fsFaults.escapeProject = false
   zstdFaults.tooLarge = false
   vi.restoreAllMocks()
@@ -93,6 +104,19 @@ afterEach(async () => {
 })
 
 describe('migration export source filesystem faults', () => {
+  it('rejects a pathname replaced after the stable handle read', async () => {
+    const fixture = await sourceFixture()
+    fsFaults.changeFinalLog = true
+    await expect(fixture.source.listSnapshots()).rejects.toThrow(/source_changed/u)
+    expect(fsFaults.logChecks).toBe(2)
+  })
+
+  it('rejects a complete JSON header without its required log newline', async () => {
+    const fixture = await sourceFixture()
+    await writeFile(fixture.log, JSON.stringify({ type: 'session', version: SESSION_FORMAT_VERSION,
+      id: 'fault', createdAt: 1, delegationDepth: 0, isSeeded: false }), { mode: 0o600 })
+    await expect(fixture.source.listSnapshots()).rejects.toThrow('empty or header-less session log')
+  })
   it('rejects a log whose metadata changes during its bounded read', async () => {
     const fixture = await sourceFixture()
     fsFaults.changeLog = true

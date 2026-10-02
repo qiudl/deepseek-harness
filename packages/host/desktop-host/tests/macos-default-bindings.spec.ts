@@ -1,10 +1,10 @@
+import { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
-import type { ChildProcess } from 'node:child_process'
 
 interface ExecResult { readonly stdout: string; readonly stderr: string }
 
@@ -85,13 +85,13 @@ it('attests the default macOS listener and rejects a listener owned by another p
   await expect(attestMacOSListener(42, 'http://127.0.0.1:4123')).rejects.toBeInstanceOf(HostAuthorityError)
 })
 
-it('uses the default listener attestor while accepting an exact authenticated readiness line', async () => {
+it.each(['/', './'])('accepts authenticated readiness with the root redirect %s', async (location) => {
   vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
   native.execFile.mockResolvedValue({ stdout: 'p42\n', stderr: '' })
   const cookie = `dsh-auth-${'a'.repeat(43)}=v1.${'b'.repeat(8)}.${'c'.repeat(43)}; Max-Age=60; Path=/; Expires=Wed, 01 Jan 2031 00:00:00 GMT; HttpOnly; SameSite=Strict`
   const cancel = vi.fn(async () => undefined)
   vi.stubGlobal('fetch', vi.fn()
-    .mockResolvedValueOnce({ status: 303, headers: { get: () => '/', getSetCookie: () => [cookie] }, body: { cancel } })
+    .mockResolvedValueOnce({ status: 303, headers: { get: () => location, getSetCookie: () => [cookie] }, body: { cancel } })
     .mockResolvedValueOnce({ status: 401, body: { cancel } })
     .mockResolvedValueOnce({ status: 200, body: { cancel } }))
   const stdout = new PassThrough()
@@ -156,4 +156,26 @@ it('rejects executable reads that are shorter or longer than the attested size',
   } finally {
     closeSync(fd)
   }
+})
+
+it.each(['https://example.com/', '//example.com/', '/other', './?token=fixture', '../', null])('rejects bootstrap redirect %s before using its cookie', async (location) => {
+  const fetch = vi.fn().mockResolvedValue({
+    status: 303, headers: { get: () => location }, body: { cancel: async () => undefined },
+  })
+  vi.stubGlobal('fetch', fetch)
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  onTestFinished(() => { stdout.destroy(); stderr.destroy() })
+  const kill = vi.fn(() => true)
+  const child = Object.assign(new ChildProcess(), { pid: 42, stdout, stderr, kill })
+  const factory = new DshWebProfileWorkerFactory({
+    nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath, attestListener: async () => undefined,
+  })
+  const waitForOrigin: unknown = Reflect.get(factory, 'waitForOrigin')
+  if (typeof waitForOrigin !== 'function') throw new TypeError('Worker factory must define waitForOrigin')
+  const pending: unknown = Reflect.apply(waitForOrigin, factory, [child])
+  stdout.write('dsh web: http://127.0.0.1:4123/?token=fixture\n')
+  await expect(pending).rejects.toBeInstanceOf(HostAuthorityError)
+  expect(fetch).toHaveBeenCalledTimes(1)
+  expect(kill).toHaveBeenCalledWith('SIGKILL')
 })

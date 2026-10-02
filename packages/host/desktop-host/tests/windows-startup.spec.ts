@@ -221,6 +221,10 @@ describe('Windows Desktop Host startup', () => {
       expect(client.inspection.capabilities).toContain('profile.extensions')
       const local = await client.bootstrapLocalProfile({ keyHandle: 'windows-credential:local', unlockMaterial })
       const lease = await client.openLocalProfile({ profileSelector: local.profileSelector })
+      await expect(client.remoteSession({ ...lease, command: { operation: 'session.list', command_id: randomUUID() as never } }))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      await expect(client.remoteUiRead({ ...lease, endpoint: 'boot/injections', payload: { args: {} } }))
+        .rejects.toMatchObject({ code: 'unavailable' })
       patch = `${root}\\profiles\\${local.profileId}\\profiles\\web\\cordis.patch.yml`
       expect(await client.extensions({ ...lease, command: { action: 'inventory', kind: 'mcp' } }))
         .toMatchObject({ state: 'inventory', entries: [], mcp_remove: true, mcp_update: true })

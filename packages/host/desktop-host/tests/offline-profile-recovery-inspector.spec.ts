@@ -61,10 +61,40 @@ async function fixture(externalRuntime = false) {
     hostRoot, installationId, expectedUid: uid, currentRuntimeAppRoot: currentRuntime,
     targetFor: () => target, ownerStateApplicator,
   })
-  return { hostRoot, profileRoot, inspector, target, ownerStateApplicator, currentRuntime, legacyRuntime, web }
+  return { hostRoot, profileRoot, inspector, target, ownerStateApplicator, currentRuntime, legacyRuntime, web, persistence, ownerPaths }
+}
+
+async function releasedPatch(value: Awaited<ReturnType<typeof fixture>>): Promise<string> {
+  // Captured from the signed 0.1.6-alpha.2 baseline; only absolute paths are substituted.
+  let text = await readFile(new URL('./fixtures/released-owner-settings.patch.yml', import.meta.url), 'utf8')
+  const paths = {
+    profileRoot: value.profileRoot, persistenceRoot: value.persistence.root,
+    storageRoot: value.ownerPaths.storageRoot, settingsPath: value.ownerPaths.settingsPath,
+    credentialsPath: value.ownerPaths.credentialsPath,
+  }
+  for (const [name, path] of Object.entries(paths)) text = text.replaceAll(`"{{${name}}}"`, JSON.stringify(path))
+  return text
 }
 
 describe('offline Profile existing-only inspector', () => {
+  it('accepts the exact released settings-owner patch without modifying it during preflight', async () => {
+    const value = await fixture()
+    const path = join(value.profileRoot, 'cordis.patch.yml')
+    const patch = await releasedPatch(value)
+    await writeFile(path, patch, { mode: 0o600 })
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .resolves.toMatchObject({ state: 'recoverable', persistenceGeneration: 1 })
+    expect(await readFile(path, 'utf8')).toBe(patch)
+  })
+
+  it('rejects a released patch with redirected owner paths', async () => {
+    const value = await fixture()
+    const patch = (await releasedPatch(value)).replace(JSON.stringify(value.ownerPaths.settingsPath), JSON.stringify('/outside/settings.yaml'))
+    await writeFile(join(value.profileRoot, 'cordis.patch.yml'), patch, { mode: 0o600 })
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'profile_integrity_failed' })
+  })
+
   it('reports current compatible plugin inventory without modifying Profile files', async () => {
     const { profileRoot, inspector } = await fixture()
     const patchBefore = await readFile(join(profileRoot, 'cordis.patch.yml'))
