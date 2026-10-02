@@ -30,6 +30,8 @@ const fields = {
 }
 const rawBodySchema = z.strictObject(fields)
 const bodySchema = rawBodySchema.refine(validBody)
+const { model_snapshot: _model, ...inputFields } = fields
+const inputSchema = z.strictObject(inputFields).refine(validInput)
 const rawSnapshotSchema = z.strictObject({ ...fields,
   host_journal_commit: z.strictObject({ journal_id: id, commit_version: version(), content_digest: digest }),
 })
@@ -38,6 +40,8 @@ const snapshotSchema = rawSnapshotSchema.refine(value => validBody(value)
 
 /** Frozen Host input; the coordinator supplies actual prepared metadata and classified mentions. */
 export type CollaborationSourceBody = DeepReadonly<z.infer<typeof rawBodySchema>>
+/** Queued user content and resolved mentions; the Profile supplies model and journal metadata. */
+export type CollaborationSourceInput = Omit<CollaborationSourceBody, 'model_snapshot'>
 /** Source envelope with the journal entry's immutable first-commit identity. This is not an authorization proof. */
 export type CollaborationSourceSnapshot = DeepReadonly<z.infer<typeof rawSnapshotSchema>>
 type DeepReadonly<T> = T extends object ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> } : T
@@ -45,6 +49,9 @@ type Coordinates = Pick<CollaborationSourceBody, 'workspace_id' | 'session_id' |
 
 function validBody(value: CollaborationSourceBody): boolean {
   if (Object.hasOwn(value.model_snapshot, 'reasoning_effort') && value.model_snapshot.reasoning_effort === undefined) return false
+  return validInput(value) && Buffer.byteLength(JSON.stringify(value), 'utf8') <= 1024 * 1024
+}
+function validInput(value: CollaborationSourceInput): boolean {
   const seen = new Set<string>()
   const ordered = [...value.active_mentions].sort((a, b) => a.source_span.start - b.source_span.start)
   let previousEnd = 0
@@ -61,6 +68,16 @@ function validBody(value: CollaborationSourceBody): boolean {
     previousEnd = span.end
   }
   return Buffer.byteLength(JSON.stringify(value), 'utf8') <= 1024 * 1024
+}
+/**
+ * Detach queued input before Profile/model work. Reject caller-supplied model and commit fields.
+ * @param value - Source input at the queued Host boundary.
+ * @returns deeply frozen coordinates, text and classified mentions, without granting authority.
+ */
+export function parseCollaborationSourceInput(value: unknown): CollaborationSourceInput {
+  const result = inputSchema.safeParse(value)
+  if (!result.success) throw new Error('collaboration_source_journal_invalid')
+  return freeze(result.data)
 }
 function bodyOf(value: CollaborationSourceSnapshot): CollaborationSourceBody {
   const { host_journal_commit: _commit, ...body } = value

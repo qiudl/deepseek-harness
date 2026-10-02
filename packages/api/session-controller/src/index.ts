@@ -7,8 +7,10 @@ import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, openNativePath, revealNativePath } from '@deepseek-ai/dsh-native-command'
-import { foldRequestHeader, type SessionId } from '@deepseek-ai/dsh-session'
-import { realpathNormalize, type WorkspaceId } from '@deepseek-ai/dsh-workspace'
+import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
+import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
+import { openCollaborationSourceJournal, parseCollaborationSourceInput } from './collaboration-source-journal.ts'
+import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot } from './collaboration-source-journal.ts'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -68,7 +70,7 @@ export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
 export { openCollaborationSourceJournal } from './collaboration-source-journal.ts'
 export type {
-  CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal,
+  CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal, CollaborationSourceInput,
 } from './collaboration-source-journal.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -123,6 +125,9 @@ export class SessionController extends TypertRemoteService {
   private readonly revealPath: (path: string, signal: AbortSignal) => Promise<void>
   private readonly canOpenPath: () => boolean
   private readonly promotions = new Set<Promise<void>>()
+  private readonly collaborationLifetime = new AbortController()
+  private collaborationCaptureTail: Promise<void> = Promise.resolve()
+  private collaborationJournal?: Promise<CollaborationSourceJournal>
 
   /**
    * @param ctx - Host context containing the Session capability assembly.
@@ -134,6 +139,13 @@ export class SessionController extends TypertRemoteService {
     // Host identity reads use the owning Profile's registry, never a caller's Cordis scope.
     this.inspectWorkspaceModelSelection = this.inspectWorkspaceModelSelection.bind(this)
     this.prepareWorkspaceModelSnapshot = this.prepareWorkspaceModelSnapshot.bind(this)
+    this.captureCollaborationSource = this.captureCollaborationSource.bind(this)
+    ctx.effect(() => async () => {
+      this.collaborationLifetime.abort(new DOMException('Profile source capture disposed', 'AbortError'))
+      await this.collaborationCaptureTail
+      const journal = await this.collaborationJournal?.catch(() => undefined)
+      await journal?.close()
+    }, 'session-controller.collaboration-sources')
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
     this.commands = new SessionCommandController(ctx, this.agents, process.cwd())
@@ -326,6 +338,85 @@ export class SessionController extends TypertRemoteService {
     }
     signal.throwIfAborted()
     return Object.freeze({ workspaceId, sessionId, prepared })
+  }
+
+  /**
+   * Capture user content under this Profile's registry and actual prepared model.
+   * Persist before returning the process-local call. Duplicate/restarted input returns
+   * only its original snapshot, never a new executable handle or a model request.
+   * This Host-only queued operation has no Remote endpoint and grants no cloud authority.
+   * @param input - exact Source coordinates, raw text and trusted classified mentions; no model or commit fields.
+   * @param signal - caller cancellation, combined with the owning Profile lifetime through dispatch.
+   * @returns first durable capture with its one-shot call, or original non-executable recovery.
+   * @throws on invalid input, unavailable journal, changed ownership/selection, conflict or cancellation.
+   */
+  async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise<
+    | Readonly<{ kind: 'captured'; snapshot: CollaborationSourceSnapshot; prepared: PreparedLlmSnapshotCall }>
+    | Readonly<{ kind: 'recovered'; snapshot: CollaborationSourceSnapshot }>
+  > {
+    const captured = parseCollaborationSourceInput(input)
+    const ownedSignal = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    ownedSignal.throwIfAborted()
+    // Pending reads/preparation can be abandoned; an accepted durable write must drain.
+    const waitForRead = async <T>(read: Promise<T>): Promise<T> => {
+      let onAbort!: () => void
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        onAbort = () => { reject(ownedSignal.reason instanceof Error ? ownedSignal.reason : new DOMException('Source capture cancelled', 'AbortError')) }
+        if (ownedSignal.aborted) onAbort()
+        else ownedSignal.addEventListener('abort', onAbort, { once: true })
+      })
+      try { return await Promise.race([read, cancelled]) }
+      finally { ownedSignal.removeEventListener('abort', onAbort) }
+    }
+    const sessionId = SessionId(captured.session_id), workspaceId = WorkspaceId(captured.workspace_id)
+    const operation = this.collaborationCaptureTail.then(async () => {
+      ownedSignal.throwIfAborted()
+      const workspace = this.ctx.workspaceRegistry.get(workspaceId)
+      const session = this.ctx.sessions.get(sessionId)
+      const selected = await waitForRead(this.inspectWorkspaceModelSelection(sessionId, workspaceId, ownedSignal))
+      const inspectCurrent = async () => {
+        const current = await waitForRead(this.inspectWorkspaceModelSelection(sessionId, workspaceId, ownedSignal))
+        if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== session) {
+          throw new Error('collaboration_session_workspace_mismatch')
+        }
+        return current
+      }
+      if (this.collaborationJournal === undefined) {
+        const facility = this.ctx.get('storageDomain')
+        if (facility === undefined) throw new Error('collaboration_source_journal_unavailable')
+        this.collaborationJournal = openCollaborationSourceJournal(facility)
+      }
+      const journal = await this.collaborationJournal
+      ownedSignal.throwIfAborted()
+      const previous = journal.read(captured)
+      if (previous !== undefined) {
+        const snapshot = await journal.capture({ ...captured, model_snapshot: previous.model_snapshot }, ownedSignal)
+        await inspectCurrent()
+        ownedSignal.throwIfAborted()
+        return Object.freeze({ kind: 'recovered' as const, snapshot })
+      }
+      const prepared = await waitForRead(this.prepareWorkspaceModelSnapshot(sessionId, workspaceId, ownedSignal))
+      const model = prepared.prepared.snapshot
+      if (model.provider !== selected.selection.provider || model.model !== selected.selection.model
+        || (selected.selection.reasoningEffort !== undefined && model.reasoning_effort !== selected.selection.reasoningEffort)) {
+        throw new Error('collaboration_model_selection_changed')
+      }
+      const checkSelection = async () => {
+        const current = await inspectCurrent()
+        // Compare the Session intent, not adapter-materialized reasoning defaults.
+        if (current.selection.provider !== selected.selection.provider || current.selection.model !== selected.selection.model
+          || current.selection.reasoningEffort !== selected.selection.reasoningEffort) {
+          throw new Error('collaboration_model_selection_changed')
+        }
+      }
+      await checkSelection()
+      const snapshot = await journal.capture({ ...captured, model_snapshot: prepared.prepared.snapshot }, ownedSignal)
+      await checkSelection()
+      ownedSignal.throwIfAborted()
+      return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared })
+    })
+    this.collaborationCaptureTail = operation.then(() => {}, () => {})
+    return operation
   }
 
   /**
