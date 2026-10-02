@@ -215,12 +215,14 @@ describe('web e2e: plan review takeover round trip', () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-plan-review-panel-return'))
     const agent = scaffold.ctx.agents.get(reviewedSession)
     if (agent === undefined) throw new Error('The reviewed Session has no active agent')
-    // The Plugins panel replaces the Conversation and its right Sidebar. The
-    // review arrives while neither is mounted; returning mounts both in one
-    // commit, and the review's automatic open runs before the Sidebar's own
-    // effects. A crash there retires the opener for the rest of the page.
+    // Slark keeps the Conversation mounted but hidden behind global panels.
+    // A review arriving off-screen must open when returning to that same view.
+    const composer = page.locator('[data-composer-input]')
+    const residentComposer = await composer.elementHandle()
+    if (residentComposer === null) throw new Error('Conversation composer is unavailable')
     await page.getByRole('button', { name: 'Plugins', exact: true }).click()
-    await expect.poll(() => page.locator('[data-composer-input]').count()).toBe(0)
+    await expect.poll(() => composer.count()).toBe(1)
+    await expect.poll(() => composer.isVisible()).toBe(false)
     const crashes: string[] = []
     const onConsole = (message: ConsoleMessage): void => {
       if (message.type() === 'error' && /slot entry crashed/i.test(message.text())) crashes.push(message.text())
@@ -239,6 +241,8 @@ describe('web e2e: plan review takeover round trip', () => {
       const row = page.locator('[role="treeitem"]').filter({ has: page.locator('[data-state="warning"]') }).first()
       await row.waitFor({ timeout: 10_000 })
       await row.click()
+      await page.locator('[data-main-panel="conversation"]').waitFor({ state: 'visible', timeout: 10_000 })
+      expect(await composer.evaluate((node, resident) => node === resident, residentComposer)).toBe(true)
       const card = page.locator('[data-plan-review-key]')
       await card.waitFor({ timeout: 10_000 })
       const preview = page.locator('[data-plan-preview^="dsh-resource://plan-review/"]')
