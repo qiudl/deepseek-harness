@@ -128,3 +128,5 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 未知包操作回执可通过 `plugin_complete` 返回闭合的 `action`、`package_name` 和可选 `spec` 字段。动作限定为 install/update/remove；安装和更新要求有界来源，卸载省略来源。该能力与恢复能力及成功解决关联字段互斥。继续执行使用独立的 `completed_by` 和 `completes_operation` UUID，拒绝指向自身及与对应恢复关联字段混用。回执规范顺序在 `plugin_restore` 后加入 `plugin_complete`，随后为 `restored_by`、`restores_operation`、`completed_by` 和 `completes_operation`。意图阶段、原依赖摘要和无关状态摘要保留在 Host 私有记录中。
 
 `parseHostRemoteSessionJson` 向私有 worker 消费者提供现有 Host JSON 限制。它复制已解析数据，拒绝非有限数字、不安全键、过深或过多节点及超限字符串；不授予操作权限。
+
+`profile.collaboration_analysis` 只携带绑定 Account 的准备/派发命令及不可执行的准备描述或原始 JSON 输出。它不接受调用方归属摘要，将编码后的 Source 输入和解码后的输出各限制在32 KiB，验证规范 base64url、UTF-8 和对象 JSON，控制帧限制不变。解析不建立 Account、Source、模型或任务权限。

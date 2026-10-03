@@ -132,6 +132,23 @@ export class ProfileWorkerSupervisor {
     return result
   }
   /**
+   * Execute private analysis using the original Account worker generation.
+   * @param profileId - Host-authorized Profile identity.
+   * @param command - Bounded prepare/dispatch JSON with Host-derived binding digest.
+   * @param signal - Current connection cancellation.
+   * @returns original worker result; replacement, closure or cancellation rejects.
+   */
+  async collaborationAnalysis(profileId: string, command: HostRemoteSessionJson, signal: AbortSignal): Promise<HostRemoteSessionJson> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.collaborationAnalysis) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.collaborationAnalysis(command, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    return result
+  }
+  /**
    * Read original Source JSON from the current Account Profile worker.
    * @param profileId - Host-authorized Profile.
    * @param target - Exact journal identity.

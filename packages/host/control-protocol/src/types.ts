@@ -584,6 +584,26 @@ export interface ProfileSourceSnapshotResult extends Omit<ProfileWorkspaceModelS
   readonly method: 'profile.source_snapshot'
   readonly result: Readonly<{ descriptor:HostCollaborationSourceDescriptor;offset:number;total_bytes:number;chunk_base64url:string }>
 }
+/** Parent commands retain no caller-selected model or Account binding digest. */
+export type HostCollaborationAnalysisCommand =
+  | Readonly<{ action: 'prepare'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
+/** Original analysis JSON uses base64url to stay within the existing frame limit after escaping. */
+export type HostCollaborationAnalysisResult =
+  | Readonly<{ kind: 'prepared'; preparation: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'output'; json_base64url: string }>
+/** Main-only analysis in this connection's token-verified Account Profile. */
+export interface ProfileCollaborationAnalysisRequest extends Omit<ProfileSourceSnapshotRequest, 'method' | 'params'> {
+  readonly method: 'profile.collaboration_analysis'
+  readonly params: Omit<ProfileSourceSnapshotRequest['params'], 'offset' | keyof HostCollaborationSourceTarget> & {
+    readonly command: HostCollaborationAnalysisCommand
+  }
+}
+/** Durable preparation or saved original output; neither grants task admission. */
+export interface ProfileCollaborationAnalysisResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.collaboration_analysis'
+  readonly result: HostCollaborationAnalysisResult
+}
 /** Server nonce bound to one Source and current registered Host epoch. */
 export interface HostSourceAuthorityChallenge extends HostWorkspaceAuthorityChallenge, HostCollaborationSourceDescriptor {
   readonly host_epoch: string
@@ -1377,6 +1397,8 @@ export type HostControlFrame =
   | ProfileWorkspaceAuthorityResult
   | ProfileSourceAuthorityRequest
   | ProfileSourceAuthorityResult
+  | ProfileCollaborationAnalysisRequest
+  | ProfileCollaborationAnalysisResult
   | ProfileSourceSnapshotRequest
   | ProfileSourceSnapshotResult
   | ProfileModelTextRequest

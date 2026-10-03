@@ -66,6 +66,8 @@ async function fixture() {
     descriptor:await inspect(profileId,target,signal),snapshot_json:JSON.stringify({ ...target,original_message:'@Guide · 项目😀\r\n',active_mentions:[],
       model_snapshot:{ provider:'p',model:'m',configuration_generation:'1',adapter_fingerprint:'b'.repeat(64) },host_journal_commit:{ journal_id:'j',commit_version:'1',content_digest:'c'.repeat(64) } }),
   })
+  let analysis = async (_profileId: string, command: Record<string, unknown>, _signal: AbortSignal): Promise<unknown> =>
+    ({ jsonText: JSON.stringify({ binding: command.binding_key }) })
   const authority = new HostControlAuthority({
     identity,
     host,
@@ -73,6 +75,7 @@ async function fixture() {
     now: clock.now,
     inspectCollaborationSource: (profileId, target, signal) => inspect(profileId, target, signal),
     readCollaborationSourceSnapshot:(profileId,target,signal)=>read(profileId,target,signal),
+    collaborationAnalysis: (profileId, command, signal) => analysis(profileId, command as Record<string, unknown>, signal),
   })
   const ownerId = randomUUID(),
     lifetime = new AbortController()
@@ -140,6 +143,7 @@ async function fixture() {
       inspect = callback
     },
     setRead:(callback:typeof read)=>{read=callback},
+    setAnalysis:(callback:typeof analysis)=>{analysis=callback},
   }
 }
 const snapshotInput = (f: Awaited<ReturnType<typeof fixture>>) => ({
@@ -331,4 +335,43 @@ it('refuses a Source digest or coordinate mismatch from the private worker', asy
     f.setInspect(async (_profile, target) => ({ ...target, snapshot_digest: 'a'.repeat(64), ...change }))
     await expect(f.client.attestSourceAuthority(f.input)).rejects.toThrow()
   }
+})
+
+it('authorizes analysis under the original connection Account and derives its private binding in Host', async () => {
+  const f = await fixture()
+  const input = { ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: {} } }
+  await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
+  await f.grant()
+  const a = await f.client.collaborationAnalysis(input)
+  const b = await f.client.collaborationAnalysis(input)
+  expect(a).toEqual(b)
+  expect(a.kind).toBe('output')
+  if (a.kind === 'output') expect((JSON.parse(Buffer.from(a.json_base64url, 'base64url').toString()) as { binding: unknown }).binding).toMatch(/^[a-f0-9]{64}$/u)
+  await expect(f.client.collaborationAnalysis({ ...input, subject: randomUUID() })).rejects.toThrow()
+  await expect(f.client.collaborationAnalysis({ ...input, authorityBindingVersion: 2 })).rejects.toThrow()
+})
+it('refuses revoked or changed Profile analysis replies and propagates transport cancellation', async () => {
+  const f = await fixture()
+  await f.grant()
+  f.setAnalysis(async () => { f.host.revokeOwner(f.ownerId); return { jsonText: '{}' } })
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: {} } })).rejects.toThrow()
+  await f.grant()
+  const controller = new AbortController()
+  f.setAnalysis(async (_profile, _command, signal) => {
+    controller.abort()
+    f.client.close()
+    expect(signal.aborted).toBe(true)
+    signal.throwIfAborted()
+    return { jsonText: '{}' }
+  })
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: {} }, signal: controller.signal })).rejects.toThrow()
+})
+it('keeps large escaped original output below the Host frame byte budget', async () => {
+  const f = await fixture()
+  await f.grant()
+  const text = JSON.stringify({ text: '\u0000'.repeat(5459) })
+  f.setAnalysis(async () => ({ jsonText: text }))
+  const result = await f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: {} } })
+  expect(result.kind).toBe('output')
+  if (result.kind === 'output') expect(Buffer.from(result.json_base64url, 'base64url').toString('utf8')).toBe(text)
 })

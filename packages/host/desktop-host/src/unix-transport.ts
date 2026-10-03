@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, verify, type KeyObject } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, verify, type KeyObject } from 'node:crypto'
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import type {
@@ -34,6 +34,7 @@ import type {
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
+  HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult, ProfileCollaborationAnalysisRequest,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
   ProfileSourceAuthorityRequest,
   ProfileSourceSnapshotRequest, HostCollaborationSourceSnapshot,
@@ -66,6 +67,7 @@ import {
   encodeHostInspectSignaturePayload,
   encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
   encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
+  parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult,
   parseHostCollaborationSourceSnapshot, parseHostCollaborationSourceSnapshotChunk, parseHostCollaborationSourceTarget,
   encodeHostCollaborationRegistrationSignaturePayload,
   parseHostCollaborationRegistrationChallenge,
@@ -144,6 +146,9 @@ export interface UnixHostServerOptions {
   readonly readCollaborationSourceSnapshot?: (
     profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal,
   ) => Promise<HostCollaborationSourceSnapshot>
+  /** Private analysis command in the currently authorized Account worker. */
+  readonly collaborationAnalysis?:
+  (profileId: string, command: HostRemoteSessionJson, signal: AbortSignal) => Promise<HostRemoteSessionJson>
   /** Call the Profile worker without exposing its private model token to Desktop. */
   readonly generateModelText?: (profileId: string, text: string, signal: AbortSignal) => Promise<{
     readonly provider: string
@@ -303,7 +308,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1337,6 +1342,28 @@ export class HostControlAuthority {
             method: frame.method,
             result: { ...unsigned, signature },
           })
+        } else if (frame.method === 'profile.collaboration_analysis') {
+          const execute = this.options.collaborationAnalysis
+          if (!execute) throw new HostAuthorityError('upgrade_required')
+          const account = { authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle, authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId, issuer: frame.params.account_issuer, subject: frame.params.account_subject }
+          const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
+          const profileId = authorize()
+          const identity = this.options.identity
+          const binding = createHash('sha256').update(JSON.stringify(['dsh-analysis-binding-v1', identity.installationId,
+            identity.installationPublicKey, identity.hostInstanceId, identity.processNonce, profileId, account])).digest('hex')
+          const command = frame.params.command
+          const value = await execute(profileId, { ...command, binding_key: binding }, context.signal)
+          if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          let result: HostCollaborationAnalysisResult
+          if (command.action === 'prepare') result = parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: value })
+          else {
+            if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).join(',') !== 'jsonText' || !('jsonText' in value) || typeof value.jsonText !== 'string')
+              throw new HostAuthorityError('unavailable')
+            result = parseHostCollaborationAnalysisResult({ kind: 'output', json_base64url: Buffer.from(value.jsonText, 'utf8').toString('base64url') })
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.source_snapshot') {
           const read = this.options.readCollaborationSourceSnapshot
           if (!read) throw new HostAuthorityError('upgrade_required')
@@ -1563,6 +1590,7 @@ export class HostControlAuthority {
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.inspectCollaborationSource ? ['profile.source_authority'] : []),
           ...(this.options.readCollaborationSourceSnapshot ? ['profile.source_snapshot'] : []),
+          ...(this.options.collaborationAnalysis ? ['profile.collaboration_analysis'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
@@ -2329,6 +2357,43 @@ export class UnixHostClient {
   }
 
   /**
+   * Prepare or dispatch analysis through this connection's verified Account and original Host peer.
+   * @param input - Account identity and bounded command; Host derives the private binding digest.
+   * @returns non-executable preparation or saved original JSON; replaced, revoked or cancelled calls reject.
+   */
+  async collaborationAnalysis(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly command: HostCollaborationAnalysisCommand
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationAnalysisResult> {
+    const active = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(35000)])
+    active.throwIfAborted()
+    const command = parseHostCollaborationAnalysisCommand(input.command)
+    if (!this.inspection.capabilities.includes('profile.collaboration_analysis' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    const peer = JSON.stringify([
+      this.inspection.installation_id, this.inspection.installation_public_key,
+      this.inspection.host_instance_id, this.inspection.process_nonce,
+    ])
+    const request: ProfileCollaborationAnalysisRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_analysis', params: {
+        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
+        account_issuer: input.issuer, account_subject: input.subject, command,
+      } }
+    const frame = await this.call(request, active)
+    active.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected() ||
+      peer !== JSON.stringify([this.inspection.installation_id, this.inspection.installation_public_key, this.inspection.host_instance_id, this.inspection.process_nonce])) throw new HostAuthorityError('unavailable')
+    const result = parseHostCollaborationAnalysisResult(frame.result)
+    if ((command.action === 'prepare') !== (result.kind === 'prepared')) throw new HostAuthorityError('unavailable')
+    return result
+  }
+
+  /**
    * Read original journal content through bounded chunks under this verified Account and current peer.
    * @param input - Main-held binding and Source coordinates; no content or model overrides.
    * @returns Original JSON capsule after consistent descriptor, length, coordinates, UTF-8 and connection checks.
@@ -3089,7 +3154,8 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
-      | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileSourceSnapshotRequest
+      | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest
+      | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
       | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest

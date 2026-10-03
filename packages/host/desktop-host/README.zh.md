@@ -184,4 +184,6 @@ MCP 操作先以排他创建方式持久保存私有备份，再记录检查点�
 
 成功继续执行使用 `completes_operation` 和 `completed_by`，与恢复关联字段区分。原操作及相关中断继续操作保留未知历史结果，仅由关联的成功回执解除这一组操作的写入阻塞。继续执行要求有效的 Profile 授权租约和完整意图证据。不猜测缺少意图的旧记录，也不保证修复无法建立租约的 Profile、损坏清单、不可用包来源或插件外部副作用。
 
-Web worker 工厂另生成随机 `DSH_PROFILE_ANALYSIS_TOKEN`，禁止调用方环境覆盖，并将其保留在视图租约之外。仅供父 Host 使用的 `collaborationAnalysis` 句柄向私有 worker 发送有界 prepare/dispatch JSON，拒绝已停止的 worker 和重定向，并校验完整有界 UTF-8 响应。父 Host 必须派生原 Account/Host 归属摘要并保持权限有效；句柄本身不授予云端资格，也不安装 Host-control 或聊天入口。
+Web worker 工厂另生成随机 `DSH_PROFILE_ANALYSIS_TOKEN`，禁止调用方环境覆盖，并将其保留在视图租约之外。仅供父 Host 使用的 `collaborationAnalysis` 句柄向私有 worker 发送有界 prepare/dispatch JSON，拒绝已停止的 worker 和重定向，并校验完整有界 UTF-8 响应。父 Host 必须派生原 Account/Host 归属摘要并保持权限有效；句柄本身不授予云端资格，也不安装聊天入口。
+
+Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。取消关闭原操作；该方法不校验任务，也不受理 Agent 执行。

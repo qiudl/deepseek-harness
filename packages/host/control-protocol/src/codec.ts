@@ -38,6 +38,8 @@ import type {
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
+  HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult,
+  ProfileCollaborationAnalysisRequest, ProfileCollaborationAnalysisResult,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
   ProfileSourceAuthorityRequest, ProfileSourceAuthorityResult,
   HostCollaborationSourceSnapshot, ProfileSourceSnapshotRequest, ProfileSourceSnapshotResult,
@@ -984,13 +986,61 @@ export function encodeHostSourceAuthorityPayload(value: HostSourceAuthorityAsser
     r.installation_id, r.installation_public_key, r.host_instance_id, r.process_nonce,
   ])}`, 'utf8')
 }
+/**
+ * Parse detached Parent commands without granting Source or Account authority.
+ * @param value - Exact prepare/dispatch command; encoded input is limited to 32 KiB.
+ * @returns validated command; invalid keys, identifiers or JSON budgets throw.
+ */
+export function parseHostCollaborationAnalysisCommand(value: unknown): HostCollaborationAnalysisCommand {
+  const row = registrationRecord(value)
+  if (row.action === 'prepare') {
+    exactKeys(row, ['action', 'input'])
+    const input = remoteSessionJson(row.input)
+    if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 32768) reject()
+    return { action: 'prepare', input }
+  }
+  if (row.action === 'dispatch') {
+    exactKeys(row, ['action', 'attempt_request_id', 'grant'])
+    return { action: 'dispatch', attempt_request_id: uuid(row.attempt_request_id) as HostControlRequestId, grant: remoteSessionJson(row.grant) }
+  }
+  return reject()
+}
+/**
+ * Validate durable preparation metadata or a complete original JSON output.
+ * @param value - Private Profile result; decoded output is bounded to 32 KiB and valid UTF-8.
+ * @returns detached preparation or canonical base64url output; malformed data throws.
+ */
+export function parseHostCollaborationAnalysisResult(value: unknown): HostCollaborationAnalysisResult {
+  const row = registrationRecord(value)
+  if (row.kind === 'prepared') {
+    exactKeys(row, ['kind', 'preparation'])
+    const preparation = registrationRecord(row.preparation)
+    const descriptor = parseHostCollaborationSourceDescriptor(preparation.descriptor)
+    if (preparation.kind === 'recovered') {
+      exactKeys(preparation, ['kind', 'descriptor'])
+      return { kind: 'prepared', preparation: remoteSessionJson({ kind: 'recovered', descriptor }) }
+    }
+    exactKeys(preparation, ['kind', 'descriptor', 'attempt_request_id', 'input_manifest_digest', 'source_digest'])
+    if (preparation.kind !== 'prepared' || preparation.source_digest !== descriptor.snapshot_digest) reject()
+    return { kind: 'prepared', preparation: remoteSessionJson({ kind: 'prepared', descriptor,
+      attempt_request_id: uuid(preparation.attempt_request_id),
+      input_manifest_digest: digest(preparation.input_manifest_digest), source_digest: descriptor.snapshot_digest }) }
+  }
+  exactKeys(row, ['kind', 'json_base64url'])
+  if (row.kind !== 'output' || typeof row.json_base64url !== 'string' || row.json_base64url.length > 43691 || !/^[A-Za-z0-9_-]+$/u.test(row.json_base64url)) reject()
+  const bytes = Buffer.from(row.json_base64url, 'base64url')
+  if (bytes.byteLength > 32768 || bytes.toString('base64url') !== row.json_base64url) reject()
+  try { registrationRecord(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))) } catch { reject() }
+  return { kind: 'output', json_base64url: row.json_base64url }
+}
+
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
-  | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileSourceSnapshotRequest
+  | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
   | ProfileModelTextRequest
   | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileRemoteSessionRequest
@@ -1269,6 +1319,16 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...parseHostWorkspaceModelSelectionTarget({ workspace_id: params.workspace_id, session_id: params.session_id }),
     } }
   }
+  if (frame.method === 'profile.collaboration_analysis') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      account_issuer: accountIssuer(params.account_issuer), account_subject: uuid(params.account_subject),
+      command: parseHostCollaborationAnalysisCommand(params.command),
+    } } satisfies ProfileCollaborationAnalysisRequest
+  }
   if (frame.method === 'profile.source_snapshot') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'offset', ...SOURCE_TARGET_KEYS])
     if (!Number.isSafeInteger(params.offset) || (params.offset as number) < 0 || (params.offset as number) >= 1024 * 1024) reject()
@@ -1359,7 +1419,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
   | ProfileWorkspaceAuthorityResult | ProfileSourceAuthorityResult
-  | ProfileSourceSnapshotResult
+  | ProfileCollaborationAnalysisResult | ProfileSourceSnapshotResult
   | ProfileModelTextResult
   | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileRemoteSessionResult
@@ -1590,6 +1650,9 @@ function decodeProfileResult(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.source_authority') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostSourceAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.collaboration_analysis') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationAnalysisResult(result) }
   }
   if (frame.method === 'profile.source_snapshot') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationSourceSnapshotChunk(result) }
