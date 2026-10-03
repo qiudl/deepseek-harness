@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -117,14 +118,14 @@ describe('profile worker child process', () => {
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
     }) as unknown as {
       remoteUiAssetRead(origin: string, cookie: { name: string; value: string }, token: string,
-        payload: unknown, signal: AbortSignal, stopped: () => boolean,
+        endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
         cache: { current?: { url: string; bytes: Buffer } }): Promise<unknown>
     }
     const signal = new AbortController().signal
     const read = (payload: unknown, stopped: () => boolean = () => false,
       cache: { current?: { url: string; bytes: Buffer } } = {}, selectedSignal = signal) =>
       factory.remoteUiAssetRead(origin, { name: 'cookie', value: 'private' }, 'token',
-        payload, selectedSignal, stopped, cache)
+        'asset/read', payload, selectedSignal, stopped, cache)
     for (const payload of [null, {}, { args: null }, { args: { url: 'http://[', offset: 0 } }]) {
       await expect(read(payload)).rejects.toMatchObject({ code: 'invalid_input' })
     }
@@ -694,6 +695,16 @@ describe('dsh web Profile worker', () => {
     expect(events).toEqual([{ cursor: 1 }])
     await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 0 } },
       new AbortController().signal)).resolves.toEqual({ bytes: Buffer.from('registered();').toString('base64url'), total: 13 })
+    await expect(worker.remoteUiRead?.('asset/describe', { args: { url: '/plugins/??a/client.js&rev=1' } },
+      new AbortController().signal)).resolves.toEqual({
+      sha256: createHash('sha256').update('registered();').digest('hex'), total: 13,
+    })
+    await expect(worker.remoteUiRead?.('asset/describe', { args: { url: '/plugins/??a/client.js&rev=1', offset: 0 } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(worker.remoteUiRead?.('asset/describe', { args: { url: 'https://evil.test/plugins/a.js' } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(worker.remoteUiRead?.('asset/describe', { args: { url: '/plugins/??b/client.js&rev=1' } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
     await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 1 } },
       new AbortController().signal)).resolves.toEqual({ bytes: Buffer.from('egistered();').toString('base64url'), total: 13 })
     await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??b/client.js&rev=1', offset: 0 } },

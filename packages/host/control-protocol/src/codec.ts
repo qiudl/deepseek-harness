@@ -764,7 +764,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.remote_ui_read') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
-    if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read'
+    if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'settings/describe'
       && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
@@ -783,11 +783,12 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       if (!Array.isArray(credentialArgs.refs) || credentialArgs.refs.length > 64
         || !credentialArgs.refs.every((ref: unknown) => typeof ref === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(ref))) reject()
     }
-    if (params.endpoint === 'asset/read') {
+    if (params.endpoint === 'asset/read' || params.endpoint === 'asset/describe') {
       const assetArgs = args as Record<string, unknown>
-      exactKeys(assetArgs, ['url', 'offset'])
+      exactKeys(assetArgs, params.endpoint === 'asset/read' ? ['url', 'offset'] : ['url'])
       if (typeof assetArgs.url !== 'string' || assetArgs.url.length > 2048 || assetArgs.url.length === 0
-        || !Number.isSafeInteger(assetArgs.offset) || (assetArgs.offset as number) < 0) reject()
+        || (params.endpoint === 'asset/read' &&
+          (!Number.isSafeInteger(assetArgs.offset) || (assetArgs.offset as number) < 0))) reject()
     }
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,

@@ -261,8 +261,13 @@ describe('Unix transport authority failures', () => {
     const lease = await client.openLocalProfile({ profileSelector: selector })
     await expect(client.remoteUiRead({ ...lease, endpoint: input.endpoint, payload: input.payload }))
       .resolves.toEqual({ sessions: [] })
-    expect(vi.mocked(host).authorizeExtensionView.mock.calls).toHaveLength(2)
+    await expect(client.remoteUiRead({ ...lease, endpoint: 'asset/describe',
+      payload: { args: { url: '/plugins/??a/client.js&rev=1' } } }))
+      .resolves.toEqual({ sessions: [] })
+    expect(vi.mocked(host).authorizeExtensionView.mock.calls).toHaveLength(4)
     expect(remoteUiRead).toHaveBeenCalledWith(profileId, input.endpoint, input.payload, expect.any(AbortSignal))
+    expect(remoteUiRead).toHaveBeenCalledWith(profileId, 'asset/describe',
+      { args: { url: '/plugins/??a/client.js&rev=1' } }, expect.any(AbortSignal))
     client.close()
   })
 

@@ -122,6 +122,9 @@ describe('Profile remote UI read wire commands', () => {
     expect(() => decode(readFrame('boot/injections', { args: { profile: 'other' } }))).toThrow()
     const asset = readFrame('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 0 } })
     expect(encodeHostControlFrame(decode(asset))).toBe(`${JSON.stringify(asset)}\n`)
+    const described = readFrame('asset/describe', { args: { url: '/plugins/??a/client.js&rev=1' } })
+    expect(encodeHostControlFrame(decode(described))).toBe(`${JSON.stringify(described)}\n`)
+    expect(() => decode(readFrame('asset/describe', { args: { url: '/plugins/a/client.js', offset: 0 } }))).toThrow()
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: -1 } }))).toThrow()
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: 0, path: '/' } }))).toThrow()
     for (const endpoint of ['session/list', 'session/page', 'session/modelCatalog',
