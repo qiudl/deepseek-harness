@@ -22,7 +22,8 @@
     "src/model-selection-projection.ts",
     "src/skill-catalog.ts",
     "src/collaboration-source-journal.ts",
-    "src/collaboration-analysis.ts"
+    "src/collaboration-analysis.ts",
+    "src/collaboration-analysis-journal.ts"
   ],
   "references": [
     { "path": "../../../vendor/cordis" },

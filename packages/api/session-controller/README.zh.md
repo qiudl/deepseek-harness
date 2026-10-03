@@ -96,6 +96,9 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 
 `readCollaborationSourceSnapshot(target, signal)` 使用相同 Profile 归属、串行 journal 读取与取消检查，返回独立冻结的原始快照。`inspectCollaborationSource` 从该读取结果生成描述符。私有 worker 通过 `parseCollaborationSourceSnapshot` 校验 journal 内容；不新增 Remote 导出、模型准备、Session 事件或可执行调用恢复。
 
+<a id="collaboration-analysis-journal"></a>
+`openCollaborationAnalysisJournal(facility)` 拥有独立的单文件 `collaboration_analysis_v2` 领域。`createCollaborationAnalysisWriter(journal, claim)` 提供 Source 分析所需的 persist 回调：先提交完整、无信号 manifest 的规范 JSON，再向当前可信协调器申请派发资格，匹配的资格记录持久化后才返回。`CollaborationAnalysisJournalRecord` 保留原始请求 ID、完整 Source digest 与输入 manifest digest；`CollaborationAnalysisDispatchGrant` 绑定 plan/revision/attempt/fence 和租约。重复请求、取消、过期资格和写入确认丢失都会阻止派发。恢复只能枚举冻结的输入与资格记录，不恢复可执行调用。Profile 在已接受写入排空后关闭 `CollaborationAnalysisJournal`。回调中的协调器权限以及真实聊天/传输装配仍由调用方负责。
+
 ## 已知限制与延期工作
 
 <a id="known-limitations-and-deferred-work"></a>

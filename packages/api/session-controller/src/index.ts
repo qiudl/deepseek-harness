@@ -75,6 +75,8 @@ export type {
   CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal, CollaborationSourceInput,
   CollaborationSourceCoordinates,
 } from './collaboration-source-journal.ts'
+export { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter } from './collaboration-analysis-journal.ts'
+export type { CollaborationAnalysisJournal, CollaborationAnalysisJournalRecord, CollaborationAnalysisDispatchGrant } from './collaboration-analysis-journal.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {

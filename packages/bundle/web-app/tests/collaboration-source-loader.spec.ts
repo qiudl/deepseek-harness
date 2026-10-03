@@ -2,7 +2,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import SessionController from '@deepseek-ai/dsh-api-session-controller'
+import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter } from '@deepseek-ai/dsh-api-session-controller'
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
@@ -104,7 +104,12 @@ it.each(['source-only', 'analysis', 'analysis-extension'] as const)('loads the S
     if (mode === 'analysis-extension') { res.writeHead(500).end(); return }
     const body: Uint8Array[] = []; for await (const chunk of req) body.push(chunk as Uint8Array)
     const wire = JSON.parse(Buffer.concat(body).toString()) as { model: unknown; max_tokens: unknown; tools?: unknown; messages: unknown }
-    const manifest = JSON.parse(await readFile(join(directory, 'analysis-request.json'), 'utf8')) as {
+    const persisted = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {
+      tables: { attempts: Record<string, { manifest_json: string; dispatch: { attempt_id: string } }> }
+    }
+    const record = Object.values(persisted.tables.attempts)[0]!
+    expect(record.dispatch.attempt_id).toBe('fixture-attempt')
+    const manifest = JSON.parse(record.manifest_json) as {
       prompt_version: string
       request: { system: string; messages: { content: { text: string }[] }[] }
     }
@@ -159,22 +164,24 @@ it.each(['source-only', 'analysis', 'analysis-extension'] as const)('loads the S
   expect((await fetch(`${origin}/internal/desktop-collaboration-source-snapshot`,{ method:'POST',headers:{ cookie:'dsh-auth=browser' },body:JSON.stringify(target) })).status).toBe(403)
   expect((await fetch(`${origin}/internal/desktop-collaboration-source`, { method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body: JSON.stringify(target) })).status).toBe(403)
   await expect(factory.inspectCollaborationSource(origin, token, { ...target, source_message_id: 'missing' }, new AbortController().signal, () => false)).rejects.toThrow()
+  const analysisJournal = mode !== 'source-only' ? await openCollaborationAnalysisJournal(facility!) : undefined
+  const analysisWriter = analysisJournal ? createCollaborationAnalysisWriter(analysisJournal, async (record) => {
+    expect(providerRequests).toBe(0)
+    return { attempt_request_id: record.attempt_request_id, plan_id: 'fixture-plan', expected_plan_revision: '1',
+      attempt_id: 'fixture-attempt', attempt_fence: '1', input_manifest_digest: record.input_manifest_digest,
+      source_digest: record.source_digest, lease_expires_at: new Date(Date.now() + 30000).toISOString(), dispatch_granted: true }
+  }) : undefined
   if (mode === 'analysis-extension') {
     if (first.kind !== 'captured') throw Error('expected original capture')
-    await expect(first.analyze(async (manifest) => {
-      await writeFile(join(directory, 'analysis-request.json'), JSON.stringify(manifest), { mode: 0o600 })
-    }, new AbortController().signal)).rejects.toThrow('collaboration_analysis_failed')
+    await expect(first.analyze(analysisWriter!, new AbortController().signal)).rejects.toThrow('collaboration_analysis_failed')
     expect(providerRequests).toBe(0)
   }
   if (mode === 'analysis') {
     if (first.kind !== 'captured') throw Error('expected original capture')
-    const result = await first.analyze(async (manifest) => {
-      expect(providerRequests).toBe(0)
-      await writeFile(join(directory, 'analysis-request.json'), JSON.stringify(manifest), { mode: 0o600 })
-    }, new AbortController().signal)
+    const result = await first.analyze(analysisWriter!, new AbortController().signal)
     expect(JSON.parse(result.jsonText) as unknown).toMatchObject({ task_candidates: [{ mention_ids: ['mention-1'] }] })
     expect(providerRequests).toBe(1)
-    const manifest = JSON.parse(await readFile(join(directory, 'analysis-request.json'), 'utf8')) as {
+    const manifest = JSON.parse([...analysisJournal!.records()][0]!.manifest_json) as {
       prompt_version: string
       request: { system: string; messages: { content: { text: string }[] }[] }
     }
@@ -186,6 +193,7 @@ it.each(['source-only', 'analysis', 'analysis-extension'] as const)('loads the S
     await expect(first.analyze(async () => {}, new AbortController().signal)).rejects.toThrow('collaboration_analysis_call_used')
     expect(providerRequests).toBe(1)
   }
+  await analysisJournal?.close()
   await workspace.detachSession(sessionId)
   await expect(factory.inspectCollaborationSource(origin, token, target, new AbortController().signal, () => false)).rejects.toThrow()
   await expect(factory.readCollaborationSourceSnapshot(origin,token,target,new AbortController().signal,()=>false)).rejects.toThrow()

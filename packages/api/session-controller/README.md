@@ -96,6 +96,9 @@ First `captureCollaborationSource` returns Host-only `analyze(persist, signal)` 
 
 Analysis uses one user message containing original text and explicit mention metadata plus an analysis prompt, with zero tools and no ordinary history. Each Profile permits two unsettled calls and a 30-second wait; cancelled non-cooperative operations retain their slots until cleanup settles. Input uses a conservative 16 KiB UTF-8 request budget, output is capped at 8192 provider tokens and 32 KiB accumulated stream text, and excess data rejects without truncation. Middleware-only responses, tool output, non-successful terminal results and malformed JSON reject. No model repair/retry or executable restart recovery occurs here; cloud attempt leases, candidate admission and actual chat callers remain the coordinator’s responsibility.
 
+<a id="collaboration-analysis-journal"></a>
+`openCollaborationAnalysisJournal(facility)` owns the separate single-layout `collaboration_analysis_v2` domain. `createCollaborationAnalysisWriter(journal, claim)` supplies the Source analysis persist callback: it commits canonical JSON of the full signal-free manifest before asking the current trusted coordinator for a dispatch grant, then commits that matching grant before resolving. `CollaborationAnalysisJournalRecord` retains its original request ID, full Source digest and input manifest digest; `CollaborationAnalysisDispatchGrant` binds plan/revision/attempt/fence and lease. Repeats, cancellation, stale grants and write-acknowledgement loss prevent dispatch. Recovery only enumerates frozen input/grant records and never restores calls. The Profile closes `CollaborationAnalysisJournal` after accepted writes drain. The callback's coordinator authority and actual chat/transport assembly remain the caller's responsibility.
+
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>
