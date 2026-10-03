@@ -6,6 +6,7 @@ import { TypertGatewayService } from '@deepseek-ai/dsh-api-gateway'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest, handleDesktopRemoteJsonRequest } from '../src/desktop-remote-ui.ts'
 import { DesktopRemoteSessionExecutor } from '../src/desktop-remote-session.ts'
+import { DesktopSessionControl } from '../src/desktop-session-control.ts'
 
 function gateway() {
   const ctx = new Context()
@@ -138,15 +139,21 @@ describe('Desktop Session command boundaries', () => {
         }
       } }
     })
-    const executor = new DesktopRemoteSessionExecutor(host)
+    const control = new DesktopSessionControl()
+    const acquired = control.acquire('session-1', { kind: 'remote', id: 'web-1' }, { takeover: false })
+    if (!('claim' in acquired)) throw new Error('missing remote claim')
+    const proof = { controller_id: acquired.claim.id, generation: acquired.claim.generation,
+      epoch: acquired.claim.epoch }
+    const executor = new DesktopRemoteSessionExecutor(host, undefined, control)
     const signal = new AbortController().signal
     await executor.execute({ operation: 'approval.poll', command_id, wait_ms: 10 }, signal)
     await executor.execute({ operation: 'approval.poll', command_id, wait_ms: 10 }, signal)
     const next = await executor.execute({ operation: 'approval.poll', command_id, cursor: 'client-1', wait_ms: 10 }, signal)
     expect(next).toMatchObject({ cursor: 'client-1', frames: [{ payload: { toolName: 'unknown', action: 'unknown', reason: null } }] })
-    const response = { operation: 'approval.respond' as const, command_id, session_id: 'session-1', outcome: 'rejected' as const }
+    const response = { operation: 'approval.respond' as const, command_id, session_id: 'session-1',
+      control: proof, outcome: 'rejected' as const }
     await expect(executor.execute({ ...response, approval_id: 'client-1:first' }, signal)).rejects.toThrow('unknown approval')
-    await expect(executor.execute({ ...response, approval_id: 'client-1:second', session_id: 'wrong' }, signal)).rejects.toThrow('unknown approval')
+    await expect(executor.execute({ ...response, approval_id: 'client-1:second', session_id: 'wrong' }, signal)).rejects.toThrow('control lost')
     await expect(executor.execute({ ...response, approval_id: 'client-1:second', operation_digest: 'wrong' as never }, signal)).rejects.toThrow('digest mismatch')
     await expect(executor.execute({ ...response, approval_id: 'client-1:second' }, signal)).resolves.toEqual({ accepted: true })
     expect(respond).toHaveBeenCalledWith({ clientId: 'client-1', eventId: 'second', outcome: { kind: 'result', value: 'rejected' } })
@@ -203,14 +210,21 @@ describe('Desktop Session command boundaries', () => {
   it('maps create, cancel, delete and rename to their exact gateway parameters', async () => {
     const host = gateway()
     const invoke = vi.spyOn(host, 'invoke').mockResolvedValue({ accepted: true })
-    const executor = new DesktopRemoteSessionExecutor(host)
+    const control = new DesktopSessionControl()
+    const acquired = control.acquire('s1', { kind: 'remote', id: 'web-1' }, { takeover: false })
+    if (!('claim' in acquired)) throw new Error('missing remote claim')
+    const proof = { controller_id: acquired.claim.id, generation: acquired.claim.generation,
+      epoch: acquired.claim.epoch }
+    const executor = new DesktopRemoteSessionExecutor(host, undefined, control)
     const signal = new AbortController().signal
     const command_id = '123e4567-e89b-42d3-a456-426614174000' as never
     await executor.execute({ operation: 'session.create', command_id }, signal)
-    await executor.execute({ operation: 'session.cancel', command_id, session_id: 's1' }, signal)
-    await executor.execute({ operation: 'session.delete', command_id, session_id: 's1' }, signal)
-    await executor.execute({ operation: 'session.rename', command_id, session_id: 's1', title: 'new title' }, signal)
-    await executor.execute({ operation: 'session.prompt', command_id, session_id: 's1', mode: 'queue', content: [] }, signal)
+    await executor.execute({ operation: 'session.cancel', command_id, session_id: 's1', control: proof }, signal)
+    await executor.execute({ operation: 'session.delete', command_id, session_id: 's1', control: proof }, signal)
+    await executor.execute({ operation: 'session.rename', command_id, session_id: 's1', control: proof,
+      title: 'new title' }, signal)
+    await executor.execute({ operation: 'session.prompt', command_id, session_id: 's1', control: proof,
+      mode: 'queue', content: [] }, signal)
     expect(invoke.mock.calls.map(([request]) => [request.method, request.args])).toEqual([
       ['create', { request: {} }], ['cancel', { request: { sessionId: 's1' } }],
       ['delete', { request: { sessionId: 's1' } }], ['rename', { request: { sessionId: 's1', title: 'new title' } }],

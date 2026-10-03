@@ -154,6 +154,7 @@ describe('web-app runtime glue', () => {
     }
     expect([...routes.keys()].sort()).toEqual([
       '/internal/desktop-model-text', '/internal/desktop-remote-session', '/internal/desktop-remote-ui',
+      '/internal/desktop-remote-ui-stream',
     ])
     const http = createServer((req, res) => { void routes.get(req.url!)!.handler(req, res) })
     onTestFinished(async () => {

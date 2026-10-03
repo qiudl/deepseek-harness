@@ -18,23 +18,38 @@ describe('Profile remote Session wire commands', () => {
   it('round-trips the closed command set', () => {
     const sessionId = 'session-0123456789abcdef'
     const commandId = randomUUID()
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
     for (const command of [
+      { operation: 'control.status', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID() },
+      { operation: 'control.acquire', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), takeover: false },
+      { operation: 'control.acquire', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), takeover: true, expected_epoch: 1 },
+      { operation: 'control.renew', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
+      { operation: 'control.release', command_id: commandId, session_id: sessionId,
+        controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
       { operation: 'session.list', command_id: commandId },
       { operation: 'session.create', command_id: commandId },
+      { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1' },
+      { operation: 'remote.event.respond', command_id: commandId, session_id: sessionId,
+        control, client_id: randomUUID(), event_id: randomUUID(), outcome: 'allowed-once' },
       { operation: 'session.history', command_id: commandId, session_id: sessionId, max_events: 100 },
-      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, mode: 'queue',
+      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, control, mode: 'queue',
         content: [{ type: 'text', text: 'hello\nworld' }], client_time_zone: 'Europe/Belgrade' },
-      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, mode: 'queue',
+      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, control, mode: 'queue',
         content: [{ type: 'text', text: 'without time zone' }] },
-      { operation: 'session.cancel', command_id: commandId, session_id: sessionId },
-      { operation: 'session.rename', command_id: commandId, session_id: sessionId, title: 'Remote session' },
-      { operation: 'session.delete', command_id: commandId, session_id: sessionId },
+      { operation: 'session.cancel', command_id: commandId, session_id: sessionId, control },
+      { operation: 'session.rename', command_id: commandId, session_id: sessionId, control,
+        title: 'Remote session' },
+      { operation: 'session.delete', command_id: commandId, session_id: sessionId, control },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000 },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000, cursor: 'approval-cursor-1' },
       { operation: 'approval.respond', command_id: commandId, session_id: sessionId,
-        approval_id: 'approval-1', outcome: 'allowed-once', operation_digest: 'a'.repeat(64) },
+        control, approval_id: 'approval-1', outcome: 'allowed-once', operation_digest: 'a'.repeat(64) },
       { operation: 'approval.respond', command_id: commandId, session_id: sessionId,
-        approval_id: 'approval-1', outcome: 'rejected' },
+        control, approval_id: 'approval-1', outcome: 'rejected' },
     ]) {
       const value = frame(command)
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
@@ -46,6 +61,10 @@ describe('Profile remote Session wire commands', () => {
     for (const command of [
       { operation: 'api.proxy', command_id: id, path: '/api/settings.describe' },
       { operation: 'session.list', command_id: id, profile_root: '/another-user' },
+      { operation: 'session.create', command_id: id, cwd: '/tmp/escape' },
+      { operation: 'session.create', command_id: id, workspace_id: '../escape' },
+      { operation: 'remote.event.respond', command_id: id, session_id: 'session-1',
+        client_id: randomUUID(), event_id: randomUUID(), outcome: 'always-allow' },
       { operation: 'session.history', command_id: id, session_id: '', max_events: 100 },
       { operation: 'session.history', command_id: id, session_id: 'session-1', max_events: 101 },
       { operation: 'session.prompt', command_id: id, session_id: 'session-1', mode: 'now',
@@ -103,6 +122,9 @@ describe('Profile remote UI read wire commands', () => {
     expect(() => decode(readFrame('boot/injections', { args: { profile: 'other' } }))).toThrow()
     const asset = readFrame('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 0 } })
     expect(encodeHostControlFrame(decode(asset))).toBe(`${JSON.stringify(asset)}\n`)
+    const described = readFrame('asset/describe', { args: { url: '/plugins/??a/client.js&rev=1' } })
+    expect(encodeHostControlFrame(decode(described))).toBe(`${JSON.stringify(described)}\n`)
+    expect(() => decode(readFrame('asset/describe', { args: { url: '/plugins/a/client.js', offset: 0 } }))).toThrow()
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: -1 } }))).toThrow()
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: 0, path: '/' } }))).toThrow()
     for (const endpoint of ['session/list', 'session/page', 'session/modelCatalog',
@@ -123,10 +145,88 @@ describe('Profile remote UI read wire commands', () => {
 
   it('rejects extra selectors, unsafe JSON, and overlarge results', () => {
     expect(() => decode(readFrame('session/list', { args: {}, profile_root: '/tmp/other' }))).toThrow()
+    expect(() => decode(readFrame('session/list', { args: null }))).toThrow()
+    expect(() => decode(readFrame('session/list', { args: [] }))).toThrow()
     expect(() => decode(readFrame('session/list', { args: { ['__proto__']: '/tmp/other' } }))).toThrow()
     const result = { version: 1, type: 'result', request_id: randomUUID(),
       method: 'profile.remote_ui_read', result: { value: { items: [] } } }
     expect(encodeHostControlFrame(decode(result))).toBe(`${JSON.stringify(result)}\n`)
     expect(() => decode({ ...result, result: { value: 'x'.repeat(65_536) } })).toThrow()
+  })
+})
+
+describe('Profile remote UI stream wire commands', () => {
+  const streamFrame = (command: unknown) => ({
+    version: 1, type: 'request', request_id: randomUUID(), method: 'profile.remote_ui_stream',
+    params: { ...auth(), view_lease_id: randomUUID(), lease_generation: 1, runtime_generation: 1,
+      command },
+  })
+
+  it('accepts only bounded Session follow open, poll and close', () => {
+    const stream_id = randomUUID()
+    for (const command of [
+      { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: {} } },
+      { action: 'open', stream_id, endpoint: '$events', payload: { args: {} } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 100, assistantStream: true,
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'subagent', parentSessionId: 'parent-1', childSessionId: 'child-1', mode: 'one-shot' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'subagent', parentSessionId: 'parent-1', childSessionId: 'child-1', mode: 'continuable' },
+      } } } },
+      { action: 'poll', stream_id }, { action: 'close', stream_id },
+    ]) {
+      const value = streamFrame(command)
+      expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+    }
+    for (const command of [
+      { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: { path: '/tmp' } } },
+      { action: 'open', stream_id, endpoint: '$events', payload: { args: { all: true } } },
+      { action: 'open', stream_id, endpoint: 'asset/read', payload: { args: {} } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: '../other' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 501,
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, arbitrary: true,
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'subagent', parentSessionId: 'parent-1', childSessionId: 'child-1', mode: 'invalid' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'other', sessionId: 'session-1' },
+      } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, assistantStream: false,
+      } } } },
+      { action: 'poll', stream_id, profile_id: randomUUID() },
+      { action: 'close', stream_id: 'not-a-uuid' },
+      { action: 'arbitrary', stream_id },
+    ]) expect(() => decode(streamFrame(command))).toThrow()
+  })
+
+  it('accepts bounded chunks and denies result injection', () => {
+    const resultFrame = (result: unknown) => ({ version: 1, type: 'result', request_id: randomUUID(),
+      method: 'profile.remote_ui_stream', result })
+    for (const result of [{ type: 'opened' }, { type: 'idle' }, { type: 'end' },
+      { type: 'error' }, { type: 'closed' }, { type: 'chunk', bytes: 'SGVsbG8', final: true }]) {
+      const value = resultFrame(result)
+      expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+    }
+    for (const result of [{ type: 'chunk', bytes: '***', final: true },
+      { type: 'chunk', bytes: 'A'.repeat(22_000), final: false },
+      { type: 'chunk', bytes: Buffer.alloc(16_385).toString('base64url'), final: true },
+      { type: 'chunk', bytes: 'A', final: true },
+      { type: 'arbitrary' },
+      { type: 'error', detail: '/private/secret' }]) {
+      expect(() => decode(resultFrame(result))).toThrow()
+    }
   })
 })

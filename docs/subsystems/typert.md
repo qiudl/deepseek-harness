@@ -315,6 +315,17 @@ type TypertGatewayErrorCode =
 interface TypertGateway {
   /** Carrier adapter shared by WebSocket and in-process transports. */
   readonly wireStream: TypertGatewayWireStream
+  /**
+   * Admit browser-origin writes and approval replies before their final Host operation.
+   * @param admission - callbacks that hold a browser write through settlement.
+   * @returns disposer removing this exact policy.
+   */
+  registerBrowserAdmission(admission: {
+    readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined
+    readonly eventResult: (sessionId: string) => (() => void) | undefined
+    readonly localControlStatus?: (sessionId: string) => unknown
+    readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown
+  }): () => void
   /** Settle one forwarded waterfall event from an authenticated in-process carrier. */
   respondRemoteEvent(result: RemoteEventResult): void
   /**
@@ -451,6 +462,13 @@ Resolve strict generated definitions or conservative SRC markers against current
 
 ```ts cordis-catalog
 /**
+ * Install one Profile-owned browser admission policy for this Gateway generation.
+ * @param admission - callbacks that hold a browser write through settlement.
+ * @returns disposer removing this exact policy.
+ */
+registerBrowserAdmission(admission: { readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined readonly eventResult: (sessionId: string) => (() => void) | undefined readonly localControlStatus?: (sessionId: string) => unknown readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown }): () => void
+
+/**
  * Register the sole application-selected forwarded-event source.
  * @param source - stream factory installed by the Remote assembly.
  * @param host - stable Host facts included in each Client generation's opening frame.
@@ -461,8 +479,9 @@ registerRemoteEvents( source: TypertRemoteEventSource, host: RemoteEventHostInfo
 /**
  * Settle one forwarded waterfall event without routing through the browser RPC carrier.
  * @param result - The forwarded event result to settle.
+ * @param source - trusted direct Host call or authenticated browser RPC.
  */
-respondRemoteEvent(result: RemoteEventResult): void
+respondRemoteEvent(result: RemoteEventResult, source: 'host' | 'browser' = 'host'): void
 
 /**
  * Invoke one live Remote method through strict generated reflection or SRC markers.

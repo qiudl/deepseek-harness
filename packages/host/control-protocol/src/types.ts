@@ -879,9 +879,48 @@ export type HostRemoteSessionJson =
   | readonly HostRemoteSessionJson[]
   | { readonly [key: string]: HostRemoteSessionJson }
 
+/** Opaque-to-browser claim returned by the selected Profile and retained by the daemon. */
+export interface HostRemoteSessionControlProof {
+  readonly controller_id: string
+  readonly generation: string
+  readonly epoch: number
+}
+
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
-  | { readonly operation: 'session.list' | 'session.create'; readonly command_id: HostControlRequestId }
+  | {
+    readonly operation: 'control.status'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly controller_id: string
+  }
+  | {
+    readonly operation: 'control.acquire'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly controller_id: string
+    readonly takeover: boolean
+    readonly expected_epoch?: number
+  }
+  | {
+    readonly operation: 'control.renew' | 'control.release'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly controller_id: string
+    readonly generation: string
+    readonly epoch: number
+  }
+  | { readonly operation: 'session.list'; readonly command_id: HostControlRequestId }
+  | { readonly operation: 'session.create'
+    readonly command_id: HostControlRequestId
+    readonly workspace_id?: string }
+  | { readonly operation: 'remote.event.respond'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly client_id: string
+    readonly event_id: string
+    readonly outcome: 'allowed-once' | 'rejected' | 'next' }
   | {
     readonly operation: 'session.history'
     readonly command_id: HostControlRequestId
@@ -892,6 +931,7 @@ export type HostRemoteSessionCommand =
     readonly operation: 'session.prompt'
     readonly command_id: HostControlRequestId
     readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
     readonly mode: 'queue'
     readonly content: readonly { readonly type: 'text'; readonly text: string }[]
     readonly client_time_zone?: string
@@ -900,11 +940,13 @@ export type HostRemoteSessionCommand =
     readonly operation: 'session.cancel' | 'session.delete'
     readonly command_id: HostControlRequestId
     readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
   }
   | {
     readonly operation: 'session.rename'
     readonly command_id: HostControlRequestId
     readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
     readonly title: string
   }
   | {
@@ -917,6 +959,7 @@ export type HostRemoteSessionCommand =
     readonly operation: 'approval.respond'
     readonly command_id: HostControlRequestId
     readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
     readonly approval_id: string
     readonly outcome: 'allowed-once' | 'rejected'
     readonly operation_digest?: HostControlSha256
@@ -955,7 +998,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'boot/injections' | 'asset/read' | 'session/list' | 'session/page' | 'session/modelCatalog'
+    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog'
     readonly payload: { readonly args: HostRemoteSessionJson }
@@ -969,6 +1012,58 @@ export interface ProfileRemoteUiReadResult {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.remote_ui_read'
   readonly result: { readonly value: HostRemoteSessionJson }
+}
+
+/** Only selected native read streams may cross a live Profile view lease. */
+export type ProfileRemoteUiStreamCommand =
+  | {
+    readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'session/follow'
+    readonly payload: { readonly args: { readonly request: {
+      readonly address: { readonly kind: 'session'; readonly sessionId: string }
+        | {
+          readonly kind: 'subagent'
+          readonly parentSessionId: string
+          readonly childSessionId: string
+          readonly mode: 'one-shot' | 'continuable'
+        }
+      readonly maxMessages?: number
+      readonly assistantStream?: true
+    } } }
+  }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'workspace/follow'
+    readonly payload: { readonly args: Record<string, never> } }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: '$events'
+    readonly payload: { readonly args: Record<string, never> } }
+  | { readonly action: 'poll' | 'close'; readonly stream_id: string }
+
+/** One short, lease-authorized stream control RPC. */
+export interface ProfileRemoteUiStreamRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_stream'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly command: ProfileRemoteUiStreamCommand
+  }
+}
+
+/** At most 16 KiB of one JSON event per frame; terminal errors carry no details. */
+export interface ProfileRemoteUiStreamResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_stream'
+  readonly result: { readonly type: 'opened' | 'idle' | 'end' | 'error' | 'closed' }
+    | { readonly type: 'chunk'; readonly bytes: string; readonly final: boolean }
 }
 
 /** Inspect legacy model candidates through a token-verified Account view. */
@@ -1155,6 +1250,8 @@ export type HostControlFrame =
   | ProfileRemoteSessionResult
   | ProfileRemoteUiReadRequest
   | ProfileRemoteUiReadResult
+  | ProfileRemoteUiStreamRequest
+  | ProfileRemoteUiStreamResult
   | ProfileExtensionsRequest
   | ProfileExtensionsResult
   | ProfileModelClaimInventoryRequest

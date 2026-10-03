@@ -396,16 +396,6 @@
     "8d1a12cbaaca534622ce68780e7eff658012782e0614d4efba713c182a122850": 2,
     "a39244e911c01d6c05812a25d761fe4701959b75ef011ec1c6de25d9d55f7856": 4
   },
-  "packages/bundle/web-app/tests/desktop-remote-session.spec.ts": {
-    "0657e53b24da1135a93b366dedf0762e53e52f0d3e408b760c2e8dfcd84b8726": 1,
-    "2279af24fde8e5056e20888770206beb3817a77e3cce86fdda014dc153ccd434": 1,
-    "3b96c89c973caa07e49fabb1083348139e30eb91ae93992906bf5b1e63a4169f": 1,
-    "6df1598dd1553dfce39ef41d2f2158cf54f3ef1f86cb748407bb75bb34aecad9": 1,
-    "88d1a05b59450b07163a09e96d93927156a75ba205b8bea83c345dd0b377acce": 2
-  },
-  "packages/bundle/web-app/tests/desktop-remote-ui.spec.ts": {
-    "88d1a05b59450b07163a09e96d93927156a75ba205b8bea83c345dd0b377acce": 2
-  },
   "packages/bundle/web-app/tests/document-conversion.e2e.ts": {
     "743a7488a765c578e607d08ba6bdcf6f2f2971f67b05a42d5097aad2458134a1": 1
   },
