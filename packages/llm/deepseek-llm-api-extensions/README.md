@@ -40,6 +40,8 @@ Indirectly, through `@deepseek-ai/dsh-llm-deepseek`, which sends registered fiel
 
 None; registry fields are model-hidden provider metadata and do not alter the serialized model-input prefix.
 
+Request purpose also identifies `collaboration-analysis`. Its consumer rejects non-empty prepared fields before HTTP; providers cannot add tools or context to Source analysis.
+
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>

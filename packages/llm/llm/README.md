@@ -145,6 +145,8 @@ None, as the LLM service adds no content; adapters choose when to add the shared
 
 Reasoning-effort materialization preserves the assembled request prefix. Image identity and request-preview text are deterministic, while an optional execution-world path is resolved for each request; a changed path or an offload decision can prevent reuse from that image.
 
+Prepared `stream(options, assertRequest?)` runs the optional Host assertion after middleware and request projection, before the captured adapter sends. A guarded request retains its original cancellation signal and is deep-frozen after validation. Repeated terminal continuations cannot dispatch the same prepared adapter call again; an assertion failure becomes a terminal error. A middleware-supplied replacement stream never runs this assertion, so guarded consumers must reject output without observing it.
+
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>

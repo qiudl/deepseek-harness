@@ -1694,8 +1694,27 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal, ): Promise<Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; prepared: PreparedLlmSnapshotCall }>>',
         description: 'Prepare the source Session\'s next model under this Profile\'s registry. Recheck workspace/session ownership and selection after credential preparation. The returned call is process-local and one-shot; this does not issue Source authority, resume an Agent, append events, or send a model request. No Remote method is exposed.',
         parameters: [{ name: 'sessionId', description: 'ordinary Session registered under this workspace.' }, { name: 'workspaceId', description: 'WorkspaceRegistry UUID.' }, { name: 'signal', description: 'owning Host operation\'s cancellation, retained through dispatch.' }],
-        returns: 'workspace/session identities and the captured executable model call.',
+        returns: 'workspace/session identities and the captured executable model call with an 8192-token output cap.',
         throws: ['on ownership/selection change, unsupported capture, preparation failure or cancellation.'],
+      },
+      {
+        signature: 'async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise< | Readonly<{ kind: \'captured\' snapshot: CollaborationSourceSnapshot prepared: PreparedLlmSnapshotCall analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }> | Readonly<{ kind: \'recovered\'; snapshot: CollaborationSourceSnapshot }> >',
+        description: 'Capture user content under this Profile\'s registry and actual prepared model. Persist before returning the process-local call. Duplicate/restarted input returns only its original snapshot, never a new executable handle or a model request. First capture exposes Host-only analyze: its caller must durably commit the supplied attempt manifest. The Profile bounds calls and rechecks original membership before and after that commit. This Host-only queued operation has no Remote endpoint and grants no cloud authority.',
+        parameters: [{ name: 'input', description: 'exact Source coordinates, raw text and trusted classified mentions; no model or commit fields.' }, { name: 'signal', description: 'caller cancellation, combined with the owning Profile lifetime through dispatch.' }],
+        returns: 'first durable capture with its one-shot call, or original non-executable recovery.',
+        throws: ['on invalid input, unavailable journal, changed ownership/selection, conflict or cancellation.'],
+      },
+      {
+        signature: 'async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise< CollaborationSourceCoordinates & { readonly snapshot_digest: string } >',
+        description: 'Read one durable Source from the owning Profile without model preparation or Agent activation.',
+        parameters: [{ name: 'target', description: 'Exact original Source identity; caller metadata is rejected.' }, { name: 'signal', description: 'Caller cancellation combined with Profile disposal.' }],
+        returns: 'Frozen identity and digest of the full original snapshot; missing records or changed membership reject.',
+      },
+      {
+        signature: 'async readCollaborationSourceSnapshot(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise<CollaborationSourceSnapshot>',
+        description: 'Read the original committed content for the authenticated parent Host without model preparation.',
+        parameters: [{ name: 'target', description: 'Exact Source identity; content, model and commit overrides are rejected.' }, { name: 'signal', description: 'Caller cancellation combined with Profile disposal.' }],
+        returns: 'Original frozen journal snapshot after current Session and Workspace ownership checks; no executable handle.',
       },
       {
         signature: '@Remote(\'list\') async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>',
@@ -4299,6 +4318,30 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ClientArtifactBaseline {\n    readonly path: string;\n    readonly mtimeMs: number;\n    readonly size: number;\n}',
   },
   {
+    name: 'CollaborationAnalysisManifest',
+    declaration: 'export interface CollaborationAnalysisManifest {\n    readonly prompt_version: \'1\';\n    readonly source: CollaborationSourceSnapshot;\n    readonly request: Omit<GenerateOptions, \'signal\'>;\n}',
+  },
+  {
+    name: 'CollaborationAnalysisResult',
+    declaration: 'export interface CollaborationAnalysisResult {\n    readonly jsonText: string;\n}',
+  },
+  {
+    name: 'CollaborationSourceBody',
+    declaration: 'export type CollaborationSourceBody = DeepReadonly<z.infer<typeof rawBodySchema>>;',
+  },
+  {
+    name: 'CollaborationSourceCoordinates',
+    declaration: 'export type CollaborationSourceCoordinates = Pick<CollaborationSourceBody, \'workspace_id\' | \'session_id\' | \'source_message_id\' | \'source_revision\'>;',
+  },
+  {
+    name: 'CollaborationSourceInput',
+    declaration: 'export type CollaborationSourceInput = Omit<CollaborationSourceBody, \'model_snapshot\'>;',
+  },
+  {
+    name: 'CollaborationSourceSnapshot',
+    declaration: 'export type CollaborationSourceSnapshot = DeepReadonly<z.infer<typeof rawSnapshotSchema>>;',
+  },
+  {
     name: 'CollectedOutput',
     declaration: 'export interface CollectedOutput {\n    text: string;\n    truncated: boolean;\n    spillPath?: string;\n}',
   },
@@ -4580,7 +4623,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'DeepSeekLlmApiExtensionRequest',
-    declaration: 'export interface DeepSeekLlmApiExtensionRequest {\n    readonly body: Readonly<Record<string, DeepSeekLlmApiJson>>;\n    readonly sessionId?: string;\n    readonly purpose?: \'compaction\' | \'session-title\';\n    readonly signal: AbortSignal;\n}',
+    declaration: 'export interface DeepSeekLlmApiExtensionRequest {\n    readonly body: Readonly<Record<string, DeepSeekLlmApiJson>>;\n    readonly sessionId?: string;\n    readonly purpose?: \'compaction\' | \'session-title\' | \'collaboration-analysis\';\n    readonly signal: AbortSignal;\n}',
   },
   {
     name: 'DeepSeekLlmApiJson',
@@ -4800,7 +4843,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GenerateOptions',
-    declaration: 'export interface GenerateOptions {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: Message[];\n    system?: string;\n    tools?: ToolSchema[];\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    purpose?: \'compaction\' | \'session-title\';\n}',
+    declaration: 'export interface GenerateOptions {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: Message[];\n    system?: string;\n    tools?: ToolSchema[];\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    purpose?: \'compaction\' | \'session-title\' | \'collaboration-analysis\';\n}',
   },
   {
     name: 'GenericCallView',
@@ -5392,7 +5435,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PreparedLlmCall',
-    declaration: 'export interface PreparedLlmCall {\n    readonly config: LlmCallConfig;\n    readonly retryPolicy: ResolvedRetryPolicy;\n    readonly context?: LlmModelContext;\n    readonly inputModalities?: readonly ModelModality[];\n    readonly systemPromptUpdate?: SystemPromptUpdate;\n    readonly adapterDefaults: LlmCallConfigAdapterDefaults;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+    declaration: 'export interface PreparedLlmCall {\n    readonly config: LlmCallConfig;\n    readonly retryPolicy: ResolvedRetryPolicy;\n    readonly context?: LlmModelContext;\n    readonly inputModalities?: readonly ModelModality[];\n    readonly systemPromptUpdate?: SystemPromptUpdate;\n    readonly adapterDefaults: LlmCallConfigAdapterDefaults;\n    stream(options: GenerateOptions, assertRequest?: (options: GenerateOptions) => void): AsyncIterable<StreamChunk>;\n}',
   },
   {
     name: 'PreparedLlmSnapshotCall',

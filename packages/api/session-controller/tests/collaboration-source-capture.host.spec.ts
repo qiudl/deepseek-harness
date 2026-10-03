@@ -389,3 +389,18 @@ it('cancels Source capture or read during a noncooperative journal open and drai
     } finally { release?.(); await observed; await h.dispose() }
   }
 })
+
+
+it.each(['before', 'during'] as const)('refuses Source analysis when original workspace membership is removed %s attempt persistence', async (phase) => {
+  const h = await harness()
+  try {
+    const first = await h.controller.captureCollaborationSource(h.source(), new AbortController().signal)
+    if (first.kind !== 'captured') throw Error('expected original capture')
+    const persist = vi.fn(async () => { await h.workspace.detachSession(h.sessionId) })
+    if (phase === 'before') await h.workspace.detachSession(h.sessionId)
+    await expect(first.analyze(persist, new AbortController().signal)).rejects.toThrow('collaboration_session_workspace_mismatch')
+    expect(persist).toHaveBeenCalledTimes(phase === 'before' ? 0 : 1)
+    expect(h.stream).not.toHaveBeenCalled()
+    expect(h.resume).not.toHaveBeenCalled()
+  } finally { await h.dispose(); await rm(h.root, { recursive: true, force: true }) }
+})

@@ -80,9 +80,13 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 -----
 
 <a id="model-experience"></a>
+首次 `captureCollaborationSource` 返回 Host 专用 `analyze(persist, signal)`，绑定原始快照及一次性已准备调用。恢复的 Source 不提供新调用或分析。`CollaborationAnalysisManifest` 包含 `prompt_version`、原始 `source` 及不含 signal 的完整 `request`；Host 所有的 `persist` 回调必须先持久提交全部 attempt 输入才可返回。Profile 在该提交前后重验原会话归属。`CollaborationAnalysisResult.jsonText` 是供持久协调器校验的不可信 JSON，不授予受理或 Source 权限。
+
+分析仅使用含原文和显式 mention 元数据的一条 user 消息及分析提示词，工具为空，不携带普通历史。每个 Profile 最多允许两个尚未清理的调用，等待上限 30 秒；取消后仍不响应的操作保留并发位置直到清理完成。输入采用保守的 16 KiB UTF-8 请求预算，输出限制为提供方 8192 token 和累计流文本 32 KiB；超限拒绝，不截断。纯中间件回复、工具输出、非成功终止结果及非法 JSON 均拒绝。这里不执行模型修复、重试或重启后的可执行恢复；云端 attempt 租约、候选受理及实际聊天调用方仍由协调器负责。
+
 ## 模型体验
 
-无；任何模型可见效果都由被调用的 Agent 命令负责。
+普通命令的模型输入由其 Agent 所有。Host 专用 Source 分析通过捕获的模型发送单独持久化的原文、mention 元数据及分析提示词，不启动 Agent turn。
 
 #### KV Cache 影响
 

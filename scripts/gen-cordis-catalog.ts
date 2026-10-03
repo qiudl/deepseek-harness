@@ -750,6 +750,8 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   CollaborationSourceInput: 'Host-only queued Source input is owned by packages/api/session-controller/README.md',
   CollaborationSourceSnapshot: 'Profile-local journal snapshot is owned by packages/api/session-controller/README.md',
   CollaborationSourceCoordinates: 'Private journal read identity is owned by packages/api/session-controller/README.md',
+  CollaborationAnalysisManifest: 'Host-only attempt input is owned by packages/api/session-controller/README.md',
+  CollaborationAnalysisResult: 'Untrusted analysis JSON is owned by packages/api/session-controller/README.md',
   ConnectionFetchHandler: 'shared Fetch dispatch is owned by packages/client/connection/src/rpc.ts',
   ConnectionRequestRejection: 'transport rejection status is owned by packages/client/connection/src/rpc.ts',
   ConnectionTrustRequest: 'transport authentication input is owned by packages/client/connection/src/rpc.ts',

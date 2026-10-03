@@ -197,6 +197,8 @@ Generated tokens follow the request's logged reasoning effort and `maxTokens`; o
 
 Loop-retained response blocks append to the next request and preserve its earlier reusable prefix; dropped blocks have no later cache effect. Changing the provider or model selects a different cache domain.
 
+For `purpose: collaboration-analysis`, both protocols reject non-empty provider request extensions with `REQUEST_EXTENSION` before HTTP. Empty tool arrays cannot become an extension slot for tools or extra context.
+
 ## Known Limitations and Deferred Work
 
 - Responses is not implemented; configuration rejects `responses`.

@@ -183,9 +183,10 @@ export interface PreparedLlmCall {
    * preparation. The request's call-config fields must match {@link config};
    * reuse or mismatch fails with `INVALID_PREPARED_CALL`.
    * @param options - fully assembled request carrying the prepared config.
+   * @param assertRequest - optional Host assertion over the final adapter request; throws prevent dispatch.
    * @returns the chunk stream, including the `llm/stream` waterfall.
    */
-  stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+  stream(options: GenerateOptions, assertRequest?: (options: GenerateOptions) => void): AsyncIterable<StreamChunk>
 }
 
 /** One-shot call with its connection and credential already captured by the adapter. */
@@ -985,9 +986,11 @@ export class LlmRuntime extends TypertRemoteService {
     return Object.freeze({
       ...prepared,
       snapshot,
-      stream: (options: GenerateOptions) => {
+      stream: (options: GenerateOptions, assertRequest?: (options: GenerateOptions) => void) => {
         signal.throwIfAborted()
-        return prepared.stream({ ...options, signal: options.signal === undefined ? signal : AbortSignal.any([signal, options.signal]) })
+        return prepared.stream({
+          ...options, signal: options.signal === undefined ? signal : AbortSignal.any([signal, options.signal]),
+        }, assertRequest)
       },
     })
   }
@@ -1026,6 +1029,7 @@ export class LlmRuntime extends TypertRemoteService {
         : {},
     })
     let dispatched = false
+    let adapterDispatched = false
     return Object.freeze({
       config: resolvedConfig,
       retryPolicy: registration.retryPolicy,
@@ -1035,7 +1039,7 @@ export class LlmRuntime extends TypertRemoteService {
         ? {}
         : { inputModalities: Object.freeze([...modelInfo.inputModalities]) },
       ...modelInfo.systemPromptUpdate === undefined ? {} : { systemPromptUpdate: modelInfo.systemPromptUpdate },
-      stream: (options: GenerateOptions): AsyncIterable<StreamChunk> => {
+      stream: (options: GenerateOptions, assertRequest?: (options: GenerateOptions) => void): AsyncIterable<StreamChunk> => {
         if (dispatched) {
           throw new LlmError('a prepared LLM call can only be dispatched once', 'INVALID_PREPARED_CALL')
         }
@@ -1046,11 +1050,21 @@ export class LlmRuntime extends TypertRemoteService {
           )
         }
         dispatched = true
+        const capturedSignal = options.signal
         return this.streamWithRegistration(options, {
           registration,
           config: resolvedConfig,
           modelInfo,
-          dispatch: options => adapterCall.stream(options),
+          dispatch: (options) => {
+            if (adapterDispatched) throw new LlmError('prepared adapter call already dispatched', 'INVALID_PREPARED_CALL')
+            adapterDispatched = true
+            if (assertRequest !== undefined && options.signal !== capturedSignal) {
+              throw new LlmError('prepared request cancellation changed', 'INVALID_PREPARED_CALL')
+            }
+            assertRequest?.(options)
+            if (assertRequest !== undefined) deepFreeze(options)
+            return adapterCall.stream(options)
+          },
         })
       },
     })

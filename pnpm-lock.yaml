@@ -2332,6 +2332,12 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
     devDependencies:
+      '@deepseek-ai/dsh-anonymous-user-id':
+        specifier: workspace:^
+        version: link:../../identity/anonymous-user-id
+      '@deepseek-ai/dsh-llm-deepseek':
+        specifier: workspace:^
+        version: link:../../llm/llm-deepseek
       '@deepseek-ai/cordis':
         specifier: workspace:^
         version: link:../../../vendor/cordis

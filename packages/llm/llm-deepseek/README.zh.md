@@ -167,6 +167,8 @@ Files 模式通过 `maxRequestFilesBytes` 与 `maxImagesPerRequest` 限制保留
 -----
 
 <a id="model-experience"></a>
+当 `purpose: collaboration-analysis` 时，两个协议在 HTTP 发送前以 `REQUEST_EXTENSION` 拒绝非空提供方请求扩展。空工具数组不能成为注入工具或额外上下文的扩展入口。
+
 ## 模型体验
 
 ### DeepSeek 请求

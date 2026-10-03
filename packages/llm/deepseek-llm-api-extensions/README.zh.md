@@ -32,6 +32,8 @@ Chat Completions 和 Messages 都会准备这些字段。每个提供方都会�
 注册表拥有字段添加与生命周期，不拥有字段语义。`@deepseek-ai/dsh-session-log-deepseek` 拥有 `dsh_session_log`；`@deepseek-ai/dsh-plugin-package-inventory-deepseek` 拥有 `dsh_plugin_packages`。提供方无关的 LLM seam 与 `llm-pi-ai` 都不消费该注册表。
 
 <a id="model-experience"></a>
+请求用途还标识 `collaboration-analysis`。其消费者会在 HTTP 发送前拒绝非空已准备字段；提供方不能向 Source 分析加入工具或上下文。
+
 ## 模型体验
 
 通过 `@deepseek-ai/dsh-llm-deepseek` 间接生效；该包在模型的 `messages`、系统提示词与工具 schema 之外发送已注册字段。

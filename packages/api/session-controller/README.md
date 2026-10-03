@@ -82,7 +82,7 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as invoked Agent commands own any model-visible effect.
+Ordinary commands delegate model input to their Agent. Host-only Source analysis sends its separately persisted original text, mention metadata and analysis prompt through the captured model without starting an Agent turn.
 
 #### KV Cache effect
 
@@ -91,6 +91,10 @@ No direct effect; model requests remain owned by the Agent and LLM packages.
 `inspectCollaborationSource(target, signal)` reads the original committed Source through the owning Profile’s registry and journal. It returns only the original coordinates and SHA-256 of the full RFC 8785 snapshot, including the first journal commit. Missing records, lost membership, extra metadata, cancellation and Profile disposal reject. Reads serialize with accepted captures without preparing a model or restoring a call; late journal opens remain owned until disposal. The private worker HTTP reader consumes this Host-only method.
 
 `readCollaborationSourceSnapshot(target, signal)` applies the same Profile ownership, serial journal read and cancellation checks, returning the detached frozen original snapshot. `inspectCollaborationSource` derives its descriptor from this read. The private worker validates journal content with `parseCollaborationSourceSnapshot`; no Remote export, model preparation, Session event or executable-call restoration is added.
+
+First `captureCollaborationSource` returns Host-only `analyze(persist, signal)` bound to its original snapshot and one-shot prepared call. Recovered Sources expose neither a new call nor analysis. `CollaborationAnalysisManifest` contains `prompt_version`, the original `source`, and the exact signal-free `request`; the Host-owned `persist` callback must commit the complete attempt input before resolving. The Profile rechecks original membership around that commit. `CollaborationAnalysisResult.jsonText` is untrusted JSON for the persistent coordinator to validate; it grants no admission or Source authority.
+
+Analysis uses one user message containing original text and explicit mention metadata plus an analysis prompt, with zero tools and no ordinary history. Each Profile permits two unsettled calls and a 30-second wait; cancelled non-cooperative operations retain their slots until cleanup settles. Input uses a conservative 16 KiB UTF-8 request budget, output is capped at 8192 provider tokens and 32 KiB accumulated stream text, and excess data rejects without truncation. Middleware-only responses, tool output, non-successful terminal results and malformed JSON reject. No model repair/retry or executable restart recovery occurs here; cloud attempt leases, candidate admission and actual chat callers remain the coordinator’s responsibility.
 
 ## Known Limitations and Deferred Work
 

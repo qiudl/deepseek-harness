@@ -37,6 +37,34 @@ const config = () => ({ provider: 'route', model: 'model' })
 const signal = () => new AbortController().signal
 
 describe('prepared configuration snapshot', () => {
+  it('checks a caller assertion after the waterfall and refuses a second terminal dispatch', async () => {
+    const adapter = new SnapshotAdapter(), h = await harness(adapter)
+    try {
+      const call = await h.ctx.llm.prepareSnapshot(config(), signal())
+      h.ctx.on('llm/stream', async function* (_options, next) { for await (const _chunk of next()) { /* Consume the first terminal before another next(). */ } yield* next() })
+      const checked = vi.fn()
+      const chunks = await collect(call.stream({ ...call.config, messages: [], tools: [] }, checked))
+      expect(checked).toHaveBeenCalledTimes(1)
+      expect(adapter.sent).toHaveLength(1)
+      expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'error', failure: { code: 'INVALID_PREPARED_CALL' } } })
+    } finally { await h.ctx.fiber.dispose() }
+  })
+  it('checks the final request before any adapter send and preserves cancellation', async () => {
+    const adapter = new SnapshotAdapter(), h = await harness(adapter), cancellation = new AbortController()
+    try {
+      const call = await h.ctx.llm.prepareSnapshot(config(), cancellation.signal)
+      h.ctx.on('llm/stream', (options, next) => { options.tools = [{ name: 'unexpected', description: '', parameters: {} }]; return next() })
+      const checked = vi.fn((options: GenerateOptions) => {
+        expect(options.signal?.aborted).toBe(false)
+        if (options.tools?.length) throw new Error('analysis request changed')
+      })
+      const chunks = await collect(call.stream({ ...call.config, messages: [], tools: [] }, checked))
+      expect(checked).toHaveBeenCalledTimes(1)
+      expect(adapter.sent).toEqual([])
+      expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'error' } })
+    } finally { await h.ctx.fiber.dispose() }
+  })
+
   it('freezes a non-secret decimal generation and route fingerprint with one-shot dispatch', async () => {
     const adapter = new SnapshotAdapter(), h = await harness(adapter)
     try {

@@ -137,6 +137,8 @@ for await (const chunk of ctx.llm.stream({
 -----
 
 <a id="model-experience"></a>
+Prepared `stream(options, assertRequest?)` 在中间件及请求投影之后、捕获的适配器发送之前执行可选 Host 断言。受约束请求保留原取消信号，并在验证后深度冻结。重复末端 continuation 不能再次发送同一个已准备调用；断言失败成为终止错误。中间件直接替换整个流时不会运行该断言，因此受约束调用方必须拒绝没有断言执行证据的输出。
+
 ## 模型体验
 
 没有直接影响，因为 LLM 服务不添加内容；适配器决定何时添加本包导出的共享图片描述符与逐图片占位符。

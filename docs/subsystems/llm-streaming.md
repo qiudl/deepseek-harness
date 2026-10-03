@@ -618,7 +618,7 @@ interface GenerateOptions {
    * map the purpose to model-hidden transport metadata or purpose-specific
    * generation policy. Ordinary conversation requests leave it unset.
    */
-  purpose?: 'compaction' | 'session-title'
+  purpose?: 'compaction' | 'session-title' | 'collaboration-analysis'
 }
 ```
 
@@ -777,9 +777,10 @@ interface PreparedLlmCall {
    * preparation. The request's call-config fields must match {@link config};
    * reuse or mismatch fails with `INVALID_PREPARED_CALL`.
    * @param options - fully assembled request carrying the prepared config.
+   * @param assertRequest - optional Host assertion over the final adapter request; throws prevent dispatch.
    * @returns the chunk stream, including the `llm/stream` waterfall.
    */
-  stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+  stream(options: GenerateOptions, assertRequest?: (options: GenerateOptions) => void): AsyncIterable<StreamChunk>
 }
 ```
 

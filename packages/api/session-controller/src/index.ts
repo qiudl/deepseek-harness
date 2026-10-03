@@ -5,6 +5,8 @@ import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
+import { CollaborationAnalysisRunner } from './collaboration-analysis.ts'
+import type { CollaborationAnalysisManifest, CollaborationAnalysisResult } from './collaboration-analysis.ts'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, openNativePath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
@@ -139,6 +141,7 @@ export class SessionController extends TypertRemoteService {
   private readonly canOpenPath: () => boolean
   private readonly promotions = new Set<Promise<void>>()
   private readonly collaborationLifetime = new AbortController()
+  private readonly collaborationAnalysis = new CollaborationAnalysisRunner(this.collaborationLifetime.signal)
   private collaborationCaptureTail: Promise<void> = Promise.resolve()
   private collaborationJournal?: Promise<CollaborationSourceJournal>
 
@@ -328,7 +331,7 @@ export class SessionController extends TypertRemoteService {
    * @param sessionId - ordinary Session registered under this workspace.
    * @param workspaceId - WorkspaceRegistry UUID.
    * @param signal - owning Host operation's cancellation, retained through dispatch.
-   * @returns workspace/session identities and the captured executable model call.
+   * @returns workspace/session identities and the captured executable model call with an 8192-token output cap.
    * @throws on ownership/selection change, unsupported capture, preparation failure or cancellation.
    */
   async prepareWorkspaceModelSnapshot(
@@ -341,6 +344,7 @@ export class SessionController extends TypertRemoteService {
     const prepared = await this.ctx.llm.prepareSnapshot({
       provider: selected.selection.provider,
       model: selected.selection.model,
+      maxTokens: 8192,
       ...selected.selection.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(selected.selection.reasoningEffort) },
     }, signal)
     const current = await this.inspectWorkspaceModelSelection(sessionId, workspaceId, signal)
@@ -358,7 +362,9 @@ export class SessionController extends TypertRemoteService {
   /**
    * Capture user content under this Profile's registry and actual prepared model.
    * Persist before returning the process-local call. Duplicate/restarted input returns
-   * only its original snapshot, never a new executable handle or a model request.
+   * only its original snapshot, never a new executable handle or a model request. First capture
+   * exposes Host-only analyze: its caller must durably commit the supplied attempt manifest.
+   * The Profile bounds calls and rechecks original membership before and after that commit.
    * This Host-only queued operation has no Remote endpoint and grants no cloud authority.
    * @param input - exact Source coordinates, raw text and trusted classified mentions; no model or commit fields.
    * @param signal - caller cancellation, combined with the owning Profile lifetime through dispatch.
@@ -366,7 +372,11 @@ export class SessionController extends TypertRemoteService {
    * @throws on invalid input, unavailable journal, changed ownership/selection, conflict or cancellation.
    */
   async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise<
-    | Readonly<{ kind: 'captured'; snapshot: CollaborationSourceSnapshot; prepared: PreparedLlmSnapshotCall }>
+    | Readonly<{ kind: 'captured'
+      snapshot: CollaborationSourceSnapshot
+      prepared: PreparedLlmSnapshotCall
+      analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
+        cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }>
     | Readonly<{ kind: 'recovered'; snapshot: CollaborationSourceSnapshot }>
   > {
     const captured = parseCollaborationSourceInput(input)
@@ -418,7 +428,19 @@ export class SessionController extends TypertRemoteService {
       const snapshot = await journal.capture({ ...captured, model_snapshot: prepared.prepared.snapshot }, ownedSignal)
       await checkSelection()
       ownedSignal.throwIfAborted()
-      return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared })
+      return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared,
+        analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
+          const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
+          return this.collaborationAnalysis.run(snapshot, prepared.prepared, async (manifest, signal) => {
+            await inspectCurrent()
+            signal.throwIfAborted()
+            await persist(manifest, signal)
+            signal.throwIfAborted()
+            await inspectCurrent()
+            signal.throwIfAborted()
+          }, analysisSignal)
+        },
+      })
     })
     this.collaborationCaptureTail = operation.then(() => {}, () => {})
     return operation
