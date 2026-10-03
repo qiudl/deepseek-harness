@@ -80,6 +80,8 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 -----
 
 <a id="model-experience"></a>
+`CollaborationAnalysisJournal.saveOutput` additionally commits complete untrusted model JSON to the separate single-layout `collaboration_analysis_output_v2` domain before the Parent receives a successful analysis response. Outputs bind the original consumed attempt, Source/input digests and exact-text output digest; they cannot replace prior text. `outputs()` only reads frozen records for reconciliation. Invalid JSON, oversized output, corrupt linkage and lost write acknowledgement refuse use while retaining files. Opening and closing the journal owns both domains; existing input, Source and Session formats remain separate.
+
 ## Model Experience
 
 Ordinary commands delegate model input to their Agent. Host-only Source analysis sends its separately persisted original text, mention metadata and analysis prompt through the captured model without starting an Agent turn.

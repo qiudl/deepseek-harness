@@ -110,6 +110,13 @@ export interface ProfileWorkerHandle {
     target: HostWorkspaceModelSelectionTarget,
     signal: AbortSignal,
   ) => Promise<HostWorkspaceModelSelection>
+  /**
+   * Private Parent analysis command; this handle grants no Account/cloud authority.
+   * @param command - Prepare/dispatch JSON with the original binding digest; caller keeps Account/peer current.
+   * @param signal - Current Parent cancellation; the private token never enters a view lease.
+   * @returns a bounded non-executable preparation or untrusted model JSON saved before acknowledgement.
+   */
+  readonly collaborationAnalysis?:(command:HostRemoteSessionJson,signal:AbortSignal)=>Promise<HostRemoteSessionJson>
   /** Host-only committed Source read; no message content or worker token enters a view lease. */
   readonly inspectCollaborationSource?: (
     target: HostCollaborationSourceTarget,

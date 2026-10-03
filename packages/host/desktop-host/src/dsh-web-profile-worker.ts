@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
-import { parseHostWorkspaceModelSelection, parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRemoteSessionJson, parseHostWorkspaceModelSelection, parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
@@ -15,6 +15,7 @@ const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
+  'DSH_PROFILE_ANALYSIS_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
 ])
@@ -103,6 +104,7 @@ export class DshWebProfileWorkerFactory {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
     const sourceToken = randomBytes(32).toString('base64url')
+    const analysisToken = randomBytes(32).toString('base64url')
     const workspaceModelToken = randomBytes(32).toString('base64url')
     const modelToken = randomBytes(32).toString('base64url')
     const remoteSessionToken = randomBytes(32).toString('base64url')
@@ -120,6 +122,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_MODEL_TOKEN: modelToken,
         DSH_PROFILE_WORKSPACE_MODEL_TOKEN: workspaceModelToken,
         DSH_PROFILE_SOURCE_TOKEN: sourceToken,
+        DSH_PROFILE_ANALYSIS_TOKEN: analysisToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
         DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
       },
@@ -128,7 +131,7 @@ export class DshWebProfileWorkerFactory {
     const activated = await this.waitForOrigin(child)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
-      modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, sourceToken)
+      modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, sourceToken, analysisToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -189,6 +192,7 @@ export class DshWebProfileWorkerFactory {
     remoteUiToken: string,
     workspaceModelToken: string,
     sourceToken: string,
+    analysisToken: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -240,6 +244,9 @@ export class DshWebProfileWorkerFactory {
       },
       readCollaborationSourceSnapshot: (target, signal) => this.readCollaborationSourceSnapshot(
         viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
+      ),
+      collaborationAnalysis: (command, signal) => this.collaborationAnalysis(
+        viewOrigin, analysisToken, command, signal, () => requestedStop || settled,
       ),
       inspectCollaborationSource: (target, signal) => this.inspectCollaborationSource(
         viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
@@ -304,6 +311,60 @@ export class DshWebProfileWorkerFactory {
       throw new HostAuthorityError('unavailable')
     } finally {
       await reader.cancel()
+      reader.releaseLock()
+    }
+  }
+
+  private async collaborationAnalysis(
+    origin: string,
+    token: string,
+    command: HostRemoteSessionJson,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostRemoteSessionJson> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(35000)])
+    active.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const body = JSON.stringify(parseHostRemoteSessionJson(command))
+    if (Buffer.byteLength(body, 'utf8') > 1024 * 1024) throw new HostAuthorityError('invalid_input')
+    const response = await fetch(`${origin}/internal/desktop-collaboration-analysis`, {
+      method: 'POST',
+      redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body,
+      signal: active,
+    })
+    if (!response.ok || !response.body) {
+      await response.body?.cancel()
+      throw new HostAuthorityError('unavailable')
+    }
+    const reader = response.body.getReader()
+    try {
+      const chunks: Uint8Array[] = []
+      let bytes = 0
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        if ((bytes += chunk.value.byteLength) > 128 * 1024) throw new HostAuthorityError('unavailable')
+        chunks.push(chunk.value)
+      }
+      active.throwIfAborted()
+      if (stopped()) throw new HostAuthorityError('unavailable')
+      const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        Object.keys(parsed).length !== 1 ||
+        !Object.hasOwn(parsed, 'value')
+      )
+        throw new HostAuthorityError('unavailable')
+      return parseHostRemoteSessionJson((parsed as { value: unknown }).value)
+    } catch (error) {
+      if (error instanceof HostAuthorityError || signal.aborted) throw error
+      throw new HostAuthorityError('unavailable')
+    } finally {
+      void reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }
   }

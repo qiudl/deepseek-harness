@@ -131,6 +131,8 @@ Read these pages when you want to go deeper into the shared core, the browser re
 
 The same private token additionally enables `/internal/desktop-collaboration-source-snapshot`. Exact coordinates resolve the existing owning Profile journal snapshot, with strict nested metadata and content-digest validation. The reply is a descriptor plus original Source JSON, without credentials or an executable handle. Browser cookies cannot authorize this route; missing membership, malformed journals and read failures return sanitized refusals. The parent consumes the complete bounded response and transfers it through fixed control-protocol chunks.
 
+`DSH_PROFILE_ANALYSIS_TOKEN` separately enables `/internal/desktop-collaboration-analysis` for the Parent Host. `prepare` captures the Profile-owned Source and persists the full analysis input, then waits for a cloud grant without calling the model. `dispatch` resumes that same one-shot call only under its original binding digest and durably saves output before replying. Two pending operations and a 30-second lifetime bound preparation and execution; cancellation, disposal, expired grants and repeats refuse continuation. Browser cookies and Source-read tokens cannot authorize it. This private route grants no task admission and does not expose executable recovery or a Renderer API.
+
 ## Model Experience
 
 ### Harness-source and Web-surface context

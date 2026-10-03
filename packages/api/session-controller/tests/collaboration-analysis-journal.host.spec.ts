@@ -170,3 +170,97 @@ describe('REQ-20260930-0004 durable analysis writer', () => {
     await journal.close()
   })
 })
+
+it('retains original output before acknowledgement and recovers without a model call', async () => {
+  const h = await harness(),
+    m = await manifest(h.facility),
+    journal = await openCollaborationAnalysisJournal(h.facility),
+    record = await journal.prepare(m, signal())
+  await expect(journal.saveOutput(record, '{"intent":"discuss"}', signal())).rejects.toThrow()
+  await journal.dispatch(record, grant(record), signal())
+  const saved = await journal.saveOutput(record, '{"intent":"discuss"}', signal())
+  expect(Object.isFrozen(saved)).toBe(true)
+  expect(await journal.saveOutput(record, saved.json_text, signal())).toEqual(saved)
+  await expect(journal.saveOutput(record, '{"intent":"delegate"}', signal())).rejects.toThrow('conflict')
+  await journal.close()
+  const reopened = await openCollaborationAnalysisJournal(h.facility)
+  expect([...reopened.outputs()]).toEqual([saved])
+  await reopened.close()
+})
+it('refuses invalid or over-budget outputs without changing the original input', async () => {
+  const h = await harness(),
+    m = await manifest(h.facility),
+    journal = await openCollaborationAnalysisJournal(h.facility),
+    record = await journal.prepare(m, signal())
+  await journal.dispatch(record, grant(record), signal())
+  const before = await readFile(join(h.root, 'collaboration_analysis_v2.json'), 'utf8')
+  for (const json of ['[]', 'null', 'bad', JSON.stringify({ text: 'x'.repeat(32768) })])
+    await expect(journal.saveOutput(record, json, signal())).rejects.toThrow()
+  expect([...journal.outputs()]).toEqual([])
+  expect(await readFile(join(h.root, 'collaboration_analysis_v2.json'), 'utf8')).toBe(before)
+  await journal.close()
+})
+it('a lost output write acknowledgement forces read-only recovery of the original result', async () => {
+  let fail = false
+  const h = await harness(undefined, {
+    afterWrite: async () => {
+      if (fail) throw Error('output acknowledgement lost')
+    },
+  })
+  const m = await manifest(h.facility),
+    journal = await openCollaborationAnalysisJournal(h.facility),
+    record = await journal.prepare(m, signal())
+  await journal.dispatch(record, grant(record), signal())
+  fail = true
+  await expect(journal.saveOutput(record, '{"intent":"discuss"}', signal())).rejects.toThrow('acknowledgement lost')
+  expect(() => [...journal.outputs()]).toThrow('recovery_required')
+  await journal.close()
+  fail = false
+  const reopened = await openCollaborationAnalysisJournal(h.facility)
+  expect([...reopened.outputs()][0]?.json_text).toBe('{"intent":"discuss"}')
+  await expect(
+    createCollaborationAnalysisWriter(reopened, async () => {
+      throw Error('must not claim')
+    })(m, signal()),
+  ).rejects.toThrow('dispatch_used')
+  await reopened.close()
+})
+it('corrupt output digest refuses opening and preserves both original files', async () => {
+  const h = await harness(),
+    m = await manifest(h.facility),
+    journal = await openCollaborationAnalysisJournal(h.facility),
+    record = await journal.prepare(m, signal())
+  await journal.dispatch(record, grant(record), signal())
+  await journal.saveOutput(record, '{"intent":"discuss"}', signal())
+  await journal.close()
+  const path = join(h.root, 'collaboration_analysis_output_v2.json'),
+    raw = await readFile(path, 'utf8'),
+    changed = raw.replace('discuss', 'delegate')
+  await writeFile(path, changed)
+  const before = await readFile(join(h.root, 'collaboration_analysis_v2.json'), 'utf8')
+  await expect(openCollaborationAnalysisJournal(h.facility)).rejects.toThrow()
+  expect(await readFile(path, 'utf8')).toBe(changed)
+  expect(await readFile(join(h.root, 'collaboration_analysis_v2.json'), 'utf8')).toBe(before)
+})
+
+it('closes the output domain even if input domain close reports failure', async () => {
+  const h = await harness()
+  const closed: string[] = []
+  const open = h.facility.open.bind(h.facility)
+  const journal = await openCollaborationAnalysisJournal({
+    open: async (spec) => {
+      const domain = await open(spec)
+      const close = domain.close.bind(domain)
+      domain.close = async () => {
+        closed.push(spec.name)
+        await close()
+        if (spec.name === 'collaboration_analysis_v2') throw Error('input-close-failed')
+      }
+      return domain
+    },
+  })
+  await expect(journal.close()).rejects.toThrow('input-close-failed')
+  expect(closed).toEqual(['collaboration_analysis_v2', 'collaboration_analysis_output_v2'])
+  await expect(journal.close()).rejects.toThrow('input-close-failed')
+  expect(closed).toHaveLength(2)
+})

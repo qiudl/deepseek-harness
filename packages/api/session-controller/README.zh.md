@@ -122,3 +122,5 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 </details>
 
 **运行时不变式：** 不发布伴生入口。每个分页与帧都会对照其指向的持久 Session 校验。
+
+`CollaborationAnalysisJournal.saveOutput` 另将完整、不可信的模型 JSON 写入独立的单文件 `collaboration_analysis_output_v2` 领域，再向父 Host 返回分析成功。结果绑定原已消耗尝试、Source/输入摘要及原文输出摘要，不能替换已有文本。`outputs()` 仅供读取冻结记录进行对账。非法 JSON、超限结果、损坏关联和写入确认丢失都会拒绝使用，同时保留文件。打开和关闭 journal 管理两个领域；已有输入、Source 与 Session 格式保持独立。

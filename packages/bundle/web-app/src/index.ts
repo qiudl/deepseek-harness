@@ -30,6 +30,8 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
+import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from './desktop-collaboration-analysis.ts'
+import { openCollaborationAnalysisJournal } from '@deepseek-ai/dsh-api-session-controller'
 import { handleDesktopWorkspaceModelSelectionRequest } from './desktop-workspace-model-selection.ts'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
@@ -243,6 +245,25 @@ export function apply(ctx: Context, config: Config): void {
             selection: () => modelCtx.agentDefaultModel.currentSelection(),
             stream: options => modelCtx.llm.stream(options),
           })),
+      }))
+    })
+  }
+  const analysisToken = process.env.DSH_PROFILE_ANALYSIS_TOKEN
+  if (analysisToken && /^[A-Za-z0-9_-]{43}$/u.test(analysisToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      const lifetime = new AbortController()
+      const owner = new DesktopCollaborationAnalysis(
+        (input, signal) => sessionCtx.sessionController.captureCollaborationSource(input, signal),
+        async () => {
+          const facility = sessionCtx.get('storageDomain')
+          if (!facility) throw Error('collaboration_analysis_journal_unavailable')
+          return openCollaborationAnalysisJournal(facility)
+        }, lifetime.signal,
+      )
+      sessionCtx.effect(() => () => { lifetime.abort(); return owner.close() }, 'web-app: private analysis lifetime')
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-analysis',
+        handler: (req, res) => handleDesktopCollaborationAnalysisRequest(req, res, analysisToken, owner),
       }))
     })
   }

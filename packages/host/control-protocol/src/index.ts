@@ -9,6 +9,7 @@ export {
   parseHostCollaborationSourceSnapshot,
   parseHostCollaborationSourceSnapshotChunk,
   parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion, encodeHostSourceAuthorityPayload,
+  parseHostRemoteSessionJson,
   HOST_CONTROL_MAX_FRAME_BYTES,
   HostControlProtocolError,
   decodeHostControlFrame,

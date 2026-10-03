@@ -67,6 +67,36 @@ const spec = defineDomain({ name: 'collaboration_analysis_v2', version: 1,
   tables: { attempts: domainTable<string, CollaborationAnalysisJournalRecord>(recordSchema) },
 })
 
+const outputSchema = z
+  .strictObject({
+    attempt_request_id: id,
+    source_digest: digest,
+    input_manifest_digest: digest,
+    json_text: z
+      .string()
+      .max(32768)
+      .refine(value => value.isWellFormed() && Buffer.byteLength(value, 'utf8') <= 32768),
+    output_digest: digest,
+  })
+  .refine((value) => {
+    try {
+      const parsed: unknown = JSON.parse(value.json_text)
+      return (
+        parsed !== null &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        hash(value.json_text) === value.output_digest
+      )
+    } catch {
+      return false
+    }
+  })
+type AnalysisOutput = Readonly<z.infer<typeof outputSchema>>
+const outputSpec = defineDomain({
+  name: 'collaboration_analysis_output_v2',
+  version: 1,
+  tables: { results: domainTable<string, AnalysisOutput>(outputSchema) },
+})
 /** Profile-owned input journal; records never contain an executable call or restore one. */
 export interface CollaborationAnalysisJournal {
   /**
@@ -85,6 +115,17 @@ export interface CollaborationAnalysisJournal {
    */
   dispatch(record: CollaborationAnalysisJournalRecord, grant: CollaborationAnalysisDispatchGrant,
     signal: AbortSignal): Promise<CollaborationAnalysisJournalRecord & { readonly dispatch: CollaborationAnalysisDispatchGrant }>
+  /**
+   * Save untrusted model JSON against its original consumed dispatch. No task is authorized.
+   * Failed acknowledgement requires reopen; accepted output can never be replaced by different text.
+   * @param record - Original persisted input and attempt identity.
+   * @param jsonText - Complete original model JSON, bounded to 32 KiB.
+   * @param signal - Current Profile/operation cancellation.
+   * @returns the committed frozen output, also accessible for read-only recovery.
+   */
+  saveOutput(record:CollaborationAnalysisJournalRecord,jsonText:string,signal:AbortSignal):Promise<AnalysisOutput>
+  /** @returns frozen original outputs; recovery never constructs executable model calls. */
+  outputs():IterableIterator<AnalysisOutput>
   /** @returns a frozen record iterator for read-only recovery and reconciliation. */
   records(): IterableIterator<CollaborationAnalysisJournalRecord>
   /** @returns resolution after accepted writes drain and the domain closes. */
@@ -105,6 +146,41 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
       deepFreeze(record)
     }
   } catch (error) { await domain.close(); throw error }
+  let outputDomain: Awaited<ReturnType<typeof facility.open<typeof outputSpec>>>
+  try {
+    outputDomain = await facility.open(outputSpec)
+  } catch (error) {
+    await domain.close()
+    throw error
+  }
+  const closeDomains = async () => {
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => domain.close()),
+      Promise.resolve().then(() => outputDomain.close()),
+    ])
+    const errors: unknown[] = []
+    for (const result of results) if (result.status === 'rejected') errors.push(result.reason)
+    if (errors.length === 1) throw errors[0]
+    if (errors.length > 1) throw new AggregateError(errors, 'collaboration_analysis_journal_close_failed')
+  }
+  const outputs = outputDomain.table('results')
+  try {
+    for (const [key, value] of outputs.entries()) {
+      const original = table.get(key)
+      if (
+        !original?.dispatch ||
+        key !== value.input_manifest_digest ||
+        original.attempt_request_id !== value.attempt_request_id ||
+        original.source_digest !== value.source_digest
+      )
+        throw Error('collaboration_analysis_output_invalid')
+      deepFreeze(value)
+    }
+  } catch (error) {
+    await closeDomains()
+    throw error
+  }
+
   let tail = Promise.resolve(), closing: Promise<void> | undefined, recoveryRequired = false
   const healthy = () => { if (recoveryRequired) throw Error('collaboration_analysis_journal_recovery_required') }
   const enqueue = <T>(work: () => Promise<T>): Promise<T> => {
@@ -153,12 +229,60 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
         return put(deepFreeze({ ...stored, dispatch: grant }))
       })
     },
+    saveOutput(record, jsonText, signal) {
+      let value: AnalysisOutput
+      try {
+        value = deepFreeze(
+          outputSchema.parse({
+            attempt_request_id: record.attempt_request_id,
+            input_manifest_digest: record.input_manifest_digest,
+            source_digest: record.source_digest,
+            json_text: jsonText,
+            output_digest: hash(jsonText),
+          }),
+        )
+      } catch (error) {
+        return Promise.reject(
+          error instanceof Error ? error : new Error('collaboration_analysis_output_invalid', { cause: error }),
+        )
+      }
+      return enqueue(async () => {
+        signal.throwIfAborted()
+        const original = table.get(value.input_manifest_digest)
+        if (
+          !original?.dispatch ||
+          original.attempt_request_id !== value.attempt_request_id ||
+          original.source_digest !== value.source_digest ||
+          original.manifest_json !== record.manifest_json
+        )
+          throw Error('collaboration_analysis_output_invalid')
+        const previous = outputs.get(value.input_manifest_digest)
+        if (previous) {
+          if (previous.json_text !== value.json_text) throw Error('collaboration_analysis_output_conflict')
+          return previous
+        }
+        try {
+          await outputs.put(value.input_manifest_digest, value)
+        } catch (error) {
+          recoveryRequired = true
+          throw error
+        }
+        signal.throwIfAborted()
+        return value
+      })
+    },
+    outputs() {
+      if (closing) throw Error('collaboration_analysis_journal_closed')
+      healthy()
+      return [...outputs.entries()].map(([, value]) => value).values()
+    },
+
     records() {
       if (closing) throw Error('collaboration_analysis_journal_closed')
       healthy()
       return [...table.entries()].map(([, record]) => record).values()
     },
-    close() { closing ??= tail.then(() => domain.close()); return closing },
+    close() { closing ??= tail.then(closeDomains); return closing },
   }
 }
 

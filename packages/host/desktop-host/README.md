@@ -109,6 +109,8 @@ No runtime invariant companion is published: filesystem and wire commit points v
 
 `profile.source_snapshot` uses the same current Account and Profile worker reader to transfer original journal content privately. The worker bearer route validates the complete persisted Source, while the supervisor rejects disposed or replaced workers. Fixed 32 KiB byte chunks preserve the existing control-frame budget; the client checks coordinates, consistent descriptor/length, complete UTF-8, cancellation and the inspected peer across a bounded read. It returns original content and redacted model/commit metadata, without credentials, model preparation or a restored call. Startup composes the reader on macOS and Windows; real chat capture and dispatch remain separate.
 
+The Web worker factory creates a separate random `DSH_PROFILE_ANALYSIS_TOKEN`, reserves it against caller environment overrides and keeps it outside view leases. Its Parent-only `collaborationAnalysis` handle sends bounded prepare/dispatch JSON to the private worker, rejects stopped workers and redirects, and validates the complete bounded UTF-8 response. The Parent must derive the original Account/Host binding digest and keep that authority current; this handle alone does not grant cloud authority or install a Host-control/chat entry.
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.

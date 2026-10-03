@@ -503,6 +503,13 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   return reject()
 }
 
+/**
+ * Detach bounded private-worker JSON using the same limits as Host Session results.
+ * @param value - Parsed worker JSON; nonfinite values and unsafe property names reject.
+ * @returns a detached JSON value with bounded depth, node count and strings.
+ */
+export function parseHostRemoteSessionJson(value:unknown):HostRemoteSessionJson{return remoteSessionJson(value)}
+
 function remoteSessionJson(value: unknown, depth = 0, count = { value: 0 }): HostRemoteSessionJson {
   count.value += 1
   if (count.value > 1_024 || depth > 8) reject()

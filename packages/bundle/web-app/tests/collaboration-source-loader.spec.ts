@@ -14,7 +14,7 @@ import { DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-dee
 import type { AnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { DshWebProfileWorkerFactory } from '@deepseek-ai/dsh-slark-desktop-host'
-import type { HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRemoteSessionJson, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
 import { mkdtemp, realpath, rm, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -32,7 +32,7 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['source-only', 'analysis', 'analysis-extension'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
   const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
@@ -53,6 +53,7 @@ it.each(['source-only', 'analysis', 'analysis-extension'] as const)('loads the S
     await rm(directory, { recursive: true, force: true })
   })
   vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
+  vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', mode === 'analysis-profile' ? 'B'.repeat(43) : '')
   for (const key of ['DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) vi.stubEnv(key, '')
   // GUI/transport peers are fixtures; Source owners, registry, model runtime and storage load from YAML.
   ctx.provide('webServer', { host: '127.0.0.1', port: 0, register(route: { path: string; handler: typeof routes extends Map<string, infer T> ? T : never }) {
@@ -142,20 +143,73 @@ it.each(['source-only', 'analysis', 'analysis-extension'] as const)('loads the S
       source_span: { source_message_id: 'message-1', source_revision: '1', start: 0, end: 6 },
       display_snapshot: { agent_name: 'Guide', project_name: 'qiu-slark' },
       binding: { kind: 'resolved' as const, target: { project_id: '212', agent_id: 'guide' }, capability_snapshot: 'a'.repeat(64) } }] }
-  const first = await ctx.sessionController.captureCollaborationSource(source, new AbortController().signal)
-  expect(await readFile(join(directory, 'state', 'collaboration_source_v2.json'), 'utf8')).toContain(first.snapshot.host_journal_commit.journal_id)
-  const target = { workspace_id: workspace.id, session_id: sessionId,
-    source_message_id: 'message-1', source_revision: '1' }
   const factory = new DshWebProfileWorkerFactory({
-    nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    nodeExecutablePath: process.execPath,
+    dshEntrypointPath: process.execPath,
   }) as unknown as {
-    inspectCollaborationSource(origin: string, token: string, target: HostCollaborationSourceTarget, signal: AbortSignal,
-      stopped: () => boolean): Promise<HostCollaborationSourceDescriptor>
+    collaborationAnalysis(
+      origin: string,
+      token: string,
+      command: HostRemoteSessionJson,
+      signal: AbortSignal,
+      stopped: () => boolean
+    ): Promise<HostRemoteSessionJson>
+    inspectCollaborationSource(
+      origin: string,
+      token: string,
+      target: HostCollaborationSourceTarget,
+      signal: AbortSignal,
+      stopped: () => boolean
+    ): Promise<HostCollaborationSourceDescriptor>
     readCollaborationSourceSnapshot(
-      origin: string, token: string, target: HostCollaborationSourceTarget, signal: AbortSignal,
-      stopped: () => boolean,
+      origin: string,
+      token: string,
+      target: HostCollaborationSourceTarget,
+      signal: AbortSignal,
+      stopped: () => boolean
     ): Promise<HostCollaborationSourceSnapshot>
   }
+  const postAnalysis = async (body: unknown, authorization = `Bearer ${'B'.repeat(43)}`) =>
+    fetch(`${origin}/internal/desktop-collaboration-analysis`, {
+      method: 'POST',
+      headers: { authorization, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const preparation =
+    mode === 'analysis-profile'
+      ? ((await factory.collaborationAnalysis(
+        origin,
+        'B'.repeat(43),
+        { action: 'prepare', binding_key: 'd'.repeat(64), input: source },
+        new AbortController().signal,
+        () => false,
+      )) as { kind: string; attempt_request_id: string; input_manifest_digest: string; source_digest: string })
+      : undefined
+  const first =
+    mode === 'analysis-profile'
+      ? {
+        kind: 'recovered' as const,
+        snapshot: await ctx.sessionController.readCollaborationSourceSnapshot(
+          {
+            workspace_id: source.workspace_id,
+            session_id: source.session_id,
+            source_message_id: source.source_message_id,
+            source_revision: source.source_revision,
+          },
+          new AbortController().signal,
+        ),
+      }
+      : await ctx.sessionController.captureCollaborationSource(source, new AbortController().signal)
+  expect(await readFile(join(directory, 'state', 'collaboration_source_v2.json'), 'utf8')).toContain(
+    first.snapshot.host_journal_commit.journal_id,
+  )
+  const target = {
+    workspace_id: workspace.id,
+    session_id: sessionId,
+    source_message_id: 'message-1',
+    source_revision: '1',
+  }
+
   const result = await factory.inspectCollaborationSource(origin, token, target, new AbortController().signal, () => false)
   expect(result).toEqual(await ctx.sessionController.inspectCollaborationSource(target, new AbortController().signal))
   const full=await factory.readCollaborationSourceSnapshot(origin,token,target,new AbortController().signal,()=>false)
@@ -164,13 +218,63 @@ it.each(['source-only', 'analysis', 'analysis-extension'] as const)('loads the S
   expect((await fetch(`${origin}/internal/desktop-collaboration-source-snapshot`,{ method:'POST',headers:{ cookie:'dsh-auth=browser' },body:JSON.stringify(target) })).status).toBe(403)
   expect((await fetch(`${origin}/internal/desktop-collaboration-source`, { method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body: JSON.stringify(target) })).status).toBe(403)
   await expect(factory.inspectCollaborationSource(origin, token, { ...target, source_message_id: 'missing' }, new AbortController().signal, () => false)).rejects.toThrow()
-  const analysisJournal = mode !== 'source-only' ? await openCollaborationAnalysisJournal(facility!) : undefined
+  const analysisJournal = mode !== 'source-only' && mode !== 'analysis-profile' ? await openCollaborationAnalysisJournal(facility!) : undefined
   const analysisWriter = analysisJournal ? createCollaborationAnalysisWriter(analysisJournal, async (record) => {
     expect(providerRequests).toBe(0)
     return { attempt_request_id: record.attempt_request_id, plan_id: 'fixture-plan', expected_plan_revision: '1',
       attempt_id: 'fixture-attempt', attempt_fence: '1', input_manifest_digest: record.input_manifest_digest,
       source_digest: record.source_digest, lease_expires_at: new Date(Date.now() + 30000).toISOString(), dispatch_granted: true }
   }) : undefined
+  if (mode === 'analysis-profile') {
+    expect(providerRequests).toBe(0)
+    expect(preparation?.kind).toBe('prepared')
+    expect(
+      (await postAnalysis({ action: 'prepare', binding_key: 'd'.repeat(64), input: source }, `Bearer ${token}`)).status,
+    ).toBe(403)
+    const headersOnly = await fetch(`${origin}/internal/desktop-collaboration-analysis`, {
+      method: 'POST',
+      headers: { cookie: 'dsh-auth=browser' },
+      body: '{}',
+    })
+    expect(headersOnly.status).toBe(403)
+    const grant = {
+      attempt_request_id: preparation!.attempt_request_id,
+      input_manifest_digest: preparation!.input_manifest_digest,
+      source_digest: preparation!.source_digest,
+      plan_id: 'fixture-plan',
+      expected_plan_revision: '1',
+      attempt_id: 'fixture-attempt',
+      attempt_fence: '1',
+      lease_expires_at: new Date(Date.now() + 30000).toISOString(),
+      dispatch_granted: true,
+    }
+    const dispatch = {
+      action: 'dispatch',
+      binding_key: 'd'.repeat(64),
+      attempt_request_id: preparation!.attempt_request_id,
+      grant,
+    }
+    expect((await postAnalysis({ ...dispatch, binding_key: 'e'.repeat(64) })).status).toBe(422)
+    expect(providerRequests).toBe(0)
+    const result = (await factory.collaborationAnalysis(
+      origin,
+      'B'.repeat(43),
+      dispatch,
+      new AbortController().signal,
+      () => false,
+    )) as { jsonText: string }
+    expect((JSON.parse(result.jsonText) as { intent: string }).intent).toBe('delegate')
+    await expect(
+      factory.collaborationAnalysis(origin, 'B'.repeat(43), dispatch, new AbortController().signal, () => true),
+    ).rejects.toThrow()
+    expect(providerRequests).toBe(1)
+    expect(await readFile(join(directory, 'state', 'collaboration_analysis_output_v2.json'), 'utf8')).toContain(
+      'json_text',
+    )
+    expect((await postAnalysis(dispatch)).status).toBe(422)
+    expect(providerRequests).toBe(1)
+  }
+
   if (mode === 'analysis-extension') {
     if (first.kind !== 'captured') throw Error('expected original capture')
     await expect(first.analyze(analysisWriter!, new AbortController().signal)).rejects.toThrow('collaboration_analysis_failed')

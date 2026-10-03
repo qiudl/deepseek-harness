@@ -85,6 +85,8 @@ See the [single Host control protocol Agent Note](../../../.agents/notes/impleme
 
 No runtime invariant companion is published: the codec validates the complete wire value algebra at its input boundary.
 
+`parseHostRemoteSessionJson` exposes the existing Host JSON limits to private-worker consumers. It detaches parsed data and rejects nonfinite numbers, unsafe keys, excess depth/count and oversized strings; it grants no operation authority.
+
 ## Model Experience
 
 None, as this local Host control codec registers nothing model-facing.
