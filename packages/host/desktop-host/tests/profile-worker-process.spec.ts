@@ -66,9 +66,10 @@ describe('profile worker child process', () => {
         batches: [{ phase: 'application', url: relative, rev: 'r1', entries: ['a'] }],
       } },
     ] }
+    let servedBoot: unknown = boot
     const server = createServer((request, response) => {
       if (request.url === '/internal/desktop-remote-ui') {
-        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ value: boot }))
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ value: servedBoot }))
       } else if (request.url === absolute) {
         response.writeHead(200, { 'content-type': 'text/javascript' }).end('registered();')
       } else response.writeHead(404).end()
@@ -100,6 +101,20 @@ describe('profile worker child process', () => {
     await expect(remoteUiAssetRead.call(factory, origin, { name: 'cookie', value: 'private' }, 'token',
       'asset/describe', { args: { url: absolute } }, signal, () => false, {}))
       .resolves.toEqual({ sha256: createHash('sha256').update('registered();').digest('hex'), total: 13 })
+    // Preserve invalid metadata for the downstream validator instead of inventing valid references.
+    for (const malformed of [null, [], {}, { injections: null }, { injections: [
+      null, {}, { kind: 'script-src', src: 42 },
+      { kind: 'script-preload', src: '/plugins/already-rooted.js' },
+      { kind: 'script-src', src: 'https://other.example/plugin.js' },
+      { kind: 'global', name: 'other', value: {} },
+      { kind: 'global', name: '__DSH_BOOT__', value: null },
+      { kind: 'global', name: '__DSH_BOOT__', value: { entries: null, batches: null } },
+      { kind: 'global', name: '__DSH_BOOT__', value: { entries: [null], batches: [null] } },
+    ] }]) {
+      servedBoot = malformed
+      await expect(remoteUiRead.call(factory, origin, 'token', 'boot/injections', { args: {} }, signal, () => false))
+        .resolves.toEqual(malformed)
+    }
   })
 
   it('rejects malformed remote responses and stopped reads at the private Host boundary', async () => {
