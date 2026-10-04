@@ -1,7 +1,6 @@
 /** Scoped Agent chips submit original Source text to Main; they never serialize into ordinary model chat. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import type { zh } from './locales.ts'
@@ -31,13 +30,22 @@ export interface DesktopCollaborationSourceInput {
     binding: { kind: 'resolved'; target: { project_id: string; agent_id: string }; capability_snapshot: string }
   }>
 }
+type SourceCoordinates = Pick<DesktopCollaborationSourceInput, 'workspace_id' | 'session_id' | 'source_message_id' | 'source_revision'>
 /** Main's public projection contains no model, proof, token, grant or Task identity. */
 export type CollaborationSubmissionResponse = {
   ok: true
-  value: { source: Pick<DesktopCollaborationSourceInput, 'workspace_id' | 'session_id' | 'source_message_id' | 'source_revision'>
+  value: { source: SourceCoordinates
     submission_state: 'accepted'
     invocation_id?: string }
 } | { ok: false; errorCode: string; reconciliationRequired: boolean }
+
+function sameAcceptedSource(value: { submission_state: unknown; source: Record<keyof SourceCoordinates, unknown> },
+  original: SourceCoordinates): boolean {
+  const source = value.source
+  return value.submission_state === 'accepted' && source.workspace_id === original.workspace_id &&
+    source.session_id === original.session_id && source.source_message_id === original.source_message_id &&
+    source.source_revision === original.source_revision
+}
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const text = (v: unknown, maximum: number): v is string => typeof v === 'string' && v.length > 0 &&
@@ -70,7 +78,7 @@ export function scopedCollaborationClipboard(ref: string): string | undefined {
   return r?.source_id ? `@${label(r)}` : undefined
 }
 function workspaceOf(ctx: Context, sessionId: SessionId): string | undefined {
-  const workspaces = ctx.get('workspaces') as IWorkspaces | undefined
+  const workspaces = ctx.get('workspaces')
   const snapshot = workspaces?.list.getSnapshot()
   if (!snapshot || snapshot.phase !== 'ready' || snapshot.state === 'error' || snapshot.archivedSessionIds.includes(sessionId)) return undefined
   return snapshot.items.find(w => w.sessionIds.includes(sessionId))?.workspaceId
@@ -87,6 +95,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
     trigger: '@', name: 'slark-agent', matchEnterPosition: 'anywhere',
     async candidates(session, { query, signal }) {
       const host = window.__DSH_DESKTOP_HOST__, workspace = workspaceOf(ctx, session.sessionId)
+      const current = () => !signal.aborted && window.__DSH_DESKTOP_HOST__ === host &&
+        workspaceOf(ctx, session.sessionId) === workspace
       if (!workspace || !host?.collaborationScopeAvailable || !host.collaborationExecutionAvailable ||
         !host.collaborationWorkspace || !host.collaborationSubmit || signal.aborted) return []
       let response
@@ -94,8 +104,7 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
         response = await host.collaborationWorkspace({ workspace_id: workspace, session_id: session.sessionId,
           operation: { kind: 'agents', query: { limit: 20, query: query.trim() } } })
       } catch { return [] }
-      if (signal.aborted || window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== workspace ||
-        !response.ok || !('scope_version' in response.value)) return []
+      if (!current() || !response.ok || !('scope_version' in response.value)) return []
       return response.value.items.filter(item => item.available && item.reason_code === 'ready').map(item => ({
         name: `${item.agent_name} · ${item.project_name} · ${item.agent_id}`,
         label: `${item.agent_name} · ${item.project_name}`, description: item.project_name,
@@ -113,6 +122,7 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
       return { insert: { source: 'slark-agent', ref: JSON.stringify({ ...r, source_id: randomUUID() }),
         label: label(r), clipboardText: `@${label(r)}` } }
     },
+    // oxlint-disable-next-line typescript/require-await -- Capture stays synchronous; failures reject the trigger Promise.
     async matchEnter(session, line, signal, envelope) {
       const scoped = ctx.sessions.scope(session.sessionId)
       if (!scoped) return undefined
@@ -120,7 +130,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
       const host = window.__DSH_DESKTOP_HOST__
       if (!host?.collaborationExecutionAvailable || !host.collaborationScopeAvailable || !host.collaborationSubmit) throw Error(t('scope.executorPending'))
       if (snapshot.draft.trim() !== line || snapshot.occurrences.length !== 1 || envelope.attachments > 0) throw Error(t('submit.single'))
-      const submit = host.collaborationSubmit
+      const submit = host.collaborationSubmit.bind(host)
+      const available = () => host.collaborationScopeAvailable && host.collaborationExecutionAvailable
       const mention = snapshot.occurrences[0]
       if (!mention) throw Error(t('submit.unavailable'))
       const r = parse(mention.ref), end = mention.offset + mention.length
@@ -145,17 +156,14 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
             currentMention.offset !== mention.offset || currentMention.length !== mention.length ||
             currentMention.clipboardText !== mention.clipboardText || args.trim() !== '' ||
             workspaceOf(ctx, session.sessionId) !== r.workspace_id || window.__DSH_DESKTOP_HOST__ !== host ||
-            !host.collaborationScopeAvailable || !host.collaborationExecutionAvailable) return { kind: 'error', text: t('submit.changed') }
+            !available()) return { kind: 'error', text: t('submit.changed') }
           let result: CollaborationSubmissionResponse
           try { result = await submit(original) }
           catch { return { kind: 'error', text: t('submit.uncertainV2') } }
           signal.throwIfAborted()
           if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== r.workspace_id) return { kind: 'error', text: t('submit.uncertainV2') }
           if (!result.ok) return { kind: 'error', text: t(result.reconciliationRequired ? 'submit.uncertainV2' : 'submit.unavailableV2') }
-          const source = result.value.source
-          if (result.value.submission_state !== 'accepted' || source.workspace_id !== original.workspace_id ||
-            source.session_id !== original.session_id || source.source_message_id !== original.source_message_id ||
-            source.source_revision !== original.source_revision) return { kind: 'error', text: t('submit.uncertainV2') }
+          if (!sameAcceptedSource(result.value, original)) return { kind: 'error', text: t('submit.uncertainV2') }
           window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
           return { kind: 'success', text: t('submit.acceptedV2') }
         },

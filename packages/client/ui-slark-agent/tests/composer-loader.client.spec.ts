@@ -161,6 +161,7 @@ it('YAML-loaded result registration receives the real composer admission event a
     f.composer.submit()
     await vi.waitFor(() => { expect(model.getSnapshot().groups[0]?.replies[0]?.answer).toBe('fixture reply') })
     expect(f.deliveries.mock.calls[0]?.[0].source.source_message_id).toBe(f.submit.mock.calls[0]?.[0].source_message_id)
+    expect(f.submit.mock.contexts[0]).toBe(window.__DSH_DESKTOP_HOST__)
     expect(f.sink).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled()
   } finally { remove() }
 })
@@ -219,6 +220,18 @@ it.each(['workspace', 'archive', 'bridge'] as const)('refuses a picked chip afte
   expect(submit).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
 })
 
+it.each(['collaborationScopeAvailable', 'collaborationExecutionAvailable'] as const)('refuses a picked chip when the same Host disables %s', async (capability) => {
+  const { composer, pick, submit, invoke, sink } = await bench(true)
+  await pick('', '请检查登录问题')
+  const original = composer.snapshot.draft, host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('Desktop bridge missing')
+  Reflect.set(host, capability, false)
+  composer.submit()
+  await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(composer.snapshot.draft).toBe(original)
+  expect(submit).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
+})
+
 it('does not consume the original draft for a late acceptance after workspace ownership changes', async () => {
   const { composer, pick, submit, workspace, sink } = await bench(true)
   await pick('', '请检查登录问题')
@@ -249,6 +262,23 @@ it('transport loss and a substituted accepted Source preserve the draft without 
   composer.submit()
   await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.seq).toBe(2) })
   expect(composer.snapshot.draft).toBe(original); expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
+})
+
+it.each(['submission_state', 'source_revision'] as const)('rejects a runtime reply with substituted %s', async (field) => {
+  const { composer, pick, submit, invoke, sink } = await bench(true)
+  await pick('', '请检查登录问题')
+  const original = composer.snapshot.draft
+  submit.mockImplementation(async (input) => {
+    const value = { source: { workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision }, submission_state: 'accepted' as const }
+    if (field === 'source_revision') Reflect.set(value.source, field, '2')
+    else Reflect.set(value, field, 'pending')
+    return { ok: true, value }
+  })
+  composer.submit()
+  await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(composer.snapshot.draft).toBe(original)
+  expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
 })
 
 it.each([

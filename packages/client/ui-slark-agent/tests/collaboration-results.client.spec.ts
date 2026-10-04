@@ -32,7 +32,7 @@ it('keeps the aggregate view within its budget when loading additional replies',
 })
 function fixture() {
   let grouped = true, remoteGeneration: unknown = 1
-  const listeners = new Set<() => void>(), changed = () => { listeners.forEach(fn => fn()) }
+  const listeners = new Set<() => void>(), changed = () => { listeners.forEach((fn) => { fn() }) }
   const workspaces = { getSnapshot: () => ({ phase: 'ready', state: 'idle', archivedSessionIds: [],
     items: grouped ? [{ workspaceId: workspace_id, sessionIds: ['session'] }] : [] }),
   subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } } as unknown as WorkspaceSource
@@ -40,17 +40,17 @@ function fixture() {
     subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } }
   const reads = vi.fn(async (_cursor: string | undefined, _signal: AbortSignal) =>
     ({ ok: true as const, value: { items: [original] } as SessionCollaborationSourcesValue }))
-  let bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true,
-    collaborationDeliveries: vi.fn(async () => ({ ok: true as const, value: { deliveries: [reply] } })) }
+  const deliveries = vi.fn(async () => ({ ok: true as const, value: { deliveries: [reply] } }))
+  let bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true, collaborationDeliveries: deliveries }
   const model = new CollaborationResultsModel('session' as never, workspaces, generation, reads, () => bridge)
-  return { model, reads, bridge, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
+  return { model, reads, bridge, deliveries, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
     move: () => { grouped = false; changed() }, reset: () => { remoteGeneration = 2; changed() } }
 }
 it('reconstructs original messages and results using readonly coordinates, with separate execution and delivery state', async () => {
   const f = fixture()
   await f.model.refresh()
   expect(f.reads).toHaveBeenCalledTimes(1)
-  expect(f.bridge.collaborationDeliveries).toHaveBeenCalledWith({ source, limit: 50 })
+  expect(f.deliveries).toHaveBeenCalledWith({ source, limit: 50 })
   expect(f.model.getSnapshot().groups[0]?.original.original_message).toBe(original.original_message)
   expect(f.model.getSnapshot().groups[0]?.replies[0]?.answer).toBe('完整答复')
   expect(f.model.getSnapshot().groups[0]?.replies[0]?.delivery_state).toBe('pending')
