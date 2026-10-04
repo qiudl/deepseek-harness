@@ -123,7 +123,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     expect(wire.messages).toHaveLength(2)
     expect(req.headers.authorization).toBe('Bearer fixture-source-key')
     const result = JSON.stringify({ intent: 'delegate', task_candidates: [{ mention_ids: ['mention-1'],
-      question: '请分析', source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 7, end: 10 }],
+      question: '@Guide 请分析', source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: 10 }],
       reference_ids: [], independent: true, dependency_candidate_indices: [] }], pending_candidates: [] })
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.end(`data: ${JSON.stringify({ id: 'fixture-response', choices: [{ index: 0, delta: { content: result }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`)

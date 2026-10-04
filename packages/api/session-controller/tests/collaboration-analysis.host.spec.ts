@@ -53,6 +53,7 @@ describe('Source-bound one-shot analysis', () => {
       expect(commit).toHaveBeenCalledTimes(1)
       expect(h.adapter.requests).toHaveLength(1)
       const request = h.adapter.requests[0]!
+      expect(request.system).toContain('For a clear independent assignment to exactly one resolved mention, question must equal original_message verbatim, including its @ mention')
       expect(request.tools).toEqual([])
       expect(request.messages).toHaveLength(1)
       expect(JSON.stringify(request.messages)).toContain('请不要开发')
