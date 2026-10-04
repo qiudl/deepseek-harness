@@ -81,7 +81,7 @@ When the Desktop remote Session route is active, its Profile keeps one control c
 
 When a remote client owns the current Session, the Desktop browser shows a takeover action in the Session header. It reads the current Profile epoch again, asks the user to confirm, and submits a compare-and-swap takeover through the authenticated browser Gateway. The user then resends the retained draft. The action is absent without the Desktop remote Session route.
 
-Remote `session.create` forwards only an optional Workspace ID to the selected Profile. The Profile resolves that ID against its own registry; caller-supplied paths do not cross the Host command protocol. Native approval results use the pending `$events` generation and must match its Session ID.
+Remote `session.create` forwards only an optional Workspace ID to the selected Profile. The Profile resolves that ID against its own registry; caller-supplied paths do not cross the Host command protocol. Native approval results use the pending `$events` generation and must match its Session ID. An event stream rejects a second ready frame or a client ID already held by a live stream; closing the stream clears its pending approvals.
 
 <details>
 <summary>Implementation internals — click to expand</summary>

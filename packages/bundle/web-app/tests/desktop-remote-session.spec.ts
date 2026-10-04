@@ -6,6 +6,7 @@ import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
   type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
+import { DesktopRemoteApprovalEvents } from '../src/desktop-remote-ui-stream.ts'
 import { DesktopSessionControl } from '../src/desktop-session-control.ts'
 
 function gatewayFixture(fields: object): TypertGateway {
@@ -40,6 +41,46 @@ describe('Desktop remote Session bridge', () => {
       session_id: 'session-1', controller_id, generation: state.claim.generation,
       epoch: state.claim.epoch }, signal)).toEqual({ released: true })
     expect(control.status('session-1', { kind: 'remote', id: controller_id }).outcome).toBe('uncontrolled')
+  })
+
+  it('reports an uncontrolled Session and fences an observed takeover epoch', async () => {
+    const control = new DesktopSessionControl()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }), undefined, control)
+    const signal = new AbortController().signal
+    const command_id = '123e4567-e89b-42d3-a456-426614174000' as never
+    const controller_id = '123e4567-e89b-42d3-a456-426614174001'
+    expect(await executor.execute({ operation: 'control.status', command_id,
+      session_id: 'session-1', controller_id }, signal)).toEqual({
+      outcome: 'uncontrolled', generation: control.generation, epoch: 0,
+    })
+    const local = control.admitBrowserWrite('session-1')
+    const observed = control.status('session-1', { kind: 'remote', id: controller_id })
+    if (!('claim' in observed)) throw new Error('missing local claim')
+    expect(await executor.execute({ operation: 'control.acquire', command_id,
+      session_id: 'session-1', controller_id, takeover: true,
+      expected_epoch: observed.claim.epoch }, signal)).toMatchObject({ outcome: 'held_elsewhere' })
+    local()
+    expect(await executor.execute({ operation: 'control.acquire', command_id,
+      session_id: 'session-1', controller_id, takeover: true,
+      expected_epoch: observed.claim.epoch }, signal)).toMatchObject({ outcome: 'controlled' })
+  })
+
+  it('admits a remote event response only through the selected Profile approval owner', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'session-1')
+    const gateway = gatewayFixture({ invoke: vi.fn() })
+    const command = { operation: 'remote.event.respond' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', control: proof, client_id: 'client-1', event_id: 'event-1',
+      outcome: 'next' as const }
+    const signal = new AbortController().signal
+    await expect(new DesktopRemoteSessionExecutor(gateway, undefined, control)
+      .execute(command, signal)).rejects.toThrow('approval events unavailable')
+    const approvals = new DesktopRemoteApprovalEvents()
+    const respond = vi.spyOn(approvals, 'respond').mockImplementation(() => {})
+    await expect(new DesktopRemoteSessionExecutor(gateway, approvals, control)
+      .execute(command, signal)).resolves.toEqual({ accepted: true })
+    expect(respond).toHaveBeenCalledWith(gateway, command)
   })
   it('creates a remote Session in the requested Host workspace', async () => {
     const invoke = vi.fn(async () => ({ sessionId: 'session-2' }))
@@ -227,6 +268,57 @@ describe('Desktop remote Session bridge', () => {
           session_id: 'session-1', control: proof }) })
       expect(response.status).toBe(409)
       expect(invoke).not.toHaveBeenCalled()
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
+    }
+  })
+
+  it('returns capacity status without creating another remote Session claim', async () => {
+    const token = 'A'.repeat(43)
+    const control = new DesktopSessionControl(() => 1_000, 30_000, 1)
+    remoteProof(control, 'session-1')
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control)
+    const server = createServer((req, res) => {
+      void handleDesktopRemoteSessionRequest(req, res, token,
+        (command, signal) => executor.execute(command, signal))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const response = await fetch(origin, { method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ operation: 'control.acquire',
+          command_id: '123e4567-e89b-42d3-a456-426614174000',
+          session_id: 'session-2', controller_id: '123e4567-e89b-42d3-a456-426614174002', takeover: false }) })
+      expect(response.status).toBe(429)
+      expect(control.status('session-2', { kind: 'remote', id: '123e4567-e89b-42d3-a456-426614174002' }))
+        .toMatchObject({ outcome: 'uncontrolled' })
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
+    }
+  })
+
+  it('returns an uncacheable validation error for malformed private Session input', async () => {
+    const token = 'A'.repeat(43)
+    const execute = vi.fn(async () => ({ accepted: true }))
+    const server = createServer((req, res) => {
+      void handleDesktopRemoteSessionRequest(req, res, token, execute)
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const response = await fetch(origin, { method: 'POST',
+        headers: { authorization: `Bearer ${token}` }, body: '{invalid' })
+      expect(response.status).toBe(422)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(execute).not.toHaveBeenCalled()
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => {
         if (error) reject(error)

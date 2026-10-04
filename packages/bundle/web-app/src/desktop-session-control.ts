@@ -212,7 +212,7 @@ export class DesktopSessionControl {
    * Hold the owner generation through an asynchronous write's settlement.
    * @param sessionId - selected Session.
    * @param claim - Host-issued owner proof.
-   * @returns disposer that releases this write once.
+   * @returns Disposer that releases this write once while its counter is still present.
    */
   beginWrite(sessionId: string, claim: DesktopSessionCredential): () => void {
     this.assertWrite(sessionId, claim)
@@ -221,7 +221,7 @@ export class DesktopSessionControl {
     return () => {
       if (released) return
       released = true
-      const remaining = (this.activeWrites.get(sessionId) ?? 1) - 1
+      const remaining = (this.activeWrites.get(sessionId) as number) - 1
       if (remaining === 0) this.activeWrites.delete(sessionId)
       else this.activeWrites.set(sessionId, remaining)
     }

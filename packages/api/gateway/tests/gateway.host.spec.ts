@@ -1230,7 +1230,13 @@ describe('TypertGatewayService', () => {
         observed.push([sessionId, epoch]); return { outcome: 'controlled', epoch: 4 }
       },
     })
+    expect(() => ctx.typertGateway.registerBrowserAdmission({ invoke() {}, eventResult() {} }))
+      .toThrow('browser admission already registered')
     expect(connection.matches?.('session/localControlStatus')).toBe(true)
+    expect((await handler('session/localControlStatus', { args: { sessionId: '../outside' } },
+      new AbortController().signal)).ok).toBe(false)
+    expect((await handler('session/localControlStatus', { args: { sessionId: 'session-1', extra: true } },
+      new AbortController().signal)).ok).toBe(false)
     expect(await handler('session/localControlStatus', { args: { sessionId: 'session-1' } },
       new AbortController().signal)).toEqual({ ok: true, value: { outcome: 'held_elsewhere', epoch: 3 } })
     expect((await handler('session/localControlTakeover', { args: {
@@ -1240,6 +1246,7 @@ describe('TypertGatewayService', () => {
       sessionId: 'session-1', expectedEpoch: 3,
     } }, new AbortController().signal)).toEqual({ ok: true, value: { outcome: 'controlled', epoch: 4 } })
     expect(observed).toEqual(['session-1', ['session-1', 3]])
+    unregister()
     unregister()
     expect(connection.matches?.('session/localControlTakeover')).toBe(false)
   })

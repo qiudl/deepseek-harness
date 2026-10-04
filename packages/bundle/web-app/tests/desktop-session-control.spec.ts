@@ -2,6 +2,52 @@ import { describe, expect, it } from 'vitest'
 import { DesktopSessionControl, DesktopSessionControlBusyError } from '../src/desktop-session-control.ts'
 
 describe('Desktop Session control authority', () => {
+  it('rejects invalid limits, takeover epochs, and Session identifiers', () => {
+    expect(() => new DesktopSessionControl(Date.now, 4_999)).toThrow('invalid lease duration')
+    expect(() => new DesktopSessionControl(Date.now, 30_000, 0)).toThrow('invalid claim capacity')
+    const control = new DesktopSessionControl()
+    expect(() => control.takeoverBrowser('session-1', 0)).toThrow('invalid expected epoch')
+    expect(() => control.status('../outside', { kind: 'remote', id: 'web-1' })).toThrow('invalid Session id')
+    for (const args of [{ request: null }, { request: [] }, { request: { sessionId: 4 } },
+      { request: { sessionId: '../outside' } }]) {
+      expect(control.admitBrowserInvoke('session/cancel', args)).toBeUndefined()
+    }
+    expect(control.status('session-1', { kind: 'remote', id: 'web-1' }).outcome).toBe('uncontrolled')
+  })
+
+  it('holds an expired claim through overlapping writes and releases each disposer once', () => {
+    let now = 1_000
+    const control = new DesktopSessionControl(() => now, 5_000)
+    const owner = { kind: 'remote' as const, id: 'web-1' }
+    const initial = control.acquire('session-1', owner, { takeover: false })
+    if (!('claim' in initial)) throw new Error('missing initial claim')
+    const finishFirst = control.beginWrite('session-1', initial.claim)
+    const finishSecond = control.beginWrite('session-1', initial.claim)
+    now += 5_000
+    expect(control.status('session-1', owner).outcome).toBe('controlled')
+    const other = { kind: 'remote' as const, id: 'web-2' }
+    expect(control.acquire('session-1', other, { takeover: true,
+      expectedEpoch: initial.claim.epoch }).outcome).toBe('held_elsewhere')
+    expect(control.renew('session-1', initial.claim).outcome).toBe('controlled')
+    finishFirst()
+    finishFirst()
+    expect(control.status('session-1', owner).outcome).toBe('controlled')
+    finishSecond()
+    expect(control.acquire('session-1', other, { takeover: true,
+      expectedEpoch: initial.claim.epoch }).outcome).toBe('controlled')
+  })
+
+  it('reports an absent lease as uncontrolled and rejects a released lease on renewal', () => {
+    const control = new DesktopSessionControl()
+    const owner = { kind: 'remote' as const, id: 'web-1' }
+    const absent = { ...owner, generation: control.generation, epoch: 1 }
+    expect(control.renew('session-1', absent)).toMatchObject({ outcome: 'uncontrolled', epoch: 0 })
+    const claimed = control.acquire('session-1', owner, { takeover: false })
+    if (!('claim' in claimed)) throw new Error('missing claim')
+    expect(control.release('session-1', claimed.claim)).toBe(true)
+    expect(control.renew('session-1', claimed.claim).outcome).toBe('epoch_stale')
+  })
+
   it('admits local browser writes until a remote client explicitly takes over', () => {
     const control = new DesktopSessionControl()
     const args = { request: { sessionId: 'session-1', content: [] } }

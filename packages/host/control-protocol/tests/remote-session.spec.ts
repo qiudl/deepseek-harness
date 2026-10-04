@@ -81,6 +81,40 @@ describe('Profile remote Session wire commands', () => {
     ]) expect(() => decode(frame(command))).toThrow()
   })
 
+  it('rejects invalid control proofs and command bounds before dispatch', () => {
+    const command_id = randomUUID()
+    const controller_id = randomUUID()
+    const control = { controller_id, generation: randomUUID(), epoch: 1 }
+    const session_id = 'session-1'
+    for (const command of [
+      { operation: 'control.acquire', command_id, session_id, controller_id, takeover: 'yes' },
+      { operation: 'control.acquire', command_id, session_id, controller_id,
+        takeover: true, expected_epoch: 0 },
+      { operation: 'control.renew', command_id, session_id, controller_id,
+        generation: control.generation, epoch: 0 },
+      { operation: 'control.release', command_id, session_id, controller_id,
+        generation: control.generation, epoch: 1.5 },
+      { operation: 'session.cancel', command_id, session_id, control: { ...control, epoch: 0 } },
+      { operation: 'remote.event.respond', command_id, session_id, control, client_id: 'client-1',
+        event_id: 'event-1', outcome: 'always-allow' },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: Array(17).fill({ type: 'text', text: 'safe' }) },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'image', text: 'unsafe' }] },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'text', text: '' }] },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'text', text: '\u0000' }] },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'text', text: 'x'.repeat(32_769) }] },
+      { operation: 'session.rename', command_id, session_id, control, title: 'bad\nname' },
+      { operation: 'approval.respond', command_id, session_id, control, approval_id: 'approval-1',
+        outcome: 'maybe' },
+      { operation: 'approval.respond', command_id, session_id, control, approval_id: 'approval-1',
+        outcome: 'allowed-once' },
+    ]) expect(() => decode(frame(command))).toThrow()
+  })
+
   it('round-trips bounded JSON results and rejects unsafe or over-deep values', () => {
     const value = {
       version: 1, type: 'result', request_id: randomUUID(), method: 'profile.remote_session',

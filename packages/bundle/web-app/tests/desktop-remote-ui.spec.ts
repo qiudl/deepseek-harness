@@ -20,6 +20,10 @@ function responseFixture<T extends object>(value: T): T & ServerResponse {
 
 describe('Desktop remote UI read-only bridge', () => {
   it('does not rewrite ended private responses and bounds JSON results', () => {
+    const open = { writableEnded: false, destroyed: false, writeHead: vi.fn().mockReturnThis(), end: vi.fn() }
+    rejectDesktopRemotePrivateRequest(responseFixture(open))
+    expect(open.writeHead).toHaveBeenCalledWith(422, { 'cache-control': 'no-store' })
+    expect(open.end).toHaveBeenCalledOnce()
     const ended = { writableEnded: true, destroyed: false, writeHead: vi.fn() }
     rejectDesktopRemotePrivateRequest(responseFixture(ended))
     expect(ended.writeHead).not.toHaveBeenCalled()
@@ -151,6 +155,22 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.open('workspace/follow', { args: { path: '/tmp' } }, signal)).rejects.toThrow('invalid payload')
   })
 
+  it('opens native events without approval tracking only for empty arguments', async () => {
+    const native = (async function* () { yield { type: 'ready', clientId: 'client-1' } })()
+    const open = vi.fn(async (_endpoint: string, _payload: unknown, uplink: AsyncIterable<unknown>) => {
+      expect(await uplink[Symbol.asyncIterator]().next()).toEqual({ done: true, value: undefined })
+      return native
+    })
+    const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ wireStream: { open } }))
+    const signal = new AbortController().signal
+    for (const payload of [null, [], {}, { args: null }, { args: [] }, { args: { all: true } }]) {
+      await expect(executor.open('$events', payload, signal)).rejects.toThrow('invalid payload')
+    }
+    const stream = await executor.open('$events', { args: {} }, signal)
+    expect(stream).toBe(native)
+    expect(open).toHaveBeenCalledWith('$events', { args: {} }, expect.anything(), undefined, signal)
+  })
+
   it('accepts approval results only for a pending event in the same Session', async () => {
     const respondRemoteEvent = vi.fn()
     const gateway = gatewayFixture({ wireStream: { open: vi.fn(async () => (async function* () {
@@ -175,6 +195,59 @@ describe('Desktop remote UI read-only bridge', () => {
       outcome: { kind: 'result', value: 'allowed-once' } })
     expect(() => { approvals.respond(gateway, command) }).toThrow()
     await iterator.return?.()
+  })
+
+  it('rejects duplicate event generations without invalidating the original owner', async () => {
+    const approvals = new DesktopRemoteApprovalEvents()
+    const respondRemoteEvent = vi.fn()
+    const gateway = gatewayFixture({ respondRemoteEvent })
+    const first = approvals.observe((async function* () {
+      yield { type: 'ready', clientId: 'client-1' }
+      yield { type: 'waterfall', event: 'approval/request', eventId: 'event-1', agentId: 'session-1' }
+      yield { type: 'ready', clientId: 'client-2' }
+    })())[Symbol.asyncIterator]()
+    await first.next()
+    await first.next()
+    const duplicate = approvals.observe((async function* () {
+      yield { type: 'ready', clientId: 'client-1' }
+    })())[Symbol.asyncIterator]()
+    await expect(duplicate.next()).rejects.toThrow('duplicate approval stream')
+    const command = { operation: 'remote.event.respond' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', control: { controller_id: '123e4567-e89b-42d3-a456-426614174001',
+        generation: '123e4567-e89b-42d3-a456-426614174002', epoch: 1 },
+      client_id: 'client-1', event_id: 'event-1', outcome: 'next' as const }
+    approvals.respond(gateway, command)
+    expect(respondRemoteEvent).toHaveBeenCalledWith({ clientId: 'client-1', eventId: 'event-1',
+      outcome: { kind: 'next' } })
+    await expect(first.next()).rejects.toThrow('duplicate approval stream')
+    expect(() => { approvals.respond(gateway, command) }).toThrow()
+  })
+
+  it('removes cancelled approvals and bounds pending replies per event generation', async () => {
+    const approvals = new DesktopRemoteApprovalEvents()
+    const source = approvals.observe((async function* () {
+      yield { type: 'ready', clientId: 'client-1' }
+      yield { type: 'waterfall', event: 'approval/request', eventId: 'cancelled', agentId: 'session-1' }
+      yield { type: 'cancel', eventId: 1 }
+      yield { type: 'cancel', eventId: 'cancelled' }
+      for (let index = 0; index <= 32; index += 1) {
+        yield { type: 'waterfall', event: 'approval/request', eventId: `event-${index}`,
+          agentId: 'session-1' }
+      }
+    })())[Symbol.asyncIterator]()
+    await source.next()
+    await source.next()
+    await source.next()
+    await source.next()
+    expect(() => { approvals.respond(gatewayFixture({ respondRemoteEvent: vi.fn() }), {
+      operation: 'remote.event.respond', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', control: { controller_id: '123e4567-e89b-42d3-a456-426614174001',
+        generation: '123e4567-e89b-42d3-a456-426614174002', epoch: 1 },
+      client_id: 'client-1', event_id: 'cancelled', outcome: 'rejected',
+    }) }).toThrow()
+    for (let index = 0; index < 32; index += 1) await source.next()
+    await expect(source.next()).rejects.toThrow('too many pending approvals')
   })
 
   it('streams through a private token and rejects browser cookies', async () => {
@@ -212,6 +285,32 @@ describe('Desktop remote UI read-only bridge', () => {
         await expect(fetch(origin, { method: 'POST', headers, body: bad }).then(value => value.status))
           .resolves.toBe(422)
       }
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
+    }
+  })
+
+  it('rejects malformed Workspace and event stream requests before opening a native stream', async () => {
+    const token = 'A'.repeat(43)
+    const open = vi.fn(async () => (async function* () {})())
+    const server = createServer((req, res) => {
+      void handleDesktopRemoteUiStreamRequest(req, res, token, open)
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      for (const endpoint of ['workspace/follow', '$events']) {
+        for (const payload of [null, [], {}, { args: null }, { args: [] }, { args: { all: true } }]) {
+          const response = await fetch(origin, { method: 'POST',
+            headers: { authorization: `Bearer ${token}` },
+            body: JSON.stringify({ endpoint, payload }) })
+          expect(response.status).toBe(422)
+        }
+      }
+      expect(open).not.toHaveBeenCalled()
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => {
         if (error) reject(error)

@@ -1256,6 +1256,26 @@ describe('Typert Remote streams', () => {
     await unregister()
   })
 
+  it('settles a trusted Host approval without applying browser write admission', async () => {
+    const { ctx } = await setup(true)
+    const source = new RemoteEventSourceProbe()
+    const unregister = ctx.typertGateway.registerRemoteEvents(source.source, REMOTE_HOST)
+    const client = await openEventClient(ctx, 'events-host-result')
+    const pending = pendingInvocation(ctx.extend())
+    source.push(pending.dispatch)
+    await vi.waitFor(() => { expect(deliveredInvocation(client)).toBeDefined() })
+    const frame = deliveredInvocation(client)!
+    const eventResult = vi.fn(() => { throw new Error('browser admission must not run') })
+    const unregisterAdmission = ctx.typertGateway.registerBrowserAdmission({ invoke() {}, eventResult })
+    ctx.typertGateway.respondRemoteEvent({ clientId: client.clientId, eventId: frame.eventId,
+      outcome: { kind: 'result', value: 'allowed-by-host' } })
+    await expect(pending.outcome).resolves.toEqual({ kind: 'result', value: 'allowed-by-host' })
+    expect(eventResult).not.toHaveBeenCalled()
+    unregisterAdmission()
+    client.socket.close()
+    await unregister()
+  })
+
   it('rejects the Host waterfall with the first Client listener rejection', async () => {
     const { ctx } = await setup(true)
     const source = new RemoteEventSourceProbe()

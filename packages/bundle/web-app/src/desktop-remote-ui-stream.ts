@@ -29,7 +29,7 @@ function followPayload(value: unknown): value is { args: Record<string, unknown>
     (request.assistantStream === undefined || request.assistantStream === true)
 }
 
-/** Binds each pending approval to the Session named by the Host event stream. */
+/** Binds each pending approval to one live event generation and its Session. */
 export class DesktopRemoteApprovalEvents {
   private readonly clients = new Map<string, Map<string, string>>()
 
@@ -40,19 +40,22 @@ export class DesktopRemoteApprovalEvents {
    */
   async *observe(source: AsyncIterable<unknown>): AsyncGenerator {
     let clientId: string | undefined
+    const pending = new Map<string, string>()
     try {
       for await (const value of source) {
         if (record(value) && value.type === 'ready' && typeof value.clientId === 'string') {
+          if (clientId !== undefined || this.clients.has(value.clientId)) {
+            throw new Error('desktop remote UI: duplicate approval stream')
+          }
           clientId = value.clientId
-          this.clients.set(clientId, new Map())
+          this.clients.set(clientId, pending)
         } else if (clientId && record(value) && value.type === 'waterfall' &&
           value.event === 'approval/request' && typeof value.eventId === 'string' &&
           typeof value.agentId === 'string') {
-          const pending = this.clients.get(clientId)
-          if (pending && pending.size >= 32) throw new Error('desktop remote UI: too many pending approvals')
-          pending?.set(value.eventId, value.agentId)
+          if (pending.size >= 32) throw new Error('desktop remote UI: too many pending approvals')
+          pending.set(value.eventId, value.agentId)
         } else if (clientId && record(value) && value.type === 'cancel' && typeof value.eventId === 'string') {
-          this.clients.get(clientId)?.delete(value.eventId)
+          pending.delete(value.eventId)
         }
         yield value
       }
