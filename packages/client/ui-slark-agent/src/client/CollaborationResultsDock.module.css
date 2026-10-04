@@ -1,0 +1,13 @@
+.panel {
+  flex-shrink: 0;
+  padding: 12px;
+  border-radius: 12px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-panel);
+}
+.records { max-height: 240px; overflow: auto; }
+.message { margin-top: 12px; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.reply { display: grid; gap: 6px; margin-top: 12px; }
+.panel small { color: var(--dsw-alias-label-secondary); }

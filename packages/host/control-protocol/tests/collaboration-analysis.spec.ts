@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
 import { parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult, encodeHostControlFrame, decodeHostControlFrame } from '../src/index.ts'
+import type { HostControlFrame } from '../src/index.ts'
 const uid = '40000000-0000-4000-8000-000000000004'
 it('detaches bounded prepare/dispatch commands and forbids caller binding or models at the command level', () => {
   const input = { source_message_id: 'original' }
@@ -14,7 +15,7 @@ it('carries a maximum escaped output within the unchanged Host frame budget', ()
   expect(Buffer.byteLength(text)).toBeLessThanOrEqual(32768)
   const result = { kind: 'output', json_base64url: Buffer.from(text).toString('base64url') }
   const frame = { version: 1, type: 'result', request_id: uid, method: 'profile.collaboration_analysis', result }
-  expect(decodeHostControlFrame(encodeHostControlFrame(frame))).toEqual(frame)
+  expect(decodeHostControlFrame(encodeHostControlFrame(frame as HostControlFrame))).toEqual(frame)
   for (const value of [ { ...result, extra: true }, { kind: 'output', json_base64url: Buffer.alloc(32769).toString('base64url') }, { kind: 'output', json_base64url: '!' }, { kind: 'output', json_base64url: Buffer.from('[]').toString('base64url') }, { kind: 'output', json_base64url: Buffer.from([0xff]).toString('base64url') } ]) expect(() => parseHostCollaborationAnalysisResult(value)).toThrow()
 })
 it('refuses malformed preparations and preserves exact Source digest and attempt metadata', () => {

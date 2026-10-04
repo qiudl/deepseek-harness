@@ -94,7 +94,8 @@ describe('REQ-20260930-0004 durable analysis writer', () => {
       { source_digest: 'e'.repeat(64) }, { input_manifest_digest: 'f'.repeat(64) },
       { attempt_request_id: 'other' }, { dispatch_granted: false }, { lease_expires_at: new Date(0).toISOString() },
     ]) {
-      const writer = createCollaborationAnalysisWriter(journal, async record => ({ ...grant(record), ...mutation }))
+      const writer = createCollaborationAnalysisWriter(journal, async record =>
+        ({ ...grant(record), ...mutation }) as ReturnType<typeof grant>)
       await expect(writer(m, signal())).rejects.toThrow()
       expect([...journal.records()][0]?.dispatch).toBeUndefined()
     }

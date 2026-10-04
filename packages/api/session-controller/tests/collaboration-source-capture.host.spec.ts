@@ -80,6 +80,60 @@ async function harness(root?: string, existingCwd?: string) {
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('reloads original Source text through the readonly Session API without model preparation or ordinary events', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    await h.controller.captureCollaborationSource(h.source(), signal)
+    const original = await readFile(h.sourceFile)
+    await h.dispose()
+    const recovered = await harness(h.root, h.cwd)
+    try {
+      const value = await recovered.controller.collaborationSources({ sessionId: recovered.sessionId }, signal)
+      expect(value.items).toHaveLength(1)
+      expect(value.items[0]?.original_message).toBe(h.source().original_message)
+      expect(value.items[0]?.source.session_id).toBe(recovered.sessionId)
+      expect(Object.keys(value.items[0]!).sort()).toEqual(['original_message', 'snapshot_digest', 'source'])
+      expect(await readFile(h.sourceFile)).toEqual(original)
+      expect(recovered.prepare).not.toHaveBeenCalled(); expect(recovered.stream).not.toHaveBeenCalled()
+      expect(recovered.resume).not.toHaveBeenCalled(); expect(recovered.ctx.sessions.get(recovered.sessionId)).toBeUndefined()
+      expect(JSON.stringify(recovered.events)).toBe(JSON.stringify(h.events))
+    } finally { await recovered.dispose() }
+  })
+  it('pages complete original messages within count and encoded-byte limits without truncation', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    try {
+      for (let i = 0; i < 3; i++) {
+        const source = h.source(), id = `message-${i}`
+        source.source_message_id = id
+        source.active_mentions[0]!.source_span.source_message_id = id
+        source.original_message += '\u0001'.repeat(30_000)
+        await h.controller.captureCollaborationSource(source, signal)
+      }
+      const seen = new Set<string>()
+      let cursor: string | undefined
+      do {
+        const page = await h.controller.collaborationSources({ sessionId: h.sessionId, ...(cursor ? { cursor } : {}) }, signal)
+        expect(page.items).toHaveLength(1)
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(256 * 1024)
+        expect(page.items[0]!.original_message).toBe(h.source().original_message + '\u0001'.repeat(30_000))
+        expect(seen.has(page.items[0]!.snapshot_digest)).toBe(false)
+        seen.add(page.items[0]!.snapshot_digest); cursor = page.next_cursor
+      } while (cursor)
+      expect(seen.size).toBe(3)
+      await expect(h.controller.collaborationSources({ sessionId: h.sessionId, cursor: 'f'.repeat(64) }, signal)).rejects.toThrow()
+    } finally { await h.dispose() }
+  })
+  it('rejects Source enumeration after ownership loss, on cancellation, or with caller authority fields', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    try {
+      await h.controller.captureCollaborationSource(h.source(), signal)
+      await expect(h.controller.collaborationSources({ sessionId: h.sessionId, namespace_id: 'forged' } as never, signal)).rejects.toThrow()
+      const cancelled = new AbortController(); cancelled.abort()
+      await expect(h.controller.collaborationSources({ sessionId: h.sessionId }, cancelled.signal)).rejects.toThrow()
+      await h.workspace.detachSession(h.sessionId)
+      await expect(h.controller.collaborationSources({ sessionId: h.sessionId }, signal)).rejects.toThrow('collaboration_session_workspace_mismatch')
+      expect(h.stream).not.toHaveBeenCalled(); expect(h.resume).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
   it('owns a cancelled delivery journal open until late storage settles and disposal closes it', async () => {
     const h = await harness(), cancel = new AbortController()
     let release: (() => void) | undefined

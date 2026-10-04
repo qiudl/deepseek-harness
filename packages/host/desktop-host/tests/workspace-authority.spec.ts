@@ -8,7 +8,7 @@ import {
   encodeHostControlFrame,
   encodeHostWorkspaceAuthorityPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostControlFrame, HostWorkspaceModelSelection } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
@@ -66,7 +66,8 @@ async function fixture() {
     host,
     profilePersistenceGeneration: () => 1,
     now: clock.now,
-    inspectWorkspaceModelSelection: (profileId, target, signal) => inspect(profileId, target, signal),
+    inspectWorkspaceModelSelection: (profileId, target, signal) =>
+      inspect(profileId, target, signal) as Promise<HostWorkspaceModelSelection>,
   })
   const ownerId = randomUUID(),
     lifetime = new AbortController()
@@ -215,7 +216,7 @@ it('refuses an absent capability and pre-cancelled calls without another frame',
   await f.grant()
   await expect(f.client.attestWorkspaceAuthority({ ...f.input, signal: AbortSignal.abort() })).rejects.toThrow()
   const before = f.seen.length
-  const capabilities = f.client.inspection.capabilities as string[]
+  const capabilities = f.client.inspection.capabilities as unknown as string[]
   capabilities.splice(capabilities.indexOf('profile.workspace_authority'), 1)
   await expect(f.client.attestWorkspaceAuthority(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })
   expect(f.seen.length).toBe(before)

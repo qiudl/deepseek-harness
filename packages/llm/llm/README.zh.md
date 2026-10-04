@@ -23,6 +23,7 @@ kind: "package-reference"
 -----
 
 <a id="use-this-package"></a>
+
 ## 使用本包
 
 任何调用模型提供方的组合——agent loop（智能体循环）、会话标题生成器、压缩（compaction）摘要器——都会通过本服务流式发起请求。与至少一个提供方适配器一起挂载它；服务本身没有任何配置，也不包含提供方协议代码。
@@ -74,6 +75,7 @@ for await (const chunk of ctx.llm.stream({
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## 理解实现
 
 <details>
@@ -122,6 +124,7 @@ for await (const chunk of ctx.llm.stream({
 -----
 
 <a id="further-exploration"></a>
+
 ## 进一步探索
 
 当包级约定不够用时阅读以下页面。它们从共享类型逐步进入具体适配器、重试执行器与计量服务。
@@ -136,8 +139,9 @@ for await (const chunk of ctx.llm.stream({
 
 -----
 
-<a id="model-experience"></a>
 Prepared `stream(options, assertRequest?)` 在中间件及请求投影之后、捕获的适配器发送之前执行可选 Host 断言。受约束请求保留原取消信号，并在验证后深度冻结。重复末端 continuation 不能再次发送同一个已准备调用；断言失败成为终止错误。中间件直接替换整个流时不会运行该断言，因此受约束调用方必须拒绝没有断言执行证据的输出。
+
+<a id="model-experience"></a>
 
 ## 模型体验
 
@@ -151,7 +155,6 @@ Prepared `stream(options, assertRequest?)` 在中间件及请求投影之后、�
 
 <a id="known-limitations-and-deferred-work"></a>
 
-
 这些限制说明本服务在哪里停止、由其他包或未来工作接续。它们是当前包约束，不是任务积压。
 
 - **本服务不提供重试执行、缓存或速率限制**——提供方注册会存储重试策略，但一次流仍是一次提供方尝试；`@deepseek-ai/dsh-llm-retry` 在持久 agent 步骤边界上执行该策略。
@@ -161,6 +164,7 @@ Prepared `stream(options, assertRequest?)` 在中间件及请求投影之后、�
 - **`GenerateOptions.sessionId` 是本地声明的品牌类型**——导入 dsh-session 的 `SessionId` 会产生依赖循环。
 
 <a id="dev-note"></a>
+
 ### 开发备注
 
 <details>

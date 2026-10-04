@@ -46,6 +46,13 @@ export const zh = {
   'task.background': '后台执行中',
   'task.done': '已完成',
   'task.failed': '未完成',
+  'task.readUnavailable': '当前无法读取协同结果，稍后将自动重试。',
+  'task.collaborationHistory': 'Slark 协同记录',
+  'task.awaitingResult': '此消息暂无协同结果。',
+  'task.restricted': '当前无权读取此结果。',
+  'task.indeterminate': '执行结果尚未确认。',
+  'task.moreResults': '查看更多结果',
+  'task.moreMessages': '查看更早的消息',
 } satisfies Record<string, string>
 
 /** English copy. */
@@ -91,6 +98,13 @@ export const en = {
   'task.background': 'Running in background',
   'task.done': 'Completed',
   'task.failed': 'Not completed',
+  'task.readUnavailable': 'Collaboration results cannot be read right now. A fresh read will be attempted automatically.',
+  'task.collaborationHistory': 'Slark collaboration history',
+  'task.awaitingResult': 'No collaboration results for this message.',
+  'task.restricted': 'This result is currently restricted.',
+  'task.indeterminate': 'Execution outcome is not confirmed.',
+  'task.moreResults': 'View more results',
+  'task.moreMessages': 'View earlier messages',
 } satisfies Record<keyof typeof zh, string>
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

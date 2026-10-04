@@ -23,6 +23,7 @@ Stream DeepSeek models through `deepseek-official` with Messages by default, or 
 -----
 
 <a id="use-this-package"></a>
+
 ## Use this package
 
 Mount this plugin when a composition streams DeepSeek models through the harness LLM service. It registers the single `deepseek-official` route and resolves connection facts per request, so a composition entry plus an optional user settings section drive the whole adapter.
@@ -73,6 +74,7 @@ A request selects the route with `provider: deepseek-official`; the model id pas
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-llm-deepseek) is the exhaustive source for every accepted field and its JSDoc.
 
 <a id="choose-a-protocol"></a>
+
 ### Choose a protocol
 
 To select Chat Completions explicitly, patch the existing plugin:
@@ -116,6 +118,7 @@ Non-2xx responses fail with stable codes: `AUTH` (401/403), `QUOTA`, `RATE_LIMIT
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## Understand the implementation
 
 <details>
@@ -150,6 +153,7 @@ One `stream()` call normally makes one model request: resolve deterministic requ
 -----
 
 <a id="further-exploration"></a>
+
 ## Further Exploration
 
 Read these pages when the package-level contract is not enough. They move from the service contract to the twin adapter, the retry executor, and the shared types.
@@ -166,7 +170,10 @@ Read these pages when the package-level contract is not enough. They move from t
 
 -----
 
+For `purpose: collaboration-analysis`, both protocols reject non-empty provider request extensions with `REQUEST_EXTENSION` before HTTP. Empty tool arrays cannot become an extension slot for tools or extra context.
+
 <a id="model-experience"></a>
+
 ## Model Experience
 
 ### DeepSeek request
@@ -197,14 +204,11 @@ Generated tokens follow the request's logged reasoning effort and `maxTokens`; o
 
 Loop-retained response blocks append to the next request and preserve its earlier reusable prefix; dropped blocks have no later cache effect. Changing the provider or model selects a different cache domain.
 
-For `purpose: collaboration-analysis`, both protocols reject non-empty provider request extensions with `REQUEST_EXTENSION` before HTTP. Empty tool arrays cannot become an extension slot for tools or extra context.
-
 ## Known Limitations and Deferred Work
 
 - Responses is not implemented; configuration rejects `responses`.
 
 <a id="known-limitations-and-deferred-work"></a>
-
 
 These limits define where the adapter stops and future work begins. They are current package constraints, not a general DeepSeek comparison or a task backlog.
 
@@ -217,6 +221,7 @@ These limits define where the adapter stops and future work begins. They are cur
 - The [Messages system-update e2e checks](tests/messages/adapter.e2e.ts) require `DEEPSEEK_IN_HISTORY_MODEL` to name a supported model, such as `deepseek-flash`, and run with `high` effort. They skip when that variable is unset or empty; ordinary `off` text checks remain enabled with credentials. Known instruction-following instability with thinking disabled makes these system-update checks unsuitable for `off`.
 
 <a id="dev-note"></a>
+
 ### Dev Note
 
 <details>

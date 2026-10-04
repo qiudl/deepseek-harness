@@ -24,6 +24,7 @@ Run `dsh --profile web` to open an interactive browser GUI with chat, model and 
 -----
 
 <a id="use-this-package"></a>
+
 ## Use this package
 
 Start the GUI, open your browser, and start talking to the agent. The flags fine-tune the invocation.
@@ -69,6 +70,7 @@ Each browser session composes its own agent from the shipped presets (the `stand
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## Understand the implementation
 
 `DSH_PROFILE_WORKSPACE_MODEL_TOKEN` enables `/internal/desktop-workspace-model-selection` only inside an isolated Profile worker. The endpoint accepts a 2 KiB registry workspace/Session target and delegates to the Host-only Session Controller reader without activating an Agent or dispatching a model. Browser cookies cannot authorize it. Failures omit exception details; responses are noncacheable and contain only validated selection fields. This read does not provide a Source proof or prepared configuration snapshot.
@@ -114,6 +116,7 @@ No invariant companion is published because every contribution — the frontend-
 -----
 
 <a id="further-exploration"></a>
+
 ## Further Exploration
 
 Read these pages when you want to go deeper into the shared core, the browser reload pipeline, or the built frontend.
@@ -127,6 +130,7 @@ Read these pages when you want to go deeper into the shared core, the browser re
 -----
 
 <a id="model-experience"></a>
+
 `DSH_PROFILE_SOURCE_TOKEN` enables `/internal/desktop-collaboration-source` in the isolated Profile worker. Its private POST accepts at most 2 KiB of exact original Source coordinates and returns a validated descriptor of the existing journal entry. It rejects browser-cookie access, caller model/commit fields, missing Sources and lost Session membership. Replies are noncacheable, sanitized and contain no message content or executable call; signing belongs to the parent Native Host.
 
 The same private token additionally enables `/internal/desktop-collaboration-source-snapshot`. Exact coordinates resolve the existing owning Profile journal snapshot, with strict nested metadata and content-digest validation. The reply is a descriptor plus original Source JSON, without credentials or an executable handle. Browser cookies cannot authorize this route; missing membership, malformed journals and read failures return sanitized refusals. The parent consumes the complete bounded response and transfers it through fixed control-protocol chunks.
@@ -167,6 +171,7 @@ These limits tell you what to expect in unusual setups — a source checkout, SS
 - **Binding all network interfaces is not supported** — `--host 0.0.0.0` is rejected at startup for safety; use the default loopback host.
 
 <a id="dev-note"></a>
+
 ### Dev Note
 
 <details>

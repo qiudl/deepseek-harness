@@ -24,6 +24,7 @@ kind: "package-bundle"
 -----
 
 <a id="use-this-package"></a>
+
 ## 使用本包
 
 启动 GUI、打开浏览器，然后开始与 agent（智能体）对话。flag 用于微调本次调用。
@@ -69,6 +70,7 @@ dsh --profile web --no-open --port 8080
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## 理解实现
 
 `DSH_PROFILE_WORKSPACE_MODEL_TOKEN` 仅在隔离 Profile worker 中启用 `/internal/desktop-workspace-model-selection`。入口接受最多 2 KiB 的注册表工作区/Session 目标，交给仅供 Host 使用的 Session Controller 读取，不激活 Agent 或调用模型。浏览器 Cookie 不能授权此入口。失败不含异常详情；响应禁止缓存，仅包含已校验的选择字段。该读取不提供 Source 凭据或已准备的配置快照。
@@ -114,6 +116,7 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 -----
 
 <a id="further-exploration"></a>
+
 ## 进一步探索
 
 当你想深入了解共享核心、浏览器重载流水线或已构建的前端时，阅读以下页面。
@@ -127,6 +130,7 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 -----
 
 <a id="model-experience"></a>
+
 `DSH_PROFILE_SOURCE_TOKEN` 在隔离 Profile worker 中启用 `/internal/desktop-collaboration-source`。私有 POST 接受最多 2 KiB 的精确原始 Source 坐标，返回已有 journal 记录的已校验描述符。浏览器 Cookie、调用方模型或提交字段、缺失 Source 和丢失的 Session 归属都会被拒绝。响应禁止缓存、隐藏异常详情，不含消息正文或可执行调用；签名由父 Native Host 负责。
 
 同一私有令牌另启用 `/internal/desktop-collaboration-source-snapshot`。精确坐标定位所属 Profile 的已有 journal 快照，并严格校验嵌套元数据及内容摘要。响应为描述符与原始 Source JSON，不含凭据或可执行句柄。浏览器 Cookie 不授予路由访问权；归属缺失、journal 损坏和读取失败均返回隐藏详情的拒绝。父 Host 读取完整有界响应，再经固定控制协议分块传输。
@@ -162,6 +166,7 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 - **不支持绑定所有网络接口**——出于安全考虑，`--host 0.0.0.0` 会在启动时被拒绝；请使用默认 loopback 主机。
 
 <a id="dev-note"></a>
+
 ### 开发备注
 
 <details>

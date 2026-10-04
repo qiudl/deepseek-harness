@@ -1,10 +1,12 @@
 /** DSH `@` source for the live, employee-assigned Slark Agent directory. */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
+import type {} from '@deepseek-ai/dsh-api-session-controller/remote'
 import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { en, NS, zh } from './locales.ts'
@@ -15,6 +17,10 @@ import { ProjectScopeDock } from './ProjectScopeDock.tsx'
 import type { ProjectScopeInjected } from './ProjectScopeDock.tsx'
 import { createScopedCollaborationSource, scopedCollaborationClipboard } from './collaboration-source.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from './collaboration-source.ts'
+import { CollaborationResultsModel } from './collaboration-results.ts'
+import type { CollaborationResultsBridge } from './collaboration-results.ts'
+import { CollaborationResultsDock } from './CollaborationResultsDock.tsx'
+import type { CollaborationResultsInjected } from './CollaborationResultsDock.tsx'
 
 /** Required client services. */
 export const inject = ['inputTriggers', 'locale', 'sessions', 'conversation', 'slots']
@@ -30,7 +36,7 @@ interface AgentItem {
   publication_version: number
 }
 
-interface DesktopAgentDirectory extends WorkspaceBridge {
+interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge {
   collaborationScopeAvailable?: boolean
   collaborationExecutionAvailable?: boolean
   collaborationSubmit?(input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse>
@@ -96,10 +102,34 @@ function agentLabel(item: AgentItem): string {
 /** Register a stable-reference source; ordinary model serialization refuses the Agent chip. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-slark-agent: dictionaries')
-  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
-    name: 'conversation.input.dock', id: 'slark-agent-tasks', order: 25, locale: NS,
-    inject: sessionId => ({ sessionId }),
-  }, AgentTaskDock))
+  ctx.slots.inject('conversation.input.dock', () => {
+    if (typeof window !== 'undefined' && window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return () => {}
+    return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-agent-tasks', order: 25, locale: NS,
+      inject: sessionId => ({ sessionId }),
+    }, AgentTaskDock)
+  })
+  ctx.inject(['remote.session', 'connection', 'workspaces'], (resultsCtx) => {
+    if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return
+    const connection = resultsCtx.get('connection') as ConnectionHandle
+    const models = new Map<string, { model: CollaborationResultsModel; bindings: CollaborationResultsInjected }>()
+    resultsCtx.effect(() => () => { models.forEach(({ model }) => { model.dispose() }); models.clear() },
+      'ui-slark-agent: original Session results')
+    resultsCtx.slots.inject('conversation.input.dock', () => resultsCtx.slots.register({
+      name: 'conversation.input.dock', id: 'slark-collaboration-results', order: 25, locale: NS,
+      inject: (sessionId) => {
+        let entry = models.get(sessionId)
+        if (!entry) {
+          const model = new CollaborationResultsModel(sessionId, resultsCtx.workspaces.list, connection.generation,
+            (cursor, signal) => resultsCtx.remote.session.collaborationSources({ sessionId, ...(cursor ? { cursor } : {}) }, signal),
+            () => window.__DSH_DESKTOP_HOST__)
+          entry = { model, bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
+            loadReplies: digest => model.loadReplies(digest) } }
+          models.set(sessionId, entry)
+        }
+        return entry.bindings
+      },
+    }, CollaborationResultsDock))
+  })
   const scopeModels = new Map<string, { model: ProjectScopeModel; bindings: ProjectScopeInjected }>()
   ctx.inject(['workspaces'], (scopeCtx) => {
     if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return

@@ -105,7 +105,7 @@ it('refuses expired or disconnected replies and captures cancellation before a q
 
 it('refuses an absent negotiated registration capability before sending another frame', async () => {
   const f = await fixture()
-  const capabilities = f.client.inspection.capabilities as string[]
+  const capabilities = f.client.inspection.capabilities as unknown as string[]
   capabilities.splice(capabilities.indexOf('profile.collaboration_registration'), 1)
   const before = f.seen.length
   await expect(f.client.attestCollaborationRegistration(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })

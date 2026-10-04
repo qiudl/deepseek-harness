@@ -17,6 +17,7 @@ import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
+import type { CollaborationResultsInjected } from '../src/client/CollaborationResultsDock.tsx'
 
 const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id: 'agent-1',
   enterprise_id: 'enterprise-1', enterprise_name: 'Company', project_name: '项目空间',
@@ -59,10 +60,29 @@ async function bench(collaboration = false) {
       items: [{ workspaceId: workspace.id, sessionIds: [id] }] }),
     subscribe: () => () => undefined,
   } } as never)
-  const submit = vi.fn(async (input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse> => ({ ok: true as const,
-    value: { source: { workspace_id: input.workspace_id, session_id: input.session_id,
-      source_message_id: input.source_message_id, source_revision: input.source_revision },
-    submission_state: 'accepted', invocation_id: 'invocation-v2' } }))
+  const originals: { source: { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
+    snapshot_digest: string
+    original_message: string }[] = []
+  const sourceReads = vi.fn(async () => ({ ok: true, value: { items: originals } }))
+  if (collaboration) {
+    const namespace = { collaborationSources: sourceReads }
+    ctx.provide('remote', { session: namespace } as never)
+    ctx.provide('remote.session', namespace as never)
+    ctx.provide('connection', { generation: { getSnapshot: () => 1, subscribe: () => () => {} } } as never)
+  }
+  const submit = vi.fn(async (input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse> => {
+    originals.push({ source: { workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision }, snapshot_digest: 'a'.repeat(64),
+    original_message: input.original_message })
+    return { ok: true as const,
+      value: { source: { workspace_id: input.workspace_id, session_id: input.session_id,
+        source_message_id: input.source_message_id, source_revision: input.source_revision },
+      submission_state: 'accepted', invocation_id: 'invocation-v2' } }
+  })
+  const deliveries = vi.fn(async (input: { source: typeof originals[number]['source'] }) => ({ ok: true, value: { deliveries: [{
+    delivery_id: 'delivery-v2', invocation_id: 'invocation-v2', delivery_state: 'pending', delivery_state_version: '1',
+    source_locator: input.source, source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded', invocation_state_version: '2',
+    target_display_snapshot: { agent_name: agent.name, project_name: agent.project_name }, answer: 'fixture reply' }] } }))
   const scopeDirectory = vi.fn(async () => ({ ok: true as const, value: {
     items: [{ project_id: agent.project_id, agent_id: agent.agent_id, agent_name: agent.name,
       project_name: agent.project_name, available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
@@ -73,6 +93,7 @@ async function bench(collaboration = false) {
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {
     collaborationScopeAvailable: collaboration, collaborationExecutionAvailable: collaboration,
     collaborationWorkspace: scopeDirectory, collaborationSubmit: submit,
+    collaborationDeliveries: deliveries,
     enterpriseAgents: async () => ({ ok: true, invocationAvailable: true, items: [agent] }),
     invokeEnterpriseAgent: invoke,
   })
@@ -123,8 +144,26 @@ async function bench(collaboration = false) {
     const end = prefix.length + 2
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
-  return { ctx, composer, controller, invoke, sink, pick, submit, scopeDirectory, workspace }
+  return { ctx, composer, controller, invoke, sink, pick, submit, scopeDirectory, workspace, sourceReads, deliveries }
 }
+
+it('YAML-loaded result registration receives the real composer admission event and reads its original coordinates', async () => {
+  const f = await bench(true)
+  const entries = f.ctx.slots.entries('conversation.input.dock')
+  expect(entries.some(entry => entry.options.id === 'slark-agent-tasks')).toBe(false)
+  const entry = entries.find(entry => entry.options.id === 'slark-collaboration-results')
+  expect(entry).toBeDefined()
+  const bindings = entry!.inject!('session-1' as never) as unknown as CollaborationResultsInjected
+  const model = bindings.hooks.slarkResults, remove = model.subscribe(() => {})
+  try {
+    await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalledTimes(1) })
+    await f.pick('', '请检查登录问题')
+    f.composer.submit()
+    await vi.waitFor(() => { expect(model.getSnapshot().groups[0]?.replies[0]?.answer).toBe('fixture reply') })
+    expect(f.deliveries.mock.calls[0]?.[0].source.source_message_id).toBe(f.submit.mock.calls[0]?.[0].source_message_id)
+    expect(f.sink).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled()
+  } finally { remove() }
+})
 
 it('sends an explicit scoped Agent from the real composer without opening the collaboration panel', async () => {
   const { composer, pick, submit, scopeDirectory, invoke, sink } = await bench(true)

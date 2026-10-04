@@ -839,6 +839,15 @@ async readCollaborationSourceSnapshot(target: CollaborationSourceCoordinates, si
 async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise<CollaborationDeliveryRecord>
 
 /**
+ * Read original collaboration messages for the Client's Session result area without preparing a model.
+ * @param request - Session identity and a prior page's immutable snapshot digest; authority fields reject.
+ * @param signal - Caller cancellation, combined with Profile disposal and serialized Source writes.
+ * @returns At most eight complete messages within 256 KiB; no executable calls or cloud authorization.
+ * @throws On malformed input, unknown cursor, corrupt storage, cancellation or changed original membership.
+ */
+@Remote('collaborationSources') async collaborationSources(request: SessionCollaborationSourcesRequest, signal: AbortSignal): Promise<SessionCollaborationSourcesValue>
+
+/**
  * Read all visible Session rows without resuming an Agent.
  * @param _request - reserved empty list request.
  * @param signal - cancellation for persistence reads.

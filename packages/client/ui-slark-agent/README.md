@@ -41,6 +41,8 @@ The Client source reads account-bound assignments from the Desktop bridge. Each 
 
 Scoped references keep the picked workspace, Session, target, capability digest and one UUID. The complete original draft and UTF-16 chip span go to Main; the page supplies no owner, credential, model or Task ID. Unknown submissions retain their draft and Source identity; editing the text does not mint a replacement Source. Main and Native reject changed content for an already captured identity. A new explicit pick creates a new user request. Workspace/archive/bridge changes and substituted or late responses cannot consume the original draft. Main owns analysis, freezing and admission; acceptance is not execution completion.
 
+The v2 result area reads complete original messages from Native's readonly `session.collaborationSources`, then obtains each Source's authorized results from Main's `collaborationDeliveries`. Its React-free model follows Session membership and Connection generation. Admission events and a three-second poll refresh it automatically; refresh retains user-loaded history pages, and older delivery versions cannot roll known delivery state backward. Restricted reads remove answers and names. Complete plain text results display `Agent · Project space`, with execution and transport delivery states kept separate. This read neither submits work nor signs acknowledgments, and does not certify durable Host result storage.
+
 </details>
 
 -----
@@ -63,7 +65,7 @@ Agent mentions require the current account's Slark Desktop bridge to report invo
 
 - **Desktop-only directory** — a standalone DSH browser session cannot list or invoke Slark Agents.
 - **Single target** — one explicitly selected Agent and a nonempty text question per send; multiple mentions, mixed references, and attachments are refused.
-- **Collaboration 2.0 integration pending** — scoped single-target chat submission calls Main's original Source capture, planning and automatic admission. Scope and execution switches default off. The actual provider/GUI loop, original-Session v2 results and history, multiple targets and explicit references still need integration and acceptance; scope mode never uses the legacy invocation as a fallback.
+- **Collaboration 2.0 integration pending** — scoped single-target chat submission calls Main's original Source capture, planning and automatic admission. Scope and execution switches default off. Original-Session v2 readonly messages and results are connected; the actual provider/GUI loop, durable Host replies and signed acknowledgments, multiple targets and explicit references still need integration and acceptance; scope mode never uses the legacy invocation as a fallback.
 
 <a id="dev-note"></a>
 

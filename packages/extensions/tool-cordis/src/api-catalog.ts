@@ -1723,6 +1723,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Original immutable reply after durable save and ownership revalidation; duplicates share its commit.',
       },
       {
+        signature: '@Remote(\'collaborationSources\') async collaborationSources(request: SessionCollaborationSourcesRequest, signal: AbortSignal): Promise<SessionCollaborationSourcesValue>',
+        description: 'Read original collaboration messages for the Client\'s Session result area without preparing a model.',
+        parameters: [{ name: 'request', description: 'Session identity and a prior page\'s immutable snapshot digest; authority fields reject.' }, { name: 'signal', description: 'Caller cancellation, combined with Profile disposal and serialized Source writes.' }],
+        returns: 'At most eight complete messages within 256 KiB; no executable calls or cloud authorization.',
+        throws: ['On malformed input, unknown cursor, corrupt storage, cancellation or changed original membership.'],
+      },
+      {
         signature: '@Remote(\'list\') async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>',
         description: 'Read all visible Session rows without resuming an Agent.',
         parameters: [{ name: '_request', description: 'reserved empty list request.' }, { name: 'signal', description: 'cancellation for persistence reads.' }],
@@ -5850,6 +5857,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionCancelValue',
     declaration: 'export interface SessionCancelValue {\n    readonly accepted: true;\n}',
+  },
+  {
+    name: 'SessionCollaborationSourceItem',
+    declaration: 'export interface SessionCollaborationSourceItem {\n    readonly source: {\n        readonly workspace_id: string;\n        readonly session_id: string;\n        readonly source_message_id: string;\n        readonly source_revision: string;\n    };\n    readonly snapshot_digest: string;\n    readonly original_message: string;\n}',
+  },
+  {
+    name: 'SessionCollaborationSourcesRequest',
+    declaration: 'export interface SessionCollaborationSourcesRequest {\n    readonly sessionId: SessionId;\n    readonly cursor?: string;\n}',
+  },
+  {
+    name: 'SessionCollaborationSourcesValue',
+    declaration: 'export interface SessionCollaborationSourcesValue {\n    readonly items: readonly SessionCollaborationSourceItem[];\n    readonly next_cursor?: string;\n}',
   },
   {
     name: 'SessionControlBaseline',

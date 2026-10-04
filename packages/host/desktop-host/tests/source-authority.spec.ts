@@ -8,7 +8,7 @@ import {
   encodeHostControlFrame,
   encodeHostSourceAuthorityPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostControlFrame, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
@@ -73,9 +73,11 @@ async function fixture() {
     host,
     profilePersistenceGeneration: () => 1,
     now: clock.now,
-    inspectCollaborationSource: (profileId, target, signal) => inspect(profileId, target, signal),
-    readCollaborationSourceSnapshot:(profileId,target,signal)=>read(profileId,target,signal),
-    collaborationAnalysis: (profileId, command, signal) => analysis(profileId, command as Record<string, unknown>, signal),
+    inspectCollaborationSource: (profileId, target, signal) =>
+      inspect(profileId, target, signal) as Promise<HostCollaborationSourceDescriptor>,
+    readCollaborationSourceSnapshot:(profileId,target,signal)=>read(profileId,target,signal) as Promise<HostCollaborationSourceSnapshot>,
+    collaborationAnalysis: (profileId, command, signal) =>
+      analysis(profileId, command as Record<string, unknown>, signal) as Promise<HostRemoteSessionJson>,
   })
   const ownerId = randomUUID(),
     lifetime = new AbortController()
@@ -231,8 +233,8 @@ it('refuses missing Source read capability and replies after connection replacem
   })
   await expect(f.client.readCollaborationSourceSnapshot(input)).rejects.toThrow()
   const old = await fixture()
-  ;(old.client.inspection.capabilities as string[]).splice(
-    (old.client.inspection.capabilities as string[]).indexOf('profile.source_snapshot'),
+  ;(old.client.inspection.capabilities as unknown as string[]).splice(
+    (old.client.inspection.capabilities as unknown as string[]).indexOf('profile.source_snapshot'),
     1,
   )
   const before = old.seen.length
@@ -323,7 +325,7 @@ it('refuses an absent capability and pre-cancelled calls without another frame',
   await f.grant()
   await expect(f.client.attestSourceAuthority({ ...f.input, signal: AbortSignal.abort() })).rejects.toThrow()
   const before = f.seen.length
-  const capabilities = f.client.inspection.capabilities as string[]
+  const capabilities = f.client.inspection.capabilities as unknown as string[]
   capabilities.splice(capabilities.indexOf('profile.source_authority'), 1)
   await expect(f.client.attestSourceAuthority(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })
   expect(f.seen.length).toBe(before)
@@ -339,7 +341,7 @@ it('refuses a Source digest or coordinate mismatch from the private worker', asy
 
 it('authorizes analysis under the original connection Account and derives its private binding in Host', async () => {
   const f = await fixture()
-  const input = { ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: {} } }
+  const input = { ...f.account, command: { action: 'dispatch' as const, attempt_request_id: f.challenge.request_id, grant: {} } }
   await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
   await f.grant()
   const a = await f.client.collaborationAnalysis(input)

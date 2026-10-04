@@ -23,6 +23,7 @@ kind: "package-reference"
 - [已知限制与延后工作](#known-limitations-and-deferred-work)
 
 <a id="wire-contract"></a>
+
 ## 线协议约定
 
 - 每帧恰好一个 UTF-8 JSON 对象和一个结尾 LF；拒绝 CRLF、多行、重复或乱序键、未知字段、非规范数字和尾随数据。
@@ -46,6 +47,7 @@ kind: "package-reference"
 `profile.model_claim_recovery_inventory` 使用同一证明，但不要求候选项 ID。它最多返回 128 条属于已验证账号的脱敏回执，覆盖未完成认领和 Profile 标记尚未清除的操作。查询不启动 worker，也不授权新认领。
 
 <a id="challenge-authentication"></a>
+
 ## 挑战认证
 
 `profile.workspace_model_selection` 接受已验证的 Account 绑定、工作区注册表 UUID 和 Session id。精确响应包含这些身份、provider/model（各最多 256 UTF-8 字节），以及可选 reasoning effort（最多 128 字节）。调用方指定的模型、Profile 路径和额外响应字段均被拒绝。结果只是只读选择，不是可执行适配器快照或 Source 凭据；Host 必须发布已安装执行器的能力才可调用。
@@ -63,6 +65,7 @@ kind: "package-reference"
 响应里的公钥本身不构成信任。Desktop Broker 必须将其与已认证安装记录匹配，并独立比对对端可执行文件的代码签名摘要后才接受签名。迁移流程只能依据其显式同意和校验策略建立该记录；普通连接绝不能静默信任新密钥。
 
 <a id="api"></a>
+
 `profile.source_authority` 接受精确服务器挑战，包含 Account/environment、原始 Source 坐标、完整快照摘要与已登记 Host epoch。专用 UTF-8 签名正文由 `dsh-collaboration-source-authority/v1`、NUL 和固定顺序 JSON 元组组成。授权 Profile 必须确认匹配的持久 journal 记录后才能签名；归属或登记签名不能替代。响应不含消息、凭据或可执行调用。云端必须在核验当前 Account/Host 的同一事务中认证并消费 nonce 和快照；签名不授予目标执行权限。
 
 ## API
@@ -76,6 +79,7 @@ kind: "package-reference"
 | `HOST_CONTROL_MAX_FRAME_BYTES` | 传输共享缓冲上限。 |
 
 <a id="dev-note"></a>
+
 ## 开发备注
 
 <details>
@@ -86,6 +90,7 @@ kind: "package-reference"
 </details>
 
 <a id="model-experience"></a>
+
 ## 运行时不变量
 
 不发布运行时不变量伴随插件：编解码器在输入边界验证完整的消息值结构。
@@ -99,6 +104,7 @@ kind: "package-reference"
 无直接失效；协议不会贡献模型上下文。
 
 <a id="known-limitations-and-deferred-work"></a>
+
 ## 已知限制与延后工作
 
 - **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read、扩展命令、远程 Session 命令、十种远程 UI 读取与通用错误。远程方法在 Host 执行器发布 capability 前仍不可用；environment、attachment 和 upgrade 操作需要显式扩展协议。

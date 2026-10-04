@@ -51,6 +51,9 @@ import type {
   SessionForkValue,
   SessionListRequest,
   SessionListValue,
+  SessionCollaborationSourcesRequest,
+  SessionCollaborationSourcesValue,
+  SessionCollaborationSourceItem,
   SessionOpenWorkspacePathRequest,
   SessionOpenWorkspacePathValue,
   SessionPage,
@@ -551,6 +554,64 @@ export class SessionController extends TypertRemoteService {
   }
 
   /**
+   * Read original collaboration messages for the Client's Session result area without preparing a model.
+   * @param request - Session identity and a prior page's immutable snapshot digest; authority fields reject.
+   * @param signal - Caller cancellation, combined with Profile disposal and serialized Source writes.
+   * @returns At most eight complete messages within 256 KiB; no executable calls or cloud authorization.
+   * @throws On malformed input, unknown cursor, corrupt storage, cancellation or changed original membership.
+   */
+  @Remote('collaborationSources')
+  async collaborationSources(request: SessionCollaborationSourcesRequest, signal: AbortSignal): Promise<SessionCollaborationSourcesValue> {
+    if (!validCollaborationSourcesRequest(request)) throw Error('collaboration_source_query_invalid')
+    const sessionId = SessionId(request.sessionId), cursor = request.cursor
+    const ownedSignal = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    ownedSignal.throwIfAborted()
+    const wait = <T>(read: Promise<T>) => waitForCollaborationSourceRead(read, ownedSignal)
+    const operation = this.collaborationCaptureTail.then(async () => {
+      ownedSignal.throwIfAborted()
+      if (this.collaborationJournal === undefined) {
+        const facility = this.ctx.get('storageDomain')
+        if (facility === undefined) throw Error('collaboration_source_journal_unavailable')
+        this.collaborationJournal = openCollaborationSourceJournal(facility)
+      }
+      const journal = await wait(this.collaborationJournal)
+      ownedSignal.throwIfAborted()
+      const entries = [...journal.sources()].filter(source => source.session_id === sessionId)
+        .map(snapshot => ({ snapshot, descriptor: describeCollaborationSource(snapshot) }))
+        .reverse()
+      if (cursor !== undefined && !entries.some(entry => entry.descriptor.snapshot_digest === cursor)) throw Error('collaboration_source_cursor_invalid')
+      // Immutable cursor lookup keeps older pages stable when a new Source is appended.
+      const remaining = cursor === undefined ? entries
+        : entries.slice(entries.findIndex(entry => entry.descriptor.snapshot_digest === cursor) + 1)
+      const items: SessionCollaborationSourceItem[] = []
+      const checks: (() => Promise<void>)[] = []
+      let bytes = 256
+      for (const { snapshot, descriptor } of remaining) {
+        const { snapshot_digest, ...source } = descriptor
+        const item = Object.freeze({ source: Object.freeze(source), snapshot_digest, original_message: snapshot.original_message })
+        const size = Buffer.byteLength(JSON.stringify(item), 'utf8') + 1
+        if (items.length === 8 || bytes + size > 256 * 1024) break
+        const workspaceId = WorkspaceId(snapshot.workspace_id)
+        const workspace = this.ctx.workspaceRegistry.get(workspaceId), attached = this.ctx.sessions.get(sessionId)
+        const current = async () => {
+          await wait(this.inspectCollaborationMembership(sessionId, workspaceId, ownedSignal))
+          if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== attached) throw Error('collaboration_session_workspace_mismatch')
+          ownedSignal.throwIfAborted()
+        }
+        await current(); checks.push(current)
+        items.push(item); bytes += size
+      }
+      for (const current of checks) await current()
+      ownedSignal.throwIfAborted()
+      const last = items.at(-1)
+      return Object.freeze({ items: Object.freeze(items), ...(last && remaining.length > items.length
+        ? { next_cursor: last.snapshot_digest } : {}) })
+    })
+    this.collaborationCaptureTail = operation.then(() => {}, () => {})
+    return wait(operation)
+  }
+
+  /**
    * Read all visible Session rows without resuming an Agent.
    * @param _request - reserved empty list request.
    * @param signal - cancellation for persistence reads.
@@ -759,6 +820,15 @@ export class SessionController extends TypertRemoteService {
     return this.controlState.control(signal)
   }
 
+}
+
+function validCollaborationSourcesRequest(value: unknown): value is SessionCollaborationSourcesRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const row = value as Record<string, unknown>
+  return Object.keys(row).every(key => key === 'sessionId' || key === 'cursor')
+    && typeof row.sessionId === 'string' && /^[!-~]{1,256}$/u.test(row.sessionId)
+    && !/[/\\]/u.test(row.sessionId) && row.sessionId !== '.' && row.sessionId !== '..'
+    && (row.cursor === undefined || (typeof row.cursor === 'string' && /^[0-9a-f]{64}$/u.test(row.cursor)))
 }
 
 export { buildModelCatalog }

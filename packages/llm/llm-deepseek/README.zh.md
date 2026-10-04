@@ -23,6 +23,7 @@ kind: "package-reference"
 -----
 
 <a id="use-this-package"></a>
+
 ## 使用本包
 
 当组合需要通过 harness LLM（大语言模型）服务流式调用 DeepSeek 模型时挂载本插件。它注册唯一的 `deepseek-official` 路由，并按请求解析连接事实，因此组合条目加可选用户设置分节即可驱动整个适配器。
@@ -73,6 +74,7 @@ kind: "package-reference"
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-llm-deepseek)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
 <a id="choose-a-protocol"></a>
+
 ### 选择协议
 
 通过补丁为已有插件显式选择 Chat Completions：
@@ -116,6 +118,7 @@ Files 模式通过 `maxRequestFilesBytes` 与 `maxImagesPerRequest` 限制保留
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## 理解实现
 
 <details>
@@ -150,6 +153,7 @@ Files 模式通过 `maxRequestFilesBytes` 与 `maxImagesPerRequest` 限制保留
 -----
 
 <a id="further-exploration"></a>
+
 ## 进一步探索
 
 当包级约定不够用时阅读以下页面。它们从服务约定逐步进入孪生适配器、重试执行器与共享类型。
@@ -166,8 +170,9 @@ Files 模式通过 `maxRequestFilesBytes` 与 `maxImagesPerRequest` 限制保留
 
 -----
 
-<a id="model-experience"></a>
 当 `purpose: collaboration-analysis` 时，两个协议在 HTTP 发送前以 `REQUEST_EXTENSION` 拒绝非空提供方请求扩展。空工具数组不能成为注入工具或额外上下文的扩展入口。
+
+<a id="model-experience"></a>
 
 ## 模型体验
 
@@ -205,7 +210,6 @@ loop 保留的响应块会追加到下一个请求，并保留其更早的可复
 
 <a id="known-limitations-and-deferred-work"></a>
 
-
 这些限制说明适配器在哪里停止、由未来工作接续。它们是当前包约束，不是通用 DeepSeek 对比或任务积压。
 
 - **设置中的 `models` 列表会整体替换组合列表**——设置层按字段合并，数组只算一个字段；按条目合并目录需要带键的形状。
@@ -217,6 +221,7 @@ loop 保留的响应块会追加到下一个请求，并保留其更早的可复
 - [Messages system 更新 e2e](tests/messages/adapter.e2e.ts) 要求通过 `DEEPSEEK_IN_HISTORY_MODEL` 指定支持该能力的模型，例如 `deepseek-flash`，并使用 `high` 思考强度。该变量未设置或为空时跳过；普通 `off` 文本检查仍在有凭据时运行。关闭思考时已知的指令遵循不稳定，使这些 system 更新检查不适合使用 `off`。
 
 <a id="dev-note"></a>
+
 ### 开发备注
 
 <details>

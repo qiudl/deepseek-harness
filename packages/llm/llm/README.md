@@ -23,6 +23,7 @@ Use `@deepseek-ai/dsh-llm` to stream model calls through configured provider ada
 -----
 
 <a id="use-this-package"></a>
+
 ## Use this package
 
 Any composition that calls a model provider — an agent loop, a session-title generator, a compaction summarizer — streams its requests through this service. Mount it together with at least one provider adapter; the service itself has no configuration and no provider wire code.
@@ -74,6 +75,7 @@ Every stream ends in exactly one terminal `finish` chunk: `{ kind: 'error', fail
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## Understand the implementation
 
 <details>
@@ -122,6 +124,7 @@ File detection reads current content, including nested tool results, on every re
 -----
 
 <a id="further-exploration"></a>
+
 ## Further Exploration
 
 Read these pages when the package-level contract is not enough. They move from the shared types to the concrete adapters, the retry executor, and the measurement service.
@@ -136,7 +139,10 @@ Read these pages when the package-level contract is not enough. They move from t
 
 -----
 
+Prepared `stream(options, assertRequest?)` runs the optional Host assertion after middleware and request projection, before the captured adapter sends. A guarded request retains its original cancellation signal and is deep-frozen after validation. Repeated terminal continuations cannot dispatch the same prepared adapter call again; an assertion failure becomes a terminal error. A middleware-supplied replacement stream never runs this assertion, so guarded consumers must reject output without observing it.
+
 <a id="model-experience"></a>
+
 ## Model Experience
 
 None, as the LLM service adds no content; adapters choose when to add the shared image descriptors and per-image placeholders exported by this package.
@@ -145,12 +151,9 @@ None, as the LLM service adds no content; adapters choose when to add the shared
 
 Reasoning-effort materialization preserves the assembled request prefix. Image identity and request-preview text are deterministic, while an optional execution-world path is resolved for each request; a changed path or an offload decision can prevent reuse from that image.
 
-Prepared `stream(options, assertRequest?)` runs the optional Host assertion after middleware and request projection, before the captured adapter sends. A guarded request retains its original cancellation signal and is deep-frozen after validation. Repeated terminal continuations cannot dispatch the same prepared adapter call again; an assertion failure becomes a terminal error. A middleware-supplied replacement stream never runs this assertion, so guarded consumers must reject output without observing it.
-
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>
-
 
 These limits define where this service stops and other packages or future work begin. They are current package constraints, not a task backlog.
 
@@ -161,6 +164,7 @@ These limits define where this service stops and other packages or future work b
 - **`GenerateOptions.sessionId` is a locally-declared brand** — importing dsh-session's `SessionId` would create a dependency cycle.
 
 <a id="dev-note"></a>
+
 ### Dev Note
 
 <details>

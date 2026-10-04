@@ -734,6 +734,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
       'client-ui-conversation TodoDock id \'todo\'',
       'client-ui-goal GoalDock id \'goal\'',
       'client-ui-slark-agent AgentTaskDock id \'slark-agent-tasks\'',
+      'client-ui-slark-agent CollaborationResultsDock id \'slark-collaboration-results\'',
       'client-ui-slark-agent ProjectScopeDock id \'slark-project-scope\'',
     ],
     replaceRisk: 'none',
