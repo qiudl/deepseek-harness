@@ -16,6 +16,7 @@ import { pathToFileURL } from 'node:url'
 import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import * as SlarkSource from '../src/client/index.ts'
+import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
 
 const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id: 'agent-1',
   enterprise_id: 'enterprise-1', enterprise_name: 'Company', project_name: '项目空间',
@@ -23,7 +24,7 @@ const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id
 
 type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST__']>['invokeEnterpriseAgent']>>[0]
 
-async function bench() {
+async function bench(collaboration = false) {
   vi.stubGlobal('crypto', webcrypto)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
   const ctx = new Context(), id = 'session-1' as SessionId
@@ -50,7 +51,28 @@ async function bench() {
   } } } as never)
   const invoke = vi.fn(async (_input: InvokeInput) => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
+  const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
+  const workspace = { id: workspaceId, archived: false }
+  ctx.provide('workspaces', { list: {
+    getSnapshot: () => ({ phase: 'ready', state: 'idle', error: null,
+      archivedSessionIds: workspace.archived ? [id] : [],
+      items: [{ workspaceId: workspace.id, sessionIds: [id] }] }),
+    subscribe: () => () => undefined,
+  } } as never)
+  const submit = vi.fn(async (input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse> => ({ ok: true as const,
+    value: { source: { workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision },
+    submission_state: 'accepted', invocation_id: 'invocation-v2' } }))
+  const scopeDirectory = vi.fn(async () => ({ ok: true as const, value: {
+    items: [{ project_id: agent.project_id, agent_id: agent.agent_id, agent_name: agent.name,
+      project_name: agent.project_name, available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
+    { project_id: 'stopped-project', agent_id: 'stopped-agent', agent_name: 'Guide', project_name: 'Stopped',
+      available: false, capability_snapshot: 'b'.repeat(64), reason_code: 'agent_stopped' }],
+    next_cursor: null, scope_version: '1',
+  } }))
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {
+    collaborationScopeAvailable: collaboration, collaborationExecutionAvailable: collaboration,
+    collaborationWorkspace: scopeDirectory, collaborationSubmit: submit,
     enterpriseAgents: async () => ({ ok: true, invocationAvailable: true, items: [agent] }),
     invokeEnterpriseAgent: invoke,
   })
@@ -101,8 +123,94 @@ async function bench() {
     const end = prefix.length + 2
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
-  return { ctx, composer, controller, invoke, sink, pick }
+  return { ctx, composer, controller, invoke, sink, pick, submit, scopeDirectory, workspace }
 }
+
+it('sends an explicit scoped Agent from the real composer without opening the collaboration panel', async () => {
+  const { composer, pick, submit, scopeDirectory, invoke, sink } = await bench(true)
+  await pick(' \n', '请检查登录问题')
+  const snapshot = composer.snapshot, occurrence = snapshot.occurrences[0]!
+  const ref = JSON.parse(occurrence.ref) as { source_id: string }
+  composer.submit(); composer.submit()
+  await vi.waitFor(() => { expect(composer.snapshot.draft).toBe('') })
+  expect(submit).toHaveBeenCalledTimes(1)
+  expect(submit).toHaveBeenCalledWith({ workspace_id: '38c7c5cb-38fc-466f-9d92-89cc49f84051', session_id: 'session-1',
+    source_message_id: ref.source_id, source_revision: '1', original_message: snapshot.draft,
+    active_mentions: [{ mention_id: ref.source_id,
+      source_span: { source_message_id: ref.source_id, source_revision: '1', start: occurrence.offset, end: occurrence.offset + occurrence.length },
+      display_snapshot: { agent_name: 'Guide', project_name: '项目空间' },
+      binding: { kind: 'resolved', target: { project_id: agent.project_id, agent_id: agent.agent_id }, capability_snapshot: 'a'.repeat(64) } }] })
+  expect(scopeDirectory).toHaveBeenCalledWith({ workspace_id: '38c7c5cb-38fc-466f-9d92-89cc49f84051', session_id: 'session-1',
+    operation: { kind: 'agents', query: { limit: 20, query: 'Gui' } } })
+  expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
+})
+
+it('retains an unknown submission and uses the same Source on a deliberate retry or edit', async () => {
+  const { composer, pick, submit, invoke, sink } = await bench(true)
+  await pick('', '请检查登录问题')
+  const original = composer.snapshot.draft
+  submit.mockResolvedValue({ ok: false, errorCode: 'collaboration_submission_unavailable', reconciliationRequired: true })
+  composer.submit()
+  await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(composer.snapshot.draft).toBe(original)
+  expect(submit).toHaveBeenCalledTimes(1)
+  composer.submit()
+  await vi.waitFor(() => { expect(submit).toHaveBeenCalledTimes(2) })
+  await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.seq).toBe(2) })
+  expect(submit.mock.calls[1]?.[0]).toEqual(submit.mock.calls[0]?.[0])
+  const end = composer.snapshot.draft.length - composer.snapshot.occurrences[0]!.length + 1
+  expect(composer.insertText('，补充检查', { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
+  composer.submit()
+  await vi.waitFor(() => { expect(submit).toHaveBeenCalledTimes(3) })
+  expect(submit.mock.calls[2]?.[0].source_message_id).toBe(submit.mock.calls[0]?.[0].source_message_id)
+  expect(submit.mock.calls[2]?.[0].source_revision).toBe('1')
+  expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
+})
+
+it.each(['workspace', 'archive', 'bridge'] as const)('refuses a picked chip after %s changes', async (change) => {
+  const { composer, pick, submit, workspace, invoke, sink } = await bench(true)
+  await pick('', '请检查登录问题')
+  const original = composer.snapshot.draft
+  if (change === 'workspace') workspace.id = '48c7c5cb-38fc-466f-9d92-89cc49f84051'
+  else if (change === 'archive') workspace.archived = true
+  else Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true, collaborationExecutionAvailable: false })
+  composer.submit()
+  await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(composer.snapshot.draft).toBe(original)
+  expect(submit).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
+})
+
+it('does not consume the original draft for a late acceptance after workspace ownership changes', async () => {
+  const { composer, pick, submit, workspace, sink } = await bench(true)
+  await pick('', '请检查登录问题')
+  const original = composer.snapshot.draft
+  let finish: (value: CollaborationSubmissionResponse) => void = () => { throw Error('not started') }
+  submit.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+  composer.submit()
+  await vi.waitFor(() => { expect(submit).toHaveBeenCalledTimes(1) })
+  const input = submit.mock.calls[0]![0]
+  workspace.archived = true
+  finish({ ok: true, value: { source: { workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision }, submission_state: 'accepted' } })
+  await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(composer.snapshot.draft).toBe(original); expect(sink).not.toHaveBeenCalled()
+})
+
+it('transport loss and a substituted accepted Source preserve the draft without falling through', async () => {
+  const { composer, pick, submit, invoke, sink } = await bench(true)
+  await pick('', '请检查登录问题')
+  const original = composer.snapshot.draft
+  submit.mockRejectedValueOnce(Error('private transport detail'))
+  composer.submit()
+  await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(composer.notices.getSnapshot()?.text).not.toContain('private transport detail')
+  expect(composer.snapshot.draft).toBe(original)
+  submit.mockImplementation(async input => ({ ok: true, value: { source: { workspace_id: input.workspace_id,
+    session_id: 'other-session', source_message_id: input.source_message_id, source_revision: input.source_revision }, submission_state: 'accepted' } }))
+  composer.submit()
+  await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.seq).toBe(2) })
+  expect(composer.snapshot.draft).toBe(original); expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
+})
 
 it.each([
   { prefix: '请 ', suffix: '检查登录问题' },

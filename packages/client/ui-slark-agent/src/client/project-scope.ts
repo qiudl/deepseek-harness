@@ -10,11 +10,11 @@ export interface ProjectScope {
 }
 /** Project names visible to the current Slark user. */
 export interface ProjectItem { project_id: string; project_name: string }
-/** Scope directory stays read-only until the v2 executor is connected. */
+/** Main reports which scoped targets support independent v2 execution. */
 export interface ScopedAgentItem extends ProjectItem {
   agent_id: string
   agent_name: string
-  available: false
+  available: boolean
   capability_snapshot: string
   reason_code: string
 }
@@ -24,7 +24,7 @@ export interface WorkspaceRequest {
   session_id: string
   operation: { kind: 'get' } | { kind: 'apply'; expected_version: string; selected_project_ids: readonly string[] } |
     { kind: 'projects' | 'agents'
-      query: { limit: number; cursor?: string } }
+      query: { limit: number; cursor?: string; query?: string } }
 }
 /** Main validates these responses before publishing them across the preload. */
 export type WorkspaceResponse = { ok: true

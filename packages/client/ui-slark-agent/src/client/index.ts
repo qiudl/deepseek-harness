@@ -13,6 +13,8 @@ import { ProjectScopeModel } from './project-scope.ts'
 import type { WorkspaceBridge } from './project-scope.ts'
 import { ProjectScopeDock } from './ProjectScopeDock.tsx'
 import type { ProjectScopeInjected } from './ProjectScopeDock.tsx'
+import { createScopedCollaborationSource, scopedCollaborationClipboard } from './collaboration-source.ts'
+import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from './collaboration-source.ts'
 
 /** Required client services. */
 export const inject = ['inputTriggers', 'locale', 'sessions', 'conversation', 'slots']
@@ -30,6 +32,8 @@ interface AgentItem {
 
 interface DesktopAgentDirectory extends WorkspaceBridge {
   collaborationScopeAvailable?: boolean
+  collaborationExecutionAvailable?: boolean
+  collaborationSubmit?(input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse>
   enterpriseAgents(): Promise<
     { ok: true; items: AgentItem[]; invocationAvailable: boolean } |
     { ok: false; errorCode: string }>
@@ -117,17 +121,17 @@ export function apply(ctx: ClientContext): void {
     }, ProjectScopeDock))
   })
   const t = ctx.locale.bind(NS)
+  const scopedSource = createScopedCollaborationSource(ctx, t)
   const source: InputTriggerSource = {
     trigger: '@',
     name: 'slark-agent',
     order: 5,
     showGroupTitle: false,
     matchEnterPosition: 'anywhere',
-    async candidates(_session, { query, signal }) {
+    async candidates(_session, { query, signal, ...options }) {
       const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
       if (host?.collaborationScopeAvailable) {
-        // The v2 directory is read-only until its own executor is connected. No legacy fallback.
-        return []
+        return scopedSource.candidates(_session, { query, signal, ...options })
       }
       if (!host?.enterpriseAgents) return []
       const response = await host.enterpriseAgents()
@@ -143,8 +147,9 @@ export function apply(ctx: ClientContext): void {
         value: JSON.stringify(item),
       }))
     },
-    onPick({ candidate }) {
-      if (typeof window !== 'undefined' && window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return undefined
+    onPick(args) {
+      if (typeof window !== 'undefined' && window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return scopedSource.onPick(args)
+      const { candidate } = args
       if (candidate.value === undefined) return undefined
       const item = parseReference(candidate.value)
       if (!item) return undefined
@@ -160,7 +165,7 @@ export function apply(ctx: ClientContext): void {
       const state = ctx.conversation.input.for(scoped).state.getSnapshot()
       const matches = state.occurrences.filter(occ => occ.source === 'slark-agent')
       if (matches.length === 0 || state.draft.trim() !== line) return undefined
-      if (window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) throw new Error(t('scope.executorPending'))
+      if (window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return scopedSource.matchEnter?.(session, line, signal, envelope)
       if (matches.length !== 1 || state.occurrences.length !== 1 || envelope.attachments > 0) {
         throw new Error(t('submit.single'))
       }
@@ -219,6 +224,8 @@ export function apply(ctx: ClientContext): void {
     },
     codec: {
       clipboardText(ref) {
+        const scoped = scopedCollaborationClipboard(ref)
+        if (scoped) return scoped
         const item = parseReference(ref)
         return item ? `@${agentLabel(item)}` : '@'
       },

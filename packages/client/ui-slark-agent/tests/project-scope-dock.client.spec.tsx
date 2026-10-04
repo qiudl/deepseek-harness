@@ -10,7 +10,7 @@ import { zh } from '../src/client/locales.ts'
 
 const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
 afterEach(cleanup)
-function fixture(grouped = true) {
+function fixture(grouped = true, executable = false) {
   let selected: readonly string[] = [], version = 0
   const call = vi.fn(async (input: Parameters<NonNullable<WorkspaceBridge['collaborationWorkspace']>>[0]) => {
     const op = input.operation
@@ -21,8 +21,8 @@ function fixture(grouped = true) {
       { project_id: 'one', project_name: '产品空间' }, { project_id: 'two', project_name: '研发空间' },
     ], next_cursor: null } }
     return { ok: true as const, value: { items: selected.length ? [{ project_id: 'one', project_name: '产品空间',
-      agent_id: 'agent', agent_name: '<script>Guide', available: false as const,
-      capability_snapshot: 'a'.repeat(64), reason_code: 'executor_unavailable' }] : [],
+      agent_id: 'agent', agent_name: '<script>Guide', available: executable,
+      capability_snapshot: 'a'.repeat(64), reason_code: executable ? 'ready' : 'executor_unavailable' }] : [],
     next_cursor: null, scope_version: String(version) } }
   })
   const bridge = { collaborationWorkspace: call }
@@ -57,6 +57,18 @@ it('optional collaboration area supports multi-select, apply and explicit clear 
   expect(f.call.mock.calls.filter(([x]) => x.operation.kind === 'apply').map(([x]) => x.operation))
     .toEqual([{ kind: 'apply', expected_version: '0', selected_project_ids: ['one', 'two'] },
       { kind: 'apply', expected_version: '1', selected_project_ids: [] }])
+  view.unmount(); f.model.dispose()
+})
+it('qualified Agents invite chat mentions without adding a task form or send button', async () => {
+  const f = fixture(true, true), view = render(<ProjectScopeDock {...f.props} />)
+  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  fireEvent.click(await screen.findByRole('checkbox', { name: '产品空间' }))
+  fireEvent.click(screen.getByTestId('slark-scope-apply'))
+  await screen.findByText('<script>Guide · 产品空间')
+  expect(screen.getByText(zh['scope.mentionReady'])).toBeTruthy()
+  expect(screen.getByText(zh['scope.chatReady'])).toBeTruthy()
+  expect(screen.queryByText(zh['scope.executorPending'])).toBeNull()
+  expect(screen.queryByRole('textbox')).toBeNull()
   view.unmount(); f.model.dispose()
 })
 it('cancel discards the local selection without saving or clearing the authority', async () => {

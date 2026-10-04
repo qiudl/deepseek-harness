@@ -16,7 +16,7 @@ export interface ProjectScopeInjected {
 type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & SlotInjectFace<ProjectScopeInjected>
 
 /**
- * Render project multi-selection and read-only scoped Agents.
+ * Render project multi-selection and current scoped Agent eligibility.
  * @param props - framework scope hook, commands and translated copy.
  * @returns the collapsible collaboration region.
  */
@@ -78,12 +78,12 @@ function ScopeEditor({ state, saved, applyScope, loadProjects, loadAgents, close
         onClick={() => { void applyScope(draft) }}>{t(busy ? 'scope.saving' : 'scope.apply')}</Button>
     </div>
     <div className={css.heading}>{t('scope.agents')}</div>
-    <p className={css.hint}>{t('scope.executorPending')}</p>
+    <p className={css.hint}>{t(state.agents.some(agent => agent.available) ? 'scope.chatReady' : 'scope.executorPending')}</p>
     {saved.length === 0 && <p>{t('scope.empty')}</p>}
     <div className={css.rows}>{state.agents.map(agent => <div className={css.agent}
       key={JSON.stringify([agent.project_id, agent.agent_id])}>
       <span>{agent.agent_name} · {agent.project_name}</span>
-      <small>{t('scope.readOnly')}</small>
+      <small>{t(agent.available ? 'scope.mentionReady' : 'scope.readOnly')}</small>
     </div>)}</div>
     {state.loadingAgents && <p role="status">{t('scope.loading')}</p>}
     {state.agentCursor && <Button size="sm" data-testid="slark-scope-more-agents" disabled={busy || state.loadingAgents}

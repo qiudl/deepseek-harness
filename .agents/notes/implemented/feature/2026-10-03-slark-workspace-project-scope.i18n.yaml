@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-10-03-slark-workspace-project-scope.md
+2026-10-03-slark-workspace-project-scope.md: 8d9c044bac54d48fa49e4b4fd95490b533adb358
+2026-10-03-slark-workspace-project-scope.zh.md: 0198b49ea55584169bbeaa879bf6441b44d6197b

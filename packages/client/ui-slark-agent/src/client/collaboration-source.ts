@@ -1,0 +1,165 @@
+/** Scoped Agent chips submit original Source text to Main; they never serialize into ordinary model chat. */
+import type { Context } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
+import type { zh } from './locales.ts'
+
+interface Reference {
+  kind: 'collaboration-v2'
+  workspace_id: string
+  session_id: string
+  project_id: string
+  project_name: string
+  agent_id: string
+  agent_name: string
+  capability_snapshot: string
+  source_id?: string
+}
+/** Page supplies only original text, editor occurrences and current directory metadata. */
+export interface DesktopCollaborationSourceInput {
+  workspace_id: string
+  session_id: string
+  source_message_id: string
+  source_revision: '1'
+  original_message: string
+  active_mentions: Array<{
+    mention_id: string
+    source_span: { source_message_id: string; source_revision: '1'; start: number; end: number }
+    display_snapshot: { agent_name: string; project_name: string }
+    binding: { kind: 'resolved'; target: { project_id: string; agent_id: string }; capability_snapshot: string }
+  }>
+}
+/** Main's public projection contains no model, proof, token, grant or Task identity. */
+export type CollaborationSubmissionResponse = {
+  ok: true
+  value: { source: Pick<DesktopCollaborationSourceInput, 'workspace_id' | 'session_id' | 'source_message_id' | 'source_revision'>
+    submission_state: 'accepted'
+    invocation_id?: string }
+} | { ok: false; errorCode: string; reconciliationRequired: boolean }
+
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+const text = (v: unknown, maximum: number): v is string => typeof v === 'string' && v.length > 0 &&
+  new TextEncoder().encode(v).byteLength <= maximum && !/[\x00-\x1f\x7f]/u.test(v)
+function parse(value: string): Reference | undefined {
+  try {
+    if (new TextEncoder().encode(value).byteLength > 4096) return undefined
+    const v: unknown = JSON.parse(value)
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined
+    const r = v as Record<string, unknown>
+    const keys = ['kind', 'workspace_id', 'session_id', 'project_id', 'project_name', 'agent_id', 'agent_name', 'capability_snapshot']
+    if (Object.hasOwn(r, 'source_id')) keys.push('source_id')
+    if (Object.keys(r).length !== keys.length || keys.some(k => !Object.hasOwn(r, k)) ||
+      r.kind !== 'collaboration-v2' || !text(r.workspace_id, 36) || !uuid.test(r.workspace_id) ||
+      !text(r.session_id, 256) || !text(r.project_id, 256) || !text(r.agent_id, 256) ||
+      !text(r.project_name, 512) || !text(r.agent_name, 512) ||
+      typeof r.capability_snapshot !== 'string' || !/^[a-f0-9]{64}$/u.test(r.capability_snapshot) ||
+      (r.source_id !== undefined && (!text(r.source_id, 36) || !uuid.test(r.source_id)))) return undefined
+    return r as unknown as Reference
+  } catch { return undefined }
+}
+const label = (r: Reference) => `${r.agent_name} · ${r.project_name}`
+/**
+ * Preserve the full scoped display label during chip clipboard export.
+ * @param ref - the original scoped chip metadata.
+ * @returns its @ label, or undefined for a malformed or unpicked reference.
+ */
+export function scopedCollaborationClipboard(ref: string): string | undefined {
+  const r = parse(ref)
+  return r?.source_id ? `@${label(r)}` : undefined
+}
+function workspaceOf(ctx: Context, sessionId: SessionId): string | undefined {
+  const workspaces = ctx.get('workspaces') as IWorkspaces | undefined
+  const snapshot = workspaces?.list.getSnapshot()
+  if (!snapshot || snapshot.phase !== 'ready' || snapshot.state === 'error' || snapshot.archivedSessionIds.includes(sessionId)) return undefined
+  return snapshot.items.find(w => w.sessionIds.includes(sessionId))?.workspaceId
+}
+
+/**
+ * Candidates need no open dock; every send rechecks Session membership and the original chip.
+ * @param ctx - the source entry's Client Context; optional workspace state is read on each operation.
+ * @param t - the entry's typed locale dictionary.
+ * @returns a source that submits original text through Main and retains failed drafts without fallback.
+ */
+export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typeof zh) => string): InputTriggerSource {
+  return {
+    trigger: '@', name: 'slark-agent', matchEnterPosition: 'anywhere',
+    async candidates(session, { query, signal }) {
+      const host = window.__DSH_DESKTOP_HOST__, workspace = workspaceOf(ctx, session.sessionId)
+      if (!workspace || !host?.collaborationScopeAvailable || !host.collaborationExecutionAvailable ||
+        !host.collaborationWorkspace || !host.collaborationSubmit || signal.aborted) return []
+      let response
+      try {
+        response = await host.collaborationWorkspace({ workspace_id: workspace, session_id: session.sessionId,
+          operation: { kind: 'agents', query: { limit: 20, query: query.trim() } } })
+      } catch { return [] }
+      if (signal.aborted || window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== workspace ||
+        !response.ok || !('scope_version' in response.value)) return []
+      return response.value.items.filter(item => item.available && item.reason_code === 'ready').map(item => ({
+        name: `${item.agent_name} · ${item.project_name} · ${item.agent_id}`,
+        label: `${item.agent_name} · ${item.project_name}`, description: item.project_name,
+        section: t('section.scopedAgents'),
+        value: JSON.stringify({ kind: 'collaboration-v2', workspace_id: workspace, session_id: session.sessionId,
+          project_id: item.project_id, project_name: item.project_name, agent_id: item.agent_id,
+          agent_name: item.agent_name, capability_snapshot: item.capability_snapshot }),
+      }))
+    },
+    onPick({ candidate, session }) {
+      const r = candidate.value === undefined ? undefined : parse(candidate.value)
+      const host = window.__DSH_DESKTOP_HOST__
+      if (!r || r.source_id || !host?.collaborationExecutionAvailable || !host.collaborationScopeAvailable ||
+        r.session_id !== session.sessionId || workspaceOf(ctx, session.sessionId) !== r.workspace_id) return undefined
+      return { insert: { source: 'slark-agent', ref: JSON.stringify({ ...r, source_id: randomUUID() }),
+        label: label(r), clipboardText: `@${label(r)}` } }
+    },
+    async matchEnter(session, line, signal, envelope) {
+      const scoped = ctx.sessions.scope(session.sessionId)
+      if (!scoped) return undefined
+      const snapshot = ctx.conversation.input.for(scoped).state.getSnapshot()
+      const host = window.__DSH_DESKTOP_HOST__
+      if (!host?.collaborationExecutionAvailable || !host.collaborationScopeAvailable || !host.collaborationSubmit) throw Error(t('scope.executorPending'))
+      if (snapshot.draft.trim() !== line || snapshot.occurrences.length !== 1 || envelope.attachments > 0) throw Error(t('submit.single'))
+      const submit = host.collaborationSubmit
+      const mention = snapshot.occurrences[0]
+      if (!mention) throw Error(t('submit.unavailable'))
+      const r = parse(mention.ref), end = mention.offset + mention.length
+      if (!r?.source_id || r.session_id !== session.sessionId || workspaceOf(ctx, session.sessionId) !== r.workspace_id ||
+        mention.source !== 'slark-agent' || !Number.isSafeInteger(mention.offset) || !Number.isSafeInteger(mention.length) ||
+        mention.offset < 0 || mention.length < 2 || end > snapshot.draft.length ||
+        mention.clipboardText !== `@${label(r)}` || snapshot.draft.slice(mention.offset, end) !== mention.clipboardText) throw Error(t('submit.unavailable'))
+      if (!(snapshot.draft.slice(0, mention.offset) + snapshot.draft.slice(end)).trim()) throw Error(t('submit.question'))
+      signal.throwIfAborted()
+      const original: DesktopCollaborationSourceInput = { workspace_id: r.workspace_id, session_id: session.sessionId,
+        source_message_id: r.source_id, source_revision: '1', original_message: snapshot.draft,
+        active_mentions: [{ mention_id: r.source_id,
+          source_span: { source_message_id: r.source_id, source_revision: '1', start: mention.offset, end },
+          display_snapshot: { agent_name: r.agent_name, project_name: r.project_name },
+          binding: { kind: 'resolved', target: { project_id: r.project_id, agent_id: r.agent_id }, capability_snapshot: r.capability_snapshot } }] }
+      return { claim: { name: 'slark-agent', token: line, retainOnFailure: false,
+        async submit(args, actx) {
+          signal.throwIfAborted()
+          const latest = ctx.conversation.input.for(actx).state.getSnapshot(), currentMention = latest.occurrences[0]
+          if (ctx.sessions.scopeOf(actx) !== session.sessionId || latest.draft !== snapshot.draft ||
+            latest.occurrences.length !== 1 || currentMention?.ref !== mention.ref ||
+            currentMention.offset !== mention.offset || currentMention.length !== mention.length ||
+            currentMention.clipboardText !== mention.clipboardText || args.trim() !== '' ||
+            workspaceOf(ctx, session.sessionId) !== r.workspace_id || window.__DSH_DESKTOP_HOST__ !== host ||
+            !host.collaborationScopeAvailable || !host.collaborationExecutionAvailable) return { kind: 'error', text: t('submit.changed') }
+          let result: CollaborationSubmissionResponse
+          try { result = await submit(original) }
+          catch { return { kind: 'error', text: t('submit.uncertainV2') } }
+          signal.throwIfAborted()
+          if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== r.workspace_id) return { kind: 'error', text: t('submit.uncertainV2') }
+          if (!result.ok) return { kind: 'error', text: t(result.reconciliationRequired ? 'submit.uncertainV2' : 'submit.unavailableV2') }
+          const source = result.value.source
+          if (result.value.submission_state !== 'accepted' || source.workspace_id !== original.workspace_id ||
+            source.session_id !== original.session_id || source.source_message_id !== original.source_message_id ||
+            source.source_revision !== original.source_revision) return { kind: 'error', text: t('submit.uncertainV2') }
+          window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
+          return { kind: 'success', text: t('submit.acceptedV2') }
+        },
+      } }
+    },
+  }
+}
