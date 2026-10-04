@@ -80,15 +80,16 @@ describe('profile worker child process', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
-    }) as unknown as {
-      remoteUiRead(origin: string, token: string, endpoint: string, payload: object,
-        signal: AbortSignal, stopped: () => boolean): Promise<unknown>
-      remoteUiAssetRead(origin: string, cookie: { name: string; value: string }, token: string,
-        endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
-        cache: { current?: { url: string; bytes: Buffer } }): Promise<unknown>
-    }
+    })
+    const remoteUiRead = Reflect.get(factory, 'remoteUiRead') as (
+      origin: string, token: string, endpoint: string, payload: object,
+      signal: AbortSignal, stopped: () => boolean) => Promise<unknown>
+    const remoteUiAssetRead = Reflect.get(factory, 'remoteUiAssetRead') as (
+      origin: string, cookie: { name: string; value: string }, token: string,
+      endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
+      cache: { current?: { url: string; bytes: Buffer } }) => Promise<unknown>
     const signal = new AbortController().signal
-    const projected = await factory.remoteUiRead(origin, 'token', 'boot/injections', { args: {} }, signal, () => false)
+    const projected = await remoteUiRead.call(factory, origin, 'token', 'boot/injections', { args: {} }, signal, () => false)
     expect(projected).toEqual({ injections: [
       { kind: 'script-src', placement: 'head', src: absolute },
       { kind: 'global', name: '__DSH_BOOT__', value: {
@@ -96,7 +97,7 @@ describe('profile worker child process', () => {
         batches: [{ phase: 'application', url: absolute, rev: 'r1', entries: ['a'] }],
       } },
     ] })
-    await expect(factory.remoteUiAssetRead(origin, { name: 'cookie', value: 'private' }, 'token',
+    await expect(remoteUiAssetRead.call(factory, origin, { name: 'cookie', value: 'private' }, 'token',
       'asset/describe', { args: { url: absolute } }, signal, () => false, {}))
       .resolves.toEqual({ sha256: createHash('sha256').update('registered();').digest('hex'), total: 13 })
   })
