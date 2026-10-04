@@ -293,6 +293,13 @@ describe('profile worker child process', () => {
 })
 
 describe('dsh web Profile worker', () => {
+  it('refuses caller overrides of the private collaboration delivery token before launching a worker', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+    await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_DELIVERY_TOKEN: 'C'.repeat(43) } }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+  })
   it('rejects relative launch paths and non-ready or oversized child output', async () => {
     expect(() => new DshWebProfileWorkerFactory({
       nodeExecutablePath: 'node', dshEntrypointPath: process.execPath,

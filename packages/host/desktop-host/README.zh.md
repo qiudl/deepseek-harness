@@ -186,4 +186,7 @@ MCP 操作先以排他创建方式持久保存私有备份，再记录检查点�
 
 Web worker 工厂另生成随机 `DSH_PROFILE_ANALYSIS_TOKEN`，禁止调用方环境覆盖，并将其保留在视图租约之外。仅供父 Host 使用的 `collaborationAnalysis` 句柄向私有 worker 发送有界 prepare/dispatch JSON，拒绝已停止的 worker 和重定向，并校验完整有界 UTF-8 响应。父 Host 必须派生原 Account/Host 归属摘要并保持权限有效；句柄本身不授予云端资格，也不安装聊天入口。
 
+Web worker 工厂另生成并保留 `DSH_PROFILE_DELIVERY_TOKEN`，供仅父 Host 可用的 `receiveCollaborationDelivery` 句柄使用。完整投递 JSON 上限为 1 MiB；所属 Profile 校验其结构，返回最多 8 KiB 的不可信本地提交 JSON，不回传答案。已停止的 worker、重定向、取消和非法响应均拒绝。该能力保留在视图租约之外。父 Host 必须认证账户命名空间与可读云端投影；该私有 HTTP 句柄不授予签名云端确认，也不提供控制协议上传。大回复需要在现有控制帧上限内进行已认证的分块传输。
+
+
 Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。取消关闭原操作；该方法不校验任务，也不受理 Agent 执行。

@@ -172,3 +172,5 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 </details>
 
 `DSH_PROFILE_ANALYSIS_TOKEN` 单独为父 Host 启用 `/internal/desktop-collaboration-analysis`。`prepare` 捕获所属 Profile 的 Source 并保存完整分析输入，等待云端资格而不调用模型。`dispatch` 仅在原归属摘要下继续同一个一次性调用，先持久保存结果再响应。最多两个待完成操作，准备和执行共用 30 秒生命周期；取消、销毁、过期资格和重复请求均拒绝继续。浏览器 Cookie 和 Source 读取令牌不能授权此入口。该私有路由不授予任务受理资格，不提供可执行恢复或 Renderer API。
+
+`DSH_PROFILE_DELIVERY_TOKEN` 独立为父 Host 启用 `/internal/desktop-collaboration-delivery`。入口接受最多 1 MiB 的精确可读投递 JSON，由所属 Session Controller 校验原 Source 与当前归属。完整回复保存后才返回禁止缓存的首次提交描述符，不回传答案。浏览器 Cookie、Source 读取令牌、调用方提交字段及受限投影不能授权保存。取消、写入失败和提交后的归属丢失均不返回成功回执，也不删除已保存的数据。此路由不签发云端确认，不追加聊天事件。

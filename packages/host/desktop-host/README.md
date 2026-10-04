@@ -111,6 +111,9 @@ No runtime invariant companion is published: filesystem and wire commit points v
 
 The Web worker factory creates a separate random `DSH_PROFILE_ANALYSIS_TOKEN`, reserves it against caller environment overrides and keeps it outside view leases. Its Parent-only `collaborationAnalysis` handle sends bounded prepare/dispatch JSON to the private worker, rejects stopped workers and redirects, and validates the complete bounded UTF-8 response. The Parent must derive the original Account/Host binding digest and keep that authority current; this handle alone does not grant cloud authority or install a chat entry.
 
+The Web worker factory separately generates and reserves `DSH_PROFILE_DELIVERY_TOKEN` for its parent-only `receiveCollaborationDelivery` handle. Complete delivery JSON is bounded to 1 MiB; the owning Profile validates its schema and returns at most 8 KiB of untrusted local commit JSON without echoing the answer. Stopped workers, redirects, cancellation and malformed responses reject. The capability stays outside view leases. The parent must authenticate the account namespace and readable cloud projection; this private HTTP handle grants neither signed cloud acknowledgement nor a control-protocol upload. Large replies require an authenticated chunked transfer within the existing control-frame limit.
+
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.

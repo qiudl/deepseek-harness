@@ -12,8 +12,18 @@ import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepsee
 import { mkdtemp, realpath, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createSessionTestController, testSessionPersistence } from './test-remote.ts'
+import { describeCollaborationSource } from '../src/collaboration-source-journal.ts'
+
+function deliveryFor(snapshot: Parameters<typeof describeCollaborationSource>[0], answer='原聊天的完整回复') {
+  const { snapshot_digest,...source_locator }=describeCollaborationSource(snapshot)
+  return { namespace_id:'n2_'+'a'.repeat(64),projection:{ delivery_id:'delivery-1',invocation_id:'invocation-1',plan_id:'plan-1',task_id:'task-1',task_revision:'1',
+    delivery_state:'pending',delivery_state_version:'1',source_locator,source_snapshot_digest:snapshot_digest,
+    execution_state:'succeeded',invocation_state_version:'3',result_digest:createHash('sha256').update(JSON.stringify({ answer,failure_code:null,state:'succeeded' })).digest('hex'),
+    target:{ project_id:'212',agent_id:'guide' },target_display_snapshot:{ agent_name:'Guide',project_name:'qiu-slark' },answer } }
+}
 
 class SnapshotAdapter extends LlmAdapter {
   prepare = () => Promise.resolve()
@@ -70,6 +80,100 @@ async function harness(root?: string, existingCwd?: string) {
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('owns a cancelled delivery journal open until late storage settles and disposal closes it', async () => {
+    const h = await harness(), cancel = new AbortController()
+    let release: (() => void) | undefined
+    try {
+      const first = await h.controller.captureCollaborationSource(h.source(), new AbortController().signal)
+      const open = h.backend.kv.open.bind(h.backend.kv)
+      let enter!: () => void, closed = false
+      const started = new Promise<void>((resolve) => { enter = resolve })
+      h.backend.kv.open = async (descriptor) => {
+        if (descriptor.name !== 'collaboration_delivery_v2') return open(descriptor)
+        await new Promise<void>((resolve) => { release = resolve; enter() })
+        const unit = await open(descriptor), close = unit.close.bind(unit)
+        unit.close = async () => { await close(); closed = true }
+        return unit
+      }
+      const result = h.controller.receiveCollaborationDelivery(deliveryFor(first.snapshot), cancel.signal)
+      const observed = expect(result).rejects.toThrow('delivery-open-cancel')
+      await started
+      cancel.abort(new Error('delivery-open-cancel'))
+      await observed
+      let disposed = false
+      const disposal = h.dispose().then(() => { disposed = true })
+      await Promise.resolve(); expect(disposed).toBe(false)
+      release!()
+      await disposal
+      expect(closed).toBe(true)
+      await expect(readFile(join(h.root, 'state', 'collaboration_delivery_v2.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally { release?.(); await h.dispose() }
+  })
+  it('withholds delivery acknowledgment after ownership changes during commit and recovers the first saved reply', async () => {
+    const h = await harness()
+    try {
+      const first = await h.controller.captureCollaborationSource(h.source(), new AbortController().signal)
+      const sourceBytes = await readFile(h.sourceFile), open = h.backend.kv.open.bind(h.backend.kv)
+      h.backend.kv.open = async (descriptor) => {
+        const unit = await open(descriptor)
+        if (descriptor.name === 'collaboration_delivery_v2') {
+          const put = unit.putRecord.bind(unit)
+          unit.putRecord = async (...args) => { await put(...args); await h.workspace.detachSession(h.sessionId) }
+        }
+        return unit
+      }
+      const input = deliveryFor(first.snapshot), signal = new AbortController().signal
+      await expect(h.controller.receiveCollaborationDelivery(input, signal)).rejects.toThrow('collaboration_session_workspace_mismatch')
+      const saved = JSON.parse(await readFile(join(h.root, 'state', 'collaboration_delivery_v2.json'), 'utf8')) as {
+        tables: { replies: Record<string, { host_journal_commit: { journal_id: string } }> }
+      }
+      const original = Object.values(saved.tables.replies)[0]!
+      await h.workspace.attachSession(h.sessionId)
+      const recovered = await h.controller.receiveCollaborationDelivery(input, signal)
+      expect(recovered.host_journal_commit.journal_id).toBe(original.host_journal_commit.journal_id)
+      expect(await readFile(h.sourceFile)).toEqual(sourceBytes)
+    } finally { await h.dispose() }
+  })
+  it('persists delivery in the original cold Profile without model preparation, Agent activation or ordinary events',async()=>{
+    const h=await harness()
+    try{
+      const first=await h.controller.captureCollaborationSource(h.source(),new AbortController().signal)
+      h.prepare.mockClear();h.stream.mockClear();h.resume.mockClear()
+      const before=JSON.stringify(h.events),signal=new AbortController().signal
+      const saved=await h.controller.receiveCollaborationDelivery(deliveryFor(first.snapshot),signal)
+      expect(saved.source_locator.session_id).toBe(h.sessionId)
+      expect(saved.answer).toBe('原聊天的完整回复')
+      expect(await readFile(join(h.root,'state','collaboration_delivery_v2.json'),'utf8')).toContain(saved.host_journal_commit.journal_id)
+      expect(await h.controller.receiveCollaborationDelivery(deliveryFor(first.snapshot),signal)).toEqual(saved)
+      expect(h.prepare).not.toHaveBeenCalled();expect(h.stream).not.toHaveBeenCalled();expect(h.resume).not.toHaveBeenCalled()
+      expect(JSON.stringify(h.events)).toBe(before);expect(h.ctx.sessions.get(h.sessionId)).toBeUndefined()
+    }finally{await h.dispose()}
+  })
+  it('rejects delivery for another Source or lost workspace ownership and preserves the original source journal',async()=>{
+    const h=await harness()
+    try{
+      const first=await h.controller.captureCollaborationSource(h.source(),new AbortController().signal),source=await readFile(h.sourceFile)
+      const input=deliveryFor(first.snapshot),signal=new AbortController().signal
+      input.projection.source_locator.source_message_id='other-message'
+      await expect(h.controller.receiveCollaborationDelivery(input,signal)).rejects.toThrow('collaboration_source_not_found')
+      await h.workspace.detachSession(h.sessionId)
+      await expect(h.controller.receiveCollaborationDelivery(deliveryFor(first.snapshot),signal)).rejects.toThrow('collaboration_session_workspace_mismatch')
+      expect(await readFile(h.sourceFile)).toEqual(source)
+      await expect(readFile(join(h.root,'state','collaboration_delivery_v2.json'))).rejects.toMatchObject({ code:'ENOENT' })
+    }finally{await h.dispose()}
+  })
+  it('captures queued delivery before caller mutation and rejects cancellation without creating a reply',async()=>{
+    const h=await harness()
+    try{
+      const first=await h.controller.captureCollaborationSource(h.source(),new AbortController().signal),cancel=new AbortController()
+      cancel.abort()
+      await expect(h.controller.receiveCollaborationDelivery(deliveryFor(first.snapshot),cancel.signal)).rejects.toThrow()
+      await expect(readFile(join(h.root,'state','collaboration_delivery_v2.json'))).rejects.toMatchObject({ code:'ENOENT' })
+      const input=deliveryFor(first.snapshot),save=h.controller.receiveCollaborationDelivery(input,new AbortController().signal)
+      input.projection.answer='changed input';input.projection.source_locator.session_id='other-session'
+      expect((await save).answer).toBe('原聊天的完整回复')
+    }finally{await h.dispose()}
+  })
   it('freezes user content with the actual prepared configuration and persists before returning a call', async () => {
     const h = await harness()
     try {

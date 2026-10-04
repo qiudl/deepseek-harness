@@ -13,6 +13,8 @@ import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates, describeCollaborationSource } from './collaboration-source-journal.ts'
 import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot, CollaborationSourceCoordinates } from './collaboration-source-journal.ts'
+import { openCollaborationDeliveryJournal, parseCollaborationDeliveryInput } from './collaboration-delivery-journal.ts'
+import type { CollaborationDeliveryJournal, CollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -70,13 +72,15 @@ export type * from './types.ts'
 export { ApiSessionNotFound } from './agent.ts'
 export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
-export { openCollaborationSourceJournal, describeCollaborationSource, parseCollaborationSourceSnapshot } from './collaboration-source-journal.ts'
+export { openCollaborationSourceJournal, describeCollaborationSource, parseCollaborationSourceSnapshot, collaborationJournalDigest } from './collaboration-source-journal.ts'
 export type {
   CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal, CollaborationSourceInput,
   CollaborationSourceCoordinates,
 } from './collaboration-source-journal.ts'
 export { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter } from './collaboration-analysis-journal.ts'
 export type { CollaborationAnalysisJournal, CollaborationAnalysisJournalRecord, CollaborationAnalysisDispatchGrant } from './collaboration-analysis-journal.ts'
+export { openCollaborationDeliveryJournal, parseCollaborationDeliveryInput, parseCollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
+export type { CollaborationDeliveryJournal, CollaborationDeliveryInput, CollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -146,6 +150,7 @@ export class SessionController extends TypertRemoteService {
   private readonly collaborationAnalysis = new CollaborationAnalysisRunner(this.collaborationLifetime.signal)
   private collaborationCaptureTail: Promise<void> = Promise.resolve()
   private collaborationJournal?: Promise<CollaborationSourceJournal>
+  private collaborationDeliveryJournal?: Promise<CollaborationDeliveryJournal>
 
   /**
    * @param ctx - Host context containing the Session capability assembly.
@@ -160,11 +165,14 @@ export class SessionController extends TypertRemoteService {
     this.captureCollaborationSource = this.captureCollaborationSource.bind(this)
     this.readCollaborationSourceSnapshot = this.readCollaborationSourceSnapshot.bind(this)
     this.inspectCollaborationSource = this.inspectCollaborationSource.bind(this)
+    this.receiveCollaborationDelivery = this.receiveCollaborationDelivery.bind(this)
     ctx.effect(() => async () => {
       this.collaborationLifetime.abort(new DOMException('Profile source capture disposed', 'AbortError'))
       await this.collaborationCaptureTail
       const journal = await this.collaborationJournal?.catch(() => undefined)
       await journal?.close()
+      const replies = await this.collaborationDeliveryJournal?.catch(() => undefined)
+      await replies?.close()
     }, 'session-controller.collaboration-sources')
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
@@ -277,6 +285,28 @@ export class SessionController extends TypertRemoteService {
     workspaceId: WorkspaceId,
     signal?: AbortSignal,
   ): Promise<WorkspaceModelSelection> {
+    const { attached, inspection, agent } = await this.inspectCollaborationMembership(sessionId, workspaceId, signal)
+    const state = attached === undefined
+      ? foldModelSelection(inspection.events)
+      : this.ctx.sessionProjections.stateOf(attached, 'modelSelection')
+    if (state === undefined) throw new Error('api-session: required modelSelection projection is not registered')
+    const choice = agent === undefined
+      ? resolveModelSelection(
+        state.pending,
+        attached?.requestHeader() ?? foldRequestHeader(inspection.events),
+        () => this.ctx.agentDefaultModel.currentSelection(),
+      )
+      : this.agents.inspectSelectionFor(agent)
+    // Copy only public choice fields even if a Host integration supplies extra settings.
+    const selection = Object.freeze({
+      provider: choice.provider,
+      model: choice.model,
+      ...(choice.reasoningEffort === undefined ? {} : { reasoningEffort: choice.reasoningEffort }),
+    })
+    return Object.freeze({ workspaceId, sessionId, selection })
+  }
+
+  private async inspectCollaborationMembership(sessionId: SessionId, workspaceId: WorkspaceId, signal?: AbortSignal) {
     signal?.throwIfAborted()
     const workspace = this.ctx.workspaceRegistry.get(workspaceId)
     if (workspace === undefined) throw new Error('collaboration_workspace_not_found')
@@ -305,24 +335,7 @@ export class SessionController extends TypertRemoteService {
     const agent = this.ctx.agents.get(sessionId)
     if (hasApiSessionSubagentOwner(this.ctx, { header: inspection.meta }, agent)
       || (agent !== undefined && (agent.session !== attached || agent.session.header !== inspection.meta))) throw mismatch()
-    const state = attached === undefined
-      ? foldModelSelection(inspection.events)
-      : this.ctx.sessionProjections.stateOf(attached, 'modelSelection')
-    if (state === undefined) throw new Error('api-session: required modelSelection projection is not registered')
-    const choice = agent === undefined
-      ? resolveModelSelection(
-        state.pending,
-        attached?.requestHeader() ?? foldRequestHeader(inspection.events),
-        () => this.ctx.agentDefaultModel.currentSelection(),
-      )
-      : this.agents.inspectSelectionFor(agent)
-    // Copy only public choice fields even if a Host integration supplies extra settings.
-    const selection = Object.freeze({
-      provider: choice.provider,
-      model: choice.model,
-      ...(choice.reasoningEffort === undefined ? {} : { reasoningEffort: choice.reasoningEffort }),
-    })
-    return Object.freeze({ workspaceId, sessionId, selection })
+    return { workspace, attached, inspection, agent }
   }
 
   /**
@@ -475,7 +488,7 @@ export class SessionController extends TypertRemoteService {
       ownedSignal.throwIfAborted()
       const workspaceId = WorkspaceId(captured.workspace_id), sessionId = SessionId(captured.session_id)
       const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
-      await wait(this.inspectWorkspaceModelSelection(sessionId, workspaceId, ownedSignal))
+      await wait(this.inspectCollaborationMembership(sessionId, workspaceId, ownedSignal))
       if (this.collaborationJournal === undefined) {
         const facility = this.ctx.get('storageDomain')
         if (facility === undefined) throw new Error('collaboration_source_journal_unavailable')
@@ -485,12 +498,53 @@ export class SessionController extends TypertRemoteService {
       ownedSignal.throwIfAborted()
       const snapshot = journal.read(captured)
       if (snapshot === undefined) throw new Error('collaboration_source_not_found')
-      await wait(this.inspectWorkspaceModelSelection(sessionId, workspaceId, ownedSignal))
+      await wait(this.inspectCollaborationMembership(sessionId, workspaceId, ownedSignal))
       if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== session) {
         throw new Error('collaboration_session_workspace_mismatch')
       }
       ownedSignal.throwIfAborted()
       return snapshot
+    })
+    this.collaborationCaptureTail = operation.then(() => {}, () => {})
+    return wait(operation)
+  }
+
+  /**
+   * Save a readable cloud reply in the owning Profile without appending model-visible Session events.
+   * The authenticated parent must establish namespace/target cloud authority. This operation checks
+   * current local ownership and the original Source; it grants no cloud delivery acknowledgment.
+   * @param value - Exact private delivery input; caller-supplied local commits are rejected.
+   * @param signal - Parent cancellation, combined with Profile disposal.
+   * @returns Original immutable reply after durable save and ownership revalidation; duplicates share its commit.
+   */
+  async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise<CollaborationDeliveryRecord> {
+    const input = parseCollaborationDeliveryInput(value)
+    const ownedSignal = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    ownedSignal.throwIfAborted()
+    const coordinates = input.projection.source_locator
+    const workspaceId = WorkspaceId(coordinates.workspace_id), sessionId = SessionId(coordinates.session_id)
+    const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
+    const source = await this.readCollaborationSourceSnapshot(coordinates, ownedSignal)
+    const wait = <T>(operation: Promise<T>) => waitForCollaborationSourceRead(operation, ownedSignal)
+    const current = async () => {
+      await wait(this.inspectCollaborationMembership(sessionId, workspaceId, ownedSignal))
+      if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== session) {
+        throw Error('collaboration_session_workspace_mismatch')
+      }
+      ownedSignal.throwIfAborted()
+    }
+    const operation = this.collaborationCaptureTail.then(async () => {
+      await current()
+      if (this.collaborationDeliveryJournal === undefined) {
+        const facility = this.ctx.get('storageDomain')
+        if (facility === undefined) throw Error('collaboration_delivery_journal_unavailable')
+        this.collaborationDeliveryJournal = openCollaborationDeliveryJournal(facility)
+      }
+      const journal = await wait(this.collaborationDeliveryJournal)
+      await current()
+      const result = await journal.persist(input, source, ownedSignal)
+      await current()
+      return result
     })
     this.collaborationCaptureTail = operation.then(() => {}, () => {})
     return wait(operation)

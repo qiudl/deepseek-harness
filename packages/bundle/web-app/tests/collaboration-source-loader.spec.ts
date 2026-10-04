@@ -2,7 +2,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter } from '@deepseek-ai/dsh-api-session-controller'
+import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest } from '@deepseek-ai/dsh-api-session-controller'
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
@@ -32,7 +32,7 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'delivery'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
   const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
@@ -54,6 +54,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile'] as
   })
   vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
   vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', mode === 'analysis-profile' ? 'B'.repeat(43) : '')
+  vi.stubEnv('DSH_PROFILE_DELIVERY_TOKEN', mode === 'delivery' ? 'C'.repeat(43) : '')
   for (const key of ['DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) vi.stubEnv(key, '')
   // GUI/transport peers are fixtures; Source owners, registry, model runtime and storage load from YAML.
   ctx.provide('webServer', { host: '127.0.0.1', port: 0, register(route: { path: string; handler: typeof routes extends Map<string, infer T> ? T : never }) {
@@ -126,7 +127,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile'] as
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.end(`data: ${JSON.stringify({ id: 'fixture-response', choices: [{ index: 0, delta: { content: result }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`)
   })
-  const adapter = mode === 'source-only' ? new FixtureAdapter() : new DeepSeekAdapter({
+  const adapter = mode === 'source-only' || mode === 'delivery' ? new FixtureAdapter() : new DeepSeekAdapter({
     options: () => resolveAdapterOptions({ protocol: 'chat-completions', baseURL: origin, models: [{ id: 'selected' }] }),
     resolveApiKey: async () => 'fixture-source-key', resolveUserId: () => '00000000-0000-4000-8000-000000000001' as AnonymousUserId,
     prepareExtensions: async () => ({ fields: mode === 'analysis-extension' ? { tools: [{ type: 'function', function: { name: 'injected_tool', description: '', parameters: {} } }] } : {}, accept: async () => {} }),
@@ -147,6 +148,13 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile'] as
     nodeExecutablePath: process.execPath,
     dshEntrypointPath: process.execPath,
   }) as unknown as {
+    receiveCollaborationDelivery(
+      origin: string,
+      token: string,
+      command: HostRemoteSessionJson,
+      signal: AbortSignal,
+      stopped: () => boolean,
+    ): Promise<HostRemoteSessionJson>
     collaborationAnalysis(
       origin: string,
       token: string,
@@ -218,7 +226,54 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile'] as
   expect((await fetch(`${origin}/internal/desktop-collaboration-source-snapshot`,{ method:'POST',headers:{ cookie:'dsh-auth=browser' },body:JSON.stringify(target) })).status).toBe(403)
   expect((await fetch(`${origin}/internal/desktop-collaboration-source`, { method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body: JSON.stringify(target) })).status).toBe(403)
   await expect(factory.inspectCollaborationSource(origin, token, { ...target, source_message_id: 'missing' }, new AbortController().signal, () => false)).rejects.toThrow()
-  const analysisJournal = mode !== 'source-only' && mode !== 'analysis-profile' ? await openCollaborationAnalysisJournal(facility!) : undefined
+  if (mode === 'delivery') {
+    const sourcePath = join(directory, 'state', 'collaboration_source_v2.json')
+    const sourceBytes = await readFile(sourcePath)
+    const answer = '😀'.repeat(32768)
+    const input = { namespace_id: 'fixture-namespace', projection: {
+      delivery_id: 'fixture-delivery', invocation_id: 'fixture-invocation', plan_id: 'fixture-plan',
+      task_id: 'fixture-task', task_revision: '1', source_locator: target,
+      source_snapshot_digest: result.snapshot_digest, execution_state: 'succeeded', invocation_state_version: '2',
+      target: { project_id: '212', agent_id: 'guide' },
+      target_display_snapshot: { agent_name: 'Guide', project_name: 'qiu-slark' }, answer,
+      result_digest: collaborationJournalDigest({ state: 'succeeded', answer, failure_code: null }),
+      delivery_state: 'pending', delivery_state_version: '1',
+    } } as HostRemoteSessionJson
+    const receive = (command: HostRemoteSessionJson, capability = 'C'.repeat(43)) =>
+      factory.receiveCollaborationDelivery(origin, capability, command, new AbortController().signal, () => false)
+    await expect(receive(input, token)).rejects.toThrow()
+    await expect(factory.receiveCollaborationDelivery(origin, 'C'.repeat(43), input, new AbortController().signal, () => true)).rejects.toThrow()
+    await expect(receive('x'.repeat(1024 * 1024))).rejects.toMatchObject({ code: 'invalid_input' })
+    const receipt = await receive(input)
+    expect(await receive(input)).toEqual(receipt)
+    expect(receipt).not.toHaveProperty('answer')
+    const persisted = JSON.parse(await readFile(join(directory, 'state', 'collaboration_delivery_v2.json'), 'utf8')) as {
+      tables: { replies: Record<string, {
+        answer: string
+        namespace_id: string
+        source_locator: typeof target
+        target_display_snapshot: { agent_name: string; project_name: string }
+        host_journal_commit: { commit_version: string }
+      }> }
+    }
+    const replies = Object.values(persisted.tables.replies)
+    expect(replies).toHaveLength(1)
+    const saved = replies[0]!
+    expect(saved.answer).toBe(answer)
+    expect(Buffer.byteLength(saved.answer, 'utf8')).toBe(128 * 1024)
+    expect(saved.source_locator).toEqual(target)
+    expect(await readFile(sourcePath)).toEqual(sourceBytes)
+    expect(providerRequests).toBe(0)
+    await expect(JSON.stringify({ namespace_id: saved.namespace_id, source_message_id: saved.source_locator.source_message_id,
+      target_display_snapshot: saved.target_display_snapshot, answer_utf8_bytes: Buffer.byteLength(saved.answer, 'utf8'),
+      answer_complete: saved.answer === answer, commit_version: saved.host_journal_commit.commit_version }, null, 2) + '\n')
+      .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-delivery.reply.expected.txt'))
+    await workspace.detachSession(sessionId)
+    await expect(receive(input)).rejects.toThrow()
+    expect(Object.values((JSON.parse(await readFile(join(directory, 'state', 'collaboration_delivery_v2.json'), 'utf8')) as typeof persisted).tables.replies)).toHaveLength(1)
+    await workspace.attachSession(sessionId)
+  }
+  const analysisJournal = mode !== 'source-only' && mode !== 'analysis-profile' && mode !== 'delivery' ? await openCollaborationAnalysisJournal(facility!) : undefined
   const analysisWriter = analysisJournal ? createCollaborationAnalysisWriter(analysisJournal, async (record) => {
     expect(providerRequests).toBe(0)
     return { attempt_request_id: record.attempt_request_id, plan_id: 'fixture-plan', expected_plan_revision: '1',

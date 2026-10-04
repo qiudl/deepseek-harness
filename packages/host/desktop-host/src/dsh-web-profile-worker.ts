@@ -16,6 +16,7 @@ const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
   'DSH_PROFILE_ANALYSIS_TOKEN',
+  'DSH_PROFILE_DELIVERY_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
 ])
@@ -105,6 +106,7 @@ export class DshWebProfileWorkerFactory {
     const root = realpathSync(spec.profileRoot)
     const sourceToken = randomBytes(32).toString('base64url')
     const analysisToken = randomBytes(32).toString('base64url')
+    const deliveryToken = randomBytes(32).toString('base64url')
     const workspaceModelToken = randomBytes(32).toString('base64url')
     const modelToken = randomBytes(32).toString('base64url')
     const remoteSessionToken = randomBytes(32).toString('base64url')
@@ -123,6 +125,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_WORKSPACE_MODEL_TOKEN: workspaceModelToken,
         DSH_PROFILE_SOURCE_TOKEN: sourceToken,
         DSH_PROFILE_ANALYSIS_TOKEN: analysisToken,
+        DSH_PROFILE_DELIVERY_TOKEN: deliveryToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
         DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
       },
@@ -131,7 +134,7 @@ export class DshWebProfileWorkerFactory {
     const activated = await this.waitForOrigin(child)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
-      modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, sourceToken, analysisToken)
+      modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, sourceToken, analysisToken, deliveryToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -193,6 +196,7 @@ export class DshWebProfileWorkerFactory {
     workspaceModelToken: string,
     sourceToken: string,
     analysisToken: string,
+    deliveryToken: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -247,6 +251,9 @@ export class DshWebProfileWorkerFactory {
       ),
       collaborationAnalysis: (command, signal) => this.collaborationAnalysis(
         viewOrigin, analysisToken, command, signal, () => requestedStop || settled,
+      ),
+      receiveCollaborationDelivery: (command, signal) => this.receiveCollaborationDelivery(
+        viewOrigin, deliveryToken, command, signal, () => requestedStop || settled,
       ),
       inspectCollaborationSource: (target, signal) => this.inspectCollaborationSource(
         viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
@@ -360,6 +367,50 @@ export class DshWebProfileWorkerFactory {
       )
         throw new HostAuthorityError('unavailable')
       return parseHostRemoteSessionJson((parsed as { value: unknown }).value)
+    } catch (error) {
+      if (error instanceof HostAuthorityError || signal.aborted) throw error
+      throw new HostAuthorityError('unavailable')
+    } finally {
+      void reader.cancel().catch(() => undefined)
+      reader.releaseLock()
+    }
+  }
+
+  private async receiveCollaborationDelivery(
+    origin: string,
+    token: string,
+    command: HostRemoteSessionJson,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostRemoteSessionJson> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    active.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    // The Profile validates the full delivery schema. Control JSON's 32 KiB string cap excludes replies.
+    const body = JSON.stringify(command)
+    if (Buffer.byteLength(body, 'utf8') > 1024 * 1024) throw new HostAuthorityError('invalid_input')
+    const response = await fetch(`${origin}/internal/desktop-collaboration-delivery`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body, signal: active,
+    })
+    if (!response.ok || !response.body) {
+      await response.body?.cancel()
+      throw new HostAuthorityError('unavailable')
+    }
+    const reader = response.body.getReader()
+    try {
+      const chunks: Uint8Array[] = []
+      let bytes = 0
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        if ((bytes += chunk.value.byteLength) > 8192) throw new HostAuthorityError('unavailable')
+        chunks.push(chunk.value)
+      }
+      active.throwIfAborted()
+      if (stopped()) throw new HostAuthorityError('unavailable')
+      return parseHostRemoteSessionJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))))
     } catch (error) {
       if (error instanceof HostAuthorityError || signal.aborted) throw error
       throw new HostAuthorityError('unavailable')

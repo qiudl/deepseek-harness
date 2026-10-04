@@ -95,6 +95,12 @@ function bodyOf(value: CollaborationSourceSnapshot): CollaborationSourceBody {
   return body
 }
 function hash(value: string): string { return createHash('sha256').update(value, 'utf8').digest('hex') }
+/**
+ * Hash schema-validated collaboration JSON with sorted keys and exact string bytes.
+ * @param value - Validated JSON containing only well-formed strings, finite numbers, arrays and records.
+ * @returns RFC 8785 SHA-256; no Unicode normalization or authority grant.
+ */
+export function collaborationJournalDigest(value: unknown): string { return hash(canonicalJson(value)) }
 // The schema admits only strings, safe integers, arrays and plain JSON objects.
 // Sorted UTF-16 keys and JSON number/string serialization implement RFC 8785 for this vocabulary.
 function canonicalJson(value: unknown): string {

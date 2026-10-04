@@ -117,6 +117,13 @@ export interface ProfileWorkerHandle {
    * @returns a bounded non-executable preparation or untrusted model JSON saved before acknowledgement.
    */
   readonly collaborationAnalysis?:(command:HostRemoteSessionJson,signal:AbortSignal)=>Promise<HostRemoteSessionJson>
+  /**
+   * Save a complete reply through the selected worker's private write capability.
+   * @param command - Readable cloud projection and coordinator-authenticated account namespace.
+   * @param signal - Parent cancellation; the worker token stays outside view leases.
+   * @returns Bounded untrusted local commit JSON, without an answer echo or cloud authorization.
+   */
+  readonly receiveCollaborationDelivery?: (command: HostRemoteSessionJson, signal: AbortSignal) => Promise<HostRemoteSessionJson>
   /** Host-only committed Source read; no message content or worker token enters a view lease. */
   readonly inspectCollaborationSource?: (
     target: HostCollaborationSourceTarget,

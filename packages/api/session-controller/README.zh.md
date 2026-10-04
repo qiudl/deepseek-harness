@@ -99,6 +99,11 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 <a id="collaboration-analysis-journal"></a>
 `openCollaborationAnalysisJournal(facility)` 拥有独立的单文件 `collaboration_analysis_v2` 领域。`createCollaborationAnalysisWriter(journal, claim)` 提供 Source 分析所需的 persist 回调：先提交完整、无信号 manifest 的规范 JSON，再向当前可信协调器申请派发资格，匹配的资格记录持久化后才返回。`CollaborationAnalysisJournalRecord` 保留原始请求 ID、完整 Source digest 与输入 manifest digest；`CollaborationAnalysisDispatchGrant` 绑定 plan/revision/attempt/fence 和租约。重复请求、取消、过期资格和写入确认丢失都会阻止派发。恢复只能枚举冻结的输入与资格记录，不恢复可执行调用。Profile 在已接受写入排空后关闭 `CollaborationAnalysisJournal`。回调中的协调器权限以及真实聊天/传输装配仍由调用方负责。
 
+`receiveCollaborationDelivery(value, signal)` 核验原 Source 摘要、显式 mention 目标及当前 Profile/工作区/Session 归属后，将可读的终态回复保存到独立的单文件 `collaboration_delivery_v2` 领域。已认证的父 Host 负责建立云端权限与账户命名空间。读取和投递校验不准备模型、不激活 Agent，也不追加普通 Session 事件。最多 128 KiB UTF-8 的完整答案连同冻结的目标名称及首次本地提交一起保留；可变云端投递版本不会替换该回复。
+
+`openCollaborationDeliveryJournal(facility)` 串行处理已接受的写入，最多保留 4096 条回复，序列化键与记录正文共计不超过 16 MiB，不淘汰已有记录。内容冲突、受限投影、非法摘要，以及损坏或未知版本的持久数据均拒绝且不修复。写入结果不确定时，句柄拒绝后续操作，必须关闭并重开；恢复返回首次提交，不执行任务。Profile 管理迟到的 journal 打开，并在销毁时排空已接受的写入。本地提交不证明云端已投递；签名、确认和聊天展示由协调器负责。
+
+
 ## 已知限制与延期工作
 
 <a id="known-limitations-and-deferred-work"></a>

@@ -1,0 +1,11 @@
+{
+  "namespace_id": "fixture-namespace",
+  "source_message_id": "message-1",
+  "target_display_snapshot": {
+    "agent_name": "Guide",
+    "project_name": "qiu-slark"
+  },
+  "answer_utf8_bytes": 131072,
+  "answer_complete": true,
+  "commit_version": "1"
+}
