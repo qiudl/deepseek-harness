@@ -10,14 +10,15 @@ const original = { source, snapshot_digest: 'a'.repeat(64), original_message: '@
 const reply = { delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1',
   source_locator: source, source_snapshot_digest: original.snapshot_digest, execution_state: 'succeeded', invocation_state_version: '2',
   target_display_snapshot: { agent_name: 'Guide', project_name: 'Project' }, answer: '完整答复' }
+type DeliveryRequest = Parameters<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>[0]
 
 it('keeps the aggregate view within its budget when loading additional replies', async () => {
   const f = fixture(), second = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'second' } }
   f.reads.mockResolvedValue({ ok: true, value: { items: [original, second] } })
-  f.bridge.collaborationDeliveries = vi.fn(async (request) => {
+  f.bridge.collaborationDeliveries = vi.fn(async (request: DeliveryRequest) => {
     const start = request.after_delivery_id ? Number(request.after_delivery_id) + 1 : 0
     const digest = request.source.source_message_id === 'second' ? second.snapshot_digest : original.snapshot_digest
-    return { ok: true, value: { deliveries: Array.from({ length: 5 }, (_, i) => ({ ...reply,
+    return { ok: true as const, value: { deliveries: Array.from({ length: 5 }, (_, i) => ({ ...reply,
       delivery_id: String(start + i), source_locator: request.source, source_snapshot_digest: digest,
       answer: 'x'.repeat(128 * 1024) })), next_cursor: String(start + 4) } }
   })
@@ -40,7 +41,7 @@ function fixture() {
   const reads = vi.fn(async (_cursor: string | undefined, _signal: AbortSignal) =>
     ({ ok: true as const, value: { items: [original] } as SessionCollaborationSourcesValue }))
   let bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true,
-    collaborationDeliveries: vi.fn(async () => ({ ok: true, value: { deliveries: [reply] } })) }
+    collaborationDeliveries: vi.fn(async () => ({ ok: true as const, value: { deliveries: [reply] } })) }
   const model = new CollaborationResultsModel('session' as never, workspaces, generation, reads, () => bridge)
   return { model, reads, bridge, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
     move: () => { grouped = false; changed() }, reset: () => { remoteGeneration = 2; changed() } }
