@@ -1,6 +1,7 @@
 import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
+import type { CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 
 interface StartProfileWorkerInput {
   readonly profileId: string
@@ -148,6 +149,26 @@ export class ProfileWorkerSupervisor {
     if (!current()) throw new HostAuthorityError('stale')
     return result
   }
+  /**
+   * Capture a current worker for the complete original reply upload and durable commit.
+   * @param profileId - Verified Account's running Profile, selected by parent authority.
+   * @returns Private receiver that refuses closure, worker replacement or cancellation before and after writes.
+   */
+  collaborationDeliveryReceiver(profileId: string): CollaborationDeliveryReceiver {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.receiveCollaborationDelivery) throw new HostAuthorityError('unavailable')
+    const receive = worker.receiveCollaborationDelivery.bind(worker)
+    const assertCurrent = () => {
+      if (this.closed || this.workers.get(profileId) !== worker) throw new HostAuthorityError('stale')
+    }
+    return { assertCurrent, receive: async (capsule, signal) => {
+      signal.throwIfAborted(); assertCurrent()
+      const result = await receive(capsule, signal)
+      signal.throwIfAborted(); assertCurrent()
+      return result
+    } }
+  }
+
   /**
    * Read original Source JSON from the current Account Profile worker.
    * @param profileId - Host-authorized Profile.

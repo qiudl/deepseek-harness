@@ -103,6 +103,8 @@ MCP configuration parsing and runtime acknowledgement share one executor across 
 
 ## Runtime invariants
 
+`profile.collaboration_delivery` captures the currently authorized Account worker on its first fragment and rechecks that worker and Account on every fragment and after persistence. Across connections the Host reserves at most four uploads and 4 MiB, expires uploads after 30 seconds and retains reservations until cancelled writes settle. It signs only a matching durable original-Profile descriptor; reconnect retries recover the Profile's first commit. The client verifies the signature, Account, process, complete immutable body digest and progress offsets. Unix and Windows startup advertise this capability only when the private receiver is installed; cloud acknowledgement remains a separate operation.
+
 No runtime invariant companion is published: filesystem and wire commit points validate owned state, while lease and crash behavior are covered by integration tests.
 
 `profile.source_authority` resolves this connection’s verified Account Profile and reads a committed Source descriptor through the supervisor and a dedicated random worker token. Startup installs this reader on macOS and Windows. Missing readers omit the capability; replaced workers, mismatched coordinates/digest, expired challenges or changed Account grants refuse signing. The client verifies the exact challenge, pinned installation/process and Source signature. This operation neither captures a message nor prepares a model; cloud consumption and chat dispatch remain separate.

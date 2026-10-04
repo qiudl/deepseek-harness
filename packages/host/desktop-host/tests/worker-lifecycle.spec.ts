@@ -1,5 +1,39 @@
 import { expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
+import { parseHostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+
+it('captures one original reply worker across fragments and refuses a commit after that worker is replaced', async () => {
+  const payload = parseHostCollaborationDeliveryCapsule({ namespace_id: 'ns', projection: {
+    delivery_id: 'd', invocation_id: 'i', plan_id: 'p', task_id: 't', task_revision: '1',
+    source_locator: { workspace_id: '123e4567-e89b-42d3-a456-426614174000', session_id: 's', source_message_id: 'm', source_revision: '1' },
+    source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded', invocation_state_version: '2', answer: 'answer',
+    result_digest: createHash('sha256').update(JSON.stringify({ answer: 'answer', failure_code: null, state: 'succeeded' })).digest('hex'),
+    target: { project_id: 'p', agent_id: 'a' }, target_display_snapshot: { agent_name: 'Guide', project_name: 'Project' },
+    delivery_state: 'pending', delivery_state_version: '1',
+  } })
+  let enter!: () => void, release!: () => void
+  const entered = new Promise<void>((resolve) => { enter = resolve })
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    receiveCollaborationDelivery: async () => { enter(); await new Promise<void>((resolve) => { release = resolve }); return {} },
+  }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  try {
+    await workers.start(input)
+    const receiver = workers.collaborationDeliveryReceiver(input.profileId)
+    const pending = receiver.receive(payload, new AbortController().signal)
+    const denied = expect(pending).rejects.toMatchObject({ code: 'stale' })
+    await entered
+    await workers.dispose(input.profileId); await workers.start(input)
+    expect(receiver.assertCurrent).toThrow()
+    release(); await denied
+    const current = workers.collaborationDeliveryReceiver(input.profileId)
+    expect(current.assertCurrent).not.toThrow()
+    await expect(current.receive(payload, AbortSignal.abort())).rejects.toThrow()
+    await workers.disposeAll()
+    expect(current.assertCurrent).toThrow()
+  } finally { release?.(); await workers.disposeAll() }
+})
 
 it('discards full Source content after worker replacement and rejects reads after disposal or cancellation', async () => {
   const target = {

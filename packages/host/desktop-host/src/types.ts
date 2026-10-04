@@ -1,4 +1,5 @@
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 /** Stable profile id that reveals no account or environment identifier. */
@@ -123,7 +124,7 @@ export interface ProfileWorkerHandle {
    * @param signal - Parent cancellation; the worker token stays outside view leases.
    * @returns Bounded untrusted local commit JSON, without an answer echo or cloud authorization.
    */
-  readonly receiveCollaborationDelivery?: (command: HostRemoteSessionJson, signal: AbortSignal) => Promise<HostRemoteSessionJson>
+  readonly receiveCollaborationDelivery?: (command: HostCollaborationDeliveryCapsule, signal: AbortSignal) => Promise<HostRemoteSessionJson>
   /** Host-only committed Source read; no message content or worker token enters a view lease. */
   readonly inspectCollaborationSource?: (
     target: HostCollaborationSourceTarget,

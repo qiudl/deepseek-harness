@@ -64,6 +64,8 @@ The public key in an answer is not trust by itself. The Desktop broker must matc
 
 ## API
 
+`profile.collaboration_delivery` uploads a complete terminal reply through sequential canonical base64url fragments of at most 16 KiB decoded, with a total capsule limit of 1 MiB and an answer limit of 128 KiB UTF-8. Ordinary JSON and 64 KiB frame limits stay unchanged. The final answer-free receipt uses the canonical sorted-key JSON signing domain `dsh-collaboration-delivery-receipt-v1` and binds the verified Account, current installation/process and original Profile commit. Parsing or a signature alone grants no cloud acknowledgement or execution authority.
+
 | Export | Role |
 |---|---|
 | `decodeHostControlFrame(source)` | Strictly parse and normalize exactly one frame. |

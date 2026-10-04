@@ -12,6 +12,8 @@ Host 与 Broker 在信任任何 profile、environment、session、migration 或 
 
 ## 决策
 
+REQ-20260930-0004 使用独立的有界上传传输完整协同答复，不扩大普通控制 JSON 上限。父进程在整个上传期间捕获同一 Account worker，仅签署与原 Profile 持久提交匹配的记录。上传状态属于连接，并受全局额度约束；取消中的持久写入结束前仍保留资源额度。独立回执签名域阻止登记或 Source 签名被用于证明回填。当前权威核验与回填状态提交仍由云端负责；本地持久写入可以在回执丢失后独立恢复和重试。
+
 `@deepseek-ai/dsh-host-control-protocol` 是 Host 组的零 I/O 库，拥有规范 JSON-Lines 信封、64 KiB 对象上限、品牌化跨边界身份、有界错误词汇和版本 1 的 `host.inspect` 交换。畸形输入必须关闭连接。Decoder 要求精确键顺序与形状，随后重新编码规范值并逐字节比较，从而拒绝重复键、数字替代写法、空白变体、CRLF、多行和未知字段。Encoder 也走同一运行时校验，不信任被擦除的 TypeScript 类型。
 
 请求携带新鲜 32 字节 challenge、临时 Desktop client id，以及包含版本 1 的降序去重版本列表。响应选中版本 1，携带互不相同的 Host 进程 id 与持久安装 id、安装级 Ed25519 公钥、正数 runtime/schema generation、process nonce、包含 `host.inspect` 的排序去重 capability，以及可由 Broker 独立比对的可执行文件签名摘要。

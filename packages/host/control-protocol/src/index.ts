@@ -21,9 +21,19 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export {
+  parseHostCollaborationDeliveryChunk, parseHostCollaborationDeliveryCapsule,
+  parseHostCollaborationDeliveryCommit, matchesHostCollaborationDeliveryCommit,
+  parseHostCollaborationDeliveryReceipt, encodeHostCollaborationDeliveryReceiptPayload, parseHostCollaborationDeliveryResult,
+} from './collaboration-delivery.js'
+export type {
+  HostCollaborationDeliveryChunk, HostCollaborationDeliveryCapsule, HostCollaborationDeliveryCommit,
+  HostCollaborationDeliveryReceipt, HostCollaborationDeliveryResult,
+} from './collaboration-delivery.js'
 export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.js'
 export type { CanonicalMigrationRecord } from './migration-canonical.js'
 export type {
+  ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
   HostRemoteSessionCommand, HostRemoteSessionJson, ProfileRemoteSessionRequest, ProfileRemoteSessionResult,

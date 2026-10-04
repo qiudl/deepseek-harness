@@ -106,6 +106,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 <a id="model-experience"></a>
 ## 运行时不变量
 
+`profile.collaboration_delivery` 在首个分块捕获当前授权 Account worker，并在每个分块及持久写入后重新核验 worker 和 Account。Host 跨连接最多保留四个上传和 4 MiB，30 秒后使上传过期，并在取消中的写入结束前保留资源额度。它仅签署与原 Profile 持久提交匹配的描述符；重连后的重试恢复 Profile 的首次提交。客户端核验签名、Account、进程、完整不可变正文摘要和分块偏移。Unix 与 Windows 启动仅在安装私有接收器后发布此 capability；云端确认仍是独立操作。
+
 不发布运行时不变量伴随插件：文件与消息提交点验证自身状态，租约与崩溃行为由集成测试覆盖。
 
 `profile.source_authority` 从当前连接已验证的 Account 解析 Profile，经监管器与独立随机 worker 令牌读取持久 Source 描述符。macOS 和 Windows 启动组合安装该读取器。读取器缺失时不发布能力；worker 替换、坐标或摘要不符、挑战过期及 Account 授权变化都会拒绝签名。客户端核验精确挑战、固定的安装/进程及 Source 签名。此操作不捕获消息或准备模型；云端消费和聊天分发仍须单独接入。

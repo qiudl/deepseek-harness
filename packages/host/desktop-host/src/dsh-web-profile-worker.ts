@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import { randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
@@ -379,7 +380,7 @@ export class DshWebProfileWorkerFactory {
   private async receiveCollaborationDelivery(
     origin: string,
     token: string,
-    command: HostRemoteSessionJson,
+    command: HostCollaborationDeliveryCapsule,
     signal: AbortSignal,
     stopped: () => boolean,
   ): Promise<HostRemoteSessionJson> {

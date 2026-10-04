@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,11 +7,13 @@ import {
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostSourceAuthorityPayload,
+  encodeHostCollaborationDeliveryReceiptPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
+import type { CollaborationDeliveryReceiver } from '../src/collaboration-delivery-uploads.ts'
 
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
@@ -68,6 +70,7 @@ async function fixture() {
   })
   let analysis = async (_profileId: string, command: Record<string, unknown>, _signal: AbortSignal): Promise<unknown> =>
     ({ jsonText: JSON.stringify({ binding: command.binding_key }) })
+  let delivery: (profileId: string) => CollaborationDeliveryReceiver = () => { throw Error('not configured') }
   const authority = new HostControlAuthority({
     identity,
     host,
@@ -78,6 +81,7 @@ async function fixture() {
     readCollaborationSourceSnapshot:(profileId,target,signal)=>read(profileId,target,signal) as Promise<HostCollaborationSourceSnapshot>,
     collaborationAnalysis: (profileId, command, signal) =>
       analysis(profileId, command as Record<string, unknown>, signal) as Promise<HostRemoteSessionJson>,
+    collaborationDeliveryReceiver: profileId => delivery(profileId),
   })
   const ownerId = randomUUID(),
     lifetime = new AbortController()
@@ -146,8 +150,49 @@ async function fixture() {
     },
     setRead:(callback:typeof read)=>{read=callback},
     setAnalysis:(callback:typeof analysis)=>{analysis=callback},
+    setDelivery: (callback: typeof delivery) => { delivery = callback },
   }
 }
+it('uploads a complete answer through the real authenticated control carrier and verifies the answer-free installation receipt', async () => {
+  const f = await fixture()
+  const canonical = (value: unknown): string => value && typeof value === 'object'
+    ? `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical((value as Record<string, unknown>)[k])}`).join(',')}}`
+    : JSON.stringify(value)
+  const hash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex')
+  const answer = '😀'.repeat(32768)
+  const capsule = { namespace_id: 'ns', projection: { delivery_id: 'delivery', invocation_id: 'invocation', plan_id: 'plan', task_id: 'task', task_revision: '1',
+    source_locator: { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id, source_message_id: f.challenge.source_message_id, source_revision: '1' },
+    source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded' as const, invocation_state_version: '2',
+    result_digest: hash({ state: 'succeeded', answer, failure_code: null }), target: { project_id: 'p', agent_id: 'a' },
+    target_display_snapshot: { agent_name: 'Guide', project_name: 'Project' }, answer, delivery_state: 'pending' as const, delivery_state_version: '1' } }
+  const { delivery_state: _state, delivery_state_version: _version, ...body } = capsule.projection
+  const commit = { namespace_id: 'ns', delivery_id: body.delivery_id, invocation_id: body.invocation_id, source_locator: body.source_locator,
+    source_snapshot_digest: body.source_snapshot_digest, result_digest: body.result_digest,
+    host_journal_commit: { journal_id: randomUUID(), commit_version: '1', content_digest: hash({ namespace_id: 'ns', ...body }) } }
+  let receives = 0
+  f.setDelivery((profileId) => {
+    expect(profileId).toBe(f.profile.profileId)
+    return { assertCurrent: () => {}, receive: async (value) => { receives++; expect(value).toEqual(capsule); return commit } }
+  })
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, capsule }
+  await expect(f.client.receiveCollaborationDelivery(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(receives).toBe(0)
+  await f.grant()
+  const receipt = await f.client.receiveCollaborationDelivery(input)
+  expect(receipt.commit).toEqual(commit)
+  expect(receipt.account_subject).toBe(f.account.subject)
+  expect(verify(null, encodeHostCollaborationDeliveryReceiptPayload(receipt), f.keys.publicKey, Buffer.from(receipt.signature, 'base64url'))).toBe(true)
+  expect(JSON.stringify(receipt)).not.toContain(answer)
+  expect(receives).toBe(1)
+  expect(f.seen.filter(frame => frame.type === 'request' && frame.method === 'profile.collaboration_delivery').length).toBeGreaterThan(1)
+  for (const frame of f.seen) expect(Buffer.byteLength(encodeHostControlFrame(frame))).toBeLessThan(65536)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.collaboration_delivery' && frame.result.kind === 'committed'
+    ? { ...frame, result: { ...frame.result, receipt: { ...frame.result.receipt, process_nonce: 'B'.repeat(43) } } } : frame)
+  await expect(f.client.receiveCollaborationDelivery(input)).rejects.toThrow()
+  f.alter(undefined)
+  f.setDelivery(() => ({ assertCurrent: () => {}, receive: async () => { f.host.revokeOwner(f.ownerId); return commit } }))
+  await expect(f.client.receiveCollaborationDelivery(input)).rejects.toThrow()
+})
 const snapshotInput = (f: Awaited<ReturnType<typeof fixture>>) => ({
   ...f.input,
   accountIssuer: f.account.issuer,

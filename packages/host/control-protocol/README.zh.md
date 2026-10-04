@@ -70,6 +70,8 @@ kind: "package-reference"
 
 ## API
 
+`profile.collaboration_delivery` 通过顺序上传的规范 base64url 分块传输完整终态答复，每块解码后最多 16 KiB，完整封装最多 1 MiB，答复最多 128 KiB UTF-8。普通 JSON 与 64 KiB 单帧上限保持不变。最终回执不包含答复，使用规范键排序 JSON 签名域 `dsh-collaboration-delivery-receipt-v1`，绑定已验证的 Account、当前安装/进程和原 Profile 提交记录。解析或签名本身均不授予云端确认或执行权威。
+
 | 导出 | 职责 |
 |---|---|
 | `decodeHostControlFrame(source)` | 严格解析并规范化恰好一帧。 |

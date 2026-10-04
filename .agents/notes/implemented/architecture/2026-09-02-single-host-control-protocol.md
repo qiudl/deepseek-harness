@@ -12,6 +12,8 @@ The Host and broker need an independent first message before any profile, enviro
 
 ## Decision
 
+REQ-20260930-0004 carries complete collaboration replies through a dedicated bounded upload rather than widening ordinary control JSON. The parent captures one Account worker for the entire upload and signs only its matching durable original-Profile commit. Upload state is connection-owned and globally bounded; cancelled durable writes retain their resource reservation until settled. A separate receipt signing domain prevents registration or Source signatures from certifying delivery. The cloud still owns current authority checks and its delivery-status commit; local persistence can survive a lost receipt and be retried independently.
+
 `@deepseek-ai/dsh-host-control-protocol` is a zero-I/O Host-group library. It owns a canonical JSON-Lines envelope, a 64 KiB object cap, branded cross-boundary identities, a bounded error vocabulary, and the version-1 `host.inspect` exchange. Malformed input is connection-fatal. The decoder requires exact key order and shape, then re-encodes the normalized value and compares bytes, rejecting duplicate keys, alternate number spellings, whitespace variants, CRLF, extra lines, and unknown fields. The encoder runs the same runtime validation instead of trusting erased TypeScript types.
 
 The request carries a fresh 32-byte challenge, an ephemeral Desktop client id, and a descending unique version list that includes version 1. The response selects version 1 and carries distinct Host-process and persistent-installation ids, the installation Ed25519 public key, positive runtime/schema generations, a process nonce, sorted unique capabilities including `host.inspect`, and an independently comparable executable-signature digest.

@@ -420,6 +420,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         inspectWorkspaceModelSelection: (profileId, target, signal) => workers.inspectWorkspaceModelSelection(profileId, target, signal),
         inspectCollaborationSource: (profileId, target, signal) => workers.inspectCollaborationSource(profileId, target, signal),
         readCollaborationSourceSnapshot: (profileId, target, signal) => workers.readCollaborationSourceSnapshot(profileId, target, signal),
+        collaborationDeliveryReceiver: profileId => workers.collaborationDeliveryReceiver(profileId),
         remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({
           authority: commandAuthority, workers, profileId, command, signal,
         }),

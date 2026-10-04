@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID,
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import type {
+  HostCollaborationDeliveryCapsule, HostCollaborationDeliveryReceipt, ProfileCollaborationDeliveryRequest,
   HostExtensionCommand, HostExtensionResponse, HostExtensionKind, HostRemoteSessionCommand,
   HostRemoteSessionJson, ProfileExtensionsRequest, ProfileRemoteSessionRequest,
   ProfileRemoteUiReadRequest,
@@ -68,6 +69,8 @@ import {
   encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
   encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
   parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult,
+  parseHostCollaborationDeliveryCapsule, parseHostCollaborationDeliveryReceipt, parseHostCollaborationDeliveryResult,
+  matchesHostCollaborationDeliveryCommit, encodeHostCollaborationDeliveryReceiptPayload,
   parseHostCollaborationSourceSnapshot, parseHostCollaborationSourceSnapshotChunk, parseHostCollaborationSourceTarget,
   encodeHostCollaborationRegistrationSignaturePayload,
   parseHostCollaborationRegistrationChallenge,
@@ -87,6 +90,7 @@ import type { DesktopHost } from './desktop-host.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
+import { CollaborationDeliveryUploads, type CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 import type { SingleHostLock } from './single-instance.ts'
 
 function collaborationReadAuthorizer(
@@ -149,6 +153,8 @@ export interface UnixHostServerOptions {
   /** Private analysis command in the currently authorized Account worker. */
   readonly collaborationAnalysis?:
   (profileId: string, command: HostRemoteSessionJson, signal: AbortSignal) => Promise<HostRemoteSessionJson>
+  /** Capture one current Account Profile worker for the entire private reply upload. */
+  readonly collaborationDeliveryReceiver?: (profileId: string) => CollaborationDeliveryReceiver
   /** Call the Profile worker without exposing its private model token to Desktop. */
   readonly generateModelText?: (profileId: string, text: string, signal: AbortSignal) => Promise<{
     readonly provider: string
@@ -308,7 +314,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -750,6 +756,7 @@ class FrameChannel implements HostClientFrameTransport {
 
 /** Shared post-attestation authority used identically by Unix and Windows carriers. */
 export class HostControlAuthority {
+  private readonly deliveryUploads = new CollaborationDeliveryUploads()
   constructor(private readonly options: HostControlAuthorityOptions) {}
 
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
@@ -1342,6 +1349,32 @@ export class HostControlAuthority {
             method: frame.method,
             result: { ...unsigned, signature },
           })
+        } else if (frame.method === 'profile.collaboration_delivery') {
+          const capture = this.options.collaborationDeliveryReceiver
+          if (!capture) throw new HostAuthorityError('upgrade_required')
+          const account = { authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle, authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId, issuer: frame.params.account_issuer, subject: frame.params.account_subject }
+          const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
+          const profileId = authorize()
+          const assertAuthorized = () => { if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch') }
+          const result = await this.deliveryUploads.accept({ ownerId, signal: context.signal,
+            bindingKey: JSON.stringify([profileId, account]), chunk: frame.params.command,
+            authorize: assertAuthorized, capture: () => capture(profileId) })
+          assertAuthorized()
+          if (result.kind === 'staged') {
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+          } else {
+            const identity = this.options.identity
+            const unsigned = parseHostCollaborationDeliveryReceipt({ schema_version: 1,
+              authority_environment_id: account.authorityEnvironmentId, account_binding_handle: account.accountBindingHandle,
+              authority_binding_version: account.authorityBindingVersion, account_issuer: account.issuer, account_subject: account.subject,
+              installation_id: identity.installationId, installation_public_key: identity.installationPublicKey,
+              host_instance_id: identity.hostInstanceId, process_nonce: identity.processNonce, commit: result.commit, signature: 'A'.repeat(86) })
+            const signature = sign(null, encodeHostCollaborationDeliveryReceiptPayload(unsigned), privateKeyObject(identity.installationPrivateKey)).toString('base64url')
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { kind: 'committed', receipt: { ...unsigned, signature } } })
+          }
         } else if (frame.method === 'profile.collaboration_analysis') {
           const execute = this.options.collaborationAnalysis
           if (!execute) throw new HostAuthorityError('upgrade_required')
@@ -1591,6 +1624,7 @@ export class HostControlAuthority {
           ...(this.options.inspectCollaborationSource ? ['profile.source_authority'] : []),
           ...(this.options.readCollaborationSourceSnapshot ? ['profile.source_snapshot'] : []),
           ...(this.options.collaborationAnalysis ? ['profile.collaboration_analysis'] : []),
+          ...(this.options.collaborationDeliveryReceiver ? ['profile.collaboration_delivery'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
@@ -2394,6 +2428,64 @@ export class UnixHostClient {
   }
 
   /**
+   * Deliver the complete terminal reply to the original Profile through bounded private upload fragments.
+   * @param input - Main-held Account binding and validated readable cloud projection, never renderer overrides.
+   * @returns Installation-verified durable commit; changed Account, peer, content or connection rejects.
+   */
+  async receiveCollaborationDelivery(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly capsule: HostCollaborationDeliveryCapsule
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationDeliveryReceipt> {
+    const active = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(35_000)])
+    active.throwIfAborted()
+    const capsule = parseHostCollaborationDeliveryCapsule(input.capsule), bytes = Buffer.from(JSON.stringify(capsule), 'utf8')
+    if (!this.inspection.capabilities.includes('profile.collaboration_delivery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    const peer = [this.inspection.installation_id, this.inspection.installation_public_key,
+      this.inspection.host_instance_id, this.inspection.process_nonce]
+    const assertPeer = () => {
+      active.throwIfAborted()
+      if (!this.isConnected() || JSON.stringify(peer) !== JSON.stringify([
+        this.inspection.installation_id, this.inspection.installation_public_key,
+        this.inspection.host_instance_id, this.inspection.process_nonce,
+      ])) throw new HostAuthorityError('stale')
+    }
+    const account = { authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
+      account_issuer: input.issuer, account_subject: input.subject }
+    const upload_id = randomUUID(), payload_digest = createHash('sha256').update(bytes).digest('hex')
+    for (let offset = 0; offset < bytes.length; offset += 16384) {
+      assertPeer()
+      const part = bytes.subarray(offset, offset + 16384)
+      const request: ProfileCollaborationDeliveryRequest = { version: 1, type: 'request', request_id: requestId(),
+        method: 'profile.collaboration_delivery', params: { ...this.auth(), ...account,
+          command: { upload_id, offset, total_bytes: bytes.length, payload_digest, chunk_base64url: part.toString('base64url') } } }
+      const frame = await this.call(request, active)
+      assertPeer()
+      if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+      const result = parseHostCollaborationDeliveryResult(frame.result)
+      if (offset + part.length < bytes.length) {
+        if (result.kind !== 'staged' || result.upload_id !== upload_id || result.next_offset !== offset + part.length) throw new HostAuthorityError('stale')
+        continue
+      }
+      if (result.kind !== 'committed') throw new HostAuthorityError('unavailable')
+      const receipt = result.receipt
+      if (Object.entries(account).some(([key, value]) => receipt[key as keyof HostCollaborationDeliveryReceipt] !== value)
+        || JSON.stringify(peer) !== JSON.stringify([receipt.installation_id, receipt.installation_public_key,
+          receipt.host_instance_id, receipt.process_nonce])
+        || !matchesHostCollaborationDeliveryCommit(capsule, receipt.commit)
+        || !verify(null, encodeHostCollaborationDeliveryReceiptPayload(receipt), publicKeyObject(receipt.installation_public_key), Buffer.from(receipt.signature, 'base64url')))
+        throw new HostAuthorityError('stale')
+      return receipt
+    }
+    throw new HostAuthorityError('unavailable')
+  }
+
+  /**
    * Read original journal content through bounded chunks under this verified Account and current peer.
    * @param input - Main-held binding and Source coordinates; no content or model overrides.
    * @returns Original JSON capsule after consistent descriptor, length, coordinates, UTF-8 and connection checks.
@@ -3156,6 +3248,7 @@ export class UnixHostClient {
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
       | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest
       | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
+      | ProfileCollaborationDeliveryRequest
       | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest

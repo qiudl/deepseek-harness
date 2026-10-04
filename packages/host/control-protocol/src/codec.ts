@@ -1,4 +1,5 @@
 import type {
+  ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
   HostRemoteSessionCommand, HostRemoteSessionJson, ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
@@ -94,6 +95,7 @@ import type {
   MigrationImportAbortRequest,
   MigrationImportAbortResult,
 } from './types.ts'
+import { parseHostCollaborationDeliveryChunk, parseHostCollaborationDeliveryResult } from './collaboration-delivery.ts'
 
 /** Maximum UTF-8 bytes in one JSON object, excluding its terminating LF. */
 export const HOST_CONTROL_MAX_FRAME_BYTES = 64 * 1024
@@ -1041,6 +1043,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
   | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
+  | ProfileCollaborationDeliveryRequest
   | ProfileModelTextRequest
   | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileRemoteSessionRequest
@@ -1319,6 +1322,16 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...parseHostWorkspaceModelSelectionTarget({ workspace_id: params.workspace_id, session_id: params.session_id }),
     } }
   }
+  if (frame.method === 'profile.collaboration_delivery') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      account_issuer: accountIssuer(params.account_issuer), account_subject: uuid(params.account_subject),
+      command: parseHostCollaborationDeliveryChunk(params.command),
+    } }
+  }
   if (frame.method === 'profile.collaboration_analysis') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
@@ -1420,6 +1433,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
   | ProfileWorkspaceAuthorityResult | ProfileSourceAuthorityResult
   | ProfileCollaborationAnalysisResult | ProfileSourceSnapshotResult
+  | ProfileCollaborationDeliveryResult
   | ProfileModelTextResult
   | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileRemoteSessionResult
@@ -1656,6 +1670,9 @@ function decodeProfileResult(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.source_snapshot') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationSourceSnapshotChunk(result) }
+  }
+  if (frame.method === 'profile.collaboration_delivery') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationDeliveryResult(result) }
   }
   if (frame.method === 'profile.collaboration_registration') {
     return { version: 1, type: 'result', request_id, method: frame.method,

@@ -3,11 +3,13 @@ import { Context } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, it, onTestFinished } from 'vitest'
+import { parseHostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
+import { CollaborationDeliveryUploads } from '../../../host/desktop-host/src/collaboration-delivery-uploads.ts'
 import {
   openCollaborationSourceJournal,
   describeCollaborationSource,
@@ -97,6 +99,38 @@ function reply(snapshot: Awaited<ReturnType<typeof harness>>['snapshot'], answer
     },
   }
 }
+
+it('assembles a maximum escaped reply into actual Profile storage and recovers its same first commit after a lost receipt', async () => {
+  const h = await harness(), original = reply(h.snapshot, '\u0001'.repeat(128 * 1024))
+  let journal = await h.openCollaborationDeliveryJournal(h.facility)
+  const lifetime = new AbortController(), uploads = new CollaborationDeliveryUploads()
+  async function upload(value: unknown) {
+    const capsule = parseHostCollaborationDeliveryCapsule(value), bytes = Buffer.from(JSON.stringify(capsule)), upload_id = randomUUID()
+    const payload_digest = createHash('sha256').update(bytes).digest('hex')
+    let result
+    for (let offset = 0; offset < bytes.length; offset += 16384) result = await uploads.accept({
+      ownerId: 'owner', bindingKey: namespace, signal: lifetime.signal, authorize: () => {},
+      capture: () => ({ assertCurrent: () => {}, receive: async (input) => {
+        const saved = await journal.persist(input, h.snapshot, lifetime.signal)
+        return Object.fromEntries(['namespace_id', 'delivery_id', 'invocation_id', 'source_locator', 'source_snapshot_digest', 'result_digest', 'host_journal_commit']
+          .map(key => [key, saved[key as keyof typeof saved]]))
+      } }),
+      chunk: { upload_id, offset, total_bytes: bytes.length, payload_digest, chunk_base64url: bytes.subarray(offset, offset + 16384).toString('base64url') },
+    })
+    return result
+  }
+  try {
+    const first = await upload(original)
+    expect(first?.kind).toBe('committed')
+    const saved = [...journal.records(namespace, original.projection.source_locator)]
+    expect(saved).toHaveLength(1)
+    expect(saved[0]!.answer).toBe(original.projection.answer)
+    await journal.close()
+    journal = await h.openCollaborationDeliveryJournal(h.facility)
+    expect(await upload({ ...original, projection: { ...original.projection, delivery_state: 'delivered', delivery_state_version: '2' } })).toEqual(first)
+    expect([...journal.records(namespace, original.projection.source_locator)]).toEqual(saved)
+  } finally { lifetime.abort(); await journal.close() }
+})
 
 it('persists complete original replies before returning a stable commit and reopens them independently of Session events', async () => {
   const h = await harness(),

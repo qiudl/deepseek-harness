@@ -1,4 +1,5 @@
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
 
 /** Current on-wire Host control protocol version. */
 export type HostControlProtocolVersion = 1
@@ -603,6 +604,18 @@ export interface ProfileCollaborationAnalysisRequest extends Omit<ProfileSourceS
 export interface ProfileCollaborationAnalysisResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
   readonly method: 'profile.collaboration_analysis'
   readonly result: HostCollaborationAnalysisResult
+}
+/** Main-only full reply upload into the currently authorized Account Profile. */
+export interface ProfileCollaborationDeliveryRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.collaboration_delivery'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & {
+    readonly command: HostCollaborationDeliveryChunk
+  }
+}
+/** Sequential progress or installation-signed durable commit, without the answer. */
+export interface ProfileCollaborationDeliveryResult extends Omit<ProfileCollaborationAnalysisResult, 'method' | 'result'> {
+  readonly method: 'profile.collaboration_delivery'
+  readonly result: HostCollaborationDeliveryResult
 }
 /** Server nonce bound to one Source and current registered Host epoch. */
 export interface HostSourceAuthorityChallenge extends HostWorkspaceAuthorityChallenge, HostCollaborationSourceDescriptor {
@@ -1399,6 +1412,8 @@ export type HostControlFrame =
   | ProfileSourceAuthorityResult
   | ProfileCollaborationAnalysisRequest
   | ProfileCollaborationAnalysisResult
+  | ProfileCollaborationDeliveryRequest
+  | ProfileCollaborationDeliveryResult
   | ProfileSourceSnapshotRequest
   | ProfileSourceSnapshotResult
   | ProfileModelTextRequest
