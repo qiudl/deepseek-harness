@@ -135,7 +135,16 @@ describe('web-app runtime glue', () => {
     ctx.provide('webServer', server)
     provideConnection(ctx)
     const gateway = new TypertGatewayService(gatewayCtx, {})
+    let browserAdmission: Parameters<typeof gateway.registerBrowserAdmission>[0] | undefined
+    const registerBrowserAdmission = gateway.registerBrowserAdmission.bind(gateway)
+    vi.spyOn(gateway, 'registerBrowserAdmission').mockImplementation((policy) => {
+      browserAdmission = policy
+      return registerBrowserAdmission(policy)
+    })
     vi.spyOn(gateway, 'invoke').mockResolvedValue({ items: [] })
+    vi.spyOn(gateway, 'stream').mockResolvedValue((async function* () {
+      yield { type: 'baseline', value: { items: [] } }
+    })() as never)
     ctx.provide('typertGateway', gateway)
     const llm = new LlmRuntime(ctx)
     const stream = vi.spyOn(llm, 'stream').mockImplementation(async function* () {
@@ -154,7 +163,16 @@ describe('web-app runtime glue', () => {
     }
     expect([...routes.keys()].sort()).toEqual([
       '/internal/desktop-model-text', '/internal/desktop-remote-session', '/internal/desktop-remote-ui',
+      '/internal/desktop-remote-ui-stream',
     ])
+    if (!browserAdmission) throw new Error('missing Desktop browser admission')
+    expect(browserAdmission.localControlStatus?.('session-1')).toMatchObject({ outcome: 'uncontrolled' })
+    const finishInvoke = browserAdmission.invoke('session/prompt', { request: { sessionId: 'session-1' } })
+    const finishApproval = browserAdmission.eventResult('session-1')
+    expect(browserAdmission.localControlStatus?.('session-1')).toMatchObject({ outcome: 'controlled' })
+    expect(browserAdmission.localControlTakeover?.('session-1', 1)).toMatchObject({ outcome: 'controlled' })
+    finishApproval?.()
+    finishInvoke?.()
     const http = createServer((req, res) => { void routes.get(req.url!)!.handler(req, res) })
     onTestFinished(async () => {
       http.closeAllConnections()
@@ -175,6 +193,14 @@ describe('web-app runtime glue', () => {
       expect(response.status, `${path}: ${await response.clone().text()} stream calls: ${stream.mock.calls.length}`).toBe(200)
       expect(await response.json()).toEqual(expected)
     }
+    const remoteStream = await fetch(`http://127.0.0.1:${address.port}/internal/desktop-remote-ui-stream`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ endpoint: 'workspace/follow', payload: { args: {} } }),
+    })
+    expect(remoteStream.status).toBe(200)
+    expect(await remoteStream.text()).toBe(`${JSON.stringify({ type: 'item', value: {
+      type: 'baseline', value: { items: [] },
+    } })}\n${JSON.stringify({ type: 'end' })}\n`)
     await ctx.fiber.dispose()
     expect(routes.size).toBe(0)
     expect(selection).toHaveBeenCalledOnce()

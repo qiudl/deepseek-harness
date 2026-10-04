@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -55,6 +56,67 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
+  it('projects document-relative plugin references to Host-root URLs for remote boot', async () => {
+    const relative = `plugins/??${'a'.repeat(2700)}&rev=1`
+    const absolute = `/${relative}`
+    const boot = { injections: [
+      { kind: 'script-src', placement: 'head', src: relative },
+      { kind: 'global', name: '__DSH_BOOT__', value: {
+        rev: 'r1', entries: [{ id: 'a', url: relative, rev: 'r1' }],
+        batches: [{ phase: 'application', url: relative, rev: 'r1', entries: ['a'] }],
+      } },
+    ] }
+    let servedBoot: unknown = boot
+    const server = createServer((request, response) => {
+      if (request.url === '/internal/desktop-remote-ui') {
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ value: servedBoot }))
+      } else if (request.url === absolute) {
+        response.writeHead(200, { 'content-type': 'text/javascript' }).end('registered();')
+      } else response.writeHead(404).end()
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    onTestFinished(async () => { await new Promise<void>((resolve) => { server.close(() => { resolve() }) }) })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
+    const origin = `http://127.0.0.1:${address.port}`
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    })
+    const remoteUiRead = Reflect.get(factory, 'remoteUiRead') as (
+      origin: string, token: string, endpoint: string, payload: object,
+      signal: AbortSignal, stopped: () => boolean) => Promise<unknown>
+    const remoteUiAssetRead = Reflect.get(factory, 'remoteUiAssetRead') as (
+      origin: string, cookie: { name: string; value: string }, token: string,
+      endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
+      cache: { current?: { url: string; bytes: Buffer } }) => Promise<unknown>
+    const signal = new AbortController().signal
+    const projected = await remoteUiRead.call(factory, origin, 'token', 'boot/injections', { args: {} }, signal, () => false)
+    expect(projected).toEqual({ injections: [
+      { kind: 'script-src', placement: 'head', src: absolute },
+      { kind: 'global', name: '__DSH_BOOT__', value: {
+        rev: 'r1', entries: [{ id: 'a', url: absolute, rev: 'r1' }],
+        batches: [{ phase: 'application', url: absolute, rev: 'r1', entries: ['a'] }],
+      } },
+    ] })
+    await expect(remoteUiAssetRead.call(factory, origin, { name: 'cookie', value: 'private' }, 'token',
+      'asset/describe', { args: { url: absolute } }, signal, () => false, {}))
+      .resolves.toEqual({ sha256: createHash('sha256').update('registered();').digest('hex'), total: 13 })
+    // Preserve invalid metadata for the downstream validator instead of inventing valid references.
+    for (const malformed of [null, [], {}, { injections: null }, { injections: [
+      null, {}, { kind: 'script-src', src: 42 },
+      { kind: 'script-preload', src: '/plugins/already-rooted.js' },
+      { kind: 'script-src', src: 'https://other.example/plugin.js' },
+      { kind: 'global', name: 'other', value: {} },
+      { kind: 'global', name: '__DSH_BOOT__', value: null },
+      { kind: 'global', name: '__DSH_BOOT__', value: { entries: null, batches: null } },
+      { kind: 'global', name: '__DSH_BOOT__', value: { entries: [null], batches: [null] } },
+    ] }]) {
+      servedBoot = malformed
+      await expect(remoteUiRead.call(factory, origin, 'token', 'boot/injections', { args: {} }, signal, () => false))
+        .resolves.toEqual(malformed)
+    }
+  })
+
   it('rejects malformed remote responses and stopped reads at the private Host boundary', async () => {
     let status = 200
     let value = JSON.stringify({ value: { items: [] } })
@@ -117,14 +179,14 @@ describe('profile worker child process', () => {
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
     }) as unknown as {
       remoteUiAssetRead(origin: string, cookie: { name: string; value: string }, token: string,
-        payload: unknown, signal: AbortSignal, stopped: () => boolean,
+        endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
         cache: { current?: { url: string; bytes: Buffer } }): Promise<unknown>
     }
     const signal = new AbortController().signal
     const read = (payload: unknown, stopped: () => boolean = () => false,
       cache: { current?: { url: string; bytes: Buffer } } = {}, selectedSignal = signal) =>
       factory.remoteUiAssetRead(origin, { name: 'cookie', value: 'private' }, 'token',
-        payload, selectedSignal, stopped, cache)
+        'asset/read', payload, selectedSignal, stopped, cache)
     for (const payload of [null, {}, { args: null }, { args: { url: 'http://[', offset: 0 } }]) {
       await expect(read(payload)).rejects.toMatchObject({ code: 'invalid_input' })
     }
@@ -566,6 +628,19 @@ describe('dsh web Profile worker', () => {
             response.writeHead(403).end()
             return
           }
+          const body = await new Promise(resolve => {
+            let body = ''
+            request.on('data', chunk => { body += chunk })
+            request.on('end', () => resolve(body))
+          })
+          if (body.includes('session.cancel')) {
+            response.writeHead(409).end()
+            return
+          }
+          if (body.includes('control.acquire')) {
+            response.writeHead(429).end()
+            return
+          }
           response.writeHead(200, { 'content-type': 'application/json' })
             .end(JSON.stringify({ value: { items: [] } }))
           return
@@ -591,6 +666,15 @@ describe('dsh web Profile worker', () => {
           }
           response.writeHead(200, { 'content-type': 'application/json' })
             .end(JSON.stringify({ value: { items: [] } }))
+          return
+        }
+        if (url.pathname === '/internal/desktop-remote-ui-stream') {
+          if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_REMOTE_UI_TOKEN) {
+            response.writeHead(403).end()
+            return
+          }
+          response.writeHead(200, { 'content-type': 'application/x-ndjson' })
+            .end('{"type":"item","value":{"cursor":1}}\\n{"type":"end"}\\n')
           return
         }
         if (url.searchParams.get('token') === 'must-stay-owner-only') {
@@ -647,16 +731,41 @@ describe('dsh web Profile worker', () => {
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-model-text`, { method: 'POST' })).status).toBe(403)
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-session`, { method: 'POST' })).status).toBe(403)
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-ui`, { method: 'POST' })).status).toBe(403)
+    expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-ui-stream`, { method: 'POST' })).status).toBe(403)
     await expect(worker.generateText?.('question', new AbortController().signal)).resolves.toEqual({
       provider: 'deepseek', model: 'chat', text: 'answer',
     })
     await expect(worker.remoteSession?.({
       operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
     }, new AbortController().signal)).resolves.toEqual({ items: [] })
+    await expect(worker.remoteSession?.({
+      operation: 'session.cancel', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', control: { controller_id: '123e4567-e89b-42d3-a456-426614174001',
+        generation: '123e4567-e89b-42d3-a456-426614174002', epoch: 1 },
+    }, new AbortController().signal)).rejects.toMatchObject({ code: 'conflict' })
+    await expect(worker.remoteSession?.({
+      operation: 'control.acquire', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', controller_id: '123e4567-e89b-42d3-a456-426614174001', takeover: false,
+    }, new AbortController().signal)).rejects.toMatchObject({ code: 'busy' })
     await expect(worker.remoteUiRead?.('session/list', { args: { _request: {} } },
       new AbortController().signal)).resolves.toEqual({ items: [] })
+    const events: unknown[] = []
+    for await (const event of worker.remoteUiStream!('session/follow', { args: {} }, new AbortController().signal)) {
+      events.push(event)
+    }
+    expect(events).toEqual([{ cursor: 1 }])
     await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 0 } },
       new AbortController().signal)).resolves.toEqual({ bytes: Buffer.from('registered();').toString('base64url'), total: 13 })
+    await expect(worker.remoteUiRead?.('asset/describe', { args: { url: '/plugins/??a/client.js&rev=1' } },
+      new AbortController().signal)).resolves.toEqual({
+      sha256: createHash('sha256').update('registered();').digest('hex'), total: 13,
+    })
+    await expect(worker.remoteUiRead?.('asset/describe', { args: { url: '/plugins/??a/client.js&rev=1', offset: 0 } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(worker.remoteUiRead?.('asset/describe', { args: { url: 'https://evil.test/plugins/a.js' } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(worker.remoteUiRead?.('asset/describe', { args: { url: '/plugins/??b/client.js&rev=1' } },
+      new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_input' })
     await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??a/client.js&rev=1', offset: 1 } },
       new AbortController().signal)).resolves.toEqual({ bytes: Buffer.from('egistered();').toString('base64url'), total: 13 })
     await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??b/client.js&rev=1', offset: 0 } },

@@ -1222,6 +1222,18 @@ describe('Typert Remote streams', () => {
     expect(firstFrame).not.toHaveProperty('deliveryId')
     expect(secondFrame).not.toHaveProperty('deliveryId')
 
+    const unregisterAdmission = ctx.typertGateway.registerBrowserAdmission({
+      invoke() {},
+      eventResult(sessionId) {
+        expect(sessionId).toBe('agent-1')
+        throw new Error('browser control lost')
+      },
+    })
+    await expect(sendEventResult(second, secondFrame, { kind: 'result', value: 'not-admitted' }))
+      .rejects.toThrow('browser control lost')
+    expect(pending.resolve).not.toHaveBeenCalled()
+    unregisterAdmission()
+
     await sendEventResult(second, secondFrame, {
       kind: 'result', value: 'allowed',
     })
@@ -1241,6 +1253,26 @@ describe('Typert Remote streams', () => {
     expect(pending.reject).not.toHaveBeenCalled()
     first.socket.close()
     second.socket.close()
+    await unregister()
+  })
+
+  it('settles a trusted Host approval without applying browser write admission', async () => {
+    const { ctx } = await setup(true)
+    const source = new RemoteEventSourceProbe()
+    const unregister = ctx.typertGateway.registerRemoteEvents(source.source, REMOTE_HOST)
+    const client = await openEventClient(ctx, 'events-host-result')
+    const pending = pendingInvocation(ctx.extend())
+    source.push(pending.dispatch)
+    await vi.waitFor(() => { expect(deliveredInvocation(client)).toBeDefined() })
+    const frame = deliveredInvocation(client)!
+    const eventResult = vi.fn(() => { throw new Error('browser admission must not run') })
+    const unregisterAdmission = ctx.typertGateway.registerBrowserAdmission({ invoke() {}, eventResult })
+    ctx.typertGateway.respondRemoteEvent({ clientId: client.clientId, eventId: frame.eventId,
+      outcome: { kind: 'result', value: 'allowed-by-host' } })
+    await expect(pending.outcome).resolves.toEqual({ kind: 'result', value: 'allowed-by-host' })
+    expect(eventResult).not.toHaveBeenCalled()
+    unregisterAdmission()
+    client.socket.close()
     await unregister()
   })
 

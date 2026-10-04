@@ -483,8 +483,7 @@ export class DesktopHost {
     const now = this.options.clock.now()
     const expiresAt = now + (this.options.viewLeaseTtlMs ?? 60_000)
     for (const [viewLeaseId, lease] of this.leases) {
-      if (lease.ownerId === ownerId && lease.profileId === profileId && lease.expiresAt > now
-        && this.generations.get(profileId) === lease.generation) {
+      if (lease.ownerId === ownerId && lease.profileId === profileId && lease.expiresAt > now) {
         lease.expiresAt = expiresAt
         lease.activationHandle ??= activationHandle()
         return {
@@ -582,7 +581,7 @@ export class DesktopHost {
   }): PersonProfileId {
     const lease = this.leases.get(input.viewLeaseId)
     if (!lease || lease.ownerId !== input.ownerId || lease.expiresAt <= this.options.clock.now()
-      || lease.generation !== input.leaseGeneration || this.generations.get(lease.profileId) !== lease.generation) {
+      || lease.generation !== input.leaseGeneration) {
       throw new HostAuthorityError('stale')
     }
     return lease.profileId

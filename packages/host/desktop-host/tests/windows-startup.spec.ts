@@ -225,6 +225,10 @@ describe('Windows Desktop Host startup', () => {
         .rejects.toMatchObject({ code: 'unavailable' })
       await expect(client.remoteUiRead({ ...lease, endpoint: 'boot/injections', payload: { args: {} } }))
         .rejects.toMatchObject({ code: 'unavailable' })
+      await expect(client.remoteUiStream({ ...lease, command: {
+        action: 'open', stream_id: randomUUID(), endpoint: 'session/follow',
+        payload: { args: { request: { address: { kind: 'session', sessionId: 'session-1' } } } },
+      } })).rejects.toMatchObject({ code: 'unavailable' })
       patch = `${root}\\profiles\\${local.profileId}\\profiles\\web\\cordis.patch.yml`
       expect(await client.extensions({ ...lease, command: { action: 'inventory', kind: 'mcp' } }))
         .toMatchObject({ state: 'inventory', entries: [], mcp_remove: true, mcp_update: true })

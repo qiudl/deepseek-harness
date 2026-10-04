@@ -141,6 +141,22 @@ describe('Desktop Host lease fences', () => {
     expect(() => host.validateViewLease({ ...next, ownerId: 'one' })).toThrow(/stale/)
   })
 
+  it('keeps independently authorized owners live when either reopens the same Profile', async () => {
+    const { host, local, opened } = await fixture()
+    await host.restoreLocalProfile({ ...local, keyHandle: 'keychain:local', unlockMaterial, ownerId: 'two' })
+    const second = await host.openLocalProfile({ profileId: local.profileId, ownerId: 'two' })
+    expect(host.validateViewLease({ ...opened, ownerId: 'one' })).toBe(local.profileId)
+    expect(host.validateViewLease({ ...second, ownerId: 'two' })).toBe(local.profileId)
+    const renewed = await host.openLocalProfile({ profileId: local.profileId, ownerId: 'one' })
+    expect(renewed.viewLeaseId).toBe(opened.viewLeaseId)
+    expect(host.validateViewLease({ ...second, ownerId: 'two' })).toBe(local.profileId)
+    host.revokeOwner('one')
+    expect(() => host.validateViewLease({ ...renewed, ownerId: 'one' })).toThrow(/stale/u)
+    expect(host.validateViewLease({ ...second, ownerId: 'two' })).toBe(local.profileId)
+    host.revokeProfile(local.profileId)
+    expect(() => host.validateViewLease({ ...second, ownerId: 'two' })).toThrow(/stale/u)
+  })
+
   it('rejects stale process and lease generations without closing the valid lease', async () => {
     const { host, local, opened } = await fixture()
     const lease = { ...opened, ownerId: 'one' }
