@@ -829,6 +829,16 @@ async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal:
 async readCollaborationSourceSnapshot(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise<CollaborationSourceSnapshot>
 
 /**
+ * Save a readable cloud reply in the owning Profile without appending model-visible Session events.
+ * The authenticated parent must establish namespace/target cloud authority. This operation checks
+ * current local ownership and the original Source; it grants no cloud delivery acknowledgment.
+ * @param value - Exact private delivery input; caller-supplied local commits are rejected.
+ * @param signal - Parent cancellation, combined with Profile disposal.
+ * @returns Original immutable reply after durable save and ownership revalidation; duplicates share its commit.
+ */
+async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise<CollaborationDeliveryRecord>
+
+/**
  * Read all visible Session rows without resuming an Agent.
  * @param _request - reserved empty list request.
  * @param signal - cancellation for persistence reads.

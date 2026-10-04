@@ -1717,6 +1717,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Original frozen journal snapshot after current Session and Workspace ownership checks; no executable handle.',
       },
       {
+        signature: 'async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise<CollaborationDeliveryRecord>',
+        description: 'Save a readable cloud reply in the owning Profile without appending model-visible Session events. The authenticated parent must establish namespace/target cloud authority. This operation checks current local ownership and the original Source; it grants no cloud delivery acknowledgment.',
+        parameters: [{ name: 'value', description: 'Exact private delivery input; caller-supplied local commits are rejected.' }, { name: 'signal', description: 'Parent cancellation, combined with Profile disposal.' }],
+        returns: 'Original immutable reply after durable save and ownership revalidation; duplicates share its commit.',
+      },
+      {
         signature: '@Remote(\'list\') async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>',
         description: 'Read all visible Session rows without resuming an Agent.',
         parameters: [{ name: '_request', description: 'reserved empty list request.' }, { name: 'signal', description: 'cancellation for persistence reads.' }],
@@ -4324,6 +4330,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CollaborationAnalysisResult',
     declaration: 'export interface CollaborationAnalysisResult {\n    readonly jsonText: string;\n}',
+  },
+  {
+    name: 'CollaborationDeliveryRecord',
+    declaration: 'export type CollaborationDeliveryRecord = DeepReadonly<z.infer<typeof rawRecordSchema>>;',
   },
   {
     name: 'CollaborationSourceBody',

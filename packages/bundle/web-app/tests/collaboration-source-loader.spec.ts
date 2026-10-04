@@ -4,6 +4,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest } from '@deepseek-ai/dsh-api-session-controller'
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
+import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import Storage from '@deepseek-ai/dsh-storage'
@@ -66,7 +67,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   ctx.provide('attachments', { imageLimits: { maxImageBytes: 1, maxImagesPerMessage: 1, maxMessageImageBytes: 1,
     maxImagePixels: 1, maxImageDimension: 1, mediaTypes: ['image/png'] } } as never)
   ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
-  const header = { version: SESSION_FORMAT_VERSION, id: SessionId('source-session'), cwd, createdAt: 1, isSeeded: false }
+  const header: SessionHeader = { version: SESSION_FORMAT_VERSION, id: SessionId('source-session'), cwd, createdAt: 1, isSeeded: false }
   ctx.provide('sessionPersistence', testSessionPersistence(ctx, { list: async () => [header],
     inspect: async () => ({ meta: header, events: [] }) }) as never)
   installSessionReadTestServices(ctx)
@@ -130,7 +131,10 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   const adapter = mode === 'source-only' || mode === 'delivery' ? new FixtureAdapter() : new DeepSeekAdapter({
     options: () => resolveAdapterOptions({ protocol: 'chat-completions', baseURL: origin, models: [{ id: 'selected' }] }),
     resolveApiKey: async () => 'fixture-source-key', resolveUserId: () => '00000000-0000-4000-8000-000000000001' as AnonymousUserId,
-    prepareExtensions: async () => ({ fields: mode === 'analysis-extension' ? { tools: [{ type: 'function', function: { name: 'injected_tool', description: '', parameters: {} } }] } : {}, accept: async () => {} }),
+    // Malformed external extension JSON must not introduce tools into the logged Source analysis request.
+    prepareExtensions: async () => ({ fields: mode === 'analysis-extension'
+      ? { tools: [{ type: 'function', function: { name: 'injected_tool', description: '', parameters: {} } }] } as never
+      : {}, accept: async () => {} }),
   })
   const prepared = vi.spyOn(adapter, 'prepareSnapshot'), stream = vi.spyOn(adapter, 'stream')
   ctx.llm.registerAdapter(['fixture'], adapter)
