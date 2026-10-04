@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import ts from 'typescript'
 import {
   collectPackageAliases,
   collectPackageNames,
@@ -11,6 +12,24 @@ import {
 } from './gen-tsconfig-paths.ts'
 
 const root = resolve(import.meta.dirname, '..')
+
+describe('Host migration source resolution (REQ-20260930-0004)', () => {
+  const config = ts.readConfigFile(resolve(root, 'tsconfig.base.json'), path => ts.sys.readFile(path))
+  if (config.error) throw Error(ts.flattenDiagnosticMessageText(config.error.messageText, '\n'))
+  const { options } = ts.parseJsonConfigFileContent(config.config, ts.sys, root)
+  const host: ts.ModuleResolutionHost = {
+    ...ts.sys,
+    // Source-plane resolution must survive the installed package omitting its source files.
+    fileExists: path => !path.replaceAll('\\', '/').includes('/node_modules/') && ts.sys.fileExists(path),
+  }
+  for (const entry of ['migration-export', 'migration-export-source', 'migration-import']) {
+    it(`resolves ${entry} from workspace source without an artifact fallback`, () => {
+      const specifier = `@deepseek-ai/dsh-session-persistence-jsonl/src/${entry}.ts`
+      const result = ts.resolveModuleName(specifier, resolve(root, 'packages/host/desktop-host/src/startup.ts'), options, host).resolvedModule
+      expect(result?.resolvedFileName).toBe(resolve(root, `packages/session/session-persistence-jsonl/src/${entry}.ts`))
+    })
+  }
+})
 
 describe('generated tsconfig package aliases', () => {
   it('maps each package to its own source directory', () => {

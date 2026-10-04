@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-10-03-slark-workspace-project-scope.md
-2026-10-03-slark-workspace-project-scope.md: d2d6135fca494ed270c36e44222ad6039038425d
-2026-10-03-slark-workspace-project-scope.zh.md: e9f983e2f59562df915a373f8d286963f21272d8
+2026-10-03-slark-workspace-project-scope.md: 3d46f4294b8f0495e824d977fa697c86ecfae85f
+2026-10-03-slark-workspace-project-scope.zh.md: 938c031a16780100bafd0376cc4161af77d706e5
