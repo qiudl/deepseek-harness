@@ -786,7 +786,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     if (params.endpoint === 'asset/read' || params.endpoint === 'asset/describe') {
       const assetArgs = args as Record<string, unknown>
       exactKeys(assetArgs, params.endpoint === 'asset/read' ? ['url', 'offset'] : ['url'])
-      if (typeof assetArgs.url !== 'string' || assetArgs.url.length > 2048 || assetArgs.url.length === 0
+      if (typeof assetArgs.url !== 'string' || assetArgs.url.length > 4096 || assetArgs.url.length === 0
         || (params.endpoint === 'asset/read' &&
           (!Number.isSafeInteger(assetArgs.offset) || (assetArgs.offset as number) < 0))) reject()
     }

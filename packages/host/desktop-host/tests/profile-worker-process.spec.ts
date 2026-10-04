@@ -56,6 +56,51 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
+  it('projects document-relative plugin references to Host-root URLs for remote boot', async () => {
+    const relative = `plugins/??${'a'.repeat(2700)}&rev=1`
+    const absolute = `/${relative}`
+    const boot = { injections: [
+      { kind: 'script-src', placement: 'head', src: relative },
+      { kind: 'global', name: '__DSH_BOOT__', value: {
+        rev: 'r1', entries: [{ id: 'a', url: relative, rev: 'r1' }],
+        batches: [{ phase: 'application', url: relative, rev: 'r1', entries: ['a'] }],
+      } },
+    ] }
+    const server = createServer((request, response) => {
+      if (request.url === '/internal/desktop-remote-ui') {
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ value: boot }))
+      } else if (request.url === absolute) {
+        response.writeHead(200, { 'content-type': 'text/javascript' }).end('registered();')
+      } else response.writeHead(404).end()
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    onTestFinished(async () => { await new Promise<void>((resolve) => { server.close(() => { resolve() }) }) })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
+    const origin = `http://127.0.0.1:${address.port}`
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    }) as unknown as {
+      remoteUiRead(origin: string, token: string, endpoint: string, payload: object,
+        signal: AbortSignal, stopped: () => boolean): Promise<unknown>
+      remoteUiAssetRead(origin: string, cookie: { name: string; value: string }, token: string,
+        endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
+        cache: { current?: { url: string; bytes: Buffer } }): Promise<unknown>
+    }
+    const signal = new AbortController().signal
+    const projected = await factory.remoteUiRead(origin, 'token', 'boot/injections', { args: {} }, signal, () => false)
+    expect(projected).toEqual({ injections: [
+      { kind: 'script-src', placement: 'head', src: absolute },
+      { kind: 'global', name: '__DSH_BOOT__', value: {
+        rev: 'r1', entries: [{ id: 'a', url: absolute, rev: 'r1' }],
+        batches: [{ phase: 'application', url: absolute, rev: 'r1', entries: ['a'] }],
+      } },
+    ] })
+    await expect(factory.remoteUiAssetRead(origin, { name: 'cookie', value: 'private' }, 'token',
+      'asset/describe', { args: { url: absolute } }, signal, () => false, {}))
+      .resolves.toEqual({ sha256: createHash('sha256').update('registered();').digest('hex'), total: 13 })
+  })
+
   it('rejects malformed remote responses and stopped reads at the private Host boundary', async () => {
     let status = 200
     let value = JSON.stringify({ value: { items: [] } })

@@ -158,6 +158,10 @@ describe('Profile remote UI read wire commands', () => {
     expect(encodeHostControlFrame(decode(asset))).toBe(`${JSON.stringify(asset)}\n`)
     const described = readFrame('asset/describe', { args: { url: '/plugins/??a/client.js&rev=1' } })
     expect(encodeHostControlFrame(decode(described))).toBe(`${JSON.stringify(described)}\n`)
+    const longUrl = `/plugins/??${'a'.repeat(2700)}&rev=1`
+    const longAsset = readFrame('asset/describe', { args: { url: longUrl } })
+    expect(encodeHostControlFrame(decode(longAsset))).toBe(`${JSON.stringify(longAsset)}\n`)
+    expect(() => decode(readFrame('asset/describe', { args: { url: 'a'.repeat(4097) } }))).toThrow()
     expect(() => decode(readFrame('asset/describe', { args: { url: '/plugins/a/client.js', offset: 0 } }))).toThrow()
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: -1 } }))).toThrow()
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: 0, path: '/' } }))).toThrow()

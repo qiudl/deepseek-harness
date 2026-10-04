@@ -58,6 +58,30 @@ function readyView(line: string): { readonly origin: string; readonly authentica
   return { origin: parsed.origin, authenticatedUrl: parsed.toString() }
 }
 
+/** Project local document-relative plugin references onto the remote Host's root-only asset route. */
+function remoteBootReferences(value: unknown): unknown {
+  const record = (item: unknown): item is Record<string, unknown> =>
+    typeof item === 'object' && item !== null && !Array.isArray(item)
+  const root = (url: unknown): unknown =>
+    typeof url === 'string' && url.startsWith('plugins/') ? `/${url}` : url
+  if (!record(value) || !Array.isArray(value.injections)) return value
+  return { ...value, injections: value.injections.map((item: unknown) => {
+    if (!record(item)) return item
+    if (item.kind === 'script-src' || item.kind === 'script-preload') {
+      return { ...item, src: root(item.src) }
+    }
+    if (item.kind !== 'global' || item.name !== '__DSH_BOOT__' || !record(item.value)) return item
+    const graph = item.value
+    return { ...item, value: {
+      ...graph,
+      entries: Array.isArray(graph.entries) ? graph.entries.map((entry: unknown) =>
+        record(entry) ? { ...entry, url: root(entry.url) } : entry) : graph.entries,
+      batches: Array.isArray(graph.batches) ? graph.batches.map((batch: unknown) =>
+        record(batch) ? { ...batch, url: root(batch.url) } : batch) : graph.batches,
+    } }
+  }) }
+}
+
 async function exchangeBootstrap(
   authenticatedUrl: string,
   origin: string,
@@ -275,7 +299,8 @@ export class DshWebProfileWorkerFactory {
     signal: AbortSignal,
     stopped: () => boolean,
   ): Promise<unknown> {
-    return this.remoteJson(viewOrigin, token, 'desktop-remote-ui', { endpoint, payload }, signal, stopped)
+    const value = await this.remoteJson(viewOrigin, token, 'desktop-remote-ui', { endpoint, payload }, signal, stopped)
+    return endpoint === 'boot/injections' ? remoteBootReferences(value) : value
   }
 
   private async remoteJson(
