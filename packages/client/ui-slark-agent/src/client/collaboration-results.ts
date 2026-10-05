@@ -32,6 +32,7 @@ export interface CollaborationResultGroup {
   readonly phase: 'ready' | 'loading' | 'error'
   readonly pending?: CollaborationPendingPage['pending_items']
   readonly pendingUnavailable?: boolean
+  readonly planningState?: string
   readonly nextCursor?: string
 }
 /** Stable observable value consumed by the injected framework hook. */
@@ -170,12 +171,18 @@ export class CollaborationResultsModel {
       })]
       if (replies.length > 4096 || bytes(replies) > 16 * 1024 * 1024) throw Error('result_view_budget')
       let pending: CollaborationPendingPage['pending_items'] | undefined, pendingUnavailable = false
+      let planningState: string | undefined
       if (host.collaborationPending) {
-        try { pending = (await readCollaborationPending(host, original.source, signal)).pending_items }
+        try {
+          const currentPlan = await readCollaborationPending(host, original.source, signal)
+          pending = currentPlan.pending_items
+          planningState = currentPlan.plan?.planning_state
+        }
         catch { pendingUnavailable = true }
         if (!this.current(generation)) throw Error('obsolete')
       }
       return { original, replies, phase: 'ready', ...(pending === undefined ? {} : { pending }),
+        ...(planningState === undefined ? {} : { planningState }),
         ...(pendingUnavailable ? { pendingUnavailable: true } : {}), ...(page.next_cursor ? { nextCursor: page.next_cursor } : {}) }
     } catch { return { original, replies: [], phase: 'error' } }
   }

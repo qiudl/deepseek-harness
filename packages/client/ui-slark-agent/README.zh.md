@@ -43,7 +43,7 @@ Client 来源通过 Desktop 桥读取绑定当前账号的分配。每个编辑�
 
 每个范围引用保留选择时的工作区、会话、目标、能力摘要和一个 UUID。第一次明确选择建立共享的原始 Source 身份；后续芯片保留该身份，即使第一个芯片被移动或删除也不改变。每个芯片携带各自的 mention ID 和 UTF-16 范围。整条原始草稿传给 Main；页面不提供 owner、凭据、模型或 Task ID。发送结果不确定时保留草稿和 Source 身份，编辑文字不会生成替代 Source；Main 与 Native 拒绝已捕获身份的内容变化。已有范围芯片全部移除后，再明确选择 Agent 才建立新的用户请求。工作区、归档或桥接身份变化，以及错误来源或迟到响应，都不能清空原草稿。Main 负责分析、冻结和受理；受理不等于执行完成。
 
-新版结果区域从 Native 的只读 `session.collaborationSources` 读取完整原消息，再从 Main 的 `collaborationDeliveries` 读取每条 Source 的授权结果。该 React 无关模型随 Session、工作区归属和 Connection generation 清理；受理事件与 3 秒轮询自动刷新。手动加载的历史页在刷新后保留，较旧投递版本不会回退已有投递状态。读取受限时移除答案和名称；完整纯文本结果按 `Agent · 项目空间` 显示，执行终态与投递状态分别处理。此读取不提交任务、不签署回执，也不证明 Host 已持久保存结果。
+新版结果区域从 Native 的只读 `session.collaborationSources` 读取完整原消息，再从 Main 的 `collaborationDeliveries` 读取每条 Source 的授权结果。该 React 无关模型随 Session、工作区归属和 Connection generation 清理；受理事件与 3 秒轮询自动刷新。手动加载的历史页在刷新后保留，较旧投递版本不会回退已有投递状态。读取受限时移除答案和名称；完整纯文本结果按 `Agent · 项目空间` 显示，执行终态与投递状态分别处理。没有回复或澄清问题时，区域显示当前经过验证的规划状态，包括失败、取消和讨论。计划读取失败会清除此状态；仅有冻结计划不代表任务已执行或受理。此读取不提交任务、不签署回执，也不证明 Host 已持久保存结果。
 
 </details>
 

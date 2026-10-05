@@ -80,3 +80,60 @@ it('restores the committed pending question automatically with no task form or a
   expect(view.container.querySelector('script, input, textarea, form')).toBeNull()
   view.unmount(); f.model.dispose()
 })
+
+it.each([
+  ['queued', '等待识别任务'],
+  ['planning', '正在识别任务'],
+  ['failed', '未能识别任务，原消息已保留'],
+  ['cancelled', '已停止识别此消息'],
+  ['unsupported', '此任务暂不支持自动分配，原消息已保留'],
+  ['discuss', '此消息被识别为讨论，未分配协同任务'],
+])('shows the current %s plan instead of a generic empty result', async (planning_state, message) => {
+  const f = fixture()
+  f.read.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  Reflect.set(f.bridge, 'collaborationPending', async () => ({ ok: true, value: { source,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1',
+      planning_state, route_decision: planning_state === 'discuss' ? 'local' : 'collaboration' },
+    frozen_task_count: 0, pending_items: [] } }))
+  const view = render(<CollaborationResultsDock {...f.props} />)
+  try {
+    await screen.findByText(message)
+    expect(screen.queryByText(zh['task.awaitingResult'])).toBeNull()
+    expect(screen.queryByText(zh['task.done'])).toBeNull()
+    expect(view.container.querySelector('input, textarea, form')).toBeNull()
+    expect(f.read).toHaveBeenCalledWith({ source, limit: 50 })
+  } finally { view.unmount(); f.model.dispose() }
+})
+
+it('keeps completed replies visible and never labels a frozen plan as accepted execution', async () => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPending', async () => ({ ok: true, value: { source,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1',
+      planning_state: 'failed', route_decision: 'collaboration' }, frozen_task_count: 1, pending_items: [] } }))
+  const view = render(<CollaborationResultsDock {...f.props} />)
+  try {
+    await screen.findByText('完整回复')
+    expect(screen.getByText(zh['task.done'])).toBeTruthy()
+    expect(screen.queryByText('未能识别任务，原消息已保留')).toBeNull()
+    f.read.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+    Reflect.set(f.bridge, 'collaborationPending', async () => ({ ok: true, value: { source,
+      plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1',
+        planning_state: 'ready', route_decision: 'collaboration' }, frozen_task_count: 1, pending_items: [] } }))
+    await act(async () => { await f.model.refresh() })
+    expect(screen.getByText(zh['task.awaitingResult'])).toBeTruthy()
+    expect(screen.queryByText(zh['task.done'])).toBeNull()
+    expect(screen.queryByText(zh['submit.acceptedV2'])).toBeNull()
+  } finally { view.unmount(); f.model.dispose() }
+})
+
+it('shows a failed status read without retaining a previous planning status', async () => {
+  const f = fixture()
+  f.read.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  Reflect.set(f.bridge, 'collaborationPending', async () => ({ ok: false, errorCode: 'unavailable' }))
+  const view = render(<CollaborationResultsDock {...f.props} />)
+  try {
+    await screen.findByText(zh['task.readUnavailable'])
+    expect(screen.queryByText(zh['task.awaitingResult'])).toBeNull()
+    expect(screen.queryByText(zh['task.done'])).toBeNull()
+  } finally { view.unmount(); f.model.dispose() }
+})

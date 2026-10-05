@@ -114,3 +114,25 @@ it('inactive scope and disposal prevent further reads and abort the owning reque
   const pending = b.model.refresh(); await vi.waitFor(() => { expect(active).toBeDefined() }); b.model.dispose()
   expect(active.aborted).toBe(true); await pending
 })
+
+it('publishes only the current verified planning state and removes it when the read fails', async () => {
+  const f = fixture()
+  f.bridge.collaborationDeliveries = async () => ({ ok: true, value: { deliveries: [] } })
+  let planning_state = 'planning'
+  f.bridge.collaborationPending = async () => ({ ok: true, value: { source,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1',
+      planning_state, route_decision: 'collaboration' }, frozen_task_count: 0, pending_items: [] } })
+  try {
+    await f.model.refresh()
+    expect(f.model.getSnapshot().groups[0]).toMatchObject({ planningState: 'planning' })
+    planning_state = 'failed'
+    await f.model.refresh()
+    expect(f.model.getSnapshot().groups[0]).toMatchObject({ planningState: 'failed' })
+    f.bridge.collaborationPending = async () => ({ ok: false, errorCode: 'unavailable' })
+    await f.model.refresh()
+    expect(f.model.getSnapshot().groups[0]).not.toHaveProperty('planningState')
+    expect(f.model.getSnapshot().groups[0]?.pendingUnavailable).toBe(true)
+    f.reset()
+    expect(f.model.getSnapshot().groups).toEqual([])
+  } finally { f.model.dispose() }
+})
