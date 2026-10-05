@@ -15,6 +15,7 @@ import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, resolveProfiles } from '../src/config.ts'
+import * as PiModels from '../src/models.ts'
 import { memoryAuth } from './auth-double.ts'
 import { assemble } from './assemble.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
@@ -140,6 +141,32 @@ describe('PiAiAdapter provider routing', () => {
     try {
       await expect(ctx.llm.prepareSnapshot({ provider: 'deepseek', model: 'deepseek-v4-flash' }, new AbortController().signal)).rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
     } finally { await ctx.fiber.dispose() }
+  })
+
+  it('denies snapshot capture for routes outside the audited explicit-credential protocol', async () => {
+    const adapter = adapterOf({ gateway: {
+      api: 'openai-completions', baseURL: 'https://gateway.example.test/v1', models: [{ id: 'custom' }],
+    } })
+    await expect(adapter.prepareSnapshot('gateway', 'custom', new AbortController().signal))
+      .rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
+  })
+
+  it('refuses an SDK collection that resolves a model without its owning provider', async () => {
+    const create = PiModels.createModels, restore: Array<() => void> = []
+    const collection = vi.spyOn(PiModels, 'createModels').mockImplementation((options) => {
+      const models = create(options)
+      const read = vi.spyOn(models, 'getProvider').mockReturnValue(undefined)
+      restore.push(() => { read.mockRestore() })
+      return models
+    })
+    try {
+      const adapter = adapterOf({ deepseek: {} })
+      await expect(adapter.prepareSnapshot('deepseek', 'deepseek-v4-flash', new AbortController().signal))
+        .rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
+    } finally {
+      restore.forEach((dispose) => { dispose() })
+      collection.mockRestore()
+    }
   })
 
   it('merges profile headers with Harness attribution winning', async () => {

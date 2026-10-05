@@ -1,6 +1,6 @@
 /** REQ-20260930-0004: configuration identity belongs to an executable one-shot preparation. */
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -37,6 +37,79 @@ const config = () => ({ provider: 'route', model: 'model' })
 const signal = () => new AbortController().signal
 
 describe('prepared configuration snapshot', () => {
+  it('refuses exhaustion before publishing another signed-range configuration generation', async () => {
+    const adapter = new SnapshotAdapter(), h = await harness(adapter)
+    try {
+      // Preload a valid terminal counter state; exercising this limit by iteration is infeasible.
+      Reflect.set(h.ctx.llm, 'snapshotGeneration', 9223372036854775806n)
+      const call = await h.ctx.llm.prepareSnapshot(config(), signal())
+      expect(call.snapshot.configuration_generation).toBe('9223372036854775807')
+      await expect(h.ctx.llm.prepareSnapshot(config(), signal())).rejects.toMatchObject({ code: 'INVALID_PREPARED_CALL' })
+      expect(adapter.sent).toEqual([])
+    } finally { await h.ctx.fiber.dispose() }
+  })
+
+  it('publishes the captured default reasoning effort without reading a later configuration', async () => {
+    const adapter = new class extends SnapshotAdapter {
+      override async prepareSnapshot(provider: string, model: string) {
+        const call = await super.prepareSnapshot(provider, model)
+        return { ...call, model: { ...call.model,
+          reasoning: { efforts: [{ id: ReasoningEffortId('high'), name: 'High' }], defaultEffort: ReasoningEffortId('high') },
+        } }
+      }
+    }()
+    const h = await harness(adapter)
+    try {
+      const call = await h.ctx.llm.prepareSnapshot(config(), signal())
+      expect(call.snapshot.reasoning_effort).toBe('high')
+      expect(call.config.reasoningEffort).toBe('high')
+      await collect(call.stream({ ...call.config, messages: [] }))
+      expect(adapter.sent).toEqual(['private-first-key'])
+    } finally { await h.ctx.fiber.dispose() }
+  })
+
+  it('contains a primitive adapter preparation failure and removes the cancellation listener', async () => {
+    const adapter = new SnapshotAdapter()
+    vi.spyOn(adapter, 'prepareSnapshot').mockRejectedValue('credential denied')
+    const h = await harness(adapter), cancel = new AbortController()
+    const remove = vi.spyOn(cancel.signal, 'removeEventListener')
+    try {
+      await expect(h.ctx.llm.prepareSnapshot(config(), cancel.signal)).rejects.toMatchObject({
+        code: 'INVALID_PREPARED_CALL', cause: 'credential denied',
+      })
+      expect(remove).toHaveBeenCalledWith('abort', expect.any(Function))
+      expect(adapter.sent).toEqual([])
+    } finally { await h.ctx.fiber.dispose() }
+  })
+
+  it('observes cancellation raised synchronously while the adapter prepares its bound call', async () => {
+    const cancel = new AbortController()
+    const adapter = new class extends SnapshotAdapter {
+      override prepareSnapshot(provider: string, model: string): Promise<PreparedAdapterCall> {
+        cancel.abort('origin revoked')
+        return super.prepareSnapshot(provider, model)
+      }
+    }()
+    const h = await harness(adapter), remove = vi.spyOn(cancel.signal, 'removeEventListener')
+    try {
+      await expect(h.ctx.llm.prepareSnapshot(config(), cancel.signal)).rejects.toMatchObject({ name: 'AbortError' })
+      expect(remove).toHaveBeenCalledWith('abort', expect.any(Function))
+      expect(adapter.sent).toEqual([])
+    } finally { await h.ctx.fiber.dispose() }
+  })
+
+  it('denies a waterfall replacing the captured cancellation before any provider request', async () => {
+    const adapter = new SnapshotAdapter(), h = await harness(adapter)
+    try {
+      const call = await h.ctx.llm.prepareSnapshot(config(), signal()), assertion = vi.fn()
+      h.ctx.on('llm/stream', (options, next) => { options.signal = signal(); return next() })
+      const chunks = await collect(call.stream({ ...call.config, messages: [] }, assertion))
+      expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'error', failure: { code: 'INVALID_PREPARED_CALL' } } })
+      expect(assertion).not.toHaveBeenCalled()
+      expect(adapter.sent).toEqual([])
+    } finally { await h.ctx.fiber.dispose() }
+  })
+
   it('checks a caller assertion after the waterfall and refuses a second terminal dispatch', async () => {
     const adapter = new SnapshotAdapter(), h = await harness(adapter)
     try {
