@@ -6,6 +6,7 @@ import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import {
   openCollaborationSourceJournal,
   openCollaborationAnalysisJournal,
+  parseCollaborationClarificationInput, clarificationAnalysisMessage, collaborationJournalDigest,
 } from '@deepseek-ai/dsh-api-session-controller'
 import type SessionController from '@deepseek-ai/dsh-api-session-controller'
 import { createMessage } from '@deepseek-ai/dsh-llm'
@@ -65,6 +66,14 @@ async function harness() {
       kind: 'captured',
       snapshot: source,
       prepared: {} as never,
+      analyzeClarification: async (clarification, persist, cancel) => {
+        await persist({ prompt_version: '2', source: clarification.original_snapshot, clarification,
+          request: { provider: 'fixture', model: 'selected', maxTokens: 8192, purpose: 'collaboration-analysis', tools: [],
+            system: 'Analyze only original user content and its clarification.',
+            messages: [createMessage({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: clarificationAnalysisMessage(clarification) }] })] } }, cancel)
+        cancel.throwIfAborted(); calls++
+        return { jsonText: '{"intent":"clarify"}' }
+      },
       analyze: async (persist, cancel) => {
         await persist(
           {
@@ -117,7 +126,8 @@ async function harness() {
     await ctx.fiber.dispose()
     await rm(root, { recursive: true, force: true })
   })
-  return { root, owner, lifetime, calls: () => calls }
+  return { root, owner, lifetime, calls: () => calls,
+    snapshot: (id: string) => sourceJournal.read({ workspace_id: input().workspace_id, session_id: input().session_id, source_message_id: id, source_revision: '1' })! }
 }
 const grant = (prepared: { attempt_request_id: string; input_manifest_digest: string; source_digest: string }) => ({
   ...prepared,
@@ -202,4 +212,55 @@ it('expires a preparation after 30 seconds and refuses its late grant', async ()
   } finally {
     vi.useRealTimers()
   }
+})
+
+function context(h: Awaited<ReturnType<typeof harness>>) {
+  const original = h.snapshot('original'), reply = h.snapshot('reply')
+  return parseCollaborationClarificationInput({ plan: { plan_id: 'plan', plan_revision: '3', input_version: '2' },
+    clarification_request_id: 'reply-request', original_snapshot: original, reply_snapshot: reply,
+    original_snapshot_digest: collaborationJournalDigest(original), reply_snapshot_digest: collaborationJournalDigest(reply),
+    pending_items: [{ pending_item_id: 'pending', revision: '1', mention_ids: ['mention'], target: { project_id: '212', agent_id: 'guide' },
+      reason: 'task_ambiguous', question: '检查哪些内容？', source_evidence_spans: [{ source_message_id: 'original', source_revision: '1', start: 0, end: original.original_message.length }] }],
+    frozen_task_ids: ['accepted-task'], mention_order: ['mention'], prior_replies: [] })
+}
+const replyInput = () => ({ ...input('reply'), original_message: '只检查规则，不修改文件。', active_mentions: [] })
+it('captures a reply without analysis, then persists a full clarification and consumes its matching new grant once', async () => {
+  const h = await harness()
+  await h.owner.prepare(input('original'), binding, signal())
+  const reply = await h.owner.captureReply(replyInput(), binding, signal())
+  expect(reply.kind).toBe('captured'); expect(h.calls()).toBe(0)
+  expect(await h.owner.captureReply(replyInput(), binding, signal())).toMatchObject({ kind: 'recovered', descriptor: reply.descriptor })
+  const p = receipt(await h.owner.prepareClarification(context(h), binding, signal()))
+  expect(p.descriptor.source_message_id).toBe('original'); expect(h.calls()).toBe(0)
+  await expect(h.owner.prepareClarification(context(h), binding, signal())).rejects.toThrow()
+  expect(await h.owner.dispatch(p.attempt_request_id, binding, { ...permission(p), expected_plan_revision: '3' }, signal())).toEqual({ jsonText: '{"intent":"clarify"}' })
+  expect(h.calls()).toBe(1)
+  const saved = await readFile(join(h.root, 'collaboration_analysis_v2.json'), 'utf8')
+  expect(saved).toContain('reply-request'); expect(saved).toContain('accepted-task')
+  await expect(h.owner.dispatch(p.attempt_request_id, binding, { ...permission(p), expected_plan_revision: '3' }, signal())).rejects.toThrow()
+  expect(h.calls()).toBe(1)
+})
+it('rejects reply ownership changes and competing preparations without constructing a second model attempt', async () => {
+  const h = await harness()
+  await h.owner.prepare(input('original'), binding, signal())
+  await h.owner.captureReply(replyInput(), binding, signal())
+  const c = context(h)
+  await expect(h.owner.prepareClarification(c, 'd'.repeat(64), signal())).rejects.toThrow()
+  const [one, two] = await Promise.allSettled([
+    h.owner.prepareClarification(c, binding, signal()), h.owner.prepareClarification(c, binding, signal())])
+  expect([one, two].filter(value => value.status === 'fulfilled')).toHaveLength(1)
+  expect(h.calls()).toBe(0)
+})
+it('expires retained reply calls without leaking the preparation slot or restoring executable recovery', async () => {
+  const h = await harness()
+  vi.useFakeTimers()
+  try {
+    await h.owner.prepare(input('original'), binding, signal())
+    await h.owner.captureReply(replyInput(), binding, signal())
+    await vi.advanceTimersByTimeAsync(30001)
+    await expect(h.owner.prepareClarification(context(h), binding, signal())).rejects.toThrow()
+    expect((await h.owner.captureReply(replyInput(), binding, signal())).kind).toBe('recovered')
+    expect((await h.owner.captureReply({ ...replyInput(), source_message_id: 'next-reply' }, binding, signal())).kind).toBe('captured')
+    expect(h.calls()).toBe(0)
+  } finally { vi.useRealTimers() }
 })

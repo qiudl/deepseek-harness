@@ -129,6 +129,8 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 `session.collaborationSources({ sessionId, cursor? })` 只读原始 Source journal，按新到旧返回当前 Session 的完整原消息、原坐标与快照摘要。每页最多 8 条及 256 KiB JSON，cursor 是上一页最后一条快照摘要；新 Source 不改变已读取分页的位置。归属变化、归档、取消与非法 cursor 均拒绝，不准备模型、不激活 Agent，也不追加普通 Session 事件。
 
+`analyzeClarification` 使用捕获补充消息时准备的调用，校验独立冻结的原始与补充 Source、选定待澄清项、相关此前回复、已冻结任务 ID 及原始 mention 顺序。完整 prompt-version-2 manifest 提交前后，均从当前 Profile 重读全部 Source 并检查模型选择与归属。原消息与补充消息保持同一 provider、model、推理配置及 adapter 注册；准备序号可以不同。两种分析方法共用一个调用，不能执行两次。恢复只读任一 manifest 版本，不重写或恢复调用；第二版派发另绑定原计划及修订号。
+
 <a id="model-experience"></a>
 
 ## 模型体验
@@ -137,7 +139,7 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 #### 模型看到什么
 
-Host 专用分析发送下方固定提示词及一条 user 消息，包含 `original_message`、原消息坐标和显式 `active_mentions`。它不包含普通历史或工具；普通 Session 命令仍由 Agent 所有。
+Host 专用分析发送下方固定提示词及一条 user 消息，包含 `original_message`、原消息坐标和显式 `active_mentions`。它不包含普通历史或工具；普通 Session 命令仍由 Agent 所有。澄清分析发送原始请求、选定待澄清问题、按顺序关联的补充消息及原始 mention 顺序。其独立固定提示词保留全部限制，禁止更改已受理分工，并按原始顺序解析前者/后者。模型输入不包含 Account、计划及修订元数据、补充 Source 凭证和已受理任务 ID；完整私有 manifest 保留核验所需信息。请求与输出预算保持一致。
 
 ##### 分析策略
 

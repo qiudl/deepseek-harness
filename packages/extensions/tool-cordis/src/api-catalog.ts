@@ -1941,8 +1941,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['on ownership/selection change, unsupported capture, preparation failure or cancellation.'],
       },
       {
-        signature: 'async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise< | Readonly<{ kind: \'captured\' snapshot: CollaborationSourceSnapshot prepared: PreparedLlmSnapshotCall analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }> | Readonly<{ kind: \'recovered\'; snapshot: CollaborationSourceSnapshot }> >',
-        description: 'Capture user content under this Profile\'s registry and actual prepared model. Persist before returning the process-local call. Duplicate/restarted input returns only its original snapshot, never a new executable handle or a model request. First capture exposes Host-only analyze: its caller must durably commit the supplied attempt manifest. The Profile bounds calls and rechecks original membership before and after that commit. This Host-only queued operation has no Remote endpoint and grants no cloud authority.',
+        signature: 'async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise< | Readonly<{ kind: \'captured\' snapshot: CollaborationSourceSnapshot prepared: PreparedLlmSnapshotCall analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> analyzeClarification: (input: CollaborationClarificationInput, persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }> | Readonly<{ kind: \'recovered\'; snapshot: CollaborationSourceSnapshot }> >',
+        description: 'Capture user content under this Profile\'s registry and actual prepared model. Persist before returning the process-local call. Duplicate/restarted input returns only its original snapshot, never a new executable handle or a model request. First capture exposes Host-only analyze and analyzeClarification sharing one one-shot call. The caller durably commits the full manifest before dispatch; clarification rereads all original/reply Sources. The Profile bounds calls and rechecks original membership before and after that commit. This Host-only queued operation has no Remote endpoint and grants no cloud authority.',
         parameters: [{ name: 'input', description: 'exact Source coordinates, raw text and trusted classified mentions; no model or commit fields.' }, { name: 'signal', description: 'caller cancellation, combined with the owning Profile lifetime through dispatch.' }],
         returns: 'first durable capture with its one-shot call, or original non-executable recovery.',
         throws: ['on invalid input, unavailable journal, changed ownership/selection, conflict or cancellation.'],
@@ -4778,11 +4778,15 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CollaborationAnalysisManifest',
-    declaration: 'export interface CollaborationAnalysisManifest {\n    readonly prompt_version: \'1\';\n    readonly source: CollaborationSourceSnapshot;\n    readonly request: Omit<GenerateOptions, \'signal\'>;\n}',
+    declaration: 'export type CollaborationAnalysisManifest = Readonly<{\n    source: CollaborationSourceSnapshot;\n    request: Omit<GenerateOptions, \'signal\'>;\n} & ({\n    prompt_version: \'1\';\n} | {\n    prompt_version: \'2\';\n    clarification: CollaborationClarificationInput;\n})>;',
   },
   {
     name: 'CollaborationAnalysisResult',
     declaration: 'export interface CollaborationAnalysisResult {\n    readonly jsonText: string;\n}',
+  },
+  {
+    name: 'CollaborationClarificationInput',
+    declaration: 'export type CollaborationClarificationInput = DeepReadonly<z.infer<typeof schema>>;',
   },
   {
     name: 'CollaborationDeliveryRecord',

@@ -131,6 +131,8 @@ Analysis uses one user message containing original text and explicit mention met
 
 `session.collaborationSources({ sessionId, cursor? })` reads the original Source journal without mutation and returns complete original messages, coordinates and snapshot digests for the current Session, newest first. Each page contains at most eight records and 256 KiB of JSON; its cursor is the last snapshot digest. New Sources do not shift an existing continuation. Changed membership, archive, cancellation and invalid cursors reject without preparing a model, activating an Agent or appending ordinary Session events.
 
+`analyzeClarification` uses the captured reply call and validates detached original/reply snapshots, selected pending items, related prior replies, frozen task IDs and original mention order. It rereads every supplied Source from this Profile before and after committing the complete prompt-version-2 manifest and rechecks current model selection and ownership. Original and reply use the same provider, model, reasoning effort and adapter registration; preparation generations may differ. Both analysis methods share one call and cannot execute twice. Recovery reads either manifest version without rewriting or restoring calls; version-2 dispatch also binds the original plan and revision.
+
 <a id="model-experience"></a>
 
 ## Model Experience
@@ -139,7 +141,7 @@ Analysis uses one user message containing original text and explicit mention met
 
 #### What the model sees
 
-Host-only analysis sends the fixed prompt below and one user message containing `original_message`, original coordinates and explicit `active_mentions`. It includes no ordinary history or tools; ordinary Session commands remain Agent-owned.
+Host-only analysis sends the fixed prompt below and one user message containing `original_message`, original coordinates and explicit `active_mentions`. It includes no ordinary history or tools; ordinary Session commands remain Agent-owned. Clarification analysis sends the original request, selected pending questions, ordered related clarification messages and original mention order. Its separate fixed prompt preserves all restrictions, forbids changing accepted assignments and resolves former/latter against the original order. Model-visible content excludes Account, plan/revision metadata, reply proofs and accepted task IDs; the full private manifest retains them for verification. It uses the same request and output budgets.
 
 ##### Analysis policy
 

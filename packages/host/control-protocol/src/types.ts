@@ -588,10 +588,13 @@ export interface ProfileSourceSnapshotResult extends Omit<ProfileWorkspaceModelS
 /** Parent commands retain no caller-selected model or Account binding digest. */
 export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'prepare'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'capture_reply'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'prepare_clarification'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
 /** Original analysis JSON uses base64url to stay within the existing frame limit after escaping. */
 export type HostCollaborationAnalysisResult =
   | Readonly<{ kind: 'prepared'; preparation: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'reply_source'; capture: HostRemoteSessionJson }>
   | Readonly<{ kind: 'output'; json_base64url: string }>
 /** Main-only analysis in this connection's token-verified Account Profile. */
 export interface ProfileCollaborationAnalysisRequest extends Omit<ProfileSourceSnapshotRequest, 'method' | 'params'> {

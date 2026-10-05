@@ -850,6 +850,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   CollaborationSourceSnapshot: 'Profile-local journal snapshot is owned by packages/api/session-controller/README.md',
   CollaborationSourceCoordinates: 'Private journal read identity is owned by packages/api/session-controller/README.md',
   CollaborationAnalysisManifest: 'Host-only attempt input is owned by packages/api/session-controller/README.md',
+  CollaborationClarificationInput: 'Private original/reply analysis input is owned by packages/api/session-controller/README.md',
   CollaborationAnalysisResult: 'Untrusted analysis JSON is owned by packages/api/session-controller/README.md',
   CollaborationDeliveryRecord: 'Profile-local committed replies are owned by packages/api/session-controller/README.md',
   ProductEvent: 'Desktop event fields are owned by packages/client/product-analytics/README.md and src/events.ts',

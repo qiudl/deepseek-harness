@@ -3,6 +3,8 @@ import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it, vi } from 'vitest'
+import { parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
+import { collaborationJournalDigest } from '../src/collaboration-source-journal.ts'
 import { CollaborationAnalysisRunner } from '../src/collaboration-analysis.ts'
 import type { CollaborationSourceSnapshot } from '../src/collaboration-source-journal.ts'
 
@@ -137,4 +139,41 @@ describe('Source-bound one-shot analysis', () => {
       await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal)).rejects.toThrow('collaboration_analysis_invalid_json')
     } finally { await h.close() }
   })
+})
+
+
+it('analyzes a fixed clarification with a fresh handle, logging both messages and never reassigning an accepted task', async () => {
+  const h = await harness()
+  try {
+    const { source: rawSource, prepared } = await h.prepare()
+    const { host_journal_commit, ...body } = rawSource
+    const source = { ...body, host_journal_commit: { ...host_journal_commit, content_digest: collaborationJournalDigest(body) } }
+    const replyBody = { ...body, source_message_id: 'reply', original_message: '只分析登录接口，保留原限制。', active_mentions: [] }
+    const reply = { ...replyBody, host_journal_commit: { journal_id: 'reply-journal', commit_version: '1', content_digest: collaborationJournalDigest(replyBody) } }
+    const input = parseCollaborationClarificationInput({ plan: { plan_id: 'plan', plan_revision: '3', input_version: '2' },
+      clarification_request_id: 'reply-request', original_snapshot: source, reply_snapshot: reply,
+      original_snapshot_digest: collaborationJournalDigest(source), reply_snapshot_digest: collaborationJournalDigest(reply),
+      pending_items: [{ pending_item_id: 'pending', revision: '1', mention_ids: ['mention'], target: { project_id: '212', agent_id: 'guide' },
+        reason: 'task_ambiguous', question: '分析哪个接口？', source_evidence_spans: [{ source_message_id: 'message', source_revision: '1', start: 0, end: source.original_message.length }] }],
+      frozen_task_ids: ['accepted-task'], mention_order: ['mention'], prior_replies: [],
+    })
+    const commit = persist()
+    commit.mockImplementation(async (manifest) => {
+      expect(h.adapter.requests).toHaveLength(0)
+      expect(manifest.prompt_version).toBe('2')
+      if (manifest.prompt_version !== '2') throw Error('missing clarification manifest')
+      expect(manifest.clarification).toEqual(input)
+      expect(manifest.source).toEqual(source)
+    })
+    await h.runner.runClarification(input, prepared, commit, new AbortController().signal)
+    expect(h.adapter.requests).toHaveLength(1)
+    const request = h.adapter.requests[0]!
+    expect(request.tools).toEqual([])
+    expect(JSON.stringify(request.messages)).toContain('请不要开发')
+    expect(JSON.stringify(request.messages)).toContain('只分析登录接口，保留原限制。')
+    expect(JSON.stringify(request.messages)).not.toContain('accepted-task')
+    expect(request.system).toContain('only the supplied pending items')
+    await expect(h.runner.runClarification(input, prepared, persist(), new AbortController().signal)).rejects.toThrow('collaboration_analysis_call_used')
+    expect(h.adapter.requests).toHaveLength(1)
+  } finally { await h.close() }
 })

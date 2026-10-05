@@ -198,3 +198,5 @@ Web worker 工厂另生成并保留 `DSH_PROFILE_DELIVERY_TOKEN`，供仅父 Hos
 
 
 Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。取消关闭原操作；该方法不校验任务，也不受理 Agent 执行。
+
+相同的当前 Account/Profile 校验覆盖 `capture_reply` 与 `prepare_clarification`。补充捕获、完整输入准备和派发全过程保留 Host 派生的归属摘要；客户端核验各操作对应的不可执行描述或准备结果类别。这两项操作不改变视图租约，不授予云端权限，也不受理任务。

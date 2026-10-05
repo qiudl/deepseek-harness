@@ -7,8 +7,11 @@ import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
+import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { CollaborationAnalysisRunner } from './collaboration-analysis.ts'
 import type { CollaborationAnalysisManifest, CollaborationAnalysisResult } from './collaboration-analysis.ts'
+import { parseCollaborationClarificationInput } from './collaboration-clarification-input.ts'
+import type { CollaborationClarificationInput } from './collaboration-clarification-input.ts'
 import type {} from '@deepseek-ai/dsh-fs'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
@@ -83,13 +86,15 @@ export type * from './types.ts'
 export { ApiSessionNotFound } from './agent.ts'
 export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
-export { openCollaborationSourceJournal, describeCollaborationSource, parseCollaborationSourceSnapshot, collaborationJournalDigest } from './collaboration-source-journal.ts'
+export { openCollaborationSourceJournal, describeCollaborationSource, parseCollaborationSourceInput, parseCollaborationSourceSnapshot, collaborationJournalDigest } from './collaboration-source-journal.ts'
 export type {
   CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal, CollaborationSourceInput,
   CollaborationSourceCoordinates,
 } from './collaboration-source-journal.ts'
 export { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter } from './collaboration-analysis-journal.ts'
 export type { CollaborationAnalysisJournal, CollaborationAnalysisJournalRecord, CollaborationAnalysisDispatchGrant } from './collaboration-analysis-journal.ts'
+export { parseCollaborationClarificationInput, clarificationAnalysisMessage } from './collaboration-clarification-input.ts'
+export type { CollaborationClarificationInput } from './collaboration-clarification-input.ts'
 export { openCollaborationDeliveryJournal, parseCollaborationDeliveryInput, parseCollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
 export type { CollaborationDeliveryJournal, CollaborationDeliveryInput, CollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
 
@@ -404,7 +409,8 @@ export class SessionController extends TypertRemoteService {
    * Capture user content under this Profile's registry and actual prepared model.
    * Persist before returning the process-local call. Duplicate/restarted input returns
    * only its original snapshot, never a new executable handle or a model request. First capture
-   * exposes Host-only analyze: its caller must durably commit the supplied attempt manifest.
+   * exposes Host-only analyze and analyzeClarification sharing one one-shot call. The caller
+   * durably commits the full manifest before dispatch; clarification rereads all original/reply Sources.
    * The Profile bounds calls and rechecks original membership before and after that commit.
    * This Host-only queued operation has no Remote endpoint and grants no cloud authority.
    * @param input - exact Source coordinates, raw text and trusted classified mentions; no model or commit fields.
@@ -417,6 +423,9 @@ export class SessionController extends TypertRemoteService {
       snapshot: CollaborationSourceSnapshot
       prepared: PreparedLlmSnapshotCall
       analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
+        cancellation: AbortSignal) => Promise<CollaborationAnalysisResult>
+      analyzeClarification: (input: CollaborationClarificationInput,
+        persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
         cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }>
     | Readonly<{ kind: 'recovered'; snapshot: CollaborationSourceSnapshot }>
   > {
@@ -478,6 +487,33 @@ export class SessionController extends TypertRemoteService {
             await persist(manifest, signal)
             signal.throwIfAborted()
             await inspectCurrent()
+            signal.throwIfAborted()
+          }, analysisSignal)
+        },
+        analyzeClarification: async (input: CollaborationClarificationInput,
+          persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
+          const clarification = parseCollaborationClarificationInput(input)
+          const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
+          if (!deepEqualJson(clarification.reply_snapshot, snapshot)) throw Error('collaboration_clarification_source_mismatch')
+          const verifySources = async () => {
+            await checkSelection()
+            for (const expected of [clarification.original_snapshot, clarification.reply_snapshot,
+              ...clarification.prior_replies.map(reply => reply.snapshot)]) {
+              const { workspace_id, session_id, source_message_id, source_revision } = expected
+              const actual = await this.readCollaborationSourceSnapshot(
+                { workspace_id, session_id, source_message_id, source_revision }, analysisSignal)
+              if (!deepEqualJson(actual, expected)) throw Error('collaboration_clarification_source_mismatch')
+            }
+            analysisSignal.throwIfAborted()
+            await checkSelection()
+          }
+          await verifySources()
+          return this.collaborationAnalysis.runClarification(clarification, prepared.prepared, async (manifest, signal) => {
+            await verifySources()
+            signal.throwIfAborted()
+            await persist(manifest, signal)
+            signal.throwIfAborted()
+            await verifySources()
             signal.throwIfAborted()
           }, analysisSignal)
         },

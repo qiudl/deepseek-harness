@@ -422,3 +422,17 @@ it('keeps large escaped original output below the Host frame byte budget', async
   expect(result.kind).toBe('output')
   if (result.kind === 'output') expect(Buffer.from(result.json_base64url, 'base64url').toString('utf8')).toBe(text)
 })
+
+it.each(['capture_reply', 'prepare_clarification'] as const)('authorizes %s under the current Account and checks the private worker result kind', async (action) => {
+  const f = await fixture(); await f.grant()
+  const descriptor = { workspace_id: f.challenge.workspace_id, session_id: 'session', source_message_id: 'reply', source_revision: '1', snapshot_digest: 'a'.repeat(64) }
+  f.setAnalysis(async (_profile, command) => {
+    expect(command).toMatchObject({ action })
+    expect(command.binding_key).toMatch(/^[a-f0-9]{64}$/u)
+    return action === 'capture_reply' ? { kind: 'captured', descriptor }
+      : { kind: 'prepared', descriptor, attempt_request_id: f.challenge.request_id, input_manifest_digest: 'b'.repeat(64), source_digest: descriptor.snapshot_digest }
+  })
+  const result = await f.client.collaborationAnalysis({ ...f.account, command: { action, input: {} } })
+  expect(result.kind).toBe(action === 'capture_reply' ? 'reply_source' : 'prepared')
+  await expect(f.client.collaborationAnalysis({ ...f.account, subject: 'wrong', command: { action, input: {} } })).rejects.toThrow()
+})

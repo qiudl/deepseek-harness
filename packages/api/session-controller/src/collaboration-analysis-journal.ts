@@ -5,6 +5,7 @@ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import { describeCollaborationSource, parseCollaborationSourceSnapshot } from './collaboration-source-journal.ts'
+import { clarificationAnalysisMessage, parseCollaborationClarificationInput } from './collaboration-clarification-input.ts'
 import type { CollaborationAnalysisManifest } from './collaboration-analysis.ts'
 
 const id = z.string().regex(/^[\x21-\x7e]{1,256}$/u)
@@ -38,9 +39,12 @@ function valid(record: CollaborationAnalysisJournalRecord): boolean {
     const parsed: unknown = JSON.parse(record.manifest_json)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false
     const manifest = parsed as Record<string, unknown>
-    if (Object.keys(manifest).sort().join(',') !== 'prompt_version,request,source'
-      || manifest.prompt_version !== '1' || canonical(manifest) !== record.manifest_json) return false
+    const clarification = manifest.prompt_version === '2' ? parseCollaborationClarificationInput(manifest.clarification) : undefined
+    if ((manifest.prompt_version !== '1' && manifest.prompt_version !== '2')
+      || Object.keys(manifest).sort().join(',') !== (clarification ? 'clarification,prompt_version,request,source' : 'prompt_version,request,source')
+      || canonical(manifest) !== record.manifest_json) return false
     const source = parseCollaborationSourceSnapshot(manifest.source)
+    if (clarification && canonical(clarification.original_snapshot) !== canonical(source)) return false
     const request = manifest.request as Record<string, unknown> | null
     if (record.source_digest !== describeCollaborationSource(source).snapshot_digest
       || hash(record.manifest_json) !== record.input_manifest_digest || !source.active_mentions.length
@@ -55,11 +59,14 @@ function valid(record: CollaborationAnalysisJournalRecord): boolean {
     const message = request.messages[0] as { role?: unknown; source?: { kind?: unknown }; content?: { type?: unknown; text?: unknown }[] }
     if (message.role !== 'user' || message.source?.kind !== 'user' || message.content?.length !== 1
       || message.content[0]?.type !== 'text' || typeof message.content[0].text !== 'string') return false
-    const expected = { source_message_id: source.source_message_id, source_revision: source.source_revision,
-      original_message: source.original_message, active_mentions: source.active_mentions }
+    const expected: unknown = clarification ? JSON.parse(clarificationAnalysisMessage(clarification))
+      : { source_message_id: source.source_message_id, source_revision: source.source_revision,
+        original_message: source.original_message, active_mentions: source.active_mentions }
     if (canonical(JSON.parse(message.content[0].text)) !== canonical(expected)) return false
     return record.dispatch === undefined || (record.dispatch.attempt_request_id === record.attempt_request_id
-      && record.dispatch.input_manifest_digest === record.input_manifest_digest && record.dispatch.source_digest === record.source_digest)
+      && record.dispatch.input_manifest_digest === record.input_manifest_digest && record.dispatch.source_digest === record.source_digest
+      && (!clarification || (record.dispatch.plan_id === clarification.plan.plan_id
+        && record.dispatch.expected_plan_revision === clarification.plan.plan_revision)))
   } catch { return false } // Invalid persisted JSON is refused; its original file is retained by the domain owner.
 }
 const recordSchema = rawRecordSchema.refine(valid)
@@ -226,7 +233,9 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
           || grant.input_manifest_digest !== stored.input_manifest_digest) throw Error('collaboration_analysis_grant_invalid')
         if (stored.dispatch !== undefined) throw Error('collaboration_analysis_dispatch_used')
         if (Date.parse(grant.lease_expires_at) <= Date.now()) throw Error('collaboration_analysis_grant_expired')
-        return put(deepFreeze({ ...stored, dispatch: grant }))
+        const dispatched = { ...stored, dispatch: grant }
+        if (!recordSchema.safeParse(dispatched).success) throw Error('collaboration_analysis_grant_invalid')
+        return put(deepFreeze(dispatched))
       })
     },
     saveOutput(record, jsonText, signal) {

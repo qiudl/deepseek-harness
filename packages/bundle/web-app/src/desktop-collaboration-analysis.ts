@@ -2,17 +2,20 @@
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type SessionController from '@deepseek-ai/dsh-api-session-controller'
-import { createCollaborationAnalysisWriter, describeCollaborationSource } from '@deepseek-ai/dsh-api-session-controller'
+import { createCollaborationAnalysisWriter, describeCollaborationSource, parseCollaborationClarificationInput, parseCollaborationSourceInput } from '@deepseek-ai/dsh-api-session-controller'
 import type {
   CollaborationAnalysisJournal,
   CollaborationAnalysisJournalRecord,
   CollaborationAnalysisDispatchGrant,
   CollaborationSourceInput,
+  CollaborationSourceSnapshot,
 } from '@deepseek-ai/dsh-api-session-controller'
 type Capture = SessionController['captureCollaborationSource']
 type Preparation = Readonly<{ kind:'recovered';descriptor:ReturnType<typeof describeCollaborationSource> }>
   | Readonly<{ kind:'prepared';descriptor:ReturnType<typeof describeCollaborationSource> }
     & Pick<CollaborationAnalysisJournalRecord,'attempt_request_id'|'input_manifest_digest'|'source_digest'>>
+type Captured = Extract<Awaited<ReturnType<Capture>>, { kind: 'captured' }>
+type ReplyCapture = Readonly<{ kind: 'captured' | 'recovered'; descriptor: ReturnType<typeof describeCollaborationSource> }>
 type Result = Awaited<ReturnType<Extract<Awaited<ReturnType<Capture>>, { kind: 'captured' }>['analyze']>>
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: unknown) => void
@@ -38,6 +41,7 @@ function wait<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 type Pending = {
   binding: string
   controller: AbortController
+  reply?: Captured
   record?: CollaborationAnalysisJournalRecord
   grant: ReturnType<typeof deferred<CollaborationAnalysisDispatchGrant>>
   result?: Promise<Result>
@@ -70,66 +74,17 @@ export class DesktopCollaborationAnalysis {
    */
   async prepare(input: CollaborationSourceInput, binding: string, signal: AbortSignal): Promise<Preparation> {
     signal.throwIfAborted()
-    this.lifetime.throwIfAborted()
-    if (this.closing) throw Error('collaboration_analysis_closed')
-    if (this.pending.size >= 2) throw Error('collaboration_analysis_busy')
-    const controller = new AbortController(),
-      owned = AbortSignal.any([controller.signal, this.lifetime]),
-      ready = deferred<CollaborationAnalysisJournalRecord>()
-    const cancel = () => {
-      controller.abort(signal.reason)
-    }
+    const p = this.reserve(binding), controller = p.controller,
+      owned = AbortSignal.any([controller.signal, this.lifetime])
+    const cancel = () => { controller.abort(signal.reason) }
     signal.addEventListener('abort', cancel, { once: true })
-    const p: Pending = {
-      binding,
-      controller,
-      grant: deferred<CollaborationAnalysisDispatchGrant>(),
-      started: false,
-      timer: setTimeout(() => {
-        controller.abort(Error('collaboration_analysis_timeout'))
-      }, 30000),
-    }
-    p.timer.unref()
-    this.pending.add(p)
     try {
       const capture = await this.capture(input, owned)
       owned.throwIfAborted()
       if (capture.kind === 'recovered') {
         return Object.freeze({ kind: 'recovered' as const, descriptor: describeCollaborationSource(capture.snapshot) })
       }
-      const journal = await wait((this.journal ??= this.open()), owned)
-      const writer = createCollaborationAnalysisWriter(journal, async (record, active) => {
-        p.record = record
-        ready.resolve(record)
-        return wait(p.grant.promise, active)
-      })
-      p.result = capture
-        .analyze(writer, owned)
-        .then(async (result) => {
-          const record = p.record
-          if (!record) throw Error('collaboration_analysis_input_missing')
-          await journal.saveOutput(record, result.jsonText, owned)
-          owned.throwIfAborted()
-          return result
-        })
-        .finally(() => {
-          controller.abort(Error('collaboration_analysis_finished'))
-          clearTimeout(p.timer)
-          this.pending.delete(p)
-        })
-      void p.result.catch((error: unknown) => {
-        ready.reject(error)
-      })
-      const record = await wait(ready.promise, owned)
-      owned.throwIfAborted()
-      signal.throwIfAborted()
-      return Object.freeze({
-        kind: 'prepared' as const,
-        descriptor: describeCollaborationSource(capture.snapshot),
-        attempt_request_id: record.attempt_request_id,
-        input_manifest_digest: record.input_manifest_digest,
-        source_digest: record.source_digest,
-      })
+      return await this.begin(p, capture.snapshot, (writer, active) => capture.analyze(writer, active), signal)
     } catch (error) {
       controller.abort(error)
       throw error
@@ -140,6 +95,114 @@ export class DesktopCollaborationAnalysis {
         this.pending.delete(p)
         controller.abort(Error('collaboration_analysis_preparation_finished'))
       }
+    }
+  }
+  private reserve(binding: string): Pending {
+    this.lifetime.throwIfAborted()
+    if (this.closing) throw Error('collaboration_analysis_closed')
+    if (this.pending.size >= 2) throw Error('collaboration_analysis_busy')
+    const controller = new AbortController()
+    const p: Pending = { binding, controller, grant: deferred<CollaborationAnalysisDispatchGrant>(), started: false,
+      timer: setTimeout(() => {
+        controller.abort(Error('collaboration_analysis_timeout'))
+        if (!p.result) this.pending.delete(p)
+      }, 30000) }
+    p.timer.unref(); this.pending.add(p)
+    return p
+  }
+  private async begin(p: Pending, source: CollaborationSourceSnapshot,
+    run: Captured['analyze'], signal: AbortSignal): Promise<Preparation> {
+    const owned = AbortSignal.any([p.controller.signal, this.lifetime]), ready = deferred<CollaborationAnalysisJournalRecord>()
+    const journal = await wait((this.journal ??= this.open()), owned)
+    const writer = createCollaborationAnalysisWriter(journal, async (record, active) => {
+      p.record = record
+      ready.resolve(record)
+      return wait(p.grant.promise, active)
+    })
+    p.result = run(writer, owned)
+      .then(async (result) => {
+        const record = p.record
+        if (!record) throw Error('collaboration_analysis_input_missing')
+        await journal.saveOutput(record, result.jsonText, owned)
+        owned.throwIfAborted()
+        return result
+      })
+      .finally(() => {
+        p.controller.abort(Error('collaboration_analysis_finished'))
+        clearTimeout(p.timer)
+        this.pending.delete(p)
+      })
+    void p.result.catch((error: unknown) => {
+      ready.reject(error)
+    })
+    const record = await wait(ready.promise, owned)
+    owned.throwIfAborted()
+    signal.throwIfAborted()
+    return Object.freeze({
+      kind: 'prepared' as const,
+      descriptor: describeCollaborationSource(source),
+      attempt_request_id: record.attempt_request_id,
+      input_manifest_digest: record.input_manifest_digest,
+      source_digest: record.source_digest,
+    })
+  }
+  /**
+   * Commit a reply Source without analyzing or assigning it; retain only its live prepared call.
+   * @param value - Same-chat raw reply with no active mentions; Profile derives the current model.
+   * @param binding - Current original Account/Host binding digest.
+   * @param signal - Capture request cancellation, detached after acknowledgement.
+   * @returns passive reply descriptor; recovery never supplies a new executable call.
+   */
+  async captureReply(value: CollaborationSourceInput, binding: string, signal: AbortSignal): Promise<ReplyCapture> {
+    signal.throwIfAborted(); this.lifetime.throwIfAborted()
+    if (this.closing) throw Error('collaboration_analysis_closed')
+    const input = parseCollaborationSourceInput(value)
+    if (input.active_mentions.length) throw Error('collaboration_clarification_new_mention')
+    const existing = [...this.pending].find(p => p.reply && p.binding === binding
+      && p.reply.snapshot.workspace_id === input.workspace_id && p.reply.snapshot.session_id === input.session_id
+      && p.reply.snapshot.source_message_id === input.source_message_id && p.reply.snapshot.source_revision === input.source_revision)
+    if (existing) {
+      const captured = await this.capture(input, AbortSignal.any([signal, this.lifetime, existing.controller.signal]))
+      if (captured.kind !== 'recovered') throw Error('collaboration_analysis_preparation_unavailable')
+      signal.throwIfAborted(); this.lifetime.throwIfAborted(); existing.controller.signal.throwIfAborted()
+      return Object.freeze({ kind: 'recovered', descriptor: describeCollaborationSource(captured.snapshot) })
+    }
+    const p = this.reserve(binding), cancel = () => { p.controller.abort(signal.reason) }
+    signal.addEventListener('abort', cancel, { once: true })
+    try {
+      const captured = await this.capture(input, AbortSignal.any([p.controller.signal, this.lifetime]))
+      p.controller.signal.throwIfAborted(); this.lifetime.throwIfAborted(); signal.throwIfAborted()
+      if (captured.kind === 'captured') p.reply = captured
+      return Object.freeze({ kind: captured.kind, descriptor: describeCollaborationSource(captured.snapshot) })
+    } catch (error) { p.controller.abort(error); throw error }
+    finally {
+      signal.removeEventListener('abort', cancel)
+      if (!p.reply) { clearTimeout(p.timer); this.pending.delete(p); p.controller.abort() }
+    }
+  }
+  /**
+   * Commit a complete clarification input using this worker's retained reply call, then wait for a new grant.
+   * @param value - Trusted coordinator's queued original/reply snapshots and selected pending identities.
+   * @param binding - Same current Account/Host binding used at reply capture.
+   * @param signal - Preparation cancellation; detached only after the full input acknowledgement.
+   * @returns original Source descriptor and durable new attempt identity, without task admission.
+   */
+  async prepareClarification(value: unknown, binding: string, signal: AbortSignal): Promise<Preparation> {
+    signal.throwIfAborted(); this.lifetime.throwIfAborted()
+    const input = parseCollaborationClarificationInput(value)
+    const p = [...this.pending].find(item => item.reply && item.binding === binding
+      && describeCollaborationSource(item.reply.snapshot).snapshot_digest === input.reply_snapshot_digest)
+    if (this.closing || !p?.reply || p.controller.signal.aborted) throw Error('collaboration_analysis_preparation_unavailable')
+    const captured = p.reply
+    delete p.reply // Reserve this capability synchronously before the first asynchronous write.
+    const cancel = () => { p.controller.abort(signal.reason) }
+    signal.addEventListener('abort', cancel, { once: true })
+    try {
+      return await this.begin(p, input.original_snapshot, (writer, active) => captured.analyzeClarification(input, writer, active), signal)
+    } catch (error) { p.controller.abort(error); throw error }
+    finally {
+      signal.removeEventListener('abort', cancel)
+      if (!p.result) { clearTimeout(p.timer); this.pending.delete(p); p.controller.abort() }
     }
   }
   /**
@@ -248,7 +311,7 @@ export async function handleDesktopCollaborationAnalysisRequest(
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw Error('invalid')
       row = parsed as Record<string, unknown>
       const keys =
-        row.action === 'prepare'
+        (row.action === 'prepare' || row.action === 'capture_reply' || row.action === 'prepare_clarification')
           ? ['action', 'binding_key', 'input']
           : row.action === 'dispatch'
             ? ['action', 'attempt_request_id', 'binding_key', 'grant']
@@ -271,12 +334,16 @@ export async function handleDesktopCollaborationAnalysisRequest(
       const value =
         row.action === 'prepare'
           ? await owner.prepare(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
-          : await owner.dispatch(
-            row.attempt_request_id as string,
-            row.binding_key,
-            row.grant as CollaborationAnalysisDispatchGrant,
-            controller.signal,
-          )
+          : row.action === 'capture_reply'
+            ? await owner.captureReply(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
+            : row.action === 'prepare_clarification'
+              ? await owner.prepareClarification(row.input, row.binding_key, controller.signal)
+              : await owner.dispatch(
+                row.attempt_request_id as string,
+                row.binding_key,
+                row.grant as CollaborationAnalysisDispatchGrant,
+                controller.signal,
+              )
       controller.signal.throwIfAborted()
       send(200, { value })
     } catch {

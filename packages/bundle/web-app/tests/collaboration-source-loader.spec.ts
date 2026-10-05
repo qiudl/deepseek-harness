@@ -2,7 +2,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest } from '@deepseek-ai/dsh-api-session-controller'
+import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest, parseCollaborationClarificationInput } from '@deepseek-ai/dsh-api-session-controller'
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -117,7 +117,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     const persisted = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {
       tables: { attempts: Record<string, { manifest_json: string; dispatch: { attempt_id: string } }> }
     }
-    const record = Object.values(persisted.tables.attempts)[0]!
+    const record = Object.values(persisted.tables.attempts).find(value => (JSON.parse(value.manifest_json) as { prompt_version: string }).prompt_version === (providerRequests === 2 ? '2' : '1'))!
     expect(record.dispatch.attempt_id).toBe('fixture-attempt')
     const manifest = JSON.parse(record.manifest_json) as {
       prompt_version: string
@@ -346,6 +346,46 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     )
     expect((await postAnalysis(dispatch)).status).toBe(422)
     expect(providerRequests).toBe(1)
+
+    const replyInput = { ...source, source_message_id: 'reply-1', original_message: '只分析这份方案的规则，不修改文件。', active_mentions: [] }
+    const captured = await factory.collaborationAnalysis(origin, 'B'.repeat(43),
+      { action: 'capture_reply', binding_key: 'd'.repeat(64), input: replyInput }, new AbortController().signal, () => false)
+    expect(captured).toMatchObject({ kind: 'captured', descriptor: { source_message_id: 'reply-1' } })
+    expect(providerRequests).toBe(1)
+    const reply = await ctx.sessionController.readCollaborationSourceSnapshot({ workspace_id: source.workspace_id,
+      session_id: source.session_id, source_message_id: 'reply-1', source_revision: '1' }, new AbortController().signal)
+    expect(reply.model_snapshot.configuration_generation).not.toBe(first.snapshot.model_snapshot.configuration_generation)
+    const clarification = parseCollaborationClarificationInput({ plan: { plan_id: 'fixture-plan', plan_revision: '3', input_version: '2' },
+      clarification_request_id: 'reply-request', original_snapshot: first.snapshot, reply_snapshot: reply,
+      original_snapshot_digest: collaborationJournalDigest(first.snapshot), reply_snapshot_digest: collaborationJournalDigest(reply),
+      pending_items: [{ pending_item_id: 'pending-1', revision: '1', mention_ids: ['mention-1'], target: { project_id: '212', agent_id: 'guide' },
+        reason: 'task_ambiguous', question: '要分析哪个方面？', source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: source.original_message.length }] }],
+      frozen_task_ids: ['accepted-task'], mention_order: ['mention-1'], prior_replies: [] })
+    const fresh = await factory.collaborationAnalysis(origin, 'B'.repeat(43),
+      { action: 'prepare_clarification', binding_key: 'd'.repeat(64), input: JSON.parse(JSON.stringify(clarification)) as HostRemoteSessionJson },
+      new AbortController().signal, () => false) as {
+      kind: string
+      attempt_request_id: string
+      input_manifest_digest: string
+      source_digest: string
+    }
+    expect(fresh.kind).toBe('prepared'); expect(providerRequests).toBe(1)
+    const nextDispatch = { action: 'dispatch', binding_key: 'd'.repeat(64), attempt_request_id: fresh.attempt_request_id,
+      grant: { ...grant, attempt_request_id: fresh.attempt_request_id, input_manifest_digest: fresh.input_manifest_digest,
+        source_digest: fresh.source_digest, expected_plan_revision: '3' } }
+    await factory.collaborationAnalysis(origin, 'B'.repeat(43), nextDispatch, new AbortController().signal, () => false)
+    expect(providerRequests).toBe(2)
+    expect((await postAnalysis(nextDispatch)).status).toBe(422)
+    const records = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {
+      tables: { attempts: Record<string, { manifest_json: string }> } }
+    const manifest = Object.values(records.tables.attempts).map(value => JSON.parse(value.manifest_json) as {
+      prompt_version: string
+      request: { system: string; messages: { content: { text: string }[] }[] } }).find(value => value.prompt_version === '2')!
+    const visible = manifest.request.messages[0]!.content[0]!.text
+    expect(visible).not.toContain('accepted-task'); expect(visible).toContain('不修改文件')
+    await expect(JSON.stringify({ prompt_version: manifest.prompt_version, system: manifest.request.system, input: JSON.parse(visible) as Record<string, unknown> }, null, 2) + '\n')
+      .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-clarification.request.expected.txt'))
+    expect(session.seq).toBe(seq)
   }
 
   if (mode === 'analysis-extension') {
@@ -376,7 +416,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   await expect(factory.readCollaborationSourceSnapshot(origin,token,target,new AbortController().signal,()=>false)).rejects.toThrow()
   expect(session.seq).toBe(seq)
   expect(ctx.agents.get(sessionId)).toBeUndefined()
-  expect(prepared).toHaveBeenCalledTimes(1)
+  expect(prepared).toHaveBeenCalledTimes(mode === 'analysis-profile' ? 2 : 1)
   expect(stream).not.toHaveBeenCalled()
   await ctx.fiber.dispose()
   routes.delete('/v1/messages')

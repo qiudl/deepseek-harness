@@ -15,7 +15,9 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createSessionTestController, testSessionPersistence } from './test-remote.ts'
-import { describeCollaborationSource } from '../src/collaboration-source-journal.ts'
+import { describeCollaborationSource, collaborationJournalDigest } from '../src/collaboration-source-journal.ts'
+import { parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
+import type { CollaborationAnalysisManifest } from '../src/collaboration-analysis.ts'
 
 function deliveryFor(snapshot: Parameters<typeof describeCollaborationSource>[0], answer='原聊天的完整回复') {
   const { snapshot_digest,...source_locator }=describeCollaborationSource(snapshot)
@@ -561,4 +563,75 @@ it.each(['before', 'during'] as const)('refuses Source analysis when original wo
     expect(h.stream).not.toHaveBeenCalled()
     expect(h.resume).not.toHaveBeenCalled()
   } finally { await h.dispose(); await rm(h.root, { recursive: true, force: true }) }
+})
+
+function clarificationInput(original: Parameters<typeof describeCollaborationSource>[0],
+  reply: Parameters<typeof describeCollaborationSource>[0]) {
+  expect(reply.model_snapshot.configuration_generation).not.toBe(original.model_snapshot.configuration_generation)
+  return parseCollaborationClarificationInput({ plan: { plan_id: 'plan', plan_revision: '3', input_version: '2' },
+    clarification_request_id: 'reply-request', original_snapshot: original, reply_snapshot: reply,
+    original_snapshot_digest: collaborationJournalDigest(original), reply_snapshot_digest: collaborationJournalDigest(reply),
+    pending_items: [{ pending_item_id: 'pending', revision: '1', mention_ids: ['mention-1'],
+      target: { project_id: '212', agent_id: 'guide' }, reason: 'task_ambiguous', question: '检查哪些内容？',
+      source_evidence_spans: [{ source_message_id: original.source_message_id, source_revision: original.source_revision,
+        start: 0, end: original.original_message.length }] }], frozen_task_ids: ['accepted-task'], mention_order: ['mention-1'], prior_replies: [] })
+}
+it('analyzes a clarification with the actual reply handle after verifying both local Sources and committing complete input', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  try {
+    const original = await h.controller.captureCollaborationSource(h.source(), signal)
+    const reply = await h.controller.captureCollaborationSource({ ...h.source(), source_message_id: 'reply', original_message: '只检查规则，不修改文件。', active_mentions: [] }, signal)
+    if (reply.kind !== 'captured') throw Error('expected first reply')
+    const sourceBytes = await readFile(h.sourceFile), input = clarificationInput(original.snapshot, reply.snapshot)
+    h.stream.mockImplementation(async function* () {
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: '{"intent":"clarify"}' } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+    const persist = vi.fn(async (manifest: CollaborationAnalysisManifest) => {
+      if (manifest.prompt_version !== '2') throw Error('expected clarification manifest')
+      expect(manifest.prompt_version).toBe('2'); expect(manifest.clarification).toEqual(input)
+      expect(h.stream).not.toHaveBeenCalled()
+    })
+    const result = await reply.analyzeClarification(input, persist, signal)
+    expect(result.jsonText).toBe('{"intent":"clarify"}')
+    expect(persist).toHaveBeenCalledTimes(1); expect(h.stream).toHaveBeenCalledTimes(1)
+    const request = h.stream.mock.calls[0]![0]
+    expect(request.tools).toEqual([]); expect(JSON.stringify(request.messages)).toContain('不修改文件')
+    expect(JSON.stringify(request.messages)).not.toContain('accepted-task')
+    expect(await readFile(h.sourceFile)).toEqual(sourceBytes)
+    expect(h.resume).not.toHaveBeenCalled(); expect(h.ctx.sessions.get(h.sessionId)).toBeUndefined()
+    await expect(reply.analyzeClarification(input, persist, signal)).rejects.toThrow('collaboration_analysis_call_used')
+  } finally { await h.dispose() }
+})
+it('refuses a validly hashed substituted original Source before committing or consuming the reply call', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  try {
+    const original = await h.controller.captureCollaborationSource(h.source(), signal)
+    const reply = await h.controller.captureCollaborationSource({ ...h.source(), source_message_id: 'reply', original_message: '只检查规则。', active_mentions: [] }, signal)
+    if (reply.kind !== 'captured') throw Error('expected first reply')
+    const { host_journal_commit, ...body } = original.snapshot
+    const changed = { ...body, original_message: body.original_message + '并修改所有文件' }
+    const forged = { ...changed, host_journal_commit: { ...host_journal_commit, content_digest: collaborationJournalDigest(changed) } }
+    const persist = vi.fn(async () => {})
+    await expect(reply.analyzeClarification(clarificationInput(forged, reply.snapshot), persist, signal)).rejects.toThrow('collaboration_clarification_source_mismatch')
+    expect(persist).not.toHaveBeenCalled(); expect(h.stream).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+it.each(['membership', 'model'] as const)('refuses clarification dispatch after %s changes during full-input commit', async (mode) => {
+  const h = await harness(), signal = new AbortController().signal
+  const live = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+  live.append('model/selection', { provider: 'fixture', model: 'selected' })
+  try {
+    const original = await h.controller.captureCollaborationSource(h.source(), signal)
+    const reply = await h.controller.captureCollaborationSource({ ...h.source(), source_message_id: 'reply', original_message: '只检查规则。', active_mentions: [] }, signal)
+    if (reply.kind !== 'captured') throw Error('expected first reply')
+    await expect(reply.analyzeClarification(clarificationInput(original.snapshot, reply.snapshot), async () => {
+      if (mode === 'membership') await h.workspace.detachSession(h.sessionId)
+      else {
+        live.append('model/selection', { provider: 'fixture', model: 'changed' })
+      }
+    }, signal)).rejects.toThrow(mode === 'membership' ? 'collaboration_session_workspace_mismatch' : 'collaboration_model_selection_changed')
+    expect(h.stream).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
 })

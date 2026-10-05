@@ -24,3 +24,18 @@ it('refuses malformed preparations and preserves exact Source digest and attempt
   expect(parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation })).toEqual({ kind: 'prepared', preparation })
   for (const row of [ { ...preparation, source_digest: 'c'.repeat(64) }, { ...preparation, extra: true }, { ...preparation, attempt_request_id: 'wrong' } ]) expect(() => parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: row })).toThrow()
 })
+
+it('transports reply capture and bounded clarification inputs as distinct passive and prepared responses', () => {
+  for (const action of ['capture_reply', 'prepare_clarification']) {
+    const command = { action, input: { source_message_id: 'reply' } }
+    expect(parseHostCollaborationAnalysisCommand(command)).toEqual(command)
+    expect(() => parseHostCollaborationAnalysisCommand({ ...command, binding_key: 'a'.repeat(64) })).toThrow()
+    expect(() => parseHostCollaborationAnalysisCommand({ ...command, input: { text: 'a'.repeat(32768) } })).toThrow()
+  }
+  const descriptor = { workspace_id: uid, session_id: 's', source_message_id: 'reply', source_revision: '1', snapshot_digest: 'a'.repeat(64) }
+  for (const kind of ['captured', 'recovered']) {
+    const result = { kind: 'reply_source', capture: { kind, descriptor } }
+    expect(parseHostCollaborationAnalysisResult(result)).toEqual(result)
+    expect(() => parseHostCollaborationAnalysisResult({ ...result, capture: { ...result.capture, attempt_request_id: uid } })).toThrow()
+  }
+})

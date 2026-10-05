@@ -265,3 +265,63 @@ it('closes the output domain even if input domain close reports failure', async 
   await expect(journal.close()).rejects.toThrow('input-close-failed')
   expect(closed).toHaveLength(2)
 })
+
+
+import { clarificationAnalysisMessage, parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
+import { collaborationJournalDigest } from '../src/collaboration-source-journal.ts'
+async function clarificationManifest(facility: DomainFacility) {
+  const m = await manifest(facility)
+  const sources = await openCollaborationSourceJournal(facility)
+  const { host_journal_commit: _commit, ...original } = m.source
+  const reply = await sources.capture({ ...original, source_message_id: 'reply', original_message: '检查原方案的交互，不要开发。', active_mentions: [] }, signal())
+  await sources.close()
+  const clarification = parseCollaborationClarificationInput({ plan: { plan_id: 'plan', plan_revision: '3', input_version: '2' },
+    clarification_request_id: 'reply-request', original_snapshot: m.source, reply_snapshot: reply,
+    original_snapshot_digest: collaborationJournalDigest(m.source), reply_snapshot_digest: collaborationJournalDigest(reply),
+    pending_items: [{ pending_item_id: 'pending', revision: '1', mention_ids: ['mention-1'], target: { project_id: '212', agent_id: 'guide' },
+      reason: 'task_ambiguous', question: '检查哪方面？', source_evidence_spans: [{ source_message_id: m.source.source_message_id, source_revision: '1', start: 0, end: m.source.original_message.length }] }],
+    frozen_task_ids: ['accepted-task'], mention_order: ['mention-1'], prior_replies: [],
+  })
+  return { prompt_version: '2' as const, source: m.source, clarification, request: { ...m.request,
+    messages: [createMessage({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: clarificationAnalysisMessage(clarification) }] })] } }
+}
+it('persists and recovers the complete fixed clarification beside exact legacy manifests without a new call', async () => {
+  const h = await harness(), legacy = await manifest(h.facility), m = await clarificationManifest(h.facility),
+    journal = await openCollaborationAnalysisJournal(h.facility)
+  const before = await journal.prepare(legacy, signal())
+  const record = await journal.prepare(m, signal())
+  expect(record.source_digest).toBe(m.clarification.original_snapshot_digest)
+  expect(record.input_manifest_digest).not.toBe(before.input_manifest_digest)
+  const received = { ...grant(record), expected_plan_revision: '3' }
+  await journal.dispatch(record, received, signal())
+  await journal.saveOutput(record, '{"intent":"clarify","task_candidates":[],"pending_candidates":[]}', signal())
+  await journal.close()
+  const reopened = await openCollaborationAnalysisJournal(h.facility)
+  expect([...reopened.records()]).toHaveLength(2)
+  expect([...reopened.records()].find(value => value.input_manifest_digest === before.input_manifest_digest)).toEqual(before)
+  const saved = [...reopened.records()].find(value => value.input_manifest_digest === record.input_manifest_digest)!
+  expect((JSON.parse(saved.manifest_json) as { clarification: typeof m.clarification }).clarification).toEqual(m.clarification)
+  await expect(createCollaborationAnalysisWriter(reopened, async () => { throw Error('must not claim again') })(m, signal())).rejects.toThrow('dispatch_used')
+  await reopened.close()
+})
+it('clarification manifest refuses a grant for another plan or revision before writing and still accepts the proper grant', async () => {
+  const h = await harness(), m = await clarificationManifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const record = await journal.prepare(m, signal())
+  const path = join(h.root, 'collaboration_analysis_v2.json'), before = await readFile(path, 'utf8')
+  for (const patch of [{ plan_id: 'another' }, { expected_plan_revision: '2' }])
+    await expect(journal.dispatch(record, { ...grant(record), expected_plan_revision: '3', ...patch }, signal())).rejects.toThrow('collaboration_analysis_grant_invalid')
+  expect(await readFile(path, 'utf8')).toBe(before)
+  await journal.dispatch(record, { ...grant(record), expected_plan_revision: '3' }, signal())
+  await journal.close()
+})
+
+
+it('refuses numeric or unknown prompt versions without altering a legacy journal', async () => {
+  const h = await harness(), legacy = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  await journal.prepare(legacy, signal())
+  const path = join(h.root, 'collaboration_analysis_v2.json'), before = await readFile(path, 'utf8')
+  for (const prompt_version of [2, '99'])
+    await expect(journal.prepare({ ...legacy, prompt_version } as never, signal())).rejects.toThrow()
+  expect(await readFile(path, 'utf8')).toBe(before)
+  await journal.close()
+})

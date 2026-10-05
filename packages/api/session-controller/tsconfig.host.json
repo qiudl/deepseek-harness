@@ -24,6 +24,7 @@
     "src/skill-catalog.ts",
     "src/collaboration-source-journal.ts",
     "src/collaboration-analysis.ts",
+    "src/collaboration-clarification-input.ts",
     "src/collaboration-analysis-journal.ts",
     "src/collaboration-delivery-journal.ts"
   ],

@@ -1470,7 +1470,8 @@ export class HostControlAuthority {
           const value = await execute(profileId, { ...command, binding_key: binding }, context.signal)
           if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
           let result: HostCollaborationAnalysisResult
-          if (command.action === 'prepare') result = parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: value })
+          if (command.action === 'prepare' || command.action === 'prepare_clarification') result = parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: value })
+          else if (command.action === 'capture_reply') result = parseHostCollaborationAnalysisResult({ kind: 'reply_source', capture: value })
           else {
             if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).join(',') !== 'jsonText' || !('jsonText' in value) || typeof value.jsonText !== 'string')
               throw new HostAuthorityError('unavailable')
@@ -2505,7 +2506,8 @@ export class UnixHostClient {
     if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected() ||
       peer !== JSON.stringify([this.inspection.installation_id, this.inspection.installation_public_key, this.inspection.host_instance_id, this.inspection.process_nonce])) throw new HostAuthorityError('unavailable')
     const result = parseHostCollaborationAnalysisResult(frame.result)
-    if ((command.action === 'prepare') !== (result.kind === 'prepared')) throw new HostAuthorityError('unavailable')
+    const expectedKind = command.action === 'dispatch' ? 'output' : command.action === 'capture_reply' ? 'reply_source' : 'prepared'
+    if (result.kind !== expectedKind) throw new HostAuthorityError('unavailable')
     return result
   }
 

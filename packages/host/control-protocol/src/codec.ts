@@ -1043,11 +1043,11 @@ export function encodeHostSourceAuthorityPayload(value: HostSourceAuthorityAsser
  */
 export function parseHostCollaborationAnalysisCommand(value: unknown): HostCollaborationAnalysisCommand {
   const row = registrationRecord(value)
-  if (row.action === 'prepare') {
+  if (row.action === 'prepare' || row.action === 'capture_reply' || row.action === 'prepare_clarification') {
     exactKeys(row, ['action', 'input'])
     const input = remoteSessionJson(row.input)
     if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 32768) reject()
-    return { action: 'prepare', input }
+    return { action: row.action, input }
   }
   if (row.action === 'dispatch') {
     exactKeys(row, ['action', 'attempt_request_id', 'grant'])
@@ -1062,6 +1062,14 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
  */
 export function parseHostCollaborationAnalysisResult(value: unknown): HostCollaborationAnalysisResult {
   const row = registrationRecord(value)
+  if (row.kind === 'reply_source') {
+    exactKeys(row, ['kind', 'capture'])
+    const capture = registrationRecord(row.capture)
+    exactKeys(capture, ['kind', 'descriptor'])
+    if (capture.kind !== 'captured' && capture.kind !== 'recovered') reject()
+    const descriptor = parseHostCollaborationSourceDescriptor(capture.descriptor)
+    return { kind: 'reply_source', capture: remoteSessionJson({ kind: capture.kind, descriptor }) }
+  }
   if (row.kind === 'prepared') {
     exactKeys(row, ['kind', 'preparation'])
     const preparation = registrationRecord(row.preparation)
