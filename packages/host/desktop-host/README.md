@@ -49,7 +49,7 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 ## Profile and execution authority
 
-`profile.workspace_model_selection` resolves the Profile from this connection’s token-verified Account binding and rechecks it after reading. The supervisor discards replies from disposed or replaced workers. macOS and Windows startup install the reader; older Hosts omit its capability. A separate random worker token authorizes the private HTTP endpoint, whose complete response is bounded while streaming. The result does not authorize Source registration, planning or task execution.
+`profile.workspace_model_selection` resolves the Profile from this connection’s token-verified Account binding and rechecks it after reading. The supervisor discards replies from disposed or replaced workers. macOS and Windows startup install the reader; older Hosts omit its capability. A separate random worker token authorizes the private HTTP endpoint, whose complete response is bounded while streaming. The 15-second deadline covers both the request and complete response read; completion rechecks cancellation before admitting the result. The result does not authorize Source registration, planning or task execution.
 
 `profile.workspace_authority` uses the same authorized reader to issue an installation-signed membership statement without opening a view, appending a Session event or sending a model request. Its client verifies the exact challenge, current installation/process, expiry and signature. Missing readers omit the capability. The server-side nonce, consumption and Source checks remain separate; see [the protocol](../control-protocol/README.md#challenge-authentication).
 

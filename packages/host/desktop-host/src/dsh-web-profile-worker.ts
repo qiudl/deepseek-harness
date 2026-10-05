@@ -321,11 +321,12 @@ export class DshWebProfileWorkerFactory {
   ): Promise<HostWorkspaceModelSelection> {
     signal.throwIfAborted()
     if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
     const response = await fetch(`${viewOrigin}/internal/desktop-workspace-model-selection`, {
       method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(target), signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+      body: JSON.stringify(target), signal: active,
     })
-    return this.readPrivateResponse(response, signal, signal, stopped, 8192, (bytes) => {
+    return this.readPrivateResponse(response, active, signal, stopped, 8192, (bytes) => {
       const result = parseHostWorkspaceModelSelection(JSON.parse(bytes.toString('utf8')))
       if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
         throw new HostAuthorityError('profile_mismatch')

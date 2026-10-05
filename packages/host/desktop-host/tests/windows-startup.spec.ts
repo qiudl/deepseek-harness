@@ -1,5 +1,7 @@
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
+  parseHostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerFactory } from '../src/types.ts'
 import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-registration.ts'
 import {
@@ -194,6 +196,65 @@ function fixture() {
 }
 
 describe('Windows Desktop Host startup', () => {
+  it('wires Account-authorized collaboration readers and refuses an uncertified worker delivery commit', async () => {
+    const state = fixture(), now = 1_780_000_000_000
+    const target = parseHostCollaborationSourceTarget({ workspace_id: randomUUID(), session_id: 'original',
+      source_message_id: 'message', source_revision: '1' })
+    const descriptor = { ...target, snapshot_digest: 'a'.repeat(64) }
+    const snapshot = { descriptor, snapshot_json: JSON.stringify({ ...target,
+      original_message: '@Guide · Project repair', active_mentions: [], model_snapshot: { provider: 'deepseek', model: 'chat' },
+      host_journal_commit: { journal_id: 'journal', commit_version: '1', content_digest: 'b'.repeat(64) },
+    }) }
+    const inspect = vi.fn(async () => descriptor), read = vi.fn(async () => snapshot)
+    const receive = vi.fn(async () => null)
+    state.createProfileWorker.mockImplementation(async () => ({
+      closeNotifications: vi.fn(), abort: vi.fn(), done: Promise.resolve(),
+      viewOrigin: 'http://127.0.0.1:49152', generation: 1,
+      bootstrapCookie: { name: 'dsh-auth-test', value: 'v1.test.test' },
+      inspectWorkspaceModelSelection: async value => ({ ...value, provider: 'deepseek', model: 'chat' }),
+      inspectCollaborationSource: inspect, readCollaborationSourceSnapshot: read, receiveCollaborationDelivery: receive,
+    }))
+    const application = await startWindowsDesktopHostApplication(state.options, { now: () => now }, state.dependencies)
+    onTestFinished(async () => { await application.close() })
+    const lifetime = new AbortController(), session = state.transportOptions()?.openSession(randomUUID(), lifetime.signal)
+    if (!session) throw Error('missing collaboration control session')
+    onTestFinished(async () => { lifetime.abort(); await session.close() })
+    const client = await UnixHostClient.connectAuthenticatedTransport({
+      trustedInstallationId: state.options.installationId, trustedInstallationPublicKey: state.options.installationPublicKey,
+      trustedExecutableSignatureDigest: state.options.executableSignatureDigest, now: () => now,
+    }, { call: async (frame, signal) => session.handleRequest(frame, signal ?? lifetime.signal),
+      isConnected: () => !lifetime.signal.aborted, close: () => { lifetime.abort() } })
+    onTestFinished(() => { client.close() })
+    const account = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:collaboration',
+      authorityBindingVersion: 1, issuer, subject: accountId }
+    const selection = { ...account, workspace_id: target.workspace_id, session_id: target.session_id }
+    await expect(client.inspectWorkspaceModelSelection(selection)).rejects.toMatchObject({ code: 'unauthorized' })
+    await client.ensureAccountProfile({ ...account, accountAccessToken: accountToken(state.accountPrivateKey, now),
+      keyHandle: 'windows-credential:account', unlockMaterial })
+    await expect(client.inspectWorkspaceModelSelection(selection))
+      .resolves.toEqual({ workspace_id: target.workspace_id, session_id: target.session_id, provider: 'deepseek', model: 'chat' })
+    const challenge = parseHostSourceAuthorityChallenge({ request_id: randomUUID(), challenge_nonce: 'A'.repeat(43),
+      expires_at: now + 1000, audience: 'https://slark.example.test', environment_id: account.authorityEnvironmentId,
+      account_issuer: issuer, account_subject: accountId, ...target, snapshot_digest: descriptor.snapshot_digest, host_epoch: '1' })
+    await expect(client.attestSourceAuthority({ ...account, challenge })).resolves.toMatchObject({ challenge: descriptor })
+    expect(inspect).toHaveBeenCalledOnce()
+    expect(inspect).toHaveBeenCalledWith(target, expect.any(AbortSignal))
+    await expect(client.readCollaborationSourceSnapshot({ ...account, ...target, accountIssuer: issuer, accountSubject: accountId }))
+      .resolves.toEqual(snapshot)
+    expect(read).toHaveBeenCalledWith(target, expect.any(AbortSignal))
+    const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace', projection: {
+      delivery_id: 'delivery', invocation_id: 'invocation', plan_id: 'plan', task_id: 'task', task_revision: '1',
+      source_locator: target, source_snapshot_digest: descriptor.snapshot_digest, execution_state: 'succeeded',
+      invocation_state_version: '2', answer: 'repaired',
+      result_digest: createHash('sha256').update(JSON.stringify({ answer: 'repaired', failure_code: null,
+        state: 'succeeded' })).digest('hex'), target: { project_id: 'project', agent_id: 'agent' },
+      target_display_snapshot: { agent_name: 'Guide', project_name: 'Project' }, delivery_state: 'pending', delivery_state_version: '1',
+    } })
+    await expect(client.receiveCollaborationDelivery({ ...account, capsule })).rejects.toThrow()
+    expect(receive).toHaveBeenCalledOnce()
+    expect(receive).toHaveBeenCalledWith(capsule, expect.any(AbortSignal))
+  })
+
   it('advertises opted-in MCP and commits through the authenticated control session after worker acknowledgement', async () => {
     const state = fixture()
     const application = await startWindowsDesktopHostApplication({ ...state.options, maximumExtensionReceiptBytes: 131072 },
