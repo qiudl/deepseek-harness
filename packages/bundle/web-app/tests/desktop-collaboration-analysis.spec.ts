@@ -388,9 +388,15 @@ it('failed reply capture frees its slot and closed ownership refuses new replies
 
 it('duplicate reply capture refuses an executable capability instead of treating it as recovery', async () => {
   const h = await harness()
+  const retained = Promise.withResolvers<Awaited<ReturnType<SessionController['captureCollaborationSource']>>>()
+  const capture = h.capture.getMockImplementation()!
+  h.capture.mockImplementationOnce(async (input, signal) => {
+    const result = await capture(input, signal)
+    retained.resolve(result)
+    return result
+  })
   await h.owner.captureReply(replyInput(), binding, signal())
-  const captured = await h.capture.mock.results[0]!.value
-  h.capture.mockResolvedValueOnce(captured)
+  h.capture.mockResolvedValueOnce(await retained.promise)
   await expect(h.owner.captureReply(replyInput(), binding, signal()))
     .rejects.toThrow('collaboration_analysis_preparation_unavailable')
   expect((await h.owner.captureReply(replyInput(), binding, signal())).kind).toBe('recovered')
