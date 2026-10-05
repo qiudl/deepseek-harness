@@ -14,6 +14,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
+import type { ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from '../src/desktop-collaboration-analysis.ts'
@@ -273,7 +274,9 @@ it('expires retained reply calls without leaking the preparation slot or restori
 
 async function httpFixture(h: Awaited<ReturnType<typeof harness>>) {
   const token = 'C'.repeat(43)
+  const response = Promise.withResolvers<ServerResponse>()
   const server = createServer((req, res) => {
+    response.resolve(res)
     void handleDesktopCollaborationAnalysisRequest(req, res, token, h.owner)
   })
   await new Promise<void>((resolve, reject) => {
@@ -290,7 +293,7 @@ async function httpFixture(h: Awaited<ReturnType<typeof harness>>) {
   const post = (value: unknown, authorization = `Bearer ${token}`) => fetch(url, {
     method: 'POST', headers: { authorization }, body: JSON.stringify(value),
   })
-  return { url, post, token }
+  return { url, post, token, response: response.promise }
 }
 
 it('private analysis HTTP rejects browser authority and malformed commands without analyzing', async () => {
@@ -411,4 +414,122 @@ it('failed clarification journal opening consumes no model call and releases the
   expect((await h.owner.captureReply({ ...replyInput(), source_message_id: 'next-reply' }, binding, signal())).kind)
     .toBe('captured')
   expect(h.calls()).toBe(0)
+})
+
+it.each(['prepare', 'reply'] as const)('cancels an in-flight %s capture and releases its preparation slot', async (operation) => {
+  const h = await harness()
+  const entered = Promise.withResolvers<AbortSignal>()
+  h.capture.mockImplementationOnce(async (_input, owned) => {
+    entered.resolve(owned)
+    return await new Promise<Awaited<ReturnType<SessionController['captureCollaborationSource']>>>((_resolve, reject) => {
+      owned.addEventListener('abort', () => {
+        reject(owned.reason instanceof Error ? owned.reason : Error('capture cancelled'))
+      }, { once: true })
+    })
+  })
+  const caller = new AbortController()
+  const reason = Error('caller cancelled capture')
+  const work = operation === 'prepare'
+    ? h.owner.prepare(input(), binding, caller.signal)
+    : h.owner.captureReply(replyInput(), binding, caller.signal)
+  const rejected = expect(work).rejects.toBe(reason)
+  const owned = await entered.promise
+  caller.abort(reason)
+  await rejected
+  expect(owned.aborted).toBe(true)
+  expect((await h.owner.captureReply(replyInput(), binding, signal())).kind).toBe('captured')
+  expect(h.calls()).toBe(0)
+})
+
+it('cancels clarification while its journal opens and releases the consumed reply slot', async () => {
+  const h = await harness()
+  await h.capture(input('original'), signal())
+  await h.owner.captureReply(replyInput(), binding, signal())
+  const journal = await h.open()
+  const entered = Promise.withResolvers<undefined>()
+  const opening = Promise.withResolvers<typeof journal>()
+  h.open.mockImplementationOnce(() => { entered.resolve(undefined); return opening.promise })
+  const caller = new AbortController()
+  const reason = Error('caller cancelled clarification')
+  const work = h.owner.prepareClarification(context(h), binding, caller.signal)
+  const rejected = expect(work).rejects.toBe(reason)
+  await entered.promise
+  caller.abort(reason)
+  await rejected
+  opening.resolve(journal)
+  expect((await h.owner.captureReply({ ...replyInput(), source_message_id: 'after-cancel' }, binding, signal())).kind)
+    .toBe('captured')
+  expect(h.calls()).toBe(0)
+})
+
+it('private analysis HTTP disconnect cancels capture without starting an analysis', async () => {
+  const h = await harness(), f = await httpFixture(h)
+  const captured = await h.capture(input(), signal())
+  const entered = Promise.withResolvers<AbortSignal>()
+  const cancelled = Promise.withResolvers<undefined>()
+  h.capture.mockImplementationOnce(async (_input, owned) => {
+    entered.resolve(owned)
+    await new Promise<void>((resolve) => {
+      owned.addEventListener('abort', () => { cancelled.resolve(undefined); resolve() }, { once: true })
+    })
+    return captured
+  })
+  const caller = new AbortController()
+  const request = fetch(f.url, { method: 'POST', headers: { authorization: `Bearer ${f.token}` },
+    body: JSON.stringify({ action: 'prepare', binding_key: binding, input: input() }), signal: caller.signal })
+  const rejected = expect(request).rejects.toThrow()
+  const owned = await entered.promise
+  caller.abort()
+  await rejected
+  await cancelled.promise
+  expect(owned.aborted).toBe(true)
+  expect(h.calls()).toBe(0)
+})
+
+it('a response completed by the transport cannot receive a second acknowledgement or run a model', async () => {
+  const h = await harness(), f = await httpFixture(h)
+  const captured = await h.capture(input(), signal())
+  const entered = Promise.withResolvers<undefined>()
+  const capture = Promise.withResolvers<typeof captured>()
+  const finished = Promise.withResolvers<undefined>()
+  const prepare = h.owner.prepare.bind(h.owner)
+  vi.spyOn(h.owner, 'prepare').mockImplementation(async (...args) => {
+    try { return await prepare(...args) } finally { finished.resolve(undefined) }
+  })
+  h.capture.mockImplementationOnce(() => { entered.resolve(undefined); return capture.promise })
+  const request = f.post({ action: 'prepare', binding_key: binding, input: input() })
+  await entered.promise
+  const response = await f.response
+  response.writeHead(504, { 'cache-control': 'no-store' }).end()
+  expect((await request).status).toBe(504)
+  capture.resolve(captured)
+  await finished.promise
+  expect(response.writableEnded).toBe(true)
+  expect(h.calls()).toBe(0)
+})
+
+it('private analysis HTTP deadline cancels its request even when capture ignores cancellation', async () => {
+  const h = await harness(), f = await httpFixture(h)
+  const captured = await h.capture(input(), signal())
+  const entered = Promise.withResolvers<AbortSignal>()
+  const capture = Promise.withResolvers<typeof captured>()
+  const finished = Promise.withResolvers<undefined>()
+  const prepare = h.owner.prepare.bind(h.owner)
+  vi.spyOn(h.owner, 'prepare').mockImplementation(async (...args) => {
+    entered.resolve(args[2])
+    try { return await prepare(...args) } finally { finished.resolve(undefined) }
+  })
+  h.capture.mockImplementationOnce(() => capture.promise)
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const request = f.post({ action: 'prepare', binding_key: binding, input: input() })
+    const outcome = request.then(response => response.status, () => 0)
+    const requestSignal = await entered.promise
+    await vi.advanceTimersByTimeAsync(35_001)
+    expect(requestSignal.aborted).toBe(true)
+    capture.resolve(captured)
+    await finished.promise
+    expect([0, 422]).toContain(await outcome)
+    expect(h.calls()).toBe(0)
+  } finally { capture.resolve(captured); vi.useRealTimers() }
 })
