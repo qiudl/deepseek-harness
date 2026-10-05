@@ -248,7 +248,7 @@ export class CollaborationResultsModel {
   /**
    * Read the next complete result page for one original message.
    * @param snapshotDigest - Existing original group selected by the view.
-   * @returns completion of its bounded readonly page, or no operation when unavailable.
+   * @returns completion of its bounded readonly page, or no operation when unavailable; paging stays disabled while reading.
    */
   async loadReplies(snapshotDigest: string): Promise<void> {
     this.bind()
@@ -257,6 +257,7 @@ export class CollaborationResultsModel {
     this.pending = true
     const generation = this.generation, controller = new AbortController()
     this.controller = controller
+    this.publish({ ...this.state, phase: 'loading' })
     try {
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
       let next = await this.results(group.original, signal, generation, group.nextCursor, group.replies)
@@ -265,7 +266,7 @@ export class CollaborationResultsModel {
           next = { original: group.original, replies: [], phase: 'error' }
         }
         if (next.phase === 'ready') this.replyPages.set(snapshotDigest, (this.replyPages.get(snapshotDigest) ?? 1) + 1)
-        this.publish({ ...this.state, groups: this.state.groups.map(item => item === group ? next : item) })
+        this.publish({ ...this.state, phase: 'ready', groups: this.state.groups.map(item => item === group ? next : item) })
       }
     } finally {
       this.finishQuery(controller)

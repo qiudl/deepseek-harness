@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useSyncExternalStore } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { workspaceSnapshot, dockRuntime, dockTranslate } from './fixture-state.client.ts'
 import { ProjectScopeModel } from '../src/client/project-scope.ts'
@@ -11,9 +11,9 @@ import { zh } from '../src/client/locales.ts'
 
 const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
 afterEach(cleanup)
-function fixture(grouped = true, executable = false) {
-  let selected: readonly string[] = [], version = 0
-  const call = vi.fn(async (input: Parameters<NonNullable<WorkspaceBridge['collaborationWorkspace']>>[0]) => {
+function fixture(grouped = true, executable = false, initialSelected: readonly string[] = []) {
+  let selected: readonly string[] = initialSelected, version = 0
+  const call = vi.fn<NonNullable<WorkspaceBridge['collaborationWorkspace']>>(async (input) => {
     const op = input.operation
     if (op.kind === 'apply') { selected = op.selected_project_ids; version++ }
     if (op.kind === 'get' || op.kind === 'apply') return { ok: true as const,
@@ -30,6 +30,7 @@ function fixture(grouped = true, executable = false) {
   const workspaces: WorkspaceSource = { getSnapshot: () => workspaceSnapshot(workspaceId, 'session', grouped),
     subscribe: () => () => undefined }
   const model = new ProjectScopeModel('session' as never, workspaces, () => bridge)
+  onTestFinished(() => { model.dispose() })
   const props: Parameters<typeof ProjectScopeDock>[0] = { ...dockRuntime(),
     useSlarkScope: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
       selector(useSyncExternalStore(model.subscribe, model.getSnapshot)),
@@ -98,4 +99,99 @@ it('save conflict replaces the stale selection, shows recovery copy, and does no
   await waitFor(() => { expect((screen.getByRole<HTMLInputElement>('checkbox', { name: '产品空间' })).checked).toBe(false) })
   expect(f.call.mock.calls.filter(([x]) => x.operation.kind === 'apply')).toHaveLength(1)
   view.unmount(); f.model.dispose()
+})
+
+it('retains unloaded selected spaces, supports deselection and directory paging, and refreshes saved authority', async () => {
+  const f = fixture(true, true, ['one', 'unloaded']), view = render(<ProjectScopeDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const first = await screen.findByRole<HTMLInputElement>('checkbox', { name: '产品空间' })
+  expect(first.checked).toBe(true)
+  expect(screen.getByText(dockTranslate('scope.selectedPending', { count: 1 }))).toBeTruthy()
+  fireEvent.click(first)
+  expect(first.checked).toBe(false)
+  f.call.mockResolvedValueOnce({ ok: true, value: { items: [], next_cursor: 'projects-more' } })
+  await act(async () => { await f.model.loadProjects(true) })
+  expect(screen.queryByText(zh['scope.noProjects'])).toBeNull()
+  fireEvent.click(screen.getByTestId('slark-scope-more-projects'))
+  await screen.findByRole('checkbox', { name: '研发空间' })
+  expect(f.call).toHaveBeenLastCalledWith(expect.objectContaining({ operation: {
+    kind: 'projects', query: { limit: 20, cursor: 'projects-more' },
+  } }))
+  expect(screen.getByRole<HTMLInputElement>('checkbox', { name: '产品空间' }).checked).toBe(false)
+  f.call.mockResolvedValueOnce({ ok: true, value: { items: [], next_cursor: 'agents-more', scope_version: '0' } })
+  await act(async () => { await f.model.loadAgents(true) })
+  fireEvent.click(screen.getByTestId('slark-scope-more-agents'))
+  await screen.findByText('<script>Guide · 产品空间')
+  expect(f.call).toHaveBeenLastCalledWith(expect.objectContaining({ operation: {
+    kind: 'agents', query: { limit: 20, cursor: 'agents-more' },
+  } }))
+  fireEvent.click(screen.getByTestId('slark-scope-refresh'))
+  await waitFor(() => { expect(screen.getByRole<HTMLInputElement>('checkbox', { name: '产品空间' }).checked).toBe(true) })
+  expect(f.model.getSnapshot().scope?.selected_project_ids).toEqual(['one', 'unloaded'])
+  expect(f.call.mock.calls.some(([input]) => input.operation.kind === 'apply')).toBe(false)
+})
+
+it('limits new selections to fifty spaces while allowing deselection and blocks edits during an outstanding save', async () => {
+  const saved = ['one', ...Array.from({ length: 49 }, (_, i) => `unloaded-${i}`)]
+  const f = fixture(true, false, saved), view = render(<ProjectScopeDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const first = await screen.findByRole<HTMLInputElement>('checkbox', { name: '产品空间' })
+  const second = screen.getByRole<HTMLInputElement>('checkbox', { name: '研发空间' })
+  expect(first.disabled).toBe(false); expect(second.disabled).toBe(true)
+  fireEvent.click(first)
+  expect(second.disabled).toBe(false)
+  fireEvent.click(second)
+  const original = f.call.getMockImplementation()
+  if (!original) throw Error('missing scope transport')
+  let release: (() => void) | undefined
+  const held = new Promise<void>((resolve) => { release = resolve })
+  f.call.mockImplementationOnce(async (input) => { const result = await original(input); await held; return result })
+  let pending: Promise<void> | undefined
+  onTestFinished(async () => { release?.(); await pending })
+  await act(async () => { pending = f.model.apply([...saved.filter(id => id !== 'one'), 'two']) })
+  expect(screen.getByText(zh['scope.saving'])).toBeTruthy()
+  expect(first.disabled).toBe(true); expect(second.disabled).toBe(true)
+  for (const id of ['clear', 'cancel', 'apply', 'refresh'])
+    expect(screen.getByTestId<HTMLButtonElement>(`slark-scope-${id}`).disabled).toBe(true)
+  const count = f.call.mock.calls.filter(([input]) => input.operation.kind === 'apply').length
+  fireEvent.click(screen.getByTestId('slark-scope-apply'))
+  expect(f.call.mock.calls.filter(([input]) => input.operation.kind === 'apply')).toHaveLength(count)
+  if (!release || !pending) throw Error('missing pending scope save')
+  await act(async () => { release?.(); await pending })
+  expect(screen.queryByText(zh['scope.saving'])).toBeNull()
+  expect(screen.getByRole<HTMLInputElement>('checkbox', { name: '研发空间' }).checked).toBe(true)
+})
+
+it('shows empty and loading directories without hiding continuation controls or allowing a second page request', async () => {
+  const f = fixture(), view = render(<ProjectScopeDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  await screen.findByRole('checkbox', { name: '产品空间' })
+  f.call.mockResolvedValueOnce({ ok: true, value: { items: [], next_cursor: null } })
+  await act(async () => { await f.model.loadProjects(true) })
+  expect(screen.getByText(zh['scope.noProjects'])).toBeTruthy()
+  for (const kind of ['projects', 'agents'] as const) {
+    f.call.mockResolvedValueOnce({ ok: true, value: { items: [], next_cursor: 'more',
+      ...(kind === 'agents' ? { scope_version: '0' } : {}) } })
+    await act(async () => { if (kind === 'projects') await f.model.loadProjects(true); else await f.model.loadAgents(true) })
+    const original = f.call.getMockImplementation()
+    if (!original) throw Error('missing directory transport')
+    let release: (() => void) | undefined
+    const held = new Promise<void>((resolve) => { release = resolve })
+    f.call.mockImplementationOnce(async (input) => { const result = await original(input); await held; return result })
+    let pending: Promise<void> | undefined
+    onTestFinished(async () => { release?.(); await pending })
+    await act(async () => { pending = kind === 'projects' ? f.model.loadProjects() : f.model.loadAgents() })
+    expect(screen.getByText(zh['scope.loading'])).toBeTruthy()
+    const more = screen.getByTestId<HTMLButtonElement>(`slark-scope-more-${kind}`)
+    expect(more.disabled).toBe(true)
+    const calls = f.call.mock.calls.length
+    fireEvent.click(more)
+    expect(f.call).toHaveBeenCalledTimes(calls)
+    if (!release || !pending) throw Error('missing pending directory page')
+    await act(async () => { release?.(); await pending })
+    expect(screen.queryByText(zh['scope.loading'])).toBeNull()
+  }
 })

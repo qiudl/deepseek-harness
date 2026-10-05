@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { useSyncExternalStore } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { workspaceSnapshot, dockRuntime, dockTranslate } from './fixture-state.client.ts'
 import { CollaborationResultsModel } from '../src/client/collaboration-results.ts'
+import type { CollaborationResultsBridge } from '../src/client/collaboration-results.ts'
 import { CollaborationResultsDock } from '../src/client/CollaborationResultsDock.tsx'
 import { zh } from '../src/client/locales.ts'
 
@@ -14,16 +16,19 @@ function fixture(answer = '完整回复') {
   const item = { delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1', source_locator: source,
     source_snapshot_digest: original.snapshot_digest, execution_state: 'succeeded', invocation_state_version: '2',
     target_display_snapshot: { agent_name: '<script>Guide', project_name: 'Project' }, answer }
-  const read = vi.fn(async () => ({ ok: true as const, value: { deliveries: [item] } }))
-  const bridge = { collaborationScopeAvailable: true, collaborationDeliveries: read }
-  const model = new CollaborationResultsModel('session' as never, { getSnapshot: () => workspaceSnapshot(source.workspace_id), subscribe: () => () => {} },
-    { getSnapshot: () => 1, subscribe: () => () => {} }, async () => ({ ok: true, value: { items: [original] } }),
+  const read = vi.fn<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>(async () => ({ ok: true, value: { deliveries: [item] } }))
+  const bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true, collaborationDeliveries: read }
+  const readSources = vi.fn<ConstructorParameters<typeof CollaborationResultsModel>[3]>(async () =>
+    ({ ok: true, value: { items: [original] } }))
+  const model = new CollaborationResultsModel(SessionId('session'), { getSnapshot: () => workspaceSnapshot(source.workspace_id), subscribe: () => () => {} },
+    { getSnapshot: () => 1, subscribe: () => () => {} }, readSources,
     () => bridge)
+  onTestFinished(() => { model.dispose() })
   const props: Parameters<typeof CollaborationResultsDock>[0] = { ...dockRuntime(),
     useSlarkResults: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
       selector(useSyncExternalStore(model.subscribe, model.getSnapshot)), loadSources: () => model.loadSources(),
     loadReplies: (id: string) => model.loadReplies(id), t: dockTranslate }
-  return { model, read, props, original, item, bridge }
+  return { model, read, readSources, props, original, item, bridge }
 }
 it('automatically displays the original message and complete plain text result without a task form', async () => {
   const prefix = '<img src=x onerror=alert(1)>\n'
@@ -136,4 +141,87 @@ it('shows a failed status read without retaining a previous planning status', as
     expect(screen.queryByText(zh['task.awaitingResult'])).toBeNull()
     expect(screen.queryByText(zh['task.done'])).toBeNull()
   } finally { view.unmount(); f.model.dispose() }
+})
+
+it('disables paging during a slow result read and appends only that original message', async () => {
+  const f = fixture()
+  f.read.mockResolvedValueOnce({ ok: true, value: { deliveries: [f.item], next_cursor: f.item.delivery_id } })
+  let release: (() => void) | undefined, active: Promise<void> | undefined
+  const held = new Promise<void>((resolve) => { release = resolve })
+  f.props.loadReplies = (digest) => { active = f.model.loadReplies(digest); return active }
+  onTestFinished(async () => { release?.(); await active })
+  const view = render(<CollaborationResultsDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  await screen.findByText('完整回复')
+  f.read.mockImplementationOnce(async () => {
+    await held
+    return { ok: true, value: { deliveries: [{ ...f.item, delivery_id: 'delivery2', answer: '第二个任务回复' }] } }
+  })
+  const before = f.read.mock.calls.length
+  await act(async () => { screen.getByTestId('slark-collaboration-results-more').click() })
+  expect(f.read).toHaveBeenCalledWith({ source, limit: 50, after_delivery_id: f.item.delivery_id })
+  expect(screen.getByTestId<HTMLButtonElement>('slark-collaboration-results-more').disabled).toBe(true)
+  await act(async () => { screen.getByTestId('slark-collaboration-results-more').click() })
+  expect(f.read).toHaveBeenCalledTimes(before + 1)
+  if (!release || !active) throw Error('result read did not start')
+  await act(async () => { release?.(); await active })
+  expect(screen.getByText('第二个任务回复')).toBeTruthy()
+  expect(screen.getByText('完整回复')).toBeTruthy()
+  expect(screen.queryByTestId('slark-collaboration-results-more')).toBeNull()
+  expect(screen.queryByRole('textbox')).toBeNull()
+})
+
+it('loads older messages from the visible Source cursor without a new chat submission', async () => {
+  const f = fixture(), older = { ...f.original, snapshot_digest: 'b'.repeat(64),
+    source: { ...source, source_message_id: 'older' }, original_message: '@Guide · Project 之前的任务' }
+  f.readSources.mockImplementation(async cursor => ({ ok: true,
+    value: cursor ? { items: [older] } : { items: [f.original], next_cursor: f.original.snapshot_digest } }))
+  f.read.mockImplementation(async request => ({ ok: true, value: { deliveries: [{ ...f.item,
+    source_locator: request.source, source_snapshot_digest: request.source.source_message_id === 'older' ? older.snapshot_digest : f.original.snapshot_digest,
+    answer: request.source.source_message_id === 'older' ? '之前的回复' : '完整回复' }] } }))
+  const view = render(<CollaborationResultsDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  await screen.findByText('完整回复')
+  await act(async () => { screen.getByTestId('slark-collaboration-messages-more').click() })
+  expect(f.readSources).toHaveBeenLastCalledWith(f.original.snapshot_digest, expect.any(AbortSignal))
+  expect(screen.getByText(older.original_message)).toBeTruthy()
+  expect(screen.getByText('之前的回复')).toBeTruthy()
+  expect(screen.getByText('完整回复')).toBeTruthy()
+  expect(screen.queryByTestId('slark-collaboration-messages-more')).toBeNull()
+})
+
+it('renders restricted and failed results without restoring private names or a missing project label', async () => {
+  const f = fixture()
+  f.read.mockResolvedValue({ ok: true, value: { deliveries: [
+    { delivery_id: 'restricted', invocation_id: 'invocation', delivery_state: 'restricted', delivery_state_version: '1',
+      source_locator: source, source_snapshot_digest: f.original.snapshot_digest },
+    { ...f.item, delivery_id: 'failed', execution_state: 'failed', target_display_snapshot: { agent_name: 'Guide', project_name: null }, answer: '执行失败说明' },
+  ] } })
+  f.bridge.collaborationPending = async () => ({ ok: true, value: { source,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1', planning_state: 'clarify', route_decision: 'collaboration' },
+    frozen_task_count: 0,
+    pending_items: [{ pending_item_id: 'pending', revision: '1', reason: 'task_ambiguous', question: '请说明任务',
+      mentions: [{ mention_id: 'guide', agent_name: 'Guide', project_name: null }] }] } })
+  const view = render(<CollaborationResultsDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  await screen.findByText(zh['task.restricted'])
+  expect(screen.getByText(zh['task.failed'])).toBeTruthy()
+  expect(screen.getByText('执行失败说明')).toBeTruthy()
+  expect(screen.getAllByText('Guide')).toHaveLength(2)
+  expect(screen.queryByText('<script>Guide · Project')).toBeNull()
+  expect(view.container.textContent).not.toContain(' · null')
+})
+
+it('shows Source and reply transport failures in the original collaboration region', async () => {
+  const f = fixture(), view = render(<CollaborationResultsDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  await screen.findByText('完整回复')
+  f.read.mockResolvedValue({ ok: false, errorCode: 'unavailable' })
+  await act(async () => { await f.model.refresh() })
+  expect(screen.getByText(f.original.original_message)).toBeTruthy()
+  expect(screen.getByText(zh['task.readUnavailable'])).toBeTruthy()
+  f.readSources.mockResolvedValue({ ok: false })
+  await act(async () => { await f.model.refresh() })
+  expect(screen.queryByText(f.original.original_message)).toBeNull()
+  expect(screen.getByText(zh['task.readUnavailable'])).toBeTruthy()
 })
