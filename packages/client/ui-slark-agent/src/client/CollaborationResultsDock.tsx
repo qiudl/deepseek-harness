@@ -28,7 +28,12 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
         <small>{t('task.question')}</small>
         <div className={css.text}>{group.original.original_message}</div>
         {group.phase === 'error' ? <p role="status">{t('task.readUnavailable')}</p>
-          : group.replies.length === 0 && <p role="status">{t('task.awaitingResult')}</p>}
+          : group.replies.length === 0 && !group.pending?.length && <p role="status">{t('task.awaitingResult')}</p>}
+        {group.pendingUnavailable && <p role="status">{t('task.readUnavailable')}</p>}
+        {group.pending?.map(item => <div className={css.reply} key={item.pending_item_id}>
+          <strong>{item.mentions.map(mention => `${mention.agent_name}${mention.project_name === null ? '' : ` · ${mention.project_name}`}`).join(', ')}</strong>
+          <div className={css.text}>{item.question}</div>
+        </div>)}
         {group.replies.map(reply => <div className={css.reply} key={reply.delivery_id}>
           {reply.target_display_snapshot && <strong>{reply.target_display_snapshot.agent_name}
             {reply.target_display_snapshot.project_name !== null && <> · {reply.target_display_snapshot.project_name}</>}</strong>}

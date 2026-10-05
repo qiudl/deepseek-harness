@@ -20,6 +20,8 @@ An explicit scoped chip sends the complete original message and UTF-16 occurrenc
 
 The v2 result area enumerates committed original messages through Native paging, then reads each Source's authorized results through Main. Membership or Connection generation changes clear view data; refresh retains loaded history pages. Restricted responses remove answers and target names, while older delivery versions cannot roll known state backward. Main completes persistence and acknowledgment when the current Host registration is ready; otherwise the result remains pending. The renderer receives no signed receipt, and reply delivery creates no ordinary chat turn.
 
+Plain-text clarification enters the existing trigger pipeline only through an explicit live source opt-in. The Client recovers pending questions from the Profile’s persisted Source feed and Main’s current plan; it never selects the latest request when several remain. The deterministic passive reply identity excludes plan revision, preventing a reload from minting a different Source for the same text and pending items. Main distinguishes a verified committed clarification from task admission, and the Client checks both original and reply coordinates before consuming a recorded reply. A newer plan alone cannot establish that this reply committed.
+
 ## Alternatives considered
 
 Filtering the old assignment list while retaining legacy invocation would let cached chips or another renderer call bypass the new project restriction. The scope mode therefore uses its own current-authority directory and submission path.

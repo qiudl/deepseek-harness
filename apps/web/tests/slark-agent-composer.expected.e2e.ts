@@ -141,3 +141,72 @@ it('saves multiple Slark spaces in the built collaboration area and never invoke
   await expect(observations.join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
     'apps/web/tests/expected/slark-agent-composer/project-scope.expected.txt'))
 })
+
+it('asks a natural question in the built composer and accepts a plain clarification without another @ or a task form', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
+  type Source = { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
+  type Input = Source & { original_message: string; active_mentions: readonly unknown[] }
+  let original: Input | undefined, completed = false
+  const legacy = vi.fn()
+  const submit = vi.fn(async (input: Input) => {
+    original = input
+    return { ok: false, errorCode: 'pending', reconciliationRequired: true }
+  })
+  const clarify = vi.fn(async (input: { source: Source; reply_input: Input }) => {
+    completed = true
+    return { ok: true, value: { source: input.source, submission_state: 'accepted', invocation_id: 'clarified' } }
+  })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true, collaborationExecutionAvailable: true,
+    collaborationWorkspace: async ({ workspace_id, operation }: WorkspaceRequest) => {
+      if (operation.kind === 'get') return { ok: true, value: { workspace_id, version: '1', selected_project_ids: ['product'] } }
+      return { ok: true, value: { items: [{ project_id: 'product', project_name: 'Product', agent_id: 'guide', agent_name: 'Guide',
+        available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' }], next_cursor: null, scope_version: '1' } }
+    },
+    collaborationSubmit: submit, collaborationClarify: clarify,
+    collaborationPending: async ({ source }: { source: Source }) => ({ ok: true, value: { source,
+      plan: { plan_id: 'pending-plan', plan_revision: '3', state_version: '3', input_version: '1',
+        planning_state: completed ? 'ready' : 'clarify', route_decision: 'collaboration' },
+      frozen_task_count: completed ? 1 : 0, pending_items: completed ? [] : [{ pending_item_id: 'pending', revision: '1', reason: 'task_ambiguous',
+        question: 'Which login problem should I check?', mentions: [{ mention_id: 'guide', agent_name: 'Guide', project_name: 'Product' }] }] } }),
+    collaborationDeliveries: async () => ({ ok: true, value: { deliveries: [] } }),
+    enterpriseAgents: legacy, invokeEnterpriseAgent: legacy,
+  })
+  const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'], remote: { workspaceId: workspace } })
+  remote.mock.unary('fileReferences/list', { ok: true, value: [] })
+  remote.mock.unary('sessionReferenceResolver/candidates', { ok: true, value: [] })
+  remote.mock.unary('session/collaborationSources', () => ({ ok: true, value: { items: original ? [{
+    source: { workspace_id: original.workspace_id, session_id: original.session_id,
+      source_message_id: original.source_message_id, source_revision: original.source_revision },
+    snapshot_digest: 'a'.repeat(64), original_message: original.original_message }] : [] } }))
+  const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
+  const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
+  if (!start) throw Error('fixture Workspace action missing')
+  fireEvent.click(start)
+  const input = await waitFor(() => {
+    const element = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
+    if (!element) throw Error('composer missing')
+    return element
+  }, { timeout: 10_000 })
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => '@Gui' } })
+  fireEvent.mouseDown(await screen.findByRole('option', { name: /Guide · Product/ }, { timeout: 10_000 }))
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'please check login' } })
+  await waitFor(() => { expect(input.textContent).toContain('@Guide · Product') })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  const question = await screen.findByText('Guide · Product Which login problem should I check?', { exact: true }, { timeout: 10_000 })
+  await waitFor(() => { expect(input.textContent).toBe('') })
+  const observations = [`question=${question.textContent}`, `original=${original?.original_message}`]
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'Please check the redirect to the home page.' } })
+  await waitFor(() => { expect(input.textContent).toBe('Please check the redirect to the home page.') })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => { expect(clarify).toHaveBeenCalledTimes(1); expect(input.textContent).toBe('') }, { timeout: 10_000 })
+  const reply = clarify.mock.calls[0]![0]
+  expect(reply.source.source_message_id).toBe(original?.source_message_id)
+  expect(reply.reply_input.active_mentions).toEqual([])
+  expect(reply.reply_input.source_message_id).toMatch(/^clarify-[a-f0-9]{64}$/u)
+  expect(legacy).not.toHaveBeenCalled(); expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
+  observations.push(`reply=${reply.reply_input.original_message}`, 'new-active-mentions=0', 'original-submissions=1',
+    'clarification-submissions=1', 'ordinary-model-prompts=0', 'draft=empty')
+  await expect(observations.join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
+    'apps/web/tests/expected/slark-agent-composer/clarification.expected.txt'))
+})

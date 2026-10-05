@@ -35,6 +35,8 @@ A source may implement `openReference(session, reference)` to open a draft refer
 
 Enter hooks normally participate only when their trigger leads the trimmed draft. A source can declare `matchEnterPosition: 'anywhere'` to inspect structured references elsewhere in the sentence; it must still decide whether it owns the submission. Registration order and the first accepted outcome remain unchanged. The composer requests adjudication for drafts containing structured references, while ordinary text keeps its immediate default-send path.
 
+A non-leading Enter source can also supply `matchEnterPlainText(session)` to explicitly request arbitration of ordinary text. The controller samples this synchronous callback before the composer freezes an attempt. Missing or false participation preserves immediate ordinary sends; true participation runs the existing ordered Enter hooks, whose first non-undefined outcome wins. Sources must return undefined for messages they do not own. Controller and source disposal remove participation without a second input pipeline.
+
 -----
 
 <a id="understand-the-implementation"></a>

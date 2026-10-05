@@ -98,6 +98,8 @@ interface CapturedFixture {
 }
 
 export interface AssembledRemoteOptions {
+  /** Explicit first workspace identity for protocols that require UUID coordinates. */
+  readonly workspaceId?: string
   /** Override the schema-resolved Host preference for developer-tool scenarios. */
   readonly developerTools?: boolean
   /** Return the fixture's image-dimension admission error from Session prompt. */
@@ -117,7 +119,8 @@ const fixtureSource = readFileSync(
 export function createAssembledRemote(options: AssembledRemoteOptions = {}): AssembledRemote {
   const fixture = JSON.parse(fixtureSource) as CapturedFixture
   const sessions = [...structuredClone(fixture.sessionList.value.items)]
-  const workspaces = [...structuredClone(fixture.workspace.value.items)]
+  const workspaces = [...structuredClone(fixture.workspace.value.items)].map((workspace, index) =>
+    index === 0 && options.workspaceId !== undefined ? { ...workspace, workspaceId: options.workspaceId } : workspace)
   const records = new Map<string, EventRecord[]>([[
     'fx-alpha',
     structuredClone(fixture.follow.records) as EventRecord[],

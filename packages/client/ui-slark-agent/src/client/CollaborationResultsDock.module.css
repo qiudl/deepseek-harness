@@ -1,7 +1,7 @@
 .panel {
   flex-shrink: 0;
   padding: 12px;
-  border-radius: 12px;
+  border-radius: var(--dsw-radius-md);
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-layer-1);
   box-shadow: var(--dsw-elevation-panel);

@@ -24,7 +24,7 @@ function fixture(answer = '完整回复') {
     selector(useSyncExternalStore(model.subscribe, model.getSnapshot)), loadSources: () => model.loadSources(),
   loadReplies: (id: string) => model.loadReplies(id), t: (key: keyof typeof zh) => zh[key] } as unknown as
     Parameters<typeof CollaborationResultsDock>[0]
-  return { model, read, props, original, item }
+  return { model, read, props, original, item, bridge }
 }
 it('automatically displays the original message and complete plain text result without a task form', async () => {
   const prefix = '<img src=x onerror=alert(1)>\n'
@@ -63,5 +63,21 @@ it('waiting and indeterminate outcomes remain distinct from successful execution
   await act(async () => { await f.model.refresh() })
   expect(screen.getByText(zh['task.indeterminate'])).toBeTruthy()
   expect(screen.queryByText(zh['task.done'])).toBeNull()
+  view.unmount(); f.model.dispose()
+})
+
+it('restores the committed pending question automatically with no task form or accepted label', async () => {
+  const f = fixture()
+  f.read.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  Reflect.set(f.bridge, 'collaborationPending', async () => ({ ok: true, value: { source,
+    plan: { plan_id: 'plan', plan_revision: '3', state_version: '3', input_version: '1', planning_state: 'clarify', route_decision: 'collaboration' },
+    frozen_task_count: 0, pending_items: [{ pending_item_id: 'pending', revision: '1', reason: 'task_ambiguous',
+      question: '<script>请说明哪个登录问题？', mentions: [{ mention_id: 'guide', agent_name: 'Guide', project_name: 'Project' }] }] } }))
+  const view = render(<CollaborationResultsDock {...f.props} />)
+  await screen.findByText('<script>请说明哪个登录问题？')
+  expect(screen.getByText('Guide · Project')).toBeTruthy()
+  expect(screen.queryByText(zh['task.awaitingResult'])).toBeNull()
+  expect(screen.queryByText(zh['task.done'])).toBeNull()
+  expect(view.container.querySelector('script, input, textarea, form')).toBeNull()
   view.unmount(); f.model.dispose()
 })

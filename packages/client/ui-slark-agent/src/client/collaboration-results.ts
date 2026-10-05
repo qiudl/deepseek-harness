@@ -1,4 +1,6 @@
 /** Session-owned readonly collaboration messages/results; view lifetimes never cancel accepted work. */
+import { readCollaborationPending } from './collaboration-dialogue.ts'
+import type { CollaborationDialogueBridge, CollaborationPendingPage } from './collaboration-dialogue.ts'
 import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionCollaborationSourceItem, SessionCollaborationSourcesValue } from '@deepseek-ai/dsh-api-session-controller/types'
@@ -18,7 +20,7 @@ export interface ScopedCollaborationReply {
   readonly answer?: string
 }
 /** Page methods cannot select Account, Host, Computer or authorization proof. */
-export interface CollaborationResultsBridge {
+export interface CollaborationResultsBridge extends CollaborationDialogueBridge {
   readonly collaborationScopeAvailable?: boolean
   collaborationDeliveries?(request: { source: Source; limit: number; after_delivery_id?: string }): Promise<
     { ok: true; value: { deliveries: readonly ScopedCollaborationReply[]; next_cursor?: string } } | { ok: false; errorCode: string }>
@@ -28,6 +30,8 @@ export interface CollaborationResultGroup {
   readonly original: SessionCollaborationSourceItem
   readonly replies: readonly ScopedCollaborationReply[]
   readonly phase: 'ready' | 'loading' | 'error'
+  readonly pending?: CollaborationPendingPage['pending_items']
+  readonly pendingUnavailable?: boolean
   readonly nextCursor?: string
 }
 /** Stable observable value consumed by the injected framework hook. */
@@ -165,7 +169,14 @@ export class CollaborationResultsModel {
         return item
       })]
       if (replies.length > 4096 || bytes(replies) > 16 * 1024 * 1024) throw Error('result_view_budget')
-      return { original, replies, phase: 'ready', ...(page.next_cursor ? { nextCursor: page.next_cursor } : {}) }
+      let pending: CollaborationPendingPage['pending_items'] | undefined, pendingUnavailable = false
+      if (host.collaborationPending) {
+        try { pending = (await readCollaborationPending(host, original.source, signal)).pending_items }
+        catch { pendingUnavailable = true }
+        if (!this.current(generation)) throw Error('obsolete')
+      }
+      return { original, replies, phase: 'ready', ...(pending === undefined ? {} : { pending }),
+        ...(pendingUnavailable ? { pendingUnavailable: true } : {}), ...(page.next_cursor ? { nextCursor: page.next_cursor } : {}) }
     } catch { return { original, replies: [], phase: 'error' } }
   }
   private async query(more: boolean): Promise<void> {

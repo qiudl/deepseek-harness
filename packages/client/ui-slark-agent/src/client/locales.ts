@@ -31,6 +31,8 @@ export const zh = {
 
   'section.agents': 'Slark 企业 Agent',
   'section.scopedAgents': 'Slark Agent',
+  'submit.clarificationRecorded': '已收到补充说明。',
+  'submit.multiplePending': '当前有多个待澄清的请求，请先说明你在回复哪条消息。',
   'submit.unavailable': 'Slark Agent 调用尚未接通，请稍后重试。',
   'submit.single': '每次只能向一个 Slark Agent 发送纯文本问题。',
   'submit.question': '请输入要交给 Agent 的任务或问题。',
@@ -83,6 +85,8 @@ export const en = {
 
   'section.agents': 'Slark enterprise Agents',
   'section.scopedAgents': 'Slark Agents',
+  'submit.clarificationRecorded': 'Clarification recorded.',
+  'submit.multiplePending': 'There are several unresolved requests. Please specify which message you are replying to.',
   'submit.unavailable': 'Slark Agent invocation is unavailable. Try again later.',
   'submit.single': 'Send one text question to one Slark Agent at a time.',
   'submit.question': 'Enter a task or question for the Agent.',

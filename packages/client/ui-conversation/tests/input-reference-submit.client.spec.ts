@@ -82,6 +82,7 @@ describe('reference submission', () => {
       .mockResolvedValueOnce({ kind: 'error', text: 'snapshot unavailable' })
       .mockResolvedValueOnce({ kind: 'success' })
     const inputTriggers = {
+      adjudicatesPlainText: () => false,
       adjudicate: async () => undefined,
       serializeReference,
       track: vi.fn(),
@@ -126,6 +127,7 @@ describe('reference submission', () => {
   it('blocks submission and retains the chip when its owner cannot serialize it', async () => {
     const sink = vi.fn()
     const inputTriggers = {
+      adjudicatesPlainText: () => false,
       adjudicate: async () => undefined,
       serializeReference: () => Promise.reject(new Error('reference codec unavailable')),
       track: vi.fn(),
@@ -276,7 +278,7 @@ describe('submit transaction hardening', () => {
     const lexicon = { getSnapshot: () => new Map(), subscribe: () => () => {} }
     const shell = new SessionInputShell({
       actx: {} as Context,
-      inputTriggers: () => ({ track, lexicon } as unknown as InputTriggerController),
+      inputTriggers: () => ({ track, lexicon, adjudicatesPlainText: () => false } as unknown as InputTriggerController),
       defaultSink: vi.fn(),
       commandAttachments,
     })
@@ -335,6 +337,7 @@ it.each(['handled', 'claim', 'message'] as const)('counts only a message after a
     lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
     track: () => {}, arbitrate: () => 'pass', onSpace: () => false,
     serializeReference: async () => '', openReference: () => false, toggleSource: () => {},
+    adjudicatesPlainText: () => false,
     adjudicate: () => pending.promise,
   }
   const shell = new SessionInputShell({ actx: {} as Context, inputTriggers: () => inputTriggers,
@@ -372,6 +375,7 @@ it('retains occurrence time and Session facts across arbitration and independent
       lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
       track: () => {}, arbitrate: () => 'pass', onSpace: () => false,
       serializeReference: async () => '', openReference: () => false, toggleSource: () => {},
+      adjudicatesPlainText: () => false,
       adjudicate: () => pending.promise,
     }),
     defaultSink: sink,

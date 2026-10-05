@@ -50,7 +50,7 @@ describe('submit-machine: plain × enter', () => {
   it('adjudicates inline references and releases an attempt-bound claim after failure', () => {
     const m = new SubmitMachine(), draft = '请 @Guide 检查'
     const attempt = effectAt(m.dispatch({ type: 'enter', mode: 'queue', draft,
-      adjudicateReferences: true }), 0, 'adjudicate').attempt
+      adjudicateSources: true }), 0, 'adjudicate').attempt
     const claim: CommandClaim = { name: 'slark-agent', token: draft, retainOnFailure: false,
       submit: async () => ({ kind: 'error' }) }
     const fx = m.dispatch({ type: 'adjudicated', attempt, outcome: { claim } })
@@ -59,7 +59,7 @@ describe('submit-machine: plain × enter', () => {
     expect(m.state.phase).toBe('plain')
     expect(m.state.claim).toBeUndefined()
     const retry = m.dispatch({ type: 'enter', mode: 'queue', draft: `${draft}并给出建议`,
-      adjudicateReferences: true })
+      adjudicateSources: true })
     expect(effectAt(retry, 0, 'adjudicate').attempt.seq).toBeGreaterThan(attempt.seq)
   })
 

@@ -17,6 +17,7 @@ import { ProjectScopeDock } from './ProjectScopeDock.tsx'
 import type { ProjectScopeInjected } from './ProjectScopeDock.tsx'
 import { createScopedCollaborationSource, scopedCollaborationClipboard } from './collaboration-source.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from './collaboration-source.ts'
+import type { CollaborationDialogueBridge } from './collaboration-dialogue.ts'
 import { CollaborationResultsModel } from './collaboration-results.ts'
 import type { CollaborationResultsBridge } from './collaboration-results.ts'
 import { CollaborationResultsDock } from './CollaborationResultsDock.tsx'
@@ -36,7 +37,7 @@ interface AgentItem {
   publication_version: number
 }
 
-interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge {
+interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge {
   collaborationScopeAvailable?: boolean
   collaborationExecutionAvailable?: boolean
   collaborationSubmit?(input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse>
@@ -158,6 +159,11 @@ export function apply(ctx: ClientContext): void {
     order: 5,
     showGroupTitle: false,
     matchEnterPosition: 'anywhere',
+    matchEnterPlainText: () => {
+      const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
+      return Boolean(host?.collaborationScopeAvailable && host.collaborationExecutionAvailable
+        && typeof host.collaborationPending === 'function' && typeof host.collaborationClarify === 'function')
+    },
     async candidates(_session, { query, signal, ...options }) {
       const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
       if (host?.collaborationScopeAvailable) {
@@ -194,8 +200,9 @@ export function apply(ctx: ClientContext): void {
       if (!scoped) return undefined
       const state = ctx.conversation.input.for(scoped).state.getSnapshot()
       const matches = state.occurrences.filter(occ => occ.source === 'slark-agent')
-      if (matches.length === 0 || state.draft.trim() !== line) return undefined
+      if (state.draft.trim() !== line) return undefined
       if (window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return scopedSource.matchEnter?.(session, line, signal, envelope)
+      if (matches.length === 0) return undefined
       if (matches.length !== 1 || state.occurrences.length !== 1 || envelope.attachments > 0) {
         throw new Error(t('submit.single'))
       }

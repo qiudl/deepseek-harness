@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
+import { createCollaborationReplyMatcher, readCollaborationPending, collaborationQuestionText } from './collaboration-dialogue.ts'
 import type { zh } from './locales.ts'
 
 interface Reference {
@@ -91,6 +92,7 @@ function workspaceOf(ctx: Context, sessionId: SessionId): string | undefined {
  * @returns a source that submits original text through Main and retains failed drafts without fallback.
  */
 export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typeof zh) => string): InputTriggerSource {
+  const reply = createCollaborationReplyMatcher(ctx, t, workspaceOf)
   return {
     trigger: '@', name: 'slark-agent', matchEnterPosition: 'anywhere',
     async candidates(session, { query, signal }) {
@@ -122,12 +124,13 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
       return { insert: { source: 'slark-agent', ref: JSON.stringify({ ...r, source_id: randomUUID() }),
         label: label(r), clipboardText: `@${label(r)}` } }
     },
-    // oxlint-disable-next-line typescript/require-await -- Capture stays synchronous; failures reject the trigger Promise.
     async matchEnter(session, line, signal, envelope) {
       const scoped = ctx.sessions.scope(session.sessionId)
       if (!scoped) return undefined
       const snapshot = ctx.conversation.input.for(scoped).state.getSnapshot()
       const host = window.__DSH_DESKTOP_HOST__
+      if (!snapshot.occurrences.length) return reply(session, line, signal, envelope)
+      if (!snapshot.occurrences.some(mention => mention.source === 'slark-agent')) return undefined
       if (!host?.collaborationExecutionAvailable || !host.collaborationScopeAvailable || !host.collaborationSubmit) throw Error(t('scope.executorPending'))
       if (snapshot.draft.trim() !== line || snapshot.occurrences.length !== 1 || envelope.attachments > 0) throw Error(t('submit.single'))
       const submit = host.collaborationSubmit.bind(host)
@@ -159,10 +162,22 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
             !available()) return { kind: 'error', text: t('submit.changed') }
           let result: CollaborationSubmissionResponse
           try { result = await submit(original) }
-          catch { return { kind: 'error', text: t('submit.uncertainV2') } }
+          catch { result = { ok: false, errorCode: 'transport_unavailable', reconciliationRequired: true } }
           signal.throwIfAborted()
-          if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== r.workspace_id) return { kind: 'error', text: t('submit.uncertainV2') }
-          if (!result.ok) return { kind: 'error', text: t(result.reconciliationRequired ? 'submit.uncertainV2' : 'submit.unavailableV2') }
+          if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== r.workspace_id || !available()) return { kind: 'error', text: t('submit.uncertainV2') }
+          if (!result.ok) {
+            if (host.collaborationPending) {
+              try {
+                const page = await readCollaborationPending(host, original, signal)
+                if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== r.workspace_id || !available()) return { kind: 'error', text: t('submit.uncertainV2') }
+                if (page.pending_items.length) {
+                  window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
+                  return { kind: 'success', text: collaborationQuestionText(page) }
+                }
+              } catch (error) { if (signal.aborted) throw error }
+            }
+            return { kind: 'error', text: t(result.reconciliationRequired ? 'submit.uncertainV2' : 'submit.unavailableV2') }
+          }
           if (!sameAcceptedSource(result.value, original)) return { kind: 'error', text: t('submit.uncertainV2') }
           window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
           return { kind: 'success', text: t('submit.acceptedV2') }

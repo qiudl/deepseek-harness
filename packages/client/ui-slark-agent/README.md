@@ -28,6 +28,8 @@ The Web bundle mounts this package without extra configuration. When Desktop ena
 
 In the existing single-target mode, type `@` in Slark Desktop, select an Agent under Slark enterprise Agents, and send a plain-text task or question. The selected chip may appear anywhere in the sentence and displays `Agent · Project space`; the candidate description also shows its enterprise. For example, select Guide in the sentence `Please @Guide · qiu-slark check the login problem`. The task strip displays the result in the originating Session and marks unfinished work as background work after 120 seconds.
 
+In scope mode, an unclear request displays its retained natural-language question beside the composer. Reply in the same input without another Agent chip; this continues the original explicitly mentioned target. The Client discovers pending originals from the current Profile’s complete bounded Session feed, then asks Main for each current plan. The collaboration history also restores these questions without requiring a panel action. It refuses to choose among several unresolved requests. A reply identity binds the original Source, plan, pending items and exact text without the changing plan revision, so the same reply keeps its identity after reload. Only a verified Main acceptance or committed-reply response consumes the reply draft; an unknown outcome retains it. New Agent targets still require an explicit chip.
+
 -----
 
 <a id="understand-the-implementation"></a>

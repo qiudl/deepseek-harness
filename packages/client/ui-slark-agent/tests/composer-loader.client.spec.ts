@@ -17,6 +17,7 @@ import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
+import type { CollaborationPendingResponse, DesktopClarificationReplyInput, CollaborationClarificationResponse } from '../src/client/collaboration-dialogue.ts'
 import type { CollaborationResultsInjected } from '../src/client/CollaborationResultsDock.tsx'
 
 const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id: 'agent-1',
@@ -79,6 +80,10 @@ async function bench(collaboration = false) {
         source_message_id: input.source_message_id, source_revision: input.source_revision },
       submission_state: 'accepted', invocation_id: 'invocation-v2' } }
   })
+  const pending = vi.fn(async (input: { source: typeof originals[number]['source'] }): Promise<CollaborationPendingResponse> =>
+    ({ ok: true, value: { source: input.source, plan: null, pending_items: [], frozen_task_count: 0 } }))
+  const clarify = vi.fn(async (input: DesktopClarificationReplyInput): Promise<CollaborationClarificationResponse> =>
+    ({ ok: true, value: { source: { ...input.source, source_revision: '1' }, submission_state: 'accepted', invocation_id: 'clarified-v2' } }))
   const deliveries = vi.fn(async (input: { source: typeof originals[number]['source'] }) => ({ ok: true, value: { deliveries: [{
     delivery_id: 'delivery-v2', invocation_id: 'invocation-v2', delivery_state: 'pending', delivery_state_version: '1',
     source_locator: input.source, source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded', invocation_state_version: '2',
@@ -93,7 +98,7 @@ async function bench(collaboration = false) {
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {
     collaborationScopeAvailable: collaboration, collaborationExecutionAvailable: collaboration,
     collaborationWorkspace: scopeDirectory, collaborationSubmit: submit,
-    collaborationDeliveries: deliveries,
+    collaborationDeliveries: deliveries, collaborationPending: pending, collaborationClarify: clarify,
     enterpriseAgents: async () => ({ ok: true, invocationAvailable: true, items: [agent] }),
     invokeEnterpriseAgent: invoke,
   })
@@ -144,7 +149,8 @@ async function bench(collaboration = false) {
     const end = prefix.length + 2
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
-  return { ctx, composer, controller, invoke, sink, pick, submit, scopeDirectory, workspace, sourceReads, deliveries }
+  return { ctx, composer, controller, invoke, sink, pick, submit, scopeDirectory, workspace, sourceReads,
+    deliveries, pending, clarify, originals }
 }
 
 it('YAML-loaded result registration receives the real composer admission event and reads its original coordinates', async () => {
@@ -441,4 +447,205 @@ it('removes the source on Loader disposal and refuses to serialize its orphaned 
   await vi.waitFor(() => {
     expect(controller.menu.getSnapshot().groups.some(group => group.source === 'slark-agent')).toBe(false)
   })
+})
+
+function pendingPage(source: DesktopCollaborationSourceInput | DesktopClarificationReplyInput['source'], revision = '3'): CollaborationPendingResponse {
+  return { ok: true, value: { source: { workspace_id: source.workspace_id, session_id: source.session_id,
+    source_message_id: source.source_message_id, source_revision: source.source_revision },
+  plan: { plan_id: 'plan-dialogue', plan_revision: revision, state_version: revision, input_version: '1',
+    planning_state: 'clarify', route_decision: 'collaboration' }, frozen_task_count: 0,
+  pending_items: [{ pending_item_id: 'pending-dialogue', revision: '1', reason: 'task_ambiguous',
+    question: '请说明需要检查哪个登录问题？', mentions: [{ mention_id: 'original-mention', agent_name: 'Guide', project_name: '项目空间' }] }] } }
+}
+
+it('asks the committed natural question and routes a plain reply through Main in the YAML-loaded composer', async () => {
+  const f = await bench(true)
+  await f.pick('', '请检查')
+  const original = f.composer.snapshot.draft
+  f.submit.mockImplementation(async (input) => {
+    f.originals.push({ source: { workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision },
+    snapshot_digest: 'a'.repeat(64), original_message: input.original_message })
+    return { ok: false, errorCode: 'pending', reconciliationRequired: true }
+  })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.composer.notices.getSnapshot()?.text).toContain('请说明需要检查哪个登录问题？')
+  expect(f.composer.notices.getSnapshot()?.text).not.toContain('任务已受理')
+  f.composer.setDraft('请检查登录后返回首页的问题')
+  f.composer.submit(); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.clarify).toHaveBeenCalledTimes(1)
+  expect(f.clarify).toHaveBeenCalledWith({ source: f.originals[0]!.source, plan_id: 'plan-dialogue', expected_plan_revision: '3',
+    pending_item_ids: ['pending-dialogue'], reply_input: { workspace_id: f.workspace.id, session_id: 'session-1',
+      source_message_id: f.clarify.mock.calls[0]?.[0].reply_input.source_message_id, source_revision: '1',
+      original_message: '请检查登录后返回首页的问题', active_mentions: [] } })
+  expect(f.clarify.mock.calls[0]?.[0].reply_input.source_message_id).toMatch(/^clarify-[a-f0-9]{64}$/u)
+  expect(f.submit.mock.calls[0]?.[0].original_message).toBe(original)
+  expect(f.submit).toHaveBeenCalledTimes(1)
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('recovers a pending Source after a cold client mount without resubmitting its original or adding a new @', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.composer.setDraft('请检查登录后返回首页的问题')
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.clarify).toHaveBeenCalledTimes(1) })
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.clarify.mock.calls[0]?.[0].source.source_message_id).toBe('prior-source')
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('keeps an uncertain passive reply identity when the plan revision changes', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.clarify.mockResolvedValue({ ok: false, errorCode: 'lost', reconciliationRequired: true })
+  const draft = '请检查登录问题'
+  f.composer.setDraft(draft); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  const first = f.clarify.mock.calls[0]![0]
+  f.pending.mockImplementation(async input => pendingPage(input.source, '5'))
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.clarify).toHaveBeenCalledTimes(2) })
+  expect(f.clarify.mock.calls[1]![0].reply_input).toEqual(first.reply_input)
+  expect(f.composer.snapshot.draft).toBe(draft); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('does not silently choose among multiple original pending requests', async () => {
+  const f = await bench(true)
+  for (const id of ['first', 'second']) f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: id, source_revision: '1' },
+    snapshot_digest: (id === 'first' ? 'a' : 'b').repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.composer.setDraft('检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('检查登录问题')
+  expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('uses the same durable reply identity after a second cold mount and a newer plan revision', async () => {
+  const requests: DesktopClarificationReplyInput[] = []
+  for (const revision of ['3', '5']) {
+    const f = await bench(true)
+    f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+      snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+    f.pending.mockImplementation(async input => pendingPage(input.source, revision))
+    f.composer.setDraft('请检查登录问题'); f.composer.submit()
+    await vi.waitFor(() => { expect(f.clarify).toHaveBeenCalledTimes(1) })
+    await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+    requests.push(f.clarify.mock.calls[0]![0])
+    f.composer.dispose(); await f.ctx.fiber.dispose()
+  }
+  expect(requests[0]!.reply_input).toEqual(requests[1]!.reply_input)
+  expect(requests.map(request => request.expected_plan_revision)).toEqual(['3', '5'])
+})
+
+it('consumes only a committed passive reply and shows the remaining natural question', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.clarify.mockImplementation(async input => ({ ok: true, value: { source: input.source,
+    submission_state: 'clarification_recorded', reply_source: input.reply_input } }))
+  f.composer.setDraft('还没想好'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.composer.notices.getSnapshot()?.text).toContain('请说明需要检查哪个登录问题？')
+  expect(f.composer.notices.getSnapshot()?.text).not.toContain('任务已受理')
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('does not consume an uncertain passive reply because another window advanced the plan', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.clarify.mockImplementation(async () => {
+    f.pending.mockImplementation(async input => pendingPage(input.source, '5'))
+    return { ok: false, errorCode: 'lost', reconciliationRequired: true }
+  })
+  f.composer.setDraft('检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('检查登录问题')
+  expect(f.pending).toHaveBeenCalledTimes(1); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['workspace', 'archive', 'bridge'] as const)('refuses passive reply discovery after %s changes', async (change) => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  let finish: (response: CollaborationPendingResponse) => void = () => { throw Error('not started') }
+  f.pending.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+  f.composer.setDraft('检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.pending).toHaveBeenCalledTimes(1) })
+  if (change === 'workspace') f.workspace.id = '48c7c5cb-38fc-466f-9d92-89cc49f84051'
+  else if (change === 'archive') f.workspace.archived = true
+  else Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  finish(pendingPage(f.originals[0]!.source))
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('检查登录问题')
+  expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('releases in-flight passive discovery when its YAML source is unloaded', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  let finish: (response: CollaborationPendingResponse) => void = () => { throw Error('not started') }
+  f.pending.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+  f.composer.setDraft('检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.pending).toHaveBeenCalledTimes(1) })
+  const entry = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  await entry!.fiber!.dispose()
+  finish(pendingPage(f.originals[0]!.source))
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('检查登录问题')
+  expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('never treats frozen tasks as accepted and passes ordinary chat when there is no pending request', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => ({ ok: true, value: { source: input.source,
+    plan: { plan_id: 'ready-plan', plan_revision: '3', state_version: '3', input_version: '1', planning_state: 'ready', route_decision: 'collaboration' },
+    pending_items: [], frozen_task_count: 1 } }))
+  f.composer.setDraft('普通聊天'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.sink).toHaveBeenCalledTimes(1) })
+  expect(f.clarify).not.toHaveBeenCalled(); expect(f.submit).not.toHaveBeenCalled()
+})
+
+it('retains a plain reply when Main records a different reply identity', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.clarify.mockImplementation(async input => ({ ok: true, value: { source: input.source,
+    submission_state: 'clarification_recorded', reply_source: { ...input.reply_input, source_message_id: 'different-reply' } } }))
+  f.composer.setDraft('检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('检查登录问题')
+  expect(f.clarify).toHaveBeenCalledTimes(1); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('retains a recorded reply after ownership changes while reading its remaining question', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior-source', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  let finish: (response: CollaborationPendingResponse) => void = () => { throw Error('not started') }
+  f.pending.mockImplementationOnce(async input => pendingPage(input.source))
+    .mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+  f.clarify.mockImplementation(async input => ({ ok: true, value: { source: input.source,
+    submission_state: 'clarification_recorded', reply_source: input.reply_input } }))
+  f.composer.setDraft('检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.pending).toHaveBeenCalledTimes(2) })
+  f.workspace.archived = true
+  finish(pendingPage(f.originals[0]!.source))
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('检查登录问题')
+  expect(f.clarify).toHaveBeenCalledTimes(1); expect(f.sink).not.toHaveBeenCalled()
 })

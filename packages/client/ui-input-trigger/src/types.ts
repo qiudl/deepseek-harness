@@ -167,6 +167,8 @@ export interface InputTriggerSource {
   readonly showGroupTitle?: boolean
   /** Enter hooks poll leading triggers by default; opt in to handle structured references elsewhere in the draft. */
   readonly matchEnterPosition?: 'leading' | 'anywhere'
+  /** Explicit synchronous opt-in to arbitrate plain text; false preserves immediate ordinary sends. */
+  readonly matchEnterPlainText?: (session: ClientSessionContext) => boolean
   candidates(session: ClientSessionContext, req: CandidateRequest): Promise<readonly InputTriggerCandidate[]>
   /**
    * Synchronous breadcrumb rendered above this source's group, re-polled on

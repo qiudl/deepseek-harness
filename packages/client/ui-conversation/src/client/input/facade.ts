@@ -336,7 +336,8 @@ export class SessionInputShell implements SessionInput {
       return
     }
     this.dispatchRun({ type: 'enter', mode, draft: this.projection.clipboardText, submission,
-      ...(this.projection.occurrences.length > 0 ? { adjudicateReferences: true as const } : {}) })
+      ...(this.projection.occurrences.length > 0 || this.deps.inputTriggers?.()?.adjudicatesPlainText()
+        ? { adjudicateSources: true as const } : {}) })
     const phase = this.snapshot.phase
     if (phase === 'adjudicating' || phase === 'submitting') {
       this.deps.popup?.()?.dismiss()

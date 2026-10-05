@@ -1292,3 +1292,20 @@ describe('reference activation', () => {
     expect(controller.openReference('skill', { ref: '/review' })).toBe(false)
   })
 })
+
+it('arbitrates plain text only while an explicit non-leading source opts in', async () => {
+  let enabled = false
+  const source: InputTriggerSource = { trigger: '@', name: 'plain', candidates: async () => [], onPick: () => undefined,
+    matchEnterPosition: 'anywhere', matchEnterPlainText: () => enabled, matchEnter: async () => undefined }
+  const f = controllerBench([source])
+  await f.root.plugin(() => {})
+  expect(f.controller.adjudicatesPlainText()).toBe(false)
+  enabled = true
+  expect(f.controller.adjudicatesPlainText()).toBe(true)
+  f.sources.splice(0)
+  expect(f.controller.adjudicatesPlainText()).toBe(false)
+  f.sources.push(source)
+  f.controller.dispose()
+  await f.root.fiber.dispose()
+  expect(f.controller.adjudicatesPlainText()).toBe(false)
+})

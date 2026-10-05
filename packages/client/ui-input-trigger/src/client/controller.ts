@@ -373,6 +373,17 @@ export class InputTriggerController {
   }
 
   /**
+   * Decide whether a live source explicitly requests plain-text Enter arbitration.
+   * @returns false without a non-leading Enter owner or after controller disposal.
+   */
+  adjudicatesPlainText(): boolean {
+    if (this.disposed) return false
+    const session = this.project()
+    return this.deps.roster.all().some(source => source.matchEnter !== undefined
+      && source.matchEnterPosition === 'anywhere' && source.matchEnterPlainText?.(session) === true)
+  }
+
+  /**
    * Enter last adjudication: polls sources' matchEnter in registration
    * order, first non-undefined wins. The outcome returns to the caller (the
    * input machine applies it inside the same submit attempt — no event).
