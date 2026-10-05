@@ -14,6 +14,82 @@ const EXPECTED = join(process.cwd(), 'apps/web/tests/expected/slark-agent-compos
 installAssembledBootEnv()
 afterEach(() => { Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
 
+it('sends two scoped Agents from the built composer as one original message without opening a task form', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
+  type Source = { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
+  type Input = Source & { original_message: string
+    active_mentions: readonly {
+      mention_id: string
+      source_span: { source_message_id: string; source_revision: string; start: number; end: number }
+      display_snapshot: { agent_name: string; project_name: string }
+      binding: { kind: string; target: { project_id: string; agent_id: string }; capability_snapshot: string }
+    }[] }
+  const legacy = vi.fn()
+  const submit = vi.fn(async (input: Input) => ({ ok: true, value: {
+    source: { workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision },
+    submission_state: 'accepted', invocation_id: 'batch-accepted',
+  } }))
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true, collaborationExecutionAvailable: true,
+    collaborationWorkspace: async ({ workspace_id, operation }: WorkspaceRequest) => {
+      if (operation.kind === 'get') return { ok: true,
+        value: { workspace_id, version: '1', selected_project_ids: ['product', 'engineering'] } }
+      return { ok: true, value: { items: [
+        { project_id: 'product', project_name: 'Product', agent_id: 'guide', agent_name: 'Guide',
+          available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
+        { project_id: 'engineering', project_name: 'Engineering', agent_id: 'tester', agent_name: 'Tester',
+          available: true, capability_snapshot: 'b'.repeat(64), reason_code: 'ready' },
+      ], next_cursor: null, scope_version: '1' } }
+    },
+    collaborationSubmit: submit,
+    collaborationDeliveries: async () => ({ ok: true, value: { deliveries: [] } }),
+    enterpriseAgents: legacy, invokeEnterpriseAgent: legacy,
+  })
+  const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'], remote: { workspaceId: workspace } })
+  remote.mock.unary('fileReferences/list', { ok: true, value: [] })
+  remote.mock.unary('sessionReferenceResolver/candidates', { ok: true, value: [] })
+  remote.mock.unary('session/collaborationSources', { ok: true, value: { items: [] } })
+  const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
+  const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
+  if (!start) throw Error('fixture Workspace action missing')
+  fireEvent.click(start)
+  const input = await waitFor(() => {
+    const element = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
+    if (!element) throw Error('composer missing')
+    return element
+  }, { timeout: 10_000 })
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => '@Gui' } })
+  fireEvent.mouseDown(await screen.findByRole('option', { name: /Guide · Product/ }, { timeout: 10_000 }))
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'check login; @Tes' } })
+  fireEvent.mouseDown(await screen.findByRole('option', { name: /Tester · Engineering/ }, { timeout: 10_000 }))
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'test the redirect' } })
+  const original = '@Guide · Product check login; @Tester · Engineering test the redirect'
+  await waitFor(() => { expect(input.textContent).toBe(original) })
+  expect(input.querySelectorAll('[data-composer-chip="slark-agent"]')).toHaveLength(2)
+  fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => { expect(submit).toHaveBeenCalledTimes(1); expect(input.textContent).toBe('') }, { timeout: 10_000 })
+  const sent = submit.mock.calls[0]?.[0]
+  if (!sent) throw Error('original submission missing')
+  expect(sent.original_message).toBe(original)
+  expect(sent.workspace_id).toBe(workspace)
+  expect(sent.active_mentions).toHaveLength(2)
+  expect(new Set(sent.active_mentions.map(mention => mention.mention_id)).size).toBe(2)
+  for (const mention of sent.active_mentions) {
+    expect(mention.source_span.source_message_id).toBe(sent.source_message_id)
+    expect(mention.source_span.source_revision).toBe(sent.source_revision)
+    expect(sent.original_message.slice(mention.source_span.start, mention.source_span.end))
+      .toBe(`@${mention.display_snapshot.agent_name} · ${mention.display_snapshot.project_name}`)
+  }
+  expect(legacy).not.toHaveBeenCalled()
+  expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
+  await expect([`original=${sent.original_message}`,
+    ...sent.active_mentions.map(mention => `target=${mention.binding.target.project_id}/${mention.binding.target.agent_id}`),
+    'shared-original-source=true', 'distinct-mention-ids=2', 'original-submissions=1', 'ordinary-model-prompts=0', 'draft=empty',
+  ].join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
+    'apps/web/tests/expected/slark-agent-composer/multiple-agents.expected.txt'))
+})
+
 it('shows the project space, retries an edited inline task, and renders its reply in the originating Session', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id: 'agent-1',

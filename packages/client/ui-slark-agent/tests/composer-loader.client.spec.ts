@@ -17,6 +17,7 @@ import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
+import { createScopedCollaborationSource } from '../src/client/collaboration-source.ts'
 import type { CollaborationPendingResponse, DesktopClarificationReplyInput, CollaborationClarificationResponse } from '../src/client/collaboration-dialogue.ts'
 import type { CollaborationResultsInjected } from '../src/client/CollaborationResultsDock.tsx'
 
@@ -153,6 +154,35 @@ async function bench(collaboration = false) {
     deliveries, pending, clarify, originals }
 }
 
+type PickedScopedReference = {
+  kind: 'collaboration-v2'
+  workspace_id: string
+  session_id: string
+  source_id: string
+  original_source_id?: string
+  project_id: string
+  project_name: string
+  agent_id: string
+  agent_name: string
+  capability_snapshot: string
+}
+
+async function appendScoped(f: Awaited<ReturnType<typeof bench>>, index: number,
+  patch: Record<string, unknown> = {}, source = 'slark-agent') {
+  const original = f.composer.snapshot
+  const ref = { ...JSON.parse(original.occurrences[0]!.ref) as PickedScopedReference,
+    source_id: `50000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`,
+    project_id: `project-${index}`, project_name: `空间${index}`,
+    agent_id: `reviewer-${index}`, agent_name: `Reviewer${index}`, ...patch }
+  const end = original.draft.length - original.occurrences.reduce((sum, o) => sum + o.length - 1, 0)
+  const name = `${ref.agent_name} · ${ref.project_name}`
+  expect(f.composer.insertReference({ source, ref: JSON.stringify(ref), label: name, clipboardText: '@' + name },
+    { start: end, end, draftRev: original.draftRev })).toBe(true)
+  const latest = f.composer.snapshot
+  const next = latest.draft.length - latest.occurrences.reduce((sum, o) => sum + o.length - 1, 0)
+  expect(f.composer.insertText('测试接口；', { start: next, end: next, draftRev: latest.draftRev })).toBe(true)
+}
+
 it('YAML-loaded result registration receives the real composer admission event and reads its original coordinates', async () => {
   const f = await bench(true)
   const entries = f.ctx.slots.entries('conversation.input.dock')
@@ -189,6 +219,104 @@ it('sends an explicit scoped Agent from the real composer without opening the co
   expect(scopeDirectory).toHaveBeenCalledWith({ workspace_id: '38c7c5cb-38fc-466f-9d92-89cc49f84051', session_id: 'session-1',
     operation: { kind: 'agents', query: { limit: 20, query: 'Gui' } } })
   expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
+})
+
+it('submits two explicit scoped Agent chips as one original Source without ordinary chat or duplicate sends', async () => {
+  const f = await bench(true)
+  await f.pick('', '检查代码；')
+  const first = f.composer.snapshot.occurrences[0]!
+  const firstRef = JSON.parse(first.ref) as { source_id: string }
+  await appendScoped(f, 2)
+  const original = f.composer.snapshot
+  expect(original.occurrences).toHaveLength(2)
+  f.composer.submit(); f.composer.submit()
+  await vi.waitFor(() => { expect(f.submit).toHaveBeenCalledTimes(1) })
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  const input = f.submit.mock.calls[0]![0]
+  expect(input.original_message).toBe(original.draft)
+  expect(input.source_message_id).toBe(firstRef.source_id)
+  expect(input.active_mentions).toEqual(original.occurrences.map((occurrence) => {
+    const r = JSON.parse(occurrence.ref) as PickedScopedReference
+    return { mention_id: r.source_id,
+      source_span: { source_message_id: firstRef.source_id, source_revision: '1', start: occurrence.offset, end: occurrence.offset + occurrence.length },
+      display_snapshot: { agent_name: r.agent_name, project_name: r.project_name },
+      binding: { kind: 'resolved', target: { project_id: r.project_id, agent_id: r.agent_id }, capability_snapshot: r.capability_snapshot } }
+  }))
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each([10, 11])('bounds a scoped message to ten explicit chips (count %i)', async (count) => {
+  const f = await bench(true)
+  await f.pick('', '检查代码；')
+  for (let index = 2; index <= count; index++) await appendScoped(f, index)
+  const original = f.composer.snapshot.draft
+  f.composer.submit()
+  if (count === 10) {
+    await vi.waitFor(() => { expect(f.submit).toHaveBeenCalledTimes(1) })
+    expect(f.submit.mock.calls[0]![0].active_mentions).toHaveLength(10)
+  } else {
+    await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+    expect(f.submit).not.toHaveBeenCalled()
+    expect(f.composer.snapshot.draft).toBe(original)
+  }
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['duplicate', 'other-workspace', 'other-session', 'other-source', 'mixed'])('refuses a second invalid scoped chip (%s) without local fallback', async (mode) => {
+  const f = await bench(true)
+  await f.pick('', '检查代码；')
+  const r = JSON.parse(f.composer.snapshot.occurrences[0]!.ref) as PickedScopedReference
+  await appendScoped(f, 2, mode === 'duplicate' ? { source_id: r.source_id }
+    : mode === 'other-workspace' ? { workspace_id: '50000000-0000-4000-8000-000000000009' }
+      : mode === 'other-session' ? { session_id: 'other-session' }
+        : mode === 'other-source' ? { original_source_id: '50000000-0000-4000-8000-000000000009' } : {}, mode === 'mixed' ? 'local-ref' : 'slark-agent')
+  const original = f.composer.snapshot.draft
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(original)
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('retains both explicit chips and the same complete Source after an unknown multi-target response', async () => {
+  const f = await bench(true)
+  await f.pick('', '检查代码；')
+  await appendScoped(f, 2)
+  const original = f.composer.snapshot.draft
+  f.submit.mockResolvedValue({ ok: false, errorCode: 'collaboration_submission_unavailable', reconciliationRequired: true })
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(original)
+  expect(f.composer.snapshot.occurrences).toHaveLength(2)
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.submit).toHaveBeenCalledTimes(2) })
+  expect(f.submit.mock.calls[1]![0]).toEqual(f.submit.mock.calls[0]![0])
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('keeps the original Source after removing its first chip from an uncertain multi-target draft', async () => {
+  const f = await bench(true)
+  await f.pick('', '检查代码；')
+  const first = f.composer.snapshot
+  const end = first.draft.length - first.occurrences[0]!.length + 1
+  const { source_id: _source, original_source_id: _original, ...candidate } = JSON.parse(first.occurrences[0]!.ref) as PickedScopedReference
+  const second = createScopedCollaborationSource(f.ctx, key => key).onPick({
+    candidate: { name: 'Guide', label: 'Guide · 项目空间', value: JSON.stringify(candidate) },
+    session: { sessionId: 'session-1' as SessionId }, position: 'inline', via: 'menu', action: 'pick',
+    span: { start: end, end, draftRev: first.draftRev },
+  })
+  if (!second || typeof second !== 'object' || !('insert' in second)) throw Error('second scoped pick unavailable')
+  expect(f.composer.insertReference(second.insert, { start: end, end, draftRev: first.draftRev })).toBe(true)
+  expect(f.composer.snapshot.occurrences).toHaveLength(2)
+  f.submit.mockResolvedValue({ ok: false, errorCode: 'collaboration_submission_unavailable', reconciliationRequired: true })
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  const originalId = f.submit.mock.calls[0]![0].source_message_id
+  expect(f.composer.insertText('', { start: 0, end: 1, draftRev: f.composer.snapshot.draftRev })).toBe(true)
+  expect(f.composer.snapshot.occurrences).toHaveLength(1)
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.submit).toHaveBeenCalledTimes(2) })
+  expect(f.submit.mock.calls[1]![0].source_message_id).toBe(originalId)
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
 })
 
 it('retains an unknown submission and uses the same Source on a deliberate retry or edit', async () => {
