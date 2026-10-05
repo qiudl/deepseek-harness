@@ -12,6 +12,6 @@ export { loadWindowsHostClientWorkerCancellation } from './windows-client-bun-ca
 export { createWindowsLocalProfileStorage } from './windows-local-profile-storage.ts'
 export type { WindowsHostClientOptions, WindowsHostDiscovery } from './windows-host-client.ts'
 export type { ProfileOpenResult } from './types.ts'
-export { canonicalMigrationRecords, migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+export { canonicalMigrationRecords, migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol'
 
 export type { HostExtensionCommand, HostExtensionResponse } from '@deepseek-ai/dsh-host-control-protocol'

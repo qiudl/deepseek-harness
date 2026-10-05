@@ -384,9 +384,12 @@ it('refuses a Source digest or coordinate mismatch from the private worker', asy
   }
 })
 
+function analysisGrant(f:Awaited<ReturnType<typeof fixture>>) {
+  return { attempt_request_id:f.challenge.request_id,plan_id:'plan',expected_plan_revision:'1',attempt_id:'attempt',attempt_fence:'1',source_digest:f.challenge.snapshot_digest,input_manifest_digest:'b'.repeat(64),lease_expires_at:new Date(20000).toISOString(),dispatch_granted:true }
+}
 it('authorizes analysis under the original connection Account and derives its private binding in Host', async () => {
   const f = await fixture()
-  const input = { ...f.account, command: { action: 'dispatch' as const, attempt_request_id: f.challenge.request_id, grant: {} } }
+  const input = { ...f.account, command: { action: 'dispatch' as const, attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) } }
   await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
   await f.grant()
   const a = await f.client.collaborationAnalysis(input)
@@ -401,7 +404,7 @@ it('refuses revoked or changed Profile analysis replies and propagates transport
   const f = await fixture()
   await f.grant()
   f.setAnalysis(async () => { f.host.revokeOwner(f.ownerId); return { jsonText: '{}' } })
-  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: {} } })).rejects.toThrow()
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) } })).rejects.toThrow()
   await f.grant()
   const controller = new AbortController()
   f.setAnalysis(async (_profile, _command, signal) => {
@@ -411,14 +414,14 @@ it('refuses revoked or changed Profile analysis replies and propagates transport
     signal.throwIfAborted()
     return { jsonText: '{}' }
   })
-  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: {} }, signal: controller.signal })).rejects.toThrow()
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) }, signal: controller.signal })).rejects.toThrow()
 })
 it('keeps large escaped original output below the Host frame byte budget', async () => {
   const f = await fixture()
   await f.grant()
   const text = JSON.stringify({ text: '\u0000'.repeat(5459) })
   f.setAnalysis(async () => ({ jsonText: text }))
-  const result = await f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: {} } })
+  const result = await f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) } })
   expect(result.kind).toBe('output')
   if (result.kind === 'output') expect(Buffer.from(result.json_base64url, 'base64url').toString('utf8')).toBe(text)
 })
@@ -435,4 +438,19 @@ it.each(['capture_reply', 'prepare_clarification'] as const)('authorizes %s unde
   const result = await f.client.collaborationAnalysis({ ...f.account, command: { action, input: {} } })
   expect(result.kind).toBe(action === 'capture_reply' ? 'reply_source' : 'prepared')
   await expect(f.client.collaborationAnalysis({ ...f.account, subject: 'wrong', command: { action, input: {} } })).rejects.toThrow()
+})
+
+it('refuses altered signed output, grant or current installation identity after an authenticated Host response',async()=>{
+  for(const mode of ['output','grant','binding','signature'] as const){
+    const f=await fixture();await f.grant()
+    f.alter((frame)=>{
+      if(frame.type!=='result'||frame.method!=='profile.collaboration_analysis'||frame.result.kind!=='output'||!frame.result.analysis_receipt)return frame
+      const result=frame.result,receipt=frame.result.analysis_receipt
+      if(mode==='output')return { ...frame,result:{ ...result,json_base64url:Buffer.from('{}').toString('base64url') } }
+      if(mode==='grant')return { ...frame,result:{ ...result,analysis_receipt:{ ...receipt,dispatch:{ ...receipt.dispatch,plan_id:'another' } } } }
+      if(mode==='binding')return { ...frame,result:{ ...result,analysis_receipt:{ ...receipt,authority_binding_version:2 } } }
+      return { ...frame,result:{ ...result,analysis_receipt:{ ...receipt,signature:'A'.repeat(86) } } }
+    })
+    await expect(f.client.collaborationAnalysis({ ...f.account,command:{ action:'dispatch',attempt_request_id:f.challenge.request_id,grant:analysisGrant(f) } })).rejects.toThrow()
+  }
 })

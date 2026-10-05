@@ -1,3 +1,4 @@
+import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
 import type {
   ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
@@ -1084,12 +1085,13 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
       attempt_request_id: uuid(preparation.attempt_request_id),
       input_manifest_digest: digest(preparation.input_manifest_digest), source_digest: descriptor.snapshot_digest }) }
   }
-  exactKeys(row, ['kind', 'json_base64url'])
+  const attested = Object.hasOwn(row, 'analysis_receipt')
+  exactKeys(row, ['kind', 'json_base64url', ...(attested ? ['analysis_receipt'] : [])])
   if (row.kind !== 'output' || typeof row.json_base64url !== 'string' || row.json_base64url.length > 43691 || !/^[A-Za-z0-9_-]+$/u.test(row.json_base64url)) reject()
   const bytes = Buffer.from(row.json_base64url, 'base64url')
   if (bytes.byteLength > 32768 || bytes.toString('base64url') !== row.json_base64url) reject()
   try { registrationRecord(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))) } catch { reject() }
-  return { kind: 'output', json_base64url: row.json_base64url }
+  return { kind: 'output', json_base64url: row.json_base64url, ...(attested ? { analysis_receipt: parseHostCollaborationAnalysisReceipt(row.analysis_receipt) } : {}) }
 }
 
 function decodeProfileRequest(frame: Record<string, unknown>):

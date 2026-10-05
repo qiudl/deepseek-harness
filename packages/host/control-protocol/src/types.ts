@@ -595,7 +595,7 @@ export type HostCollaborationAnalysisCommand =
 export type HostCollaborationAnalysisResult =
   | Readonly<{ kind: 'prepared'; preparation: HostRemoteSessionJson }>
   | Readonly<{ kind: 'reply_source'; capture: HostRemoteSessionJson }>
-  | Readonly<{ kind: 'output'; json_base64url: string }>
+  | Readonly<{ kind: 'output'; json_base64url: string; analysis_receipt?: HostCollaborationAnalysisReceipt }>
 /** Main-only analysis in this connection's token-verified Account Profile. */
 export interface ProfileCollaborationAnalysisRequest extends Omit<ProfileSourceSnapshotRequest, 'method' | 'params'> {
   readonly method: 'profile.collaboration_analysis'
@@ -1539,3 +1539,30 @@ export type HostControlFrame =
   | MigrationExportInventoryResult
   | MigrationExistingSourceInventoryRequest
   | MigrationExistingSourceInventoryResult
+
+/** Installation signature binding one saved analysis output; it grants no task authority. */
+export type HostCollaborationAnalysisReceipt = Readonly<{
+  schema_version: 1
+  authority_environment_id: string
+  account_binding_handle: string
+  authority_binding_version: number
+  account_issuer: string
+  account_subject: string
+  installation_id: string
+  installation_public_key: string
+  host_instance_id: string
+  process_nonce: string
+  dispatch: Readonly<{
+    attempt_request_id: string
+    plan_id: string
+    expected_plan_revision: string
+    attempt_id: string
+    attempt_fence: string
+    input_manifest_digest: string
+    source_digest: string
+    lease_expires_at: string
+    dispatch_granted: true
+  }>
+  output_digest: string
+  signature: string
+}>

@@ -133,3 +133,6 @@ export type {
   HostInstanceId,
   InstallationId,
 } from './types.js'
+
+export { parseHostCollaborationAnalysisReceipt, encodeHostCollaborationAnalysisReceiptPayload } from './collaboration-analysis-receipt.js'
+export type { HostCollaborationAnalysisReceipt } from './types.js'

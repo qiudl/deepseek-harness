@@ -142,6 +142,6 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 
 `parseHostRemoteSessionJson` 向私有 worker 消费者提供现有 Host JSON 限制。它复制已解析数据，拒绝非有限数字、不安全键、过深或过多节点及超限字符串；不授予操作权限。
 
-`profile.collaboration_analysis` 只携带绑定 Account 的准备/派发命令及不可执行的准备描述或原始 JSON 输出。它不接受调用方归属摘要，将编码后的 Source 输入和解码后的输出各限制在32 KiB，验证规范 base64url、UTF-8 和对象 JSON，控制帧限制不变。解析不建立 Account、Source、模型或任务权限。
+`profile.collaboration_analysis` 只携带绑定 Account 的准备/派发命令及不可执行的准备描述或原始 JSON 输出。它不接受调用方归属摘要，将编码后的 Source 输入和解码后的输出各限制在32 KiB，验证规范 base64url、UTF-8 和对象 JSON，控制帧限制不变。派发输出另携带安装签名，绑定已验证 Account、当前 Host、原派发 grant 及已保存原始 JSON 摘要。Unix 客户端核验签名和未变输出；服务仍须分别核对当前 Source、attempt 和目标权限。
 
 `profile.collaboration_analysis` 另支持携带有界私有输入的 `capture_reply` 和 `prepare_clarification`。补充捕获返回 `reply_source`，仅包含 captured/recovered Source 描述符；完整输入准备返回 `prepared`。命令与结果字段及操作对应的结果类别均严格核验，帧和 JSON 预算不变。补充捕获不授予模型派发资格。

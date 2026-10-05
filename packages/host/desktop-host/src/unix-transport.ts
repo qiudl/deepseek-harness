@@ -59,7 +59,7 @@ import type {
   MigrationImportStageRequest,
   MigrationImportStatusRequest,
   MigrationImportVerifyRequest,
-} from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+} from '@deepseek-ai/dsh-host-control-protocol'
 import type { LegacyClaimCoordinator, LegacyClaimReceipt, LegacyClaimOutcome } from './legacy-claim-coordinator.ts'
 import {
   HOST_CONTROL_MAX_FRAME_BYTES,
@@ -69,6 +69,7 @@ import {
   encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
   encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
   parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult,
+  parseHostCollaborationAnalysisReceipt, encodeHostCollaborationAnalysisReceiptPayload,
   parseHostCollaborationDeliveryCapsule, parseHostCollaborationDeliveryReceipt, parseHostCollaborationDeliveryResult,
   matchesHostCollaborationDeliveryCommit, encodeHostCollaborationDeliveryReceiptPayload,
   parseHostCollaborationSourceSnapshot, parseHostCollaborationSourceSnapshotChunk, parseHostCollaborationSourceTarget,
@@ -76,7 +77,7 @@ import {
   parseHostCollaborationRegistrationChallenge,
   parseHostCollaborationRegistrationAssertion,
   migrationProfileSelectorHash,
-} from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+} from '@deepseek-ai/dsh-host-control-protocol'
 import type {
   HostAuthorityErrorCode,
   OfflineProfileOpenResult,
@@ -1475,7 +1476,15 @@ export class HostControlAuthority {
           else {
             if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).join(',') !== 'jsonText' || !('jsonText' in value) || typeof value.jsonText !== 'string')
               throw new HostAuthorityError('unavailable')
-            result = parseHostCollaborationAnalysisResult({ kind: 'output', json_base64url: Buffer.from(value.jsonText, 'utf8').toString('base64url') })
+            // The private worker returns only after its output journal commits; failed writes never reach signing.
+            const unsigned = parseHostCollaborationAnalysisReceipt({ schema_version:1,
+              authority_environment_id:account.authorityEnvironmentId,account_binding_handle:account.accountBindingHandle,
+              authority_binding_version:account.authorityBindingVersion,account_issuer:account.issuer,account_subject:account.subject,
+              installation_id:identity.installationId,installation_public_key:identity.installationPublicKey,
+              host_instance_id:identity.hostInstanceId,process_nonce:identity.processNonce,dispatch:command.grant,
+              output_digest:createHash('sha256').update(value.jsonText,'utf8').digest('hex'),signature:'A'.repeat(86) })
+            const signature=sign(null,Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(unsigned)),privateKeyObject(identity.installationPrivateKey)).toString('base64url')
+            result = parseHostCollaborationAnalysisResult({ kind:'output',json_base64url:Buffer.from(value.jsonText,'utf8').toString('base64url'),analysis_receipt:{ ...unsigned,signature } })
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.source_snapshot') {
@@ -2508,6 +2517,18 @@ export class UnixHostClient {
     const result = parseHostCollaborationAnalysisResult(frame.result)
     const expectedKind = command.action === 'dispatch' ? 'output' : command.action === 'capture_reply' ? 'reply_source' : 'prepared'
     if (result.kind !== expectedKind) throw new HostAuthorityError('unavailable')
+    if (result.kind === 'output' && result.analysis_receipt) {
+      if (command.action !== 'dispatch') throw new HostAuthorityError('unauthorized')
+      const receipt=result.analysis_receipt
+      const expected=parseHostCollaborationAnalysisReceipt({ ...receipt,
+        authority_environment_id:input.authorityEnvironmentId,account_binding_handle:input.accountBindingHandle,
+        authority_binding_version:input.authorityBindingVersion,account_issuer:input.issuer,account_subject:input.subject,
+        installation_id:this.inspection.installation_id,installation_public_key:this.inspection.installation_public_key,
+        host_instance_id:this.inspection.host_instance_id,process_nonce:this.inspection.process_nonce,dispatch:command.grant })
+      if (encodeHostCollaborationAnalysisReceiptPayload(receipt)!==encodeHostCollaborationAnalysisReceiptPayload(expected)
+        || createHash('sha256').update(Buffer.from(result.json_base64url,'base64url')).digest('hex')!==receipt.output_digest
+        || !verify(null,Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(receipt)),publicKeyObject(receipt.installation_public_key),Buffer.from(receipt.signature,'base64url'))) throw new HostAuthorityError('unauthorized')
+    }
     return result
   }
 

@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto'
 import {
   parseHostCollaborationDeliveryCapsule, parseHostCollaborationDeliveryChunk,
   parseHostCollaborationDeliveryCommit, matchesHostCollaborationDeliveryCommit,
-} from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
-import type { HostCollaborationDeliveryCapsule, HostCollaborationDeliveryChunk, HostCollaborationDeliveryCommit } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+} from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationDeliveryCapsule, HostCollaborationDeliveryChunk, HostCollaborationDeliveryCommit } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
 
 /** Captures one running worker; every fragment and completed write must retain that same worker. */

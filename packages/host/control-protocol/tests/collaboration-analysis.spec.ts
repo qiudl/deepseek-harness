@@ -39,3 +39,9 @@ it('transports reply capture and bounded clarification inputs as distinct passiv
     expect(() => parseHostCollaborationAnalysisResult({ ...result, capture: { ...result.capture, attempt_request_id: uid } })).toThrow()
   }
 })
+
+it('preserves installation-signed saved output across the bounded control frame', () => {
+  const receipt = { 'schema_version': 1, 'authority_environment_id': '40000000-0000-4000-8000-000000000004', 'account_binding_handle': 'binding', 'authority_binding_version': 1, 'account_issuer': 'https://account.example', 'account_subject': '40000000-0000-4000-8000-000000000004', 'installation_id': '40000000-0000-4000-8000-000000000004', 'installation_public_key': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'host_instance_id': '40000000-0000-4000-8000-000000000004', 'process_nonce': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'dispatch': { 'attempt_request_id': '40000000-0000-4000-8000-000000000004', 'plan_id': 'plan', 'expected_plan_revision': '1', 'attempt_id': 'attempt', 'attempt_fence': '1', 'input_manifest_digest': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'source_digest': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'lease_expires_at': '2026-10-05T15:30:00.000Z', 'dispatch_granted': true }, 'output_digest': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'signature': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }
+  const result = { kind:'output',json_base64url:Buffer.from('{}').toString('base64url'),analysis_receipt:receipt }
+  expect(parseHostCollaborationAnalysisResult(result)).toEqual(result)
+})
