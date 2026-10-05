@@ -1,11 +1,16 @@
 /** Host-only bridge from the Desktop worker to the existing Session Remote surface. */
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
   RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventId, TypertGateway,
 } from '@deepseek-ai/dsh-api-gateway'
 import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { DesktopRemoteApprovalEvents } from './desktop-remote-ui-stream.ts'
+import { DesktopSessionControl, DesktopSessionControlBusyError, DesktopSessionControlLostError,
+  type DesktopSessionControlState } from './desktop-session-control.ts'
+import { openDesktopRemotePrivateRequest, readDesktopRemotePrivateBody,
+  rejectDesktopRemotePrivateRequest, writeDesktopRemotePrivateResult } from './desktop-remote-private-request.ts'
 
 interface ApprovalCursor {
   readonly iterator: AsyncIterator<unknown>
@@ -26,6 +31,12 @@ function digest(value: unknown): string {
 
 function row(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function controlResult(state: DesktopSessionControlState): HostRemoteSessionJson {
+  return 'claim' in state
+    ? { outcome: state.outcome, claim: { ...state.claim } }
+    : { outcome: state.outcome, generation: state.generation, epoch: state.epoch }
 }
 
 function historyText(value: unknown): string {
@@ -64,7 +75,9 @@ export class DesktopRemoteSessionExecutor {
   private readonly cursors = new Map<string, ApprovalCursor>()
   private readonly approvals = new Map<string, PendingApproval>()
 
-  constructor(private readonly gateway: TypertGateway) {}
+  constructor(private readonly gateway: TypertGateway,
+    private readonly remoteApprovals?: DesktopRemoteApprovalEvents,
+    private readonly control = new DesktopSessionControl()) {}
 
   /**
    * Execute one bounded Session command using the Session Remote method parameter names.
@@ -73,11 +86,44 @@ export class DesktopRemoteSessionExecutor {
    * @returns The JSON response sent to the Desktop Host.
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
+    let release: (() => void) | undefined
+    if (command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+      command.operation === 'session.rename' || command.operation === 'session.delete' ||
+      command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
+      if (!Object.hasOwn(command, 'control')) throw new Error('desktop session control: claim required')
+      const proof = command.control
+      release = this.control.beginWrite(command.session_id, { kind: 'remote', id: proof.controller_id,
+        generation: proof.generation, epoch: proof.epoch })
+    }
+    try { return await this.dispatch(command, signal) } finally { release?.() }
+  }
+
+  private async dispatch(command: HostRemoteSessionCommand,
+    signal: AbortSignal): Promise<HostRemoteSessionJson> {
     switch (command.operation) {
+      case 'control.status':
+        return controlResult(this.control.status(command.session_id,
+          { kind: 'remote', id: command.controller_id }))
+      case 'control.acquire':
+        return controlResult(this.control.acquire(command.session_id,
+          { kind: 'remote', id: command.controller_id }, { takeover: command.takeover,
+            ...(command.expected_epoch === undefined ? {} : { expectedEpoch: command.expected_epoch }) }))
+      case 'control.renew':
+        return controlResult(this.control.renew(command.session_id,
+          { kind: 'remote', id: command.controller_id,
+            generation: command.generation, epoch: command.epoch }))
+      case 'control.release':
+        return { released: this.control.release(command.session_id, { kind: 'remote', id: command.controller_id,
+          generation: command.generation, epoch: command.epoch }) }
+      case 'remote.event.respond':
+        if (!this.remoteApprovals) throw new Error('desktop remote UI: approval events unavailable')
+        this.remoteApprovals.respond(this.gateway, command)
+        return { accepted: true }
       case 'session.list':
         return this.invoke('list', { _request: {} }, signal)
       case 'session.create':
-        return this.invoke('create', { request: {} }, signal)
+        return this.invoke('create', { request: command.workspace_id === undefined
+          ? {} : { workspaceId: command.workspace_id } }, signal)
       case 'session.prompt':
         return this.invoke('prompt', { request: {
           requestId: command.command_id, sessionId: command.session_id, mode: command.mode,
@@ -147,7 +193,16 @@ export class DesktopRemoteSessionExecutor {
     if (id !== undefined && state === undefined) throw new Error('desktop remote session: stale approval cursor')
     if (state === undefined) {
       const abort = new AbortController()
-      const stream = await this.gateway.wireStream.open('$events', { args: {} }, abort.signal)
+      const uplink: AsyncIterable<unknown> = {
+        async *[Symbol.asyncIterator]() {
+          if (!abort.signal.aborted) {
+            await new Promise<void>((resolve) => {
+              abort.signal.addEventListener('abort', () => { resolve() }, { once: true })
+            })
+          }
+        },
+      }
+      const stream = await this.gateway.wireStream.open('$events', { args: {} }, uplink, undefined, abort.signal)
       const iterator = stream[Symbol.asyncIterator]()
       const ready = await iterator.next()
       if (ready.done || !row(ready.value) || ready.value.type !== 'ready' || typeof ready.value.clientId !== 'string') {
@@ -228,30 +283,21 @@ export async function handleDesktopRemoteSessionRequest(
   token: string,
   execute: (command: HostRemoteSessionCommand, signal: AbortSignal) => Promise<HostRemoteSessionJson>,
 ): Promise<void> {
-  const supplied = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : ''
-  const expected = Buffer.from(token)
-  const actual = Buffer.from(supplied)
-  if (req.method !== 'POST' || !/^[A-Za-z0-9_-]{43}$/u.test(token)
-    || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-    res.writeHead(403).end(); return
-  }
-  const controller = new AbortController()
-  res.once('close', () => { controller.abort() })
+  const controller = openDesktopRemotePrivateRequest(req, res, token)
+  if (!controller) return
   try {
-    const chunks: Buffer[] = []
-    let size = 0
-    for await (const chunk of req as AsyncIterable<unknown>) {
-      if (!(chunk instanceof Uint8Array)) throw new Error('invalid body')
-      size += chunk.byteLength
-      if (size > 64 * 1024) throw new Error('body too large')
-      chunks.push(Buffer.from(chunk))
-    }
-    const command = JSON.parse(Buffer.concat(chunks).toString('utf8')) as HostRemoteSessionCommand
+    const command = await readDesktopRemotePrivateBody(req) as HostRemoteSessionCommand
     const value = await execute(command, controller.signal)
-    const body = JSON.stringify({ value })
-    if (Buffer.byteLength(body) > 512 * 1024) throw new Error('result too large')
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }).end(body)
-  } catch {
-    if (!res.writableEnded && !res.destroyed) res.writeHead(422, { 'cache-control': 'no-store' }).end()
+    writeDesktopRemotePrivateResult(res, value)
+  } catch (error) {
+    if (error instanceof DesktopSessionControlLostError && !res.writableEnded && !res.destroyed) {
+      res.writeHead(409, { 'cache-control': 'no-store' }).end()
+      return
+    }
+    if (error instanceof DesktopSessionControlBusyError && !res.writableEnded && !res.destroyed) {
+      res.writeHead(429, { 'cache-control': 'no-store' }).end()
+      return
+    }
+    rejectDesktopRemotePrivateRequest(res)
   }
 }

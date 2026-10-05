@@ -1,0 +1,11 @@
+{
+  "requirement": "REQ-20260929-0002",
+  "writerVersion": "0.1.6-alpha.2",
+  "writerEntrypointSha256": "e1642173d728c3d7743532b25a4b115b3108c228646147ced0328ee0191dd776",
+  "writerWorkerSha256": "df6ec2eb203eeb0afee885a5d5edd22f1ab0713f04aca8c14b0c2c40bea91b9b",
+  "sessionVersion": 3,
+  "compression": "zstd",
+  "eventCount": 6,
+  "sha256": "1997ed565abf29adb57ef6016dd3fcfc0f0d4ac5cb94c3f8875f206a22884cac",
+  "generation": "Created and read back with the signed Slark baseline packaged JsonlSessionPersistence.create/append APIs; messages contain only test markers."
+}

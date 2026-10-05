@@ -29,7 +29,7 @@ Use it when you assemble the browser application: `apps/web`'s Vite entry runs `
 
 Static application pages install `__DSH_BOOT_READY__` before the entry runs. The boot page renders immediately while `run()` waits; the page owner applies the Host rows with `applyIndexInjections` (also exported from `./injections`) and resolves the deferred after all scripts finish. A rejected deferred renders a boot failure unless the caller supplies `run(onFailure)` to present the error externally while retaining the loading page. Desktop uses this callback to request native recovery. Desktop and WebWorker share the injection interpreter; server-side `tapIndex` HTML transforms apply only to served documents.
 
-The bundled Cordis Loader calls `new Function` during startup, so an isolated static DSH page requires `script-src 'unsafe-eval'` in its Content Security Policy. The remote page must run on a dedicated origin without Slark login cookies and keep `connect-src` blocked; the parent MessagePort carries Host traffic. `apps/web/tests/remote-frame.spec.ts` exercises this policy in Chromium.
+The bundled Cordis Loader calls `new Function` during startup, so an isolated static DSH page requires `script-src 'unsafe-eval'` in its Content Security Policy. The remote page must run on a dedicated origin without Slark login cookies and keep `connect-src` blocked; the parent MessagePort carries Host traffic. `apps/web/tests/remote-frame.e2e.ts` exercises this policy in Chromium.
 
 The shell base styles apply automatic CJK/Latin spacing to ordinary content in supporting browsers. Semantic code and terminal, diff, read, and search output containers retain literal source spacing and column alignment; browsers without `text-autospace` support ignore both declarations.
 
@@ -53,6 +53,8 @@ The package accepts no plugin config of its own; the generated [configuration ca
 
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
+
+Menus use the shared `MenuSurface` material, including the macOS backing for background blur; custom content follows the [menu rules](../../../docs/web-styling.md#component-rules).
 
 <details>
 <summary>Implementation internals — click to expand</summary>
@@ -78,12 +80,14 @@ The boot kernel delegates manifest entry creation to Client Modules so live grap
 | File | Role |
 |---|---|
 | [`src/index.ts`](src/index.ts) | Library entry: `AppWebEntry`, `getStaticModules`, platform tables |
-| [`src/boot.ts`](src/boot.ts) | `AppWebEntry`: module stage, boot page, immediate-tier prefetch, then `bootClient` + `mountClient` |
+| [`src/boot.ts`](src/boot.ts) | `AppWebEntry`: module stage, boot page, immediate-tier prefetch, window drag-rect watcher install, then `bootClient` + `mountClient` |
 | [`src/boot-client.ts`](src/boot-client.ts) | `bootClient` / `assertEntriesActive`: Loader mount, one entry per manifest row, activation audit |
 | [`src/mount.ts`](src/mount.ts) | `mountClient`: renderer handoff through a `uiRenderer` dependency fiber |
 | [`src/boot-page.ts`](src/boot-page.ts) | Framework-free boot page: spinner, per-entry status, failure rendering |
 | [`src/platform.ts`](src/platform.ts) | `PLATFORM_MODULES` / `PRELOADED_CLIENT_EXTERNALS`: the implicit external baseline |
 | [`src/seed.ts`](src/seed.ts) | Static module table handed to the loader at boot |
+| [`src/window-drag/regions.ts`](src/window-drag/regions.ts) | The darwin app-region composition model, and the interactive selector `base.css` subtracts |
+| [`src/window-drag/recall.ts`](src/window-drag/recall.ts) | The shell's one window drag-rect watcher (electron/electron#32341): measure the marked rows per frame and pulse the recall mark while they move |
 
 </details>
 

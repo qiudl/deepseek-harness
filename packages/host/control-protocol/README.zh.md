@@ -36,7 +36,11 @@ kind: "package-reference"
 
 `profile.remote_session` 把封闭的 Session 与审批命令集合绑定到 Main 持有的一个视图租约。每条命令另带一个 UUID 幂等键；命令不能选择 HTTP 路径、Profile 根目录、凭据、cookie、启动 token 或任意方法。提示文本、标识符、标题、等待间隔、游标、JSON 深度、节点数、字符串和完整帧均有上限。能够解码该方法不代表功能可用；Host 只有在安装受租约授权的 worker 执行器后才能发布对应 capability。
 
-`profile.remote_ui_read` 将启动、资源、Session 和五种精确的启动元数据读取绑定到同一有效视图租约。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；Host worker 只为当前启动项列出的 URL 返回分块。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制；大页和流式事件需要独立传输。Host 仅在安装 worker 执行器后发布此 capability。
+`profile.remote_session.control_lease` capability 增加精确的 `control.status`、`control.acquire`、`control.renew` 和 `control.release` 命令。选定 Profile 签发进程 generation 和按 Session 递增的 epoch；每次远端 Session 修改及审批答复都携带该证明。Profile 在调用业务代码前拒绝过期或缺失的证明，已获准的写入执行期间不允许接管。Profile 重启会更换 generation，使旧证明失效。
+
+`profile.remote_ui_read` 将启动、资源、Session 和五种精确的启动元数据读取绑定到同一有效视图租约。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。
+
+`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
 
 `profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
 
@@ -109,7 +113,8 @@ kind: "package-reference"
 
 ## 已知限制与延后工作
 
-- **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read、扩展命令、远程 Session 命令、十种远程 UI 读取与通用错误。远程方法在 Host 执行器发布 capability 前仍不可用；environment、attachment 和 upgrade 操作需要显式扩展协议。
+- 远程 Session 创建可携带不透明的工作区 ID，由选定 Profile 验证是否存在。传输命令不接受调用方指定的路径。
+- **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read、扩展命令、远程 Session 命令、十种远程 UI 读取、三种原生流（`session/follow`、`workspace/follow` 与 `$events`）与通用错误。远程方法在 Host 执行器发布 capability 前仍不可用；environment、attachment 和 upgrade 操作需要显式扩展协议。
 - **传输上限由外部执行**——Unix domain socket carrier 必须在字节上限停止读取，并在首次 codec 失败时关闭连接。
 - **密码学策略由外部执行**——密钥持久化、代码签名检查、挑战签名与验证、重放存储和密钥轮换属于 Host identity 与 Desktop broker 包。
 

@@ -1,6 +1,40 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/host/control-protocol/README.md
-README.md: 33b8b1d646076d656e863796be461a36706a0702
-README.zh.md: d3010e2a897bc5123b147378518da97edcdcf4f6
+/:
+  en: 23fa74cc8d3e44f2
+  zh: 1f35273f19025279
+/dsh-host-control-protocol:
+  en: 6568fdece0cb7c05
+  zh: 1f821937d7694d4b
+/dsh-host-control-protocol/summary:
+  en: a6d334a65f3d21a3
+  zh: 17488df181ad7dec
+/dsh-host-control-protocol/table-of-contents:
+  en: 431c79e8f1d3425d
+  zh: e36641bb99e01953
+/dsh-host-control-protocol/wire-contract:
+  en: a1b3e8b67c21834f
+  zh: 4df2a0b93d7f7611
+/dsh-host-control-protocol/challenge-authentication:
+  en: 0046f55770ebffd4
+  zh: 44226200f06202db
+/dsh-host-control-protocol/api:
+  en: af9691a7c7676329
+  zh: 56eaf8ac39c8ae03
+/dsh-host-control-protocol/dev-note:
+  en: ff2766d2c3ff33c1
+  zh: dc9eaadc32ff2fad
+/dsh-host-control-protocol/runtime-invariants:
+  en: b3f7ef53ffc89101
+  zh: 90f8cb60256f6917
+/dsh-host-control-protocol/model-experience:
+  en: 014d55646fcf02ad
+  zh: e290720514952264
+/dsh-host-control-protocol/model-experience/kv-cache-effect:
+  en: 7e27c6b2c939d049
+  zh: 9781e6ac564ea433
+/dsh-host-control-protocol/known-limitations-and-deferred-work:
+  en: 424bdf7d33afbe00
+  zh: a545154d3bc6ea54

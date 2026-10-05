@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -539,6 +539,19 @@ describe('fixed owner legacy migration source', () => {
       stageOwnerTransfer: async () => { throw new Error('unexpected_transfer') },
     })
     await expect(unknown.inventory()).rejects.toThrow(/unknown_entry/u)
+  })
+
+  it('accepts retained dsh-duet traces without reading or changing them', async () => {
+    const { home, source } = await fixture()
+    const traces = join(source, 'dsh-duet', 'traces')
+    await mkdir(traces, { recursive: true, mode: 0o700 })
+    const trace = join(traces, 'events.jsonl')
+    await writeFile(trace, 'private trace\n', { mode: 0o600 })
+    const before = createHash('sha256').update(await readFile(trace)).digest('hex')
+    const proof = await service(home).inventory()
+    expect(proof.requiredMaxRecords).toBeGreaterThan(0)
+    expect(createHash('sha256').update(await readFile(trace)).digest('hex')).toBe(before)
+    expect((await stat(trace)).mode & 0o777).toBe(0o600)
   })
 
   it('recomputes the owner inventory at begin and rejects a post-confirmation change', async () => {

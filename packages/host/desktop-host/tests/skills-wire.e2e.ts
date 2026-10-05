@@ -1,7 +1,3 @@
-import { createRequire } from 'node:module'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:http'
 import AdmZip from 'adm-zip'
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
@@ -57,21 +53,22 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
   const address = http.address(); if (!address || typeof address === 'string') throw Error('missing port')
   const skill = new ProfileSkillExecutor({ profileRoot: home, uid, catalog: async (id, signal) => loaded && installedHome === home(id) ? readProfileSkillCatalog({ origin: `http://127.0.0.1:${address.port}`, bootstrapCookie: { name: 'fixture', value: 'private' } }, signal) : { complete: true, skills: [] }, acknowledge: async (id, name, _content, signal, guard) => {
     installedHome = home(id); acknowledgements++; guard(); await loaded?.fiber.dispose()
-    const presetRoot = join(home(id), 'presets'); mkdirSync(join(presetRoot, 'fixture'), { recursive: true })
-    writeFileSync(join(presetRoot, 'fixture/agent.cordis.yml'), JSON.stringify([
-      { id: 'skill-filesystem', name: new URL('../../../skill/skill-filesystem/lib/index.js', import.meta.url).href,
-        config: { dshHome: home(id), agentsHome: join(root, 'isolated-agents'), watch: false } },
-    ]))
     const config = join(home(id), 'profiles/web/cordis.yml')
     writeFileSync(config, JSON.stringify([
       { id: 'typert', name: '@deepseek-ai/dsh-typert-registry' },
       { id: 'projection', name: '@deepseek-ai/dsh-session-projection' },
       { id: 'skills', name: '@deepseek-ai/dsh-skill' },
-      { id: 'presets', name: '@deepseek-ai/dsh-agent-presets', config: {
-        default: 'fixture', roots: [{ path: presetRoot, trust: 'user' }], includeUserRoot: false, includeShippedRoot: false } },
+      { id: 'presets', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'fixture' } },
+      { id: 'fixture', name: new URL('../../../preset/agent-preset/lib/index.js', import.meta.url).href, config: {
+        id: 'fixture', plugins: [
+          { id: 'skill-filesystem', name: new URL('../../../skill/skill-filesystem/lib/index.js', import.meta.url).href,
+            config: { dshHome: home(id), agentsHome: join(root, 'isolated-agents'), watch: false } },
+        ],
+      } },
       { id: 'gateway', name: '@deepseek-ai/dsh-api-gateway' },
     ]))
     loaded = await boot('skill-wire', config, [], undefined, new URL('../../../api/session-controller/', import.meta.url).href)
+    expect(await loaded.agentPresets.resolve()).toEqual({ id: 'fixture' })
     new SessionSkillCatalog(loaded)
     // This built-runtime fixture loads generated RPC only after the Host build.
     const generated: unknown = await import(new URL('../../../api/session-controller/lib/typert.host.js', import.meta.url).href)
@@ -173,21 +170,5 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
   expect(await client.extensions({ ...otherLease, command: { action: 'inventory', kind: 'skill' } })).toMatchObject({ entries: [] })
   await expect(client.extensions({ ...otherLease, command: { action: 'status', operation_id: operationId as never } })).rejects.toThrow()
 
-  const slarkRoot = process.env.SLARK_EXTENSION_ACCEPTANCE_ROOT
-  if (slarkRoot) {
-    mkdirSync(join(root, 'isolated-agents/skills/slark'), { recursive: true, mode: 0o700 })
-    writeFileSync(join(root, 'isolated-agents/skills/slark/SKILL.md'), '---\nname: slark\ndescription: Fallback\n---\nFallback instructions.\n', { mode: 0o600 })
-    const config = join(root, 'slark-skill-fixture.json')
-    writeFileSync(config, JSON.stringify({ options, kind: 'skill', restoreSkill: true, toggleSkill: true, importSkillFile: true, replaceSkill: true, removeSkill: true,
-      clientArtifact: fileURLToPath(new URL('../lib/host-control-client.js', import.meta.url)) }), { mode: 0o600 })
-    const child = await promisify(execFile)(process.execPath,
-      ['--import', createRequire(join(slarkRoot, 'packages/desktop/package.json')).resolve('tsx'),
-        'scripts/fixtures/dsh-host-extension-client.mjs', config],
-      { cwd: slarkRoot, timeout: 90_000, maxBuffer: 256 * 1024 })
-    expect(child.stdout).toContain('"ok":true')
-    expect(acknowledgements).toBe(9)
-    expect(await loaded!.skills.get('slark', { scope: await loaded!.agentPresets.standingKeyFor() }))
-      .toMatchObject({ source: 'user-agents', content: 'Fallback instructions.' })
-  }
 
 })

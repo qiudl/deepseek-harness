@@ -6,6 +6,7 @@
  */
 
 import { EventEmitter } from 'node:events'
+import { createServer } from 'node:http'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -17,7 +18,11 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import * as AppBoot from '@deepseek-ai/dsh-app-boot'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
+import { WebServer, type WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import { LlmRuntime } from '@deepseek-ai/dsh-llm'
+import { TypertGatewayService } from '@deepseek-ai/dsh-api-gateway'
+import AgentDefaultModel from '@deepseek-ai/dsh-agent-default-model'
+import { liveConfig } from '../../../settings/settings/tests/live-config.ts'
 import { apply, Config, internals } from '../src/index.ts'
 
 vi.mock('node:child_process', async importOriginal => ({
@@ -57,7 +62,7 @@ type BrowserLauncher = ChildProcess & { stderr: PassThrough }
 
 /** Minimal browser-launcher process for the native handoff adapter. */
 function launcher(): BrowserLauncher {
-  return Object.assign(new EventEmitter(), { stderr: new PassThrough() }) as unknown as BrowserLauncher
+  return Object.assign(new EventEmitter(), { stderr: new PassThrough() }) as BrowserLauncher
 }
 
 /** Stage a dist fixture and point the bundle's resolver at it. */
@@ -71,18 +76,24 @@ function stageDist(): string {
 }
 
 /** A fake webServer capturing the fallback seat and index taps. */
-function fakeHttpServer(host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1'): { server: WebServer; seat: () => unknown } {
+function fakeHttpServer(host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1'): { server: WebServer; seat: () => unknown; routes: Map<string, WebRoute> } {
   let fallback: unknown
-  const server = {
-    host,
-    port: 4567,
-    registerFallback: (handler: unknown) => {
-      fallback = handler
-      return () => { fallback = undefined }
-    },
-    renderIndex: (html: string) => html,
-  } as unknown as WebServer
-  return { server, seat: () => fallback }
+  const routes = new Map<string, WebRoute>()
+  const serviceCtx = new Context()
+  onTestFinished(() => serviceCtx.fiber.dispose())
+  const server = new WebServer(serviceCtx, { host, port: 4567 })
+  Object.defineProperty(server, 'port', { configurable: true, value: 4567 })
+  vi.spyOn(server, 'registerFallback').mockImplementation((handler) => {
+    fallback = handler
+    return () => { fallback = undefined }
+  })
+  vi.spyOn(server, 'renderIndex').mockImplementation(html => html)
+  vi.spyOn(server, 'collectIndexInjections').mockReturnValue([{ kind: 'script', placement: 'head', text: 'fixtureBoot()' }])
+  vi.spyOn(server, 'register').mockImplementation((route) => {
+    routes.set(route.path, route)
+    return () => { routes.delete(route.path) }
+  })
+  return { server, seat: () => fallback, routes }
 }
 
 /** Deterministic Host Connection face for URL publication and frontend injection. */
@@ -112,6 +123,88 @@ interface BashContribution {
 }
 
 describe('web-app runtime glue', () => {
+  it.each(['', 'invalid', 'A'.repeat(43)])('registers private Desktop routes only for valid tokens (%s)', async (token) => {
+    for (const name of ['DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) {
+      vi.stubEnv(name, token)
+    }
+    stageDist()
+    const ctx = new Context()
+    const gatewayCtx = new Context()
+    onTestFinished(async () => { await ctx.fiber.dispose(); await gatewayCtx.fiber.dispose() })
+    const { server, routes } = fakeHttpServer()
+    ctx.provide('webServer', server)
+    provideConnection(ctx)
+    const gateway = new TypertGatewayService(gatewayCtx, {})
+    let browserAdmission: Parameters<typeof gateway.registerBrowserAdmission>[0] | undefined
+    const registerBrowserAdmission = gateway.registerBrowserAdmission.bind(gateway)
+    vi.spyOn(gateway, 'registerBrowserAdmission').mockImplementation((policy) => {
+      browserAdmission = policy
+      return registerBrowserAdmission(policy)
+    })
+    vi.spyOn(gateway, 'invoke').mockResolvedValue({ items: [] })
+    vi.spyOn(gateway, 'stream').mockResolvedValue((async function* () {
+      yield { type: 'baseline', value: { items: [] } }
+    })() as never)
+    ctx.provide('typertGateway', gateway)
+    const llm = new LlmRuntime(ctx)
+    const stream = vi.spyOn(llm, 'stream').mockImplementation(async function* () {
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'text-delta', index: 0, text: 'fixture answer' }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'fixture answer' } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+    await liveConfig(ctx, AgentDefaultModel, { provider: 'fixture', model: 'fixture-model' })
+    const selection = vi.spyOn(ctx.agentDefaultModel, 'currentSelection').mockReturnValue({ provider: 'fixture', model: 'fixture-model' })
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+    await ctx.fiber.await()
+    if (token.length !== 43) {
+      expect(routes.size).toBe(0)
+      return
+    }
+    expect([...routes.keys()].sort()).toEqual([
+      '/internal/desktop-model-text', '/internal/desktop-remote-session', '/internal/desktop-remote-ui',
+      '/internal/desktop-remote-ui-stream',
+    ])
+    if (!browserAdmission) throw new Error('missing Desktop browser admission')
+    expect(browserAdmission.localControlStatus?.('session-1')).toMatchObject({ outcome: 'uncontrolled' })
+    const finishInvoke = browserAdmission.invoke('session/prompt', { request: { sessionId: 'session-1' } })
+    const finishApproval = browserAdmission.eventResult('session-1')
+    expect(browserAdmission.localControlStatus?.('session-1')).toMatchObject({ outcome: 'controlled' })
+    expect(browserAdmission.localControlTakeover?.('session-1', 1)).toMatchObject({ outcome: 'controlled' })
+    finishApproval?.()
+    finishInvoke?.()
+    const http = createServer((req, res) => { void routes.get(req.url!)!.handler(req, res) })
+    onTestFinished(async () => {
+      http.closeAllConnections()
+      await new Promise<void>((resolve) => { http.close(() => { resolve() }) })
+    })
+    await new Promise<void>((resolve) => { http.listen(0, '127.0.0.1', resolve) })
+    const address = http.address()
+    if (!address || typeof address === 'string') throw new Error('missing fixture port')
+    for (const [path, body, expected] of [
+      ['/internal/desktop-model-text', { text: 'question' }, { provider: 'fixture', model: 'fixture-model', text: 'fixture answer' }],
+      ['/internal/desktop-remote-session', { operation: 'session.list' }, { value: { items: [] } }],
+      ['/internal/desktop-remote-ui', { endpoint: 'boot/injections', payload: { args: {} } },
+        { value: { injections: [{ kind: 'script', placement: 'head', text: 'fixtureBoot()' }] } }],
+    ] as const) {
+      const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
+        method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+      })
+      expect(response.status, `${path}: ${await response.clone().text()} stream calls: ${stream.mock.calls.length}`).toBe(200)
+      expect(await response.json()).toEqual(expected)
+    }
+    const remoteStream = await fetch(`http://127.0.0.1:${address.port}/internal/desktop-remote-ui-stream`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ endpoint: 'workspace/follow', payload: { args: {} } }),
+    })
+    expect(remoteStream.status).toBe(200)
+    expect(await remoteStream.text()).toBe(`${JSON.stringify({ type: 'item', value: {
+      type: 'baseline', value: { items: [] },
+    } })}\n${JSON.stringify({ type: 'end' })}\n`)
+    await ctx.fiber.dispose()
+    expect(routes.size).toBe(0)
+    expect(selection).toHaveBeenCalledOnce()
+  })
   it('mounts dist serving, prompt section, bash variables, and publishes the URL with the LAN snapshot', async () => {
     stageDist()
     const ctx = new Context()

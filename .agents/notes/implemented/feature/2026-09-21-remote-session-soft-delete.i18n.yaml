@@ -1,6 +1,19 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-21-remote-session-soft-delete.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-21-remote-session-soft-delete.md
-2026-09-21-remote-session-soft-delete.md: 235de2d268d8514d0179e18846100c8077ff3010
-2026-09-21-remote-session-soft-delete.zh.md: e70cc7e3ed28ac1f245a865017492a68b25acbec
+/agent-note-remote-session-soft-delete:
+  en: d829f219e145633c
+  zh: 83f401e3fbe397e6
+/agent-note-remote-session-soft-delete/problem:
+  en: ab83159f7f4af1b4
+  zh: 7d6b482dc3f42036
+/agent-note-remote-session-soft-delete/decision:
+  en: 45f36935a5f30047
+  zh: 40c4741ca161ce7b
+/agent-note-remote-session-soft-delete/alternatives-considered:
+  en: ebcdf6aa00dfab73
+  zh: c5f2ac7d53c5ee49
+/agent-note-remote-session-soft-delete/consequences:
+  en: b8927ec823b635bb
+  zh: d1aea92589997ac0

@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-07-B2-split-line-and-upgrade-baseline.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-07-B2-split-line-and-upgrade-baseline.md
-2026-09-07-B2-split-line-and-upgrade-baseline.md: ce032cb36535947f79702b30bc1cef1b26e08e5a
-2026-09-07-B2-split-line-and-upgrade-baseline.zh.md: ee67f2bd4a8327c83d59279decde97b36a1b84de
+/agent-note-b2-upstream-separation-and-upgrade-baseline:
+  en: d793994df5a77a73
+  zh: 2e353607bdedda85
+/agent-note-b2-upstream-separation-and-upgrade-baseline/problem:
+  en: 3a601e968592c965
+  zh: 9dccd1d8d0ddb008
+/agent-note-b2-upstream-separation-and-upgrade-baseline/decision:
+  en: f9c3741d28ece2d0
+  zh: 793c8c699cdb5b63
+/agent-note-b2-upstream-separation-and-upgrade-baseline/probes:
+  en: 61cad5d7d416c00f
+  zh: 4d11d898ba4f04e9
+/agent-note-b2-upstream-separation-and-upgrade-baseline/alternatives-considered:
+  en: 13a896b69f7fc7aa
+  zh: 937720b31543dee2
+/agent-note-b2-upstream-separation-and-upgrade-baseline/consequences:
+  en: 535a8e3da24d8843
+  zh: a955f5882b2dc3f7

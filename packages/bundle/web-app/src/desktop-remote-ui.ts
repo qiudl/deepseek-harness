@@ -1,8 +1,9 @@
 /** Host-only, read-only RPC seam for the remote Web DSH transport. */
-import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
+import { isDesktopBearerRequest } from './desktop-model.ts'
+import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
 const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog',
   'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
@@ -65,30 +66,37 @@ export async function handleDesktopRemoteUiRequest(
   token: string,
   execute: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>,
 ): Promise<void> {
-  const supplied = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : ''
-  const expected = Buffer.from(token)
-  const actual = Buffer.from(supplied)
-  if (req.method !== 'POST' || !/^[A-Za-z0-9_-]{43}$/u.test(token)
-    || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+  await handleDesktopRemoteJsonRequest(req, res, token, async (request, signal) => {
+    if (!record(request) || Object.keys(request).length !== 2
+      || typeof request.endpoint !== 'string' || !Object.hasOwn(request, 'payload')) {
+      throw new Error('invalid request')
+    }
+    return execute(request.endpoint, request.payload, signal)
+  })
+}
+
+/**
+ * Handle a bounded bearer-authenticated JSON request shared by the Host RPC routes.
+ * @param req - Incoming HTTP request.
+ * @param res - HTTP response to settle.
+ * @param token - Private Profile bearer token.
+ * @param execute - Route-specific validation and execution.
+ * @returns Completion of the bounded response, including rejection responses.
+ */
+export async function handleDesktopRemoteJsonRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  execute: (request: unknown, signal: AbortSignal) => Promise<unknown>,
+): Promise<void> {
+  if (!isDesktopBearerRequest(req, token)) {
     res.writeHead(403).end(); return
   }
   const controller = new AbortController()
   res.once('close', () => { controller.abort() })
   try {
-    const chunks: Buffer[] = []
-    let size = 0
-    for await (const chunk of req as AsyncIterable<unknown>) {
-      if (!(chunk instanceof Uint8Array)) throw new Error('invalid body')
-      size += chunk.byteLength
-      if (size > 64 * 1024) throw new Error('body too large')
-      chunks.push(Buffer.from(chunk))
-    }
-    const request: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    if (!record(request) || Object.keys(request).length !== 2
-      || typeof request.endpoint !== 'string' || !Object.hasOwn(request, 'payload')) {
-      throw new Error('invalid request')
-    }
-    const value = await execute(request.endpoint, request.payload, controller.signal)
+    const request = await readDesktopRemotePrivateBody(req)
+    const value = await execute(request, controller.signal)
     const body = JSON.stringify({ value })
     if (Buffer.byteLength(body) > 512 * 1024) throw new Error('result too large')
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }).end(body)

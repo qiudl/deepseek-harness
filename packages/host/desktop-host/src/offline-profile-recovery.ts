@@ -222,17 +222,29 @@ export function existingProfilePatch(
     '- id: storage-json',
     '  config:',
     `    root: ${JSON.stringify(ownerPaths.storageRoot)}`,
-    '- id: settings',
+    '- id: config-editor',
     '  config:',
-    `    path: ${JSON.stringify(ownerPaths.settingsPath)}`,
-    `    dshHome: ${JSON.stringify(profileRoot)}`,
-    '    watch: false',
+    `    ownerSettingsPath: ${JSON.stringify(ownerPaths.settingsPath)}`,
     '- id: credentials',
     '  config:',
     `    path: ${JSON.stringify(ownerPaths.credentialsPath)}`,
     `    dshHome: ${JSON.stringify(profileRoot)}`,
     '    watch: false',
   ].join('\n')}\n`
+}
+
+/** Exact released layout: only the settings owner moved to config-editor in rc.1. */
+function releasedSettingsProfilePatch(
+  profileRoot: string,
+  persistence: { readonly root: string; readonly compression: 'none' },
+  ownerPaths: AppliedMigrationOwnerState,
+): string {
+  return existingProfilePatch(profileRoot, persistence, ownerPaths).replace([
+    '- id: config-editor', '  config:', `    ownerSettingsPath: ${JSON.stringify(ownerPaths.settingsPath)}`,
+  ].join('\n'), [
+    '- id: settings', '  config:', `    path: ${JSON.stringify(ownerPaths.settingsPath)}`,
+    `    dshHome: ${JSON.stringify(profileRoot)}`, '    watch: false',
+  ].join('\n'))
 }
 
 /** Production read-only inspector for an existing Account Profile. */
@@ -268,7 +280,10 @@ export class OfflineProfileRecoveryInspector {
       const ownerPaths = await this.options.ownerStateApplicator.inspectExisting(profileRoot, persistence.generation)
       const patch = await checkedFile(join(profileRoot, 'cordis.patch.yml'), this.options.expectedUid, true)
       const expectedPatch = existingProfilePatch(profileRoot, persistence, ownerPaths)
-      if (!patch.equals(Buffer.from(expectedPatch))) throw new HostAuthorityError('profile_integrity_failed')
+      const releasedPatch = releasedSettingsProfilePatch(profileRoot, persistence, ownerPaths)
+      if (!patch.equals(Buffer.from(expectedPatch)) && !patch.equals(Buffer.from(releasedPatch))) {
+        throw new HostAuthorityError('profile_integrity_failed')
+      }
 
       const profileComposition = await checkedDirectory(join(profileRoot, 'profiles'), this.options.expectedUid)
       const webComposition = await checkedDirectory(join(profileComposition, 'web'), this.options.expectedUid)

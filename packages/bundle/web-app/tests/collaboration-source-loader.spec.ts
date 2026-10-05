@@ -67,6 +67,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   ctx.provide('attachments', { imageLimits: { maxImageBytes: 1, maxImagesPerMessage: 1, maxMessageImageBytes: 1,
     maxImagePixels: 1, maxImageDimension: 1, mediaTypes: ['image/png'] } } as never)
   ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
+  ctx.provide('fs', {} as never)
   const header: SessionHeader = { version: SESSION_FORMAT_VERSION, id: SessionId('source-session'), cwd, createdAt: 1, isSeeded: false }
   ctx.provide('sessionPersistence', testSessionPersistence(ctx, { list: async () => [header],
     inspect: async () => ({ meta: header, events: [] }) }) as never)
@@ -102,11 +103,17 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   if (!address || typeof address === 'string') throw Error('expected loopback server')
   const origin = `http://127.0.0.1:${address.port}`
   let providerRequests = 0
-  routes.set('/chat/completions', async (req, res) => {
+  routes.set('/v1/messages', async (req, res) => {
     providerRequests++
     if (mode === 'analysis-extension') { res.writeHead(500).end(); return }
     const body: Uint8Array[] = []; for await (const chunk of req) body.push(chunk as Uint8Array)
-    const wire = JSON.parse(Buffer.concat(body).toString()) as { model: unknown; max_tokens: unknown; tools?: unknown; messages: unknown }
+    const wire = JSON.parse(Buffer.concat(body).toString()) as {
+      model: unknown
+      max_tokens: unknown
+      tools?: unknown
+      system: unknown
+      messages: unknown
+    }
     const persisted = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {
       tables: { attempts: Record<string, { manifest_json: string; dispatch: { attempt_id: string } }> }
     }
@@ -118,19 +125,26 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     }
     expect(wire.model).toBe('selected'); expect(wire.max_tokens).toBe(8192)
     expect(wire.tools ?? []).toEqual([])
-    expect(wire.messages).toEqual([{ role: 'system', content: manifest.request.system },
-      { role: 'user', content: manifest.request.messages[0]!.content[0]!.text }])
-    expect(wire.messages).toHaveLength(2)
-    expect(req.headers.authorization).toBe('Bearer fixture-source-key')
+    expect(wire.system).toBe(manifest.request.system)
+    expect(wire.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: manifest.request.messages[0]!.content[0]!.text }] }])
+    expect(wire.messages).toHaveLength(1)
+    expect(req.headers['x-api-key']).toBe('fixture-source-key')
     const result = JSON.stringify({ intent: 'delegate', task_candidates: [{ mention_ids: ['mention-1'],
       question: '@Guide 请分析', source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: 10 }],
       reference_ids: [], independent: true, dependency_candidate_indices: [] }], pending_candidates: [] })
     res.writeHead(200, { 'content-type': 'text/event-stream' })
-    res.end(`data: ${JSON.stringify({ id: 'fixture-response', choices: [{ index: 0, delta: { content: result }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`)
+    res.end([
+      { type: 'message_start', message: { id: 'fixture-response', model: 'selected', usage: { input_tokens: 3, output_tokens: 0 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: result } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''))
   })
   const adapter = mode === 'source-only' || mode === 'delivery' ? new FixtureAdapter() : new DeepSeekAdapter({
-    options: () => resolveAdapterOptions({ protocol: 'chat-completions', baseURL: origin, models: [{ id: 'selected' }] }),
-    resolveApiKey: async () => 'fixture-source-key', resolveUserId: () => '00000000-0000-4000-8000-000000000001' as AnonymousUserId,
+    options: () => resolveAdapterOptions({ baseURL: origin, models: [{ id: 'selected' }] }),
+    resolveAuth: async () => ({ headers: { 'x-api-key': 'fixture-source-key' } }), resolveUserId: () => '00000000-0000-4000-8000-000000000001' as AnonymousUserId,
     // Malformed external extension JSON must not introduce tools into the logged Source analysis request.
     prepareExtensions: async () => ({ fields: mode === 'analysis-extension'
       ? { tools: [{ type: 'function', function: { name: 'injected_tool', description: '', parameters: {} } }] } as never
@@ -365,6 +379,6 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   expect(prepared).toHaveBeenCalledTimes(1)
   expect(stream).not.toHaveBeenCalled()
   await ctx.fiber.dispose()
-  routes.delete('/chat/completions')
+  routes.delete('/v1/messages')
   expect(routes.size).toBe(0)
 })

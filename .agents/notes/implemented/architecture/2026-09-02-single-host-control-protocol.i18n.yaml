@@ -1,6 +1,25 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-02-single-host-control-protocol.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-02-single-host-control-protocol.md
-2026-09-02-single-host-control-protocol.md: 1dd7c28872ec7f74231eaa1a9abc5b5243bc6778
-2026-09-02-single-host-control-protocol.zh.md: c1e43704a746e5835db3cd14b8c23836c77aff86
+/agent-note-single-host-local-control-protocol:
+  en: fd96bff1473588d7
+  zh: a0e6c21e9de80118
+/agent-note-single-host-local-control-protocol/problem:
+  en: 7f1077a9ad33127b
+  zh: b9093a7a3a89bcfa
+/agent-note-single-host-local-control-protocol/decision:
+  en: b87406d56e36961d
+  zh: cddd162983818a3f
+/agent-note-single-host-local-control-protocol/defect-analysis-iterations:
+  en: 05030feba96eaad1
+  zh: 1ad321494bced355
+/agent-note-single-host-local-control-protocol/alternatives-considered:
+  en: 57325a98ecfee502
+  zh: 1903eeae3f2649fa
+/agent-note-single-host-local-control-protocol/consequences:
+  en: 34f478748b0a1c2c
+  zh: 1fd3a8fd16d166e0
+/agent-note-single-host-local-control-protocol/testing:
+  en: 8cff25512db71401
+  zh: 1a8f703285a769f7

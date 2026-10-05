@@ -1,14 +1,17 @@
 /** Session Remote owner: cold reads, explicit Agent commands, and live control state. */
 
 import { hostname } from 'node:os'
+import { resolve } from 'node:path'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
 import { CollaborationAnalysisRunner } from './collaboration-analysis.ts'
 import type { CollaborationAnalysisManifest, CollaborationAnalysisResult } from './collaboration-analysis.ts'
+import type {} from '@deepseek-ai/dsh-fs'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
-import { canOpenNativePath, nativeFileManager, openNativePath, revealNativePath } from '@deepseek-ai/dsh-native-command'
+import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates, describeCollaborationSource } from './collaboration-source-journal.ts'
@@ -16,7 +19,7 @@ import type { CollaborationSourceJournal, CollaborationSourceInput, Collaboratio
 import { openCollaborationDeliveryJournal, parseCollaborationDeliveryInput } from './collaboration-delivery-journal.ts'
 import type { CollaborationDeliveryJournal, CollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
-import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
+import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import {
   ApiSessionAgentController,
@@ -29,13 +32,15 @@ import { SessionControlController } from './control.ts'
 import { SessionHistoryController } from './history.ts'
 import { SessionFileReferences } from './file-references.ts'
 import { ApiSessionList } from './list.ts'
-import { buildModelCatalog } from './catalog.ts'
+import { buildModelCatalog, hasProviderApiKey } from './catalog.ts'
 import { foldModelSelection, installModelSelectionProjection, resolveModelSelection } from './model-selection-projection.ts'
 import { SessionSkillCatalog } from './skill-catalog.ts'
 import { installAttachmentExport } from './attachment-export.ts'
 import { SessionMediaReferences } from './media-references.ts'
+import { ArchivedSessionGate } from './archived-session-gate.ts'
 import type {
   ModelCatalog,
+  SessionWorkspacePathApplication,
   SessionAttachmentRequest,
   SessionAttachmentValue,
   SessionCancelRequest,
@@ -58,6 +63,9 @@ import type {
   SessionOpenWorkspacePathValue,
   SessionPage,
   SessionPageRequest,
+  SessionProjectionsRequest,
+  SessionProjectionsValue,
+  SessionProjectionValues,
   SessionPromptRequest,
   SessionPromptValue,
   SessionRenameRequest,
@@ -102,6 +110,8 @@ export interface Config {
 export interface SessionControllerInternals {
   /** Native default-application handoff. */
   readonly openPath?: (path: string, signal: AbortSignal) => Promise<void>
+  readonly fileApplications?: typeof nativeFileApplications
+  readonly openFileApplication?: typeof openNativeFileApplication
   /** Native file-manager handoff. */
   readonly revealPath?: (path: string, signal: AbortSignal) => Promise<void>
   /** Native handoff availability probe. */
@@ -128,6 +138,7 @@ export class SessionController extends TypertRemoteService {
     'attachments',
     'connection',
     'fileUploads',
+    'fs',
     'llm',
     'sessions',
     'sessionProjections',
@@ -146,6 +157,8 @@ export class SessionController extends TypertRemoteService {
   private readonly history: SessionHistoryController
   private readonly listState: ApiSessionList
   private readonly openPath: (path: string, signal: AbortSignal) => Promise<void>
+  private readonly fileApplications: typeof nativeFileApplications
+  private readonly openFileApplication: typeof openNativeFileApplication
   private readonly revealPath: (path: string, signal: AbortSignal) => Promise<void>
   private readonly canOpenPath: () => boolean
   private readonly promotions = new Set<Promise<void>>()
@@ -193,7 +206,9 @@ export class SessionController extends TypertRemoteService {
     }, 'session-controller.promotions')
     this.history = new SessionHistoryController(ctx, (observation) => { this.promote(observation) })
     this.listState = new ApiSessionList(ctx)
-    this.openPath = internals.openPath ?? openNativePath
+    this.fileApplications = internals.fileApplications ?? nativeFileApplications
+    this.openFileApplication = internals.openFileApplication ?? openNativeFileApplication
+    this.openPath = internals.openPath ?? openNativeAssociatedPath
     this.revealPath = internals.revealPath ?? revealNativePath
     this.canOpenPath = internals.canOpenPath
       ?? (() => config.nativeOpen ?? (internals.openPath !== undefined || canOpenNativePath()))
@@ -201,6 +216,7 @@ export class SessionController extends TypertRemoteService {
     ctx.plugin(SessionFileReferences)
     ctx.plugin(SessionMediaReferences)
     ctx.plugin(SessionSkillCatalog)
+    ctx.plugin(ArchivedSessionGate)
 
     ctx.on('session/created', (session) => {
       ctx.emit('api-session/added', this.listState.summaryFor(session))
@@ -208,6 +224,13 @@ export class SessionController extends TypertRemoteService {
     ctx.on('session/disposed', (session) => {
       ctx.emit('api-session/removed', session.id)
     })
+    const publishAgentAvailability = ({ agent }: { agent: Agent }): undefined => {
+      if (ctx.sessions.get(agent.id) === agent.session) {
+        ctx.emit('api-session/added', this.listState.summaryFor(agent.session))
+      }
+    }
+    ctx.on('agent/created', publishAgentAvailability)
+    ctx.on('agent/disposed', publishAgentAvailability)
     ctx.on('agent/status', ({ agent, status }) => {
       ctx.emit('api-session/status', agent.id, status === 'running')
     })
@@ -653,6 +676,21 @@ export class SessionController extends TypertRemoteService {
     return this.commands.selectModel(request)
   }
 
+  /** Initialize the upstream Desktop account model when that product is composed. */
+  @Remote
+  async initializeDefaultModel(): Promise<void> {
+    const provider = 'deepseek-account'
+    if (await hasProviderApiKey(this.ctx)) return
+    const catalog = await buildModelCatalog(this.ctx)
+    const model = catalog.groups.find(group => group.id === provider)?.models[0]
+    if (model === undefined) throw new RemoteError('session/provider-models-unavailable',
+      `provider "${provider}" has no available models`, { provider })
+    const selection = { provider, model: model.id,
+      ...model.reasoning?.defaultEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(model.reasoning.defaultEffort) },
+    }
+    await this.ctx.agentDefaultModel.saveSelection(selection)
+  }
+
   /**
    * Describe every currently routable model for Host-generation selectors.
    * @returns provider-grouped models, the deployment default, and isolated provider failures.
@@ -681,37 +719,61 @@ export class SessionController extends TypertRemoteService {
   }
 
   /**
-   * Open one path prepared by a Session-aware caller on the Host desktop.
-   * @param request - path after best-effort Session workspace resolution.
-   * @param signal - caller lifetime; abort terminates the native command.
-   * @returns confirmation after the native opener accepts the path.
-   * @throws RemoteError when the request is invalid, cancelled, or the opener fails.
+   * Open a verified Host path through its selected native application.
+   * @param request - requested path and native action.
+   * @param signal - cancellation for verification and opening.
+   * @returns whether the native open operation succeeded.
    */
   @Remote('openWorkspacePath')
   async openWorkspacePath(
     request: SessionOpenWorkspacePathRequest,
     signal: AbortSignal,
   ): Promise<SessionOpenWorkspacePathValue> {
-    if (request.path.length === 0) {
-      throw new RemoteError(
-        'gateway/bad-request',
-        'session.openWorkspacePath requires a non-empty path',
-        {},
-      )
-    }
-    signal.throwIfAborted()
     try {
-      if (request.action === 'reveal') await this.revealPath(request.path, signal)
-      else await this.openPath(request.path, signal)
+      const path = await this.verifyDesktopPath(request.path, signal)
+      if (request.action === 'reveal') await this.revealPath(path, signal)
+      else if (request.application !== undefined) await this.openFileApplication(path, request.application, signal)
+      else await this.openPath(path, signal)
       return { opened: true }
     } catch (error: unknown) {
       if (signal.aborted) throw new RemoteError('gateway/cancelled', 'path open was aborted', {})
-      throw new RemoteError(
-        'gateway/internal',
-        `path open failed: ${error instanceof Error ? error.message : String(error)}`,
-        {},
-      )
+      if (error instanceof RemoteError) throw error
+      throw new RemoteError('gateway/internal', 'path open failed', {}, { cause: error })
     }
+  }
+
+  /**
+   * Query applications for a verified Host path.
+   * @param request - path to inspect.
+   * @param signal - cancellation for path verification and application lookup.
+   * @returns applications available to open the path.
+   */
+  @Remote('workspacePathApplications')
+  async workspacePathApplications(
+    request: { readonly path: string }, signal: AbortSignal,
+  ): Promise<readonly SessionWorkspacePathApplication[]> {
+    if (!this.canOpenPath()) return []
+    try {
+      const path = await this.verifyDesktopPath(request.path, signal)
+      return await this.fileApplications(path, signal)
+    } catch (error: unknown) {
+      if (signal.aborted) throw new RemoteError('gateway/cancelled', 'application query was aborted', {})
+      if (error instanceof RemoteError) throw error
+      throw new RemoteError('gateway/internal', 'file application query failed', {}, { cause: error })
+    }
+  }
+
+  private async verifyDesktopPath(path: string, signal: AbortSignal): Promise<string> {
+    if (path.length === 0) throw new RemoteError('gateway/bad-request', 'A non-empty file path is required', {})
+    signal.throwIfAborted()
+    const hostPath = resolve(path)
+    const { fs } = this.ctx
+    const mapped = fs.processPathFromHostPath(hostPath)
+    if (mapped === undefined || fs.processPath(await fs.resolve(mapped, { signal })) !== hostPath) {
+      throw new RemoteError('gateway/bad-request', 'Path has no verified Host path', {})
+    }
+    signal.throwIfAborted()
+    return hostPath
   }
 
   /**
@@ -808,6 +870,33 @@ export class SessionController extends TypertRemoteService {
   @Remote({ mode: 'stream' })
   follow(request: SessionFollowRequest, signal: AbortSignal): AsyncIterable<SessionFollowFrame> {
     return this.history.follow(request, signal)
+  }
+
+  /**
+   * Read the current projection baseline without starting an Agent.
+   * @param request - Session whose projections are requested.
+   * @param signal - cancellation for the observation.
+   * @returns projection values and their sequence cursor.
+   */
+  @Remote('projections')
+  async projections(request: SessionProjectionsRequest, signal: AbortSignal): Promise<SessionProjectionsValue> {
+    const { sessionId } = request
+    if (sessionId.length === 0) throw new RemoteError('gateway/bad-request', 'sessionId must not be empty', {})
+    try {
+      using observation = await this.ctx.sessionQuery.observeSession(sessionId, { signal })
+      const projections = observation.projections
+      if (projections === undefined) {
+        throw new RemoteError('session/projections-unavailable', 'Session projections are unavailable', {})
+      }
+      return { asOfSeq: projections.asOfSeq, values: projections.values as SessionProjectionValues }
+    } catch (error: unknown) {
+      if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') return null
+      if (signal.aborted || (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_ABORTED')) {
+        throw new RemoteError('gateway/cancelled', 'Session projection read was cancelled', {}, { cause: error })
+      }
+      if (error instanceof RemoteError) throw error
+      throw new RemoteError('gateway/internal', 'Session projection read failed', {}, { cause: error })
+    }
   }
 
   /**

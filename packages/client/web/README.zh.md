@@ -29,7 +29,7 @@ kind: "package-library"
 
 静态应用页面在入口运行前安装 `__DSH_BOOT_READY__`。`run()` 等待期间会立即显示启动页；页面所有者通过 `applyIndexInjections`（也从 `./injections` 导出）应用 Host 注入项，并在所有脚本完成后兑现延迟对象。延迟对象拒绝时显示启动失败；若调用方提供 `run(onFailure)`，则由外部呈现错误并保留加载页。Desktop 使用该回调请求原生恢复。Desktop 与 WebWorker 共享注入解释器；服务端 `tapIndex` HTML 转换仅适用于服务端提供的文档。
 
-打包后的 Cordis Loader 在启动时调用 `new Function`，因此隔离的静态 DSH 页面需要在内容安全策略中设置 `script-src 'unsafe-eval'`。远程页面必须运行于不含 Slark 登录 cookie 的独立 origin，并阻断 `connect-src`；父页面的 MessagePort 承载 Host 流量。`apps/web/tests/remote-frame.spec.ts` 在 Chromium 中验证这项策略。
+打包后的 Cordis Loader 在启动时调用 `new Function`，因此隔离的静态 DSH 页面需要在内容安全策略中设置 `script-src 'unsafe-eval'`。远程页面必须运行于不含 Slark 登录 cookie 的独立 origin，并阻断 `connect-src`；父页面的 MessagePort 承载 Host 流量。`apps/web/tests/remote-frame.e2e.ts` 在 Chromium 中验证这项策略。
 
 外壳基础样式会在支持的浏览器中为普通内容自动添加中西文间距。语义化代码以及终端、diff、读取和搜索输出容器会保留源码中的原始间距和列对齐；不支持 `text-autospace` 的浏览器会忽略这两项声明。
 
@@ -53,6 +53,8 @@ kind: "package-library"
 
 <a id="understand-the-implementation"></a>
 ## 理解实现
+
+菜单采用共享 `MenuSurface` 材质，包括用于背景模糊的 macOS 底层；自定义内容遵循[菜单规则](../../../docs/web-styling.zh.md#component-rules)。
 
 <details>
 <summary>实现细节——点击展开</summary>
@@ -78,12 +80,14 @@ kind: "package-library"
 | 文件 | 职责 |
 |---|---|
 | [`src/index.ts`](src/index.ts) | 库入口：`AppWebEntry`、`getStaticModules`、平台表 |
-| [`src/boot.ts`](src/boot.ts) | `AppWebEntry`：模块阶段、启动页、immediately 层级预取，随后调用 `bootClient` + `mountClient` |
+| [`src/boot.ts`](src/boot.ts) | `AppWebEntry`：模块阶段、启动页、immediately 层级预取、安装窗口拖拽矩形 watcher，随后调用 `bootClient` + `mountClient` |
 | [`src/boot-client.ts`](src/boot-client.ts) | `bootClient` / `assertEntriesActive`：挂载 Loader、每个 manifest 行一个 entry、激活审计 |
 | [`src/mount.ts`](src/mount.ts) | `mountClient`：经 `uiRenderer` 依赖 fiber 完成渲染器交接 |
 | [`src/boot-page.ts`](src/boot-page.ts) | 无框架启动页：spinner、逐 entry 状态、失败渲染 |
 | [`src/platform.ts`](src/platform.ts) | `PLATFORM_MODULES` / `PRELOADED_CLIENT_EXTERNALS`：隐式 external 基座 |
 | [`src/seed.ts`](src/seed.ts) | 启动时交给 loader 的静态模块表 |
+| [`src/window-drag/regions.ts`](src/window-drag/regions.ts) | darwin app-region 组合模型，以及 `base.css` 减除的交互元素选择器 |
+| [`src/window-drag/recall.ts`](src/window-drag/recall.ts) | 外壳唯一的窗口拖拽矩形 watcher（electron/electron#32341）：逐帧测量被打标行，并在它们移动期间脉冲 recall 标记 |
 
 </details>
 

@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-11-windows-desktop-host-carrier.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-09-11-windows-desktop-host-carrier.md
-2026-09-11-windows-desktop-host-carrier.md: 62a1ba960cc36fede9f01efbb09c1312d3d77409
-2026-09-11-windows-desktop-host-carrier.zh.md: 1f00fdad878adfb4d02a99d2b23879c02f60709b
+/agent-note-windows-carrier-for-the-single-desktop-host:
+  en: 9656c3cda6fe9a89
+  zh: 99edce1cf1644134
+/agent-note-windows-carrier-for-the-single-desktop-host/problem:
+  en: 53edf4558763d6ec
+  zh: 55fed2af3cfef69d
+/agent-note-windows-carrier-for-the-single-desktop-host/proposal:
+  en: f0e7caa3b9b422c7
+  zh: a144dc5cff4d9c88
+/agent-note-windows-carrier-for-the-single-desktop-host/alternatives-considered:
+  en: bcb4a5a590eaf1e6
+  zh: 1adfc6b20a4569f9
+/agent-note-windows-carrier-for-the-single-desktop-host/acceptance-criteria:
+  en: bfeddc4311a55d7f
+  zh: 769ed18dbc9020d6
+/agent-note-windows-carrier-for-the-single-desktop-host/risks:
+  en: f58a533ad7dcce85
+  zh: eb1063824ceabfd8

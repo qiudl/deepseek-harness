@@ -95,7 +95,7 @@ export class CollaborationAnalysisRunner {
       if (++chunks > 32768 || finished) throw new Error('collaboration_analysis_invalid_stream')
       switch (chunk.type) {
         case 'block-start':
-          if (chunk.blockType === 'tool-call' || chunk.blockType === 'tool-result') throw new Error('collaboration_analysis_tool_output')
+          if (chunk.blockType === 'tool-call' || chunk.blockType === 'tool-addition' || chunk.blockType === 'tool-removal') throw new Error('collaboration_analysis_tool_output')
           if (chunk.blockType !== 'text' && chunk.blockType !== 'reasoning') throw new Error('collaboration_analysis_invalid_stream')
           break
         case 'tool-call-delta': throw new Error('collaboration_analysis_tool_output')

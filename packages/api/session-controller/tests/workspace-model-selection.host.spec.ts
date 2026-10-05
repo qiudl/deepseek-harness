@@ -252,7 +252,10 @@ describe('Host workspace model inspection', () => {
   })
 
   it('reads an installed live choice, then strips an adapter default after consumption', async () => {
-    const h = await harness()
+    const adapter = new SnapshotAdapter()
+    adapter.listModels = async provider => [{ provider, id: 'selected-model', name: 'Selected' }]
+    const h = await harness([], adapter)
+    h.ctx.llm.registerAdapter(['selected'], adapter)
     try {
       const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } })
       const agent = { id: sessionId, session, ctx: h.ctx, status: 'idle', inbox: { nextStep: [], nextTurn: [] } } as unknown as Agent

@@ -1,6 +1,25 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-12-profile-extension-receipts.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-12-profile-extension-receipts.md
-2026-09-12-profile-extension-receipts.md: f35c8f25ac6e604918994c2d8a6cc654cca61f63
-2026-09-12-profile-extension-receipts.zh.md: 2de2be55eae988307fd13d0e6971351085063942
+/agent-note-profile-bound-extension-operation-receipts:
+  en: 81e47a55accaf300
+  zh: b5222594a6f6d6d6
+/agent-note-profile-bound-extension-operation-receipts/problem:
+  en: 1a02c6c151d8c754
+  zh: 07f9d355d160dd88
+/agent-note-profile-bound-extension-operation-receipts/decision:
+  en: 7456405a6682821e
+  zh: e33f9afdfd4e55c0
+/agent-note-profile-bound-extension-operation-receipts/alternatives-considered:
+  en: 3fc7e672aef04f3c
+  zh: 2706bb6016a2b5f5
+/agent-note-profile-bound-extension-operation-receipts/consequences:
+  en: d11c4d7d9ea62f95
+  zh: 38bdc7e853e10e12
+/agent-note-profile-bound-extension-operation-receipts/slark-joint-acceptance:
+  en: f47de43c340e4dc0
+  zh: ab815778f5634f92
+/agent-note-profile-bound-extension-operation-receipts/skill-publication-and-acknowledgement:
+  en: ca8b7ec5468e0ad8
+  zh: 062e0131af7ffe50

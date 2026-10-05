@@ -1,5 +1,5 @@
 import {
-  chmod, copyFile, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile,
+  chmod, copyFile, link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, unlink, writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -107,6 +107,17 @@ describe('SchemaAwareMigrationOwnerStateSource', () => {
 })
 
 describe('FileJsonlMigrationExportSource', () => {
+  it('preserves current-format parent and child identities alongside their events', async () => {
+    const { source, target } = await fixture()
+    const child = { ...header, id: SessionId('export-child'), parentSession: header.id }
+    await target.importSession(4, child, events)
+    const snapshots = await source.listSnapshots()
+    expect(snapshots).toHaveLength(2)
+    expect(snapshots.map(snapshot => snapshot.header.id).sort()).toEqual(['export-child', 'export-source'])
+    expect(snapshots.find(snapshot => snapshot.header.id === child.id)?.header.parentSession).toBe(header.id)
+    expect((await source.inspect(child.id)).events).toEqual(events)
+    expect((await source.inspect(header.id)).events).toEqual(events)
+  })
   it('reads stable snapshots, cloned owner state, inspections, revisions, and inventory digests', async () => {
     const { source, target } = await fixture()
     await target.importSession(4, { ...header, id: SessionId('a-first') }, [])
@@ -235,6 +246,79 @@ describe('FileJsonlMigrationExportSource', () => {
       .toEqual([])
     expect((await (await manualLog('session.jsonl', [legacyHeader, event])).inspect(SessionId('manual'))).events)
       .toHaveLength(1)
+  })
+
+  it('completes a released parent catalog from the full legacy source inventory', async () => {
+    const root = await tempRoot('dsh-migration-export-related-')
+    const project = join(root, '_no-cwd')
+    for (const [id, header] of [
+      ['parent', { type: 'session', version: 0, id: 'parent', createdAt: 1, delegationDepth: 0 }],
+      ['child', { type: 'session', version: 0, id: 'child', createdAt: 2, delegationDepth: 1,
+        parentSession: 'parent', origin: 'subagent' }],
+    ] as const) {
+      const directory = join(project, id)
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      await writeFile(join(directory, 'session.jsonl'), `${JSON.stringify(header)}\n`, { mode: 0o600 })
+    }
+    const source = new FileJsonlMigrationExportSource(root, uid, { read: async () => ownerState })
+    const parent = await source.inspect(SessionId('parent'))
+    expect(parent.events.some(event => event.type === 'subagent/catalog'
+      && (event.data as { childId?: string }).childId === 'child')).toBe(true)
+  })
+
+  it('imports the default V3 Zstandard output of the released 0.1.6-alpha.2 writer without changing it', async () => {
+    const root = await tempRoot('dsh-migration-export-released-v3-')
+    const session = join(root, 'project', 'req0002-old-writer-history')
+    await mkdir(session, { recursive: true, mode: 0o700 })
+    const log = join(session, 'session.v3.jsonl.zstd')
+    const bytes = await readFile(new URL('./fixtures/released-v3-old-writer.jsonl.zstd', import.meta.url))
+    await writeFile(log, bytes, { mode: 0o600 })
+    // A retained predecessor is normal after a released writer migrates its generation.
+    await writeFile(join(session, 'session.jsonl.zstd'), await compressZstdFrame(JSON.stringify({
+      type: 'session', version: 0, id: 'req0002-old-writer-history', createdAt: 1, delegationDepth: 0,
+    }) + '\n'), { mode: 0o600 })
+    const names = await readdir(session)
+    const source = new FileJsonlMigrationExportSource(root, uid, { read: async () => ownerState })
+    const snapshots = await source.listSnapshots()
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]?.header.version).toBe(SESSION_FORMAT_VERSION)
+    const imported = await source.inspect(SessionId('req0002-old-writer-history'))
+    expect(JSON.stringify(imported.events)).toContain('REQ-20260929-0002 old-writer historical prompt')
+    expect(JSON.stringify(imported.events)).toContain('REQ-20260929-0002 historical assistant reply')
+    expect(await readFile(log)).toEqual(bytes)
+    expect((await stat(log)).mode & 0o777).toBe(0o600)
+    expect(await readdir(session)).toEqual(names)
+  })
+
+  it('continues to refuse mixed encodings when the compressed generation is versioned', async () => {
+    const mixed = await fixture()
+    await writeFile(join(mixed.session, 'session.v3.jsonl.zstd'),
+      await readFile(new URL('./fixtures/released-v3-old-writer.jsonl.zstd', import.meta.url)), { mode: 0o600 })
+    const before = await readFile(mixed.log)
+    await expect(mixed.source.listSnapshots()).rejects.toThrow(/source_unsafe/u)
+    expect(await readFile(mixed.log)).toEqual(before)
+  })
+
+  it.each(['future', 'corrupt', 'mismatched'] as const)('refuses a %s compressed successor without falling back or changing its source', async (fault) => {
+    const root = await tempRoot('dsh-migration-export-zstd-refusal-')
+    const session = join(root, 'project', 'req0002-old-writer-history')
+    await mkdir(session, { recursive: true, mode: 0o700 })
+    const original = await readFile(new URL('./fixtures/released-v3-old-writer.jsonl.zstd', import.meta.url))
+    await writeFile(join(session, 'session.v3.jsonl.zstd'), original, { mode: 0o600 })
+    const name = fault === 'future' ? 'session.v99.jsonl.zstd' : 'session.v4.jsonl.zstd'
+    const bytes = fault === 'future' ? await compressZstdFrame(JSON.stringify({
+      type: 'session', version: 99, id: 'req0002-old-writer-history', createdAt: 1, delegationDepth: 0,
+    }) + '\n') : fault === 'corrupt' ? Buffer.concat([original, Buffer.of(0)]) : original
+    const log = join(session, name)
+    await writeFile(log, bytes, { mode: 0o600 })
+    const names = await readdir(session)
+    const source = new FileJsonlMigrationExportSource(root, uid, { read: async () => ownerState })
+    await expect(source.listSnapshots()).rejects.toThrow()
+    await expect(source.listSnapshots()).rejects.toThrow()
+    expect(await readFile(log)).toEqual(bytes)
+    expect(await readFile(join(session, 'session.v3.jsonl.zstd'))).toEqual(original)
+    expect((await stat(log)).mode & 0o777).toBe(0o600)
+    expect(await readdir(session)).toEqual(names)
   })
 
   it('decodes complete legacy zstd frames and rejects corrupt compressed input', async () => {

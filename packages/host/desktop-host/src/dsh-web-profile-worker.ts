@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
@@ -8,6 +8,7 @@ import { parseHostRemoteSessionJson, parseHostWorkspaceModelSelection, parseHost
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
 
 const execFileAsync = promisify(execFile)
 const REMOTE_UI_ASSET_MAX_BYTES = 8 * 1024 * 1024
@@ -20,6 +21,7 @@ const RESERVED_ENV = new Set([
   'DSH_PROFILE_DELIVERY_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
+  'DSH_SLARK_EMBEDDED',
 ])
 
 /** Classified failure from the authenticated worker model endpoint. */
@@ -60,6 +62,30 @@ function readyView(line: string): { readonly origin: string; readonly authentica
   return { origin: parsed.origin, authenticatedUrl: parsed.toString() }
 }
 
+/** Project local document-relative plugin references onto the remote Host's root-only asset route. */
+function remoteBootReferences(value: unknown): unknown {
+  const record = (item: unknown): item is Record<string, unknown> =>
+    typeof item === 'object' && item !== null && !Array.isArray(item)
+  const root = (url: unknown): unknown =>
+    typeof url === 'string' && url.startsWith('plugins/') ? `/${url}` : url
+  if (!record(value) || !Array.isArray(value.injections)) return value
+  return { ...value, injections: value.injections.map((item: unknown) => {
+    if (!record(item)) return item
+    if (item.kind === 'script-src' || item.kind === 'script-preload') {
+      return { ...item, src: root(item.src) }
+    }
+    if (item.kind !== 'global' || item.name !== '__DSH_BOOT__' || !record(item.value)) return item
+    const graph = item.value
+    return { ...item, value: {
+      ...graph,
+      entries: Array.isArray(graph.entries) ? graph.entries.map((entry: unknown) =>
+        record(entry) ? { ...entry, url: root(entry.url) } : entry) : graph.entries,
+      batches: Array.isArray(graph.batches) ? graph.batches.map((batch: unknown) =>
+        record(batch) ? { ...batch, url: root(batch.url) } : batch) : graph.batches,
+    } }
+  }) }
+}
+
 async function exchangeBootstrap(
   authenticatedUrl: string,
   origin: string,
@@ -67,7 +93,8 @@ async function exchangeBootstrap(
 ): Promise<{ readonly name: string; readonly value: string }> {
   const response = await fetch(authenticatedUrl, { redirect: 'manual', signal })
   await response.body?.cancel()
-  if (response.status !== 303 || response.headers.get('location') !== '/') throw new HostAuthorityError('unavailable')
+  const location = response.headers.get('location')
+  if (response.status !== 303 || (location !== '/' && location !== './')) throw new HostAuthorityError('unavailable')
   const cookies = response.headers.getSetCookie()
   if (cookies.length !== 1) throw new HostAuthorityError('unavailable')
   const cookie = cookies[0] as string
@@ -129,6 +156,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_DELIVERY_TOKEN: deliveryToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
         DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
+        DSH_SLARK_EMBEDDED: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -265,11 +293,13 @@ export class DshWebProfileWorkerFactory {
       remoteSession: (command, signal) => this.remoteSession(
         viewOrigin, remoteSessionToken, command, signal, () => requestedStop || settled,
       ),
-      remoteUiRead: (endpoint, payload, signal) => endpoint === 'asset/read'
-        ? this.remoteUiAssetRead(viewOrigin, bootstrapCookie, remoteUiToken, payload, signal,
+      remoteUiRead: (endpoint, payload, signal) => endpoint === 'asset/read' || endpoint === 'asset/describe'
+        ? this.remoteUiAssetRead(viewOrigin, bootstrapCookie, remoteUiToken, endpoint, payload, signal,
           () => requestedStop || settled, assetCache)
         : this.remoteUiRead(viewOrigin, remoteUiToken, endpoint, payload, signal,
           () => requestedStop || settled),
+      remoteUiStream: (endpoint, payload, signal) => openRemoteUiWorkerStream(
+        viewOrigin, remoteUiToken, endpoint, payload, signal, () => requestedStop || settled),
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
         if (requestedStop || settled) return
@@ -518,23 +548,7 @@ export class DshWebProfileWorkerFactory {
     signal: AbortSignal,
     stopped: () => boolean,
   ): Promise<HostRemoteSessionJson> {
-    if (stopped()) throw new HostAuthorityError('unavailable')
-    const response = await fetch(`${viewOrigin}/internal/desktop-remote-session`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(command),
-      signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
-    })
-    if (!response.ok) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
-    const body = await response.text()
-    if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')
-    let parsed: unknown
-    try { parsed = JSON.parse(body) } catch { throw new HostAuthorityError('unavailable') }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
-      || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'value')) {
-      throw new HostAuthorityError('unavailable')
-    }
-    return (parsed as { value: HostRemoteSessionJson }).value
+    return await this.remoteJson(viewOrigin, token, 'desktop-remote-session', command, signal, stopped) as HostRemoteSessionJson
   }
 
   private async remoteUiRead(
@@ -545,14 +559,31 @@ export class DshWebProfileWorkerFactory {
     signal: AbortSignal,
     stopped: () => boolean,
   ): Promise<unknown> {
+    const value = await this.remoteJson(viewOrigin, token, 'desktop-remote-ui', { endpoint, payload }, signal, stopped)
+    return endpoint === 'boot/injections' ? remoteBootReferences(value) : value
+  }
+
+  private async remoteJson(
+    viewOrigin: string,
+    token: string,
+    route: 'desktop-remote-session' | 'desktop-remote-ui',
+    payload: unknown,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<unknown> {
     if (stopped()) throw new HostAuthorityError('unavailable')
-    const response = await fetch(`${viewOrigin}/internal/desktop-remote-ui`, {
+    const response = await fetch(`${viewOrigin}/internal/${route}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ endpoint, payload }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
     })
-    if (!response.ok) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
+    if (!response.ok) {
+      await response.body?.cancel()
+      throw new HostAuthorityError(route === 'desktop-remote-session' && response.status === 409
+        ? 'conflict' : route === 'desktop-remote-session' && response.status === 429
+          ? 'busy' : 'unavailable')
+    }
     const body = await response.text()
     if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')
     let parsed: unknown
@@ -568,18 +599,21 @@ export class DshWebProfileWorkerFactory {
     viewOrigin: string,
     cookie: { readonly name: string; readonly value: string },
     token: string,
+    endpoint: 'asset/read' | 'asset/describe',
     payload: unknown,
     signal: AbortSignal,
     stopped: () => boolean,
     cache: { current?: { readonly url: string; readonly bytes: Buffer } },
-  ): Promise<{ readonly bytes: string; readonly total: number }> {
+  ): Promise<{ readonly bytes: string; readonly total: number } | { readonly sha256: string; readonly total: number }> {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new HostAuthorityError('invalid_input')
     const args = (payload as { args?: unknown }).args
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new HostAuthorityError('invalid_input')
     const selected = args as Record<string, unknown>
-    if (Object.keys(selected).length !== 2 || typeof selected.url !== 'string'
-      || !Number.isSafeInteger(selected.offset) || (selected.offset as number) < 0
-      || (selected.offset as number) > REMOTE_UI_ASSET_MAX_BYTES) throw new HostAuthorityError('invalid_input')
+    if (Object.keys(selected).length !== (endpoint === 'asset/read' ? 2 : 1)
+      || typeof selected.url !== 'string'
+      || (endpoint === 'asset/read' && (!Number.isSafeInteger(selected.offset)
+        || (selected.offset as number) < 0
+        || (selected.offset as number) > REMOTE_UI_ASSET_MAX_BYTES))) throw new HostAuthorityError('invalid_input')
     let url: URL
     try { url = new URL(selected.url, viewOrigin) } catch { throw new HostAuthorityError('invalid_input') }
     if (url.origin !== viewOrigin || url.hash !== '' || !url.pathname.startsWith('/plugins/')
@@ -617,6 +651,9 @@ export class DshWebProfileWorkerFactory {
       cache.current = { url: selected.url, bytes: body }
     }
     if (stopped() || signal.aborted) throw new HostAuthorityError('unavailable')
+    if (endpoint === 'asset/describe') {
+      return { sha256: createHash('sha256').update(body).digest('hex'), total: body.byteLength }
+    }
     if ((selected.offset as number) > body.byteLength) throw new HostAuthorityError('invalid_input')
     const bytes = body.subarray(selected.offset as number,
       (selected.offset as number) + REMOTE_UI_ASSET_CHUNK_BYTES)

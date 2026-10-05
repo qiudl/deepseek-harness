@@ -9,7 +9,7 @@ kind: "package-bundle"
 
 ## 概述
 
-本包提供 Desktop Main 使用的本机 DSH Host 权威。它让 issuer-qualified Person Profile 独立于 Slark 环境，串行化同一会话命令，围栏审批与环境上下文租约，监管相互隔离的 Profile worker，并提供 owner-only 的已认证 Unix socket。Host 控制组件不拥有 HTTP listener；产品组合会启动既有 `dsh web` worker，由 Host 自行兑换一次性启动 URL，并且只向可信 Main 返回已校验的 loopback origin 与 HttpOnly Cookie 名称／值。启动 token 和文件系统路径都不会进入 Renderer。
+本机 DSH Host 服务于 Desktop Main。它让 issuer-qualified Person Profile 独立于 Slark 环境，串行化同一会话命令，围栏审批与环境上下文租约，监管相互隔离的 Profile worker，并提供 owner-only 的已认证 Unix socket。Host 控制组件不拥有 HTTP listener；其组合会启动既有 `dsh web` worker，由 Host 自行兑换一次性启动 URL，并且只向可信 Main 返回已校验的 loopback origin 与 HttpOnly Cookie 名称／值。启动 token 和文件系统路径都不会进入 Renderer。启动认证重定向必须精确为 `/` 或 `./`；其他目标会在使用 Cookie 之前被拒绝。
 
 ## 目录
 
@@ -21,6 +21,8 @@ kind: "package-bundle"
 
 <a id="desktop-adapter"></a>
 ## Desktop adapter
+
+远程 UI 启动读取只在返回的注入表中将 worker 的文档相对路径 `plugins/` 投影为 Host 根路由 `/plugins/`。worker 本机 Web 文档仍使用相对路径；远程资源读取仍要求当前启动表列出的精确 URL 和有效视图租约。
 
 固定摘要的原生辅助模块只在验证精确原生模块路径和字节后创建默认加载器。导入该辅助模块不会解析原生包。私有 `windows-startup.js` 组合会把同一发布固定值传给父线程的 SID、注册、监听器和取消适配器，并把它放入严格解码的 Worker 启动数据。文件 Worker 会独立重新校验并加载这个精确原生模块，供取消、管道 I/O、生命周期和对端认证使用。两条生产路径都不会搜索 Koffi 包；嵌入方仍须验证发布元数据，并在整个使用期间保护已安装文件。
 
@@ -42,7 +44,7 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 客户端取消逻辑会接管启动取消后才移交的线程句柄。取消重试预算耗尽时，父线程继续持有该句柄，直到 Worker 后续正常或异常退出，确认可以关闭；预算耗尽不代表已经停止。
 
-`UnixHostClient` 提供 Profile 的账号 ensure／restore／status／open、本地 bootstrap／restore／open、view activation／close 与 owner-only 迁移操作。本地操作不接收账号身份、token、binding 或 environment assertion；Host selector 与 Keychain material 可在后续 authenticated connection 上恢复本地专用 Profile。同一 authenticated owner 再次打开相同 Profile 时，Host 会原子延长现有短时 view lease 并签发新的单次 activation handle，使活跃 Desktop 无需替换 renderer 即可续期授权。`profile.ensure_account_token` capability 标识 Host 接受带 token 的 `profile.ensure` 载荷；当该 capability 缺失时，任一 peer 都会在 mutation 前报告 `upgrade_required`。`profile.ensure` 要求携带面向 `dsh-host` audience 的短时规范 DSH Account token；Host 离线校验该 token，并在任何 Profile registry mutation 前要求其 issuer 与 subject 和请求账号一致。每个操作都接受 `AbortSignal`。中止会销毁已认证连接，Host 会撤销该连接拥有的全部 view lease 和 Profile 解锁引用；另一个已独立证明同一 Profile 的 staging 或 production 连接仍保持授权。
+`UnixHostClient` 提供 Profile 的账号 ensure／restore／status／open、本地 bootstrap／restore／open、view activation／close 与 owner-only 迁移操作。本地操作不接收账号身份、token、binding 或 environment assertion；Host selector 与 Keychain material 可在后续 authenticated connection 上恢复本地专用 Profile。同一 authenticated owner 再次打开相同 Profile 时，Host 会原子延长现有短时 view lease 并签发新的单次 activation handle，使活跃 Desktop 无需替换 renderer 即可续期授权。`profile.ensure_account_token` capability 标识 Host 接受带 token 的 `profile.ensure` 载荷；当该 capability 缺失时，任一 peer 都会在 mutation 前报告 `upgrade_required`。`profile.ensure` 要求携带面向 `dsh-host` audience 的短时规范 DSH Account token；Host 离线校验该 token，并在任何 Profile registry mutation 前要求其 issuer 与 subject 和请求账号一致。每个操作都接受 `AbortSignal`。中止会销毁已认证连接，Host 会撤销该连接拥有的全部 view lease 和 Profile 解锁引用；另一个已独立证明同一 Profile 的 staging 或 production 连接，在任一连接重新打开该 Profile 后仍保有自己的 view lease；租约过期、连接断开和 Profile 撤销仍会使相应租约失效。
 
 连接以 `host.inspect` 开始：Desktop 提供新鲜 challenge，并校验安装 Ed25519 签名、可信安装 id 与公钥、peer UID、可执行文件签名摘要、Host process nonce 和 runtime generation。后续帧重复 client、Host 与 process 身份，并携带最长 30 秒、只能使用一次的 JTI。
 
@@ -55,11 +57,15 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `profile.collaboration_registration` 使用当前连接已验证的 Account grant 和安装私钥，将服务器挑战与当前 Host 进程一起签名。客户端按已核验的安装身份验证签名，检查全部挑战/进程字段及有效期，返回冻结证明。Unix 与 Windows 共用这套 authority/client 方法。它不启动 worker、不打开视图租约、不修改 Profile/Session 数据。Slark 私有 Host broker 持有独立连接并负责取消；服务器挑战持久层、公钥登记及操作对账不属于该方法。
 
+仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
+
 Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
 
 远程 Session 执行是可选的 Host 依赖。安装执行器后，Host 才会广告 `profile.remote_session`，并只通过有效且绑定 owner 的 view lease 接受控制协议定义的封闭命令联合。Host 从该 lease 解出 Profile，转发连接取消，在异步执行完成后重新校验同一 lease，并让有界结果通过规范 wire codec 后才返回。没有执行器的 Host 不发布 capability，客户端会在发送命令前返回 `upgrade_required`。该执行缝不暴露浏览器 cookie、启动 token、Profile 路径或通用 HTTP 代理。
 
 远程 Web DSH 读取使用 `profile.remote_ui_read`，在调用 worker 前后校验同一绑定 owner 的租约。macOS 和 Windows Host 启动入口安装精确端点的 worker 执行器，worker 私有 Bearer token 始终留在 Host 内。对于 `asset/read`，Host 校验当前启动注入表，只用私有 cookie 读取其中列出的同源 `/plugins/` 脚本，要求 JavaScript 响应，将完整资源限制在 8 MiB，并从单个 worker 本机缓存返回 24 KiB 分块。超过 64 KiB 的结果会被控制帧拒绝。这只是有界读取通道，不是流或通用 Web API 隧道。
+
+Profile worker 句柄读取其私有 `session/follow`、`workspace/follow` 或 `$events` NDJSON 路由。它只接受有界的事件项和明确的结束帧，调用方释放时取消 HTTP 读取，并拒绝格式错误、失败或不完整的流。Host 只通过 `profile.remote_ui_stream` 暴露这个读取端：每次短暂的打开、轮询或关闭请求都校验绑定 owner 的租约；每条连接最多保留八个游标；每个游标最多缓存一个 512 KiB 事件，并以 16 KiB 分块返回，空闲时不阻塞控制通道。租约撤销后的下一次请求或连接断开会取消读取。worker 令牌和通用 Gateway 流都不会通过控制通道。
 
 账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。注册表出现并发变更时，回退被阻止并返回 `stale`。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
 

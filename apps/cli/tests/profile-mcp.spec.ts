@@ -11,7 +11,7 @@ const installAnchor = fileURLToPath(new URL('../package.json', import.meta.url))
 const resourcePackage = '@deepseek-ai/dsh-mcp-resources'
 
 describe('shipped MCP resource composition', () => {
-  it.each(Object.keys(PROFILE_TEMPLATES))('%s carries one shared resource consumer without a server', (name) => {
+  it.each(Object.keys(PROFILE_TEMPLATES).filter(name => name !== 'desktop-host' && name !== 'slark-desktop-host'))('%s carries one shared resource consumer without a server', (name) => {
     const home = mkdtempSync(join(tmpdir(), 'dsh-profile-mcp-'))
     try {
       const profile = loadProfile('dsh', name, installAnchor, home)

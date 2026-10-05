@@ -7,6 +7,10 @@ kind: "package-bundle"
 
 English | [中文](README.zh.md)
 
+Desktop analytics follows the [product collection policy](../../client/product-analytics/README.md), including its live application setting. Web usage is excluded.
+
+Desktop analytics schedules partial batches every 30 seconds, with a 15-second exporter timeout and a 20-second processor timeout. Shutdown allows 2 seconds to drain, then cancels pending requests and retry waits so telemetry does not keep the Host alive. Pending events may be lost on exit.
+
 ## Summary
 
 Run `dsh --profile web` to open an interactive browser GUI with chat, model and settings management, and session history. It uses the same model access, tools, and safety defaults as other dsh surfaces. Startup prints an authenticated URL and normally opens it in the default browser; SSH sessions and `--no-open` leave the URL for manual opening. You can change the port and allow extra hosts, but cannot bind all network interfaces. Choose this package for interactive browser work; use `dsh-headless` for one-shot command-line tasks.
@@ -36,11 +40,11 @@ dsh --profile web
 dsh --profile web --no-open --port 8080
 ```
 
-After startup you see a `dsh web:` line whose root URL carries a fresh process token. Unless `--no-open` or an SSH session suppresses it, the default browser opens that URL, receives a signed cookie, and redirects to the clean root page. You know it worked when the page loads and you can chat with the agent. Two failures to expect: if the frontend is not built, startup stops with a build hint (`pnpm run build` in a checkout); if the browser cannot be opened, a credential-free diagnostic prints to stderr while the server keeps running — open the printed startup URL yourself.
+After startup you see a `dsh web:` line whose root URL carries a fresh process token. Unless `--no-open` or an SSH session suppresses it, the default browser opens that URL, receives a signed cookie, and redirects to the same directory without the token. You know it worked when the page loads and you can chat with the agent. Two failures to expect: if the frontend is not built, startup stops with a build hint (`pnpm run build` in a checkout); if the browser cannot be opened, a credential-free diagnostic prints to stderr while the server keeps running — open the printed startup URL yourself.
 
-**Settings → Models** displays **DeepSeek**, using `DEEPSEEK_API_KEY`. The default is `deepseek-official` / `deepseek-flash` (DeepSeek-V41-Flash). The [DeepSeek plugin](../../llm/llm-deepseek/README.md#choose-a-protocol) defaults to Messages; set `protocol: chat-completions` in Cordis YAML to select Chat Completions. Web has no protocol selector.
+**Settings → Models** displays **DeepSeek**, using `DEEPSEEK_API_KEY`. The default is `deepseek-official` / `deepseek-flash` (DeepSeek-V41-Flash). The [DeepSeek plugin](../../llm/llm-deepseek/README.md#endpoint-and-wire-format) uses the Messages API.
 
-Saved model selections override the composition default. Both protocols share `deepseek-official` and `llm-deepseek` settings, so switching preserves model selections and credential references. Endpoint overrides retain their values; the settings card lets users supply a compatible API address.
+Saved model selections override the composition default. The settings card accepts a Messages-compatible API address and a credential reference.
 
 ### Configuration
 
@@ -53,7 +57,7 @@ Most users never set these; the command-line flags feed the four settings below 
 | `surfaceContext` | `true` | Give the agent GUI-orientation context and expose `DSH_WEB_URL` to its shell commands |
 | `trustedHosts` | `[]` | Extra hosts allowed to reach the GUI from the network |
 
-The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) is the exhaustive source for every accepted field and its JSDoc.
+The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) is the exhaustive source for every accepted field and its JSDoc. The shipped composition carries no `time-context`, `schedule`, or `ui-schedule` row; the optional experimental bundle `@deepseek-ai/dsh-experimental-schedule-bundle` inserts those three rows from the Plugins page.
 
 ### LAN access and trusted hosts
 
@@ -65,7 +69,7 @@ When you launch `dsh --profile web` over SSH, the URL line still prints but the 
 
 ### Per-session agent setup
 
-Each browser session composes its own agent from the shipped presets (the `standard` preset by default), instead of sharing one process-wide tool set. You can change the default preset or add your own presets under `$DSH_HOME/.agent-presets`.
+Each browser session selects a shipped preset (`standard` by default). The Agent presets settings page changes the default and edits preset child plugins; saves persist in `$DSH_HOME/profiles/web/cordis.patch.yml`. Creator's plugin-management tool is enabled only when the Host provides an editable profile.
 
 -----
 
@@ -75,12 +79,18 @@ Each browser session composes its own agent from the shipped presets (the `stand
 
 `DSH_PROFILE_WORKSPACE_MODEL_TOKEN` enables `/internal/desktop-workspace-model-selection` only inside an isolated Profile worker. The endpoint accepts a 2 KiB registry workspace/Session target and delegates to the Host-only Session Controller reader without activating an Agent or dispatching a model. Browser cookies cannot authorize it. Failures omit exception details; responses are noncacheable and contain only validated selection fields. This read does not provide a Source proof or prepared configuration snapshot.
 
-When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the bundle also serves one Host-only local text request. It snapshots the Profile's current default model and uses its credential service for a single user message without tools or a Session. The private token is never returned to the browser; requests are limited to 8 KiB, answers to 16 KiB, and execution to 60 seconds. A separate token-authenticated local route executes bounded Desktop Session commands through the Profile's existing Session Remote methods; browser cookies cannot authorize it. Session history projects only Web-visible message, tool, and turn fields and returns a recent ordered suffix within the Host control-frame budget; internal, older, or oversized records are omitted. A third Host-only route, enabled by `DSH_PROFILE_REMOTE_UI_TOKEN`, accepts exact Session and startup reads through the existing Gateway, with bounded request and response bodies. Startup reads include redacted settings, preset rosters, source-free Plugin inventory, credential status without values, and permission options; credential references are bounded and validated. `dynamicCordisRunner/syncInspectManifest` remains denied because it changes Host state. The boot read returns current structured startup rows, not arbitrary URL content; the browser parent must still authenticate and check resource bytes before executing remote scripts. This is an internal remote-Web-UI building block, not a public browser API or a complete remote UI transport; streams and writes still require a separately authorized lease bridge.
+When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the bundle also serves one Host-only local text request. It snapshots the Profile's current default model and uses its credential service for a single user message without tools or a Session. The private token is never returned to the browser; requests are limited to 8 KiB, answers to 16 KiB, and execution to 60 seconds. A separate token-authenticated local route executes bounded Desktop Session commands through the Profile's existing Session Remote methods; browser cookies cannot authorize it. Session history projects only Web-visible message, tool, and turn fields and returns a recent ordered suffix within the Host control-frame budget; internal, older, or oversized records are omitted. A third Host-only route, enabled by `DSH_PROFILE_REMOTE_UI_TOKEN`, accepts exact Session and startup reads through the existing Gateway, with bounded request and response bodies. Startup reads include redacted settings, preset rosters, source-free Plugin inventory, credential status without values, and permission options; credential references are bounded and validated. `dynamicCordisRunner/syncInspectManifest` remains denied because it changes Host state. The boot read returns current structured startup rows, not arbitrary URL content; the browser parent must still authenticate and check resource bytes before executing remote scripts. The same private token also protects a separate `session/follow`, `workspace/follow`, or `$events` NDJSON route; it limits each event to 512 KiB and cancels the Gateway iterator when its Host HTTP reader disconnects. Browser cookies cannot authorize either remote UI route. These are internal building blocks, not a public browser API or a complete remote UI transport; the event stream and writes still require a separately authorized Host lease bridge.
+
+When the Desktop remote Session route is active, its Profile keeps one control claim per Session. Browser Session writes implicitly claim local control while the Session is unclaimed; a remote controller uses explicit acquire and compare-and-swap takeover. The Profile checks remote claims on every supported mutation and approval reply, checks local browser writes and event replies at the Gateway, and holds admitted writes until they settle. Control claims expire after 30 seconds without renewal and are invalid after Profile restart. The daemon and Slark Server must exchange the Profile claim before the remote browser can use these commands.
+
+When a remote client owns the current Session, the Desktop browser shows a takeover action in the Session header. It reads the current Profile epoch again, asks the user to confirm, and submits a compare-and-swap takeover through the authenticated browser Gateway. The user then resends the retained draft. The action is absent without the Desktop remote Session route.
+
+Remote `session.create` forwards only an optional Workspace ID to the selected Profile. The Profile resolves that ID against its own registry; caller-supplied paths do not cross the Host command protocol. Native approval results use the pending `$events` generation and must match its Session ID. An event stream rejects a second ready frame or a client ID already held by a live stream; closing the stream clears its pending approvals.
 
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The bundle is one patch plus one runtime glue plugin. The storage stack and projection cache come from `dsh-base`; the web overlay's workspace and message-feedback rows consume that shared `storageDomain` service. The patch restates the surface-specific values the base deliberately omits, inserts the web-only host rows and browser roster, then moves the agent plane behind presets. The glue plugin owns dist serving, trust sampling, prompt sections, the bash variable, and the readiness announcements. The `office-to-pdf` row mounts one lazy [Office conversion provider](../../document/office-to-pdf/README.md) for Host consumers, including Desktop compositions using this bundle. The conversion service's Remote methods authorize preview reads, while Document Preview owns the Office viewer and Client cache.
+The bundle is one patch layer of five files plus one runtime glue plugin: `cordis.patch.yml` carries the host rows and the preset registry, and each `presets/<id>.patch.yml` inserts one shipped preset declaration, applied in the order `dsh.bundle.patch` lists them. The storage stack and projection cache come from `dsh-base`; the web overlay's workspace and message-feedback rows consume that shared `storageDomain` service. The patch restates the surface-specific values the base deliberately omits, inserts the web-only host rows and browser roster, then moves the agent plane behind presets. The glue plugin owns dist serving, trust sampling, prompt sections, the bash variable, and the readiness announcements. The `office-to-pdf` row mounts one lazy [Office conversion provider](../../document/office-to-pdf/README.md) for Host consumers, including Desktop compositions using this bundle. The conversion service's Remote methods authorize preview reads, while Document Preview owns the Office viewer and Client cache.
 
 ### Patch semantics
 
@@ -100,7 +110,8 @@ The URL line and browser handoff are readiness signals: supervisors RPC as soon 
 |---|---|
 | [`src/index.ts`](src/index.ts) | The `web-app` glue plugin: dist resolution, LAN trust sampling, prompt sections, bash variable, URL line, browser handoff |
 | [`src/startup.ts`](src/startup.ts) | The `web-startup` provider: `--host`, `--port`, `--trusted-host`, `--no-open`, `--help` |
-| [`cordis.patch.yml`](cordis.patch.yml) | The web patch: restated base values, web host rows, browser roster, agent plane behind presets |
+| [`cordis.patch.yml`](cordis.patch.yml) | The web patch: restated base values, web host rows, browser roster, preset registry |
+| [`presets/`](presets) | One `@deepseek-ai/dsh-agent-preset` declaration per shipped preset (`standard`, `ptc`, `minimal`, `cordis`), each its own patch file |
 | — | No runtime invariant companion is published; every contribution (frontend-static child plugin, prompt section, bashEnv registration) is registry-disposed with the fiber, and each owning registry's package carries that relation's invariant; the package holds no mutable state of its own to audit. |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | Dist resolution, fallback seat, prompt sections, readiness |
 | [`tests/startup.spec.ts`](tests/startup.spec.ts) | Command-line parsing over a real Loader tree |
@@ -169,6 +180,7 @@ These limits tell you what to expect in unusual setups — a source checkout, SS
 - **SSH sessions keep the URL but skip the browser handoff** — the printed URL names the remote host's loopback endpoint; the SSH client or editor must expose and open the local forwarded address.
 - **`BROWSER` overrides only come from the environment** — a discovered `.env` cannot set `BROWSER`; only an inherited value can choose the executable for the automatic handoff.
 - **Binding all network interfaces is not supported** — `--host 0.0.0.0` is rejected at startup for safety; use the default loopback host.
+- **Desktop control groups local browser windows** — the Profile currently treats local browser windows as one Desktop owner. Its claim covers Session Remote mutations and forwarded approval replies; terminal input, file upload, and settings writes have separate owners and are outside this claim.
 
 <a id="dev-note"></a>
 
@@ -180,3 +192,5 @@ These limits tell you what to expect in unusual setups — a source checkout, SS
 None.
 
 </details>
+
+The Web composition includes the account Remote controller and Account settings section.

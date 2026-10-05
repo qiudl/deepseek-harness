@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-10-03-slark-workspace-project-scope.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-10-03-slark-workspace-project-scope.md
-2026-10-03-slark-workspace-project-scope.md: 3d46f4294b8f0495e824d977fa697c86ecfae85f
-2026-10-03-slark-workspace-project-scope.zh.md: 938c031a16780100bafd0376cc4161af77d706e5
+/agent-note-slark-workspace-project-scope:
+  en: 4c163bd94ee71a42
+  zh: dc95ad0aec24a895
+/agent-note-slark-workspace-project-scope/problem:
+  en: aaff664a48194838
+  zh: a8c82272465e5b41
+/agent-note-slark-workspace-project-scope/decision:
+  en: c36ceb86729f8450
+  zh: 6f3abb246e5fc338
+/agent-note-slark-workspace-project-scope/consequences:
+  en: e99482ac7aa408ec
+  zh: 41018becf699d75d
+/agent-note-slark-workspace-project-scope/alternatives-considered:
+  en: 88a5e52ceb0b6b3d
+  zh: 90ff3cb23691b23a
+/agent-note-slark-workspace-project-scope/testing:
+  en: 34775ac5daec0344
+  zh: 6ab4b5273ec3f591

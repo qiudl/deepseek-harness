@@ -83,11 +83,11 @@ describe('Source-bound one-shot analysis', () => {
       expect(h.adapter.requests).toEqual([])
     } finally { await h.close() }
   })
-  it('refuses tool-call output without an executor', async () => {
+  it.each(['tool-call', 'tool-addition', 'tool-removal'] as const)('refuses %s output without an executor', async (blockType) => {
     const h = await harness()
     try {
       const c = await h.prepare()
-      h.adapter.response = async function* () { yield { type: 'block-start', index: 0, blockType: 'tool-call' } }
+      h.adapter.response = async function* () { yield { type: 'block-start', index: 0, blockType } }
       await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal)).rejects.toThrow('collaboration_analysis_tool_output')
     } finally { await h.close() }
   })
