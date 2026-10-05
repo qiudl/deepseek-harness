@@ -1,7 +1,8 @@
 /** REQ-20260930-0004: fixed original/reply input for a new Host analysis, never a dispatch grant. */
 import { describe, expect, it } from 'vitest'
 import { collaborationJournalDigest, parseCollaborationSourceSnapshot } from '../src/collaboration-source-journal.ts'
-import { parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
+import { clarificationAnalysisMessage, parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
+import type { CollaborationSourceSnapshot } from '../src/collaboration-source-journal.ts'
 
 function snapshot(message: string, text: string, mention = false) {
   const body = {
@@ -28,6 +29,76 @@ function input() {
     frozen_task_ids: ['already-accepted'], mention_order: ['guide'], prior_replies: [],
   }
 }
+function reseal(original: CollaborationSourceSnapshot,
+  patch: Partial<Omit<CollaborationSourceSnapshot, 'host_journal_commit'>>) {
+  const { host_journal_commit, ...body } = original, changed = { ...body, ...patch }
+  return parseCollaborationSourceSnapshot({ ...changed, host_journal_commit: {
+    ...host_journal_commit, content_digest: collaborationJournalDigest(changed),
+  } })
+}
+
+it('preserves mention order by original position even when Source entries arrive in reverse order', () => {
+  const raw = input(), first = raw.original_snapshot.active_mentions[0]!
+  const original = reseal(raw.original_snapshot, { original_message: '@Guide @Other 请评审', active_mentions: [
+    { ...first, mention_id: 'other', source_span: { ...first.source_span, start: 7, end: 13 },
+      binding: { kind: 'resolved', target: { project_id: 'project', agent_id: 'other' }, capability_snapshot: 'a'.repeat(64) } },
+    first,
+  ] })
+  const pending = raw.pending_items[0]!, request = { ...raw, original_snapshot: original,
+    original_snapshot_digest: collaborationJournalDigest(original), mention_order: ['guide', 'other'], pending_items: [
+      { ...pending, source_evidence_spans: [{ ...pending.source_evidence_spans[0]!, end: 6 }] },
+      { ...pending, pending_item_id: 'pending-other', mention_ids: ['other'], target: { project_id: 'project', agent_id: 'other' },
+        source_evidence_spans: [{ source_message_id: 'original', source_revision: '1', start: 7, end: 13 }] },
+    ] }
+  expect(parseCollaborationClarificationInput(request).mention_order).toEqual(['guide', 'other'])
+  expect(() => parseCollaborationClarificationInput({ ...request, mention_order: ['other', 'guide'] }))
+    .toThrow('collaboration_clarification_input_invalid')
+})
+
+it('keeps an ambiguous target unresolved and refuses a guessed target or an empty mention list', () => {
+  const raw = input(), mention = raw.original_snapshot.active_mentions[0]!
+  const original = reseal(raw.original_snapshot, { active_mentions: [{ ...mention,
+    binding: { kind: 'ambiguous', candidate_handles: ['first', 'second'] } }] })
+  const request = { ...raw, original_snapshot: original, original_snapshot_digest: collaborationJournalDigest(original),
+    pending_items: [{ ...raw.pending_items[0]!, target: null, reason: 'target_ambiguous' }] }
+  expect(parseCollaborationClarificationInput(request).pending_items[0]?.target).toBeNull()
+  for (const change of [{ target: raw.pending_items[0]!.target }, { mention_ids: [] }]) {
+    expect(() => parseCollaborationClarificationInput({ ...request, pending_items: [{ ...request.pending_items[0]!, ...change }] }))
+      .toThrow('collaboration_clarification_input_invalid')
+  }
+})
+
+it('accepts complete surrogate pairs in evidence and refuses splitting either edge of the pair', () => {
+  const raw = input(), original = reseal(raw.original_snapshot, { original_message: '@Guide😀 后续' })
+  const full = { source_message_id: 'original', source_revision: '1', start: 0, end: 6 }
+  const request = { ...raw, original_snapshot: original, original_snapshot_digest: collaborationJournalDigest(original),
+    pending_items: [{ ...raw.pending_items[0]!, source_evidence_spans: [full, { ...full, start: 6, end: 8 }] }] }
+  expect(parseCollaborationClarificationInput(request).pending_items[0]?.source_evidence_spans).toHaveLength(2)
+  for (const span of [{ ...full, start: 7, end: 8 }, { ...full, start: 6, end: 7 }]) {
+    expect(() => parseCollaborationClarificationInput({ ...request,
+      pending_items: [{ ...request.pending_items[0]!, source_evidence_spans: [full, span] }] }))
+      .toThrow('collaboration_clarification_input_invalid')
+  }
+  const { host_journal_commit, ...body } = original
+  const malformed = { ...body, original_message: '@Guide\uD83D 后续' }
+  expect(() => parseCollaborationClarificationInput({ ...request, original_snapshot: { ...malformed,
+    host_journal_commit: { ...host_journal_commit, content_digest: collaborationJournalDigest(malformed) } } }))
+    .toThrow('collaboration_clarification_input_invalid')
+})
+
+it('serializes earlier replies in order while excluding accepted task and transport identities', () => {
+  const raw = input(), prior = snapshot('prior', '先看交互'), request = { ...raw, prior_replies: [{
+    clarification_request_id: 'prior-request', state: 'irrelevant', snapshot: prior,
+    snapshot_digest: collaborationJournalDigest(prior), pending_item_ids: ['pending'],
+  }] }
+  const message = clarificationAnalysisMessage(parseCollaborationClarificationInput(request))
+  expect(JSON.parse(message)).toMatchObject({ clarification_messages: [
+    { source_message_id: 'prior', original_message: '先看交互' },
+    { source_message_id: 'reply', original_message: raw.reply_snapshot.original_message },
+  ], mention_order: ['guide'] })
+  for (const excluded of ['already-accepted', 'prior-request', 'clarification_request_id', 'host_journal_commit', 'plan_revision'])
+    expect(message).not.toContain(excluded)
+})
 describe('fixed clarification analysis input', () => {
   it('detaches and freezes the original request, same-session reply, pending IDs and excluded task IDs', () => {
     const raw = input(), parsed = parseCollaborationClarificationInput(raw)

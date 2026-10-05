@@ -9,7 +9,7 @@ import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { mkdtemp, realpath, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -34,13 +34,14 @@ class SnapshotAdapter extends LlmAdapter {
     await this.prepare()
     return { model: { provider, id: model, name: model,
       ...this.defaultEffort ? { reasoning: {
-        efforts: [{ id: ReasoningEffortId('max'), name: 'Max' }], defaultEffort: ReasoningEffortId('max'),
+        efforts: [{ id: ReasoningEffortId('max'), name: 'Max' }, { id: ReasoningEffortId('high'), name: 'High' }],
+        defaultEffort: ReasoningEffortId('max'),
       } } : {},
     }, stream: options => this.stream(options) }
   }
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
-async function harness(root?: string, existingCwd?: string) {
+async function harness(root?: string, existingCwd?: string, isolateDomain = false) {
   root ??= await mkdtemp(join(tmpdir(), 'req0004-profile-source-'))
   const cwd = existingCwd ?? await realpath(root)
   const sessionId = SessionId('source-session')
@@ -65,7 +66,10 @@ async function harness(root?: string, existingCwd?: string) {
   await ctx.plugin(WorkspaceRegistry)
   const workspace = await ctx.workspaceRegistry.create(cwd)
   await workspace.attachSession(sessionId)
-  const controller = createSessionTestController(ctx, { defaultModelSelection: () => ({ provider: 'fixture', model: 'default' }), cwd })
+  const controllerContext = isolateDomain ? ctx.isolate('storageDomain') : ctx
+  const controller = createSessionTestController(controllerContext, {
+    defaultModelSelection: () => ({ provider: 'fixture', model: 'default' }), cwd,
+  })
   const resume = vi.spyOn(controller, 'resolveAgent')
   const source = () => ({ workspace_id: workspace.id, session_id: sessionId,
     source_message_id: 'message-1', source_revision: '1', original_message: '@Guide · qiu-slark 请分析',
@@ -75,7 +79,7 @@ async function harness(root?: string, existingCwd?: string) {
       binding: { kind: 'resolved' as const, target: { project_id: '212', agent_id: 'guide' }, capability_snapshot: 'a'.repeat(64) },
     }],
   })
-  return { root, cwd, ctx, controller, workspace, sessionId, source, adapter, prepare, stream, resume, backend, events,
+  return { root, cwd, ctx, controller, controllerContext, workspace, sessionId, source, adapter, prepare, stream, resume, backend, events,
     sourceFile: join(root, 'state', 'collaboration_source_v2.json'),
     dispose: async () => { await ctx.fiber.dispose(); await facility.closeAll(); await backend.close() },
   }
@@ -576,6 +580,214 @@ function clarificationInput(original: Parameters<typeof describeCollaborationSou
       source_evidence_spans: [{ source_message_id: original.source_message_id, source_revision: original.source_revision,
         start: 0, end: original.original_message.length }] }], frozen_task_ids: ['accepted-task'], mention_order: ['mention-1'], prior_replies: [] })
 }
+it.each(['capture', 'read', 'list', 'delivery'] as const)('refuses %s when its required storage domain is unavailable', async (mode) => {
+  const h = await harness(undefined, undefined, true), signal = new AbortController().signal
+  try {
+    const consumer = h.controllerContext, controller = h.controller
+    const { workspace_id, session_id, source_message_id, source_revision } = h.source()
+    let saved: Awaited<ReturnType<typeof controller.captureCollaborationSource>> | undefined
+    if (mode === 'delivery') {
+      const facility = h.ctx.get('storageDomain')
+      if (facility === undefined) throw Error('missing fixture domain')
+      const remove = consumer.provide('storageDomain', facility)
+      saved = await controller.captureCollaborationSource(h.source(), signal)
+      remove()
+    }
+    expect(consumer.get('storageDomain')).toBeUndefined()
+    expect(h.ctx.workspaceRegistry.get(h.workspace.id)).toBe(h.workspace)
+    const operation = mode === 'capture' ? controller.captureCollaborationSource(h.source(), signal)
+      : mode === 'read' ? controller.readCollaborationSourceSnapshot({ workspace_id, session_id, source_message_id, source_revision }, signal)
+        : mode === 'list' ? controller.collaborationSources({ sessionId: h.sessionId }, signal)
+          : controller.receiveCollaborationDelivery(deliveryFor(saved!.snapshot), signal)
+    await expect(operation).rejects.toThrow(mode === 'delivery'
+      ? 'collaboration_delivery_journal_unavailable' : 'collaboration_source_journal_unavailable')
+    expect(h.stream).not.toHaveBeenCalled()
+    expect(h.resume).not.toHaveBeenCalled()
+    if (mode !== 'delivery') expect(h.prepare).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+
+it('refuses primitive or array Source listing JSON before reading, preparing or resuming', async () => {
+  const h = await harness()
+  try {
+    for (const value of [null, undefined, [], 'message', 1])
+      await expect(h.controller.collaborationSources(value as never, new AbortController().signal)).rejects.toThrow()
+    expect(h.prepare).not.toHaveBeenCalled()
+    expect(h.stream).not.toHaveBeenCalled()
+    expect(h.resume).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+
+it('retains a committed Source but releases no call when the same Session is newly attached during the write', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const open = h.backend.kv.open.bind(h.backend.kv)
+  h.backend.kv.open = async (descriptor) => {
+    const unit = await open(descriptor)
+    if (descriptor.name !== 'collaboration_source_v2') return unit
+    const put = unit.putRecord.bind(unit)
+    unit.putRecord = async (...args) => {
+      await put(...args)
+      const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+      session.append('model/selection', { provider: 'fixture', model: 'selected' })
+    }
+    return unit
+  }
+  try {
+    await expect(h.controller.captureCollaborationSource(h.source(), signal))
+      .rejects.toThrow('collaboration_session_workspace_mismatch')
+    const bytes = await readFile(h.sourceFile)
+    const retry = await h.controller.captureCollaborationSource(h.source(), signal)
+    expect(retry.kind).toBe('recovered')
+    expect(retry).not.toHaveProperty('prepared')
+    expect(await readFile(h.sourceFile)).toEqual(bytes)
+    expect(h.prepare).toHaveBeenCalledTimes(1)
+    expect(h.stream).not.toHaveBeenCalled()
+    expect(h.resume).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+
+it('refuses a different prepared reasoning choice even if the Session choice changes back before capture', async () => {
+  const h = await harness()
+  h.adapter.defaultEffort = true
+  const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+  session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: 'max' })
+  const prepare = h.controller.prepareWorkspaceModelSnapshot.bind(h.controller)
+  vi.spyOn(h.controller, 'prepareWorkspaceModelSnapshot').mockImplementation(async (...args) => {
+    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: 'high' })
+    const captured = await prepare(...args)
+    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: 'max' })
+    return captured
+  })
+  try {
+    await expect(h.controller.captureCollaborationSource(h.source(), new AbortController().signal))
+      .rejects.toThrow('collaboration_model_selection_changed')
+    await expect(readFile(h.sourceFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(h.stream).not.toHaveBeenCalled()
+    expect(h.resume).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+
+it.each(['read', 'list', 'delivery'] as const)('refuses %s when a cold Session becomes attached after membership verification', async (mode) => {
+  const h = await harness(), signal = new AbortController().signal
+  try {
+    const saved = await h.controller.captureCollaborationSource(h.source(), signal), bytes = await readFile(h.sourceFile)
+    expect(h.ctx.sessions.get(h.sessionId)).toBeUndefined()
+    const getAgent = h.ctx.agents.get.bind(h.ctx.agents)
+    const arm = () => {
+      vi.spyOn(h.ctx.agents, 'get').mockImplementationOnce((...args) => {
+        const agent = getAgent(...args)
+        // Agent lookup is the last registry read in membership verification; attach before its caller resumes.
+        queueMicrotask(() => {
+          const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+          session.append('model/selection', { provider: 'fixture', model: 'selected' })
+        })
+        return agent
+      })
+    }
+    const coordinates = describeCollaborationSource(saved.snapshot)
+    const { snapshot_digest: _digest, ...target } = coordinates
+    if (mode === 'delivery') {
+      const read = h.controller.readCollaborationSourceSnapshot.bind(h.controller)
+      vi.spyOn(h.controller, 'readCollaborationSourceSnapshot').mockImplementationOnce(async (...args) => {
+        const source = await read(...args)
+        arm()
+        return source
+      })
+    } else arm()
+    const operation = mode === 'read' ? h.controller.readCollaborationSourceSnapshot(target, signal)
+      : mode === 'list' ? h.controller.collaborationSources({ sessionId: h.sessionId }, signal)
+        : h.controller.receiveCollaborationDelivery(deliveryFor(saved.snapshot), signal)
+    await expect(operation).rejects.toThrow('collaboration_session_workspace_mismatch')
+    expect(await readFile(h.sourceFile)).toEqual(bytes)
+    expect(await h.controller.readCollaborationSourceSnapshot(target, signal)).toEqual(saved.snapshot)
+    await expect(readFile(join(h.root, 'state', 'collaboration_delivery_v2.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(h.prepare).toHaveBeenCalledTimes(1)
+    expect(h.stream).not.toHaveBeenCalled()
+    expect(h.resume).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+
+it('contains a malformed Source or delivery journal and disposes without replacing its bytes', async () => {
+  for (const kind of ['source', 'delivery'] as const) {
+    const h = await harness(), signal = new AbortController().signal
+    try {
+      const saved = kind === 'delivery' ? await h.controller.captureCollaborationSource(h.source(), signal) : undefined
+      const path = kind === 'source' ? h.sourceFile : join(h.root, 'state', 'collaboration_delivery_v2.json')
+      const malformed = '{malformed journal'
+      await writeFile(path, malformed)
+      const operation = kind === 'source' ? h.controller.captureCollaborationSource(h.source(), signal)
+        : h.controller.receiveCollaborationDelivery(deliveryFor(saved!.snapshot), signal)
+      await expect(operation).rejects.toThrow()
+      await h.dispose()
+      expect(await readFile(path, 'utf8')).toBe(malformed)
+      expect(h.stream).not.toHaveBeenCalled()
+      expect(h.resume).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  }
+})
+
+it('contains a primitive cancellation before a pending membership read is observed and releases the queue', async () => {
+  const h = await harness(), caller = new AbortController()
+  const inspect = h.controller.inspectWorkspaceModelSelection.bind(h.controller)
+  vi.spyOn(h.controller, 'inspectWorkspaceModelSelection').mockImplementationOnce((...args) => {
+    caller.abort('caller expired')
+    return inspect(...args)
+  })
+  try {
+    await expect(h.controller.captureCollaborationSource(h.source(), caller.signal))
+      .rejects.toMatchObject({ name: 'AbortError', message: 'Source read cancelled' })
+    expect(h.prepare).not.toHaveBeenCalled()
+    const next = await h.controller.captureCollaborationSource(h.source(), new AbortController().signal)
+    expect(next.kind).toBe('captured')
+    expect(h.prepare).toHaveBeenCalledTimes(1)
+    expect(h.stream).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+
+it('rejects a valid clarification reply that was not captured by this handle and preserves all Sources', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  try {
+    const original = await h.controller.captureCollaborationSource(h.source(), signal)
+    const reply = await h.controller.captureCollaborationSource({ ...h.source(), source_message_id: 'reply',
+      original_message: '只检查规则。', active_mentions: [] }, signal)
+    const other = await h.controller.captureCollaborationSource({ ...h.source(), source_message_id: 'other-reply',
+      original_message: '另一个补充。', active_mentions: [] }, signal)
+    if (reply.kind !== 'captured') throw Error('expected reply capture')
+    const bytes = await readFile(h.sourceFile), persist = vi.fn(async () => {})
+    await expect(reply.analyzeClarification(clarificationInput(original.snapshot, other.snapshot), persist, signal))
+      .rejects.toThrow('collaboration_clarification_source_mismatch')
+    expect(persist).not.toHaveBeenCalled()
+    expect(h.stream).not.toHaveBeenCalled()
+    expect(await readFile(h.sourceFile)).toEqual(bytes)
+  } finally { await h.dispose() }
+})
+
+it('revalidates every saved earlier clarification while keeping them out of ordinary Session history', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  try {
+    const original = await h.controller.captureCollaborationSource(h.source(), signal)
+    const prior = await h.controller.captureCollaborationSource({ ...h.source(), source_message_id: 'prior',
+      original_message: '先看规则。', active_mentions: [] }, signal)
+    const reply = await h.controller.captureCollaborationSource({ ...h.source(), source_message_id: 'reply',
+      original_message: '只检查交互，不改文件。', active_mentions: [] }, signal)
+    if (reply.kind !== 'captured') throw Error('expected reply capture')
+    const input = parseCollaborationClarificationInput({ ...clarificationInput(original.snapshot, reply.snapshot), prior_replies: [{
+      clarification_request_id: 'prior-request', state: 'irrelevant', snapshot: prior.snapshot,
+      snapshot_digest: collaborationJournalDigest(prior.snapshot), pending_item_ids: ['pending'],
+    }] })
+    h.stream.mockImplementation(async function* () {
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: '{"intent":"clarify"}' } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+    const read = vi.spyOn(h.controller, 'readCollaborationSourceSnapshot')
+    await expect(reply.analyzeClarification(input, async () => {}, signal)).resolves.toEqual({ jsonText: '{"intent":"clarify"}' })
+    expect(read.mock.calls.filter(([coordinates]) => coordinates.source_message_id === 'prior')).toHaveLength(3)
+    expect(JSON.stringify(h.stream.mock.calls[0]![0].messages)).toContain('先看规则。')
+    expect(h.resume).not.toHaveBeenCalled()
+    expect(h.ctx.sessions.get(h.sessionId)).toBeUndefined()
+    expect(h.events).toHaveLength(1)
+  } finally { await h.dispose() }
+})
 it('analyzes a clarification with the actual reply handle after verifying both local Sources and committing complete input', async () => {
   const h = await harness(), signal = new AbortController().signal
   try {
