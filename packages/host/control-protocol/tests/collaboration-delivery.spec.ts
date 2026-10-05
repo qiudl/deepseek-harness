@@ -5,6 +5,7 @@ import {
   parseHostCollaborationDeliveryCapsule, parseHostCollaborationDeliveryChunk,
   parseHostCollaborationDeliveryReceipt, encodeHostCollaborationDeliveryReceiptPayload,
   matchesHostCollaborationDeliveryCommit,
+  parseHostCollaborationDeliveryCommit, parseHostCollaborationDeliveryResult,
 } from '../src/index.ts'
 
 const uuid = '40000000-0000-4000-8000-000000000004'
@@ -28,6 +29,16 @@ function capsule(answer = '完整答复') {
 }
 const chunk = () => ({ upload_id: randomUUID(), offset: 0, total_bytes: 20000,
   payload_digest: 'b'.repeat(64), chunk_base64url: Buffer.alloc(16384, 1).toString('base64url') })
+function receipt() {
+  const input = capsule(), { delivery_state: _state, delivery_state_version: _version, ...body } = input.projection
+  return { schema_version: 1, authority_environment_id: uuid, account_binding_handle: 'binding',
+    authority_binding_version: 1, account_issuer: 'https://accounts.example.test', account_subject: uuid,
+    installation_id: uuid, installation_public_key: 'A'.repeat(43), host_instance_id: uuid, process_nonce: 'B'.repeat(43),
+    commit: { namespace_id: input.namespace_id, delivery_id: body.delivery_id, invocation_id: body.invocation_id,
+      source_locator: body.source_locator, source_snapshot_digest: body.source_snapshot_digest, result_digest: body.result_digest,
+      host_journal_commit: { journal_id: uuid, commit_version: '1', content_digest: hash({ namespace_id: input.namespace_id, ...body }) } },
+    signature: 'A'.repeat(86) }
+}
 it('preserves a complete 128KiB Unicode reply and detaches its exact immutable capsule', () => {
   const input = capsule('😀'.repeat(32768)), result = parseHostCollaborationDeliveryCapsule(input)
   expect(result).toEqual(input)
@@ -91,4 +102,72 @@ it('binds a bounded answer-free receipt to the full immutable Profile commit and
   expect(encodeHostCollaborationDeliveryReceiptPayload({ ...parsed, signature: 'B'.repeat(86) })).toEqual(payload)
   expect(() => parseHostCollaborationDeliveryReceipt({ ...receipt, answer: 'caller' })).toThrow()
   expect(parseHostCollaborationDeliveryReceipt({ ...receipt, account_binding_handle: '项'.repeat(512) }).account_binding_handle).toHaveLength(512)
+})
+
+it('preserves each unsuccessful terminal result without manufacturing an answer', () => {
+  const { answer: _answer, ...projection } = capsule().projection
+  for (const execution_state of ['failed', 'revoked', 'cancelled', 'indeterminate']) {
+    for (const failure of [{}, { failure_code: 'provider_failed' }]) {
+      const input = { namespace_id: 'namespace', projection: { ...projection, execution_state, ...failure,
+        result_digest: hash({ state: execution_state, answer: null, failure_code: 'failure_code' in failure ? failure.failure_code : null }) } }
+      const result = parseHostCollaborationDeliveryCapsule(input)
+      expect(result).toEqual(input)
+      expect(Object.hasOwn(result.projection, 'answer')).toBe(false)
+      expect(() => parseHostCollaborationDeliveryCapsule({ ...input, projection: { ...input.projection, answer: '' } })).toThrow()
+    }
+  }
+})
+
+it('rejects foreign records, unsafe identities, Unicode and oversized revision numbers', () => {
+  for (const value of [null, [], Object.setPrototypeOf(capsule(), { namespace_id: 'namespace' })])
+    expect(() => parseHostCollaborationDeliveryCapsule(value)).toThrow()
+  const hidden = capsule()
+  Object.defineProperty(hidden, 'namespace_id', { value: 'namespace', enumerable: false })
+  const symbolic = { ...capsule(), [Symbol('private')]: 'secret' }
+  for (const value of [hidden, symbolic]) expect(() => parseHostCollaborationDeliveryCapsule(value)).toThrow()
+  for (const namespace_id of ['.', '..', 'path/name', 'path\\name', '\u0000', '\ud800', 'x'.repeat(257)])
+    expect(() => parseHostCollaborationDeliveryCapsule({ ...capsule(), namespace_id })).toThrow()
+  for (const change of [
+    { task_revision: '0' }, { task_revision: '9223372036854775808' }, { result_digest: 'A'.repeat(64) },
+    { target_display_snapshot: { agent_name: ' ', project_name: 'Project' } },
+    { failure_code: '' },
+  ]) expect(() => parseHostCollaborationDeliveryCapsule({ ...capsule(), projection: { ...capsule().projection, ...change } })).toThrow()
+})
+
+it('rejects invalid Profile commits and mismatched immutable reply coordinates', () => {
+  const input = parseHostCollaborationDeliveryCommit(receipt().commit), parsed = parseHostCollaborationDeliveryCapsule(capsule())
+  expect(() => parseHostCollaborationDeliveryCommit({ ...input, host_journal_commit: { ...input.host_journal_commit, commit_version: '2' } })).toThrow()
+  expect(() => parseHostCollaborationDeliveryCommit({ ...input, host_journal_commit: { ...input.host_journal_commit, journal_id: 'foreign' } })).toThrow()
+  for (const change of [{ namespace_id: 'other' }, { delivery_id: 'other' }, { invocation_id: 'other' },
+    { source_snapshot_digest: 'b'.repeat(64) }, { result_digest: 'b'.repeat(64) },
+    { source_locator: { ...source, session_id: 'other' } },
+    { host_journal_commit: { ...input.host_journal_commit, content_digest: 'b'.repeat(64) } }])
+    expect(matchesHostCollaborationDeliveryCommit(parsed, parseHostCollaborationDeliveryCommit({ ...input, ...change }))).toBe(false)
+  expect(matchesHostCollaborationDeliveryCommit(parseHostCollaborationDeliveryCapsule({ ...capsule(), projection: {
+    ...capsule().projection, delivery_state: 'delivered', delivery_state_version: '3',
+  } }), input)).toBe(true)
+})
+
+it('refuses malformed receipt origins, bindings, generations and cryptographic fields', () => {
+  for (const change of [
+    { account_issuer: 'invalid' }, { account_issuer: 'http://accounts.example.test' },
+    { account_issuer: 'https://accounts.example.test/path' }, { account_issuer: 'https://user:pass@accounts.example.test' },
+    { schema_version: 2 }, { account_binding_handle: '' }, { account_binding_handle: 'x'.repeat(513) },
+    { account_binding_handle: 'private\u0000' }, { authority_binding_version: 0 }, { authority_binding_version: 1.5 },
+    { installation_public_key: '!'.repeat(43) }, { process_nonce: '!'.repeat(43) }, { signature: '!'.repeat(86) },
+  ]) expect(() => parseHostCollaborationDeliveryReceipt({ ...receipt(), ...change })).toThrow()
+})
+
+it('roundtrips staged and committed delivery responses without answer or credential echoes', () => {
+  const progress = { kind: 'staged', upload_id: uuid, next_offset: 16384 }
+  const committed = { kind: 'committed', receipt: receipt() }
+  for (const result of [progress, committed]) {
+    expect(parseHostCollaborationDeliveryResult(result)).toEqual(result)
+    const frame = { version: 1, type: 'result', request_id: uuid, method: 'profile.collaboration_delivery', result }
+    expect(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)).toEqual(frame)
+  }
+  for (const change of [{ kind: 'unknown' }, { next_offset: 0 }, { next_offset: 1024 * 1024 },
+    { next_offset: 1.5 }, { upload_id: 'foreign' }, { receipt: receipt() }, { answer: 'private' }])
+    expect(() => parseHostCollaborationDeliveryResult({ ...progress, ...change })).toThrow()
+  expect(() => parseHostCollaborationDeliveryResult({ ...committed, upload_id: uuid })).toThrow()
 })

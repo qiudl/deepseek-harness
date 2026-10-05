@@ -45,3 +45,11 @@ it('rejects noncanonical identity, nonce, audience, expiry, secrets and hidden d
   const hidden=assertion();Object.defineProperty(hidden,'private',{ value:'secret' })
   expect(()=>parseHostCollaborationRegistrationAssertion(hidden)).toThrow()
 })
+
+it('refuses inherited or symbolic registration fields and a Host masquerading as its installation', () => {
+  const nullPrototype = challenge()
+  Object.setPrototypeOf(nullPrototype, null)
+  for (const value of [nullPrototype, { ...challenge(), [Symbol('private')]: true }])
+    expect(() => parseHostCollaborationRegistrationChallenge(value)).toThrow()
+  expect(() => parseHostCollaborationRegistrationAssertion({ ...assertion(), host_instance_id: assertion().installation_id })).toThrow()
+})

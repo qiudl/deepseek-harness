@@ -45,3 +45,25 @@ it('preserves installation-signed saved output across the bounded control frame'
   const result = { kind:'output',json_base64url:Buffer.from('{}').toString('base64url'),analysis_receipt:receipt }
   expect(parseHostCollaborationAnalysisResult(result)).toEqual(result)
 })
+
+it('roundtrips Account-bound preparation, dispatch and recovered Source responses', () => {
+  const params = { client_instance_id: uid, host_instance_id: uid, process_nonce: 'A'.repeat(43), jti: uid,
+    issued_at: 1000, expires_at: 2000, authority_environment_id: uid, account_binding_handle: 'binding',
+    authority_binding_version: 1, account_issuer: 'https://accounts.example.test', account_subject: uid }
+  for (const command of [{ action: 'prepare', input: { source_message_id: 'm' } },
+    { action: 'dispatch', attempt_request_id: uid, grant: {} }]) {
+    const frame = { version: 1, type: 'request', request_id: uid, method: 'profile.collaboration_analysis', params: { ...params, command } }
+    expect(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)).toEqual(frame)
+    expect(() => decodeHostControlFrame(`${JSON.stringify({ ...frame, params: { ...frame.params, provider: 'caller' } })}\n`)).toThrow()
+  }
+  const descriptor = { workspace_id: uid, session_id: 's', source_message_id: 'm', source_revision: '1', snapshot_digest: 'a'.repeat(64) }
+  const result = { kind: 'prepared', preparation: { kind: 'recovered', descriptor } }
+  expect(parseHostCollaborationAnalysisResult(result)).toEqual(result)
+  expect(() => parseHostCollaborationAnalysisResult({ ...result,
+    preparation: { ...result.preparation, attempt_request_id: uid } })).toThrow()
+  expect(() => parseHostCollaborationAnalysisResult({ kind: 'reply_source', capture: { kind: 'prepared', descriptor } })).toThrow()
+})
+
+it('rejects noncanonical base64 before parsing the private JSON output', () => {
+  expect(() => parseHostCollaborationAnalysisResult({ kind: 'output', json_base64url: 'e31' })).toThrow()
+})
