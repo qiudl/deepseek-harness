@@ -61,6 +61,20 @@ it('refuses replaced workers, revoked Accounts, digest substitution and mismatch
     f.lifetime.abort()
   }
 })
+
+it('rejects malformed complete reply bytes before a worker write and releases the upload reservation', async () => {
+  for (const bytes of [Buffer.from('{'), Buffer.from([0xff]), Buffer.from('[]')]) {
+    const f = fixture('short')
+    try {
+      await expect(f.uploads.accept({ ...f.input, chunk: { ...f.chunks[0]!, total_bytes: bytes.length,
+        payload_digest: createHash('sha256').update(bytes).digest('hex'), chunk_base64url: bytes.toString('base64url'),
+      } })).rejects.toMatchObject({ code: 'unavailable' })
+      expect(f.receive).not.toHaveBeenCalled()
+      expect((await f.uploads.accept({ ...f.input, chunk: f.chunks[0]! })).kind).toBe('committed')
+      expect(f.receive).toHaveBeenCalledTimes(1)
+    } finally { f.lifetime.abort() }
+  }
+})
 it('keeps the budget reserved while an aborted or concurrent durable write settles, and never reports a late commit', async () => {
   const f = fixture('short'); let finish!: () => void
   f.receive.mockImplementation(async () => { await new Promise<void>((resolve) => { finish = resolve }); return f.commit })
