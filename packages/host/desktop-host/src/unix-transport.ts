@@ -140,7 +140,7 @@ function commandReadAccount(
   return challengeReadAccount(params, {
     environment_id: params.authority_environment_id,
     account_issuer: params.account_issuer,
-    account_subject: params.account_subject,
+    account_subject: params.account_subject as HostWorkspaceAuthorityChallenge['account_subject'],
   }, ownerId)
 }
 function signAuthorityPayload(identity: HostIdentity, payload: Uint8Array): HostControlSignature {
