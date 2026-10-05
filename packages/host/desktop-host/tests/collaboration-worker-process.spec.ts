@@ -1,6 +1,7 @@
 /** REQ-20260930-0004: original Profile worker communication through public handles. */
 import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -25,7 +26,7 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
   delivery_state: 'pending', delivery_state_version: '1',
 } })
 
-async function harness() {
+async function harness(selectionRedirect?: string) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -39,6 +40,7 @@ async function harness() {
     import { createServer } from 'node:http'
     const descriptor = ${JSON.stringify(descriptor)}
     const snapshot = ${JSON.stringify(snapshot)}
+    const selectionRedirect = ${JSON.stringify(selectionRedirect ?? null)}
     const tokens = {
       '/internal/desktop-workspace-model-selection': 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
@@ -56,6 +58,9 @@ async function harness() {
       if (tokens[url.pathname]) {
         if (request.headers.authorization !== 'Bearer ' + process.env[tokens[url.pathname]]) {
           response.writeHead(403).end(); return
+        }
+        if (selectionRedirect && url.pathname === '/internal/desktop-workspace-model-selection') {
+          response.writeHead(307, { location: selectionRedirect }).end(); return
         }
         const chunks = []; for await (const chunk of request) chunks.push(chunk)
         const input = JSON.parse(Buffer.concat(chunks).toString('utf8'))
@@ -219,4 +224,30 @@ it('discards all private capabilities after a worker exits without an abort requ
   for (const run of [() => h.inspectCollaborationSource(target, signal), () => h.readCollaborationSourceSnapshot(target, signal),
     () => h.collaborationAnalysis(command, signal), () => h.receiveCollaborationDelivery(capsule, signal)])
     await expect(run()).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('refuses a redirected private model-selection response before sending original Session coordinates to another listener', async () => {
+  const forwarded: { method: string | undefined; body: string }[] = []
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => { chunks.push(chunk) })
+    request.on('error', (error) => { response.destroy(error) })
+    request.on('end', () => {
+      forwarded.push({ method: request.method, body: Buffer.concat(chunks).toString('utf8') })
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+        workspace_id: target.workspace_id, session_id: target.session_id, provider: 'redirected', model: 'unattested',
+      }))
+    })
+  })
+  onTestFinished(async () => {
+    server.closeAllConnections()
+    await new Promise<void>((resolve, reject) => { server.close((error) => { if (error) reject(error); else resolve() }) })
+  })
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
+  const address = server.address()
+  if (!address || typeof address === 'string') throw Error('missing redirect listener')
+  const h = await harness(`http://127.0.0.1:${address.port}/selection`)
+  await expect(h.inspectWorkspaceModelSelection({ workspace_id: target.workspace_id,
+    session_id: target.session_id }, new AbortController().signal)).rejects.toThrow()
+  expect(forwarded).toEqual([])
 })

@@ -9,13 +9,13 @@ import {
   encodeHostSourceAuthorityPayload,
   encodeHostCollaborationDeliveryReceiptPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostControlFrame, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from '../src/collaboration-delivery-uploads.ts'
 
-async function fixture() {
+async function fixture(enabled = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
     rmSync(root, { recursive: true, force: true })
@@ -76,12 +76,13 @@ async function fixture() {
     host,
     profilePersistenceGeneration: () => 1,
     now: clock.now,
-    inspectCollaborationSource: (profileId, target, signal) =>
+    ...(enabled ? { inspectCollaborationSource: (profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal) =>
       inspect(profileId, target, signal) as Promise<HostCollaborationSourceDescriptor>,
-    readCollaborationSourceSnapshot:(profileId,target,signal)=>read(profileId,target,signal) as Promise<HostCollaborationSourceSnapshot>,
-    collaborationAnalysis: (profileId, command, signal) =>
+    readCollaborationSourceSnapshot: (profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal) =>
+      read(profileId, target, signal) as Promise<HostCollaborationSourceSnapshot>,
+    collaborationAnalysis: (profileId: string, command: HostRemoteSessionJson, signal: AbortSignal) =>
       analysis(profileId, command as Record<string, unknown>, signal) as Promise<HostRemoteSessionJson>,
-    collaborationDeliveryReceiver: profileId => delivery(profileId),
+    collaborationDeliveryReceiver: (profileId: string) => delivery(profileId) } : {}),
   })
   const ownerId = randomUUID(),
     lifetime = new AbortController()
@@ -129,6 +130,7 @@ async function fixture() {
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
   return {
     host,
+    registry,
     account,
     profile,
     ownerId,
@@ -153,13 +155,11 @@ async function fixture() {
     setDelivery: (callback: typeof delivery) => { delivery = callback },
   }
 }
-it('uploads a complete answer through the real authenticated control carrier and verifies the answer-free installation receipt', async () => {
-  const f = await fixture()
+function replyFixture(f: Awaited<ReturnType<typeof fixture>>, answer = '😀'.repeat(32768)) {
   const canonical = (value: unknown): string => value && typeof value === 'object'
     ? `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical((value as Record<string, unknown>)[k])}`).join(',')}}`
     : JSON.stringify(value)
   const hash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex')
-  const answer = '😀'.repeat(32768)
   const capsule = { namespace_id: 'ns', projection: { delivery_id: 'delivery', invocation_id: 'invocation', plan_id: 'plan', task_id: 'task', task_revision: '1',
     source_locator: { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id, source_message_id: f.challenge.source_message_id, source_revision: '1' },
     source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded' as const, invocation_state_version: '2',
@@ -169,6 +169,10 @@ it('uploads a complete answer through the real authenticated control carrier and
   const commit = { namespace_id: 'ns', delivery_id: body.delivery_id, invocation_id: body.invocation_id, source_locator: body.source_locator,
     source_snapshot_digest: body.source_snapshot_digest, result_digest: body.result_digest,
     host_journal_commit: { journal_id: randomUUID(), commit_version: '1', content_digest: hash({ namespace_id: 'ns', ...body }) } }
+  return { capsule, commit, answer }
+}
+it('uploads a complete answer through the real authenticated control carrier and verifies the answer-free installation receipt', async () => {
+  const f = await fixture(), { capsule, commit, answer } = replyFixture(f)
   let receives = 0
   f.setDelivery((profileId) => {
     expect(profileId).toBe(f.profile.profileId)
@@ -186,12 +190,45 @@ it('uploads a complete answer through the real authenticated control carrier and
   expect(receives).toBe(1)
   expect(f.seen.filter(frame => frame.type === 'request' && frame.method === 'profile.collaboration_delivery').length).toBeGreaterThan(1)
   for (const frame of f.seen) expect(Buffer.byteLength(encodeHostControlFrame(frame))).toBeLessThan(65536)
+  const old = await fixture(false), before = old.seen.length
+  await expect(old.client.receiveCollaborationDelivery({ ...input, signal: new AbortController().signal }))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(old.seen).toHaveLength(before)
+  await expect(f.client.receiveCollaborationDelivery({ ...input, signal: AbortSignal.abort() })).rejects.toThrow()
+  for (const mode of ['wrong-frame', 'early-commit', 'upload-id', 'next-offset', 'late-stage'] as const) {
+    const faulty = await fixture(); await faulty.grant()
+    faulty.setDelivery(() => ({ assertCurrent: () => {}, receive: async () => commit }))
+    faulty.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.collaboration_delivery') return frame
+      if (mode === 'wrong-frame') return decodeHostControlFrame(JSON.stringify({ ...frame,
+        method: 'profile.workspace_model_selection', result: { workspace_id: f.challenge.workspace_id,
+          session_id: f.challenge.session_id, provider: 'p', model: 'm' } }) + '\n')
+      const result = frame.result
+      if (result.kind === 'staged') {
+        if (mode === 'early-commit') return { ...frame, result: { kind: 'committed', receipt } }
+        if (mode === 'upload-id') return { ...frame, result: { ...result, upload_id: randomUUID() } }
+        if (mode === 'next-offset') return { ...frame, result: { ...result, next_offset: result.next_offset + 1 } }
+      } else if (mode === 'late-stage') {
+        const request = faulty.seen.at(-1)
+        if (request?.type !== 'request' || request.method !== 'profile.collaboration_delivery') throw Error('missing final upload')
+        return { ...frame, result: { kind: 'staged', upload_id: request.params.command.upload_id,
+          next_offset: request.params.command.total_bytes } }
+      }
+      return frame
+    })
+    await expect(faulty.client.receiveCollaborationDelivery({ ...faulty.account, capsule })).rejects.toThrow()
+    faulty.client.close()
+  }
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.collaboration_delivery' && frame.result.kind === 'committed'
     ? { ...frame, result: { ...frame.result, receipt: { ...frame.result.receipt, process_nonce: 'B'.repeat(43) } } } : frame)
   await expect(f.client.receiveCollaborationDelivery(input)).rejects.toThrow()
   f.alter(undefined)
   f.setDelivery(() => ({ assertCurrent: () => {}, receive: async () => { f.host.revokeOwner(f.ownerId); return commit } }))
   await expect(f.client.receiveCollaborationDelivery(input)).rejects.toThrow()
+  await f.grant()
+  f.setDelivery(() => ({ assertCurrent: () => {}, receive: async () => commit }))
+  f.alter((frame) => { f.client.close(); return frame })
+  await expect(f.client.receiveCollaborationDelivery(input)).rejects.toMatchObject({ code: 'stale' })
 })
 const snapshotInput = (f: Awaited<ReturnType<typeof fixture>>) => ({
   ...f.input,
@@ -451,4 +488,132 @@ it('refuses altered signed output, grant or current installation identity after 
     })
     await expect(f.client.collaborationAnalysis({ ...f.account,command:{ action:'dispatch',attempt_request_id:f.challenge.request_id,grant:analysisGrant(f) } })).rejects.toThrow()
   }
+})
+
+it('refuses unnegotiated collaboration methods at the server before any private worker call', async () => {
+  const f = await fixture(false)
+  await f.client.ensureAccountProfile({ ...f.account, accountAccessToken: 'valid-token' })
+  const request = f.seen.at(-1)
+  if (request?.type !== 'request' || request.method !== 'profile.ensure') throw Error('missing Account ensure frame')
+  const p = request.params
+  const auth = { client_instance_id: p.client_instance_id, host_instance_id: p.host_instance_id,
+    process_nonce: p.process_nonce, jti: randomUUID(), issued_at: p.issued_at, expires_at: p.expires_at }
+  const binding = { authority_environment_id: f.account.authorityEnvironmentId,
+    account_binding_handle: f.account.accountBindingHandle, authority_binding_version: f.account.authorityBindingVersion }
+  const account = { ...binding, account_issuer: f.account.issuer, account_subject: f.account.subject }
+  const { source_message_id: _message, source_revision: _revision, snapshot_digest: _digest,
+    host_epoch: _epoch, ...workspaceChallenge } = f.challenge
+  const target = { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id,
+    source_message_id: f.challenge.source_message_id, source_revision: f.challenge.source_revision }
+  const methods = [
+    { method: 'profile.workspace_authority', params: { account_binding_handle: binding.account_binding_handle,
+      authority_binding_version: binding.authority_binding_version, challenge: workspaceChallenge } },
+    { method: 'profile.source_authority', params: { account_binding_handle: binding.account_binding_handle,
+      authority_binding_version: binding.authority_binding_version, challenge: f.challenge } },
+    { method: 'profile.workspace_model_selection', params: { ...binding,
+      workspace_id: target.workspace_id, session_id: target.session_id } },
+    { method: 'profile.source_snapshot', params: { ...account, offset: 0, ...target } },
+    { method: 'profile.collaboration_analysis', params: { ...account, command: { action: 'prepare', input: {} } } },
+    { method: 'profile.collaboration_delivery', params: { ...account, command: { upload_id: randomUUID(), offset: 0,
+      total_bytes: 2, payload_digest: createHash('sha256').update('{}').digest('hex'), chunk_base64url: 'e30' } } },
+  ]
+  for (const method of methods) {
+    const frame = decodeHostControlFrame(JSON.stringify({ version: 1, type: 'request', request_id: randomUUID(),
+      method: method.method, params: { ...auth, jti: randomUUID(), ...method.params } }) + '\n')
+    expect(await f.session.handleRequest(frame)).toMatchObject({ type: 'error', error: { code: 'upgrade_required' } })
+  }
+  const before = f.seen.length
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'prepare', input: {} } }))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  await expect(f.client.attestWorkspaceAuthority({ ...f.input, challenge: workspaceChallenge }))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen).toHaveLength(before)
+})
+
+it('refuses mismatching result frames and private analysis result kinds through the authenticated carrier', async () => {
+  const f = await fixture(); await f.grant()
+  f.alter(frame => decodeHostControlFrame(JSON.stringify({ version: 1, type: 'result', request_id: frame.request_id,
+    method: 'profile.workspace_model_selection', result: { workspace_id: f.challenge.workspace_id,
+      session_id: f.challenge.session_id, provider: 'p', model: 'm' } }) + '\n'))
+  await expect(f.client.attestSourceAuthority(f.input)).rejects.toMatchObject({ code: 'unavailable' })
+  await expect(f.client.readCollaborationSourceSnapshot(snapshotInput(f))).rejects.toMatchObject({ code: 'unavailable' })
+  await expect(f.client.collaborationAnalysis({ ...f.account,
+    command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) } }))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  f.alter(undefined)
+  for (const value of [null, [], {}, { extra: true }, { jsonText: 1 }, { jsonText: '{}', extra: true }]) {
+    f.setAnalysis(async () => value)
+    await expect(f.client.collaborationAnalysis({ ...f.account,
+      command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) } }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  }
+  const descriptor = { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id,
+    source_message_id: f.challenge.source_message_id, source_revision: f.challenge.source_revision,
+    snapshot_digest: f.challenge.snapshot_digest }
+  f.setAnalysis(async () => ({ kind: 'prepared', descriptor, attempt_request_id: f.challenge.request_id,
+    input_manifest_digest: 'b'.repeat(64), source_digest: descriptor.snapshot_digest }))
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.collaboration_analysis'
+    ? { ...frame, result: { kind: 'reply_source', capture: { kind: 'captured', descriptor } } } : frame)
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'prepare', input: {} } }))
+    .rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('refuses expired, foreign or exhausted Source snapshot coordinates before returning original content', async () => {
+  for (const mode of ['expired', 'offset', 'workspace', 'session', 'message', 'revision'] as const) {
+    const f = await fixture(); await f.grant()
+    const input = { ...snapshotInput(f), signal: new AbortController().signal }
+    if (mode === 'expired') {
+      f.setRead(async (_profile, target) => {
+        const active = f.seen.at(-1)
+        if (active?.type !== 'request' || active.method !== 'profile.source_snapshot') throw Error('missing active read')
+        f.time.value = active.params.expires_at
+        return { descriptor: { ...target, snapshot_digest: 'a'.repeat(64) },
+          snapshot_json: JSON.stringify({ ...target, original_message: 'source', active_mentions: [],
+            model_snapshot: {}, host_journal_commit: {} }) }
+      })
+    } else if (mode === 'offset') {
+      f.setRead(async (_profile, target) => ({ descriptor: { ...target, snapshot_digest: 'a'.repeat(64) },
+        snapshot_json: JSON.stringify({ ...target, original_message: 'source', active_mentions: [],
+          model_snapshot: {}, host_journal_commit: {} }) }))
+      await f.client.readCollaborationSourceSnapshot(input)
+      const previous = f.seen.at(-1)
+      if (previous?.type !== 'request' || previous.method !== 'profile.source_snapshot') throw Error('missing original read')
+      const frame = decodeHostControlFrame(JSON.stringify({ ...previous, request_id: randomUUID(),
+        params: { ...previous.params, jti: randomUUID(), offset: 100000 } }) + '\n')
+      expect(await f.session.handleRequest(frame)).toMatchObject({ type: 'error', error: { code: 'invalid_frame' } })
+      continue
+    } else {
+      const change = mode === 'workspace' ? { workspace_id: randomUUID() } : mode === 'session' ? { session_id: 'foreign' }
+        : mode === 'message' ? { source_message_id: 'foreign' } : { source_revision: '2' }
+      f.setRead(async (_profile, target) => {
+        const foreign = { ...target, ...change }
+        return { descriptor: { ...foreign, snapshot_digest: 'a'.repeat(64) },
+          snapshot_json: JSON.stringify({ ...foreign, original_message: 'source', active_mentions: [],
+            model_snapshot: {}, host_journal_commit: {} }) }
+      })
+    }
+    await expect(f.client.readCollaborationSourceSnapshot(input)).rejects.toThrow()
+  }
+})
+
+it.each(['analysis', 'delivery'] as const)('refuses %s certification after a Profile registration rollback and replacement', async (operation) => {
+  const f = await fixture(); await f.grant()
+  let replacement: string | undefined
+  const replaceProfile = async () => {
+    f.registry.rollbackRegistration(f.profile.profileId)
+    replacement = (await f.grant()).profileId
+  }
+  if (operation === 'analysis') {
+    f.setAnalysis(async () => { await replaceProfile(); return { jsonText: '{}' } })
+    await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch',
+      attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) } }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+  } else {
+    const { capsule, commit } = replyFixture(f, 'short')
+    f.setDelivery(() => ({ assertCurrent: () => {}, receive: async () => { await replaceProfile(); return commit } }))
+    await expect(f.client.receiveCollaborationDelivery({ ...f.account, capsule }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+  }
+  expect(replacement).toBeDefined()
+  expect(replacement).not.toBe(f.profile.profileId)
 })

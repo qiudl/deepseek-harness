@@ -221,3 +221,10 @@ it('refuses an absent capability and pre-cancelled calls without another frame',
   await expect(f.client.attestWorkspaceAuthority(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })
   expect(f.seen.length).toBe(before)
 })
+
+it('refuses a valid result frame for another method after the authorized workspace membership read', async () => {
+  const f = await fixture(); await f.grant()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.workspace_authority'
+    ? { ...frame, method: 'profile.collaboration_analysis', result: { kind: 'output', json_base64url: 'e30' } } : frame)
+  await expect(f.client.attestWorkspaceAuthority(f.input)).rejects.toMatchObject({ code: 'unavailable' })
+})

@@ -38,14 +38,29 @@ async function fixture(enabled = true) {
   const lifetime = new AbortController()
   const session = authority.openSession(ownerId, lifetime.signal)
   const seen: HostControlFrame[] = []
+  let alter: ((frame: HostControlFrame) => HostControlFrame) | undefined
   const client = await UnixHostClient.connectAuthenticatedTransport({ trustedInstallationId: identity.installationId,
     trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: identity.executableSignatureDigest, now: clock.now },
-  { call: (frame) => { seen.push(frame); return session.handleRequest(frame) }, isConnected: () => !lifetime.signal.aborted,
-    close: () => { lifetime.abort(); session.close() } })
+  { call: async (frame) => {
+    seen.push(frame)
+    const result = await session.handleRequest(frame)
+    return alter ? alter(result) : result
+  }, isConnected: () => !lifetime.signal.aborted,
+  close: () => { lifetime.abort(); session.close() } })
   onTestFinished(() => { client.close() })
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
-  return { host, account, profile, ownerId, client, inspectWorkspaceModelSelection, grant, seen, session, identity, authority }
+  return { host, account, profile, ownerId, client, inspectWorkspaceModelSelection, grant, seen, session, identity, authority,
+    alter: (callback: typeof alter) => { alter = callback } }
 }
+
+it('refuses a valid result frame for another method after the authorized model-selection read', async () => {
+  const f = await fixture(); await f.grant()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.workspace_model_selection'
+    ? { ...frame, method: 'profile.collaboration_analysis', result: { kind: 'output', json_base64url: 'e30' } } : frame)
+  await expect(f.client.inspectWorkspaceModelSelection({ ...binding, ...target }))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  expect(f.inspectWorkspaceModelSelection).toHaveBeenCalledOnce()
+})
 
 it('requires a verified Account on this connection and returns the worker-selected choice', async () => {
   const f = await fixture()

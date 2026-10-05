@@ -323,7 +323,7 @@ export class DshWebProfileWorkerFactory {
     if (stopped()) throw new HostAuthorityError('unavailable')
     const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
     const response = await fetch(`${viewOrigin}/internal/desktop-workspace-model-selection`, {
-      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(target), signal: active,
     })
     return this.readPrivateResponse(response, active, signal, stopped, 8192, (bytes) => {

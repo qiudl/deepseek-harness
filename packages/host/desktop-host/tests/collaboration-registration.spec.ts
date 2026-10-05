@@ -141,3 +141,10 @@ it('client rejects bad signatures and signed replies for a different challenge o
   const cancellation = new AbortController(); cancellation.abort()
   await expect(f.client.attestCollaborationRegistration({ ...f.input, signal: cancellation.signal })).rejects.toThrow()
 })
+
+it('refuses a valid result frame for another method after Account registration authorization', async () => {
+  const f = await fixture(); await f.grant()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.collaboration_registration'
+    ? { ...frame, method: 'profile.collaboration_analysis', result: { kind: 'output', json_base64url: 'e30' } } : frame)
+  await expect(f.client.attestCollaborationRegistration(f.input)).rejects.toMatchObject({ code: 'unavailable' })
+})

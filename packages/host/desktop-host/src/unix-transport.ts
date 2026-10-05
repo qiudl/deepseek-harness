@@ -2503,16 +2503,16 @@ export class UnixHostClient {
     if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected() ||
       peer !== JSON.stringify([this.inspection.installation_id, this.inspection.installation_public_key, this.inspection.host_instance_id, this.inspection.process_nonce])) throw new HostAuthorityError('unavailable')
     const result = parseHostCollaborationAnalysisResult(frame.result)
-    const expectedKind = command.action === 'dispatch' ? 'output' : command.action === 'capture_reply' ? 'reply_source' : 'prepared'
+    const dispatch = command.action === 'dispatch' ? command.grant : undefined
+    const expectedKind = dispatch !== undefined ? 'output' : command.action === 'capture_reply' ? 'reply_source' : 'prepared'
     if (result.kind !== expectedKind) throw new HostAuthorityError('unavailable')
     if (result.kind === 'output' && result.analysis_receipt) {
-      if (command.action !== 'dispatch') throw new HostAuthorityError('unauthorized')
       const receipt=result.analysis_receipt
       const expected=parseHostCollaborationAnalysisReceipt({ ...receipt,
         authority_environment_id:input.authorityEnvironmentId,account_binding_handle:input.accountBindingHandle,
         authority_binding_version:input.authorityBindingVersion,account_issuer:input.issuer,account_subject:input.subject,
         installation_id:this.inspection.installation_id,installation_public_key:this.inspection.installation_public_key,
-        host_instance_id:this.inspection.host_instance_id,process_nonce:this.inspection.process_nonce,dispatch:command.grant })
+        host_instance_id:this.inspection.host_instance_id,process_nonce:this.inspection.process_nonce,dispatch })
       if (encodeHostCollaborationAnalysisReceiptPayload(receipt)!==encodeHostCollaborationAnalysisReceiptPayload(expected)
         || createHash('sha256').update(Buffer.from(result.json_base64url,'base64url')).digest('hex')!==receipt.output_digest
         || !verify(null,Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(receipt)),publicKeyObject(receipt.installation_public_key),Buffer.from(receipt.signature,'base64url'))) throw new HostAuthorityError('unauthorized')
