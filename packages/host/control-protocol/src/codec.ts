@@ -426,6 +426,23 @@ function extensionKind(value: unknown): HostExtensionKind {
   if (value !== 'plugin' && value !== 'mcp' && value !== 'skill') reject()
   return value
 }
+function collaborationAccountParams(params: Record<string, unknown>) {
+  return {
+    ...authorized(params),
+    authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+    account_binding_handle: opaqueHandle(params.account_binding_handle),
+    authority_binding_version: generation(params.authority_binding_version),
+    account_issuer: accountIssuer(params.account_issuer),
+    account_subject: uuid(params.account_subject),
+  }
+}
+function accountChallengeParams(params: Record<string, unknown>) {
+  return {
+    ...authorized(params),
+    account_binding_handle: opaqueHandle(params.account_binding_handle),
+    authority_binding_version: generation(params.authority_binding_version),
+  }
+}
 function extensionCommand(value: unknown): HostExtensionCommand {
   const command = record(value)
   if (command.action === 'inventory') {
@@ -1436,20 +1453,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   if (frame.method === 'profile.collaboration_delivery') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: uuid(params.account_subject),
+      ...collaborationAccountParams(params),
       command: parseHostCollaborationDeliveryChunk(params.command),
     } }
   }
   if (frame.method === 'profile.collaboration_analysis') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: uuid(params.account_subject),
+      ...collaborationAccountParams(params),
       command: parseHostCollaborationAnalysisCommand(params.command),
     } } satisfies ProfileCollaborationAnalysisRequest
   }
@@ -1473,9 +1484,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       request_id: requestId,
       method: frame.method,
       params: {
-        ...authorized(params),
-        account_binding_handle: opaqueHandle(params.account_binding_handle),
-        authority_binding_version: generation(params.authority_binding_version),
+        ...accountChallengeParams(params),
         challenge: parseHostWorkspaceAuthorityChallenge(params.challenge),
       },
     }
@@ -1488,9 +1497,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       request_id: requestId,
       method: frame.method,
       params: {
-        ...authorized(params),
-        account_binding_handle: opaqueHandle(params.account_binding_handle),
-        authority_binding_version: generation(params.authority_binding_version),
+        ...accountChallengeParams(params),
         challenge: parseHostSourceAuthorityChallenge(params.challenge),
       },
     }
@@ -1498,8 +1505,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   if (frame.method === 'profile.collaboration_registration') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...authorized(params), account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
+      ...accountChallengeParams(params),
       challenge: parseHostCollaborationRegistrationChallenge(params.challenge),
     } }
   }
