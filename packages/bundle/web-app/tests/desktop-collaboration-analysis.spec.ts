@@ -13,8 +13,10 @@ import { createMessage } from '@deepseek-ai/dsh-llm'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { DesktopCollaborationAnalysis } from '../src/desktop-collaboration-analysis.ts'
+import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from '../src/desktop-collaboration-analysis.ts'
 const signal = () => new AbortController().signal
 const binding = 'a'.repeat(64)
 const input = (id = 'message') => ({
@@ -36,7 +38,7 @@ const input = (id = 'message') => ({
     },
   ],
 })
-async function harness() {
+async function harness(journalOpenFailure?: Error) {
   const root = await mkdtemp(join(tmpdir(), 'req0004-profile-analysis-')),
     ctx = new Context(),
     lifetime = new AbortController()
@@ -113,20 +115,24 @@ async function harness() {
       },
     }
   }
+  const captureCall = vi.fn(capture)
+  const open = vi.fn(() => openCollaborationAnalysisJournal(facility))
+  if (journalOpenFailure) open.mockRejectedValueOnce(journalOpenFailure)
   const owner = new DesktopCollaborationAnalysis(
-    capture,
-    () => openCollaborationAnalysisJournal(facility),
+    captureCall,
+    open,
     lifetime.signal,
   )
   onTestFinished(async () => {
-    await owner.close()
+    if (journalOpenFailure) await expect(owner.close()).rejects.toBe(journalOpenFailure)
+    else await owner.close()
     await sourceJournal.close()
     await facility.closeAll()
     await backend.close()
     await ctx.fiber.dispose()
     await rm(root, { recursive: true, force: true })
   })
-  return { root, owner, lifetime, calls: () => calls,
+  return { root, owner, lifetime, capture: captureCall, open, calls: () => calls,
     snapshot: (id: string) => sourceJournal.read({ workspace_id: input().workspace_id, session_id: input().session_id, source_message_id: id, source_revision: '1' })! }
 }
 const grant = (prepared: { attempt_request_id: string; input_manifest_digest: string; source_digest: string }) => ({
@@ -263,4 +269,140 @@ it('expires retained reply calls without leaking the preparation slot or restori
     expect((await h.owner.captureReply({ ...replyInput(), source_message_id: 'next-reply' }, binding, signal())).kind).toBe('captured')
     expect(h.calls()).toBe(0)
   } finally { vi.useRealTimers() }
+})
+
+async function httpFixture(h: Awaited<ReturnType<typeof harness>>) {
+  const token = 'C'.repeat(43)
+  const server = createServer((req, res) => {
+    void handleDesktopCollaborationAnalysisRequest(req, res, token, h.owner)
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  onTestFinished(async () => {
+    server.closeAllConnections()
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => { if (error) reject(error); else resolve() })
+    })
+  })
+  const url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+  const post = (value: unknown, authorization = `Bearer ${token}`) => fetch(url, {
+    method: 'POST', headers: { authorization }, body: JSON.stringify(value),
+  })
+  return { url, post, token }
+}
+
+it('private analysis HTTP rejects browser authority and malformed commands without analyzing', async () => {
+  const h = await harness(), f = await httpFixture(h)
+  const command = { action: 'prepare', binding_key: binding, input: input() }
+  for (const authorization of ['', 'Bearer short', `Bearer ${'A'.repeat(43)}`]) {
+    expect((await f.post(command, authorization)).status).toBe(403)
+  }
+  expect((await fetch(f.url, { headers: { cookie: 'dsh-auth=browser' } })).status).toBe(403)
+  expect((await fetch(f.url, { headers: { authorization: `Bearer ${f.token}` } })).status).toBe(403)
+  for (const body of [null, [], 'prepare', {}, { ...command, action: 'unknown' },
+    { ...command, binding_key: null }, { ...command, binding_key: 'not-a-digest' },
+    { action: 'prepare', binding_key: binding, extra: true },
+    { ...command, api_key: 'private' },
+    { action: 'dispatch', binding_key: binding, attempt_request_id: 12, grant: {} },
+    { action: 'dispatch', binding_key: binding, attempt_request_id: 'not-an-attempt', grant: {} },
+    { ...command, padding: 'x'.repeat(1024 * 1024) }]) {
+    const response = await f.post(body)
+    expect(response.status).toBe(400)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toEqual({ error: 'invalid_input' })
+  }
+  expect(h.calls()).toBe(0)
+})
+
+it('private analysis HTTP prepares and dispatches once without cancelling acknowledged ownership', async () => {
+  const h = await harness(), f = await httpFixture(h)
+  const response = await f.post({ action: 'prepare', binding_key: binding, input: input() })
+  expect(response.status).toBe(200)
+  const p = receipt((await response.json() as { value: Awaited<ReturnType<DesktopCollaborationAnalysis['prepare']>> }).value)
+  expect(h.calls()).toBe(0)
+  const dispatch = { action: 'dispatch', binding_key: binding, attempt_request_id: p.attempt_request_id, grant: permission(p) }
+  const result = await f.post(dispatch)
+  expect(result.status).toBe(200)
+  expect(await result.json()).toEqual({ value: { jsonText: '{"intent":"discuss"}' } })
+  expect((await f.post(dispatch)).status).toBe(422)
+  expect(h.calls()).toBe(1)
+})
+
+it('private analysis HTTP retains a same-chat clarification and sanitizes unavailable ownership', async () => {
+  const h = await harness(), f = await httpFixture(h)
+  expect((await f.post({ action: 'prepare', binding_key: binding, input: input('original') })).status).toBe(200)
+  expect((await f.post({ action: 'capture_reply', binding_key: binding, input: input('new-mention') })).status).toBe(422)
+  expect((await f.post({ action: 'capture_reply', binding_key: binding, input: replyInput() })).status).toBe(200)
+  const prepared = await f.post({ action: 'prepare_clarification', binding_key: binding, input: context(h) })
+  expect(prepared.status).toBe(200)
+  const p = receipt((await prepared.json() as { value: Awaited<ReturnType<DesktopCollaborationAnalysis['prepare']>> }).value)
+  expect(h.calls()).toBe(0)
+  expect((await f.post({ action: 'dispatch', binding_key: binding, attempt_request_id: p.attempt_request_id,
+    grant: { ...permission(p), expected_plan_revision: '3' } })).status).toBe(200)
+  expect(h.calls()).toBe(1)
+  await h.owner.close()
+  const closed = await f.post({ action: 'prepare', binding_key: binding, input: input('closed') })
+  expect(closed.status).toBe(422)
+  expect(await closed.json()).toEqual({ error: 'unavailable' })
+})
+
+it('releases preparation capacity after Source capture fails without starting a model', async () => {
+  const h = await harness()
+  h.capture.mockRejectedValueOnce(Error('source storage failed'))
+  await expect(h.owner.prepare(input('failed'), binding, signal())).rejects.toThrow('source storage failed')
+  expect((await h.owner.prepare(input('next'), binding, signal())).kind).toBe('prepared')
+  expect(h.calls()).toBe(0)
+})
+
+it('refuses a captured result that omitted the durable analysis input', async () => {
+  const h = await harness()
+  const captured = await h.capture(input(), signal())
+  if (captured.kind !== 'captured') throw Error('expected first capture')
+  h.capture.mockResolvedValueOnce({ ...captured, analyze: async () => ({ jsonText: '{}' }) })
+  await expect(h.owner.prepare(input(), binding, signal())).rejects.toThrow()
+  expect(h.calls()).toBe(0)
+})
+
+it('caller cancellation before the dispatch write finishes never reaches the model', async () => {
+  const h = await harness()
+  const p = receipt(await h.owner.prepare(input(), binding, signal()))
+  const caller = new AbortController()
+  const work = h.owner.dispatch(p.attempt_request_id, binding, permission(p), caller.signal)
+  const rejected = expect(work).rejects.toThrow('collaboration_analysis_cancelled')
+  caller.abort('caller lost authority')
+  await rejected
+  expect(h.calls()).toBe(0)
+})
+
+it('failed reply capture frees its slot and closed ownership refuses new replies', async () => {
+  const h = await harness()
+  h.capture.mockRejectedValueOnce(Error('reply storage failed'))
+  await expect(h.owner.captureReply(replyInput(), binding, signal())).rejects.toThrow('reply storage failed')
+  expect((await h.owner.captureReply(replyInput(), binding, signal())).kind).toBe('captured')
+  await h.owner.close()
+  await expect(h.owner.captureReply(replyInput(), binding, signal())).rejects.toThrow('collaboration_analysis_closed')
+  expect(h.calls()).toBe(0)
+})
+
+it('duplicate reply capture refuses an executable capability instead of treating it as recovery', async () => {
+  const h = await harness()
+  await h.owner.captureReply(replyInput(), binding, signal())
+  const captured = await h.capture.mock.results[0]!.value
+  h.capture.mockResolvedValueOnce(captured)
+  await expect(h.owner.captureReply(replyInput(), binding, signal()))
+    .rejects.toThrow('collaboration_analysis_preparation_unavailable')
+  expect((await h.owner.captureReply(replyInput(), binding, signal())).kind).toBe('recovered')
+  expect(h.calls()).toBe(0)
+})
+
+it('failed clarification journal opening consumes no model call and releases the retained slot', async () => {
+  const h = await harness(Error('analysis journal failed'))
+  await h.capture(input('original'), signal())
+  await h.owner.captureReply(replyInput(), binding, signal())
+  await expect(h.owner.prepareClarification(context(h), binding, signal())).rejects.toThrow('analysis journal failed')
+  expect((await h.owner.captureReply({ ...replyInput(), source_message_id: 'next-reply' }, binding, signal())).kind)
+    .toBe('captured')
+  expect(h.calls()).toBe(0)
 })
