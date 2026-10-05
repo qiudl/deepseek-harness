@@ -32,9 +32,8 @@ const input = () => ({
       .digest('hex'),
   },
 })
-function saved() {
-  const value = input(),
-    { delivery_state: _state, delivery_state_version: _version, ...projection } = value.projection
+function saved(value = input()) {
+  const { delivery_state: _state, delivery_state_version: _version, ...projection } = value.projection
   const body = { namespace_id: value.namespace_id, ...projection }
   return {
     ...body,
@@ -47,7 +46,7 @@ function saved() {
 }
 async function fixture() {
   const { handleDesktopCollaborationDeliveryRequest } = await import('../src/desktop-collaboration-delivery.ts')
-  const receive = vi.fn(async (): Promise<unknown> => saved())
+  const receive = vi.fn(async (_input: unknown, _signal: AbortSignal): Promise<unknown> => saved())
   const server = createServer((req, res) => {
     void handleDesktopCollaborationDeliveryRequest(req, res, token, receive)
   })
@@ -71,7 +70,7 @@ async function fixture() {
       headers: { authorization, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
-  return { receive, post }
+  return { receive, post, url }
 }
 it('requires the distinct parent write token and refuses cookie, Source-read token and caller local commits', async () => {
   const f = await fixture()
@@ -102,4 +101,62 @@ it('does not acknowledge mismatched, corrupted or failed persistence and exposes
     host_journal_commit: { ...saved().host_journal_commit, content_digest: '0'.repeat(64) },
   })
   expect((await f.post()).status).toBe(422)
+  const foreign = input()
+  foreign.projection.plan_id = 'different-plan'
+  f.receive.mockResolvedValueOnce(saved(foreign))
+  expect((await f.post()).status).toBe(422)
 })
+
+it('refuses non-POST requests and oversized replies before persistence', async () => {
+  const f = await fixture()
+  expect((await fetch(f.url, { headers: { authorization: `Bearer ${token}` } })).status).toBe(403)
+  expect((await f.post({ ...input(), padding: 'x'.repeat(1024 * 1024) })).status).toBe(400)
+  expect(f.receive).not.toHaveBeenCalled()
+})
+
+it('cancels persistence ownership when its caller disconnects without retrying the write', async () => {
+  const f = await fixture()
+  const started = Promise.withResolvers<AbortSignal>()
+  const cancelled = Promise.withResolvers<undefined>()
+  f.receive.mockImplementationOnce(async (_input, signal) => {
+    started.resolve(signal)
+    await new Promise<void>((resolve) => {
+      signal.addEventListener('abort', () => { cancelled.resolve(undefined); resolve() }, { once: true })
+    })
+    return saved()
+  })
+  const caller = new AbortController()
+  const request = fetch(f.url, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify(input()), signal: caller.signal,
+  })
+  const rejected = expect(request).rejects.toThrow()
+  const ownedSignal = await started.promise
+  caller.abort()
+  await rejected
+  await cancelled.promise
+  expect(ownedSignal.aborted).toBe(true)
+  expect(f.receive).toHaveBeenCalledTimes(1)
+})
+
+it('expires persistence ownership without acknowledging the delayed write', async () => {
+  const f = await fixture()
+  const started = Promise.withResolvers<AbortSignal>()
+  const cancelled = Promise.withResolvers<undefined>()
+  f.receive.mockImplementationOnce(async (_input, signal) => {
+    started.resolve(signal)
+    await new Promise<void>((resolve) => {
+      signal.addEventListener('abort', () => { cancelled.resolve(undefined); resolve() }, { once: true })
+    })
+    return saved()
+  })
+  const request = f.post()
+  const ownedSignal = await started.promise
+  await cancelled.promise
+  const response = await request
+  expect(response.status).toBe(422)
+  expect(await response.json()).toEqual({ error: 'unavailable' })
+  expect(response.headers.get('cache-control')).toBe('no-store')
+  expect(ownedSignal.aborted).toBe(true)
+  expect(f.receive).toHaveBeenCalledTimes(1)
+}, 20_000)
