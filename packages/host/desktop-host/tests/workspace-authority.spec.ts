@@ -216,8 +216,8 @@ it('refuses an absent capability and pre-cancelled calls without another frame',
   await f.grant()
   await expect(f.client.attestWorkspaceAuthority({ ...f.input, signal: AbortSignal.abort() })).rejects.toThrow()
   const before = f.seen.length
-  const capabilities = f.client.inspection.capabilities as unknown as string[]
-  capabilities.splice(capabilities.indexOf('profile.workspace_authority'), 1)
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.workspace_authority')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
   await expect(f.client.attestWorkspaceAuthority(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })
   expect(f.seen.length).toBe(before)
 })

@@ -1,14 +1,15 @@
 import { expect, it, vi } from 'vitest'
 import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import { workspaceSnapshot } from './fixture-state.client.ts'
 import { ProjectScopeModel } from '../src/client/project-scope.ts'
 
 const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
 function fixture() {
-  let snapshot = { items: [{ workspaceId, sessionIds: ['session'] }], phase: 'ready', state: 'idle', archivedSessionIds: [] }
+  let snapshot = workspaceSnapshot(workspaceId)
   const listeners = new Set<() => void>()
-  const source = { getSnapshot: () => snapshot, subscribe: (fn: () => void) => {
+  const source: WorkspaceSource = { getSnapshot: () => snapshot, subscribe: (fn: () => void) => {
     listeners.add(fn); return () => { listeners.delete(fn) }
-  } } as unknown as WorkspaceSource
+  } }
   let version = '0', selected: string[] = []
   const call = vi.fn(async (input: { workspace_id: string; operation: { kind: string; selected_project_ids?: readonly string[] } }) => {
     const kind = input.operation.kind

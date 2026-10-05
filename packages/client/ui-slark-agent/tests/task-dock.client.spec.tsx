@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { dockRuntime } from './fixture-state.client.ts'
 import { afterEach, expect, it, vi } from 'vitest'
 import { AgentTaskDock } from '../src/client/AgentTaskDock.tsx'
 
@@ -16,8 +16,7 @@ it('reloads the original Session answer and removes it when authority is revoked
     .mockResolvedValue({ ok: true, value: { items: [{ ...item, state: 'revoked',
       question: null, answer: null, failure_code: 'authority_changed' }], total: 1 } })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgentInvocations: list })
-  const props = { sessionId: 'session-1' as SessionId,
-    t: (key: string) => key } as unknown as Parameters<typeof AgentTaskDock>[0]
+  const props: Parameters<typeof AgentTaskDock>[0] = { ...dockRuntime('session-1'), t: key => key }
   render(<AgentTaskDock {...props} />)
   expect(await screen.findByText('Private answer')).toBeTruthy()
   expect(screen.getByText('Original employee question')).toBeTruthy()
@@ -40,17 +39,22 @@ it('shows waiting, background, and failed tasks after refresh', async () => {
     .mockResolvedValue({ ok: true, value: { items: [{ ...base, state: 'failed' }], total: 1 } })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgentInvocations: list })
   let tick: (() => void) | undefined
-  const actualSetInterval = window.setInterval.bind(window)
-  const interval = vi.spyOn(window, 'setInterval').mockImplementation((fn, delay, ...args) => {
+  const browserWindow: Pick<Window, 'setInterval' | 'clearInterval'> = window
+  const actualSetInterval = browserWindow.setInterval.bind(browserWindow)
+  let timer: number | undefined
+  const interval = vi.spyOn(browserWindow, 'setInterval').mockImplementation((fn, delay, ...args) => {
+    const intervalArgs: unknown[] = args
     if (delay === 3_000) {
-      tick = fn
-      return 1 as unknown as ReturnType<typeof setInterval>
+      if (typeof fn !== 'function') throw Error('expected task refresh callback')
+      tick = () => { Reflect.apply(fn, undefined, intervalArgs) }
+      const handle = actualSetInterval(() => {}, delay)
+      timer = handle
+      return handle
     }
-    return actualSetInterval(fn, delay, ...args) as unknown as ReturnType<typeof setInterval>
+    return actualSetInterval(fn, delay, ...intervalArgs)
   })
   const clear = vi.spyOn(window, 'clearInterval')
-  const props = { sessionId: 'session-1' as SessionId,
-    t: (key: string) => key } as unknown as Parameters<typeof AgentTaskDock>[0]
+  const props: Parameters<typeof AgentTaskDock>[0] = { ...dockRuntime('session-1'), t: key => key }
   const view = render(<AgentTaskDock {...props} />)
   expect(await screen.findByText(/task.waiting/)).toBeTruthy()
   expect(screen.getByText('Original employee question')).toBeTruthy()
@@ -64,7 +68,8 @@ it('shows waiting, background, and failed tasks after refresh', async () => {
   await act(async () => { tick?.() })
   expect(await screen.findByText(/task.failed/)).toBeTruthy()
   view.unmount()
-  expect(clear).toHaveBeenCalledWith(1)
+  expect(timer).toBeDefined()
+  expect(clear).toHaveBeenCalledWith(timer)
   interval.mockRestore()
   clear.mockRestore()
 })
@@ -73,8 +78,7 @@ it('keeps one request in flight and ignores late responses after unmount', async
   let resolve!: (value: unknown) => void
   const list = vi.fn(() => new Promise((resolveFn) => { resolve = resolveFn }))
   Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgentInvocations: list })
-  const props = { sessionId: 'session-1' as SessionId,
-    t: (key: string) => key } as unknown as Parameters<typeof AgentTaskDock>[0]
+  const props: Parameters<typeof AgentTaskDock>[0] = { ...dockRuntime('session-1'), t: key => key }
   const view = render(<AgentTaskDock {...props} />)
   window.dispatchEvent(new CustomEvent('dsh-slark-agent-admitted', { detail: 'session-1' }))
   expect(list).toHaveBeenCalledTimes(1)
@@ -98,8 +102,7 @@ it('clears tasks when the list fails or the Desktop bridge is unavailable', asyn
     .mockRejectedValueOnce(new Error('network'))
     .mockResolvedValueOnce({ ok: false, errorCode: 'revoked' })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgentInvocations: list })
-  const props = { sessionId: 'session-1' as SessionId,
-    t: (key: string) => key } as unknown as Parameters<typeof AgentTaskDock>[0]
+  const props: Parameters<typeof AgentTaskDock>[0] = { ...dockRuntime('session-1'), t: key => key }
   render(<AgentTaskDock {...props} />)
   expect(await screen.findByText('Private answer')).toBeTruthy()
   expect(screen.getByText('Original employee question')).toBeTruthy()
@@ -124,8 +127,7 @@ it('restores the exact multiline question from the server after reopening the se
     failure_code: null, created_at: new Date().toISOString(), terminal_at: null }
   const list = vi.fn().mockResolvedValue({ ok: true, value: { items: [item], total: 1 } })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', { enterpriseAgentInvocations: list })
-  const props = { sessionId: 'session-1' as SessionId,
-    t: (key: string) => key } as unknown as Parameters<typeof AgentTaskDock>[0]
+  const props: Parameters<typeof AgentTaskDock>[0] = { ...dockRuntime('session-1'), t: key => key }
   const first = render(<AgentTaskDock {...props} />)
   await screen.findByText('Done')
   first.unmount()

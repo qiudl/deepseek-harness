@@ -278,10 +278,8 @@ it('refuses missing Source read capability and replies after connection replacem
   })
   await expect(f.client.readCollaborationSourceSnapshot(input)).rejects.toThrow()
   const old = await fixture()
-  ;(old.client.inspection.capabilities as unknown as string[]).splice(
-    (old.client.inspection.capabilities as unknown as string[]).indexOf('profile.source_snapshot'),
-    1,
-  )
+  const oldCapabilities = old.client.inspection.capabilities.filter(value => value !== 'profile.source_snapshot')
+  expect(Reflect.set(old.client.inspection, 'capabilities', oldCapabilities)).toBe(true)
   const before = old.seen.length
   await expect(old.client.readCollaborationSourceSnapshot(snapshotInput(old))).rejects.toMatchObject({
     code: 'upgrade_required',
@@ -370,8 +368,8 @@ it('refuses an absent capability and pre-cancelled calls without another frame',
   await f.grant()
   await expect(f.client.attestSourceAuthority({ ...f.input, signal: AbortSignal.abort() })).rejects.toThrow()
   const before = f.seen.length
-  const capabilities = f.client.inspection.capabilities as unknown as string[]
-  capabilities.splice(capabilities.indexOf('profile.source_authority'), 1)
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.source_authority')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
   await expect(f.client.attestSourceAuthority(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })
   expect(f.seen.length).toBe(before)
 })

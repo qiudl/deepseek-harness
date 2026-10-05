@@ -66,7 +66,7 @@ function base64(v: unknown, size: number): string {
   return s
 }
 /**
- * Parse detached bounded output provenance without accepting its claimed installation as trusted.
+ * Parse detached bounded output output origin without accepting its claimed installation as trusted.
  * @param value - Exact signed receipt, including original coordinator dispatch fields.
  * @returns Frozen receipt; malformed fields, getters and extra properties reject.
  */

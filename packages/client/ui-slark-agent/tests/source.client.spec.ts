@@ -160,6 +160,9 @@ it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', a
   expect(pick('[]')).toBeUndefined()
   expect(pick('{}')).toBeUndefined()
   expect(pick(JSON.stringify({ ...agent, logical_key_version: 3 }))).toBeUndefined()
+  for (const logical_key of [42, null, {}, []]) {
+    expect(pick(JSON.stringify({ ...agent, logical_key }))).toBeUndefined()
+  }
   const picked = pick(rows[0]!.value!)
   if (!picked || typeof picked !== 'object' || !('insert' in picked))
     throw new Error('Agent reference not inserted')

@@ -81,21 +81,32 @@ declare global {
   }
 }
 
-function parseReference(value: string): (AgentItem & { logical_key?: string; logical_key_version?: 2 }) | null {
+type AgentReference = Pick<AgentItem, 'assignment_id' | 'project_id' | 'agent_id' | 'enterprise_id' | 'name' | 'publication_version'> & {
+  project_name?: unknown
+  enterprise_name?: unknown
+  logical_key?: string
+  logical_key_version?: 2
+}
+
+function isAgentReference(item: Record<string, unknown>): item is Record<string, unknown> & AgentReference {
+  return ['assignment_id', 'project_id', 'agent_id', 'enterprise_id', 'name'].every(
+    key => typeof item[key] === 'string' && item[key].length > 0,
+  ) && Number.isSafeInteger(item.publication_version) &&
+    (item.logical_key === undefined || typeof item.logical_key === 'string') &&
+    (item.logical_key_version === undefined || item.logical_key_version === 2)
+}
+
+function parseReference(value: string): AgentReference | null {
   try {
     const parsed: unknown = JSON.parse(value)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const item = parsed as Record<string, unknown>
-    if (!['assignment_id', 'project_id', 'agent_id', 'enterprise_id', 'name'].every(
-      key => typeof item[key] === 'string' && item[key].length > 0,
-    ) || !Number.isSafeInteger(item.publication_version) ||
-      (item.logical_key_version !== undefined && item.logical_key_version !== 2)) return null
-    return item as unknown as AgentItem & { logical_key?: string; logical_key_version?: 2 }
+    return isAgentReference(item) ? item : null
   } catch { return null }
 }
 
 /** Preserve legacy references whose project display name was not recorded. */
-function agentLabel(item: AgentItem): string {
+function agentLabel(item: Pick<AgentItem, 'name'> & { project_name?: unknown }): string {
   return typeof item.project_name === 'string' && item.project_name.length > 0
     ? `${item.name} · ${item.project_name}` : item.name
 }

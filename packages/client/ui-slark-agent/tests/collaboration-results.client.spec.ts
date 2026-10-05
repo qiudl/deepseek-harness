@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest'
+import { workspaceSnapshot } from './fixture-state.client.ts'
 import { CollaborationResultsModel } from '../src/client/collaboration-results.ts'
 import type { CollaborationResultsBridge } from '../src/client/collaboration-results.ts'
 import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
@@ -33,9 +34,8 @@ it('keeps the aggregate view within its budget when loading additional replies',
 function fixture() {
   let grouped = true, remoteGeneration: unknown = 1
   const listeners = new Set<() => void>(), changed = () => { listeners.forEach((fn) => { fn() }) }
-  const workspaces = { getSnapshot: () => ({ phase: 'ready', state: 'idle', archivedSessionIds: [],
-    items: grouped ? [{ workspaceId: workspace_id, sessionIds: ['session'] }] : [] }),
-  subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } } as unknown as WorkspaceSource
+  const workspaces: WorkspaceSource = { getSnapshot: () => workspaceSnapshot(workspace_id, 'session', grouped),
+    subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } }
   const generation = { getSnapshot: () => remoteGeneration,
     subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } }
   const reads = vi.fn(async (_cursor: string | undefined, _signal: AbortSignal) =>

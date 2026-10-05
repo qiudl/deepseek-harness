@@ -19,7 +19,7 @@ import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
 import { createScopedCollaborationSource } from '../src/client/collaboration-source.ts'
 import type { CollaborationPendingResponse, DesktopClarificationReplyInput, CollaborationClarificationResponse } from '../src/client/collaboration-dialogue.ts'
-import type { CollaborationResultsInjected } from '../src/client/CollaborationResultsDock.tsx'
+import { CollaborationResultsModel } from '../src/client/collaboration-results.ts'
 
 const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id: 'agent-1',
   enterprise_id: 'enterprise-1', enterprise_name: 'Company', project_name: '项目空间',
@@ -123,11 +123,21 @@ async function bench(collaboration = false) {
   ctx.baseUrl = pathToFileURL(directory).href + '/'
   await ctx.plugin(Loader)
   ctx.loader.builtins.include = Include
-  ctx.loader.internal = { version: 'v2', async import(specifier: string) {
+  const internal = ctx.loader.internal
+  if (!internal) throw Error('expected native Loader')
+  const fixtureImport = async (specifier: string) => {
     const plugin = plugins[specifier.slice('composer-test:'.length) as keyof typeof plugins]
     if (!plugin) throw Error('unexpected plugin')
     return typeof plugin === 'function' ? { default: plugin } : plugin
-  } } as unknown as NonNullable<typeof ctx.loader.internal>
+  }
+  ctx.loader.internal = new Proxy(internal, {
+    get(target, key) {
+      if (key === 'import') return fixtureImport
+      const value: unknown = Reflect.get(target, key, target)
+      const bound: unknown = typeof value === 'function' ? value.bind(target) : value
+      return bound
+    },
+  })
   await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(yaml).href } })
   await ctx.loader.await()
   for (const entry of ctx.loader.entries()) await entry.fiber?.await()
@@ -189,7 +199,10 @@ it('YAML-loaded result registration receives the real composer admission event a
   expect(entries.some(entry => entry.options.id === 'slark-agent-tasks')).toBe(false)
   const entry = entries.find(entry => entry.options.id === 'slark-collaboration-results')
   expect(entry).toBeDefined()
-  const bindings = entry!.inject!('session-1' as never) as unknown as CollaborationResultsInjected
+  const bindings: unknown = Reflect.apply(entry!.inject!, undefined, ['session-1'])
+  if (!bindings || typeof bindings !== 'object' || !('hooks' in bindings) ||
+    !bindings.hooks || typeof bindings.hooks !== 'object' || !('slarkResults' in bindings.hooks) ||
+    !(bindings.hooks.slarkResults instanceof CollaborationResultsModel)) throw Error('expected registered results model')
   const model = bindings.hooks.slarkResults, remove = model.subscribe(() => {})
   try {
     await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalledTimes(1) })

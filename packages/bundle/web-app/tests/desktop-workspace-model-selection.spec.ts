@@ -93,10 +93,20 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   ctx.baseUrl = pathToFileURL(directory).href + '/'
   await ctx.plugin(Loader)
   ctx.loader.builtins.include = Include
-  ctx.loader.internal = { version: 'v2', async import(specifier: string) {
+  const internal = ctx.loader.internal
+  if (!internal) throw Error('expected native Loader')
+  const fixtureImport = async (specifier: string) => {
     if (specifier !== '@deepseek-ai/dsh-web-app') throw Error(`Unexpected plugin: ${specifier}`)
     return WebApp
-  } } as unknown as NonNullable<typeof ctx.loader.internal>
+  }
+  ctx.loader.internal = new Proxy(internal, {
+    get(target, key) {
+      if (key === 'import') return fixtureImport
+      const value: unknown = Reflect.get(target, key, target)
+      const bound: unknown = typeof value === 'function' ? value.bind(target) : value
+      return bound
+    },
+  })
   await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(join(directory, 'cordis.yml')).href } })
   await ctx.loader.await()
   const entry = [...ctx.loader.entries()].find(candidate => candidate.options.id === 'web-app')!

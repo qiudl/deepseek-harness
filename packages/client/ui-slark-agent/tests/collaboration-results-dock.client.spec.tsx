@@ -2,7 +2,7 @@
 import { useSyncExternalStore } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import { workspaceSnapshot, dockRuntime, dockTranslate } from './fixture-state.client.ts'
 import { CollaborationResultsModel } from '../src/client/collaboration-results.ts'
 import { CollaborationResultsDock } from '../src/client/CollaborationResultsDock.tsx'
 import { zh } from '../src/client/locales.ts'
@@ -16,14 +16,13 @@ function fixture(answer = '完整回复') {
     target_display_snapshot: { agent_name: '<script>Guide', project_name: 'Project' }, answer }
   const read = vi.fn(async () => ({ ok: true as const, value: { deliveries: [item] } }))
   const bridge = { collaborationScopeAvailable: true, collaborationDeliveries: read }
-  const model = new CollaborationResultsModel('session' as never, { getSnapshot: () => ({ phase: 'ready', state: 'idle', archivedSessionIds: [],
-    items: [{ workspaceId: source.workspace_id, sessionIds: ['session'] }] }), subscribe: () => () => {} } as unknown as WorkspaceSource,
-  { getSnapshot: () => 1, subscribe: () => () => {} }, async () => ({ ok: true, value: { items: [original] } }),
-  () => bridge)
-  const props = { useSlarkResults: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
-    selector(useSyncExternalStore(model.subscribe, model.getSnapshot)), loadSources: () => model.loadSources(),
-  loadReplies: (id: string) => model.loadReplies(id), t: (key: keyof typeof zh) => zh[key] } as unknown as
-    Parameters<typeof CollaborationResultsDock>[0]
+  const model = new CollaborationResultsModel('session' as never, { getSnapshot: () => workspaceSnapshot(source.workspace_id), subscribe: () => () => {} },
+    { getSnapshot: () => 1, subscribe: () => () => {} }, async () => ({ ok: true, value: { items: [original] } }),
+    () => bridge)
+  const props: Parameters<typeof CollaborationResultsDock>[0] = { ...dockRuntime(),
+    useSlarkResults: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
+      selector(useSyncExternalStore(model.subscribe, model.getSnapshot)), loadSources: () => model.loadSources(),
+    loadReplies: (id: string) => model.loadReplies(id), t: dockTranslate }
   return { model, read, props, original, item, bridge }
 }
 it('automatically displays the original message and complete plain text result without a task form', async () => {

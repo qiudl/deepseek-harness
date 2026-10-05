@@ -52,24 +52,27 @@ function sameAcceptedSource(value: { submission_state: unknown; source: Record<k
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const text = (v: unknown, maximum: number): v is string => typeof v === 'string' && v.length > 0 &&
   new TextEncoder().encode(v).byteLength <= maximum && !/[\x00-\x1f\x7f]/u.test(v)
+function isReference(r: Record<string, unknown>): r is Record<string, unknown> & Reference {
+  const keys = ['kind', 'workspace_id', 'session_id', 'project_id', 'project_name', 'agent_id', 'agent_name', 'capability_snapshot']
+  if (Object.hasOwn(r, 'source_id')) keys.push('source_id')
+  if (Object.hasOwn(r, 'original_source_id')) keys.push('original_source_id')
+  if (Object.keys(r).length !== keys.length || keys.some(k => !Object.hasOwn(r, k)) ||
+    r.kind !== 'collaboration-v2' || !text(r.workspace_id, 36) || !uuid.test(r.workspace_id) ||
+    !text(r.session_id, 256) || !text(r.project_id, 256) || !text(r.agent_id, 256) ||
+    !text(r.project_name, 512) || !text(r.agent_name, 512) ||
+    typeof r.capability_snapshot !== 'string' || !/^[a-f0-9]{64}$/u.test(r.capability_snapshot) ||
+    (r.source_id !== undefined && (!text(r.source_id, 36) || !uuid.test(r.source_id))) ||
+    (r.original_source_id !== undefined &&
+    (!r.source_id || !text(r.original_source_id, 36) || !uuid.test(r.original_source_id)))) return false
+  return true
+}
 function parse(value: string): Reference | undefined {
   try {
     if (new TextEncoder().encode(value).byteLength > 4096) return undefined
     const v: unknown = JSON.parse(value)
     if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined
     const r = v as Record<string, unknown>
-    const keys = ['kind', 'workspace_id', 'session_id', 'project_id', 'project_name', 'agent_id', 'agent_name', 'capability_snapshot']
-    if (Object.hasOwn(r, 'source_id')) keys.push('source_id')
-    if (Object.hasOwn(r, 'original_source_id')) keys.push('original_source_id')
-    if (Object.keys(r).length !== keys.length || keys.some(k => !Object.hasOwn(r, k)) ||
-      r.kind !== 'collaboration-v2' || !text(r.workspace_id, 36) || !uuid.test(r.workspace_id) ||
-      !text(r.session_id, 256) || !text(r.project_id, 256) || !text(r.agent_id, 256) ||
-      !text(r.project_name, 512) || !text(r.agent_name, 512) ||
-      typeof r.capability_snapshot !== 'string' || !/^[a-f0-9]{64}$/u.test(r.capability_snapshot) ||
-      (r.source_id !== undefined && (!text(r.source_id, 36) || !uuid.test(r.source_id))) ||
-      (r.original_source_id !== undefined &&
-        (!r.source_id || !text(r.original_source_id, 36) || !uuid.test(r.original_source_id)))) return undefined
-    return r as unknown as Reference
+    return isReference(r) ? r : undefined
   } catch { return undefined }
 }
 const label = (r: Reference) => `${r.agent_name} · ${r.project_name}`

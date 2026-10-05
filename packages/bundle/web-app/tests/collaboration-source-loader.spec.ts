@@ -15,7 +15,7 @@ import { DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-dee
 import type { AnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { DshWebProfileWorkerFactory } from '@deepseek-ai/dsh-slark-desktop-host'
-import type { HostRemoteSessionJson, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { mkdtemp, realpath, rm, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -89,11 +89,21 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   ctx.baseUrl = pathToFileURL(directory).href + '/'
   await ctx.plugin(Loader)
   ctx.loader.builtins.include = Include
-  ctx.loader.internal = { version: 'v2', async import(specifier: string) {
+  const internal = ctx.loader.internal
+  if (!internal) throw Error('expected native Loader')
+  const fixtureImport = async (specifier: string) => {
     const plugin = plugins[specifier.slice('source-test:'.length) as keyof typeof plugins]
     if (!plugin) throw Error('unexpected plugin')
     return typeof plugin === 'function' ? { default: plugin } : plugin
-  } } as unknown as NonNullable<typeof ctx.loader.internal>
+  }
+  ctx.loader.internal = new Proxy(internal, {
+    get(target, key) {
+      if (key === 'import') return fixtureImport
+      const value: unknown = Reflect.get(target, key, target)
+      const bound: unknown = typeof value === 'function' ? value.bind(target) : value
+      return bound
+    },
+  })
   await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(join(directory, 'cordis.yml')).href } })
   await ctx.loader.await()
   for (const entry of ctx.loader.entries()) await entry.fiber?.await()
@@ -165,36 +175,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   const factory = new DshWebProfileWorkerFactory({
     nodeExecutablePath: process.execPath,
     dshEntrypointPath: process.execPath,
-  }) as unknown as {
-    receiveCollaborationDelivery(
-      origin: string,
-      token: string,
-      command: HostRemoteSessionJson,
-      signal: AbortSignal,
-      stopped: () => boolean,
-    ): Promise<HostRemoteSessionJson>
-    collaborationAnalysis(
-      origin: string,
-      token: string,
-      command: HostRemoteSessionJson,
-      signal: AbortSignal,
-      stopped: () => boolean
-    ): Promise<HostRemoteSessionJson>
-    inspectCollaborationSource(
-      origin: string,
-      token: string,
-      target: HostCollaborationSourceTarget,
-      signal: AbortSignal,
-      stopped: () => boolean
-    ): Promise<HostCollaborationSourceDescriptor>
-    readCollaborationSourceSnapshot(
-      origin: string,
-      token: string,
-      target: HostCollaborationSourceTarget,
-      signal: AbortSignal,
-      stopped: () => boolean
-    ): Promise<HostCollaborationSourceSnapshot>
-  }
+  })
   const postAnalysis = async (body: unknown, authorization = `Bearer ${'B'.repeat(43)}`) =>
     fetch(`${origin}/internal/desktop-collaboration-analysis`, {
       method: 'POST',
@@ -203,7 +184,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     })
   const preparation =
     mode === 'analysis-profile'
-      ? ((await factory.collaborationAnalysis(
+      ? ((await factory['collaborationAnalysis'](
         origin,
         'B'.repeat(43),
         { action: 'prepare', binding_key: 'd'.repeat(64), input: source },
@@ -236,14 +217,14 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     source_revision: '1',
   }
 
-  const result = await factory.inspectCollaborationSource(origin, token, target, new AbortController().signal, () => false)
+  const result = await factory['inspectCollaborationSource'](origin, token, target, new AbortController().signal, () => false)
   expect(result).toEqual(await ctx.sessionController.inspectCollaborationSource(target, new AbortController().signal))
-  const full=await factory.readCollaborationSourceSnapshot(origin,token,target,new AbortController().signal,()=>false)
+  const full=await factory['readCollaborationSourceSnapshot'](origin,token,target,new AbortController().signal,()=>false)
   expect(full.descriptor).toEqual(result);expect(JSON.parse(full.snapshot_json)).toEqual(first.snapshot)
   expect(full.snapshot_json).not.toMatch(/prepared|api_key|unlockMaterial/)
   expect((await fetch(`${origin}/internal/desktop-collaboration-source-snapshot`,{ method:'POST',headers:{ cookie:'dsh-auth=browser' },body:JSON.stringify(target) })).status).toBe(403)
   expect((await fetch(`${origin}/internal/desktop-collaboration-source`, { method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body: JSON.stringify(target) })).status).toBe(403)
-  await expect(factory.inspectCollaborationSource(origin, token, { ...target, source_message_id: 'missing' }, new AbortController().signal, () => false)).rejects.toThrow()
+  await expect(factory['inspectCollaborationSource'](origin, token, { ...target, source_message_id: 'missing' }, new AbortController().signal, () => false)).rejects.toThrow()
   if (mode === 'delivery') {
     const sourcePath = join(directory, 'state', 'collaboration_source_v2.json')
     const sourceBytes = await readFile(sourcePath)
@@ -258,9 +239,9 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
       delivery_state: 'pending', delivery_state_version: '1',
     } } as HostRemoteSessionJson
     const receive = (command: HostRemoteSessionJson, capability = 'C'.repeat(43)) =>
-      factory.receiveCollaborationDelivery(origin, capability, command, new AbortController().signal, () => false)
+      factory['receiveCollaborationDelivery'](origin, capability, command, new AbortController().signal, () => false)
     await expect(receive(input, token)).rejects.toThrow()
-    await expect(factory.receiveCollaborationDelivery(origin, 'C'.repeat(43), input, new AbortController().signal, () => true)).rejects.toThrow()
+    await expect(factory['receiveCollaborationDelivery'](origin, 'C'.repeat(43), input, new AbortController().signal, () => true)).rejects.toThrow()
     await expect(receive('x'.repeat(1024 * 1024))).rejects.toMatchObject({ code: 'invalid_input' })
     const receipt = await receive(input)
     expect(await receive(input)).toEqual(receipt)
@@ -329,7 +310,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     }
     expect((await postAnalysis({ ...dispatch, binding_key: 'e'.repeat(64) })).status).toBe(422)
     expect(providerRequests).toBe(0)
-    const result = (await factory.collaborationAnalysis(
+    const result = (await factory['collaborationAnalysis'](
       origin,
       'B'.repeat(43),
       dispatch,
@@ -338,7 +319,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     )) as { jsonText: string }
     expect((JSON.parse(result.jsonText) as { intent: string }).intent).toBe('delegate')
     await expect(
-      factory.collaborationAnalysis(origin, 'B'.repeat(43), dispatch, new AbortController().signal, () => true),
+      factory['collaborationAnalysis'](origin, 'B'.repeat(43), dispatch, new AbortController().signal, () => true),
     ).rejects.toThrow()
     expect(providerRequests).toBe(1)
     expect(await readFile(join(directory, 'state', 'collaboration_analysis_output_v2.json'), 'utf8')).toContain(
@@ -348,7 +329,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     expect(providerRequests).toBe(1)
 
     const replyInput = { ...source, source_message_id: 'reply-1', original_message: '只分析这份方案的规则，不修改文件。', active_mentions: [] }
-    const captured = await factory.collaborationAnalysis(origin, 'B'.repeat(43),
+    const captured = await factory['collaborationAnalysis'](origin, 'B'.repeat(43),
       { action: 'capture_reply', binding_key: 'd'.repeat(64), input: replyInput }, new AbortController().signal, () => false)
     expect(captured).toMatchObject({ kind: 'captured', descriptor: { source_message_id: 'reply-1' } })
     expect(providerRequests).toBe(1)
@@ -361,7 +342,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
       pending_items: [{ pending_item_id: 'pending-1', revision: '1', mention_ids: ['mention-1'], target: { project_id: '212', agent_id: 'guide' },
         reason: 'task_ambiguous', question: '要分析哪个方面？', source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: source.original_message.length }] }],
       frozen_task_ids: ['accepted-task'], mention_order: ['mention-1'], prior_replies: [] })
-    const fresh = await factory.collaborationAnalysis(origin, 'B'.repeat(43),
+    const fresh = await factory['collaborationAnalysis'](origin, 'B'.repeat(43),
       { action: 'prepare_clarification', binding_key: 'd'.repeat(64), input: JSON.parse(JSON.stringify(clarification)) as HostRemoteSessionJson },
       new AbortController().signal, () => false) as {
       kind: string
@@ -373,7 +354,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     const nextDispatch = { action: 'dispatch', binding_key: 'd'.repeat(64), attempt_request_id: fresh.attempt_request_id,
       grant: { ...grant, attempt_request_id: fresh.attempt_request_id, input_manifest_digest: fresh.input_manifest_digest,
         source_digest: fresh.source_digest, expected_plan_revision: '3' } }
-    await factory.collaborationAnalysis(origin, 'B'.repeat(43), nextDispatch, new AbortController().signal, () => false)
+    await factory['collaborationAnalysis'](origin, 'B'.repeat(43), nextDispatch, new AbortController().signal, () => false)
     expect(providerRequests).toBe(2)
     expect((await postAnalysis(nextDispatch)).status).toBe(422)
     const records = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {
@@ -396,14 +377,16 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   if (mode === 'analysis') {
     if (first.kind !== 'captured') throw Error('expected original capture')
     const result = await first.analyze(analysisWriter!, new AbortController().signal)
-    expect(JSON.parse(result.jsonText) as unknown).toMatchObject({ task_candidates: [{ mention_ids: ['mention-1'] }] })
+    const output: unknown = JSON.parse(result.jsonText)
+    expect(output).toMatchObject({ task_candidates: [{ mention_ids: ['mention-1'] }] })
     expect(providerRequests).toBe(1)
     const manifest = JSON.parse([...analysisJournal!.records()][0]!.manifest_json) as {
       prompt_version: string
       request: { system: string; messages: { content: { text: string }[] }[] }
     }
+    const input: unknown = JSON.parse(manifest.request.messages[0]!.content[0]!.text)
     await expect(JSON.stringify({ prompt_version: manifest.prompt_version, system: manifest.request.system,
-      input: JSON.parse(manifest.request.messages[0]!.content[0]!.text) as unknown, output: JSON.parse(result.jsonText) as unknown }, null, 2) + '\n')
+      input, output }, null, 2) + '\n')
       .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-analysis.request.expected.txt'))
     const retry = await ctx.sessionController.captureCollaborationSource(source, new AbortController().signal)
     expect(retry.kind).toBe('recovered'); expect(retry).not.toHaveProperty('analyze')
@@ -412,8 +395,8 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   }
   await analysisJournal?.close()
   await workspace.detachSession(sessionId)
-  await expect(factory.inspectCollaborationSource(origin, token, target, new AbortController().signal, () => false)).rejects.toThrow()
-  await expect(factory.readCollaborationSourceSnapshot(origin,token,target,new AbortController().signal,()=>false)).rejects.toThrow()
+  await expect(factory['inspectCollaborationSource'](origin, token, target, new AbortController().signal, () => false)).rejects.toThrow()
+  await expect(factory['readCollaborationSourceSnapshot'](origin,token,target,new AbortController().signal,()=>false)).rejects.toThrow()
   expect(session.seq).toBe(seq)
   expect(ctx.agents.get(sessionId)).toBeUndefined()
   expect(prepared).toHaveBeenCalledTimes(mode === 'analysis-profile' ? 2 : 1)

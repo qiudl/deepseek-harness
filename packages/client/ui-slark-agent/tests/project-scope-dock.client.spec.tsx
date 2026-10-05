@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import { workspaceSnapshot, dockRuntime, dockTranslate } from './fixture-state.client.ts'
 import { ProjectScopeModel } from '../src/client/project-scope.ts'
 import type { WorkspaceBridge } from '../src/client/project-scope.ts'
 import { ProjectScopeDock } from '../src/client/ProjectScopeDock.tsx'
@@ -26,17 +27,16 @@ function fixture(grouped = true, executable = false) {
     next_cursor: null, scope_version: String(version) } }
   })
   const bridge = { collaborationWorkspace: call }
-  const workspaces = { getSnapshot: () => ({ phase: 'ready', state: 'idle', archivedSessionIds: [],
-    items: grouped ? [{ workspaceId, sessionIds: ['session'] }] : [] }), subscribe: () => () => undefined } as unknown as WorkspaceSource
+  const workspaces: WorkspaceSource = { getSnapshot: () => workspaceSnapshot(workspaceId, 'session', grouped),
+    subscribe: () => () => undefined }
   const model = new ProjectScopeModel('session' as never, workspaces, () => bridge)
-  const props = { useSlarkScope: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
-    selector(useSyncExternalStore(model.subscribe, model.getSnapshot)),
-  refreshScope: () => model.refresh(), applyScope: (ids: readonly string[]) => model.apply(ids),
-  loadProjects: () => model.loadProjects(), loadAgents: () => model.loadAgents(),
-  t: (key: keyof typeof zh, params?: Record<string, unknown>) => {
-    let value: string = zh[key]; for (const [name, item] of Object.entries(params ?? {})) value = value.replace(`{${name}}`, String(item))
-    return value
-  } } as unknown as Parameters<typeof ProjectScopeDock>[0]
+  const props: Parameters<typeof ProjectScopeDock>[0] = { ...dockRuntime(),
+    useSlarkScope: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
+      selector(useSyncExternalStore(model.subscribe, model.getSnapshot)),
+    refreshScope: () => model.refresh(), applyScope: (ids: readonly string[]) => model.apply(ids),
+    loadProjects: () => model.loadProjects(), loadAgents: () => model.loadAgents(),
+    t: dockTranslate,
+  }
   return { model, call, props }
 }
 it('optional collaboration area supports multi-select, apply and explicit clear with Agent space labels', async () => {

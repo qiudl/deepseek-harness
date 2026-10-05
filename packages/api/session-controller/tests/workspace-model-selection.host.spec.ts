@@ -1,3 +1,4 @@
+import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 /** REQ-20260930-0004: Host-only workspace model inspection never activates a Session. */
 import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises'
@@ -11,7 +12,6 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
-import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { describe, expect, it, vi } from 'vitest'
 import { createSessionTestController, testSessionPersistence } from './test-remote.ts'
 
@@ -214,7 +214,7 @@ describe('Host workspace model inspection', () => {
       const persisted = { meta: source.header, events: source.snapshotEvents(), inheritedEventCount: SessionLogOffset(0) }
       const persistence = testSessionPersistence(h.ctx, {
         list: async () => [persisted.meta], inspect: async () => persisted,
-      }) as unknown as SessionPersistence
+      })
       const open = vi.spyOn(persistence, 'open')
       h.ctx.provide('sessionPersistence', persistence as never)
       h.inspect.mockRestore()
@@ -241,7 +241,11 @@ describe('Host workspace model inspection', () => {
     try {
       const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } })
       session.append('model/selection', { provider: 'live', model: 'live-model' })
-      const agent = { id: sessionId, session, ctx: h.ctx, status: 'idle', inbox: { nextStep: [], nextTurn: [] } } as unknown as Agent
+      const agent: Agent = {
+        id: sessionId, session, ctx: h.ctx, status: 'idle', options: {}, inbox: unsupportedInbox(),
+        send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
+        runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
+      }
       await h.ctx.agents.register(agent)
       const seq = session.seq
       expect((await h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId)).selection).toEqual({ provider: 'live', model: 'live-model' })
@@ -258,7 +262,11 @@ describe('Host workspace model inspection', () => {
     h.ctx.llm.registerAdapter(['selected'], adapter)
     try {
       const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } })
-      const agent = { id: sessionId, session, ctx: h.ctx, status: 'idle', inbox: { nextStep: [], nextTurn: [] } } as unknown as Agent
+      const agent: Agent = {
+        id: sessionId, session, ctx: h.ctx, status: 'idle', options: {}, inbox: unsupportedInbox(),
+        send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
+        runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
+      }
       await h.ctx.agents.register(agent)
       const resolve = vi.fn(async (config: LlmCallConfig) => config)
       h.ctx.llm.resolveCallConfig = resolve

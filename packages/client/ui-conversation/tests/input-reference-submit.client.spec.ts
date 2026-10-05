@@ -17,6 +17,22 @@ const commandAttachments = {
   unsupportedNotice: (token: string) => `${token.trim()} attachments-unsupported`,
 }
 
+function inputTriggerFixture(overrides: Partial<InputTriggerController>): InputTriggerController {
+  return {
+    launcher: { getSnapshot: () => null, subscribe: () => () => {} },
+    lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
+    track: vi.fn(),
+    arbitrate: () => 'pass',
+    onSpace: () => false,
+    serializeReference: () => Promise.reject(new Error('unexpected reference serialization')),
+    adjudicatesPlainText: () => false,
+    adjudicate: async () => undefined,
+    openReference: () => false,
+    toggleSource: () => {},
+    ...overrides,
+  }
+}
+
 function chip(shell: SessionInputShell): void {
   shell.setDraft('@res')
   const accepted = shell.insertReference({
@@ -81,13 +97,13 @@ describe('reference submission', () => {
     ) => Promise<SubmitOutcome>>()
       .mockResolvedValueOnce({ kind: 'error', text: 'snapshot unavailable' })
       .mockResolvedValueOnce({ kind: 'success' })
-    const inputTriggers = {
+    const inputTriggers = inputTriggerFixture({
       adjudicatesPlainText: () => false,
       adjudicate: async () => undefined,
       serializeReference,
       track: vi.fn(),
       lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
-    } as unknown as InputTriggerController
+    })
     const shell = new SessionInputShell({
       actx: {} as Context,
       inputTriggers: () => inputTriggers,
@@ -126,13 +142,13 @@ describe('reference submission', () => {
 
   it('blocks submission and retains the chip when its owner cannot serialize it', async () => {
     const sink = vi.fn()
-    const inputTriggers = {
+    const inputTriggers = inputTriggerFixture({
       adjudicatesPlainText: () => false,
       adjudicate: async () => undefined,
       serializeReference: () => Promise.reject(new Error('reference codec unavailable')),
       track: vi.fn(),
       lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
-    } as unknown as InputTriggerController
+    })
     const shell = new SessionInputShell({
       actx: {} as Context,
       inputTriggers: () => inputTriggers,
@@ -278,7 +294,7 @@ describe('submit transaction hardening', () => {
     const lexicon = { getSnapshot: () => new Map(), subscribe: () => () => {} }
     const shell = new SessionInputShell({
       actx: {} as Context,
-      inputTriggers: () => ({ track, lexicon, adjudicatesPlainText: () => false } as unknown as InputTriggerController),
+      inputTriggers: () => inputTriggerFixture({ track, lexicon, adjudicatesPlainText: () => false }),
       defaultSink: vi.fn(),
       commandAttachments,
     })
