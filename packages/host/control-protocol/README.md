@@ -68,6 +68,8 @@ The public key in an answer is not trust by itself. The Desktop broker must matc
 
 `profile.reference_authority` additionally binds `reference_request_digest` to a separate Profile transfer grant. Its signing bytes are `dsh-collaboration-reference-authority/v1`, NUL, and JSON `[1, sourceSigningPayload, referenceRequestDigest]`; the Source signing payload is included as its exact UTF-8 string. Source, workspace and registration signatures cannot authorize reference transfer. The Profile grant reader must independently return the committed Source descriptor and complete reservation digest; the operation exposes neither content nor file paths.
 
+`profile.reference_capture` accepts at most 32 KiB of Source-bound locator, whole/range selection, recipients and user evidence under the current token-verified Account. It normalizes private Profile field ordering and returns at most 32 KiB of computed descriptor/request/digest metadata, without selected bytes. The parent establishes explicit sharing intent before capture and independently validates the full request afterward; capture grants neither content transfer nor task admission.
+
 `parseHostCollaborationReferenceTarget` validates a private worker lookup containing only original Source coordinates and the complete reference request digest. It cannot supply selected bytes, a snapshot digest or a grant. `parseHostCollaborationReferenceGrant` independently validates the returned committed descriptor and request digest.
 
 ## API

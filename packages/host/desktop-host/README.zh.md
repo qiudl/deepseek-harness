@@ -122,6 +122,8 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 `profile.reference_authority` 仅在持久 Source 读取器与 `readCollaborationReferenceGrant` 同时安装时发布。Host 要求当前令牌验证的 Account，将独立 Profile 授权与请求的 Source 和完整引用预登记摘要比对，再于签名前重新读取 Source。撤权、过期、取消或 Profile/Source 观察变化均拒绝签名。客户端核验精确挑战和固定安装进程的签名；Source 签名不能替代引用授权。
 
+`profile.reference_capture` 解析当前 Account 的 Profile，在调用独立令牌保护的 worker 捕获前读取其 Source。捕获后和返回元数据前再次核验 Account、Profile 与完整 Source 摘要。客户端将操作限制为 18 秒并固定已检查的 peer；监管器代际替换、销毁、过期、取消或归属丢失均不返回成功结果。macOS 与 Windows 共用的启动读取器安装此操作。Main 仍须独立确认分享意图并校验计算请求，再进行单独的引用签名或传递。
+
 `profile.source_snapshot` 使用同一当前 Account 与 Profile worker 读取器私有传输 journal 原始内容。worker bearer 路由校验完整持久 Source；监管器拒绝已销毁或被替换的 worker。固定 32 KiB 字节分块保留现有控制帧预算，客户端在有界读取内跨块核验坐标、描述符和长度一致性、完整 UTF-8、取消及已检查的 peer。返回原文与脱敏模型/提交元数据，不含凭据，不准备模型或恢复调用。macOS 与 Windows 启动组合安装读取器；真实聊天捕获和派发仍须单独接入。
 
 ### 远端工作区目录
