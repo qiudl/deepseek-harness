@@ -1534,7 +1534,7 @@ it('inserts a directory-selected scoped Agent into the existing composer without
 })
 
 
-it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'stale-draft', 'archived', 'moved', 'bridge-changed', 'session-closed', 'plugin-closed', 'claimed', 'scope-only'] as const)(
+it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'stale-draft', 'archived', 'moved', 'bridge-changed', 'session-closed', 'plugin-closed', 'claimed', 'scope-only', 'mode-closed', 'invalid-span'] as const)(
   'directory insertion preserves the draft and never sends when %s', async (mode) => {
     const f = await bench(true, true, true, mode !== 'scope-only')
     const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
@@ -1555,6 +1555,8 @@ it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'st
     if (mode === 'archived') f.workspace.archived = true
     if (mode === 'moved') f.workspace.id = '48c7c5cb-38fc-466f-9d92-89cc49f84051'
     if (mode === 'bridge-changed') Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...window.__DSH_DESKTOP_HOST__ })
+    if (mode === 'mode-closed' && window.__DSH_DESKTOP_HOST__) window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable = false
+    if (mode === 'invalid-span') span = { ...span, start: -1, end: -1 }
     if (mode === 'session-closed') await f.closeSession()
     if (mode === 'plugin-closed') {
       const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
