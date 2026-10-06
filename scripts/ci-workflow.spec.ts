@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
+import { ciWorkerEnvironment, gatesForMode } from './run-gates.ts'
 
 function evaluateRunsOn(selector: unknown, context: Record<string, unknown>): unknown {
   if (typeof selector !== 'string') throw new TypeError('Runner selector must be a string')
@@ -14,6 +15,43 @@ const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{
 const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
+  it('builds coverage gates from the standard Windows fork workflow environment', () => {
+    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'windows-coverage')
+    if (!isRecord(job.env)) throw new TypeError('Windows coverage must define its environment')
+    const configured: Record<string, string> = {}
+    for (const key of ['DSH_COVERAGE_MAX_WORKERS', 'DSH_COVERAGE_PARTITIONS', 'DSH_GATE_CONCURRENCY']) {
+      const value: unknown = evaluateRunsOn(job.env[key], {
+        vars: { DSH_CI_FAILOVER_WINDOWS: 'github' },
+        github: { repository: 'qiudl/deepseek-harness', event: { pull_request: { user: { login: 'contributor' } } } },
+      })
+      if (typeof value !== 'string') throw new TypeError(`Invalid Windows coverage setting ${key}`)
+      configured[key] = value
+    }
+    const effective: Record<string, string> = {
+      ...configured,
+      ...ciWorkerEnvironment('ci-coverage', configured, 4),
+      npm_execpath: '/private/pnpm.cjs',
+    }
+    const previous = new Map(Object.keys(effective).map(key => [key, process.env[key]]))
+    try {
+      Object.assign(process.env, effective)
+      const gates = gatesForMode('ci-coverage')
+      expect(gates.map(gate => gate.id)).toEqual(['native-system', 'coverage', 'coverage-exempt-heavy'])
+      for (const id of ['coverage', 'coverage-exempt-heavy']) {
+        const gate = gates.find(gate => gate.id === id)
+        expect(gate?.args).toContain('--maxWorkers=1')
+        expect(gate?.needs).toEqual(['native-system'])
+      }
+      expect(gates.find(gate => gate.id === 'coverage')?.args).toContain('--coverage')
+      expect(effective.DSH_COVERAGE_PARTITIONS).toBe('')
+    } finally {
+      for (const [key, value] of previous) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key)
+        else process.env[key] = value
+      }
+    }
+  })
+
   it.each(['windows-build', 'windows-coverage', 'windows-native-tests'])(
     '%s honors the Slark fork Windows GitHub runner choice', (name) => {
       const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), name)
@@ -51,7 +89,7 @@ describe('CI workflow', () => {
         }),
       ]),
     )
-    const standard = { DSH_COVERAGE_MAX_WORKERS: '2', DSH_COVERAGE_PARTITIONS: '1', DSH_GATE_CONCURRENCY: '2' }
+    const standard = { DSH_COVERAGE_MAX_WORKERS: '2', DSH_COVERAGE_PARTITIONS: '', DSH_GATE_CONCURRENCY: '2' }
     const shared = { DSH_COVERAGE_MAX_WORKERS: '6', DSH_COVERAGE_PARTITIONS: '4', DSH_GATE_CONCURRENCY: '3' }
     const defaults = { DSH_COVERAGE_MAX_WORKERS: '', DSH_COVERAGE_PARTITIONS: '', DSH_GATE_CONCURRENCY: '' }
     expect(budgets('qiudl/deepseek-harness', 'github')).toEqual(standard)
