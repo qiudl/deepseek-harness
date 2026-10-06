@@ -396,7 +396,9 @@ describe('REQ-20260930-0015 remote directory confirmation', () => {
     const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
     const signal = new AbortController().signal
     const picked = await executor.execute({ operation: 'directory.pick', command_id, client_id }, signal)
-    expect(picked).toMatchObject({ path: '/tmp/confirmed-folder', grantId: expect.any(String) })
+    expect((picked as { path: string }).path).toBe('/tmp/confirmed-folder')
+    expect(typeof (picked as { grantId: string }).grantId).toBe('string')
+    expect((picked as { grantId: string }).grantId.length).toBeGreaterThan(0)
     const command = { operation: 'workspace.create' as const, command_id, client_id,
       path: '/tmp/confirmed-folder', grant_id: (picked as { grantId: string }).grantId }
     await expect(executor.execute({ ...command, path: '/tmp/forged' }, signal)).rejects.toThrow()
