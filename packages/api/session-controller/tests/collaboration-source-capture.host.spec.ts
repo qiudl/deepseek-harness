@@ -104,6 +104,31 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('logs same-Session reference identities before analysis without exposing historical text or private paths', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const previous = createUserMessage({ content: [{ type: 'text', text: 'private historical content' }], source: { kind: 'user' } })
+    h.events.push({ type: 'user/message', seq: SessionSeq(1), time: 1, data: previous, surfaceOp: 'append' })
+    h.adapter.stream = async function* () {
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: '{}' } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const captured = await h.controller.captureCollaborationSource(h.source(), signal)
+    if (captured.kind !== 'captured') throw Error('expected captured Source')
+    const later = createUserMessage({ content: [{ type: 'text', text: 'unrelated later history' }], source: { kind: 'user' } })
+    h.events.push({ type: 'user/message', seq: SessionSeq(2), time: 1, data: later, surfaceOp: 'append' })
+    const persist = vi.fn(async (manifest: CollaborationAnalysisManifest) => {
+      expect(manifest.prompt_version).toBe('3')
+      const text = manifest.request.messages[0]!.content.find(part => part.type === 'text')
+      if (text?.type !== 'text') throw Error('expected analysis text')
+      expect(text.text).not.toContain('private historical content')
+      expect(text.text).not.toContain(later.id)
+      expect(JSON.parse(text.text)).toMatchObject({ reference_catalogue: { source_position: 2,
+        entries: [{ source_kind: 'message', source_locator: previous.id, source_version: '1', message_position: 1, author: 'user' }] } })
+      expect(manifest.request.system).toContain('reference_candidates')
+    })
+    await captured.analyze(persist, signal)
+    expect(persist).toHaveBeenCalledOnce()
+  })
   it.each(['', '\ufeff仅引用这条😀\r\n'])('reads only separately captured reference bytes while its original Source and content remain current (%j)', async (text) => {
     const h = await harness(), signal = new AbortController().signal
     try {
@@ -996,8 +1021,8 @@ it('analyzes a clarification with the actual reply handle after verifying both l
       yield { type: 'finish', reason: { kind: 'stop' } }
     })
     const persist = vi.fn(async (manifest: CollaborationAnalysisManifest) => {
-      if (manifest.prompt_version !== '2') throw Error('expected clarification manifest')
-      expect(manifest.prompt_version).toBe('2'); expect(manifest.clarification).toEqual(input)
+      if (manifest.prompt_version !== '4') throw Error('expected clarification manifest')
+      expect(manifest.prompt_version).toBe('4'); expect(manifest.clarification).toEqual(input)
       expect(h.stream).not.toHaveBeenCalled()
     })
     const result = await reply.analyzeClarification(input, persist, signal)

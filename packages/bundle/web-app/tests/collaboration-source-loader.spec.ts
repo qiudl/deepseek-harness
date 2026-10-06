@@ -16,7 +16,7 @@ import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
-import LlmRuntime, { LlmAdapter, createUserMessage } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { LlmAdapter, createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
 import { DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'
 import type { AnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -137,7 +137,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       ? 'collaboration_root_planning_v1.json' : 'collaboration_analysis_v2.json'), 'utf8')) as {
       tables: { attempts: Record<string, { manifest_json: string; manifest?: unknown; dispatch: { attempt_id: string } }> }
     }
-    const record = mode === 'root-submission' ? Object.values(persisted.tables.attempts)[0]! : Object.values(persisted.tables.attempts).find(value => (JSON.parse(value.manifest_json) as { prompt_version: string }).prompt_version === (providerRequests === 2 ? '2' : '1'))!
+    const record = mode === 'root-submission' ? Object.values(persisted.tables.attempts)[0]! : Object.values(persisted.tables.attempts).find(value => (JSON.parse(value.manifest_json) as { prompt_version: string }).prompt_version === (providerRequests === 2 ? '4' : '3'))!
     expect(record.dispatch.attempt_id).toBe('fixture-attempt')
     const manifest = (mode === 'root-submission' ? record.manifest : JSON.parse(record.manifest_json)) as {
       prompt_version: string
@@ -150,8 +150,10 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     expect(wire.messages).toHaveLength(1)
     expect(req.headers['x-api-key']).toBe('fixture-source-key')
     const result = JSON.stringify({ intent: 'delegate', task_candidates: [{ mention_ids: ['mention-1'],
-      question: '@Guide 请分析', source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: 10 }],
-      reference_ids: [], independent: true, dependency_candidate_indices: [] }], pending_candidates: [] })
+      question: source.original_message, source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: source.original_message.length }],
+      reference_ids: mode === 'analysis' ? ['reference-0'] : [], independent: true, dependency_candidate_indices: [] }], pending_candidates: [],
+    ...(mode === 'analysis' ? { reference_candidates: [{ source_kind: 'message', source_locator: 'previous-message', source_version: '1',
+      selection: { unit: 'whole' }, source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: source.original_message.length }] }] } : {}) })
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.end([
       { type: 'message_start', message: { id: 'fixture-response', model: 'selected', usage: { input_tokens: 3, output_tokens: 0 } } },
@@ -179,8 +181,10 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
   const referenceText = '\ufeff范围说明😀\r\n只读分析，不修改文件'
   const referenceMessage = createUserMessage({ content: [{ type: 'text', text: referenceText }], source: { kind: 'user' } })
   if (mode === 'reference') session.append('user/message', referenceMessage, { surfaceOp: 'append' })
+  if (mode === 'analysis') session.append('user/message', { ...referenceMessage, id: MessageId('previous-message') }, { surfaceOp: 'append' })
   const seq = session.seq, source = { workspace_id: workspace.id, session_id: sessionId, source_message_id: 'message-1', source_revision: '1',
-    original_message: mode === 'reference' ? '@Guide 请引用前面那条范围说明并分析' : '@Guide 请分析',
+    original_message: mode === 'reference' ? '@Guide 请引用前面那条范围说明并分析'
+      : mode === 'analysis' ? '@Guide 请引用上一条消息并分析' : '@Guide 请分析',
     active_mentions: [{ mention_id: 'mention-1',
       source_span: { source_message_id: 'message-1', source_revision: '1', start: 0, end: 6 },
       display_snapshot: { agent_name: 'Guide', project_name: 'qiu-slark' },
@@ -539,7 +543,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
         tables: { attempts: Record<string, { manifest_json: string }> } }
       const manifest = Object.values(records.tables.attempts).map(value => JSON.parse(value.manifest_json) as {
         prompt_version: string
-        request: { system: string; messages: { content: { text: string }[] }[] } }).find(value => value.prompt_version === '2')!
+        request: { system: string; messages: { content: { text: string }[] }[] } }).find(value => value.prompt_version === '4')!
       const visible = manifest.request.messages[0]!.content[0]!.text
       expect(visible).not.toContain('accepted-task'); expect(visible).toContain('不修改文件')
       await expect(JSON.stringify({ prompt_version: manifest.prompt_version, system: manifest.request.system, input: JSON.parse(visible) as Record<string, unknown> }, null, 2) + '\n')
@@ -615,13 +619,17 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     if (first.kind !== 'captured') throw Error('expected original capture')
     const result = await first.analyze(analysisWriter!, new AbortController().signal)
     const output: unknown = JSON.parse(result.jsonText)
-    expect(output).toMatchObject({ task_candidates: [{ mention_ids: ['mention-1'] }] })
+    expect(output).toMatchObject({ task_candidates: [{ mention_ids: ['mention-1'], question: source.original_message, reference_ids: ['reference-0'] }],
+      reference_candidates: [{ source_kind: 'message', source_locator: 'previous-message', selection: { unit: 'whole' } }] })
     expect(providerRequests).toBe(1)
     const manifest = JSON.parse([...analysisJournal!.records()][0]!.manifest_json) as {
       prompt_version: string
       request: { system: string; messages: { content: { text: string }[] }[] }
     }
     const input: unknown = JSON.parse(manifest.request.messages[0]!.content[0]!.text)
+    expect(input).toMatchObject({ reference_catalogue: { source_position: 2, entries: [
+      { source_kind: 'message', source_locator: 'previous-message', source_version: '1', message_position: 1, author: 'user' }] } })
+    expect(manifest.request.messages[0]!.content[0]!.text).not.toContain(referenceText)
     await expect(JSON.stringify({ prompt_version: manifest.prompt_version, system: manifest.request.system,
       input, output }, null, 2) + '\n')
       .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-analysis.request.expected.txt'))
@@ -723,7 +731,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     const m = record!.manifest
     await expect(JSON.stringify({ prompt_version: m.prompt_version, system: m.request.system,
       input: JSON.parse(m.request.messages[0].content[0].text) as Record<string, unknown>, output: JSON.parse(result.jsonText) as Record<string, unknown> }, null, 2) + '\n')
-      .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-analysis.request.expected.txt'))
+      .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-root-planning.request.expected.txt'))
     expect(await readFile(sourcePath)).toEqual(sourceBytes)
     expect(await readFile(rootPath)).toEqual(rootBytes)
   }

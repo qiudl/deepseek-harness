@@ -16,6 +16,7 @@ import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
+import { createCollaborationReferenceCatalogue } from './collaboration-reference-catalogue.ts'
 import { CollaborationAnalysisRunner } from './collaboration-analysis.ts'
 import { hasCollaborationDiscussion } from './collaboration-discussion.ts'
 import type { CollaborationAnalysisManifest, CollaborationAnalysisResult } from './collaboration-analysis.ts'
@@ -553,12 +554,17 @@ export class SessionController extends TypertRemoteService {
         }
       }
       await checkSelection()
+      const inspected = await waitForRead(this.inspect(sessionId, ownedSignal))
+      const catalogue = createCollaborationReferenceCatalogue(inspected.events, captured.source_message_id)
+      await checkSelection()
       const snapshot = await journal.capture({ ...captured, model_snapshot: prepared.prepared.snapshot }, ownedSignal)
       await checkSelection()
       ownedSignal.throwIfAborted()
       return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared,
-        analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
+        analyze: async (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
+          cancellation: AbortSignal) => {
           const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
+          await inspectCurrent()
           return this.collaborationAnalysis.run(snapshot, prepared.prepared, async (manifest, signal) => {
             await inspectCurrent()
             signal.throwIfAborted()
@@ -566,7 +572,7 @@ export class SessionController extends TypertRemoteService {
             signal.throwIfAborted()
             await inspectCurrent()
             signal.throwIfAborted()
-          }, analysisSignal, this.collaborationRootTransportTraces.get(snapshot))
+          }, analysisSignal, this.collaborationRootTransportTraces.get(snapshot), catalogue)
         },
         analyzeClarification: async (input: CollaborationClarificationInput,
           persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
@@ -593,7 +599,7 @@ export class SessionController extends TypertRemoteService {
             signal.throwIfAborted()
             await verifySources()
             signal.throwIfAborted()
-          }, analysisSignal)
+          }, analysisSignal, catalogue)
         },
       })
     })

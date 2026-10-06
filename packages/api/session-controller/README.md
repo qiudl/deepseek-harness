@@ -159,7 +159,7 @@ Analysis uses one user message containing original text and explicit mention met
 
 #### What the model sees
 
-Host-only analysis sends the fixed prompt below and one user message containing `original_message`, original coordinates and explicit `active_mentions`. It includes no ordinary history or tools; ordinary Session commands remain Agent-owned. Clarification analysis sends the original request, selected pending questions, ordered related clarification messages and original mention order. Its separate fixed prompt preserves all restrictions, forbids changing accepted assignments and resolves former/latter against the original order. Model-visible content excludes Account, plan/revision metadata, reply proofs and accepted task IDs; the full private manifest retains them for verification. It uses the same request and output budgets.
+Host-only analysis uses the fixed base policy below and one user message containing original coordinates, `original_message` and explicit `active_mentions`. Clarification includes selected pending questions, ordered related replies and original mention order, preserving restrictions and accepted assignments. Ordinary capture adds a same-Session `reference_catalogue` in version 3; clarification uses version 4. Captured before later messages arrive, it contains at most 40 entries and 4 KiB of locator/version, author, absolute message/attachment positions and file basename/length metadata. It excludes historical bodies, reasoning, synthetic context, paths, Account/plan metadata, reply proofs and accepted task IDs. Missing or same-name objects require clarification. Explicit sharing uses `reference_candidates`, `selection.unit` (`whole`, `quote`, `utf16`, `byte`) and task aliases `reference-0` onward; the runner rejects identities outside the catalogue. Content and recipient authorization remain separate. Full catalogue and request commit before dispatch, without tools or an ordinary Agent turn. Legacy versions 1/2 remain readable unchanged; root re-planning keeps its independent original prompt.
 
 ##### Analysis policy
 
@@ -169,7 +169,7 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 
 #### Token effect
 
-Each call includes the complete prompt and Source JSON within a 16 KiB UTF-8 request budget, at most 8192 provider output tokens and 32 KiB accumulated stream text. Excess data rejects without truncation.
+Each call includes the complete prompt, Source JSON and supplied catalogue within a 16 KiB UTF-8 request budget, at most 8192 provider output tokens and 32 KiB accumulated stream text. Excess data rejects without truncation.
 
 #### KV Cache effect
 

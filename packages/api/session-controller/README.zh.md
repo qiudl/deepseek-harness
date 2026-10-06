@@ -157,7 +157,7 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 #### 模型看到什么
 
-Host 专用分析发送下方固定提示词及一条 user 消息，包含 `original_message`、原消息坐标和显式 `active_mentions`。它不包含普通历史或工具；普通 Session 命令仍由 Agent 所有。澄清分析发送原始请求、选定待澄清问题、按顺序关联的补充消息及原始 mention 顺序。其独立固定提示词保留全部限制，禁止更改已受理分工，并按原始顺序解析前者/后者。模型输入不包含 Account、计划及修订元数据、补充 Source 凭证和已受理任务 ID；完整私有 manifest 保留核验所需信息。请求与输出预算保持一致。
+Host 专用分析使用下方固定基础策略和一条 user 消息，包含原消息坐标、`original_message` 与显式 `active_mentions`。澄清包含选定待澄清问题、有序关联回复和原始 mention 顺序，保留限制及已受理分工。普通捕获在版本 3 中增加同会话 `reference_catalogue`，澄清使用版本 4。目录在后续消息到来前捕获，最多 40 项、4 KiB，包含定位与版本、作者、消息及附件的绝对顺序、文件基本名与字节数，不包含历史正文、推理、合成上下文、路径、Account/计划元数据、回复凭证或已受理任务 ID。对象缺失或同名时须澄清。明确分享使用 `reference_candidates`、`selection.unit`（`whole`、`quote`、`utf16`、`byte`）及从 `reference-0` 开始的任务引用序号；运行器拒绝目录以外的身份。内容和接收对象授权仍须独立核验。完整目录和请求在派发前提交，不包含工具，也不启动普通 Agent 回合。历史版本 1/2 原样读取；根重规划保留其独立原提示词。
 
 ##### 分析策略
 
@@ -167,7 +167,7 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 
 #### Token 影响
 
-每次调用包含完整提示词与 Source JSON；请求预算为 16 KiB UTF-8，提供方输出最多 8192 token，累计流文本最多 32 KiB。超限拒绝，不截断。
+每次调用包含完整提示词、Source JSON 与所提供目录；请求预算为 16 KiB UTF-8，提供方输出最多 8192 token，累计流文本最多 32 KiB。超限拒绝，不截断。
 
 #### KV Cache 影响
 

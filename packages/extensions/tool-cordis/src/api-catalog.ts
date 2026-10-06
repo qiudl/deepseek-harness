@@ -4850,7 +4850,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CollaborationAnalysisManifest',
-    declaration: 'export type CollaborationAnalysisManifest = Readonly<{\n    source: CollaborationSourceSnapshot;\n    request: Omit<GenerateOptions, \'signal\'>;\n} & ({\n    prompt_version: \'1\';\n} | {\n    prompt_version: \'2\';\n    clarification: CollaborationClarificationInput;\n})>;',
+    declaration: 'export type CollaborationAnalysisManifest = Readonly<{\n    source: CollaborationSourceSnapshot;\n    request: Omit<GenerateOptions, \'signal\'>;\n} & ({\n    prompt_version: \'1\';\n} | {\n    prompt_version: \'2\';\n    clarification: CollaborationClarificationInput;\n} | {\n    prompt_version: \'3\';\n    reference_catalogue: CollaborationReferenceCatalogue;\n} | {\n    prompt_version: \'4\';\n    clarification: CollaborationClarificationInput;\n    reference_catalogue: CollaborationReferenceCatalogue;\n})>;',
   },
   {
     name: 'CollaborationAnalysisResult',
@@ -4883,6 +4883,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CollaborationPlanningPredecessor',
     declaration: 'export type CollaborationPlanningPredecessor = Readonly<z.infer<typeof predecessorSchema>> | null;',
+  },
+  {
+    name: 'CollaborationReferenceCatalogue',
+    declaration: 'export type CollaborationReferenceCatalogue = Readonly<z.infer<typeof schema>>;',
   },
   {
     name: 'CollaborationReferenceRecord',
