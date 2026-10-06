@@ -241,7 +241,6 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
           if (result.value.submission_state === 'planning_recorded')
             return { kind: 'success', text: t('submit.plannedV2').replace('{trace}', result.value.root_trace_id) }
           if (result.value.submission_state === 'discussion') {
-            if (result.value.invocation_id !== undefined) return { kind: 'error', text: t('submit.uncertainV2') }
             const ordinary = ctx.sessions.sessionOf(actx)
             if (!ordinary || ordinary.sessionId !== session.sessionId) return { kind: 'error', text: t('submit.changed') }
             try {

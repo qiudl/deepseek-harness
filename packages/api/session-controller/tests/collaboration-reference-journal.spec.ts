@@ -297,6 +297,27 @@ it('resolves one literal quote across UTF-8 chunks into an immutable UTF-16 rang
   expect(captured.request.content_digest).toBe(sha(Buffer.from(text)))
   expect(captured.request.byte_length).toBe(Buffer.byteLength(text))
 })
+it('captures a single-character quote and refuses a later repeated match', async () => {
+  const f = await fixture(), signal = new AbortController().signal
+  const selection = { ...wholeSelection(f), range: { unit: 'quote', text: '范' } }
+  const record = await referenceCapture.captureCollaborationReferenceSelectionContent(
+    selection, f.source, async () => ({ ...f.content(), chunks: (async function* () {
+      for (const byte of Buffer.from(f.text)) yield Uint8Array.of(byte)
+    })() }), signal,
+  )
+  const start = f.text.indexOf('范')
+  expect(record.request.range).toEqual({ unit: 'utf16', start, end: start + 1 })
+  expect(record.request.byte_length).toBe(Buffer.byteLength('范'))
+  expect(record.request.content_digest).toBe(sha('范'))
+  expect(Buffer.from(record.content_base64, 'base64').toString()).toBe('范')
+  let closed = false
+  await expect(referenceCapture.captureCollaborationReferenceSelectionContent(
+    selection, f.source, async () => ({ ...f.content(), chunks: (async function* () {
+      try { yield Buffer.from(f.text); yield Buffer.from('范') } finally { closed = true }
+    })() }), signal,
+  )).rejects.toThrow('collaboration_reference_quote_ambiguous')
+  expect(closed).toBe(true)
+})
 it('requires a unique literal quote and consumes the complete source before accepting it', async () => {
   const f = await fixture(), signal = new AbortController().signal
   for (const text of ['absent', 'aaa']) {
