@@ -8,7 +8,7 @@
 
 独立的 `remote-bootstrap` 构建入口将隔离页面连接到 Slark 父页面。`VITE_DSH_REMOTE_PARENT_ORIGIN` 必须为父页面准确的 HTTPS origin。载体只接受来自该父窗口、origin 且携带原 nonce 的一个 MessagePort。经过认证的 Host 启动字节和 Client bundle 均由该端口传入。
 
-Client 插件应用前，载体通过端口读取 `/__collaboration__`。父页面声明 `dsh-remote-collaboration/v1` 且方法仅为 `workspace` 时，安装范围桥。能力元数据缺失、无效、未知或超时时，不安装此桥，普通远程聊天仍可用。五秒发现期限也覆盖响应体读取。
+Client 插件应用前，载体通过端口读取 `/__collaboration__`。父页面声明 `dsh-remote-collaboration/v1` 且方法仅为 `workspace` 时，安装范围桥。能力元数据缺失、无效、未知或超时时，不安装此桥，普通远程聊天仍可用。不支持协同的父页面可以用 HTTP404 回应能力发现，并继续提供经过认证的启动数据。五秒发现期限也覆盖响应体读取。
 
 范围桥只将已捕获的工作区、会话坐标和一个 `get`、`apply`、`projects` 或 `agents` 操作转发给父页面的 `collaboration/workspace` RPC。它检查 RPC 身份、嵌套结果、工作区、范围版本和目录字段，不携带账户凭据或可选电脑身份，也不使用浏览器网络 fetch。请求最多32 KiB，完整响应最多256 KiB。三十秒操作期限覆盖响应体读取。已发出的保存失败后需要重新读取，因为取消不能确定保存是否已提交。页面退出会取消正在处理的工作并移除自身的桥，迟到的能力发现不能安装它。
 
