@@ -1,4 +1,4 @@
-/** Session-owned readonly collaboration messages/results; view lifetimes never cancel accepted work. */
+/** Workspace-bound readonly collaboration messages/results; view lifetimes never cancel accepted work. */
 import { readCollaborationPending } from './collaboration-dialogue.ts'
 import type { CollaborationDialogueBridge, CollaborationPendingPage } from './collaboration-dialogue.ts'
 import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
@@ -54,14 +54,16 @@ export interface CollaborationResultGroup {
 /** Stable observable value consumed by the injected framework hook. */
 export interface CollaborationResultsSnapshot {
   readonly phase: 'idle' | 'loading' | 'ready' | 'error'
+  readonly workspaceHistory?: true
   readonly executionAvailable?: boolean
   readonly groups: readonly CollaborationResultGroup[]
   readonly nextCursor?: string
 }
 type Generation = { getSnapshot(): unknown; subscribe(fn: () => void): () => void }
 type ReadableResultsBridge = CollaborationResultsBridge & Required<Pick<CollaborationResultsBridge, 'collaborationDeliveries'>>
-type ReadSources = (cursor: string | undefined, signal: AbortSignal) => Promise<
+type ReadSources = (cursor: string | undefined, signal: AbortSignal, sessionId: SessionId) => Promise<
   { ok: true; value: SessionCollaborationSourcesValue } | { ok: false }>
+type SourceCursor = { sessionId: SessionId; nativeCursor?: string }
 const empty = (): CollaborationResultsSnapshot => ({ phase: 'idle', groups: [] })
 const sameSource = (a: Source, b: Source): boolean => a.workspace_id === b.workspace_id && a.session_id === b.session_id
   && a.source_message_id === b.source_message_id && a.source_revision === b.source_revision
@@ -85,6 +87,8 @@ export class CollaborationResultsModel {
   private observers = new Set<() => void>()
   private generation = 0
   private workspaceId: string | undefined
+  private sessionIds: readonly SessionId[] = []
+  private sourceCursors = new Map<string, SourceCursor>()
   private connectionGeneration: unknown
   private boundBridge: CollaborationResultsBridge | undefined
   private controller: AbortController | undefined
@@ -96,21 +100,31 @@ export class CollaborationResultsModel {
   private timer: ReturnType<typeof setInterval> | undefined
   private unsubscribe: (() => void)[]
   private refreshEvent = (event: Event): void => {
-    if ((event as CustomEvent<Source | undefined>).detail?.session_id === this.sessionId) void this.refresh()
+    this.bind()
+    const sessionId = (event as CustomEvent<Source | undefined>).detail?.session_id
+    if (this.sessionIds.some(id => id === sessionId)) void this.refresh()
   }
 
   constructor(private sessionId: SessionId, private workspaces: WorkspaceSource, private connection: Generation,
-    private readSources: ReadSources, private bridge: () => CollaborationResultsBridge | undefined) {
+    private readSources: ReadSources, private bridge: () => CollaborationResultsBridge | undefined,
+    private history: 'session' | 'workspace' = 'session') {
     const changed = () => { if (this.bind() && this.observers.size) void this.refresh() }
     this.unsubscribe = [workspaces.subscribe(changed), connection.subscribe(changed)]
     this.bind()
   }
   private bind(): boolean {
     const data = this.workspaces.getSnapshot(), host = this.bridge(), connection = this.connection.getSnapshot()
-    const workspaceId = host?.collaborationScopeAvailable && host.collaborationDeliveries && connection !== undefined
+    const workspace = host?.collaborationScopeAvailable && host.collaborationDeliveries && connection !== undefined
       && data.phase === 'ready' && data.state !== 'error' && !data.archivedSessionIds.includes(this.sessionId)
-      ? data.items.find(item => item.sessionIds.includes(this.sessionId))?.workspaceId : undefined
-    if (workspaceId === this.workspaceId && host === this.boundBridge && connection === this.connectionGeneration) return false
+      ? data.items.find(item => item.sessionIds.includes(this.sessionId)) : undefined
+    const workspaceId = workspace?.workspaceId
+    const members = workspace === undefined ? [] : this.history === 'workspace'
+      ? workspace.sessionIds.filter(id => !data.archivedSessionIds.includes(id))
+      : [this.sessionId]
+    const sessionIds = [...new Set(members)].sort((a, b) => a === this.sessionId ? -1 : b === this.sessionId ? 1 : a.localeCompare(b))
+    if (workspaceId === this.workspaceId && host === this.boundBridge && connection === this.connectionGeneration
+      && sessionIds.length === this.sessionIds.length && sessionIds.every((id, i) => id === this.sessionIds[i])) return false
+    this.sessionIds = sessionIds; this.sourceCursors.clear()
     this.workspaceId = workspaceId; this.boundBridge = host; this.connectionGeneration = connection
     this.executions.clear()
     this.generation++; this.sourcePages = 1; this.replyPages.clear(); this.controller?.abort(); this.publish(empty())
@@ -120,6 +134,7 @@ export class CollaborationResultsModel {
   private publish(state: CollaborationResultsSnapshot): void {
     const { executionAvailable: _available, ...base } = state
     this.state = { ...base,
+      ...(this.history === 'workspace' ? { workspaceHistory: true as const } : {}),
       ...(this.boundBridge?.collaborationPlanningAvailable && this.boundBridge.collaborationRootExecution
         ? { executionAvailable: true } : {}),
       groups: state.groups.map((group) => {
@@ -159,17 +174,47 @@ export class CollaborationResultsModel {
     if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-collaboration-admitted', this.refreshEvent)
     this.controller?.abort(); this.generation++; this.executions.clear(); this.publish(this.state)
   }
-  private sourcePage(value: SessionCollaborationSourcesValue, cursor?: string): SessionCollaborationSourcesValue {
+  private sourcePage(value: SessionCollaborationSourcesValue, cursor?: string,
+    sessionId = this.sessionId): SessionCollaborationSourcesValue {
     if (!array(value.items) || value.items.length > 8 || bytes(value) > 256 * 1024
       || (value.next_cursor !== undefined && (value.items.length === 0 || value.next_cursor !== value.items.at(-1)?.snapshot_digest || value.next_cursor === cursor))) throw Error('invalid_source_page')
     const seen = new Set<string>()
     for (const item of value.items) {
-      if (item.source.session_id !== this.sessionId || item.source.workspace_id !== this.workspaceId
+      if (item.source.session_id !== sessionId || item.source.workspace_id !== this.workspaceId
         || !/^[a-f0-9]{64}$/u.test(item.snapshot_digest) || seen.has(item.snapshot_digest)
         || !safeText(item.original_message, 32 * 1024)) throw Error('invalid_source_page')
       seen.add(item.snapshot_digest)
     }
     return value
+  }
+  private async sourceRead(cursor: string | undefined, signal: AbortSignal, generation: number,
+    cursors: Map<string, SourceCursor>): Promise<SessionCollaborationSourcesValue> {
+    if (this.history === 'session') {
+      const read = await wait(this.readSources(cursor, signal, this.sessionId), signal)
+      if (!this.current(generation)) throw Error('obsolete')
+      if (!read.ok) throw Error('source_unavailable')
+      return this.sourcePage(read.value, cursor)
+    }
+    const start: SourceCursor = cursor === undefined ? { sessionId: this.sessionId } : cursors.get(cursor) as SourceCursor
+    let nativeCursor = start.nativeCursor
+    const remaining = this.sessionIds.slice(this.sessionIds.indexOf(start.sessionId))
+    for (const [i, sessionId] of remaining.entries()) {
+      signal.throwIfAborted()
+      const read = await wait(this.readSources(nativeCursor, signal, sessionId), signal)
+      if (!this.current(generation)) throw Error('obsolete')
+      if (!read.ok) throw Error('source_unavailable')
+      const page = this.sourcePage(read.value, nativeCursor, sessionId)
+      const nextSessionId = remaining[i + 1]
+      const following = page.next_cursor ? { sessionId, nativeCursor: page.next_cursor }
+        : nextSessionId ? { sessionId: nextSessionId } : undefined
+      if (page.items.length) {
+        const last = (page.items.at(-1) as SessionCollaborationSourceItem).snapshot_digest
+        if (following) cursors.set(last, following)
+        return { items: page.items, ...(following ? { next_cursor: last } : {}) }
+      }
+      nativeCursor = undefined
+    }
+    return { items: [] }
   }
   /** The caller binds an available reader and verifies the owning generation before each page. */
   private async results(original: SessionCollaborationSourceItem, signal: AbortSignal, generation: number,
@@ -231,12 +276,11 @@ export class CollaborationResultsModel {
       const prior = more ? this.state.groups : []
       const known = new Set(prior.map(item => item.original.snapshot_digest))
       const groups: CollaborationResultGroup[] = [...prior]
+      const cursors = more ? new Map(this.sourceCursors) : new Map<string, SourceCursor>()
       let nextCursor = cursor, pages = 0
       do {
-        const read = await wait(this.readSources(nextCursor, signal), signal)
+        const page = await this.sourceRead(nextCursor, signal, generation, cursors)
         if (!this.current(generation)) return
-        if (!read.ok) throw Error('source_unavailable')
-        const page = this.sourcePage(read.value, nextCursor)
         if (page.items.some(item => known.has(item.snapshot_digest)) || groups.length + page.items.length > 128) throw Error('invalid_source_cursor')
         for (const original of page.items) {
           known.add(original.snapshot_digest)
@@ -252,6 +296,7 @@ export class CollaborationResultsModel {
       } while (!more && nextCursor !== undefined && pages < this.sourcePages)
       if (bytes(groups) > 16 * 1024 * 1024) throw Error('result_view_budget')
       if (more) this.sourcePages++
+      this.sourceCursors = cursors
       this.publish({ phase: 'ready', groups, ...(nextCursor ? { nextCursor } : {}) })
     } catch {
       if (this.current(generation)) this.publish({ phase: 'error', groups: [] })

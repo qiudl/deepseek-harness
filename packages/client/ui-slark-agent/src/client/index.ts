@@ -128,15 +128,16 @@ export function apply(ctx: ClientContext): void {
     const connection = resultsCtx.get('connection') as ConnectionHandle
     const models = new Map<string, { model: CollaborationResultsModel; bindings: CollaborationResultsInjected }>()
     resultsCtx.effect(() => () => { models.forEach(({ model }) => { model.dispose() }); models.clear() },
-      'ui-slark-agent: original Session results')
+      'ui-slark-agent: workspace results')
     resultsCtx.slots.inject('conversation.input.dock', () => resultsCtx.slots.register({
       name: 'conversation.input.dock', id: 'slark-collaboration-results', order: 25, locale: NS,
       inject: (sessionId) => {
         let entry = models.get(sessionId)
         if (!entry) {
           const model = new CollaborationResultsModel(sessionId, resultsCtx.workspaces.list, connection.generation,
-            (cursor, signal) => resultsCtx.remote.session.collaborationSources({ sessionId, ...(cursor ? { cursor } : {}) }, signal),
-            () => window.__DSH_DESKTOP_HOST__)
+            (cursor, signal, sourceSessionId) => resultsCtx.remote.session.collaborationSources({
+              sessionId: sourceSessionId, ...(cursor ? { cursor } : {}),
+            }, signal), () => window.__DSH_DESKTOP_HOST__, 'workspace')
           entry = { model, bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
             consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
             executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),

@@ -11,7 +11,7 @@ import { zh } from '../src/client/locales.ts'
 
 afterEach(cleanup)
 const source = { workspace_id: '40000000-0000-4000-8000-000000000004', session_id: 'session', source_message_id: 'message', source_revision: '1' }
-function fixture(answer = '完整回复') {
+function fixture(answer = '完整回复', workspace = false) {
   const original = { source, snapshot_digest: 'a'.repeat(64), original_message: '@Guide · Project 检查页面' }
   const item = { delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1', source_locator: source,
     source_snapshot_digest: original.snapshot_digest, execution_state: 'succeeded', invocation_state_version: '2',
@@ -22,7 +22,7 @@ function fixture(answer = '完整回复') {
     ({ ok: true, value: { items: [original] } }))
   const model = new CollaborationResultsModel(SessionId('session'), { getSnapshot: () => workspaceSnapshot(source.workspace_id), subscribe: () => () => {} },
     { getSnapshot: () => 1, subscribe: () => () => {} }, readSources,
-    () => bridge)
+    () => bridge, workspace ? 'workspace' : 'session')
   onTestFinished(() => { model.dispose() })
   const props: Parameters<typeof CollaborationResultsDock>[0] = { ...dockRuntime(),
     useSlarkResults: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
@@ -32,6 +32,13 @@ function fixture(answer = '完整回复') {
     loadReplies: (id: string) => model.loadReplies(id), t: dockTranslate }
   return { model, read, readSources, props, original, item, bridge }
 }
+it('labels workspace history separately from the current Session history', async () => {
+  const f = fixture('完整回复', true), view = render(<CollaborationResultsDock {...f.props} />)
+  await screen.findByText(zh['task.workspaceHistory'])
+  expect(screen.queryByText(zh['task.collaborationHistory'])).toBeNull()
+  expect(screen.queryByRole('textbox')).toBeNull()
+  view.unmount()
+})
 it('automatically displays the original message and complete plain text result without a task form', async () => {
   const prefix = '<img src=x onerror=alert(1)>\n'
   const answer = prefix + 'x'.repeat(128 * 1024 - prefix.length)
@@ -173,8 +180,8 @@ it('disables paging during a slow result read and appends only that original mes
   expect(screen.queryByRole('textbox')).toBeNull()
 })
 
-it('loads older messages from the visible Source cursor without a new chat submission', async () => {
-  const f = fixture(), older = { ...f.original, snapshot_digest: 'b'.repeat(64),
+it.each([false, true])('loads more history from its Source cursor without a new chat submission (workspace %s)', async (workspace) => {
+  const f = fixture('完整回复', workspace), older = { ...f.original, snapshot_digest: 'b'.repeat(64),
     source: { ...source, source_message_id: 'older' }, original_message: '@Guide · Project 之前的任务' }
   f.readSources.mockImplementation(async cursor => ({ ok: true,
     value: cursor ? { items: [older] } : { items: [f.original], next_cursor: f.original.snapshot_digest } }))
@@ -184,8 +191,9 @@ it('loads older messages from the visible Source cursor without a new chat submi
   const view = render(<CollaborationResultsDock {...f.props} />)
   onTestFinished(() => { view.unmount() })
   await screen.findByText('完整回复')
+  expect(screen.getByText(zh[workspace ? 'task.moreWorkspaceMessages' : 'task.moreMessages'])).toBeTruthy()
   await act(async () => { screen.getByTestId('slark-collaboration-messages-more').click() })
-  expect(f.readSources).toHaveBeenLastCalledWith(f.original.snapshot_digest, expect.any(AbortSignal))
+  expect(f.readSources).toHaveBeenLastCalledWith(f.original.snapshot_digest, expect.any(AbortSignal), SessionId('session'))
   expect(screen.getByText(older.original_message)).toBeTruthy()
   expect(screen.getByText('之前的回复')).toBeTruthy()
   expect(screen.getByText('完整回复')).toBeTruthy()

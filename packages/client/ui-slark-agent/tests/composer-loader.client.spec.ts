@@ -71,17 +71,18 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   const invoke = vi.fn(async (_input: InvokeInput) => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
   const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
-  const workspace = { id: workspaceId, archived: false }
+  const workspace = { id: workspaceId, archived: false, siblings: [] as SessionId[] }
   ctx.provide('workspaces', { list: {
     getSnapshot: () => ({ phase: 'ready', state: 'idle', error: null,
       archivedSessionIds: workspace.archived ? [id] : [],
-      items: [{ workspaceId: workspace.id, sessionIds: [id] }] }),
+      items: [{ workspaceId: workspace.id, sessionIds: [id, ...workspace.siblings] }] }),
     subscribe: () => () => undefined,
   } } as never)
   const originals: { source: { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
     snapshot_digest: string
     original_message: string }[] = []
-  const sourceReads = vi.fn<typeof ctx.remote.session.collaborationSources>(async () => ({ ok: true, value: { items: originals } }))
+  const sourceReads = vi.fn<typeof ctx.remote.session.collaborationSources>(async input => ({ ok: true,
+    value: { items: originals.filter(item => item.source.session_id === input.sessionId) } }))
   if (servicesAvailable) {
     const namespace = { collaborationSources: sourceReads }
     if (remoteAvailable) {
@@ -1170,6 +1171,32 @@ it('uses YAML-registered result paging commands and retains their model only for
   await plugin.fiber.dispose()
   expect(model.getSnapshot().groups).toEqual([])
   expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('loads sibling collaboration history through the YAML-registered workspace reader without submitting work', async () => {
+  const f = await bench(true)
+  f.workspace.siblings.push(SessionId('session-2'))
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-2', source_message_id: 'sibling', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 其他会话的任务' })
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  if (!entry?.inject) throw Error('missing results registration')
+  const value: unknown = Reflect.apply(entry.inject, undefined, [SessionId('session-1')])
+  if (!value || typeof value !== 'object' || !('hooks' in value) || !value.hooks || typeof value.hooks !== 'object'
+    || !('slarkResults' in value.hooks) || !(value.hooks.slarkResults instanceof CollaborationResultsModel))
+    throw Error('invalid registered results model')
+  const model = value.hooks.slarkResults
+  await model.refresh()
+  expect(model.getSnapshot()).toMatchObject({ workspaceHistory: true, phase: 'ready',
+    groups: [{ original: f.originals[0], replies: [{ answer: 'fixture reply' }] }] })
+  expect(f.sourceReads.mock.calls.map(([input]) => input.sessionId)).toEqual(['session-1', 'session-2'])
+  expect(f.deliveries).toHaveBeenCalledWith({ source: f.originals[0]!.source, limit: 50 })
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  f.workspace.siblings.length = 0
+  await model.refresh()
+  expect(model.getSnapshot().groups).toEqual([])
+  await f.ctx.fiber.dispose()
+  await model.refresh()
+  expect(f.sourceReads).toHaveBeenCalledTimes(3)
 })
 
 it('refuses plain reply discovery without the current Session Remote service', async () => {

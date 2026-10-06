@@ -1,4 +1,4 @@
-/** Original-Session collaboration results; plain text replies never submit a new chat turn. */
+/** Workspace collaboration results; plain text replies never submit a new chat turn. */
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, SlotInjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CollaborationResultsModel } from './collaboration-results.ts'
@@ -24,15 +24,16 @@ const planningStatus: Partial<Record<string, keyof typeof zh>> = {
 }
 
 /**
- * Display each original message and its readable task results in this Session.
+ * Display original messages and readable task results from the bound Session or workspace.
  * @param props - Framework result hook, readonly paging commands and locale copy.
  * @returns a task region with complete plain text replies, or no region when no records exist.
  */
 export function CollaborationResultsDock({ useSlarkResults, loadSources, loadReplies, executionAction, consumptionAction, t }: Props) {
   const state = useSlarkResults(value => value)
   if (state.groups.length === 0 && state.phase !== 'error') return null
-  return <section className={css.panel} aria-label={t('task.collaborationHistory')} data-testid="slark-collaboration-results">
-    <strong>{t('task.collaborationHistory')}</strong>
+  const title = state.workspaceHistory ? 'task.workspaceHistory' : 'task.collaborationHistory'
+  return <section className={css.panel} aria-label={t(title)} data-testid="slark-collaboration-results">
+    <strong>{t(title)}</strong>
     {state.phase === 'error' && <p role="status">{t('task.readUnavailable')}</p>}
     <div className={css.records}>
       {state.groups.map(group => <article className={css.message} key={group.original.snapshot_digest}>
@@ -91,6 +92,6 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
     </div>
     {state.nextCursor && <Button size="sm" disabled={state.phase === 'loading'}
       data-testid="slark-collaboration-messages-more"
-      onClick={() => { void loadSources() }}>{t('task.moreMessages')}</Button>}
+      onClick={() => { void loadSources() }}>{t(state.workspaceHistory ? 'task.moreWorkspaceMessages' : 'task.moreMessages')}</Button>}
   </section>
 }

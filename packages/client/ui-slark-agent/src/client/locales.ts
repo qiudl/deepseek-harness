@@ -70,6 +70,7 @@ export const zh = {
   'task.failed': '未完成',
   'task.readUnavailable': '当前无法读取协同结果，稍后将自动重试。',
   'task.collaborationHistory': 'Slark 协同记录',
+  'task.workspaceHistory': '工作区 Slark 协同记录',
   'task.awaitingResult': '此消息暂无协同结果。',
   'task.planningQueued': '等待识别任务',
   'task.planning': '正在识别任务',
@@ -81,6 +82,7 @@ export const zh = {
   'task.indeterminate': '执行结果尚未确认。',
   'task.moreResults': '查看更多结果',
   'task.moreMessages': '查看更早的消息',
+  'task.moreWorkspaceMessages': '查看更多协同记录',
 } satisfies Record<string, string>
 
 /** English copy. */
@@ -150,6 +152,7 @@ export const en = {
   'task.failed': 'Not completed',
   'task.readUnavailable': 'Collaboration results cannot be read right now. A fresh read will be attempted automatically.',
   'task.collaborationHistory': 'Slark collaboration history',
+  'task.workspaceHistory': 'Workspace Slark collaboration history',
   'task.awaitingResult': 'No collaboration results for this message.',
   'task.planningQueued': 'Waiting to interpret the task.',
   'task.planning': 'Interpreting the task.',
@@ -161,6 +164,7 @@ export const en = {
   'task.indeterminate': 'Execution outcome is not confirmed.',
   'task.moreResults': 'View more results',
   'task.moreMessages': 'View earlier messages',
+  'task.moreWorkspaceMessages': 'View more collaboration records',
 } satisfies Record<keyof typeof zh, string>
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
