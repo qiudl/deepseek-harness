@@ -391,6 +391,30 @@ describe('Session file uploads', () => {
     expect(followup).toHaveBeenCalledOnce()
   })
 
+  it('commits one ordinary prompt when two retries overlap in asynchronous content admission', async () => {
+    const { controller, agent, followup, ctx } = await uploadHarness()
+    const ready = Promise.withResolvers<undefined>(), release = Promise.withResolvers<undefined>()
+    let admissions = 0
+    const original = ctx.attachments.admitPromptContent.bind(ctx.attachments)
+    vi.spyOn(ctx.attachments, 'admitPromptContent').mockImplementation(async (content) => {
+      admissions++
+      if (admissions === 2) ready.resolve(undefined)
+      await release.promise
+      return original(content)
+    })
+    followup.mockImplementation((message: UserMessage) => {
+      agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [message] })
+    })
+    const request = promptRequest([{ type: 'text', text: 'once' }])
+    const pending = Promise.all([controller.prompt(request), controller.prompt(request)])
+    onTestFinished(async () => { release.resolve(undefined); await pending; await ctx.fiber.dispose() })
+    await ready.promise
+    try { expect(admissions).toBe(2) }
+    finally { release.resolve(undefined) }
+    await expect(pending).resolves.toEqual([{ accepted: true }, { accepted: true }])
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
   it('rejects when the Agent disappears during prompt admission', async () => {
     const { controller, saveImages, disposeAgent } = await uploadHarness()
     const admitted = Promise.withResolvers<readonly ImageAttachmentRef[]>()

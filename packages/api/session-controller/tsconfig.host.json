@@ -26,7 +26,8 @@
     "src/collaboration-analysis.ts",
     "src/collaboration-clarification-input.ts",
     "src/collaboration-analysis-journal.ts",
-    "src/collaboration-delivery-journal.ts"
+    "src/collaboration-delivery-journal.ts",
+    "src/collaboration-discussion.ts"
   ],
   "references": [
     {

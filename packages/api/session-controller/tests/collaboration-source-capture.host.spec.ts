@@ -18,6 +18,8 @@ import { createSessionTestController, testSessionPersistence } from './test-remo
 import { describeCollaborationSource, collaborationJournalDigest } from '../src/collaboration-source-journal.ts'
 import { parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
 import type { CollaborationAnalysisManifest } from '../src/collaboration-analysis.ts'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { collaborationDiscussionRequestId } from '../src/collaboration-discussion.ts'
 
 function deliveryFor(snapshot: Parameters<typeof describeCollaborationSource>[0], answer='原聊天的完整回复') {
   const { snapshot_digest,...source_locator }=describeCollaborationSource(snapshot)
@@ -86,6 +88,22 @@ async function harness(root?: string, existingCwd?: string, isolateDomain = fals
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('hides an exact ordinary discussion from the Source feed after inbox acceptance, even after cancellation', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const captured = await h.controller.captureCollaborationSource(h.source(), signal)
+    const originalFile = await readFile(h.sourceFile)
+    const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+    expect((await h.controller.collaborationSources({ sessionId: h.sessionId }, signal)).items).toHaveLength(1)
+    session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [createUserMessage({
+      content: [{ type: 'text', text: captured.snapshot.original_message }],
+      source: { kind: 'user', rpcId: collaborationDiscussionRequestId(captured.snapshot) },
+    })] })
+    expect((await h.controller.collaborationSources({ sessionId: h.sessionId }, signal)).items).toEqual([])
+    session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' })
+    expect((await h.controller.collaborationSources({ sessionId: h.sessionId }, signal)).items).toEqual([])
+    expect(await readFile(h.sourceFile)).toEqual(originalFile)
+    expect(h.resume).not.toHaveBeenCalled(); expect(h.stream).not.toHaveBeenCalled()
+  })
   it('reloads original Source text through the readonly Session API without model preparation or ordinary events', async () => {
     const h = await harness(), signal = new AbortController().signal
     await h.controller.captureCollaborationSource(h.source(), signal)
@@ -845,5 +863,41 @@ it.each(['membership', 'model'] as const)('refuses clarification dispatch after 
       }
     }, signal)).rejects.toThrow(mode === 'membership' ? 'collaboration_session_workspace_mismatch' : 'collaboration_model_selection_changed')
     expect(h.stream).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+
+it('lists an empty collaboration feed without activating an Agent', async () => {
+  const h = await harness()
+  try {
+    expect(await h.controller.collaborationSources({ sessionId: h.sessionId }, new AbortController().signal)).toEqual({ items: [] })
+    expect(h.resume).not.toHaveBeenCalled(); expect(h.stream).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+
+it('stops Source analysis if cancellation occurs in full-input persistence', async () => {
+  const h = await harness(), cancellation = new AbortController()
+  try {
+    const first = await h.controller.captureCollaborationSource(h.source(), new AbortController().signal)
+    if (first.kind !== 'captured') throw Error('expected original capture')
+    await expect(first.analyze(async () => { cancellation.abort() }, cancellation.signal)).rejects.toThrow()
+    expect(h.stream).not.toHaveBeenCalled(); expect(h.resume).not.toHaveBeenCalled()
+  } finally { await h.dispose() }
+})
+
+it('dispatches a captured Source after committing its full analysis request and rechecking membership', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  try {
+    const first = await h.controller.captureCollaborationSource(h.source(), signal)
+    if (first.kind !== 'captured') throw Error('expected original capture')
+    h.stream.mockImplementation(async function* () {
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: '{"intent":"discuss"}' } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+    const persist = vi.fn(async () => { expect(h.stream).not.toHaveBeenCalled() })
+    const result = await first.analyze(persist, signal)
+    expect(result.jsonText).toBe('{"intent":"discuss"}')
+    expect(persist).toHaveBeenCalledOnce(); expect(h.stream).toHaveBeenCalledOnce()
+    expect(h.resume).not.toHaveBeenCalled()
   } finally { await h.dispose() }
 })

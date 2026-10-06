@@ -10,6 +10,7 @@ import type {
   SessionReference, SessionReferenceSource, SessionRetainInfo, SessionRetainOptions,
   SessionSnapshot, SessionSummary, SessionTarget, SubmissionHandle,
 } from '@deepseek-ai/dsh-api-session-controller/client'
+import { collaborationDiscussionRequestId } from '@deepseek-ai/dsh-api-session-controller/src/collaboration-discussion.ts'
 import { scopeIdentityOf } from '@deepseek-ai/dsh-api-session-controller/src/client/scope.ts'
 import type { SessionRequestId } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
@@ -300,6 +301,8 @@ class TestSessionReference implements SessionReference {
  * behavior/calls/stubs) are bench-only surface.
  */
 export class TestSessions implements ISessions {
+  /** Production Source discussion identity; deriving it opens no fixture Session. */
+  readonly discussionRequestId: ISessions['discussionRequestId'] = collaborationDiscussionRequestId
   /** The useSessions catalog feed, independent of view ownership. */
   readonly list: SnapshotStore<SessionListState>
   private readonly records = new Map<SessionId, SessionRecord>()

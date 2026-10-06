@@ -384,6 +384,8 @@ export class SessionCommandController {
             { sessionId: agent.id },
           )
         }
+        // Another retry can commit while attachment admission is awaiting I/O.
+        if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
         using binding = this.ctx.fileUploads.bindPrompt(agent, admission.receiptIds, request.requestId)
         if (request.mode === 'steer') agent.steer(message)
         else agent.followup(message)
