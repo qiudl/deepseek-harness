@@ -57,6 +57,8 @@ describe('Desktop remote Session bridge', () => {
     const refusal = Object.assign(new Error('writer held'), { isDSHRemoteError: true, code: 'session/writer-held' })
     const invoke = vi.fn().mockRejectedValueOnce(refusal).mockRejectedValueOnce(new Error('unexpected'))
       .mockRejectedValueOnce(refusal)
+      .mockRejectedValueOnce('non-object failure')
+      .mockRejectedValueOnce(Object.assign(new Error('different native failure'), { isDSHRemoteError: true, code: 'gateway/internal' }))
     const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
     const command = { operation: 'session.create' as const, command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
       workspace_id: 'workspace-1', session_id: 'session-existing' }
@@ -64,6 +66,8 @@ describe('Desktop remote Session bridge', () => {
     await expect(executor.execute(command, signal)).resolves.toEqual({ sessionCreateFailure: 'session/writer-held' })
     await expect(executor.execute(command, signal)).rejects.toThrow('unexpected')
     await expect(executor.execute({ operation: 'session.create', command_id: command.command_id }, signal)).rejects.toBe(refusal)
+    await expect(executor.execute(command, signal)).rejects.toBe('non-object failure')
+    await expect(executor.execute(command, signal)).rejects.toThrow('different native failure')
   })
 
   it('reports an uncontrolled Session and fences an observed takeover epoch', async () => {
