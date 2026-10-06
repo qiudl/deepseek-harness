@@ -74,6 +74,8 @@ kind: "package-reference"
 
 `profile.reference_authority` 另将 `reference_request_digest` 绑定到独立的 Profile 传递授权。签名字节为 `dsh-collaboration-reference-authority/v1`、NUL 和 JSON `[1, sourceSigningPayload, referenceRequestDigest]`；其中 Source 签名正文保留为精确 UTF-8 字符串。Source、工作区或登记签名不能授权引用传递。Profile 授权读取器必须独立返回已提交的 Source 描述符与完整预登记请求摘要；此操作不暴露正文或文件路径。
 
+`profile.reference_capture` 在当前令牌已验证的 Account 下接受最多 32 KiB、绑定 Source 的定位、全部或范围选择、接收对象和用户证据。它规范化私有 Profile 字段顺序，返回最多 32 KiB 的计算描述符、请求和摘要元数据，不含选中字节。父协调器须在捕获前独立确认明确分享意图，并在收到结果后校验完整请求；捕获不授予内容传递或任务受理权限。
+
 `parseHostCollaborationReferenceTarget` 校验私有 worker 查询，其中只有原始 Source 坐标及完整引用请求摘要，不能提供所选字节、快照摘要或授权。`parseHostCollaborationReferenceGrant` 独立校验返回的已提交描述符及请求摘要。
 
 ## API

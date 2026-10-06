@@ -1,5 +1,5 @@
 import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
-import type { HostCollaborationReferenceGrant, HostControlSha256 } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
 import type { HostControlAuthorityOptions } from './unix-transport.ts'
@@ -158,6 +158,25 @@ export class ProfileWorkerSupervisor {
   }
 
   /**
+   * Capture authorized locator metadata with the current worker's separate Reference token.
+   * @param profileId - Current Account Profile resolved by Host authority.
+   * @param selection - Coordinator-authorized selection; no content or computed fields.
+   * @param signal - Current connection cancellation.
+   * @returns untrusted computed metadata; disposed, replaced and cancelled workers refuse.
+   */
+  async captureCollaborationReferenceSelection(profileId: string, selection: HostCollaborationReferenceSelection,
+    signal: AbortSignal): Promise<HostRemoteSessionJson> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.captureCollaborationReferenceSelection) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.captureCollaborationReferenceSelection(selection, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    return result
+  }
+
+  /**
    * Execute private analysis using the original Account worker generation.
    * @param profileId - Host-authorized Profile identity.
    * @param command - Bounded prepare/dispatch JSON with Host-derived binding digest.
@@ -310,14 +329,15 @@ export class ProfileWorkerSupervisor {
 /**
  * Bind original Profile readers for the platform startup compositions.
  * @param workers - Supervisor owning the current unlocked Profile generations.
- * @returns descriptor readers with their supervisor receiver retained; no selection or content-transfer producer.
+ * @returns Source readers and explicit-reference capture with their supervisor receiver retained; no byte transfer.
  */
 export function collaborationWorkerReaders(workers: ProfileWorkerSupervisor): Pick<HostControlAuthorityOptions,
-  'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'readCollaborationReferenceGrant'> {
+  'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection'> {
   return {
     inspectWorkspaceModelSelection: workers.inspectWorkspaceModelSelection.bind(workers),
     inspectCollaborationSource: workers.inspectCollaborationSource.bind(workers),
     readCollaborationSourceSnapshot: workers.readCollaborationSourceSnapshot.bind(workers),
     readCollaborationReferenceGrant: workers.readCollaborationReferenceGrant.bind(workers),
+    captureCollaborationReferenceSelection: workers.captureCollaborationReferenceSelection.bind(workers),
   }
 }

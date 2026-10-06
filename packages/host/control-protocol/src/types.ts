@@ -651,6 +651,39 @@ export interface HostCollaborationReferenceGrant extends HostCollaborationSource
 export interface HostCollaborationReferenceTarget extends HostCollaborationSourceTarget {
   readonly reference_request_digest: HostControlSha256
 }
+/** Correlates one independently authorized reference selection. */
+export type HostCollaborationReferenceRequestId = Branded<'HostCollaborationReferenceRequestId'>
+/** One addressed recipient in the original Source. */
+export type HostCollaborationMentionId = Branded<'HostCollaborationMentionId'>
+/** Locator selection without caller bytes, paths, media type or computed digests. */
+export type HostCollaborationReferenceSelection = Readonly<{
+  source: Readonly<{ workspace_id: string; session_id: string; source_message_id: string; revision: string }>
+  reference_request_id: HostCollaborationReferenceRequestId
+  source_kind: 'message' | 'file'
+  source_locator: string
+  source_version: string
+  range: Readonly<{ unit: 'whole' }> | Readonly<{ unit: 'utf16' | 'byte'; start: number; end: number }>
+  recipient_mention_ids: readonly HostCollaborationMentionId[]
+  source_evidence_spans: readonly Readonly<{ source_message_id: string; source_revision: string; start: number; end: number }>[]
+}>
+/** Computed Profile metadata; consumers still validate the full request and user sharing intent. */
+export type HostCollaborationReferenceCapture = Readonly<{
+  descriptor: HostCollaborationSourceDescriptor
+  request: HostRemoteSessionJson
+  reference_request_digest: HostControlSha256
+}>
+/** Parent-only capture in this connection's current token-verified Account Profile. */
+export interface ProfileReferenceCaptureRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_capture'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & {
+    readonly selection: HostCollaborationReferenceSelection
+  }
+}
+/** Selection metadata without selected bytes or a reference transfer assertion. */
+export interface ProfileReferenceCaptureResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_capture'
+  readonly result: HostCollaborationReferenceCapture
+}
 /** Server nonce binds the original Source and the complete immutable reference reservation request. */
 export interface HostReferenceAuthorityChallenge extends HostSourceAuthorityChallenge {
   readonly reference_request_digest: HostControlSha256
@@ -1550,6 +1583,8 @@ export type HostControlFrame =
   | ProfileSourceAuthorityResult
   | ProfileReferenceAuthorityRequest
   | ProfileReferenceAuthorityResult
+  | ProfileReferenceCaptureRequest
+  | ProfileReferenceCaptureResult
   | ProfileCollaborationAnalysisRequest
   | ProfileCollaborationAnalysisResult
   | ProfileCollaborationDeliveryRequest

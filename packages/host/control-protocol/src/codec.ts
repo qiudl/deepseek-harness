@@ -48,6 +48,9 @@ import type {
   ProfileSourceAuthorityRequest, ProfileSourceAuthorityResult,
   HostCollaborationReferenceGrant, HostCollaborationReferenceTarget, HostReferenceAuthorityChallenge, HostReferenceAuthorityAssertion,
   ProfileReferenceAuthorityRequest, ProfileReferenceAuthorityResult,
+  HostCollaborationReferenceSelection, HostCollaborationReferenceCapture,
+  HostCollaborationReferenceRequestId, HostCollaborationMentionId,
+  ProfileReferenceCaptureRequest, ProfileReferenceCaptureResult,
   HostCollaborationSourceSnapshot, ProfileSourceSnapshotRequest, ProfileSourceSnapshotResult,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
@@ -1081,6 +1084,95 @@ export function parseHostCollaborationReferenceTarget(value: unknown): HostColla
   return Object.freeze({ ...sourceTargetFields(r), reference_request_digest: digest(r.reference_request_digest) })
 }
 
+function referenceIdentifier(value: unknown): string {
+  if (typeof value !== 'string' || !/^[!-~]{1,256}$/u.test(value) || /[/\\]/u.test(value)
+    || value === '.' || value === '..') reject()
+  return value
+}
+function referenceOffset(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) reject()
+  return value
+}
+function referenceKeys(value: Record<string, unknown>, keys: readonly string[]): void {
+  if (Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) reject()
+}
+/**
+ * Parse a private locator selection without computed metadata or content overrides.
+ * @param value - Source coordinates, range, recipients and original evidence spans.
+ * @returns detached frozen fields; parsing establishes no user sharing intent.
+ */
+export function parseHostCollaborationReferenceSelection(value: unknown): HostCollaborationReferenceSelection {
+  const r = registrationRecord(value)
+  referenceKeys(r, ['source', 'reference_request_id', 'source_kind', 'source_locator', 'source_version',
+    'range', 'recipient_mention_ids', 'source_evidence_spans'])
+  const s = registrationRecord(r.source)
+  referenceKeys(s, ['workspace_id', 'session_id', 'source_message_id', 'revision'])
+  const source = sourceTargetFields({ ...s, source_revision: s.revision })
+  if (r.source_kind !== 'message' && r.source_kind !== 'file') reject()
+  const raw = registrationRecord(r.range)
+  let range: HostCollaborationReferenceSelection['range']
+  if (raw.unit === 'whole') { referenceKeys(raw, ['unit']); range = Object.freeze({ unit: 'whole' }) }
+  else {
+    referenceKeys(raw, ['unit', 'start', 'end'])
+    if (raw.unit !== 'utf16' && raw.unit !== 'byte') reject()
+    const start = referenceOffset(raw.start), end = referenceOffset(raw.end)
+    if (end < start || end - start > 1024 * 1024) reject()
+    range = Object.freeze({ unit: raw.unit, start, end })
+  }
+  if (!Array.isArray(r.recipient_mention_ids) || r.recipient_mention_ids.length < 1 || r.recipient_mention_ids.length > 10
+    || !Array.isArray(r.source_evidence_spans) || r.source_evidence_spans.length < 1 || r.source_evidence_spans.length > 64) reject()
+  const recipients = Array.from(r.recipient_mention_ids, v => referenceIdentifier(v) as HostCollaborationMentionId)
+  if (new Set(recipients).size !== recipients.length) reject()
+  const spans = Array.from(r.source_evidence_spans, (value) => {
+    const span = registrationRecord(value)
+    referenceKeys(span, ['source_message_id', 'source_revision', 'start', 'end'])
+    const start = referenceOffset(span.start), end = referenceOffset(span.end)
+    if (start >= end) reject()
+    return Object.freeze({ source_message_id: referenceIdentifier(span.source_message_id),
+      source_revision: sourceVersion(span.source_revision), start, end })
+  })
+  const result: HostCollaborationReferenceSelection = { source: Object.freeze({
+    workspace_id: source.workspace_id, session_id: source.session_id,
+    source_message_id: source.source_message_id, revision: source.source_revision }),
+  reference_request_id: referenceIdentifier(r.reference_request_id) as HostCollaborationReferenceRequestId,
+  source_kind: r.source_kind, source_locator: referenceIdentifier(r.source_locator), source_version: sourceVersion(r.source_version),
+  range, recipient_mention_ids: Object.freeze(recipients), source_evidence_spans: Object.freeze(spans) }
+  if (Buffer.byteLength(JSON.stringify(result)) > 32768) reject()
+  return Object.freeze(result)
+}
+/**
+ * Bound computed capture metadata without accepting content bytes or transfer authority.
+ * @param value - Original Profile response; the full request remains untrusted to its coordinator.
+ * @returns descriptor, opaque request and digest; consumers validate the request against their authorized selection.
+ */
+export function parseHostCollaborationReferenceCapture(value: unknown): HostCollaborationReferenceCapture {
+  const r = registrationRecord(value)
+  referenceKeys(r, ['descriptor', 'request', 'reference_request_digest'])
+  const request = registrationRecord(r.request)
+  referenceKeys(request, ['source', 'reference_request_id', 'source_kind', 'source_locator', 'source_version', 'range',
+    'mime_type', 'content_digest', 'byte_length', 'recipient_mention_ids', 'source_evidence_spans'])
+  const s = registrationRecord(request.source)
+  referenceKeys(s, ['workspace_id', 'session_id', 'source_message_id', 'revision', 'message_digest'])
+  digest(s.message_digest)
+  const { message_digest: _messageDigest, ...source } = s
+  const selected = parseHostCollaborationReferenceSelection({ source, reference_request_id: request.reference_request_id,
+    source_kind: request.source_kind, source_locator: request.source_locator, source_version: request.source_version,
+    range: request.range, recipient_mention_ids: request.recipient_mention_ids, source_evidence_spans: request.source_evidence_spans })
+  if (selected.range.unit === 'whole' || typeof request.mime_type !== 'string' || request.mime_type.length > 128
+    || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+(?:;[\x20-\x7e]+)?$/u.test(request.mime_type)) reject()
+  digest(request.content_digest)
+  const length = referenceOffset(request.byte_length), extent = selected.range.end - selected.range.start
+  if (length > 1024 * 1024 || (selected.range.unit === 'byte' ? extent !== length : extent > length || length > extent * 3)) reject()
+  const descriptor = parseHostCollaborationSourceDescriptor(r.descriptor)
+  if (descriptor.workspace_id !== selected.source.workspace_id || descriptor.session_id !== selected.source.session_id
+    || descriptor.source_message_id !== selected.source.source_message_id
+    || descriptor.source_revision !== selected.source.revision) reject()
+  const result = { descriptor,
+    request: parseHostRemoteSessionJson(request), reference_request_digest: digest(r.reference_request_digest) }
+  if (Buffer.byteLength(JSON.stringify(result)) > 32768) reject()
+  return Object.freeze(result)
+}
+
 /**
  * Validate a separate Profile grant without trusting Desktop-supplied coordinates.
  * @param value - Exact committed Source descriptor and full reservation digest.
@@ -1187,7 +1279,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
-  | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileReferenceAuthorityRequest
+  | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileReferenceAuthorityRequest | ProfileReferenceCaptureRequest
   | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
   | ProfileCollaborationDeliveryRequest
   | ProfileModelTextRequest
@@ -1545,6 +1637,12 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       command: parseHostCollaborationAnalysisCommand(params.command),
     } } satisfies ProfileCollaborationAnalysisRequest
   }
+  if (frame.method === 'profile.reference_capture') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'selection'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), selection: parseHostCollaborationReferenceSelection(params.selection),
+    } }
+  }
   if (frame.method === 'profile.source_snapshot') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'offset', ...SOURCE_TARGET_KEYS])
     if (!Number.isSafeInteger(params.offset) || (params.offset as number) < 0 || (params.offset as number) >= 1024 * 1024) reject()
@@ -1630,7 +1728,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
-  | ProfileWorkspaceAuthorityResult | ProfileSourceAuthorityResult | ProfileReferenceAuthorityResult
+  | ProfileWorkspaceAuthorityResult | ProfileSourceAuthorityResult | ProfileReferenceAuthorityResult | ProfileReferenceCaptureResult
   | ProfileCollaborationAnalysisResult | ProfileSourceSnapshotResult
   | ProfileCollaborationDeliveryResult
   | ProfileModelTextResult
@@ -1882,6 +1980,9 @@ function decodeProfileResult(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.reference_authority') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostReferenceAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.reference_capture') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationReferenceCapture(result) }
   }
   if (frame.method === 'profile.collaboration_analysis') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationAnalysisResult(result) }
