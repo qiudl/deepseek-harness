@@ -862,6 +862,15 @@ async readCollaborationSourceSnapshot(target: CollaborationSourceCoordinates, si
 async captureCollaborationReference(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord>
 
 /**
+ * Derive a reservation request from independently authorized message/file selection and actual Profile content.
+ * The trusted coordinator establishes explicit sharing intent before this Host-only operation; no Remote endpoint is provided.
+ * @param value - Exact Source coordinates, locator/version, explicit range/whole choice, recipients and evidence.
+ * @param signal - Parent cancellation, combined with current Profile disposal and owned read drainage.
+ * @returns persisted immutable request and selected bytes with Profile-computed MIME, range, length and digests.
+ */
+async captureCollaborationReferenceSelection(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord>
+
+/**
  * Read a separately committed reference selection and revalidate its original content before attestation.
  * @param target - Exact original Source coordinates, without caller-supplied content or commit fields.
  * @param requestDigest - Full immutable reference request digest; no record is created from this value.

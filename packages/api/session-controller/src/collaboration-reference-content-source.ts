@@ -14,7 +14,7 @@ import type { CollaborationReferenceRequest, CollaborationReferenceContentSource
  * @param signal - Owning operation cancellation; the attachment stream verifies the full object before completion.
  * @returns exact immutable source stream; absent, synthetic, ambiguous or changed locators refuse.
  */
-export function resolveCollaborationReferenceContentSource(request: CollaborationReferenceRequest,
+export function resolveCollaborationReferenceContentSource(request: Pick<CollaborationReferenceRequest, 'source_kind' | 'source_locator' | 'source_version'>,
   events: readonly SessionEvent[], attachments: Pick<Attachment, 'readFileStream'> | undefined, signal: AbortSignal): CollaborationReferenceContentSource {
   signal.throwIfAborted()
   if (request.source_version !== '1') throw Error('collaboration_reference_source_changed')

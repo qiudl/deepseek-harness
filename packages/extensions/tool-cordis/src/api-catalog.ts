@@ -1966,6 +1966,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'immutable content after independent message/attachment reads, durable save and ownership revalidation.',
       },
       {
+        signature: 'async captureCollaborationReferenceSelection(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord>',
+        description: 'Derive a reservation request from independently authorized message/file selection and actual Profile content. The trusted coordinator establishes explicit sharing intent before this Host-only operation; no Remote endpoint is provided.',
+        parameters: [{ name: 'value', description: 'Exact Source coordinates, locator/version, explicit range/whole choice, recipients and evidence.' }, { name: 'signal', description: 'Parent cancellation, combined with current Profile disposal and owned read drainage.' }],
+        returns: 'persisted immutable request and selected bytes with Profile-computed MIME, range, length and digests.',
+      },
+      {
         signature: 'async readCollaborationReferenceGrant(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise< CollaborationReferenceRecord[\'descriptor\'] & { readonly reference_request_digest: string } >',
         description: 'Read a separately committed reference selection and revalidate its original content before attestation.',
         parameters: [{ name: 'target', description: 'Exact original Source coordinates, without caller-supplied content or commit fields.' }, { name: 'requestDigest', description: 'Full immutable reference request digest; no record is created from this value.' }, { name: 'signal', description: 'Current Parent operation cancellation, combined with Profile disposal.' }],

@@ -8,6 +8,7 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import { expect, it, onTestFinished } from 'vitest'
 import { collaborationJournalDigest, describeCollaborationSource, openCollaborationSourceJournal } from '../src/collaboration-source-journal.ts'
+import * as referenceCapture from '../src/collaboration-reference-journal.ts'
 import { captureCollaborationReferenceContent, openCollaborationReferenceJournal, parseCollaborationReferenceRequest } from '../src/collaboration-reference-journal.ts'
 
 const sha = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex')
@@ -274,4 +275,67 @@ it('refuses actual UTF-8 content exceeding the declared selected byte length', a
   const text = 'é'.repeat(f.text.length)
   await expect(captureCollaborationReferenceContent({ ...f.request(), byte_length: f.text.length }, f.source,
     async () => f.content(text), signal)).rejects.toThrow('collaboration_reference_content_changed')
+})
+
+function wholeSelection(f: Awaited<ReturnType<typeof fixture>>) {
+  const { mime_type: _mime, content_digest: _digest, byte_length: _bytes, ...request } = f.request()
+  const { message_digest: _sourceDigest, ...source } = request.source
+  return { ...request, source, range: { unit: 'whole' as const } }
+}
+it('generates immutable reservation metadata from actual whole-message bytes without caller digests', async () => {
+  const f = await fixture(), selection = wholeSelection(f), signal = new AbortController().signal
+  const captured = await referenceCapture.captureCollaborationReferenceSelectionContent(
+    selection, f.source, async () => f.content(), signal,
+  )
+  expect(captured.request).toEqual(f.request())
+  expect(Buffer.from(captured.content_base64, 'base64').toString()).toBe(f.text)
+  expect(captured.reference_request_digest).toBe(collaborationJournalDigest(f.request()))
+  expect(Object.isFrozen(captured.request)).toBe(true)
+})
+it('generates a precise selected range and independently derived binary media type', async () => {
+  const f = await fixture(), signal = new AbortController().signal, payload = Uint8Array.of(0, 255, 128, 1)
+  const selection = { ...wholeSelection(f), source_kind: 'file', range: { start: 1, end: 3, unit: 'byte' } }
+  const captured = await referenceCapture.captureCollaborationReferenceSelectionContent(selection, f.source, async () => ({
+    ...f.content(), source_kind: 'file', mime_type: 'application/octet-stream',
+    chunks: (async function* () { yield payload })(),
+  }), signal)
+  expect(captured.request.range).toEqual(selection.range)
+  expect(captured.request.mime_type).toBe('application/octet-stream')
+  expect(captured.request.byte_length).toBe(2)
+  expect(captured.request.content_digest).toBe(sha(payload.subarray(1, 3)))
+  expect(Buffer.from(captured.content_base64, 'base64')).toEqual(Buffer.from(payload.subarray(1, 3)))
+})
+it('refuses caller content, digests, paths, invalid recipients and stale Sources before selection reads', async () => {
+  const f = await fixture(), signal = new AbortController().signal
+  let reads = 0
+  for (const change of [{ content: 'injected' }, { content_digest: 'a'.repeat(64) }, { mime_type: 'text/plain' },
+    { source_locator: '/private/file' }, { recipient_mention_ids: ['unmentioned'] },
+    { source: { ...wholeSelection(f).source, session_id: 'foreign' } }])
+    await expect(referenceCapture.captureCollaborationReferenceSelectionContent({ ...wholeSelection(f), ...change }, f.source,
+      async () => { reads++; return f.content() }, signal)).rejects.toThrow()
+  expect(reads).toBe(0)
+})
+it('rejects an oversized whole file while disposing its independent source stream', async () => {
+  const f = await fixture(), signal = new AbortController().signal
+  let closed = false
+  const selection = { ...wholeSelection(f), source_kind: 'file' }
+  await expect(referenceCapture.captureCollaborationReferenceSelectionContent(selection, f.source, async () => ({
+    ...f.content(), source_kind: 'file', mime_type: 'application/octet-stream',
+    chunks: (async function* () { try { yield Buffer.alloc(1024 * 1024 + 1) } finally { closed = true } })(),
+  }), signal)).rejects.toThrow('collaboration_reference_content_changed')
+  expect(closed).toBe(true)
+})
+
+it('exports only validated computed metadata and refuses altered digests or leaked content fields', async () => {
+  const f = await fixture(), signal = new AbortController().signal
+  const record = await referenceCapture.captureCollaborationReferenceSelectionContent(
+    wholeSelection(f), f.source, async () => f.content(), signal,
+  )
+  const metadata = referenceCapture.describeCollaborationReference(record)
+  expect(referenceCapture.parseCollaborationReferenceMetadata(metadata)).toEqual(metadata)
+  expect(Object.hasOwn(metadata, 'content_base64')).toBe(false)
+  expect(Object.isFrozen(metadata)).toBe(true)
+  for (const change of [{ reference_request_digest: 'c'.repeat(64) }, { content_base64: record.content_base64 },
+    { descriptor: { ...metadata.descriptor, session_id: 'foreign' } }])
+    expect(() => referenceCapture.parseCollaborationReferenceMetadata({ ...metadata, ...change })).toThrow()
 })

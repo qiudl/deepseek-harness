@@ -116,6 +116,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 
 不发布运行时不变量伴随插件：文件与消息提交点验证自身状态，租约与崩溃行为由集成测试覆盖。
 
+Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 句柄生成并保留独立的 `DSH_PROFILE_REFERENCE_TOKEN`。选择 JSON 和返回元数据各不超过 32 KiB，请求 15 秒后超时，拒绝已停止 worker、重定向与取消。句柄返回不含内容字节的不可信 JSON。父 Host 必须先将计算元数据与已授权选择比对，才能传递；该句柄不确认分享意图，也不新增 Host 控制协议命令。
+
 `profile.source_authority` 从当前连接已验证的 Account 解析 Profile，经监管器与独立随机 worker 令牌读取持久 Source 描述符。macOS 和 Windows 启动组合安装该读取器。读取器缺失时不发布能力；worker 替换、坐标或摘要不符、挑战过期及 Account 授权变化都会拒绝签名。客户端核验精确挑战、固定的安装/进程及 Source 签名。此操作不捕获消息或准备模型；云端消费和聊天分发仍须单独接入。
 
 `profile.reference_authority` 仅在持久 Source 读取器与 `readCollaborationReferenceGrant` 同时安装时发布。Host 要求当前令牌验证的 Account，将独立 Profile 授权与请求的 Source 和完整引用预登记摘要比对，再于签名前重新读取 Source。撤权、过期、取消或 Profile/Source 观察变化均拒绝签名。客户端核验精确挑战和固定安装进程的签名；Source 签名不能替代引用授权。

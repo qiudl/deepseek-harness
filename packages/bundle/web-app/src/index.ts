@@ -28,9 +28,10 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
+import { describeCollaborationReference } from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
-import { handleDesktopCollaborationReferenceGrantRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationReferenceGrantRequest, handleDesktopCollaborationReferenceCaptureRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopCollaborationDeliveryRequest } from './desktop-collaboration-delivery.ts'
 import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from './desktop-collaboration-analysis.ts'
 import { openCollaborationAnalysisJournal } from '@deepseek-ai/dsh-api-session-controller'
@@ -291,6 +292,19 @@ export function apply(ctx: Context, config: Config): void {
           (query, signal) => {
             const { reference_request_digest, ...target } = query
             return sessionCtx.sessionController.readCollaborationReferenceGrant(target, reference_request_digest, signal)
+          }),
+      }))
+    })
+  }
+  const referenceToken = process.env.DSH_PROFILE_REFERENCE_TOKEN
+  if (referenceToken && /^[A-Za-z0-9_-]{43}$/u.test(referenceToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-reference-capture',
+        handler: (req, res) => handleDesktopCollaborationReferenceCaptureRequest(req, res, referenceToken,
+          async (selection, signal) => {
+            const record = await sessionCtx.sessionController.captureCollaborationReferenceSelection(selection, signal)
+            return describeCollaborationReference(record)
           }),
       }))
     })

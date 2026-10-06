@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
+import { collaborationJournalDigest } from '@deepseek-ai/dsh-api-session-controller'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from '../src/desktop-collaboration-source.ts'
-import { handleDesktopCollaborationReferenceGrantRequest } from '../src/desktop-collaboration-source.ts'
+import { handleDesktopCollaborationReferenceGrantRequest, handleDesktopCollaborationReferenceCaptureRequest } from '../src/desktop-collaboration-source.ts'
 
 const token = 'A'.repeat(43)
 const target = { workspace_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session' as never, source_message_id: 'message-1', source_revision: '1' }
@@ -82,4 +84,48 @@ it('full Source reader rejects malformed journal digests, nested credentials and
   for(const value of [await inspect(),{ ...await inspect() as object,session_id:'other' },{ ...await inspect() as object,model_snapshot:{ api_key:'private' } }]){
     inspect.mockResolvedValueOnce(value);const response=await f.post(target);expect(response.status).toBe(422);expect(await response.json()).toEqual({ error:'unavailable' })
   }
+})
+
+it('captures computed metadata only under its separate Reference capability and rejects caller content and mismatched recipients', async () => {
+  const referenceToken = 'B'.repeat(43)
+  const request = {
+    source: { workspace_id: target.workspace_id, session_id: target.session_id,
+      source_message_id: target.source_message_id, revision: target.source_revision, message_digest: 'b'.repeat(64) },
+    reference_request_id: 'ref', source_kind: 'message', source_locator: 'previous', source_version: '1',
+    range: { start: 0, end: 3, unit: 'utf16' }, mime_type: 'text/plain', byte_length: 3,
+    content_digest: createHash('sha256').update('ref').digest('hex'), recipient_mention_ids: ['mention'],
+    source_evidence_spans: [{ source_message_id: target.source_message_id, source_revision: '1', start: 0, end: 2 }],
+  }
+  const { mime_type: _mime, content_digest: _digest, byte_length: _bytes, ...fields } = request
+  const { message_digest: _sourceDigest, ...source } = fields.source
+  const input = { ...fields, source, range: { unit: 'whole' } }
+  const metadata = { descriptor: selection, request, reference_request_digest: collaborationJournalDigest(request) }
+  const capture = vi.fn(async (): Promise<unknown> => metadata)
+  const server = createServer((req, res) => { void handleDesktopCollaborationReferenceCaptureRequest(req, res, referenceToken, capture) })
+  onTestFinished(async () => {
+    server.closeAllConnections()
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) => server.close((error) => { if (error) reject(error); else resolve() }))
+    }
+  })
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
+  const url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`, post = privatePoster(url, referenceToken)
+  expect((await post(input, `Bearer ${token}`)).status).toBe(403)
+  expect((await post(input, '')).status).toBe(403)
+  expect((await post({ ...input, content: 'injected' })).status).toBe(400)
+  expect(capture).not.toHaveBeenCalled()
+  const response = await post(input)
+  expect(response.headers.get('cache-control')).toBe('no-store')
+  expect(await response.json()).toEqual(metadata)
+  expect(capture).toHaveBeenCalledWith(input, expect.any(AbortSignal))
+  expect((await post({ ...input, range: request.range })).status).toBe(200)
+  expect((await post({ ...input, range: { ...request.range, end: 2 } })).status).toBe(422)
+  const fileRequest = { ...request, source_kind: 'file', range: { start: 0, end: 3, unit: 'byte' }, mime_type: 'application/octet-stream' }
+  capture.mockResolvedValue({ ...metadata, request: fileRequest, reference_request_digest: collaborationJournalDigest(fileRequest) })
+  expect((await post({ ...input, source_kind: 'file' })).status).toBe(200)
+  const wrong = { ...request, recipient_mention_ids: ['other'] }
+  capture.mockResolvedValue({ ...metadata, request: wrong, reference_request_digest: collaborationJournalDigest(wrong) })
+  expect((await post(input)).status).toBe(422)
+  capture.mockRejectedValue(Error('private path and credential'))
+  expect(await (await post(input)).json()).toEqual({ error: 'unavailable' })
 })

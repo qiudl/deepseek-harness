@@ -135,6 +135,13 @@ export interface ProfileWorkerHandle {
   readonly readCollaborationReferenceGrant?: (
     target: HostCollaborationSourceTarget, requestDigest: HostControlSha256, signal: AbortSignal,
   ) => Promise<HostCollaborationReferenceGrant>
+  /**
+   * Capture an already authorized selection through the independent private Reference capability.
+   * Returns bounded untrusted metadata; the parent must validate it before cloud use, and it grants no transfer authority.
+   */
+  readonly captureCollaborationReferenceSelection?: (
+    selection: HostRemoteSessionJson, signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
   /** Original journal content for Main cloud admission; never carried by a view lease. */
   readonly readCollaborationSourceSnapshot?: (
     target: HostCollaborationSourceTarget, signal: AbortSignal,

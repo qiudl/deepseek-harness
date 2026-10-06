@@ -21,8 +21,8 @@ import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates, describeCollaborationSource } from './collaboration-source-journal.ts'
 import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot, CollaborationSourceCoordinates } from './collaboration-source-journal.ts'
 import { captureCollaborationReferenceContent, openCollaborationReferenceJournal,
-  parseCollaborationReferenceRequest } from './collaboration-reference-journal.ts'
-import type { CollaborationReferenceJournal, CollaborationReferenceRecord } from './collaboration-reference-journal.ts'
+  parseCollaborationReferenceRequest, parseCollaborationReferenceSelection, captureCollaborationReferenceSelectionContent } from './collaboration-reference-journal.ts'
+import type { CollaborationReferenceJournal, CollaborationReferenceRecord, CollaborationReferenceRequest } from './collaboration-reference-journal.ts'
 import { resolveCollaborationReferenceContentSource } from './collaboration-reference-content-source.ts'
 import { openCollaborationDeliveryJournal, parseCollaborationDeliveryInput } from './collaboration-delivery-journal.ts'
 import type { CollaborationDeliveryJournal, CollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
@@ -93,8 +93,10 @@ export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
 export { openCollaborationSourceJournal, describeCollaborationSource, parseCollaborationSourceInput, parseCollaborationSourceSnapshot, collaborationJournalDigest } from './collaboration-source-journal.ts'
 export { openCollaborationReferenceJournal, captureCollaborationReferenceContent,
-  parseCollaborationReferenceRequest } from './collaboration-reference-journal.ts'
+  parseCollaborationReferenceRequest, parseCollaborationReferenceSelection, captureCollaborationReferenceSelectionContent,
+  parseCollaborationReferenceMetadata, describeCollaborationReference } from './collaboration-reference-journal.ts'
 export type { CollaborationReferenceJournal, CollaborationReferenceRequest, CollaborationReferenceRecord,
+  CollaborationReferenceSelection, CollaborationReferenceMetadata,
   CollaborationReferenceContentSource } from './collaboration-reference-journal.ts'
 export type {
   CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal, CollaborationSourceInput,
@@ -198,6 +200,7 @@ export class SessionController extends TypertRemoteService {
     this.readCollaborationSourceSnapshot = this.readCollaborationSourceSnapshot.bind(this)
     this.inspectCollaborationSource = this.inspectCollaborationSource.bind(this)
     this.captureCollaborationReference = this.captureCollaborationReference.bind(this)
+    this.captureCollaborationReferenceSelection = this.captureCollaborationReferenceSelection.bind(this)
     this.readCollaborationReferenceGrant = this.readCollaborationReferenceGrant.bind(this)
     this.receiveCollaborationDelivery = this.receiveCollaborationDelivery.bind(this)
     ctx.effect(() => async () => {
@@ -595,16 +598,33 @@ export class SessionController extends TypertRemoteService {
    * @returns immutable content after independent message/attachment reads, durable save and ownership revalidation.
    */
   async captureCollaborationReference(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord> {
+    const request = parseCollaborationReferenceRequest(value)
+    return this.captureOwnedCollaborationReference(request.source, signal, (source, owned) =>
+      captureCollaborationReferenceContent(request, source, this.collaborationReferenceReader(source), owned))
+  }
+
+  /**
+   * Derive a reservation request from independently authorized message/file selection and actual Profile content.
+   * The trusted coordinator establishes explicit sharing intent before this Host-only operation; no Remote endpoint is provided.
+   * @param value - Exact Source coordinates, locator/version, explicit range/whole choice, recipients and evidence.
+   * @param signal - Parent cancellation, combined with current Profile disposal and owned read drainage.
+   * @returns persisted immutable request and selected bytes with Profile-computed MIME, range, length and digests.
+   */
+  async captureCollaborationReferenceSelection(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord> {
+    const selection = parseCollaborationReferenceSelection(value)
+    return this.captureOwnedCollaborationReference(selection.source, signal, (source, owned) =>
+      captureCollaborationReferenceSelectionContent(selection, source, this.collaborationReferenceReader(source), owned))
+  }
+
+  private async captureOwnedCollaborationReference(input: Pick<CollaborationReferenceRequest['source'],
+    'workspace_id' | 'session_id' | 'source_message_id' | 'revision'>, signal: AbortSignal,
+  create: (source: CollaborationSourceSnapshot, owned: AbortSignal) => Promise<CollaborationReferenceRecord>):
+  Promise<CollaborationReferenceRecord> {
     return this.ownCollaborationReferenceOperation(signal, async (owned) => {
-      const request = parseCollaborationReferenceRequest(value)
-      const target = { workspace_id: request.source.workspace_id, session_id: request.source.session_id,
-        source_message_id: request.source.source_message_id, source_revision: request.source.revision }
+      const target = { workspace_id: input.workspace_id, session_id: input.session_id,
+        source_message_id: input.source_message_id, source_revision: input.revision }
       const source = await this.readCollaborationSourceSnapshot(target, owned)
-      const record = await captureCollaborationReferenceContent(request, source, async (selection, active) => {
-        const inspection = await this.inspect(SessionId(source.session_id), active)
-        active.throwIfAborted()
-        return resolveCollaborationReferenceContentSource(selection, inspection.events, this.ctx.get('attachments'), active)
-      }, owned)
+      const record = await create(source, owned)
       const current = await this.readCollaborationSourceSnapshot(target, owned)
       if (describeCollaborationSource(current).snapshot_digest !== record.descriptor.snapshot_digest)
         throw Error('collaboration_reference_source_changed')
@@ -615,6 +635,15 @@ export class SessionController extends TypertRemoteService {
       return saved
     })
   }
+
+  private collaborationReferenceReader(source: CollaborationSourceSnapshot) {
+    return async (selection: Pick<CollaborationReferenceRequest, 'source_kind' | 'source_locator' | 'source_version'>, active: AbortSignal) => {
+      const inspection = await this.inspect(SessionId(source.session_id), active)
+      active.throwIfAborted()
+      return resolveCollaborationReferenceContentSource(selection, inspection.events, this.ctx.get('attachments'), active)
+    }
+  }
+
   /**
    * Read a separately committed reference selection and revalidate its original content before attestation.
    * @param target - Exact original Source coordinates, without caller-supplied content or commit fields.
@@ -630,11 +659,7 @@ export class SessionController extends TypertRemoteService {
       const journal = await this.openCollaborationReferences(owned)
       const record = journal.read(source, requestDigest)
       if (!record) throw Error('collaboration_reference_not_found')
-      const current = await captureCollaborationReferenceContent(record.request, source, async (selection, active) => {
-        const inspection = await this.inspect(SessionId(source.session_id), active)
-        active.throwIfAborted()
-        return resolveCollaborationReferenceContentSource(selection, inspection.events, this.ctx.get('attachments'), active)
-      }, owned)
+      const current = await captureCollaborationReferenceContent(record.request, source, this.collaborationReferenceReader(source), owned)
       const latest = await this.readCollaborationSourceSnapshot(target, owned)
       if (describeCollaborationSource(latest).snapshot_digest !== record.descriptor.snapshot_digest
         || current.content_base64 !== record.content_base64) throw Error('collaboration_reference_source_changed')

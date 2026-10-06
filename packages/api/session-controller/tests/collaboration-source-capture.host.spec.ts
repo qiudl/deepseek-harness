@@ -99,6 +99,74 @@ async function harness(root?: string, existingCwd?: string, isolateDomain = fals
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('refuses changed Source observations before reference persistence and before returning a retained grant', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    try {
+      const text = '明确引用的内容'
+      const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+      h.events.push({ type: 'user/message', seq: SessionSeq(1), time: 1, data: message, surfaceOp: 'append' })
+      const { snapshot } = await h.controller.captureCollaborationSource(h.source(), signal)
+      const changed = { ...snapshot, host_journal_commit: { ...snapshot.host_journal_commit, journal_id: 'another-commit' } }
+      const request = referenceFor(snapshot, message.id, text)
+      const reads = vi.spyOn(h.controller, 'readCollaborationSourceSnapshot')
+      reads.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(changed)
+      await expect(h.controller.captureCollaborationReference(request, signal)).rejects.toThrow('collaboration_reference_source_changed')
+      await expect(readFile(join(h.root, 'state', 'collaboration_reference_v2.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+      const saved = await h.controller.captureCollaborationReference(request, signal)
+      const { snapshot_digest: _digest, ...target } = saved.descriptor
+      reads.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(changed)
+      await expect(h.controller.readCollaborationReferenceGrant(target, saved.reference_request_digest, signal))
+        .rejects.toThrow('collaboration_reference_source_changed')
+    } finally { await h.dispose() }
+  })
+
+  it.each(['missing', 'malformed'] as const)('retains original reference storage and refuses %s journal availability', async (mode) => {
+    const h = await harness(), signal = new AbortController().signal
+    try {
+      const text = '明确引用的内容'
+      const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+      h.events.push({ type: 'user/message', seq: SessionSeq(1), time: 1, data: message, surfaceOp: 'append' })
+      const { snapshot } = await h.controller.captureCollaborationSource(h.source(), signal)
+      const request = referenceFor(snapshot, message.id, text)
+      const path = join(h.root, 'state', 'collaboration_reference_v2.json')
+      if (mode === 'missing') {
+        const get = h.controllerContext.get.bind(h.controllerContext)
+        vi.spyOn(h.controllerContext, 'get').mockImplementation((name, strict): unknown =>
+          name === 'storageDomain' ? undefined : get(name, strict))
+        await expect(h.controller.captureCollaborationReference(request, signal)).rejects.toThrow('collaboration_reference_journal_unavailable')
+        await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' })
+      } else {
+        const malformed = '{"schema_version":"unknown"}'
+        await writeFile(path, malformed)
+        await expect(h.controller.captureCollaborationReference(request, signal)).rejects.toThrow()
+        expect(await readFile(path, 'utf8')).toBe(malformed)
+      }
+      expect(h.stream).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
+  it('derives and commits whole-message reservation metadata through the current Profile producer', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    try {
+      const text = '\ufeff正文😀\r\n不包含其他会话'
+      const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+      h.events.push({ type: 'user/message', seq: SessionSeq(1), time: 1, data: message, surfaceOp: 'append' })
+      const { snapshot } = await h.controller.captureCollaborationSource(h.source(), signal)
+      const request = referenceFor(snapshot, message.id, text)
+      const { mime_type: _mime, content_digest: _digest, byte_length: _length, ...fields } = request
+      const { message_digest: _sourceDigest, ...source } = fields.source
+      const selection = { ...fields, source, range: { unit: 'whole' } }
+      const record = await h.controller.captureCollaborationReferenceSelection(selection, signal)
+      expect(record.request).toEqual(request)
+      expect(await h.controller.captureCollaborationReferenceSelection(selection, signal)).toEqual(record)
+      const { snapshot_digest: _snapshot, ...target } = record.descriptor
+      expect(await h.controller.readCollaborationReferenceGrant(target, record.reference_request_digest, signal))
+        .toEqual({ ...record.descriptor, reference_request_digest: record.reference_request_digest })
+      expect(h.stream).not.toHaveBeenCalled()
+      expect(h.resume).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
   it('cancels the caller while owning a noncooperative reference inspection until Profile disposal drains it', async () => {
     const h = await harness(), cancel = new AbortController()
     let release: (() => void) | undefined

@@ -21,6 +21,11 @@ it('reads the exact original worker reference grant and refuses changed digests,
   read.mockResolvedValue({ ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: 'c'.repeat(64) as never })
   await expect(workers.readCollaborationReferenceGrant('profile', target, digest, signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
   await expect(workers.readCollaborationReferenceGrant('profile', target, digest, AbortSignal.abort())).rejects.toThrow()
+  read.mockImplementationOnce(async () => {
+    await workers.disposeAll()
+    return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: digest }
+  })
+  await expect(workers.readCollaborationReferenceGrant('profile', target, digest, signal)).rejects.toMatchObject({ code: 'stale' })
 })
 
 it('denies private collaboration operations when the original worker is missing, unsupported or closed', async () => {
