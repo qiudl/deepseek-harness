@@ -1,5 +1,5 @@
 /** Host-only bridge from the Desktop worker to the existing Session Remote surface. */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
   RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventId, TypertGateway,
@@ -72,6 +72,8 @@ function projectHistoryRecord(value: unknown): HostRemoteSessionJson | null {
 
 /** Profile-local executor; all methods stay inside the already composed DSH worker. */
 export class DesktopRemoteSessionExecutor {
+  private readonly directories = new Map<string, { path: string; clientId: string; expiresAt: number }>()
+  private pickingDirectory = false
   private readonly cursors = new Map<string, ApprovalCursor>()
   private readonly approvals = new Map<string, PendingApproval>()
 
@@ -119,11 +121,52 @@ export class DesktopRemoteSessionExecutor {
         if (!this.remoteApprovals) throw new Error('desktop remote UI: approval events unavailable')
         this.remoteApprovals.respond(this.gateway, command)
         return { accepted: true }
+      case 'directory.pick': {
+        signal.throwIfAborted()
+        if (this.pickingDirectory) throw new Error('directory picker busy')
+        for (const [id, grant] of this.directories) {
+          if (grant.expiresAt <= Date.now() || grant.clientId === command.client_id) this.directories.delete(id)
+        }
+        this.pickingDirectory = true
+        try {
+          const path = await this.gateway.invoke({ namespace: 'directoryPicker', method: 'pick', args: {}, signal })
+          signal.throwIfAborted()
+          if (path === null) return { path: null }
+          if (typeof path !== 'string' || !path || path.length > 4096 || path.includes('\0')) {
+            throw new Error('directory picker invalid path')
+          }
+          if (this.directories.size >= 32) throw new Error('directory confirmations full')
+          const grantId = randomUUID()
+          this.directories.set(grantId, { path, clientId: command.client_id, expiresAt: Date.now() + 60_000 })
+          return { path, grantId }
+        } finally { this.pickingDirectory = false }
+      }
+      case 'workspace.create': {
+        signal.throwIfAborted()
+        const grant = this.directories.get(command.grant_id)
+        if (!grant || grant.expiresAt <= Date.now() || grant.clientId !== command.client_id || grant.path !== command.path) {
+          throw new Error('directory confirmation required')
+        }
+        this.directories.delete(command.grant_id)
+        return await this.gateway.invoke({ namespace: 'workspace', method: 'create',
+          args: { request: { path: grant.path } }, signal }) as HostRemoteSessionJson
+      }
       case 'session.list':
         return this.invoke('list', { _request: {} }, signal)
       case 'session.create':
-        return this.invoke('create', { request: command.workspace_id === undefined
-          ? {} : { workspaceId: command.workspace_id } }, signal)
+        try {
+          return await this.invoke('create', { request: {
+            ...(command.workspace_id === undefined ? {} : { workspaceId: command.workspace_id }),
+            ...(command.session_id === undefined ? {} : { sessionId: command.session_id }),
+          } }, signal)
+        } catch (error) {
+          // Keep the native UI's blank-session fallback tied to the actual Host refusal.
+          if (command.session_id !== undefined && row(error) && error.isDSHRemoteError === true &&
+            error.code === 'session/writer-held') {
+            return { sessionCreateFailure: 'session/writer-held' }
+          }
+          throw error
+        }
       case 'session.prompt':
         return this.invoke('prompt', { request: {
           requestId: command.command_id, sessionId: command.session_id, mode: command.mode,

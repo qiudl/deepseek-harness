@@ -136,6 +136,10 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 -----
 
 <a id="model-experience"></a>
+### 远端工作区目录
+
+远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
+
 ## 模型体验
 
 ### Harness 源码与 Web 表层上下文
@@ -166,6 +170,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 - **`BROWSER` 覆盖只能来自环境**——被发现的 `.env` 不能设置 `BROWSER`；只有继承值能为自动交接选择可执行文件。
 - **不支持绑定所有网络接口**——出于安全考虑，`--host 0.0.0.0` 会在启动时被拒绝；请使用默认 loopback 主机。
 - **Desktop 控制权把本地浏览器窗口视为同一方**——Profile 当前将本地浏览器窗口归为一个 Desktop 控制者。证明覆盖 Session Remote 修改与转发的审批答复；终端输入、文件上传和设置写入由其他模块负责，不在此证明范围内。
+
+- Desktop 远程 Session 创建将工作区和会话身份交给原生 Session controller。原生 `session/writer-held` 拒绝以有界的 `sessionCreateFailure` 值返回，供远程 UI 执行已有的空白会话回退规则。
 
 <a id="dev-note"></a>
 ### 开发备注

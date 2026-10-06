@@ -474,11 +474,25 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     exactKeys(command, ['operation', 'command_id'])
     return { operation: 'session.list', command_id }
   }
+
+  if (command.operation === 'directory.pick') {
+    exactKeys(command, ['operation', 'command_id', 'client_id'])
+    return { operation: 'directory.pick', command_id, client_id: uuid(command.client_id) }
+  }
+  if (command.operation === 'workspace.create') {
+    exactKeys(command, ['operation', 'command_id', 'client_id', 'grant_id', 'path'])
+    const path = wireText(command.path, 4096, true)
+    return { operation: 'workspace.create', command_id, client_id: uuid(command.client_id),
+      grant_id: uuid(command.grant_id), path }
+  }
   if (command.operation === 'session.create') {
     const withWorkspace = 'workspace_id' in command
-    exactKeys(command, ['operation', 'command_id', ...(withWorkspace ? ['workspace_id'] : [])])
+    const withSession = 'session_id' in command
+    exactKeys(command, ['operation', 'command_id', ...(withWorkspace ? ['workspace_id'] : []),
+      ...(withSession ? ['session_id'] : [])])
     return { operation: 'session.create', command_id,
-      ...(withWorkspace ? { workspace_id: remoteIdentifier(command.workspace_id) } : {}) }
+      ...(withWorkspace ? { workspace_id: remoteIdentifier(command.workspace_id) } : {}),
+      ...(withSession ? { session_id: remoteIdentifier(command.session_id) } : {}) }
   }
   if (command.operation === 'remote.event.respond') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'client_id', 'event_id', 'outcome'])

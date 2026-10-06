@@ -47,7 +47,7 @@ describe('remote Session command authority', () => {
     await executeRemoteSessionCommand({
       authority, workers: { remoteSession } as unknown as ProfileWorkerSupervisor,
       profileId: 'profile-1', signal: new AbortController().signal,
-      command: { operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never },
+      command: { operation: 'directory.pick', client_id: '123e4567-e89b-42d3-a456-426614174001', command_id: '123e4567-e89b-42d3-a456-426614174000' as never },
     })
     expect(append).not.toHaveBeenCalled()
   })

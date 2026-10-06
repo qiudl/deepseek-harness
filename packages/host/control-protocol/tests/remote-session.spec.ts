@@ -31,8 +31,12 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'control.release', command_id: commandId, session_id: sessionId,
         controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
       { operation: 'session.list', command_id: commandId },
+      { operation: 'directory.pick', command_id: commandId, client_id: randomUUID() },
+      { operation: 'workspace.create', command_id: commandId, client_id: randomUUID(), grant_id: randomUUID(), path: '/tmp/confirmed' },
       { operation: 'session.create', command_id: commandId },
       { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1' },
+      { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1', session_id: sessionId },
+      { operation: 'session.create', command_id: commandId, session_id: sessionId },
       { operation: 'remote.event.respond', command_id: commandId, session_id: sessionId,
         control, client_id: randomUUID(), event_id: randomUUID(), outcome: 'allowed-once' },
       { operation: 'session.history', command_id: commandId, session_id: sessionId, max_events: 100 },
@@ -59,10 +63,14 @@ describe('Profile remote Session wire commands', () => {
   it('rejects unknown operations, injected selectors and malformed command fields', () => {
     const id = randomUUID()
     for (const command of [
+      { operation: 'directory.pick', command_id: id, client_id: randomUUID(), path: '/tmp/forged' },
+      { operation: 'workspace.create', command_id: id, client_id: randomUUID(), grant_id: 'bad', path: '/tmp/confirmed' },
+      { operation: 'workspace.create', command_id: id, client_id: randomUUID(), grant_id: randomUUID(), path: 'bad\0path' },
       { operation: 'api.proxy', command_id: id, path: '/api/settings.describe' },
       { operation: 'session.list', command_id: id, profile_root: '/another-user' },
       { operation: 'session.create', command_id: id, cwd: '/tmp/escape' },
       { operation: 'session.create', command_id: id, workspace_id: '../escape' },
+      { operation: 'session.create', command_id: id, session_id: '../escape' },
       { operation: 'remote.event.respond', command_id: id, session_id: 'session-1',
         client_id: randomUUID(), event_id: randomUUID(), outcome: 'always-allow' },
       { operation: 'session.history', command_id: id, session_id: '', max_events: 100 },

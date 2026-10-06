@@ -1414,7 +1414,7 @@ export class HostControlAuthority {
           ...capabilities,
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session',
-            'profile.remote_session.workspace_create', 'profile.remote_session.event_result',
+            'profile.remote_session.workspace_create', 'profile.remote_session.directory_picker', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
             'profile.remote_session.control_lease'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',

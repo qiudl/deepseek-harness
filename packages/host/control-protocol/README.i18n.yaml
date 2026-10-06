@@ -29,6 +29,9 @@
 /dsh-host-control-protocol/runtime-invariants:
   en: 597b81830e8e41cf
   zh: 90f8cb60256f6917
+/dsh-host-control-protocol/runtime-invariants/remote-workspace-directories:
+  en: 804610ff0f553589
+  zh: 28b1b6ce9f10a143
 /dsh-host-control-protocol/model-experience:
   en: 014d55646fcf02ad
   zh: e290720514952264
@@ -36,5 +39,5 @@
   en: 7e27c6b2c939d049
   zh: 9781e6ac564ea433
 /dsh-host-control-protocol/known-limitations-and-deferred-work:
-  en: b30112259e913556
-  zh: 4a10cd0fea9987cd
+  en: a539207eea53352f
+  zh: d283cc89ead5f8b4
