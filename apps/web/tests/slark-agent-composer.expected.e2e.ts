@@ -298,3 +298,55 @@ it('asks a natural question in the built composer and accepts a plain clarificat
   await expect(observations.join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
     'apps/web/tests/expected/slark-agent-composer/clarification.expected.txt'))
 })
+
+it('reads original-root collaboration history from the built Trajectory tab without executing work', async () => {
+  const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
+  const root = { root_task_id: 'root', root_trace_id: 'b'.repeat(32), task_revision: '2', state_version: '3', state: 'active', intent_state: 'active' }
+  const trace = vi.fn(async (request: { action: string; cursor: { evidence?: { event_id: string } } }) => {
+    if (request.action !== 'trace') throw Error('history must not execute')
+    return { ok: true, value: { root, coverage: 'partial', next_after_seq: null,
+      events: [{ event_id: 'settlement', root_seq: 1, task_revision: 1, type: 'execution_observed', phase: 'execution_succeeded',
+        occurred_at: '2026-10-07T00:00:00.000Z', recorded_at: '2026-10-07T00:00:00.000Z',
+        trace_context: { root_task_id: root.root_task_id, root_trace_id: root.root_trace_id, task_revision: 1, attempt_id: 'attempt' } }],
+      ...(request.cursor.evidence ? { execution: { event_id: 'settlement', attempt_id: 'attempt', state: 'succeeded',
+        digest: 'a'.repeat(64), next_after_sequence: null, provider_visibility: 'boundary_only',
+        events: [{ sequence: 1, observedAt: 1791331200000, type: 'file.completed', runtimeId: 'file-proof', success: true }] } } : {}) } }
+  })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true, collaborationPlanningAvailable: true,
+    collaborationExecutionAvailable: false, collaborationRootExecution: trace,
+    collaborationDeliveries: async () => ({ ok: true, value: { deliveries: [] } }),
+    collaborationWorkspace: async () => ({ ok: true, value: { workspace_id: workspace, version: '1', selected_project_ids: [] } }),
+  })
+  const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'], remote: { workspaceId: workspace } })
+  remote.mock.unary('fileReferences/list', { ok: true, value: [] })
+  remote.mock.unary('sessionReferenceResolver/candidates', { ok: true, value: [] })
+  remote.mock.unary('session/collaborationSources', (input: unknown) => {
+    if (!input || typeof input !== 'object') throw Error('request missing')
+    const request: unknown = Reflect.get(input, 'request')
+    if (!request || typeof request !== 'object') throw Error('session request missing')
+    const sessionId: unknown = Reflect.get(request, 'sessionId')
+    if (typeof sessionId !== 'string') throw Error('session missing')
+    return { ok: true, value: { items: [{ source: { workspace_id: workspace, session_id: sessionId,
+      source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64), original_message: 'Check the recorded file operation' }] } }
+  })
+  const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
+  const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
+  if (!start) throw Error('fixture Workspace action missing')
+  fireEvent.click(start)
+  await waitFor(() => { expect(remote.mock.log.calls('session/collaborationSources').length).toBeGreaterThan(0) })
+  await screen.findByText('Check the recorded file operation', {}, { timeout: 10_000 })
+  fireEvent.click(await screen.findByRole('tab', { name: 'Trajectory' }, { timeout: 10_000 }))
+  const panel = await screen.findByTestId('slark-collaboration-trajectory', {}, { timeout: 10_000 })
+  fireEvent.click(within(panel).getByTestId('slark-trace-load'))
+  await within(panel).findByText(root.root_trace_id)
+  expect(panel.textContent).toContain('Original task in progress')
+  expect(panel.textContent).toContain('Remote execution succeeded')
+  fireEvent.click(within(panel).getByTestId('slark-trace-execution'))
+  await within(panel).findByText('file-proof')
+  expect(panel.textContent).toContain('2026-10-07T00:00:00.000Z')
+  expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
+  expect(trace.mock.calls.every(([request]) => request.action === 'trace')).toBe(true)
+  await expect([`trace=${root.root_trace_id}`, 'root=active', 'execution=succeeded', 'revision=2', 'runtime=file.completed',
+    'provider-visibility=boundary-only', 'ordinary-model-prompts=0', 'commands=trace-only'].join('\n') + '\n')
+    .toMatchFileSnapshot(join(process.cwd(), 'apps/web/tests/expected/slark-agent-composer/trajectory.expected.txt'))
+})

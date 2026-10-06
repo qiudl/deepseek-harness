@@ -281,6 +281,7 @@ async function bench(snapshot = historySnapshot(NODES)) {
     snapshot: conversationStore,
     openTurn: createSnapshotStore<number | undefined>(undefined),
     activate: () => {},
+    retainActivity: () => () => {},
     target: target => targetSources[target],
   }
   vi.spyOn(uiConversation, 'binding').mockReturnValue(binding)
@@ -382,6 +383,7 @@ function mount(fixture: Awaited<ReturnType<typeof bench>>) {
       ? (() => {
         const trajectory = injected as TrajectoryViewInjected
         return {
+          renderSlot: () => null,
           loadOlder: trajectory.loadOlder,
           setActualDuration: trajectory.setActualDuration,
           useDuration: bindSnapshotSelector(trajectory.hooks.duration),

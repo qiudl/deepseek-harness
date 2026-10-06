@@ -174,3 +174,5 @@ None.
 </details>
 
 **Runtime invariant:** No companion is published. Conversation Definitions, target builders, and Views are already validated by their owning registries and the Slot ledger.
+
+External activity owners can retain a Session's shell through `ConversationBinding.retainActivity(target)` and release it when their current authorized history becomes empty or their owner is disposed. This permits views of external work before an ordinary chat turn exists; it does not change Session blank state or append model-visible events.

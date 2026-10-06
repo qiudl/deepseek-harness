@@ -46,6 +46,7 @@ function fixture() {
   const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge)
   onTestFinished(() => { model.dispose() })
   return { model, reads, bridge, deliveries, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
+    quietReset: () => { remoteGeneration = 2 },
     move: () => { grouped = false; changed() }, reset: () => { remoteGeneration = 2; changed() } }
 }
 it('reconstructs original messages and results using readonly coordinates, with separate execution and delivery state', async () => {
@@ -469,4 +470,170 @@ it('allows a new explicit confirmation only after the original command is known 
   f.command.mockResolvedValue({ ok: true, status: 'recorded' })
   await f.model.executionAction(original.snapshot_digest, 'task')
   expect(f.model.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('recorded')
+})
+
+it('reads original-root trajectory without preview or execution and restores requested pages on refresh', async () => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const root = { root_task_id: '10000000-0000-4000-8000-000000000001', root_trace_id: 'b'.repeat(32), task_revision: '1', state_version: '1', state: 'active', intent_state: 'active' as const }
+  const trace = vi.fn(async (r: { action: string; cursor?: { after_seq: number } }) => {
+    expect(r.action).toBe('trace')
+    const after = r.cursor?.after_seq ?? 0
+    const events = Array.from({ length: after ? 1 : 20 }, (_, n) => ({ event_id: `event-${after + n + 1}`,
+      root_seq: after + n + 1, task_revision: 1, type: 'execution_observed', phase: 'execution_admitted',
+      occurred_at: '2026-10-07T00:00:00.000Z', recorded_at: '2026-10-07T00:00:00.000Z',
+      trace_context: { root_task_id: root.root_task_id, root_trace_id: root.root_trace_id, task_revision: 1, step_id: 'step', attempt_id: 'attempt' } }))
+    return { ok: true, value: { root, events, next_after_seq: after ? null : 20, coverage: 'partial' } }
+  })
+  f.bridge.collaborationRootExecution = trace
+  await f.model.refresh()
+  expect(trace).not.toHaveBeenCalled()
+  await f.model.traceAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]?.trace?.page?.events).toHaveLength(20)
+  await f.model.traceAction(original.snapshot_digest, true)
+  expect(f.model.getSnapshot().groups[0]?.trace?.page?.events).toHaveLength(21)
+  await f.model.refresh()
+  expect(f.model.getSnapshot().groups[0]?.trace?.page?.events).toHaveLength(21)
+  expect(trace.mock.calls.map(([r]) => r.cursor?.after_seq)).toEqual([0, 20, 0, 20])
+  expect(f.model.getSnapshot().groups[0]?.trace?.page?.root.state).toBe('active')
+  f.reset()
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+it('pages settlement evidence through readonly commands and clears it when authority fails', async () => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const root = { root_task_id: 'root', root_trace_id: 'b'.repeat(32), task_revision: '1', state_version: '1', state: 'active', intent_state: 'active' }
+  const event = { event_id: 'event', root_seq: 1, task_revision: 1, type: 'execution_observed', phase: 'execution_succeeded',
+    occurred_at: '2026-10-07T00:00:00.000Z', recorded_at: '2026-10-07T00:00:00.000Z',
+    trace_context: { root_task_id: root.root_task_id, root_trace_id: root.root_trace_id, task_revision: 1 } }
+  const command = vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>(async (request) => {
+    if (request.action !== 'trace') throw Error('must only read')
+    const after = request.cursor.evidence?.after_sequence ?? 0
+    return { ok: true, value: { root, events: [event], next_after_seq: null, coverage: 'partial',
+      ...(request.cursor.evidence ? { execution: { event_id: 'event', attempt_id: 'attempt', state: 'succeeded', digest: 'a'.repeat(64),
+        provider_visibility: 'boundary_only', next_after_sequence: after ? null : 20,
+        events: Array.from({ length: after ? 1 : 20 }, (_, n) => ({ sequence: after + n + 1, observedAt: 0, type: 'tool.completed' })) } } : {}) } }
+  })
+  f.bridge.collaborationRootExecution = command
+  await f.model.refresh()
+  await f.model.traceEvidenceAction(original.snapshot_digest, 'event')
+  expect(command).not.toHaveBeenCalled()
+  await f.model.traceAction(original.snapshot_digest)
+  await f.model.traceEvidenceAction(original.snapshot_digest, 'missing')
+  expect(command).toHaveBeenCalledTimes(1)
+  await f.model.traceEvidenceAction(original.snapshot_digest, 'event', true)
+  expect(command).toHaveBeenCalledTimes(1)
+  await f.model.traceEvidenceAction(original.snapshot_digest, 'event')
+  expect(f.model.getSnapshot().groups[0]?.trace?.execution?.page?.events).toHaveLength(20)
+  await f.model.traceEvidenceAction(original.snapshot_digest, 'event', true)
+  expect(command).toHaveBeenLastCalledWith({ action: 'trace', source: original.source,
+    cursor: { after_seq: 0, limit: 20, evidence: { event_id: 'event', after_sequence: 20 } } })
+  expect(f.model.getSnapshot().groups[0]?.trace?.execution?.page?.events).toHaveLength(21)
+  await f.model.traceEvidenceAction(original.snapshot_digest, 'event', true)
+  expect(command).toHaveBeenCalledTimes(3)
+  command.mockRejectedValueOnce(Error('revoked'))
+  await f.model.traceEvidenceAction(original.snapshot_digest, 'event')
+  expect(f.model.getSnapshot().groups[0]?.trace).toEqual({ phase: 'error' })
+  await f.model.traceAction(original.snapshot_digest)
+  command.mockImplementationOnce(async () => { f.reset(); return { ok: false } })
+  await f.model.traceEvidenceAction(original.snapshot_digest, 'event')
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+function auditPage(after = 0, full = false) {
+  const root = { root_task_id: 'root', root_trace_id: 'b'.repeat(32), task_revision: '1', state_version: '1', state: 'active', intent_state: 'active' }
+  return { ok: true, value: { root, coverage: 'partial', next_after_seq: full ? after + 20 : null,
+    events: Array.from({ length: full ? 20 : 1 }, (_, n) => ({ event_id: `event-${after + n + 1}`, root_seq: after + n + 1,
+      task_revision: 1, type: 'root_accepted', phase: 'root_accepted', occurred_at: '2026-10-07T00:00:00.000Z',
+      recorded_at: '2026-10-07T00:00:00.000Z', trace_context: { root_task_id: root.root_task_id,
+        root_trace_id: root.root_trace_id, task_revision: 1 } })) } }
+}
+it('refuses unavailable trajectory reads, stale responses and duplicate events across pages', async () => {
+  const f = fixture()
+  await f.model.traceAction(original.snapshot_digest)
+  await f.model.refresh()
+  await f.model.traceAction(original.snapshot_digest, true)
+  await f.model.traceAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]?.trace).toEqual({ phase: 'error' })
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const command = vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>(async () => auditPage(0, true))
+  f.bridge.collaborationRootExecution = command
+  await f.model.traceAction(original.snapshot_digest)
+  const duplicate = auditPage(20, true)
+  duplicate.value.events[0]!.event_id = 'event-1'
+  command.mockResolvedValueOnce(duplicate)
+  await f.model.traceAction(original.snapshot_digest, true)
+  expect(f.model.getSnapshot().groups[0]?.trace).toEqual({ phase: 'error' })
+  command.mockImplementationOnce(async () => { f.reset(); return auditPage() })
+  await f.model.traceAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups).toEqual([])
+  await f.model.refresh()
+  command.mockImplementationOnce(async () => { f.changeBridge({ ...f.bridge }); throw Error('obsolete') })
+  await f.model.traceAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+it('caps retained audit and runtime histories even when every page is individually valid', async () => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const command = vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>(async (request) => {
+    if (request.action !== 'trace') throw Error('unexpected execution')
+    const page = auditPage(request.cursor.after_seq, true), evidence = request.cursor.evidence
+    return evidence ? { ...page, value: { ...page.value, execution: {
+      event_id: evidence.event_id, attempt_id: 'attempt', state: 'succeeded', digest: 'a'.repeat(64), provider_visibility: 'boundary_only',
+      next_after_sequence: evidence.after_sequence + 20, events: Array.from({ length: 20 }, (_, n) => ({
+        sequence: evidence.after_sequence + n + 1, observedAt: 0, type: 'tool.completed' })),
+    } } } : page
+  })
+  f.bridge.collaborationRootExecution = command
+  await f.model.refresh()
+  await f.model.traceAction(original.snapshot_digest)
+  for (let n = 0; n < 204; n++) await f.model.traceAction(original.snapshot_digest, true)
+  expect(f.model.getSnapshot().groups[0]?.trace).toEqual({ phase: 'error' })
+  // Refresh this Source's history, then independently exhaust runtime observation capacity.
+  command.mockResolvedValueOnce(auditPage())
+  await f.model.traceAction(original.snapshot_digest)
+  await f.model.traceEvidenceAction(original.snapshot_digest, 'event-1')
+  for (let n = 0; n < 102; n++) await f.model.traceEvidenceAction(original.snapshot_digest, 'event-1', true)
+  expect(f.model.getSnapshot().groups[0]?.trace).toEqual({ phase: 'error' })
+})
+
+it('drops completed audit and evidence reads when connection generation changes before its notification', async () => {
+  for (const evidence of [false, true]) {
+    const f = fixture()
+    Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+    const command = vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>(async () => auditPage())
+    f.bridge.collaborationRootExecution = command
+    await f.model.refresh()
+    if (evidence) await f.model.traceAction(original.snapshot_digest)
+    command.mockImplementationOnce(async () => { f.quietReset(); return auditPage() })
+    if (evidence) await f.model.traceEvidenceAction(original.snapshot_digest, 'event-1')
+    else await f.model.traceAction(original.snapshot_digest)
+    expect(f.model.getSnapshot().groups).toEqual([])
+  }
+})
+it('bounds combined cloud history across separate original Sources', async () => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const originals = Array.from({ length: 6 }, (_, n) => ({ ...original, snapshot_digest: String(n + 1).repeat(64),
+    source: { ...source, source_message_id: `source-${n}` } }))
+  f.reads.mockResolvedValue({ ok: true, value: { items: originals } })
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  const large = '界'.repeat(240)
+  f.bridge.collaborationRootExecution = async (request) => {
+    if (request.action !== 'trace') throw Error('unexpected execution')
+    const page = auditPage(request.cursor.after_seq, true)
+    return { ...page, value: { ...page.value, events: page.value.events.map(e => ({ ...e,
+      event_id: `${large}${e.root_seq}`, phase: large, type: large,
+      trace_context: { ...e.trace_context, step_id: large, attempt_id: large, causation_id: large } })) } }
+  }
+  await f.model.refresh()
+  for (const source of originals) {
+    await f.model.traceAction(source.snapshot_digest)
+    for (let n = 0; n < 35; n++) await f.model.traceAction(source.snapshot_digest, true)
+  }
+  const snapshot = f.model.getSnapshot()
+  expect(snapshot.groups.some(g => g.trace?.phase === 'error')).toBe(true)
+  expect(snapshot.groups.some(g => g.trace?.phase === 'ready')).toBe(true)
+  expect(new TextEncoder().encode(JSON.stringify(snapshot.groups.map(g => g.trace))).length).toBeLessThan(16 * 1024 * 1024)
 })

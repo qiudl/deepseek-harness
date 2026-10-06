@@ -1,0 +1,22 @@
+- region "Collaboration trajectory":
+  - strong: Collaboration trajectory
+  - article:
+    - text: Verify the recorded file operation
+    - button "Refresh trace"
+    - paragraph:
+      - text: "Original Trace ID:"
+      - code: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    - paragraph: Original task in progress · Task revision 2
+    - status: Only connected durable audit records are shown. Coverage is incomplete; a successful remote execution does not complete the original task.
+    - list:
+      - listitem:
+        - group:
+          - text: Remote execution succeeded ·
+          - time: {{timestamp}}
+          - term: Task revision
+          - definition: "1"
+          - term: Event ID
+          - definition: settlement
+          - term: Attempt ID
+          - definition: attempt
+          - button "View execution details"

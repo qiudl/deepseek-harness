@@ -58,6 +58,8 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     if (!mounted.composer) throw Error('composer not mounted')
     return mounted.composer
   } } } as never)
+  const releaseActivity = vi.fn(), retainActivity = vi.fn(() => releaseActivity)
+  ctx.provide('uiConversation', { binding: () => ({ retainActivity }) } as never)
   const invoke = vi.fn(async (_input: InvokeInput) => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
   const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
@@ -132,6 +134,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
       c.slots.register({ name: 'root', children: {
         'conversation.input.overlay': { kind: 'list', scope: 'session' },
         'conversation.input.dock': { kind: 'list', scope: 'session' },
+        'conversation.trajectory.external': { kind: 'list', scope: 'session' },
       } } as never, () => null)
     } },
     triggers: Triggers, source: SlarkSource,
@@ -178,7 +181,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     const end = prefix.length + 2
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
-  return { ctx, composer, controller, invoke, sink, pick, submit, scopeDirectory, workspace, sourceReads,
+  return { ctx, composer, controller, invoke, sink, pick, submit, scopeDirectory, workspace, sourceReads, retainActivity, releaseActivity,
     deliveries, pending, clarify, originals, closeSession: () => scope.fiber.dispose() }
 }
 
@@ -1407,4 +1410,24 @@ it('keeps the scoped draft when its Host disappears before submission', async ()
   expect(f.composer.snapshot.draft).toBe(draft)
   expect(f.submit).not.toHaveBeenCalled()
   expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('YAML-loaded trajectory and dock share the original Source model and unload their registrations', async () => {
+  const f = await bench(true)
+  const dock = f.ctx.slots.entries('conversation.input.dock').find(e => e.options.id === 'slark-collaboration-results')
+  const trace = f.ctx.slots.entries('conversation.trajectory.external').find(e => e.options.id === 'slark-collaboration-trace')
+  expect(trace).toBeDefined()
+  const a = Reflect.apply(dock!.inject!, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  const b = Reflect.apply(trace!.inject!, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  expect(b.hooks.slarkResults).toBe(a.hooks.slarkResults)
+  expect(typeof b.traceAction).toBe('function')
+  await f.pick('', '请检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.originals).toHaveLength(1) })
+  await b.hooks.slarkResults.refresh()
+  expect(b.hooks.slarkResults.getSnapshot().groups[0]?.original.original_message).toContain('请检查登录问题')
+  expect(f.retainActivity).toHaveBeenCalledWith('trajectory')
+  const slots = f.ctx.slots
+  await f.ctx.fiber.dispose()
+  expect(slots.entries('conversation.trajectory.external')).toEqual([])
+  expect(f.releaseActivity).toHaveBeenCalled()
 })

@@ -174,3 +174,5 @@ selector 必须是 owner currency 的纯函数。非 null 返回值作为 `match
 </details>
 
 **运行时不变式：** 不发布伴生入口。Conversation Definition、target builder 与 View 已由其所属注册表和 Slot ledger 校验。
+
+外部活动的所有者可通过 `ConversationBinding.retainActivity(target)` 保持 Session 界面可见，并在当前授权历史为空或所有者释放时撤销保留。这允许在普通聊天轮次出现前查看外部工作，不会修改 Session 的空白状态或追加模型可见事件。

@@ -1,3 +1,4 @@
+import { readCollaborationExecutionEvidence, readCollaborationTracePage, type CollaborationTraceView, type CollaborationTracePage } from './collaboration-trace.ts'
 /** Session-owned readonly collaboration messages/results; view lifetimes never cancel accepted work. */
 import { readCollaborationPending } from './collaboration-dialogue.ts'
 import type { CollaborationDialogueBridge, CollaborationPendingPage } from './collaboration-dialogue.ts'
@@ -24,7 +25,7 @@ export interface ScopedCollaborationReply {
 export interface CollaborationResultsBridge extends CollaborationDialogueBridge {
   readonly collaborationScopeAvailable?: boolean
   readonly collaborationPlanningAvailable?: boolean
-  collaborationRootExecution?(request: { action: 'preview'; source: Source } |
+  collaborationRootExecution?(request: { action: 'trace'; source: Source; cursor: { after_seq: number; limit: number; evidence?: { event_id: string; after_sequence: number } } } | { action: 'preview'; source: Source } |
     { action: 'confirm' | 'reconcile'; previewId: string; taskId: string } |
     { action: 'consume' | 'consumption-status'; previewId: string; taskId: string; deliveryId: string }): Promise<unknown>
   collaborationDeliveries?(request: { source: Source; limit: number; after_delivery_id?: string }): Promise<
@@ -48,6 +49,7 @@ export interface CollaborationResultGroup {
   readonly pending?: CollaborationPendingPage['pending_items']
   readonly pendingUnavailable?: boolean
   readonly planningState?: string
+  readonly trace?: CollaborationTraceView
   readonly execution?: CollaborationExecutionView
   readonly nextCursor?: string
 }
@@ -81,6 +83,8 @@ function wait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 /** Own readonly paging and refresh through the Session, workspace and Connection generation. */
 export class CollaborationResultsModel {
   private state = empty()
+  private traces = new Map<string, CollaborationTraceView>()
+  private tracePages = new Map<string, number>()
   private executions = new Map<string, CollaborationExecutionView>()
   private observers = new Set<() => void>()
   private generation = 0
@@ -100,7 +104,8 @@ export class CollaborationResultsModel {
   }
 
   constructor(private sessionId: SessionId, private workspaces: WorkspaceSource, private connection: Generation,
-    private readSources: ReadSources, private bridge: () => CollaborationResultsBridge | undefined) {
+    private readSources: ReadSources, private bridge: () => CollaborationResultsBridge | undefined,
+    private readonly activity: (active: boolean) => void = () => {}) {
     const changed = () => { if (this.bind() && this.observers.size) void this.refresh() }
     this.unsubscribe = [workspaces.subscribe(changed), connection.subscribe(changed)]
     this.bind()
@@ -112,7 +117,7 @@ export class CollaborationResultsModel {
       ? data.items.find(item => item.sessionIds.includes(this.sessionId))?.workspaceId : undefined
     if (workspaceId === this.workspaceId && host === this.boundBridge && connection === this.connectionGeneration) return false
     this.workspaceId = workspaceId; this.boundBridge = host; this.connectionGeneration = connection
-    this.executions.clear()
+    this.executions.clear(); this.traces.clear(); this.tracePages.clear()
     this.generation++; this.sourcePages = 1; this.replyPages.clear(); this.controller?.abort(); this.publish(empty())
     return true
   }
@@ -124,10 +129,12 @@ export class CollaborationResultsModel {
         ? { executionAvailable: true } : {}),
       groups: state.groups.map((group) => {
         const execution = this.executions.get(group.original.snapshot_digest)
-        if (group.execution === execution) return group
-        const { execution: _old, ...original } = group
-        return { ...original, ...(execution ? { execution } : {}) }
+        const trace = this.traces.get(group.original.snapshot_digest)
+        if (group.execution === execution && group.trace === trace) return group
+        const { execution: _old, trace: _trace, ...original } = group
+        return { ...original, ...(execution ? { execution } : {}), ...(trace ? { trace } : {}) }
       }) }
+    this.activity(!this.closed && this.state.groups.length > 0)
     if (!this.closed) this.observers.forEach((fn) => { fn() })
   }
   /**
@@ -157,7 +164,8 @@ export class CollaborationResultsModel {
     if (this.timer !== undefined) clearInterval(this.timer)
     this.timer = undefined
     if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-collaboration-admitted', this.refreshEvent)
-    this.controller?.abort(); this.generation++; this.executions.clear(); this.publish(this.state)
+    this.controller?.abort(); this.generation++; this.executions.clear()
+    this.traces.clear(); this.tracePages.clear(); this.publish(this.state)
   }
   private sourcePage(value: SessionCollaborationSourcesValue, cursor?: string): SessionCollaborationSourcesValue {
     if (!array(value.items) || value.items.length > 8 || bytes(value) > 256 * 1024
@@ -245,6 +253,8 @@ export class CollaborationResultsModel {
           for (let i = 1; i < (this.replyPages.get(original.snapshot_digest) ?? 1) && group.nextCursor; i++) {
             group = await this.results(original, signal, generation, group.nextCursor, group.replies, previous)
           }
+          const tracePages = this.tracePages.get(original.snapshot_digest)
+          if (tracePages !== undefined) await this.traceRead(original, signal, generation, tracePages)
           groups.push(group)
           if (!this.current(generation)) return
         }
@@ -300,6 +310,106 @@ export class CollaborationResultsModel {
           item.original.snapshot_digest === group.original.snapshot_digest ? next : item) })
       }
     } finally {
+      this.finishQuery()
+    }
+  }
+  private retainTrace(digest: string, trace: CollaborationTraceView): void {
+    let size = bytes(trace)
+    for (const [key, value] of this.traces) {
+      if (key !== digest) size += bytes(value)
+    }
+    if (size > 16 * 1024 * 1024) throw Error('trace_budget')
+    this.traces.set(digest, trace)
+  }
+  private async traceRead(
+    original: SessionCollaborationSourceItem, signal: AbortSignal, generation: number, loadedPages: number, append?: CollaborationTracePage,
+  ): Promise<void> {
+    const digest = original.snapshot_digest, old = this.traces.get(digest)?.page
+    const bridge = this.boundBridge
+    try {
+      if (!bridge?.collaborationRootExecution || !bridge.collaborationPlanningAvailable) throw Error('unavailable')
+      let after = append?.next_after_seq ?? 0
+      let page = append
+      const pages = append ? 1 : loadedPages
+      let n = 0
+      do {
+        const response = await wait(bridge.collaborationRootExecution({ action: 'trace', source: original.source,
+          cursor: { after_seq: after, limit: 20 } }), signal)
+        if (!this.current(generation)) return
+        const next = readCollaborationTracePage(response, after, page ?? old)
+        const events = [...(page?.events ?? []), ...next.events]
+        if (events.length > 4096 || new Set(events.map(e => e.event_id)).size !== events.length
+          || bytes(events) > 4 * 1024 * 1024) throw Error('trace_budget')
+        page = { ...next, events }
+        if (next.next_after_seq === null) break
+        after = next.next_after_seq
+        n++
+      } while (n < pages)
+      this.retainTrace(digest, { ...this.traces.get(digest), phase: 'ready', page })
+      if (append) this.tracePages.set(digest, loadedPages + 1)
+    } catch {
+      if (this.current(generation)) this.traces.set(digest, { phase: 'error' })
+    }
+  }
+  /** Read or page cloud audits for one original Source; no preview, admission or consumption.
+   * @param digest - Original message selected in this Session.
+   * @param more - Append the next immutable audit page instead of refreshing loaded pages.
+   * @returns Completion of the bounded read, discarding obsolete generations.
+   */
+  async traceAction(digest: string, more = false): Promise<void> {
+    this.bind()
+    const original = this.state.groups.find(group => group.original.snapshot_digest === digest)?.original
+    if (this.closed || this.pending || !this.workspaceId || !original) return
+    const old = this.traces.get(digest)
+    if (more && old?.page?.next_after_seq == null) return
+    this.pending = true
+    const generation = this.generation, controller = new AbortController()
+    this.controller = controller
+    const pages = this.tracePages.get(digest) ?? 1
+    this.tracePages.set(digest, pages)
+    this.traces.set(digest, { ...old, phase: 'loading' }); this.publish(this.state)
+    try {
+      await this.traceRead(original, AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),
+        generation, pages, more ? old?.page : undefined)
+      if (this.current(generation)) this.publish(this.state)
+    } finally { this.finishQuery() }
+  }
+  /** Read immutable runtime observations for a displayed settlement; browsing cannot launch tools.
+   * @param digest - Original Source message digest.
+   * @param eventId - Settlement event already present in this root's audit history.
+   * @param more - Append the next runtime observation page.
+   * @returns Completion of the current authorized read.
+   */
+  async traceEvidenceAction(digest: string, eventId: string, more = false): Promise<void> {
+    this.bind()
+    const group = this.state.groups.find(g => g.original.snapshot_digest === digest), prior = this.traces.get(digest)
+    const bridge = this.boundBridge
+    if (this.closed || this.pending || !this.workspaceId || !bridge?.collaborationRootExecution || !bridge.collaborationPlanningAvailable
+      || !group || !prior?.page?.events.some(e => e.event_id === eventId)) return
+    const previous = prior.execution?.eventId === eventId ? prior.execution.page : undefined
+    const after = more ? previous?.next_after_sequence : 0
+    if (after === undefined || after === null) return
+    this.pending = true
+    const generation = this.generation, controller = new AbortController()
+    this.controller = controller
+    this.traces.set(digest, { ...prior, execution: { eventId, phase: 'loading', ...(previous ? { page: previous } : {}) } })
+    this.publish(this.state)
+    try {
+      const value = await wait(bridge.collaborationRootExecution({ action: 'trace', source: group.original.source,
+        cursor: { after_seq: 0, limit: 20, evidence: { event_id: eventId, after_sequence: after } } }),
+      AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]))
+      if (!this.current(generation)) return
+      readCollaborationTracePage(value, 0, prior.page)
+      const next = readCollaborationExecutionEvidence(value, eventId, after, previous)
+      const events = [...(more && previous ? previous.events : []), ...next.events]
+      if (events.length > 2048) throw Error('evidence_budget')
+      this.retainTrace(digest, { ...prior, execution: { eventId, phase: 'ready', page: { ...next, events } } })
+    } catch {
+      if (!this.current(generation)) return
+      // An unavailable read may mean authority was revoked; drop all cloud data for this Source.
+      this.traces.set(digest, { phase: 'error' })
+    } finally {
+      if (this.current(generation)) this.publish(this.state)
       this.finishQuery()
     }
   }
@@ -390,6 +500,7 @@ export class CollaborationResultsModel {
   }
   /** Release observers and readonly requests; accepted tasks continue independently. */
   dispose(): void {
-    this.stop(); this.closed = true; this.unsubscribe.forEach((fn) => { fn() }); this.observers.clear(); this.state = empty()
+    this.stop(); this.closed = true; this.unsubscribe.forEach((fn) => { fn() }); this.observers.clear()
+    this.state = empty(); this.activity(false)
   }
 }

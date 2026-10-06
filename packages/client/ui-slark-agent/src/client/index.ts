@@ -1,3 +1,6 @@
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type {} from '@deepseek-ai/dsh-client-ui-trajectory/client'
+import { CollaborationTrajectory } from './CollaborationTrajectory.tsx'
 /** DSH `@` source for the live, employee-assigned Slark Agent directory. */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
@@ -122,30 +125,42 @@ export function apply(ctx: ClientContext): void {
       inject: sessionId => ({ sessionId }),
     }, AgentTaskDock)
   })
-  ctx.inject(['remote.session', 'connection', 'workspaces'], (resultsCtx) => {
+  ctx.inject(['remote', 'remote.session', 'connection', 'workspaces', 'uiConversation'], (resultsCtx) => {
     if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable ||
-      !window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable) return
+      !(window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable || window.__DSH_DESKTOP_HOST__.collaborationPlanningAvailable)) return
     const connection = resultsCtx.get('connection') as ConnectionHandle
     const models = new Map<string, { model: CollaborationResultsModel; bindings: CollaborationResultsInjected }>()
     resultsCtx.effect(() => () => { models.forEach(({ model }) => { model.dispose() }); models.clear() },
       'ui-slark-agent: original Session results')
+    const bindings = (sessionId: SessionId) => {
+      let entry = models.get(sessionId)
+      if (!entry) {
+        const conversation = resultsCtx.uiConversation.binding(sessionId)
+        let releaseActivity: (() => void) | undefined
+        const model = new CollaborationResultsModel(sessionId, resultsCtx.workspaces.list, connection.generation,
+          (cursor, signal) => resultsCtx.remote.session.collaborationSources({ sessionId, ...(cursor ? { cursor } : {}) }, signal),
+          () => window.__DSH_DESKTOP_HOST__, (active) => {
+            if (active && !releaseActivity) releaseActivity = conversation.retainActivity('trajectory')
+            if (!active && releaseActivity) { releaseActivity(); releaseActivity = undefined }
+          })
+        entry = { model, bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
+          traceEvidenceAction: (digest, eventId, more) => model.traceEvidenceAction(digest, eventId, more),
+          traceAction: (digest, more) => model.traceAction(digest, more),
+          consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
+          executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
+          loadReplies: digest => model.loadReplies(digest) } }
+        models.set(sessionId, entry)
+      }
+      return entry.bindings
+    }
     resultsCtx.slots.inject('conversation.input.dock', () => resultsCtx.slots.register({
       name: 'conversation.input.dock', id: 'slark-collaboration-results', order: 25, locale: NS,
-      inject: (sessionId) => {
-        let entry = models.get(sessionId)
-        if (!entry) {
-          const model = new CollaborationResultsModel(sessionId, resultsCtx.workspaces.list, connection.generation,
-            (cursor, signal) => resultsCtx.remote.session.collaborationSources({ sessionId, ...(cursor ? { cursor } : {}) }, signal),
-            () => window.__DSH_DESKTOP_HOST__)
-          entry = { model, bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
-            consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
-            executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
-            loadReplies: digest => model.loadReplies(digest) } }
-          models.set(sessionId, entry)
-        }
-        return entry.bindings
-      },
+      inject: bindings,
     }, CollaborationResultsDock))
+    resultsCtx.slots.inject('conversation.trajectory.external', () => resultsCtx.slots.register({
+      name: 'conversation.trajectory.external', id: 'slark-collaboration-trace', order: 10, locale: NS,
+      inject: bindings,
+    }, CollaborationTrajectory))
   })
   const scopeModels = new Map<string, { model: ProjectScopeModel; bindings: ProjectScopeInjected }>()
   ctx.inject(['workspaces'], (scopeCtx) => {

@@ -256,3 +256,19 @@ describe('title projection across assembled surfaces', () => {
     await runtime.dispose()
   })
 })
+
+it('keeps a blank Session visible while independent external activity owners retain it', async () => {
+  const runtime = await bench({ blank: true })
+  const view = runtime.renderRoot(), binding = runtime.ctx.uiConversation.binding(SID)
+  expect(view.container.querySelector('[data-phase="hero"]')).not.toBeNull()
+  let releaseFirst!: () => void, releaseSecond!: () => void
+  act(() => { releaseFirst = binding.retainActivity('trajectory'); releaseSecond = binding.retainActivity('trajectory') })
+  expect(view.container.querySelector('[data-phase="active"]')).not.toBeNull()
+  act(() => { releaseFirst(); releaseFirst() })
+  expect(binding.snapshot.getSnapshot().activeTargets.has('trajectory')).toBe(true)
+  act(() => { releaseSecond() })
+  expect(view.container.querySelector('[data-phase="hero"]')).not.toBeNull()
+  const releaseAfterDispose = binding.retainActivity('trajectory')
+  await runtime.dispose()
+  expect(() => { releaseAfterDispose() }).not.toThrow()
+})

@@ -8,6 +8,8 @@ import css from './CollaborationResultsDock.module.css'
 /** The registrant owns the readonly model and passes commands through its apply closure. */
 export interface CollaborationResultsInjected {
   hooks: { slarkResults: CollaborationResultsModel }
+  traceEvidenceAction?(digest: string, eventId: string, more?: boolean): Promise<void>
+  traceAction?(digest: string, more?: boolean): Promise<void>
   consumptionAction?(digest: string, deliveryId: string, reconcile?: boolean): Promise<void>
   executionAction(digest: string, taskId?: string, reconcile?: boolean): Promise<void>
   loadSources(): Promise<void>
