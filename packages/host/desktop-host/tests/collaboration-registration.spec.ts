@@ -7,6 +7,7 @@ import { encodeHostCollaborationRegistrationSignaturePayload } from '@deepseek-a
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
 async function fixture() {
@@ -14,7 +15,7 @@ async function fixture() {
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const time = { value: 1000 }
   const clock = { now: () => time.value }
-  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock, ...registryFileFixture() })
   const binding = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:registration', authorityBindingVersion: 1 }
   const account = { issuer: 'https://accounts.example.test', subject: randomUUID(), keyHandle: 'keychain:registration',
     unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ...binding }

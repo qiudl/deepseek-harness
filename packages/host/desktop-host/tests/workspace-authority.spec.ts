@@ -11,6 +11,7 @@ import {
 import type { HostControlFrame, HostWorkspaceModelSelection } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
 async function fixture() {
@@ -20,7 +21,7 @@ async function fixture() {
   })
   const time = { value: 1000 }
   const clock = { now: () => time.value }
-  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock, ...registryFileFixture() })
   const binding = {
     authorityEnvironmentId: randomUUID(),
     accountBindingHandle: 'binding:registration',

@@ -150,6 +150,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 <a id="dev-note"></a>
 ### 开发备注
 
+协议权威测试在所有平台使用实例独立的 JSON 注册表钩子。POSIX 与 Windows 存储套件负责文件系统权限检查。内置归档存储测试依赖 POSIX UID 和权限位；Windows 私有文件、命名管道、ACL 与原生 PowerShell 套件仍为必需检查。
+
 <details>
 <summary>维护者的工作上下文——点击展开</summary>
 

@@ -12,6 +12,7 @@ import {
 import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from '../src/collaboration-delivery-uploads.ts'
 
@@ -22,7 +23,7 @@ async function fixture(enabled = true) {
   })
   const time = { value: 1000 }
   const clock = { now: () => time.value }
-  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock, ...registryFileFixture() })
   const binding = {
     authorityEnvironmentId: randomUUID(),
     accountBindingHandle: 'binding:registration',

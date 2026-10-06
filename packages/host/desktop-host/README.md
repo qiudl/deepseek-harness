@@ -151,6 +151,8 @@ No direct invalidation; Host control facts do not enter model context.
 
 ### Dev Note
 
+Protocol authority tests use instance-local JSON registry hooks on every platform. POSIX and Windows storage suites own filesystem permission checks. Bundled archive storage tests require POSIX UID and mode bits; Windows private-file, named-pipe, ACL, and native PowerShell suites remain required.
+
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 

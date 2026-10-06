@@ -6,6 +6,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
 const binding = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:selection', authorityBindingVersion: 1 }
@@ -16,7 +17,7 @@ async function fixture(enabled = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-selection-authority-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const clock = { now: () => 1000 }
-  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock, ...registryFileFixture() })
   const account = { issuer: 'https://accounts.example.test', subject: 'owner', keyHandle: 'keychain:selection',
     unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ...binding }
   const profile = await registry.registerAccount(account)
