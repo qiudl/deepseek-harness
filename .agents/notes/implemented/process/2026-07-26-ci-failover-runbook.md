@@ -40,7 +40,7 @@ The two switches are independent: flip only the one whose platform is degraded.
 
 ## Forks without enterprise runners
 
-`DSH_CI_FAILOVER_LINUX=github` routes the three enterprise Linux workers in `ci.yml` to GitHub's standard `ubuntu-24.04` images, while `DSH_CI_FAILOVER_WINDOWS=github` routes the four native Windows jobs to `windows-2025`. These explicit writer-controlled choices let a fork run the required platform checks without access to upstream private runner labels. The commands, thresholds, timeouts, and dependency verdict remain intact; the Windows coverage job reduces its worker, partition, and gate concurrency to fit the standard runner, and benchmark jobs retain their existing hosts so this route does not redefine performance baselines. The platform switches remain independent. Standard machines may take longer or exhaust resources; such failures remain failures and require evidence before changing scheduling budgets. Delete the variable to restore the default enterprise labels. Already queued jobs need a fresh run.
+`DSH_CI_FAILOVER_LINUX=github` routes the three enterprise Linux workers in `ci.yml` to standard `ubuntu-24.04`; `DSH_CI_FAILOVER_WINDOWS=github` routes the three native Windows jobs to `windows-2025`. Both explicit choices apply only to `qiudl/deepseek-harness`; other repositories retain their existing routes. Standard Windows coverage uses two workers across its two gates, one instrumented partition, and gate concurrency two. Commands, thresholds, timeouts, and the dependency verdict stay intact; benchmark hosts stay unchanged. Delete the variable to restore enterprise labels. Already queued jobs need a new run; runner allocation alone does not establish a passing gate.
 
 ## Capacity during failover
 
