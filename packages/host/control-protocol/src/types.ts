@@ -1121,7 +1121,8 @@ export type HostRemoteSessionCommand =
   | { readonly operation: 'session.list'; readonly command_id: HostControlRequestId }
   | { readonly operation: 'session.create'
     readonly command_id: HostControlRequestId
-    readonly workspace_id?: string }
+    readonly workspace_id?: string
+    readonly session_id?: string }
   | { readonly operation: 'remote.event.respond'
     readonly command_id: HostControlRequestId
     readonly session_id: string

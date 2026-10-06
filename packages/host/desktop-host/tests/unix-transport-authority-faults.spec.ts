@@ -187,6 +187,7 @@ describe('Unix transport authority failures', () => {
     })
     const { client } = await authorityClient({ host, remoteSession })
     expect(client.inspection.capabilities).toContain('profile.remote_session')
+    expect(client.inspection.capabilities).toContain('profile.remote_session.session_reuse')
     const selector = await localSelector(client)
     const lease = await client.openLocalProfile({ profileSelector: selector })
     await expect(client.remoteSession({ ...lease, command })).resolves.toEqual({

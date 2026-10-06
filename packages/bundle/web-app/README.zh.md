@@ -85,7 +85,7 @@ Desktop 远端 Session 路由启用时，选定 Profile 为每个 Session 保留
 
 远端客户端持有当前 Session 控制权时，Desktop 浏览器会在会话标题栏显示接管入口。用户点击后，浏览器重新读取 Profile 当前 epoch，请用户确认，再通过已认证的浏览器 Gateway 提交比较交换接管。用户随后重新发送保留的草稿。Desktop 远端 Session 路由未启用时不显示此入口。
 
-远程 `session.create` 只向选定 Profile 转发可选的工作区 ID。Profile 在本机注册表中解析该 ID；调用方指定的路径不能通过 Host 命令协议。原生审批答复使用仍在等待的 `$events` 连接，且必须匹配其 Session ID。事件流会拒绝第二个 ready 帧或已被其他活动事件流占用的客户端 ID；事件流关闭时清除待处理审批。
+远程 `session.create` 向选定 Profile 转发可选的工作区和会话 ID。Profile 通过本机注册表和原生 Session controller 解析这些 ID；调用方指定的路径不能通过 Host 命令协议。原生 `session/writer-held` 拒绝返回有界的 `sessionCreateFailure` 值，供远程 UI 执行已有的空白会话回退规则。原生审批答复使用仍在等待的 `$events` 连接，且必须匹配其 Session ID。事件流会拒绝第二个 ready 帧或已被其他活动事件流占用的客户端 ID；事件流关闭时清除待处理审批。
 
 <details>
 <summary>实现细节——点击展开</summary>
@@ -176,6 +176,7 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 - **`BROWSER` 覆盖只能来自环境**——被发现的 `.env` 不能设置 `BROWSER`；只有继承值能为自动交接选择可执行文件。
 - **不支持绑定所有网络接口**——出于安全考虑，`--host 0.0.0.0` 会在启动时被拒绝；请使用默认 loopback 主机。
 - **Desktop 控制权把本地浏览器窗口视为同一方**——Profile 当前将本地浏览器窗口归为一个 Desktop 控制者。证明覆盖 Session Remote 修改与转发的审批答复；终端输入、文件上传和设置写入由其他模块负责，不在此证明范围内。
+
 
 <a id="dev-note"></a>
 
