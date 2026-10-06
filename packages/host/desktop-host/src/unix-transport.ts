@@ -110,6 +110,42 @@ function collaborationReadAuthorizer(
     return host.authorizeAccountModelText(account)
   }
 }
+function challengeReadAccount(
+  params: { account_binding_handle: string; authority_binding_version: number },
+  challenge: Pick<HostWorkspaceAuthorityChallenge, 'environment_id' | 'account_issuer' | 'account_subject'>,
+  ownerId: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]['ownerId'],
+): Parameters<DesktopHost['authorizeCollaborationRegistration']>[0] {
+  return {
+    authorityEnvironmentId: challenge.environment_id,
+    accountBindingHandle: params.account_binding_handle,
+    authorityBindingVersion: params.authority_binding_version,
+    ownerId,
+    issuer: challenge.account_issuer,
+    subject: challenge.account_subject,
+  }
+}
+function assertionIdentityFields(identity: HostIdentity) {
+  return {
+    installation_id: identity.installationId as InstallationId,
+    installation_public_key: identity.installationPublicKey as HostControlPublicKey,
+    host_instance_id: identity.hostInstanceId as HostInstanceId,
+    process_nonce: identity.processNonce as HostControlNonce,
+  }
+}
+function commandReadAccount(
+  params: Pick<ProfileCollaborationAnalysisRequest['params'],
+    'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version' | 'account_issuer' | 'account_subject'>,
+  ownerId: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]['ownerId'],
+): Parameters<DesktopHost['authorizeCollaborationRegistration']>[0] {
+  return challengeReadAccount(params, {
+    environment_id: params.authority_environment_id,
+    account_issuer: params.account_issuer,
+    account_subject: params.account_subject as HostWorkspaceAuthorityChallenge['account_subject'],
+  }, ownerId)
+}
+function signAuthorityPayload(identity: HostIdentity, payload: Uint8Array): HostControlSignature {
+  return sign(null, payload, privateKeyObject(identity.installationPrivateKey)).toString('base64url') as HostControlSignature
+}
 
 /** Native peer evidence supplied by the embedding Desktop/Host process. */
 export interface UnixPeerEvidence { readonly uid: number; readonly executableSignatureDigest: string }
@@ -1393,14 +1429,7 @@ export class HostControlAuthority {
           const inspect = this.options.inspectWorkspaceModelSelection
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const c = frame.params.challenge
-          const account = {
-            authorityEnvironmentId: c.environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
-            ownerId,
-            issuer: c.account_issuer,
-            subject: c.account_subject,
-          }
+          const account = challengeReadAccount(frame.params, c, ownerId)
           const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
           const profileId = authorize()
           const target = { workspace_id: c.workspace_id, session_id: c.session_id }
@@ -1412,17 +1441,10 @@ export class HostControlAuthority {
           const unsigned: HostWorkspaceAuthorityAssertion = {
             schema_version: 1,
             challenge: c,
-            installation_id: identity.installationId as InstallationId,
-            installation_public_key: identity.installationPublicKey as HostControlPublicKey,
-            host_instance_id: identity.hostInstanceId as HostInstanceId,
-            process_nonce: identity.processNonce as HostControlNonce,
+            ...assertionIdentityFields(identity),
             signature: 'A'.repeat(86) as HostControlSignature,
           }
-          const signature = sign(
-            null,
-            encodeHostWorkspaceAuthorityPayload(unsigned),
-            privateKeyObject(identity.installationPrivateKey),
-          ).toString('base64url') as HostControlSignature
+          const signature = signAuthorityPayload(identity, encodeHostWorkspaceAuthorityPayload(unsigned))
           channel.send({
             version: 1,
             type: 'result',
@@ -1433,9 +1455,7 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.collaboration_delivery') {
           const capture = this.options.collaborationDeliveryReceiver
           if (!capture) throw new HostAuthorityError('upgrade_required')
-          const account = { authorityEnvironmentId: frame.params.authority_environment_id,
-            accountBindingHandle: frame.params.account_binding_handle, authorityBindingVersion: frame.params.authority_binding_version,
-            ownerId, issuer: frame.params.account_issuer, subject: frame.params.account_subject }
+          const account = commandReadAccount(frame.params, ownerId)
           const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
           const profileId = authorize()
           const assertAuthorized = () => { if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch') }
@@ -1459,9 +1479,7 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.collaboration_analysis') {
           const execute = this.options.collaborationAnalysis
           if (!execute) throw new HostAuthorityError('upgrade_required')
-          const account = { authorityEnvironmentId: frame.params.authority_environment_id,
-            accountBindingHandle: frame.params.account_binding_handle, authorityBindingVersion: frame.params.authority_binding_version,
-            ownerId, issuer: frame.params.account_issuer, subject: frame.params.account_subject }
+          const account = commandReadAccount(frame.params, ownerId)
           const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
           const profileId = authorize()
           const identity = this.options.identity
@@ -1543,14 +1561,7 @@ export class HostControlAuthority {
           const inspect = this.options.inspectCollaborationSource
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const c = frame.params.challenge
-          const account = {
-            authorityEnvironmentId: c.environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
-            ownerId,
-            issuer: c.account_issuer,
-            subject: c.account_subject,
-          }
+          const account = challengeReadAccount(frame.params, c, ownerId)
           const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
           const profileId = authorize()
           const target = { workspace_id: c.workspace_id, session_id: c.session_id,
@@ -1565,17 +1576,10 @@ export class HostControlAuthority {
           const unsigned: HostSourceAuthorityAssertion = {
             schema_version: 1,
             challenge: c,
-            installation_id: identity.installationId as InstallationId,
-            installation_public_key: identity.installationPublicKey as HostControlPublicKey,
-            host_instance_id: identity.hostInstanceId as HostInstanceId,
-            process_nonce: identity.processNonce as HostControlNonce,
+            ...assertionIdentityFields(identity),
             signature: 'A'.repeat(86) as HostControlSignature,
           }
-          const signature = sign(
-            null,
-            encodeHostSourceAuthorityPayload(unsigned),
-            privateKeyObject(identity.installationPrivateKey),
-          ).toString('base64url') as HostControlSignature
+          const signature = signAuthorityPayload(identity, encodeHostSourceAuthorityPayload(unsigned))
           channel.send({
             version: 1,
             type: 'result',
@@ -1716,7 +1720,9 @@ export class HostControlAuthority {
           ...(this.options.collaborationAnalysis ? ['profile.collaboration_analysis'] : []),
           ...(this.options.collaborationDeliveryReceiver ? ['profile.collaboration_delivery'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
-          ...(this.options.remoteSession ? ['profile.remote_session', 'profile.remote_session.workspace_create', 'profile.remote_session.event_result', 'profile.remote_session.control_lease'] : []),
+          ...(this.options.remoteSession ? ['profile.remote_session',
+            'profile.remote_session.workspace_create', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
+            'profile.remote_session.control_lease'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
             'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events'] : []),
@@ -2396,10 +2402,7 @@ export class UnixHostClient {
       request_id: requestId(),
       method: 'profile.workspace_authority',
       params: {
-        ...this.auth(),
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
-        challenge,
+        ...this.challengeRequestParams(input, challenge),
       },
     }
     const frame = await this.call(request, signal)
@@ -2407,12 +2410,7 @@ export class UnixHostClient {
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     const result = parseHostWorkspaceAuthorityAssertion(frame.result)
     if (
-      !this.isConnected() ||
-      JSON.stringify(result.challenge) !== JSON.stringify(challenge) ||
-      result.installation_id !== this.inspection.installation_id ||
-      result.installation_public_key !== this.inspection.installation_public_key ||
-      result.host_instance_id !== this.inspection.host_instance_id ||
-      result.process_nonce !== this.inspection.process_nonce ||
+      !this.matchesChallengeIdentity(result, challenge) ||
       challenge.expires_at <= this.now() ||
       challenge.expires_at - this.now() > 300_000 ||
       !verify(
@@ -2451,10 +2449,7 @@ export class UnixHostClient {
       request_id: requestId(),
       method: 'profile.source_authority',
       params: {
-        ...this.auth(),
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
-        challenge,
+        ...this.challengeRequestParams(input, challenge),
       },
     }
     const frame = await this.call(request, signal)
@@ -2462,12 +2457,7 @@ export class UnixHostClient {
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     const result = parseHostSourceAuthorityAssertion(frame.result)
     if (
-      !this.isConnected() ||
-      JSON.stringify(result.challenge) !== JSON.stringify(challenge) ||
-      result.installation_id !== this.inspection.installation_id ||
-      result.installation_public_key !== this.inspection.installation_public_key ||
-      result.host_instance_id !== this.inspection.host_instance_id ||
-      result.process_nonce !== this.inspection.process_nonce ||
+      !this.matchesChallengeIdentity(result, challenge) ||
       challenge.expires_at <= this.now() ||
       challenge.expires_at - this.now() > 300_000 ||
       !verify(
@@ -2515,16 +2505,16 @@ export class UnixHostClient {
     if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected() ||
       peer !== JSON.stringify([this.inspection.installation_id, this.inspection.installation_public_key, this.inspection.host_instance_id, this.inspection.process_nonce])) throw new HostAuthorityError('unavailable')
     const result = parseHostCollaborationAnalysisResult(frame.result)
-    const expectedKind = command.action === 'dispatch' ? 'output' : command.action === 'capture_reply' ? 'reply_source' : 'prepared'
+    const dispatch = command.action === 'dispatch' ? command.grant : undefined
+    const expectedKind = dispatch !== undefined ? 'output' : command.action === 'capture_reply' ? 'reply_source' : 'prepared'
     if (result.kind !== expectedKind) throw new HostAuthorityError('unavailable')
     if (result.kind === 'output' && result.analysis_receipt) {
-      if (command.action !== 'dispatch') throw new HostAuthorityError('unauthorized')
       const receipt=result.analysis_receipt
       const expected=parseHostCollaborationAnalysisReceipt({ ...receipt,
         authority_environment_id:input.authorityEnvironmentId,account_binding_handle:input.accountBindingHandle,
         authority_binding_version:input.authorityBindingVersion,account_issuer:input.issuer,account_subject:input.subject,
         installation_id:this.inspection.installation_id,installation_public_key:this.inspection.installation_public_key,
-        host_instance_id:this.inspection.host_instance_id,process_nonce:this.inspection.process_nonce,dispatch:command.grant })
+        host_instance_id:this.inspection.host_instance_id,process_nonce:this.inspection.process_nonce,dispatch })
       if (encodeHostCollaborationAnalysisReceiptPayload(receipt)!==encodeHostCollaborationAnalysisReceiptPayload(expected)
         || createHash('sha256').update(Buffer.from(result.json_base64url,'base64url')).digest('hex')!==receipt.output_digest
         || !verify(null,Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(receipt)),publicKeyObject(receipt.installation_public_key),Buffer.from(receipt.signature,'base64url'))) throw new HostAuthorityError('unauthorized')
@@ -2701,18 +2691,13 @@ export class UnixHostClient {
     if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
     const request: ProfileCollaborationRegistrationRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_registration',
-      params: { ...this.auth(), account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion, challenge },
+      params: this.challengeRequestParams(input, challenge),
     }
     const frame = await this.call(request, signal)
     signal?.throwIfAborted()
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     const result = parseHostCollaborationRegistrationAssertion(frame.result)
-    if (!this.isConnected() || JSON.stringify(result.challenge) !== JSON.stringify(challenge)
-      || result.installation_id !== this.inspection.installation_id
-      || result.installation_public_key !== this.inspection.installation_public_key
-      || result.host_instance_id !== this.inspection.host_instance_id
-      || result.process_nonce !== this.inspection.process_nonce
+    if (!this.matchesChallengeIdentity(result, challenge)
       || result.challenge.expires_at <= this.now()
       || !verify(null, encodeHostCollaborationRegistrationSignaturePayload(result),
         publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
@@ -3363,6 +3348,30 @@ export class UnixHostClient {
       ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
       runtime_generation: input.runtimeGeneration, command: input.command,
     }
+  }
+
+  private challengeRequestParams<Challenge extends
+    HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge>(
+    input: { readonly accountBindingHandle: string; readonly authorityBindingVersion: number },
+    challenge: Challenge,
+  ) {
+    return {
+      ...this.auth(),
+      account_binding_handle: input.accountBindingHandle as never,
+      authority_binding_version: input.authorityBindingVersion,
+      challenge,
+    }
+  }
+
+  private matchesChallengeIdentity(
+    result: HostWorkspaceAuthorityAssertion | HostSourceAuthorityAssertion | HostCollaborationRegistrationAssertion,
+    challenge: HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge,
+  ): boolean {
+    return this.isConnected() && JSON.stringify(result.challenge) === JSON.stringify(challenge)
+      && result.installation_id === this.inspection.installation_id
+      && result.installation_public_key === this.inspection.installation_public_key
+      && result.host_instance_id === this.inspection.host_instance_id
+      && result.process_nonce === this.inspection.process_nonce
   }
 
   private auth(): Pick<

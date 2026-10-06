@@ -21,7 +21,8 @@ function fixture() {
   const profile = join(root, 'profile'); const control = join(root, 'control')
   mkdirSync(profile, { mode: 0o700 }); mkdirSync(control, { mode: 0o700 })
   const cli = join(root, 'cli.cjs'); const pnpm = join(root, 'pnpm.cjs')
-  writeFileSync(cli, "const {spawnSync}=require('node:child_process');const r=spawnSync('pnpm', process.argv.slice(5),{stdio:'inherit'});process.exit(r.status??1)")
+  writeFileSync(cli, "process.on('SIGTERM',()=>{});const {spawnSync}=require('node:child_process');"
+    + "const r=spawnSync('pnpm', process.argv.slice(5),{stdio:'inherit'});process.exit(r.status??1)")
   writeFileSync(pnpm, "require('node:fs').writeFileSync(process.env.DSH_HOME+'/observed.json',"
     + 'JSON.stringify({args:process.argv.slice(2),home:process.env.DSH_HOME,secret:process.env.PLUGIN_TEST_SECRET}));')
   return { root, profile, control, cli, pnpm, options: { nodeExecutablePath: process.execPath,
@@ -142,11 +143,19 @@ it('reports launch, exit, and post-install authority failures without leaving it
 })
 it('cancels a running installer and waits for process exit', async () => {
   const f = fixture()
-  writeFileSync(f.pnpm, 'setInterval(()=>{},1000)')
+  writeFileSync(f.pnpm, "require('node:fs').writeFileSync(process.env.DSH_HOME+'/ready',String(process.pid));setInterval(()=>{},1000)")
   const controller = new AbortController()
   const pending = runProfilePluginCommand({ ...f.options, spec: `github:owner/repo#${'a'.repeat(40)}`, signal: controller.signal, guard() {} })
-  const timer = setTimeout(() => { controller.abort() }, 150)
-  try { await expect(pending).rejects.toThrow('plugin_install_cancelled') } finally { clearTimeout(timer) }
+  const settled = pending.then(() => ({ kind: 'resolved' as const }), (error: unknown) => ({ kind: 'rejected' as const, error }))
+  try {
+    await vi.waitFor(() => { expect(existsSync(join(f.profile, 'ready'))).toBe(true) })
+    const installerPid = Number(readFileSync(join(f.profile, 'ready'), 'utf8'))
+    expect(Number.isSafeInteger(installerPid) && installerPid > 0).toBe(true)
+    controller.abort()
+    expect(await settled).toMatchObject({ kind: 'rejected', error: { message: 'plugin_install_cancelled' } })
+    expect(() => process.kill(installerPid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    expect(readdirSync(f.control)).toEqual([])
+  } finally { controller.abort(); await settled }
 })
 
 it('enforces the install deadline and force-kills a process that ignores graceful termination', async () => {

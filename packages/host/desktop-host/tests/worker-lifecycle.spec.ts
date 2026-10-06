@@ -1,7 +1,97 @@
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { parseHostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarget,
+  parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+
+it('denies private collaboration operations when the original worker is missing, unsupported or closed', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
+    session_id: 'session', source_message_id: 'message', source_revision: '1' })
+  const denied = async () => {
+    await expect(workers.inspectCollaborationSource(input.profileId, target, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(workers.readCollaborationSourceSnapshot(input.profileId, target, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(workers.collaborationAnalysis(input.profileId, {}, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    expect(() => workers.collaborationDeliveryReceiver(input.profileId)).toThrow('unavailable')
+  }
+  try {
+    await denied()
+    await workers.start(input)
+    await denied()
+    await workers.disposeAll()
+    await denied()
+  } finally { await workers.disposeAll() }
+})
+
+it.each(['replacement', 'closure', 'cancellation'])('discards analysis after worker %s before settlement', async (cause) => {
+  let release!: () => void, enter!: () => void
+  const entered = new Promise<void>((resolve) => { enter = resolve })
+  const command = { action: 'prepare', input: { source_message_id: 'message' } }
+  const response = { kind: 'prepared', descriptor: { source_message_id: 'message' } }
+  let generation = 0
+  let blocked = false
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const current = ++generation
+    return { closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      collaborationAnalysis: async (received: HostRemoteSessionJson, receivedSignal: AbortSignal) => {
+        expect(received).toBe(command)
+        expect(receivedSignal.aborted).toBe(false)
+        if (current === 1 && !blocked) {
+          blocked = true
+          await new Promise<void>((resolve) => { release = resolve; enter() })
+        }
+        return response
+      },
+    }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  try {
+    await workers.start(input)
+    await expect(workers.collaborationAnalysis(input.profileId, command, AbortSignal.abort())).rejects.toThrow()
+    const cancellation = new AbortController()
+    const pending = workers.collaborationAnalysis(input.profileId, command, cancellation.signal)
+    const denied = expect(pending).rejects.toMatchObject(cause === 'cancellation' ? { name: 'AbortError' } : { code: 'stale' })
+    await entered
+    if (cause === 'replacement') {
+      await workers.dispose(input.profileId)
+      await workers.start(input)
+    } else if (cause === 'closure') await workers.disposeAll()
+    else cancellation.abort()
+    release()
+    await denied
+    if (cause !== 'closure')
+      expect(await workers.collaborationAnalysis(input.profileId, command, new AbortController().signal)).toBe(response)
+    await workers.disposeAll()
+    await expect(workers.collaborationAnalysis(input.profileId, command, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  } finally { release?.(); await workers.disposeAll() }
+})
+
+it('refuses Source descriptors and complete snapshots belonging to another original message', async () => {
+  const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
+    session_id: 'session', source_message_id: 'message', source_revision: '1' })
+  for (const change of [{ workspace_id: '223e4567-e89b-42d3-a456-426614174000' }, { session_id: 'other' },
+    { source_message_id: 'other' }, { source_revision: '2' }]) {
+    const descriptor = parseHostCollaborationSourceDescriptor({ ...target, ...change, snapshot_digest: 'a'.repeat(64) })
+    const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      inspectCollaborationSource: async () => descriptor,
+      readCollaborationSourceSnapshot: async () => ({ descriptor, snapshot_json: '{}' }),
+    }))
+    const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+    try {
+      await workers.start(input)
+      await expect(workers.inspectCollaborationSource(input.profileId, target, new AbortController().signal))
+        .rejects.toMatchObject({ code: 'profile_mismatch' })
+      await expect(workers.readCollaborationSourceSnapshot(input.profileId, target, new AbortController().signal))
+        .rejects.toMatchObject({ code: 'profile_mismatch' })
+    } finally { await workers.disposeAll() }
+  }
+})
 
 it('captures one original reply worker across fragments and refuses a commit after that worker is replaced', async () => {
   const payload = parseHostCollaborationDeliveryCapsule({ namespace_id: 'ns', projection: {

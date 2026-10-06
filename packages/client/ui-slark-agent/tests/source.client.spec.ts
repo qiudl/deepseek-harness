@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { webcrypto } from 'node:crypto'
 import { apply, inject } from '../src/client/index.ts'
 
@@ -20,6 +20,7 @@ afterEach(() => {
 it('shows same-name Agents by stable identity and blocks ordinary model submission', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const ctx = new Context()
+  onTestFinished(async () => { await ctx.fiber.dispose() })
   let source: InputTriggerSource | undefined
   ctx.provide('inputTriggers', { registerSource(value: InputTriggerSource) {
     source = value
@@ -97,6 +98,7 @@ it('shows same-name Agents by stable identity and blocks ordinary model submissi
 it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const ctx = new Context()
+  onTestFinished(async () => { await ctx.fiber.dispose() })
   let source: InputTriggerSource | undefined
   let slotSession: unknown
   ctx.provide('inputTriggers', { registerSource(value: InputTriggerSource) {
@@ -133,6 +135,7 @@ it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', a
     signal: new AbortController().signal }
   vi.stubGlobal('window', undefined)
   expect(await registered.candidates(session, options)).toEqual([])
+  expect(registered.matchEnterPlainText?.(session)).toBe(false)
   vi.unstubAllGlobals()
   expect(await registered.candidates(session, options)).toEqual([])
   const directory = vi.fn(async () => ({ ok: true as const, invocationAvailable: true,
@@ -217,5 +220,9 @@ it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', a
   expect(registered.codec?.clipboardText?.(mention.ref)).toBe('@Test Agent · Project')
   expect(registered.codec?.clipboardText?.(JSON.stringify({ ...agent, project_name: undefined }))).toBe('@Test Agent')
   expect(registered.codec?.clipboardText?.('{')).toBe('@')
+  expect(registered.codec?.clipboardText?.(JSON.stringify({ kind: 'collaboration-v2',
+    workspace_id: '40000000-0000-4000-8000-000000000004', session_id: session.sessionId,
+    project_id: 'project', agent_id: 'guide', agent_name: 'Guide', project_name: 'Project',
+    capability_snapshot: 'a'.repeat(64), source_id: '50000000-0000-4000-8000-000000000005' }))).toBe('@Guide · Project')
   await fiber.dispose()
 })

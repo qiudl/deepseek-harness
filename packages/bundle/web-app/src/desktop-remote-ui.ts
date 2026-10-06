@@ -2,10 +2,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
+import { parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog',
+const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'session/collaborationSources',
   'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog'])
 const STARTUP_ZERO_ARG = new Set(['settings/describe', 'agentPresets/list',
@@ -41,6 +42,40 @@ export class DesktopRemoteUiExecutor {
     }
     if (STARTUP_ZERO_ARG.has(endpoint) && Object.keys(payload.args).length !== 0) {
       throw new Error('desktop remote UI: invalid payload')
+    }
+    if (endpoint === 'session/collaborationSources') {
+      const request = payload.args.request
+      if (Object.keys(payload.args).length !== 1 || !record(request)
+        || Object.keys(request).some(key => key !== 'sessionId' && key !== 'cursor')
+        || typeof request.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(request.sessionId)
+        || /[/\\]/u.test(request.sessionId) || request.sessionId === '.' || request.sessionId === '..'
+        || (request.cursor !== undefined && (typeof request.cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(request.cursor)))) {
+        throw new Error('desktop remote UI: invalid payload')
+      }
+      const page: unknown = await this.gateway.invoke({ namespace: 'session', method: 'collaborationSources', args: payload.args, signal })
+      if (!record(page) || !Array.isArray(page.items) || page.items.length > 8
+        || Object.keys(page).some(key => key !== 'items' && key !== 'next_cursor')
+        || (page.next_cursor !== undefined && (typeof page.next_cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(page.next_cursor)))) {
+        throw new Error('desktop remote UI: invalid Source page')
+      }
+      if (!page.items.length) {
+        if (page.next_cursor !== undefined) throw new Error('desktop remote UI: invalid Source page')
+        return { items: [] }
+      }
+      const first: unknown = page.items[0]
+      if (!record(first) || Object.keys(first).sort().join(',') !== 'original_message,snapshot_digest,source'
+        || typeof first.snapshot_digest !== 'string' || !/^[0-9a-f]{64}$/u.test(first.snapshot_digest)
+        || !record(first.source) || Object.keys(first.source).sort().join(',') !== 'session_id,source_message_id,source_revision,workspace_id'
+        || first.source.session_id !== request.sessionId || typeof first.original_message !== 'string'
+        || Buffer.from(first.original_message, 'utf8').toString('utf8') !== first.original_message) {
+        throw new Error('desktop remote UI: invalid Source page')
+      }
+      parseHostCollaborationSourceDescriptor({ ...first.source, snapshot_digest: first.snapshot_digest })
+      // Remote control reads use a 64 KiB frame; the immutable digest pages complete originals individually.
+      const result = { items: [first],
+        ...(page.items.length > 1 || page.next_cursor !== undefined ? { next_cursor: first.snapshot_digest } : {}) }
+      if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 60 * 1024) throw new Error('desktop remote UI: result too large')
+      return result
     }
     if (endpoint === 'credentials/describe' &&
       (Object.keys(payload.args).length !== 1 || !Array.isArray(payload.args.refs) ||

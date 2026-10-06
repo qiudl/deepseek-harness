@@ -214,4 +214,83 @@ describe('REQ-20260930-0004 independent Source journal', () => {
       new AbortController().signal)).rejects.toThrow('collaboration_source_journal_invalid')
     await journal.close()
   })
+
+  it('retains ambiguous mention candidates but rejects duplicate candidate handles', async () => {
+    const { root, facility } = await harness()
+    const journal = await openCollaborationSourceJournal(facility)
+    const body = { ...input(), active_mentions: [{ ...input().active_mentions[0]!,
+      binding: { kind: 'ambiguous' as const, candidate_handles: ['candidate-a', 'candidate-b'] } }] }
+    const signal = new AbortController().signal
+    expect((await journal.capture(body, signal)).active_mentions[0]?.binding).toEqual(body.active_mentions[0]!.binding)
+    const bytes = await readFile(sourceFile(root))
+    await expect(journal.capture({ ...body, active_mentions: [{ ...body.active_mentions[0]!,
+      binding: { kind: 'ambiguous', candidate_handles: ['candidate-a', 'candidate-a'] } }] }, signal))
+      .rejects.toThrow('collaboration_source_journal_invalid')
+    expect(await readFile(sourceFile(root))).toEqual(bytes)
+    await journal.close()
+  })
+
+  it('accepts disjoint classified spans and rejects surrogate splits, malformed text and overlaps', async () => {
+    const { root, facility } = await harness()
+    const journal = await openCollaborationSourceJournal(facility)
+    const mention = input().active_mentions[0]!
+    const body = { ...input(), original_message: '@A😀 @B', active_mentions: [
+      { ...mention, mention_id: 'mention-b', source_span: { ...mention.source_span, start: 5, end: 7 } },
+      { ...mention, source_span: { ...mention.source_span, start: 0, end: 2 } },
+    ] }
+    const signal = new AbortController().signal
+    expect((await journal.capture(body, signal)).original_message).toBe(body.original_message)
+    const bytes = await readFile(sourceFile(root))
+    for (const text of ['@A😀', '@A\uD83D@', '@A\uD83D\uE000']) {
+      await expect(journal.capture({ ...input(), original_message: text,
+        active_mentions: [{ ...mention, source_span: { ...mention.source_span, end: 3 } }] }, signal))
+        .rejects.toThrow('collaboration_source_journal_invalid')
+    }
+    await expect(journal.capture({ ...body, original_message: '@A@B', active_mentions: [
+      { ...mention, source_span: { ...mention.source_span, start: 0, end: 4 } },
+      { ...mention, mention_id: 'mention-b', source_span: { ...mention.source_span, start: 2, end: 4 } },
+    ] }, signal)).rejects.toThrow('collaboration_source_journal_invalid')
+    expect(await readFile(sourceFile(root))).toEqual(bytes)
+    await journal.close()
+  })
+
+  it('rejects an explicitly undefined reasoning choice before writing a Source', async () => {
+    const { facility } = await harness()
+    const journal = await openCollaborationSourceJournal(facility)
+    await expect(journal.capture({ ...input(), model_snapshot: { ...input().model_snapshot, reasoning_effort: undefined } },
+      new AbortController().signal)).rejects.toThrow('collaboration_source_journal_invalid')
+    expect([...journal.sources()]).toHaveLength(0)
+    await journal.close()
+  })
+
+  it('keeps a valid snapshot moved under a wrong storage key and refuses recovery', async () => {
+    const { root, facility } = await harness()
+    const journal = await openCollaborationSourceJournal(facility)
+    const saved = await journal.capture(input(), new AbortController().signal)
+    await journal.close()
+    const path = sourceFile(root), original = await readFile(path, 'utf8')
+    const file = JSON.parse(original) as { tables: { sources: Record<string, unknown> } }
+    const key = Object.keys(file.tables.sources)[0]!
+    file.tables.sources = { 'wrong-key': file.tables.sources[key] }
+    const bytes = JSON.stringify(file)
+    await writeFile(path, bytes)
+    await expect(openCollaborationSourceJournal(facility)).rejects.toThrow('collaboration_source_journal_invalid')
+    expect(await readFile(path, 'utf8')).toBe(bytes)
+    await writeFile(path, original)
+    const restored = await openCollaborationSourceJournal(facility)
+    expect(restored.read(input())).toEqual(saved)
+    await restored.close()
+  })
+
+  it('normalizes a non-Error cancellation without writing or discarding its cause', async () => {
+    const { facility } = await harness()
+    const journal = await openCollaborationSourceJournal(facility)
+    const caller = new AbortController()
+    caller.abort('caller expired')
+    await expect(journal.capture(input(), caller.signal)).rejects.toMatchObject({
+      message: 'collaboration_source_journal_invalid', cause: 'caller expired',
+    })
+    expect([...journal.sources()]).toHaveLength(0)
+    await journal.close()
+  })
 })

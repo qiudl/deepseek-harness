@@ -43,6 +43,29 @@ describe('Desktop remote Session bridge', () => {
     expect(control.status('session-1', { kind: 'remote', id: controller_id }).outcome).toBe('uncontrolled')
   })
 
+  it('reuses the caller session identity when selecting its workspace', async () => {
+    const invoke = vi.fn().mockResolvedValue({ sessionId: 'session-existing' })
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const signal = new AbortController().signal
+    await executor.execute({ operation: 'session.create', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      workspace_id: 'workspace-1', session_id: 'session-existing' }, signal)
+    expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'create',
+      args: { request: { workspaceId: 'workspace-1', sessionId: 'session-existing' } }, signal })
+  })
+
+  it('returns the actual native writer refusal without fabricating other failures', async () => {
+    const refusal = Object.assign(new Error('writer held'), { isDSHRemoteError: true, code: 'session/writer-held' })
+    const invoke = vi.fn().mockRejectedValueOnce(refusal).mockRejectedValueOnce(new Error('unexpected'))
+      .mockRejectedValueOnce(refusal)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const command = { operation: 'session.create' as const, command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      workspace_id: 'workspace-1', session_id: 'session-existing' }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual({ sessionCreateFailure: 'session/writer-held' })
+    await expect(executor.execute(command, signal)).rejects.toThrow('unexpected')
+    await expect(executor.execute({ operation: 'session.create', command_id: command.command_id }, signal)).rejects.toBe(refusal)
+  })
+
   it('reports an uncontrolled Session and fences an observed takeover epoch', async () => {
     const control = new DesktopSessionControl()
     const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }), undefined, control)

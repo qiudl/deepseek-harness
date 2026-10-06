@@ -51,7 +51,7 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
 
-`profile.workspace_model_selection` 从当前连接已验证令牌的 Account 绑定解出 Profile，并在读取后重新校验。监管器丢弃已销毁或替换 worker 的响应。macOS 和 Windows 启动组合安装读取器；旧 Host 不发布此能力。独立随机 worker 令牌授权私有 HTTP 入口，完整响应在流式读取时有上限。结果不授权 Source 登记、规划或任务执行。
+`profile.workspace_model_selection` 从当前连接已验证令牌的 Account 绑定解出 Profile，并在读取后重新校验。监管器丢弃已销毁或替换 worker 的响应。macOS 和 Windows 启动组合安装读取器；旧 Host 不发布此能力。独立随机 worker 令牌授权私有 HTTP 入口，完整响应在流式读取时有上限。请求拒绝重定向，只使用已核验的监听端。15 秒期限覆盖请求和完整响应读取；读取结束后再次检查取消状态，才接纳结果。结果不授权 Source 登记、规划或任务执行。
 
 `profile.workspace_authority` 使用同一授权读取器签发安装级归属证明，不打开视图、不追加 Session 事件、不发送模型请求。客户端核验准确挑战、当前安装/进程、有效期和签名。未安装读取器时不发布此能力。服务器的 nonce、消费及 Source 校验仍须独立完成，见[协议](../control-protocol/README.zh.md#challenge-authentication)。
 
@@ -150,6 +150,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 <a id="dev-note"></a>
 ### 开发备注
 
+协议权威测试在所有平台使用实例独立的 JSON 注册表钩子。POSIX 与 Windows 存储套件负责文件系统权限检查。内置归档存储测试依赖 POSIX UID 和权限位；Windows 私有文件、命名管道、ACL 与原生 PowerShell 套件仍为必需检查。
+
 <details>
 <summary>维护者的工作上下文——点击展开</summary>
 
@@ -199,4 +201,4 @@ Web worker 工厂另生成并保留 `DSH_PROFILE_DELIVERY_TOKEN`，供仅父 Hos
 
 Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。worker 保存输出后，Host 签署原始 JSON 摘要、派发 grant 及当前 Account/安装/进程身份。保存失败或权限变化不会返回签名结果。取消关闭原操作；签名将已保存输出绑定到原派发及当前 Account 和 Host，不建立任务语义或 Agent 执行权限。
 
-相同的当前 Account/Profile 校验覆盖 `capture_reply` 与 `prepare_clarification`。补充捕获、完整输入准备和派发全过程保留 Host 派生的归属摘要；客户端核验各操作对应的不可执行描述或准备结果类别。这两项操作不改变视图租约，不授予云端权限，也不受理任务。
+相同的当前 Account/Profile 校验覆盖 `capture_reply` 与 `prepare_clarification`。补充捕获、完整输入准备和派发全过程保留 Host 派生的归属摘要；客户端核验各操作对应的不可执行描述或准备结果类别。客户端仅在派发时接纳输出，并将其签名凭据与该派发核对。这两项操作不改变视图租约，不授予云端权限，也不受理任务。

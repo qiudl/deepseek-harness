@@ -3,6 +3,7 @@ import {
   parseHostCollaborationSourceSnapshot,
   decodeHostControlFrame,
   encodeHostControlFrame,
+  parseHostCollaborationSourceSnapshotChunk,
 } from '../src/index.ts'
 const target = {
   workspace_id: '40000000-0000-4000-8000-000000000004',
@@ -115,4 +116,19 @@ it('transfers a Source with escaped control characters in bounded chunks under t
   const encoded = encodeHostControlFrame(frame as never)
   expect(Buffer.byteLength(encoded)).toBeLessThan(65536)
   expect(decodeHostControlFrame(encoded)).toEqual(frame)
+})
+
+it('refuses invalid Source offsets and noncanonical, partial or oversized worker chunks', () => {
+  const chunk = { descriptor: capsule().descriptor, offset: 0, total_bytes: 3, chunk_base64url: Buffer.from('abc').toString('base64url') }
+  for (const change of [{ offset: -1 }, { offset: 0.5 }, { total_bytes: 0 }, { total_bytes: 1024 * 1024 + 1 },
+    { chunk_base64url: '!' }, { chunk_base64url: 'e31' }, { chunk_base64url: 'YQ' },
+    { chunk_base64url: Buffer.alloc(32769).toString('base64url') }, { offset: 3 }])
+    expect(() => parseHostCollaborationSourceSnapshotChunk({ ...chunk, ...change })).toThrow()
+  const request = { version: 1, type: 'request', request_id: target.workspace_id, method: 'profile.source_snapshot',
+    params: { client_instance_id: target.workspace_id, host_instance_id: target.workspace_id, process_nonce: 'A'.repeat(43),
+      jti: target.workspace_id, issued_at: 1000, expires_at: 2000, authority_environment_id: target.workspace_id,
+      account_binding_handle: 'binding', authority_binding_version: 1, account_issuer: 'https://accounts.example.test',
+      account_subject: target.workspace_id, offset: 0, ...target } }
+  for (const offset of [-1, 0.5, 1024 * 1024])
+    expect(() => decodeHostControlFrame(`${JSON.stringify({ ...request, params: { ...request.params, offset } })}\n`)).toThrow()
 })

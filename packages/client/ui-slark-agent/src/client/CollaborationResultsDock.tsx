@@ -2,6 +2,7 @@
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, SlotInjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CollaborationResultsModel } from './collaboration-results.ts'
+import type { zh } from './locales.ts'
 import css from './CollaborationResultsDock.module.css'
 
 /** The registrant owns the readonly model and passes commands through its apply closure. */
@@ -11,6 +12,14 @@ export interface CollaborationResultsInjected {
   loadReplies(snapshotDigest: string): Promise<void>
 }
 type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & SlotInjectFace<CollaborationResultsInjected>
+const planningStatus: Partial<Record<string, keyof typeof zh>> = {
+  queued: 'task.planningQueued',
+  planning: 'task.planning',
+  failed: 'task.planningFailed',
+  cancelled: 'task.planningCancelled',
+  unsupported: 'task.planningUnsupported',
+  discuss: 'task.planningDiscussion',
+}
 
 /**
  * Display each original message and its readable task results in this Session.
@@ -28,7 +37,8 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
         <small>{t('task.question')}</small>
         <div className={css.text}>{group.original.original_message}</div>
         {group.phase === 'error' ? <p role="status">{t('task.readUnavailable')}</p>
-          : group.replies.length === 0 && !group.pending?.length && <p role="status">{t('task.awaitingResult')}</p>}
+          : group.replies.length === 0 && !group.pending?.length && !group.pendingUnavailable &&
+            <p role="status">{t(planningStatus[group.planningState ?? ''] ?? 'task.awaitingResult')}</p>}
         {group.pendingUnavailable && <p role="status">{t('task.readUnavailable')}</p>}
         {group.pending?.map(item => <div className={css.reply} key={item.pending_item_id}>
           <strong>{item.mentions.map(mention => `${mention.agent_name}${mention.project_name === null ? '' : ` · ${mention.project_name}`}`).join(', ')}</strong>

@@ -65,6 +65,7 @@ it('roundtrips the signed private request/result and rejects Source or credentia
   expect(() => parseHostWorkspaceAuthorityAssertion({ ...proof(), source_snapshot: {} })).toThrow()
 })
 it('rejects unsafe targets and accessors without calling them', () => {
+  expect(() => parseHostWorkspaceAuthorityAssertion({ ...proof(), schema_version: 2 })).toThrow()
   for (const change of [
     { workspace_id: '/private' },
     { session_id: '' },

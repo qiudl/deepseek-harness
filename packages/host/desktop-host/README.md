@@ -49,7 +49,7 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 ## Profile and execution authority
 
-`profile.workspace_model_selection` resolves the Profile from this connection’s token-verified Account binding and rechecks it after reading. The supervisor discards replies from disposed or replaced workers. macOS and Windows startup install the reader; older Hosts omit its capability. A separate random worker token authorizes the private HTTP endpoint, whose complete response is bounded while streaming. The result does not authorize Source registration, planning or task execution.
+`profile.workspace_model_selection` resolves the Profile from this connection’s token-verified Account binding and rechecks it after reading. The supervisor discards replies from disposed or replaced workers. macOS and Windows startup install the reader; older Hosts omit its capability. A separate random worker token authorizes the private HTTP endpoint, whose complete response is bounded while streaming. The request refuses redirects to preserve the attested listener. The 15-second deadline covers both the request and complete response read; completion rechecks cancellation before admitting the result. The result does not authorize Source registration, planning or task execution.
 
 `profile.workspace_authority` uses the same authorized reader to issue an installation-signed membership statement without opening a view, appending a Session event or sending a model request. Its client verifies the exact challenge, current installation/process, expiry and signature. Missing readers omit the capability. The server-side nonce, consumption and Source checks remain separate; see [the protocol](../control-protocol/README.md#challenge-authentication).
 
@@ -151,6 +151,8 @@ No direct invalidation; Host control facts do not enter model context.
 
 ### Dev Note
 
+Protocol authority tests use instance-local JSON registry hooks on every platform. POSIX and Windows storage suites own filesystem permission checks. Bundled archive storage tests require POSIX UID and mode bits; Windows private-file, named-pipe, ACL, and native PowerShell suites remain required.
+
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
@@ -195,4 +197,4 @@ Successful completion uses `completes_operation` and `completed_by`, distinct fr
 
 The Unix Host control method `profile.collaboration_analysis` checks the connection’s token-verified Account identity and current Profile before and after prepare/dispatch. The Host derives the preparation binding from that connection, Account, Profile and installation/process identity; callers cannot supply it. The supervisor rejects replies from replaced worker generations. Original output uses bounded base64url so 32 KiB JSON remains within the existing 64 KiB control frame. After the worker saves output, the Host signs its raw JSON digest, dispatch grant and current Account/installation/process identity. Failed saves or changed authorization produce no signed result. Cancellation closes the original operation; the signature binds the saved output to its original dispatch and current Account and Host, and does not establish task semantics or Agent execution authority.
 
-The same current Account/Profile checks cover `capture_reply` and `prepare_clarification`. Host-derived binding is retained through reply capture, complete-input preparation and dispatch; the client validates each action's passive or prepared result category. Neither operation changes view leases, grants cloud authority or admits tasks.
+The same current Account/Profile checks cover `capture_reply` and `prepare_clarification`. Host-derived binding is retained through reply capture, complete-input preparation and dispatch; the client validates each action's passive or prepared result category. The client admits output only for dispatch and verifies any signed receipt against that dispatch. Neither operation changes view leases, grants cloud authority or admits tasks.

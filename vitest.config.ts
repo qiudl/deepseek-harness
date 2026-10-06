@@ -43,6 +43,7 @@ const windowsUnsupportedPackages = process.platform === 'win32'
 // named-pipe, registry, and storage owners instead of executing these suites.
 const windowsUnsupportedOwnerTests = process.platform === 'win32'
   ? [
+      'packages/host/desktop-host/tests/bundled-plugins.spec.ts',
       'packages/host/desktop-host/tests/desktop-host-lease-fences.spec.ts',
       'packages/host/desktop-host/tests/desktop-host.spec.ts',
       'packages/host/desktop-host/tests/extension-operations.spec.ts',
@@ -144,6 +145,7 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       // macOS implementations at the same per-file 100% threshold. Windows
       // composes their stable-handle and ACL counterparts instead.
       'packages/host/desktop-host/src/approval.ts',
+      'packages/host/desktop-host/src/bundled-plugins.ts',
       'packages/host/desktop-host/src/desktop-host.ts',
       'packages/host/desktop-host/src/dsh-web-profile-worker.ts',
       'packages/host/desktop-host/src/extension-operations.ts',

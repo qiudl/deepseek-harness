@@ -26,7 +26,7 @@ describe('Host migration source resolution (REQ-20260930-0004)', () => {
     it(`resolves ${entry} from workspace source without an artifact fallback`, () => {
       const specifier = `@deepseek-ai/dsh-session-persistence-jsonl/src/${entry}.ts`
       const result = ts.resolveModuleName(specifier, resolve(root, 'packages/host/desktop-host/src/startup.ts'), options, host).resolvedModule
-      expect(result?.resolvedFileName).toBe(resolve(root, `packages/session/session-persistence-jsonl/src/${entry}.ts`))
+      expect(result?.resolvedFileName).toBe(resolve(root, `packages/session/session-persistence-jsonl/src/${entry}.ts`).replaceAll('\\', '/'))
     })
   }
 })

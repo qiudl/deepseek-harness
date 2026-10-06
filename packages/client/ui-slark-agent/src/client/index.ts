@@ -121,7 +121,8 @@ export function apply(ctx: ClientContext): void {
     }, AgentTaskDock)
   })
   ctx.inject(['remote.session', 'connection', 'workspaces'], (resultsCtx) => {
-    if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return
+    if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable ||
+      !window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable) return
     const connection = resultsCtx.get('connection') as ConnectionHandle
     const models = new Map<string, { model: CollaborationResultsModel; bindings: CollaborationResultsInjected }>()
     resultsCtx.effect(() => () => { models.forEach(({ model }) => { model.dispose() }); models.clear() },
@@ -217,8 +218,7 @@ export function apply(ctx: ClientContext): void {
       if (matches.length !== 1 || state.occurrences.length !== 1 || envelope.attachments > 0) {
         throw new Error(t('submit.single'))
       }
-      const mention = matches[0]
-      if (!mention) return undefined
+      const mention = matches[0] as (typeof matches)[number]
       const end = mention.offset + mention.length
       if (!Number.isSafeInteger(mention.offset) || !Number.isSafeInteger(mention.length) ||
         mention.offset < 0 || mention.length < 2 || end > state.draft.length ||

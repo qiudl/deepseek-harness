@@ -7,6 +7,7 @@ import { encodeHostCollaborationRegistrationSignaturePayload } from '@deepseek-a
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
 async function fixture() {
@@ -14,7 +15,7 @@ async function fixture() {
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const time = { value: 1000 }
   const clock = { now: () => time.value }
-  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock, ...registryFileFixture() })
   const binding = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:registration', authorityBindingVersion: 1 }
   const account = { issuer: 'https://accounts.example.test', subject: randomUUID(), keyHandle: 'keychain:registration',
     unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ...binding }
@@ -140,4 +141,11 @@ it('client rejects bad signatures and signed replies for a different challenge o
   f.alter(undefined)
   const cancellation = new AbortController(); cancellation.abort()
   await expect(f.client.attestCollaborationRegistration({ ...f.input, signal: cancellation.signal })).rejects.toThrow()
+})
+
+it('refuses a valid result frame for another method after Account registration authorization', async () => {
+  const f = await fixture(); await f.grant()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.collaboration_registration'
+    ? { ...frame, method: 'profile.collaboration_analysis', result: { kind: 'output', json_base64url: 'e30' } } : frame)
+  await expect(f.client.attestCollaborationRegistration(f.input)).rejects.toMatchObject({ code: 'unavailable' })
 })

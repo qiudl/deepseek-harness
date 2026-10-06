@@ -321,36 +321,18 @@ export class DshWebProfileWorkerFactory {
   ): Promise<HostWorkspaceModelSelection> {
     signal.throwIfAborted()
     if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
     const response = await fetch(`${viewOrigin}/internal/desktop-workspace-model-selection`, {
-      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(target), signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+      method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
     })
-    if (!response.ok || !response.body) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
-    const reader = response.body.getReader()
-    try {
-      const chunks: Uint8Array[] = []
-      let bytes = 0
-      for (;;) {
-        const chunk = await reader.read()
-        if (chunk.done) break
-        bytes += chunk.value.byteLength
-        if (bytes > 8192) throw new HostAuthorityError('unavailable')
-        chunks.push(chunk.value)
-      }
-      signal.throwIfAborted()
-      if (stopped()) throw new HostAuthorityError('unavailable')
-      const result = parseHostWorkspaceModelSelection(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+    return this.readPrivateResponse(response, active, signal, stopped, 8192, (bytes) => {
+      const result = parseHostWorkspaceModelSelection(JSON.parse(bytes.toString('utf8')))
       if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
         throw new HostAuthorityError('profile_mismatch')
       }
       return result
-    } catch (error) {
-      if (error instanceof HostAuthorityError || signal.aborted) throw error
-      throw new HostAuthorityError('unavailable')
-    } finally {
-      await reader.cancel()
-      reader.releaseLock()
-    }
+    }, 'await')
   }
 
   private async collaborationAnalysis(
@@ -372,23 +354,8 @@ export class DshWebProfileWorkerFactory {
       body,
       signal: active,
     })
-    if (!response.ok || !response.body) {
-      await response.body?.cancel()
-      throw new HostAuthorityError('unavailable')
-    }
-    const reader = response.body.getReader()
-    try {
-      const chunks: Uint8Array[] = []
-      let bytes = 0
-      for (;;) {
-        const chunk = await reader.read()
-        if (chunk.done) break
-        if ((bytes += chunk.value.byteLength) > 128 * 1024) throw new HostAuthorityError('unavailable')
-        chunks.push(chunk.value)
-      }
-      active.throwIfAborted()
-      if (stopped()) throw new HostAuthorityError('unavailable')
-      const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))
+    return this.readPrivateResponse(response, active, signal, stopped, 128 * 1024, (bytes) => {
+      const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
       if (
         !parsed ||
         typeof parsed !== 'object' ||
@@ -398,13 +365,7 @@ export class DshWebProfileWorkerFactory {
       )
         throw new HostAuthorityError('unavailable')
       return parseHostRemoteSessionJson((parsed as { value: unknown }).value)
-    } catch (error) {
-      if (error instanceof HostAuthorityError || signal.aborted) throw error
-      throw new HostAuthorityError('unavailable')
-    } finally {
-      void reader.cancel().catch(() => undefined)
-      reader.releaseLock()
-    }
+    }, 'detach')
   }
 
   private async receiveCollaborationDelivery(
@@ -425,30 +386,9 @@ export class DshWebProfileWorkerFactory {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body, signal: active,
     })
-    if (!response.ok || !response.body) {
-      await response.body?.cancel()
-      throw new HostAuthorityError('unavailable')
-    }
-    const reader = response.body.getReader()
-    try {
-      const chunks: Uint8Array[] = []
-      let bytes = 0
-      for (;;) {
-        const chunk = await reader.read()
-        if (chunk.done) break
-        if ((bytes += chunk.value.byteLength) > 8192) throw new HostAuthorityError('unavailable')
-        chunks.push(chunk.value)
-      }
-      active.throwIfAborted()
-      if (stopped()) throw new HostAuthorityError('unavailable')
-      return parseHostRemoteSessionJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))))
-    } catch (error) {
-      if (error instanceof HostAuthorityError || signal.aborted) throw error
-      throw new HostAuthorityError('unavailable')
-    } finally {
-      void reader.cancel().catch(() => undefined)
-      reader.releaseLock()
-    }
+    return this.readPrivateResponse(response, active, signal, stopped, 8192,
+      bytes => parseHostRemoteSessionJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))),
+      'detach')
   }
 
   private async inspectCollaborationSource(
@@ -502,6 +442,31 @@ export class DshWebProfileWorkerFactory {
       body: JSON.stringify(target),
       signal: active,
     })
+    return this.readPrivateResponse(response, active, signal, stopped, maxBytes, (bytes) => {
+      const result = parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)))
+      const selected = coordinates(result)
+      if (
+        selected.workspace_id !== target.workspace_id ||
+        selected.session_id !== target.session_id ||
+        selected.source_message_id !== target.source_message_id ||
+        selected.source_revision !== target.source_revision
+      ) {
+        throw new HostAuthorityError('profile_mismatch')
+      }
+      return result
+    }, 'detach')
+  }
+
+  /** Retain each read's deadline, owner cancellation, byte budget and reader teardown policy. */
+  private async readPrivateResponse<T>(
+    response: Response,
+    active: AbortSignal,
+    ownerSignal: AbortSignal,
+    stopped: () => boolean,
+    maxBytes: number,
+    parse: (bytes: Buffer) => T,
+    cancellation: 'await' | 'detach',
+  ): Promise<T> {
     if (!response.ok || !response.body) {
       await response.body?.cancel()
       throw new HostAuthorityError('unavailable')
@@ -513,30 +478,18 @@ export class DshWebProfileWorkerFactory {
       for (;;) {
         const chunk = await reader.read()
         if (chunk.done) break
-        bytes += chunk.value.byteLength
-        if (bytes > maxBytes) throw new HostAuthorityError('unavailable')
+        if ((bytes += chunk.value.byteLength) > maxBytes) throw new HostAuthorityError('unavailable')
         chunks.push(chunk.value)
       }
       active.throwIfAborted()
       if (stopped()) throw new HostAuthorityError('unavailable')
-      const result = parse(
-        JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))),
-      )
-      const selected = coordinates(result)
-      if (
-        selected.workspace_id !== target.workspace_id ||
-        selected.session_id !== target.session_id ||
-        selected.source_message_id !== target.source_message_id ||
-        selected.source_revision !== target.source_revision
-      ) {
-        throw new HostAuthorityError('profile_mismatch')
-      }
-      return result
+      return parse(Buffer.concat(chunks))
     } catch (error) {
-      if (error instanceof HostAuthorityError || signal.aborted) throw error
+      if (error instanceof HostAuthorityError || ownerSignal.aborted) throw error
       throw new HostAuthorityError('unavailable')
     } finally {
-      void reader.cancel().catch(() => undefined)
+      if (cancellation === 'await') await reader.cancel()
+      else void reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }
   }

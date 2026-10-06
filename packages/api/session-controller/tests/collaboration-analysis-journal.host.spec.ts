@@ -6,6 +6,7 @@ import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { openCollaborationSourceJournal } from '../src/collaboration-source-journal.ts'
 
 const roots: string[] = []
@@ -324,4 +325,183 @@ it('refuses numeric or unknown prompt versions without altering a legacy journal
     await expect(journal.prepare({ ...legacy, prompt_version } as never, signal())).rejects.toThrow()
   expect(await readFile(path, 'utf8')).toBe(before)
   await journal.close()
+})
+
+it('refuses a valid input stored under a foreign key and retains the original bytes', async () => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const saved = await journal.prepare(m, signal())
+  await journal.close()
+  const path = join(h.root, 'collaboration_analysis_v2.json'), original = await readFile(path, 'utf8')
+  const file = JSON.parse(original) as { tables: { attempts: Record<string, CollaborationAnalysisJournalRecord> } }
+  file.tables.attempts = { 'wrong-key': saved }
+  const bytes = JSON.stringify(file)
+  await writeFile(path, bytes)
+  await expect(openCollaborationAnalysisJournal(h.facility)).rejects.toThrow('collaboration_analysis_journal_invalid')
+  expect(await readFile(path, 'utf8')).toBe(bytes)
+  await writeFile(path, original)
+  const restored = await openCollaborationAnalysisJournal(h.facility)
+  expect([...restored.records()]).toEqual([saved])
+  await restored.close()
+})
+
+it('rejects malformed persisted model messages even when their input digest matches', async () => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const saved = await journal.prepare(m, signal())
+  await journal.close()
+  const path = join(h.root, 'collaboration_analysis_v2.json'), original = await readFile(path, 'utf8')
+  for (const manifest_json of [
+    'null', '[]', '{broken',
+    saved.manifest_json.replace('"role":"user"', '"role":"assistant"'),
+    saved.manifest_json.replace('"type":"text"', '"type":"image"'),
+    saved.manifest_json.replace(/"text":"(?:\\.|[^"\\])*"/u, '"text":"null"'),
+    saved.manifest_json.replace(/"text":"(?:\\.|[^"\\])*"/u, '"text":"bad"'),
+  ]) {
+    expect(manifest_json).not.toBe(saved.manifest_json)
+    const input_manifest_digest = createHash('sha256').update(manifest_json).digest('hex')
+    const file = JSON.parse(original) as { tables: { attempts: Record<string, CollaborationAnalysisJournalRecord> } }
+    file.tables.attempts = { [input_manifest_digest]: { ...saved, manifest_json, input_manifest_digest } }
+    const bytes = JSON.stringify(file)
+    await writeFile(path, bytes)
+    await expect(openCollaborationAnalysisJournal(h.facility)).rejects.toThrow()
+    expect(await readFile(path, 'utf8')).toBe(bytes)
+  }
+})
+
+it('closes the opened input domain when the output domain cannot open', async () => {
+  const h = await harness(), open = h.facility.open.bind(h.facility), closed: string[] = []
+  await expect(openCollaborationAnalysisJournal({ open: async (spec) => {
+    if (spec.name === 'collaboration_analysis_output_v2') throw Error('output-domain-unavailable')
+    const domain = await open(spec), close = domain.close.bind(domain)
+    domain.close = async () => { closed.push(spec.name); await close() }
+    return domain
+  } })).rejects.toThrow('output-domain-unavailable')
+  expect(closed).toEqual(['collaboration_analysis_v2'])
+})
+
+it('retains both close failures and refuses reads or writes after closing', async () => {
+  const h = await harness(), m = await manifest(h.facility), open = h.facility.open.bind(h.facility)
+  const journal = await openCollaborationAnalysisJournal({ open: async (spec) => {
+    const domain = await open(spec), close = domain.close.bind(domain)
+    domain.close = async () => { await close(); throw Error(spec.name) }
+    return domain
+  } })
+  const record = await journal.prepare(m, signal())
+  await expect(journal.close()).rejects.toMatchObject({ message: 'collaboration_analysis_journal_close_failed',
+    errors: [Error('collaboration_analysis_v2'), Error('collaboration_analysis_output_v2')] })
+  expect(() => [...journal.records()]).toThrow('collaboration_analysis_journal_closed')
+  expect(() => [...journal.outputs()]).toThrow('collaboration_analysis_journal_closed')
+  await expect(journal.prepare(m, signal())).rejects.toThrow('collaboration_analysis_journal_closed')
+  await expect(journal.dispatch(record, grant(record), signal())).rejects.toThrow('collaboration_analysis_journal_closed')
+})
+
+it('normalizes a primitive cancellation before writing a model input', async () => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const caller = new AbortController()
+  caller.abort('caller expired')
+  await expect(journal.prepare(m, caller.signal)).rejects.toMatchObject({
+    message: 'collaboration_analysis_journal_invalid', cause: 'caller expired',
+  })
+  expect([...journal.records()]).toHaveLength(0)
+  await journal.close()
+})
+
+it('refuses an output for an input absent from this Profile without creating a result', async () => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const record = await journal.prepare(m, signal())
+  await journal.dispatch(record, grant(record), signal())
+  await expect(journal.saveOutput({ ...record, input_manifest_digest: 'f'.repeat(64) }, '{"intent":"discuss"}', signal()))
+    .rejects.toThrow('collaboration_analysis_output_invalid')
+  expect([...journal.outputs()]).toHaveLength(0)
+  await journal.close()
+})
+
+it('rejects outputs with foreign keys or changed attempt coordinates while preserving both journals', async () => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const record = await journal.prepare(m, signal())
+  await journal.dispatch(record, grant(record), signal())
+  const saved = await journal.saveOutput(record, '{"intent":"discuss"}', signal())
+  await journal.close()
+  const inputPath = join(h.root, 'collaboration_analysis_v2.json'), inputBytes = await readFile(inputPath)
+  const path = join(h.root, 'collaboration_analysis_output_v2.json'), original = await readFile(path, 'utf8')
+  for (const [key, value] of [
+    ['wrong-key', saved],
+    [saved.input_manifest_digest, { ...saved, input_manifest_digest: 'f'.repeat(64) }],
+    [saved.input_manifest_digest, { ...saved, attempt_request_id: 'another-attempt' }],
+    [saved.input_manifest_digest, { ...saved, source_digest: 'f'.repeat(64) }],
+  ] as const) {
+    const file = JSON.parse(original) as { tables: { results: Record<string, typeof saved> } }
+    file.tables.results = { [key]: value }
+    const bytes = JSON.stringify(file)
+    await writeFile(path, bytes)
+    await expect(openCollaborationAnalysisJournal(h.facility)).rejects.toThrow('collaboration_analysis_output_invalid')
+    expect(await readFile(path, 'utf8')).toBe(bytes)
+    expect(await readFile(inputPath)).toEqual(inputBytes)
+  }
+  await writeFile(path, original)
+  const restored = await openCollaborationAnalysisJournal(h.facility)
+  expect([...restored.outputs()]).toEqual([saved])
+  await restored.close()
+})
+
+it('normalizes cancellation raised while detaching a received grant or output identity', async () => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const record = await journal.prepare(m, signal()), received = grant(record), caller = new AbortController()
+  caller.abort('transport owner expired')
+  Object.defineProperty(received, 'attempt_request_id', { get: () => { caller.signal.throwIfAborted() } })
+  await expect(journal.dispatch(record, received, signal())).rejects.toMatchObject({
+    message: 'collaboration_analysis_grant_invalid', cause: 'transport owner expired',
+  })
+  const outputIdentity = { ...record }
+  Object.defineProperty(outputIdentity, 'attempt_request_id', { get: () => { caller.signal.throwIfAborted() } })
+  await expect(journal.saveOutput(outputIdentity, '{"intent":"discuss"}', signal())).rejects.toMatchObject({
+    message: 'collaboration_analysis_output_invalid', cause: 'transport owner expired',
+  })
+  expect([...journal.records()]).toEqual([record])
+  expect([...journal.outputs()]).toHaveLength(0)
+  await journal.close()
+})
+
+it('refuses a persisted clarification whose top-level Source is its reply rather than the original', async () => {
+  const h = await harness(), m = await clarificationManifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const saved = await journal.prepare(m, signal())
+  await journal.close()
+  const parsed = JSON.parse(saved.manifest_json) as { source: typeof m.source }
+  parsed.source = m.clarification.reply_snapshot
+  const manifest_json = JSON.stringify(parsed, (_key, value: unknown) => {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      const row = value as Record<string, unknown>
+      return Object.fromEntries(Object.keys(row).sort().map(key => [key, row[key]]))
+    }
+    return value
+  })
+  const input_manifest_digest = createHash('sha256').update(manifest_json).digest('hex')
+  const path = join(h.root, 'collaboration_analysis_v2.json')
+  const file = JSON.parse(await readFile(path, 'utf8')) as { tables: { attempts: Record<string, CollaborationAnalysisJournalRecord> } }
+  file.tables.attempts = { [input_manifest_digest]: { ...saved, manifest_json, input_manifest_digest } }
+  const bytes = JSON.stringify(file)
+  await writeFile(path, bytes)
+  await expect(openCollaborationAnalysisJournal(h.facility)).rejects.toThrow()
+  expect(await readFile(path, 'utf8')).toBe(bytes)
+})
+
+it('keeps all 256 restored analysis inputs and their original IDs when a new input exceeds capacity', async () => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const saved = await journal.prepare(m, signal())
+  await journal.close()
+  const path = join(h.root, 'collaboration_analysis_v2.json')
+  const file = JSON.parse(await readFile(path, 'utf8')) as { tables: { attempts: Record<string, CollaborationAnalysisJournalRecord> } }
+  for (let index = 1; index < 256; index++) {
+    const manifest_json = saved.manifest_json.replace(m.request.system, `Analyze restored input ${index}.`)
+    const input_manifest_digest = createHash('sha256').update(manifest_json).digest('hex')
+    file.tables.attempts[input_manifest_digest] = { ...saved, attempt_request_id: `restored-${index}`,
+      manifest_json, input_manifest_digest }
+  }
+  await writeFile(path, JSON.stringify(file))
+  const bytes = await readFile(path), restored = await openCollaborationAnalysisJournal(h.facility)
+  expect([...restored.records()]).toHaveLength(256)
+  await expect(restored.prepare({ ...m, request: { ...m.request, system: 'Analyze a new input.' } }, signal()))
+    .rejects.toThrow('collaboration_analysis_journal_capacity_reached')
+  expect(await restored.prepare(m, signal())).toEqual(saved)
+  expect(await readFile(path)).toEqual(bytes)
+  await restored.close()
 })

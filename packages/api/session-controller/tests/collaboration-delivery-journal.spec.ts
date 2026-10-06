@@ -34,12 +34,13 @@ async function harness(root?: string, hook?: { afterWrite?: () => Promise<void> 
   }
   ctx.storage.backend.register('json', backend)
   const facility = new DomainFacility(ctx, { backend: 'json' })
+  // Large journal fixtures retain the coverage lane's teardown budget.
   onTestFinished(async () => {
     await facility.closeAll()
     await backend.close()
     await ctx.fiber.dispose()
     await rm(root, { recursive: true, force: true })
-  })
+  }, 90000)
   const source = await openCollaborationSourceJournal(facility)
   const snapshot = await source.capture(
     {
@@ -319,3 +320,89 @@ it('does not write cancelled inputs and drains accepted delivery writes before c
     'collaboration_delivery_journal_closed',
   )
 })
+
+it('persists a failed result with its exact failure code and refuses an undefined or blank code', async () => {
+  const h = await harness(), journal = await h.openCollaborationDeliveryJournal(h.facility)
+  const original = reply(h.snapshot)
+  const { answer: _answer, ...projection } = original.projection
+  const failed = { ...original, projection: { ...projection, execution_state: 'failed' as const,
+    failure_code: 'worker_unavailable', result_digest: digest(null, 'failed', 'worker_unavailable') } }
+  const signal = new AbortController().signal
+  const saved = await journal.persist(failed, h.snapshot, signal)
+  expect(saved.failure_code).toBe('worker_unavailable')
+  expect(saved).not.toHaveProperty('answer')
+  const bytes = await readFile(h.file)
+  for (const failure_code of [undefined, ' ']) {
+    await expect(journal.persist({ ...failed, projection: { ...failed.projection, failure_code,
+      result_digest: digest(null, 'failed', failure_code ?? null) } }, h.snapshot, signal))
+      .rejects.toThrow('collaboration_delivery_journal_invalid')
+  }
+  expect(await readFile(h.file)).toEqual(bytes)
+  await journal.close()
+})
+
+it('refuses a valid reply stored under the wrong key and keeps Source and reply bytes intact', async () => {
+  const h = await harness(), journal = await h.openCollaborationDeliveryJournal(h.facility)
+  const saved = await journal.persist(reply(h.snapshot), h.snapshot, new AbortController().signal)
+  await journal.close()
+  const original = await readFile(h.file, 'utf8')
+  const sourceFile = join(h.root, 'collaboration_source_v2.json'), sourceBytes = await readFile(sourceFile)
+  const file = JSON.parse(original) as { tables: { replies: Record<string, typeof saved> } }
+  const key = Object.keys(file.tables.replies)[0]!
+  file.tables.replies = { 'wrong-key': file.tables.replies[key]! }
+  const bytes = JSON.stringify(file)
+  await writeFile(h.file, bytes)
+  await expect(h.openCollaborationDeliveryJournal(h.facility)).rejects.toThrow('collaboration_delivery_journal_invalid')
+  expect(await readFile(h.file, 'utf8')).toBe(bytes)
+  expect(await readFile(sourceFile)).toEqual(sourceBytes)
+  await writeFile(h.file, original)
+  const restored = await h.openCollaborationDeliveryJournal(h.facility)
+  expect([...restored.records(namespace, saved.source_locator)]).toEqual([saved])
+  await restored.close()
+})
+
+it('normalizes a non-Error cancellation before any reply is committed', async () => {
+  const h = await harness(), journal = await h.openCollaborationDeliveryJournal(h.facility)
+  const caller = new AbortController()
+  caller.abort('caller expired')
+  await expect(journal.persist(reply(h.snapshot), h.snapshot, caller.signal)).rejects.toMatchObject({
+    message: 'collaboration_delivery_journal_invalid', cause: 'caller expired',
+  })
+  expect([...journal.records(namespace, reply(h.snapshot).projection.source_locator)]).toHaveLength(0)
+  await journal.close()
+})
+
+// Reopening all 4096 records uses the coverage lane's 90-second budget, including cleanup.
+it('refuses count overflow on reopen or a new reply without evicting existing commits', async () => {
+  const h = await harness(), first = await h.openCollaborationDeliveryJournal(h.facility)
+  const signal = new AbortController().signal
+  const saved = await first.persist(reply(h.snapshot), h.snapshot, signal)
+  await first.close()
+  const file = JSON.parse(await readFile(h.file, 'utf8')) as { tables: { replies: Record<string, typeof saved> } }
+  const { host_journal_commit, ...body } = saved
+  file.tables.replies = {}
+  for (let index = 0; index < 4096; index++) {
+    const result = { ...body, delivery_id: `restored-${index}` }
+    file.tables.replies[collaborationJournalDigest([namespace, result.delivery_id])] = {
+      ...result, host_journal_commit: { ...host_journal_commit, journal_id: randomUUID(),
+        content_digest: collaborationJournalDigest(result) },
+    }
+  }
+  await writeFile(h.file, JSON.stringify(file))
+  const bytes = await readFile(h.file)
+  const restored = await h.openCollaborationDeliveryJournal(h.facility)
+  await expect(restored.persist(reply(h.snapshot), h.snapshot, signal))
+    .rejects.toThrow('collaboration_delivery_journal_capacity_reached')
+  const retry = reply(h.snapshot)
+  retry.projection.delivery_id = 'restored-0'
+  expect(await restored.persist(retry, h.snapshot, signal))
+    .toEqual(file.tables.replies[collaborationJournalDigest([namespace, retry.projection.delivery_id])])
+  expect(await readFile(h.file)).toEqual(bytes)
+  await restored.close()
+  file.tables.replies[collaborationJournalDigest([namespace, saved.delivery_id])] = saved
+  await writeFile(h.file, JSON.stringify(file))
+  const oversized = await readFile(h.file)
+  await expect(h.openCollaborationDeliveryJournal(h.facility))
+    .rejects.toThrow('collaboration_delivery_journal_capacity_reached')
+  expect(await readFile(h.file)).toEqual(oversized)
+}, 90000)

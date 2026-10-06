@@ -50,11 +50,18 @@ it('boots the stock DSH entry through one cross-origin parent port and rejects a
     await context.route(`${parentOrigin}/**`, async (route) => {
       await route.fulfill({ contentType: 'text/html', body: `<!doctype html><iframe id="dsh" src="${remoteOrigin}/remote.html"></iframe><script>
         window.requests = 0;
+        window.capabilityRequests = 0;
         addEventListener('message', event => {
           if (event.origin !== '${remoteOrigin}' || event.data?.kind !== 'ready') return;
           const channel = new MessageChannel();
           channel.port1.onmessage = ({data}) => {
-            if (data.t !== 'req' || !data.url.endsWith('/__boot__')) return;
+            if (data.t !== 'req') return;
+            if (data.method === 'GET' && data.url.endsWith('/__collaboration__')) {
+              window.capabilityRequests++;
+              channel.port1.postMessage({t:'res', id:data.id, status:404, headers:{}, body:''});
+              return;
+            }
+            if (!data.url.endsWith('/__boot__')) return;
             window.requests++;
             channel.port1.postMessage({t:'res', id:data.id, status:200,
               headers:{'content-type':'application/json'}, body:JSON.stringify({injections:[]})});
@@ -72,6 +79,14 @@ it('boots the stock DSH entry through one cross-origin parent port and rejects a
     })).toBe(1)
     const child = page.frameLocator('#dsh')
     await expect.poll(() => child.locator('body').innerText()).toContain('window.__ModuleLoader__ bootstrap facade is missing')
+    expect(await page.evaluate(() => {
+      const requests: unknown = Reflect.get(window, 'capabilityRequests')
+      return requests
+    })).toBe(1)
+    expect(await child.locator('body').evaluate(() => {
+      const bridge: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
+      return bridge
+    })).toBeUndefined()
     expect(await child.locator('body').evaluate(() => document.cookie)).toBe('')
     expect(await child.locator('body').evaluate(async () => {
       try { await fetch('https://example.com/'); return 'allowed' }

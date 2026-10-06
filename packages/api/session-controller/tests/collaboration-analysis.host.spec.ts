@@ -1,6 +1,6 @@
 /** REQ-20260930-0004: Source-bound analysis never starts a normal Agent turn. */
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { LlmAdapter, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it, vi } from 'vitest'
 import { parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
@@ -10,6 +10,7 @@ import type { CollaborationSourceSnapshot } from '../src/collaboration-source-jo
 
 class Adapter extends LlmAdapter {
   requests: GenerateOptions[] = []
+  contextWindow = 32768
   response: () => AsyncIterable<StreamChunk> = async function* () {
     yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text: '{"intent":"delegate","task_candidates":[],"pending_candidates":[]}' }
@@ -17,7 +18,8 @@ class Adapter extends LlmAdapter {
     yield { type: 'finish', reason: { kind: 'stop' } }
   }
   override async prepareSnapshot(provider: string, model: string): Promise<PreparedAdapterCall> {
-    return { model: { provider, id: model, name: model, context: { contextWindow: 32768 } }, stream: options => this.stream(options) }
+    return { model: { provider, id: model, name: model, context: { contextWindow: this.contextWindow } },
+      stream: options => this.stream(options) }
   }
   async * stream(options: GenerateOptions) { this.requests.push(options); yield* this.response() }
 }
@@ -26,8 +28,8 @@ async function harness() {
   await ctx.plugin(LlmRuntime)
   ctx.llm.registerAdapter(['fixture'], adapter)
   const runner = new CollaborationAnalysisRunner(lifetime.signal)
-  const prepare = async () => {
-    const prepared = await ctx.llm.prepareSnapshot({ provider: 'fixture', model: 'selected', maxTokens: 8192 }, lifetime.signal)
+  const prepare = async (options: { maxTokens?: number } = { maxTokens: 8192 }) => {
+    const prepared = await ctx.llm.prepareSnapshot({ provider: 'fixture', model: 'selected', ...options }, lifetime.signal)
     const source: CollaborationSourceSnapshot = {
       workspace_id: '12345678-1234-4234-8234-123456789abc', session_id: 'session', source_message_id: 'message', source_revision: '1',
       original_message: '@Guide 分析需求；请不要开发', model_snapshot: prepared.snapshot,
@@ -41,6 +43,141 @@ async function harness() {
   return { ctx, lifetime, adapter, runner, prepare, close: () => ctx.fiber.dispose() }
 }
 const persist = () => vi.fn(async (_manifest: import('../src/collaboration-analysis.ts').CollaborationAnalysisManifest, _signal: AbortSignal) => {})
+
+it.each([undefined, 0, -1, 1.5, 8193])('refuses an unavailable analysis output cap (%s) before writing or dispatching', async (maxTokens) => {
+  const h = await harness()
+  try {
+    const c = await h.prepare(maxTokens === undefined ? {} : { maxTokens }), commit = persist()
+    await expect(h.runner.run(c.source, c.prepared, commit, new AbortController().signal))
+      .rejects.toThrow('collaboration_analysis_output_cap_unavailable')
+    expect(commit).not.toHaveBeenCalled()
+    expect(h.adapter.requests).toHaveLength(0)
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+const invalidStreams: { name: string; chunks: StreamChunk[]; error: string }[] = [
+  { name: 'an image block', chunks: [{ type: 'block-start', index: 0, blockType: 'image' }], error: 'invalid_stream' },
+  { name: 'a tool delta', chunks: [{ type: 'tool-call-delta', index: 0, id: ToolCallId('call'), argumentsDelta: '{}' }], error: 'tool_output' },
+  { name: 'a completed tool call', chunks: [{ type: 'block-end', index: 0,
+    block: { type: 'tool-call', id: ToolCallId('call'), name: 'execute', arguments: '{}' } }], error: 'tool_output' },
+  { name: 'a tool finish', chunks: [{ type: 'finish', reason: { kind: 'tool-calls' } }], error: 'failed' },
+  { name: 'data after finish', chunks: [{ type: 'finish', reason: { kind: 'stop' } },
+    { type: 'text-delta', index: 0, text: '{}' }], error: 'invalid_stream' },
+  ...['null', '[]', '42'].map(text => ({ name: `a JSON ${text} result`, chunks: [
+    { type: 'block-end' as const, index: 0, block: { type: 'text' as const, text } },
+    { type: 'finish' as const, reason: { kind: 'stop' as const } },
+  ], error: 'invalid_json' })),
+  ...[
+    { inputTokens: 16385, outputTokens: 0 },
+    { inputTokens: 16383, outputTokens: 0, cacheReadTokens: 1, cacheWriteTokens: 1 },
+    { inputTokens: 1, outputTokens: 8193 },
+  ].map(usage => ({ name: `token usage ${JSON.stringify(usage)}`, chunks: [{ type: 'usage' as const, usage }], error: 'token_budget' })),
+]
+it.each(invalidStreams)('refuses $name without returning an analysis result', async ({ chunks, error }) => {
+  const h = await harness()
+  try {
+    h.adapter.response = async function* () { yield* chunks }
+    const c = await h.prepare()
+    await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal))
+      .rejects.toThrow(`collaboration_analysis_${error}`)
+    expect(h.adapter.requests).toHaveLength(1)
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+it('counts reasoning and cached input usage while returning only the exact final JSON text', async () => {
+  const h = await harness()
+  try {
+    h.adapter.response = async function* () {
+      yield { type: 'block-start', index: 0, blockType: 'reasoning' }
+      yield { type: 'reasoning-delta', index: 0, text: 'hidden' }
+      yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'hidden' } }
+      yield { type: 'usage', usage: { inputTokens: 1, outputTokens: 8192 } }
+      yield { type: 'usage', usage: { inputTokens: 16382, cacheReadTokens: 1, cacheWriteTokens: 1, outputTokens: 8192 } }
+      yield { type: 'block-end', index: 1, block: { type: 'text', text: ' {"intent":"discuss"} ' } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const c = await h.prepare()
+    expect(await h.runner.run(c.source, c.prepared, persist(), new AbortController().signal))
+      .toEqual({ jsonText: ' {"intent":"discuss"} ' })
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+it('bounds excessive empty stream chunks independently of the byte budget', async () => {
+  const h = await harness()
+  try {
+    h.adapter.response = async function* () {
+      for (let index = 0; index < 32769; index++) yield { type: 'reasoning-delta', index: 0, text: '' }
+    }
+    const c = await h.prepare()
+    await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal))
+      .rejects.toThrow('collaboration_analysis_invalid_stream')
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+it('checks the model context budget before committing or dispatching the original request', async () => {
+  const h = await harness()
+  try {
+    h.adapter.contextWindow = 8192
+    const c = await h.prepare(), commit = persist()
+    await expect(h.runner.run(c.source, c.prepared, commit, new AbortController().signal))
+      .rejects.toThrow('collaboration_analysis_input_budget')
+    expect(commit).not.toHaveBeenCalled()
+    expect(h.adapter.requests).toHaveLength(0)
+  } finally { await h.close() }
+})
+
+it('refuses middleware adding tools to the captured zero-tool request before any adapter call', async () => {
+  const h = await harness()
+  try {
+    const c = await h.prepare()
+    h.ctx.on('llm/stream', (options, next) => {
+      options.tools = [{ name: 'unexpected', description: 'unexpected tool', parameters: {} }]
+      return next()
+    })
+    await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal))
+      .rejects.toThrow('collaboration_analysis_failed')
+    expect(h.adapter.requests).toHaveLength(0)
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+it('refuses a JSON stream that ends without a terminal finish', async () => {
+  const h = await harness()
+  try {
+    h.adapter.response = async function* () { yield { type: 'block-end', index: 0, block: { type: 'text', text: '{}' } } }
+    const c = await h.prepare()
+    await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal))
+      .rejects.toThrow('collaboration_analysis_invalid_stream')
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+it('normalizes cancellation during prompt persistence and never dispatches a provider call', async () => {
+  const h = await harness(), caller = new AbortController()
+  try {
+    const c = await h.prepare()
+    await expect(h.runner.run(c.source, c.prepared, async () => { caller.abort('caller expired') }, caller.signal))
+      .rejects.toThrow('collaboration_analysis_aborted')
+    await vi.waitFor(() => { expect(h.runner.active).toBe(0) })
+    expect(h.adapter.requests).toHaveLength(0)
+  } finally { await h.close() }
+})
+
+it('retains a primitive prompt-storage failure as the analysis failure cause', async () => {
+  const h = await harness(), storage = new AbortController()
+  storage.abort('storage owner expired')
+  try {
+    const c = await h.prepare()
+    await expect(h.runner.run(c.source, c.prepared, async () => { storage.signal.throwIfAborted() }, new AbortController().signal))
+      .rejects.toMatchObject({ message: 'collaboration_analysis_failed', cause: 'storage owner expired' })
+    expect(h.adapter.requests).toHaveLength(0)
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
 describe('Source-bound one-shot analysis', () => {
   it('persists the exact isolated prompt before sending the captured call once', async () => {
     const h = await harness()

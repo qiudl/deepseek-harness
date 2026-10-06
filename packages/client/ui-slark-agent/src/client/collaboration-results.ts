@@ -32,6 +32,7 @@ export interface CollaborationResultGroup {
   readonly phase: 'ready' | 'loading' | 'error'
   readonly pending?: CollaborationPendingPage['pending_items']
   readonly pendingUnavailable?: boolean
+  readonly planningState?: string
   readonly nextCursor?: string
 }
 /** Stable observable value consumed by the injected framework hook. */
@@ -41,6 +42,7 @@ export interface CollaborationResultsSnapshot {
   readonly nextCursor?: string
 }
 type Generation = { getSnapshot(): unknown; subscribe(fn: () => void): () => void }
+type ReadableResultsBridge = CollaborationResultsBridge & Required<Pick<CollaborationResultsBridge, 'collaborationDeliveries'>>
 type ReadSources = (cursor: string | undefined, signal: AbortSignal) => Promise<
   { ok: true; value: SessionCollaborationSourcesValue } | { ok: false }>
 const empty = (): CollaborationResultsSnapshot => ({ phase: 'idle', groups: [] })
@@ -141,12 +143,12 @@ export class CollaborationResultsModel {
     }
     return value
   }
+  /** The caller binds an available reader and verifies the owning generation before each page. */
   private async results(original: SessionCollaborationSourceItem, signal: AbortSignal, generation: number,
     cursor?: string, prior: readonly ScopedCollaborationReply[] = [],
     previous: readonly ScopedCollaborationReply[] = []): Promise<CollaborationResultGroup> {
     try {
-      const host = this.boundBridge
-      if (!host?.collaborationDeliveries) throw Error('unavailable')
+      const host = this.boundBridge as ReadableResultsBridge
       const result = await wait(host.collaborationDeliveries({ source: original.source, limit: 50,
         ...(cursor ? { after_delivery_id: cursor } : {}) }), signal)
       if (!this.current(generation)) throw Error('obsolete')
@@ -170,12 +172,18 @@ export class CollaborationResultsModel {
       })]
       if (replies.length > 4096 || bytes(replies) > 16 * 1024 * 1024) throw Error('result_view_budget')
       let pending: CollaborationPendingPage['pending_items'] | undefined, pendingUnavailable = false
+      let planningState: string | undefined
       if (host.collaborationPending) {
-        try { pending = (await readCollaborationPending(host, original.source, signal)).pending_items }
+        try {
+          const currentPlan = await readCollaborationPending(host, original.source, signal)
+          pending = currentPlan.pending_items
+          planningState = currentPlan.plan?.planning_state
+        }
         catch { pendingUnavailable = true }
         if (!this.current(generation)) throw Error('obsolete')
       }
       return { original, replies, phase: 'ready', ...(pending === undefined ? {} : { pending }),
+        ...(planningState === undefined ? {} : { planningState }),
         ...(pendingUnavailable ? { pendingUnavailable: true } : {}), ...(page.next_cursor ? { nextCursor: page.next_cursor } : {}) }
     } catch { return { original, replies: [], phase: 'error' } }
   }
@@ -220,12 +228,12 @@ export class CollaborationResultsModel {
     } catch {
       if (this.current(generation)) this.publish({ phase: 'error', groups: [] })
     } finally {
-      this.finishQuery(controller)
+      this.finishQuery()
     }
   }
-  private finishQuery(controller: AbortController): void {
+  private finishQuery(): void {
     this.pending = false
-    if (this.controller === controller) this.controller = undefined
+    this.controller = undefined
     if (this.again && !this.closed) { this.again = false; void this.refresh() }
   }
   /**
@@ -241,7 +249,7 @@ export class CollaborationResultsModel {
   /**
    * Read the next complete result page for one original message.
    * @param snapshotDigest - Existing original group selected by the view.
-   * @returns completion of its bounded readonly page, or no operation when unavailable.
+   * @returns completion of its bounded readonly page, or no operation when unavailable; paging stays disabled while reading.
    */
   async loadReplies(snapshotDigest: string): Promise<void> {
     this.bind()
@@ -250,6 +258,7 @@ export class CollaborationResultsModel {
     this.pending = true
     const generation = this.generation, controller = new AbortController()
     this.controller = controller
+    this.publish({ ...this.state, phase: 'loading' })
     try {
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
       let next = await this.results(group.original, signal, generation, group.nextCursor, group.replies)
@@ -258,10 +267,10 @@ export class CollaborationResultsModel {
           next = { original: group.original, replies: [], phase: 'error' }
         }
         if (next.phase === 'ready') this.replyPages.set(snapshotDigest, (this.replyPages.get(snapshotDigest) ?? 1) + 1)
-        this.publish({ ...this.state, groups: this.state.groups.map(item => item === group ? next : item) })
+        this.publish({ ...this.state, phase: 'ready', groups: this.state.groups.map(item => item === group ? next : item) })
       }
     } finally {
-      this.finishQuery(controller)
+      this.finishQuery()
     }
   }
   /** Release observers and readonly requests; accepted tasks continue independently. */

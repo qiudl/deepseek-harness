@@ -1,4 +1,5 @@
-import { expect, it, vi } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { workspaceSnapshot } from './fixture-state.client.ts'
 import { CollaborationResultsModel } from '../src/client/collaboration-results.ts'
 import type { CollaborationResultsBridge } from '../src/client/collaboration-results.ts'
@@ -11,6 +12,7 @@ const original = { source, snapshot_digest: 'a'.repeat(64), original_message: '@
 const reply = { delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1',
   source_locator: source, source_snapshot_digest: original.snapshot_digest, execution_state: 'succeeded', invocation_state_version: '2',
   target_display_snapshot: { agent_name: 'Guide', project_name: 'Project' }, answer: '完整答复' }
+const { answer: _answer, ...replyWithoutAnswer } = reply
 type DeliveryRequest = Parameters<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>[0]
 
 it('keeps the aggregate view within its budget when loading additional replies', async () => {
@@ -38,11 +40,11 @@ function fixture() {
     subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } }
   const generation = { getSnapshot: () => remoteGeneration,
     subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } }
-  const reads = vi.fn(async (_cursor: string | undefined, _signal: AbortSignal) =>
-    ({ ok: true as const, value: { items: [original] } as SessionCollaborationSourcesValue }))
-  const deliveries = vi.fn(async () => ({ ok: true as const, value: { deliveries: [reply] } }))
+  const reads = vi.fn<ConstructorParameters<typeof CollaborationResultsModel>[3]>(async () => ({ ok: true, value: { items: [original] } }))
+  const deliveries = vi.fn<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>(async () => ({ ok: true, value: { deliveries: [reply] } }))
   let bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true, collaborationDeliveries: deliveries }
-  const model = new CollaborationResultsModel('session' as never, workspaces, generation, reads, () => bridge)
+  const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge)
+  onTestFinished(() => { model.dispose() })
   return { model, reads, bridge, deliveries, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
     move: () => { grouped = false; changed() }, reset: () => { remoteGeneration = 2; changed() } }
 }
@@ -113,4 +115,249 @@ it('inactive scope and disposal prevent further reads and abort the owning reque
   b.reads.mockImplementation(async (_cursor, signal) => { active = signal; return new Promise(() => {}) })
   const pending = b.model.refresh(); await vi.waitFor(() => { expect(active).toBeDefined() }); b.model.dispose()
   expect(active.aborted).toBe(true); await pending
+})
+
+it('publishes only the current verified planning state and removes it when the read fails', async () => {
+  const f = fixture()
+  f.bridge.collaborationDeliveries = async () => ({ ok: true, value: { deliveries: [] } })
+  let planning_state = 'planning'
+  f.bridge.collaborationPending = async () => ({ ok: true, value: { source,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1',
+      planning_state, route_decision: 'collaboration' }, frozen_task_count: 0, pending_items: [] } })
+  try {
+    await f.model.refresh()
+    expect(f.model.getSnapshot().groups[0]).toMatchObject({ planningState: 'planning' })
+    planning_state = 'failed'
+    await f.model.refresh()
+    expect(f.model.getSnapshot().groups[0]).toMatchObject({ planningState: 'failed' })
+    f.bridge.collaborationPending = async () => ({ ok: false, errorCode: 'unavailable' })
+    await f.model.refresh()
+    expect(f.model.getSnapshot().groups[0]).not.toHaveProperty('planningState')
+    expect(f.model.getSnapshot().groups[0]?.pendingUnavailable).toBe(true)
+    f.reset()
+    expect(f.model.getSnapshot().groups).toEqual([])
+  } finally { f.model.dispose() }
+})
+
+it('rejects substituted, duplicate, oversized and stalled Source pages before reading their results', async () => {
+  const pages: SessionCollaborationSourcesValue[] = [
+    { items: Array.from({ length: 9 }, () => original) },
+    { items: Array.from({ length: 8 }, (_, i) => ({ ...original, snapshot_digest: String(i).repeat(64), original_message: 'x'.repeat(32 * 1024) })) },
+    { items: [original], next_cursor: 'other' },
+    { items: [], next_cursor: original.snapshot_digest },
+    { items: [{ ...original, source: { ...source, session_id: 'other' } }] },
+    { items: [{ ...original, source: { ...source, workspace_id: 'other' } }] },
+    { items: [{ ...original, snapshot_digest: 'bad' }] },
+    { items: [original, original] },
+    { items: [{ ...original, original_message: 'x'.repeat(32 * 1024 + 1) }] },
+    { items: [{ ...original, original_message: '\ud800' }] },
+  ]
+  for (const value of pages) {
+    const f = fixture(); f.reads.mockResolvedValue({ ok: true, value })
+    await f.model.refresh()
+    expect(f.model.getSnapshot()).toEqual({ phase: 'error', groups: [] })
+    expect(f.deliveries).not.toHaveBeenCalled()
+  }
+  const f = fixture()
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original], next_cursor: original.snapshot_digest } })
+  await f.model.refresh(); await f.model.loadSources()
+  expect(f.model.getSnapshot()).toEqual({ phase: 'error', groups: [] })
+})
+
+it('removes an invalid result page instead of showing substituted, leaked or duplicated replies', async () => {
+  type Page = Extract<Awaited<ReturnType<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>>, { ok: true }>['value']
+  const pages: Page[] = [
+    { deliveries: Array.from({ length: 51 }, () => reply) },
+    { deliveries: Array.from({ length: 7 }, (_, i) => ({ ...reply, delivery_id: String(i), answer: 'x'.repeat(128 * 1024) })) },
+    ...(['workspace_id', 'session_id', 'source_message_id', 'source_revision'] as const).map(key => ({
+      deliveries: [{ ...reply, source_locator: { ...source, [key]: 'other' } }],
+    })),
+    { deliveries: [{ ...reply, source_snapshot_digest: 'b'.repeat(64) }] },
+    { deliveries: [reply, reply] },
+    { deliveries: [{ ...reply, answer: 'x'.repeat(128 * 1024 + 1) }] },
+    { deliveries: [{ ...reply, answer: '\ud800' }] },
+    { deliveries: [{ ...reply, delivery_state: 'restricted' }] },
+    { deliveries: [{ ...replyWithoutAnswer, delivery_state: 'restricted' }] },
+    { deliveries: [], next_cursor: 'delivery' },
+    { deliveries: [reply], next_cursor: 'other' },
+  ]
+  for (const value of pages) {
+    const f = fixture(); f.deliveries.mockResolvedValue({ ok: true, value })
+    await f.model.refresh()
+    expect(f.model.getSnapshot().groups[0]).toMatchObject({ phase: 'error', replies: [] })
+  }
+  const f = fixture()
+  f.deliveries.mockResolvedValueOnce({ ok: true, value: { deliveries: [reply], next_cursor: 'delivery' } })
+  await f.model.refresh()
+  f.deliveries.mockResolvedValueOnce({ ok: true, value: { deliveries: [{ ...reply, delivery_id: 'second' }], next_cursor: 'delivery' } })
+  await f.model.loadReplies(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]).toMatchObject({ phase: 'error', replies: [] })
+})
+
+it('coalesces refresh requests while reading and ignores paging calls without a cursor', async () => {
+  const f = fixture()
+  await f.model.loadSources(); await f.model.loadReplies('missing')
+  expect(f.reads).not.toHaveBeenCalled()
+  let release: (() => void) | undefined
+  const held = new Promise<void>((resolve) => { release = resolve })
+  f.reads.mockImplementationOnce(async () => { await held; return { ok: true, value: { items: [original] } } })
+  const active = f.model.refresh()
+  onTestFinished(async () => { release?.(); await active })
+  await f.model.refresh(); await f.model.refresh(); await f.model.loadSources(); await f.model.loadReplies(original.snapshot_digest)
+  expect(f.reads).toHaveBeenCalledTimes(1)
+  release?.(); await active
+  await vi.waitFor(() => { expect(f.reads).toHaveBeenCalledTimes(2) })
+  await vi.waitFor(() => { expect(f.model.getSnapshot().phase).toBe('ready') })
+  await f.model.loadReplies(original.snapshot_digest)
+  expect(f.deliveries).toHaveBeenCalledTimes(2)
+})
+
+it('aborts a pending plan read on connection change and never restores the old questions', async () => {
+  const f = fixture()
+  let release: (() => void) | undefined, entered: (() => void) | undefined
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const started = new Promise<void>((resolve) => { entered = resolve })
+  f.bridge.collaborationPending = async () => {
+    entered?.(); await held
+    return { ok: true, value: { source, plan: null, frozen_task_count: 0, pending_items: [] } }
+  }
+  const active = f.model.refresh()
+  onTestFinished(async () => { release?.(); await active })
+  await started; f.reset(); release?.(); await active
+  expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
+})
+
+it('stops automatic polling when the last observer leaves and refuses subscriptions after disposal', async () => {
+  vi.useFakeTimers()
+  onTestFinished(() => { vi.useRealTimers() })
+  const f = fixture(), first = vi.fn(), second = vi.fn()
+  const stopFirst = f.model.subscribe(first), stopSecond = f.model.subscribe(second)
+  onTestFinished(() => { stopFirst(); stopSecond() })
+  await vi.waitFor(() => { expect(f.model.getSnapshot().phase).toBe('ready') })
+  const before = f.reads.mock.calls.length
+  await vi.advanceTimersByTimeAsync(3_000)
+  expect(f.reads).toHaveBeenCalledTimes(before + 1)
+  expect(second).toHaveBeenCalled()
+  stopFirst(); f.move()
+  expect(f.model.getSnapshot().groups).toEqual([])
+  stopSecond(); await vi.advanceTimersByTimeAsync(3_000)
+  expect(f.reads).toHaveBeenCalledTimes(before + 1)
+  f.model.dispose()
+  const closed = vi.fn(), stopClosed = f.model.subscribe(closed)
+  stopClosed(); await f.model.refresh()
+  expect(closed).not.toHaveBeenCalled()
+})
+
+it('bounds the number of complete replies accumulated for one Source', async () => {
+  const f = fixture()
+  f.bridge.collaborationDeliveries = async (request) => {
+    const start = request.after_delivery_id ? Number(request.after_delivery_id) + 1 : 0
+    const deliveries = Array.from({ length: 50 }, (_, i) => ({ ...replyWithoutAnswer, delivery_id: String(start + i) }))
+    return { ok: true, value: { deliveries,
+      next_cursor: String(start + 49) } }
+  }
+  await f.model.refresh()
+  for (let i = 0; i < 82; i++) await f.model.loadReplies(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]).toMatchObject({ phase: 'error', replies: [] })
+})
+
+it('rejects unavailable feeds and repeated originals across otherwise valid cursor pages', async () => {
+  const f = fixture()
+  f.reads.mockResolvedValueOnce({ ok: false }); await f.model.refresh()
+  expect(f.model.getSnapshot()).toEqual({ phase: 'error', groups: [] })
+  f.reads.mockResolvedValueOnce({ ok: true, value: { items: [original], next_cursor: original.snapshot_digest } })
+  await f.model.refresh()
+  const older = { ...original, snapshot_digest: 'b'.repeat(64) }
+  f.reads.mockResolvedValueOnce({ ok: true, value: { items: [original, older], next_cursor: older.snapshot_digest } })
+  await f.model.loadSources()
+  expect(f.model.getSnapshot()).toEqual({ phase: 'error', groups: [] })
+})
+
+it('bounds the total loaded message count and aggregate reply bytes across Sources', async () => {
+  for (const mode of ['count', 'bytes'] as const) {
+    const f = fixture()
+    f.reads.mockImplementation(async (cursor) => {
+      const start = cursor ? Number.parseInt(cursor, 16) + 1 : 0
+      const items = Array.from({ length: 8 }, (_, i) => ({ ...original, snapshot_digest: (start + i).toString(16).padStart(64, '0'),
+        source: { ...source, source_message_id: String(start + i) } }))
+      const last = items.at(-1)
+      if (!last) throw Error('empty Source page fixture')
+      return { ok: true, value: { items, next_cursor: last.snapshot_digest } }
+    })
+    f.deliveries.mockImplementation(async request => ({ ok: true, value: { deliveries: mode === 'count' ? [] :
+      Array.from({ length: 5 }, (_, i) => ({ ...reply, delivery_id: String(i), source_locator: request.source,
+        source_snapshot_digest: Number(request.source.source_message_id).toString(16).padStart(64, '0'), answer: 'x'.repeat(128 * 1024) })) } }))
+    await f.model.refresh()
+    for (let i = 0; i < (mode === 'count' ? 16 : 3); i++) await f.model.loadSources()
+    expect(f.model.getSnapshot()).toEqual({ phase: 'error', groups: [] })
+  }
+})
+
+it('discards a paged result when its owning workspace changes during the read', async () => {
+  const f = fixture()
+  f.deliveries.mockResolvedValueOnce({ ok: true, value: { deliveries: [reply], next_cursor: reply.delivery_id } })
+  await f.model.refresh()
+  let release: (() => void) | undefined
+  const held = new Promise<void>((resolve) => { release = resolve })
+  f.deliveries.mockImplementationOnce(async () => { await held; return { ok: true, value: { deliveries: [] } } })
+  const active = f.model.loadReplies(original.snapshot_digest)
+  onTestFinished(async () => { release?.(); await active })
+  f.move(); release?.(); await active
+  expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
+})
+
+it('does not poll while a Source read is outstanding and ignores results after the view closes', async () => {
+  vi.useFakeTimers()
+  onTestFinished(() => { vi.useRealTimers() })
+  const f = fixture()
+  let release: (() => void) | undefined
+  const held = new Promise<void>((resolve) => { release = resolve })
+  f.reads.mockImplementationOnce(async () => { await held; return { ok: true, value: { items: [original] } } })
+  const stop = f.model.subscribe(() => {})
+  onTestFinished(() => { release?.(); stop() })
+  await vi.advanceTimersByTimeAsync(3_000)
+  expect(f.reads).toHaveBeenCalledTimes(1)
+  release?.()
+  await vi.waitFor(() => { expect(f.model.getSnapshot().phase).toBe('ready') })
+  stop()
+  f.deliveries.mockImplementationOnce(() => {
+    f.model.dispose()
+    return Promise.resolve({ ok: true, value: { deliveries: [reply] } })
+  })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
+})
+
+it('does not notify disposed observers when the previous request completes after a bridge change', async () => {
+  const f = fixture()
+  let release: (() => void) | undefined
+  const held = new Promise<void>((resolve) => { release = resolve })
+  f.reads.mockImplementationOnce(async () => { await held; return { ok: true, value: { items: [original] } } })
+  const observer = vi.fn(), stop = f.model.subscribe(observer)
+  onTestFinished(() => { release?.(); stop() })
+  f.model.dispose(); const before = observer.mock.calls.length
+  f.changeBridge({ ...f.bridge }); release?.()
+  await vi.waitFor(() => { expect(f.reads).toHaveBeenCalledTimes(1) })
+  await f.model.refresh()
+  expect(observer).toHaveBeenCalledTimes(before)
+  expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
+})
+
+it('ignores a Source page from a workspace that changes before the read completes', async () => {
+  const f = fixture()
+  f.reads.mockImplementationOnce(async () => { f.move(); return { ok: true, value: { items: [original] } } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
+  expect(f.deliveries).not.toHaveBeenCalled()
+})
+
+it('discards a fulfilled Source page if workspace ownership changes before the awaiting query resumes', async () => {
+  const f = fixture()
+  f.reads.mockImplementationOnce(() => {
+    queueMicrotask(() => { queueMicrotask(() => { f.move() }) })
+    return Promise.resolve({ ok: true, value: { items: [original] } })
+  })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
+  expect(f.deliveries).not.toHaveBeenCalled()
 })

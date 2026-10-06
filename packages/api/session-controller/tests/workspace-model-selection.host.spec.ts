@@ -55,6 +55,21 @@ class SnapshotAdapter extends LlmAdapter {
 }
 
 describe('Host workspace prepared model snapshot', () => {
+  it('rejects a same-workspace Session generation attached after the final model inspection', async () => {
+    const h = await harness([used, pending], new SnapshotAdapter())
+    const inspect = h.controller.inspectWorkspaceModelSelection.bind(h.controller)
+    let reads = 0
+    vi.spyOn(h.controller, 'inspectWorkspaceModelSelection').mockImplementation(async (...args) => {
+      const selected = await inspect(...args)
+      if (++reads === 2) h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } })
+      return selected
+    })
+    try {
+      await expect(h.controller.prepareWorkspaceModelSnapshot(sessionId, workspaceId, new AbortController().signal))
+        .rejects.toThrow('collaboration_session_workspace_mismatch')
+      expect(h.resume).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
   it('prepares the cold Session choice through the real runtime without activating or appending', async () => {
     const h = await harness([used, pending], new SnapshotAdapter())
     try {
@@ -202,6 +217,35 @@ describe('Host workspace model inspection', () => {
       expect((await h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId)).selection).toEqual({ provider: 'attached', model: 'next', reasoningEffort: 'high' })
       expect(session.seq).toBe(before)
       expect(h.ctx.agents.get(sessionId)).toBeUndefined()
+      expect(h.resume).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
+  it('refuses an attached Session whose required model projection disappears without activating it', async () => {
+    const h = await harness()
+    try {
+      const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } }), before = session.seq
+      vi.spyOn(h.ctx.sessionProjections, 'stateOf').mockReturnValueOnce(undefined)
+      await expect(h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId))
+        .rejects.toThrow('required modelSelection projection')
+      expect(session.seq).toBe(before)
+      expect(h.resume).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
+  it('refuses a registered Agent whose Session is absent from the current Profile registry', async () => {
+    const h = await harness()
+    try {
+      const session = Session.create(sessionId, undefined, h.meta)
+      const agent: Agent = {
+        id: sessionId, session, ctx: h.ctx, status: 'idle', options: {}, inbox: unsupportedInbox(),
+        send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
+        runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
+      }
+      await h.ctx.agents.register(agent)
+      expect(h.ctx.sessions.get(sessionId)).toBeUndefined()
+      await expect(h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId))
+        .rejects.toThrow('collaboration_session_workspace_mismatch')
       expect(h.resume).not.toHaveBeenCalled()
     } finally { await h.dispose() }
   })

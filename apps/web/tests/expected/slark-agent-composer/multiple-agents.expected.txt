@@ -1,3 +1,4 @@
+parent-execution=true
 original=@Guide · Product check login; @Tester · Engineering test the redirect
 target=product/guide
 target=engineering/tester

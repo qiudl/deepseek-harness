@@ -426,6 +426,23 @@ function extensionKind(value: unknown): HostExtensionKind {
   if (value !== 'plugin' && value !== 'mcp' && value !== 'skill') reject()
   return value
 }
+function collaborationAccountParams(params: Record<string, unknown>) {
+  return {
+    ...authorized(params),
+    authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+    account_binding_handle: opaqueHandle(params.account_binding_handle),
+    authority_binding_version: generation(params.authority_binding_version),
+    account_issuer: accountIssuer(params.account_issuer),
+    account_subject: uuid(params.account_subject),
+  }
+}
+function accountChallengeParams(params: Record<string, unknown>) {
+  return {
+    ...authorized(params),
+    account_binding_handle: opaqueHandle(params.account_binding_handle),
+    authority_binding_version: generation(params.authority_binding_version),
+  }
+}
 function extensionCommand(value: unknown): HostExtensionCommand {
   const command = record(value)
   if (command.action === 'inventory') {
@@ -489,9 +506,12 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   }
   if (command.operation === 'session.create') {
     const withWorkspace = 'workspace_id' in command
-    exactKeys(command, ['operation', 'command_id', ...(withWorkspace ? ['workspace_id'] : [])])
+    const withSession = 'session_id' in command
+    exactKeys(command, ['operation', 'command_id', ...(withWorkspace ? ['workspace_id'] : []),
+      ...(withSession ? ['session_id'] : [])])
     return { operation: 'session.create', command_id,
-      ...(withWorkspace ? { workspace_id: remoteIdentifier(command.workspace_id) } : {}) }
+      ...(withWorkspace ? { workspace_id: remoteIdentifier(command.workspace_id) } : {}),
+      ...(withSession ? { session_id: remoteIdentifier(command.session_id) } : {}) }
   }
   if (command.operation === 'remote.event.respond') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'client_id', 'event_id', 'outcome'])
@@ -1184,7 +1204,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
     if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
-      && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'settings/describe'
+      && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
+      && params.endpoint !== 'settings/describe'
       && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
       && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog') reject()
     const payload = record(params.payload)
@@ -1195,6 +1216,15 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     if ((params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
       || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog')
       && Object.keys(args).length !== 0) reject()
+    if (params.endpoint === 'session/collaborationSources') {
+      const sourceArgs = args as Record<string, unknown>
+      exactKeys(sourceArgs, ['request'])
+      const request = record(sourceArgs.request)
+      exactKeys(request, Object.hasOwn(request, 'cursor') ? ['sessionId', 'cursor'] : ['sessionId'])
+      if (typeof request.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(request.sessionId)
+        || /[/\\]/u.test(request.sessionId) || request.sessionId === '.' || request.sessionId === '..'
+        || (Object.hasOwn(request, 'cursor') && (typeof request.cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(request.cursor)))) reject()
+    }
     if (params.endpoint === 'credentials/describe') {
       const credentialArgs = args as Record<string, unknown>
       exactKeys(credentialArgs, ['refs'])
@@ -1436,20 +1466,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   if (frame.method === 'profile.collaboration_delivery') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: uuid(params.account_subject),
+      ...collaborationAccountParams(params),
       command: parseHostCollaborationDeliveryChunk(params.command),
     } }
   }
   if (frame.method === 'profile.collaboration_analysis') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: uuid(params.account_subject),
+      ...collaborationAccountParams(params),
       command: parseHostCollaborationAnalysisCommand(params.command),
     } } satisfies ProfileCollaborationAnalysisRequest
   }
@@ -1473,9 +1497,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       request_id: requestId,
       method: frame.method,
       params: {
-        ...authorized(params),
-        account_binding_handle: opaqueHandle(params.account_binding_handle),
-        authority_binding_version: generation(params.authority_binding_version),
+        ...accountChallengeParams(params),
         challenge: parseHostWorkspaceAuthorityChallenge(params.challenge),
       },
     }
@@ -1488,9 +1510,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       request_id: requestId,
       method: frame.method,
       params: {
-        ...authorized(params),
-        account_binding_handle: opaqueHandle(params.account_binding_handle),
-        authority_binding_version: generation(params.authority_binding_version),
+        ...accountChallengeParams(params),
         challenge: parseHostSourceAuthorityChallenge(params.challenge),
       },
     }
@@ -1498,8 +1518,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   if (frame.method === 'profile.collaboration_registration') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...authorized(params), account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
+      ...accountChallengeParams(params),
       challenge: parseHostCollaborationRegistrationChallenge(params.challenge),
     } }
   }

@@ -33,6 +33,8 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'session.list', command_id: commandId },
       { operation: 'session.create', command_id: commandId },
       { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1' },
+      { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1', session_id: sessionId },
+      { operation: 'session.create', command_id: commandId, session_id: sessionId },
       { operation: 'remote.event.respond', command_id: commandId, session_id: sessionId,
         control, client_id: randomUUID(), event_id: randomUUID(), outcome: 'allowed-once' },
       { operation: 'session.history', command_id: commandId, session_id: sessionId, max_events: 100 },
@@ -63,6 +65,7 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'session.list', command_id: id, profile_root: '/another-user' },
       { operation: 'session.create', command_id: id, cwd: '/tmp/escape' },
       { operation: 'session.create', command_id: id, workspace_id: '../escape' },
+      { operation: 'session.create', command_id: id, session_id: '../escape' },
       { operation: 'remote.event.respond', command_id: id, session_id: 'session-1',
         client_id: randomUUID(), event_id: randomUUID(), outcome: 'always-allow' },
       { operation: 'session.history', command_id: id, session_id: '', max_events: 100 },
@@ -178,6 +181,17 @@ describe('Profile remote UI read wire commands', () => {
     for (const endpoint of ['session/create', '/api/session/list', 'session/list?all=true',
       'dynamicCordisRunner/syncInspectManifest']) {
       expect(() => decode(readFrame(endpoint, { args: {} }))).toThrow()
+    }
+  })
+
+  it('REQ-20260930-0004: admits only original Session feed coordinates and immutable digest cursor', () => {
+    for (const request of [{ sessionId:'session-1' },{ sessionId:'session-1',cursor:'a'.repeat(64) }]) {
+      const value = readFrame('session/collaborationSources',{ args:{ request } })
+      expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+    }
+    for (const args of [{},{ request:{ sessionId:'../other' } },{ request:{ sessionId:'session-1',cursor:'bad' } },
+      { request:{ sessionId:'session-1',profile:'other' } },{ request:{ sessionId:'session-1' },token:'other' }]) {
+      expect(() => decode(readFrame('session/collaborationSources',{ args }))).toThrow()
     }
   })
 

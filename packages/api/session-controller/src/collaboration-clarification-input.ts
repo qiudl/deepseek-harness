@@ -41,8 +41,8 @@ function sameOwner(original: CollaborationSourceSnapshot, reply: CollaborationSo
     && original.model_snapshot.reasoning_effort === reply.model_snapshot.reasoning_effort
 }
 function splits(text: string, at: number): boolean {
+  // Source parsing already requires well-formed Unicode, so a high surrogate has a low successor.
   return at > 0 && at < text.length && text.charCodeAt(at - 1) >= 0xd800 && text.charCodeAt(at - 1) <= 0xdbff
-    && text.charCodeAt(at) >= 0xdc00 && text.charCodeAt(at) <= 0xdfff
 }
 function valid(input: CollaborationClarificationInput): boolean {
   const original = input.original_snapshot
@@ -64,8 +64,8 @@ function valid(input: CollaborationClarificationInput): boolean {
       mentionIds.add(id)
       bindings.push(mention.binding)
     }
-    const first = bindings[0]
-    if (first === undefined) return false
+    // The schema requires a mention, and each validated mention contributes one binding.
+    const [first] = bindings as [typeof bindings[number], ...typeof bindings[number][]]
     const target = first.kind === 'resolved' && bindings.every(binding => binding.kind === 'resolved' && deepEqualJson(binding.target, first.target))
       ? first.target : null
     if (!deepEqualJson(item.target, target) || item.source_evidence_spans.some(span => span.source_message_id !== original.source_message_id

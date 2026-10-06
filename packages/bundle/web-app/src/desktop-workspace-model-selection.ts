@@ -1,6 +1,6 @@
 /** Private worker HTTP read for the authenticated Desktop Host. */
-import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { handleDesktopPrivateRead } from './desktop-private-read.ts'
 import {
   parseHostWorkspaceModelSelection, parseHostWorkspaceModelSelectionTarget,
   type HostWorkspaceModelSelection, type HostWorkspaceModelSelectionTarget,
@@ -19,50 +19,8 @@ export async function handleDesktopWorkspaceModelSelectionRequest(
   token: string,
   inspect: (target: HostWorkspaceModelSelectionTarget, signal: AbortSignal) => Promise<HostWorkspaceModelSelection>,
 ): Promise<void> {
-  const authorization = req.headers.authorization
-  const actual = Buffer.from(authorization?.startsWith('Bearer ') ? authorization.slice(7) : '')
-  const expected = Buffer.from(token)
-  if (req.method !== 'POST' || !/^[A-Za-z0-9_-]{43}$/u.test(token)
-    || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-    res.writeHead(403).end()
-    return
-  }
-  const controller = new AbortController()
-  const close = () => { controller.abort() }
-  const timer = setTimeout(() => { controller.abort(); req.destroy() }, 10_000)
-  res.once('close', close)
-  const send = (status: number, value: unknown) => {
-    if (!res.destroyed && !res.writableEnded) {
-      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-        .end(JSON.stringify(value))
-    }
-  }
-  try {
-    let target: HostWorkspaceModelSelectionTarget
-    try {
-      let bytes = 0
-      const chunks: Buffer[] = []
-      for await (const chunk of req as AsyncIterable<unknown>) {
-        controller.signal.throwIfAborted()
-        if (!(chunk instanceof Uint8Array) || (bytes += chunk.byteLength) > 2048) throw Error('invalid_input')
-        chunks.push(Buffer.from(chunk))
-      }
-      target = parseHostWorkspaceModelSelectionTarget(JSON.parse(Buffer.concat(chunks).toString('utf8')))
-    } catch {
-      send(400, { error: 'invalid_input' })
-      return
-    }
-    try {
-      controller.signal.throwIfAborted()
-      const result = parseHostWorkspaceModelSelection(await inspect(target, controller.signal))
-      controller.signal.throwIfAborted()
-      if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) throw Error('mismatch')
-      send(200, result)
-    } catch {
-      send(422, { error: 'unavailable' })
-    }
-  } finally {
-    clearTimeout(timer)
-    res.removeListener('close', close)
-  }
+  return handleDesktopPrivateRead(
+    req, res, token, inspect, parseHostWorkspaceModelSelectionTarget, parseHostWorkspaceModelSelection,
+    (result, target) => result.workspace_id === target.workspace_id && result.session_id === target.session_id,
+  )
 }

@@ -294,6 +294,7 @@ describe('ApiSession model selection', () => {
     vi.spyOn(ctx.sessionProjections, 'stateOf').mockReturnValue(undefined)
 
     expect(() => agents.selectionFor(live)).toThrow('required modelSelection projection')
+    expect(() => agents.inspectSelectionFor(live)).toThrow('required modelSelection projection')
   })
 
   it('reads a reasoning-free request and consumes only the exact pending selection', async () => {
@@ -307,6 +308,7 @@ describe('ApiSession model selection', () => {
       provider: 'logged-provider',
       model: 'logged-model',
     })
+    expect(agents.inspectSelectionFor(logged)).toEqual({ provider: 'logged-provider', model: 'logged-model' })
 
     const pending = agent(ctx, header('pending-model'))
     const selection = agents.selectionFor(pending)
@@ -318,6 +320,9 @@ describe('ApiSession model selection', () => {
     expect(selection.current).toMatchObject({
       provider: 'selected-provider', model: 'selected-model', reasoningEffort: 'high',
     })
+    const seqBeforeRead = pending.session.seq
+    expect(agents.inspectSelectionFor(pending)).toEqual(selection.current)
+    expect(pending.session.seq).toBe(seqBeforeRead)
     expect(agents.consumeSelection(pending, 'other-provider', 'selected-model', 'high')).toBe(false)
     expect(agents.consumeSelection(pending, 'selected-provider', 'other-model', 'high')).toBe(false)
     expect(agents.consumeSelection(pending, 'selected-provider', 'selected-model', 'low')).toBe(false)
@@ -325,6 +330,7 @@ describe('ApiSession model selection', () => {
     expect(selection.current).toEqual({ provider: 'fixture', model: 'fixture-model' })
 
     const untouched = agent(ctx, header('uninstalled-model'))
+    expect(agents.inspectSelectionFor(untouched)).toEqual({ provider: 'fixture', model: 'fixture-model' })
     expect(agents.consumeSelection(untouched, 'fixture', 'fixture-model', undefined)).toBe(false)
   })
 })

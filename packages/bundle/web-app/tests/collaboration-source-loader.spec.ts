@@ -33,7 +33,7 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'delivery'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
   const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
@@ -54,7 +54,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     await rm(directory, { recursive: true, force: true })
   })
   vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
-  vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', mode === 'analysis-profile' ? 'B'.repeat(43) : '')
+  vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', mode === 'analysis-profile' || mode === 'analysis-missing-domain' ? 'B'.repeat(43) : '')
   vi.stubEnv('DSH_PROFILE_DELIVERY_TOKEN', mode === 'delivery' ? 'C'.repeat(43) : '')
   for (const key of ['DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) vi.stubEnv(key, '')
   // GUI/transport peers are fixtures; Source owners, registry, model runtime and storage load from YAML.
@@ -84,6 +84,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     } },
   }
   await writeFile(join(directory, 'cordis.yml'), JSON.stringify(Object.keys(plugins).map(id => ({ id, name: `source-test:${id}`,
+    ...(id === 'web' && mode === 'analysis-missing-domain' ? { isolate: { storageDomain: true } } : {}),
     config: id === 'web' ? { openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] }
       : id === 'controller' ? { nativeOpen: false } : {} }))))
   ctx.baseUrl = pathToFileURL(directory).href + '/'
@@ -152,7 +153,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
       { type: 'message_stop' },
     ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''))
   })
-  const adapter = mode === 'source-only' || mode === 'delivery' ? new FixtureAdapter() : new DeepSeekAdapter({
+  const adapter = mode === 'source-only' || mode === 'delivery' || mode === 'analysis-missing-domain' ? new FixtureAdapter() : new DeepSeekAdapter({
     options: () => resolveAdapterOptions({ baseURL: origin, models: [{ id: 'selected' }] }),
     resolveAuth: async () => ({ headers: { 'x-api-key': 'fixture-source-key' } }), resolveUserId: () => '00000000-0000-4000-8000-000000000001' as AnonymousUserId,
     // Malformed external extension JSON must not introduce tools into the logged Source analysis request.
@@ -272,7 +273,22 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
     expect(Object.values((JSON.parse(await readFile(join(directory, 'state', 'collaboration_delivery_v2.json'), 'utf8')) as typeof persisted).tables.replies)).toHaveLength(1)
     await workspace.attachSession(sessionId)
   }
-  const analysisJournal = mode !== 'source-only' && mode !== 'analysis-profile' && mode !== 'delivery' ? await openCollaborationAnalysisJournal(facility!) : undefined
+  if (mode === 'analysis-missing-domain') {
+    // Real Loader isolation removes storage only from the Web owner's context;
+    // the Controller's already-open Source journal retains its original data.
+    const nextId = 'message-missing-domain'
+    const next = { ...source, source_message_id: nextId,
+      active_mentions: source.active_mentions.map(mention => ({ ...mention,
+        source_span: { ...mention.source_span, source_message_id: nextId } })) }
+    const response = await postAnalysis({ action: 'prepare', binding_key: 'd'.repeat(64), input: next })
+    expect(response.status).toBe(422)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toEqual({ error: 'unavailable' })
+    expect(await readFile(join(directory, 'state', 'collaboration_source_v2.json'), 'utf8')).toContain(nextId)
+    await expect(readFile(join(directory, 'state', 'collaboration_analysis_v2.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(providerRequests).toBe(0)
+  }
+  const analysisJournal = mode !== 'source-only' && mode !== 'analysis-profile' && mode !== 'analysis-missing-domain' && mode !== 'delivery' ? await openCollaborationAnalysisJournal(facility!) : undefined
   const analysisWriter = analysisJournal ? createCollaborationAnalysisWriter(analysisJournal, async (record) => {
     expect(providerRequests).toBe(0)
     return { attempt_request_id: record.attempt_request_id, plan_id: 'fixture-plan', expected_plan_revision: '1',
@@ -399,7 +415,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'd
   await expect(factory['readCollaborationSourceSnapshot'](origin,token,target,new AbortController().signal,()=>false)).rejects.toThrow()
   expect(session.seq).toBe(seq)
   expect(ctx.agents.get(sessionId)).toBeUndefined()
-  expect(prepared).toHaveBeenCalledTimes(mode === 'analysis-profile' ? 2 : 1)
+  expect(prepared).toHaveBeenCalledTimes(mode === 'analysis-profile' || mode === 'analysis-missing-domain' ? 2 : 1)
   expect(stream).not.toHaveBeenCalled()
   await ctx.fiber.dispose()
   routes.delete('/v1/messages')

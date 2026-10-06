@@ -11,6 +11,7 @@ import {
 import type { HostControlFrame, HostWorkspaceModelSelection } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
 async function fixture() {
@@ -20,7 +21,7 @@ async function fixture() {
   })
   const time = { value: 1000 }
   const clock = { now: () => time.value }
-  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock, ...registryFileFixture() })
   const binding = {
     authorityEnvironmentId: randomUUID(),
     accountBindingHandle: 'binding:registration',
@@ -220,4 +221,11 @@ it('refuses an absent capability and pre-cancelled calls without another frame',
   expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
   await expect(f.client.attestWorkspaceAuthority(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })
   expect(f.seen.length).toBe(before)
+})
+
+it('refuses a valid result frame for another method after the authorized workspace membership read', async () => {
+  const f = await fixture(); await f.grant()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.workspace_authority'
+    ? { ...frame, method: 'profile.collaboration_analysis', result: { kind: 'output', json_base64url: 'e30' } } : frame)
+  await expect(f.client.attestWorkspaceAuthority(f.input)).rejects.toMatchObject({ code: 'unavailable' })
 })

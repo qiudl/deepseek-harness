@@ -19,7 +19,7 @@ const token = 'A'.repeat(43)
 const target = { workspace_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session' as never }
 const selection = { ...target, provider: 'p', model: 'm' }
 
-async function fixture(inspect = vi.fn(async () => selection)) {
+async function fixture(inspect = vi.fn(async (_target: unknown, _signal: AbortSignal) => selection)) {
   const server = createServer((req, res) => { void handleDesktopWorkspaceModelSelectionRequest(req, res, token, inspect) })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   onTestFinished(async () => {
@@ -30,7 +30,7 @@ async function fixture(inspect = vi.fn(async () => selection)) {
   const post = (body: object, authorization = `Bearer ${token}`) => fetch(url, {
     method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body),
   })
-  return { inspect, post }
+  return { inspect, post, url }
 }
 
 it('requires the private worker token and rejects cookie-only or arbitrary identity requests', async () => {
@@ -119,6 +119,14 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect(session.seq).toBe(seq)
   expect(ctx.agents.get(target.session_id)).toBeUndefined()
   expect(resume).not.toHaveBeenCalled()
+  session.append('model/selection', { provider: 'actual', model: 'basic' })
+  const plainSeq = session.seq
+  const plain = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(target) })
+  expect(plain.status).toBe(200)
+  expect(await plain.json()).toEqual({ ...target, provider: 'actual', model: 'basic' })
+  expect(session.seq).toBe(plainSeq)
+  expect(ctx.agents.get(target.session_id)).toBeUndefined()
+  expect(resume).not.toHaveBeenCalled()
   const cookie = await fetch(url, { method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body: JSON.stringify(target) })
   expect(cookie.status).toBe(403)
   await ctx.fiber.dispose()
@@ -136,3 +144,58 @@ it('sanitizes reader failures and rejects mismatched or secret-bearing results',
   f.inspect.mockResolvedValueOnce({ ...selection, api_key: 'private' } as typeof selection)
   expect((await f.post(target)).status).toBe(422)
 })
+
+it('refuses oversized bodies and non-POST requests before reading a Session', async () => {
+  const f = await fixture()
+  expect((await fetch(f.url, { headers: { authorization: `Bearer ${token}` } })).status).toBe(403)
+  expect((await f.post({ ...target, padding: 'x'.repeat(2048) })).status).toBe(400)
+  expect(f.inspect).not.toHaveBeenCalled()
+  expect((await f.post(target)).status).toBe(200)
+})
+
+it('cancels an owned Session read when its caller disconnects and accepts a later read', async () => {
+  const f = await fixture()
+  const started = Promise.withResolvers<AbortSignal>()
+  const cancelled = Promise.withResolvers<undefined>()
+  f.inspect.mockImplementationOnce(async (_target, signal) => {
+    started.resolve(signal)
+    await new Promise<void>((resolve) => {
+      signal.addEventListener('abort', () => { cancelled.resolve(undefined); resolve() }, { once: true })
+    })
+    return selection
+  })
+  const caller = new AbortController()
+  const request = fetch(f.url, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify(target), signal: caller.signal,
+  })
+  const rejected = expect(request).rejects.toThrow()
+  const ownedSignal = await started.promise
+  caller.abort()
+  await rejected
+  await cancelled.promise
+  expect(ownedSignal.aborted).toBe(true)
+  expect((await f.post(target)).status).toBe(200)
+})
+
+it('expires an unresponsive Session read without returning its selection', async () => {
+  const f = await fixture()
+  const started = Promise.withResolvers<AbortSignal>()
+  const cancelled = Promise.withResolvers<undefined>()
+  f.inspect.mockImplementationOnce(async (_target, signal) => {
+    started.resolve(signal)
+    await new Promise<void>((resolve) => {
+      signal.addEventListener('abort', () => { cancelled.resolve(undefined); resolve() }, { once: true })
+    })
+    return selection
+  })
+  const request = f.post(target)
+  const ownedSignal = await started.promise
+  await cancelled.promise
+  const response = await request
+  expect(response.status).toBe(422)
+  expect(response.headers.get('cache-control')).toBe('no-store')
+  expect(await response.json()).toEqual({ error: 'unavailable' })
+  expect(ownedSignal.aborted).toBe(true)
+  expect((await f.post(target)).status).toBe(200)
+}, 15_000)

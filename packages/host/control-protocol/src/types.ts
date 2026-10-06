@@ -1121,7 +1121,8 @@ export type HostRemoteSessionCommand =
   | { readonly operation: 'session.list'; readonly command_id: HostControlRequestId }
   | { readonly operation: 'session.create'
     readonly command_id: HostControlRequestId
-    readonly workspace_id?: string }
+    readonly workspace_id?: string
+    readonly session_id?: string }
   | { readonly operation: 'remote.event.respond'
     readonly command_id: HostControlRequestId
     readonly session_id: string
@@ -1206,7 +1207,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog'
+    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog'
     readonly payload: { readonly args: HostRemoteSessionJson }
