@@ -34,10 +34,12 @@ const requestSchema = z.strictObject({
 const selectionSchema = z.strictObject({
   source: z.strictObject({ ...coordinates, revision: version }),
   reference_request_id: id, source_kind: z.enum(['message', 'file']), source_locator: id, source_version: version,
-  range: z.union([z.strictObject({ unit: z.literal('whole') }), requestSchema.shape.range]),
+  range: z.union([z.strictObject({ unit: z.literal('whole') }),
+    z.strictObject({ unit: z.literal('quote'), text: z.string().min(1).refine(text => text.isWellFormed() && Buffer.byteLength(text) <= 16384) }),
+    requestSchema.shape.range]),
   recipient_mention_ids: requestSchema.shape.recipient_mention_ids,
   source_evidence_spans: requestSchema.shape.source_evidence_spans,
-}).refine(value => (value.range.unit === 'whole'
+}).refine(value => (value.range.unit === 'whole' || value.range.unit === 'quote'
   || value.range.end >= value.range.start && value.range.end - value.range.start <= referenceBytes)
   && Buffer.byteLength(JSON.stringify(value)) <= 32768)
 /** Independently authorized locator/range selection; the Profile derives media type and byte metadata. */
@@ -179,6 +181,7 @@ function referenceRecord(request: CollaborationReferenceRequest, source: Collabo
 
 async function extractReferenceContent(content: CollaborationReferenceContentSource,
   range: CollaborationReferenceSelection['range'], maximumBytes: number, signal: AbortSignal) {
+  if (range.unit === 'quote') return extractReferenceQuote(content, range.text, signal)
   const unit = range.unit === 'whole' ? content.source_kind === 'message' ? 'utf16' : 'byte' : range.unit
   const start = range.unit === 'whole' ? 0 : range.start
   const end = range.unit === 'whole' ? undefined : range.end
@@ -212,9 +215,32 @@ async function extractReferenceContent(content: CollaborationReferenceContentSou
   return { bytes: selected, range: { start, end: end === undefined ? position : end, unit } }
 }
 
+async function extractReferenceQuote(content: CollaborationReferenceContentSource, quote: string, signal: AbortSignal) {
+  if (!isTextual(content)) throw Error('collaboration_reference_range_invalid')
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+  let tail = '', position = 0, matches = 0, start = 0
+  const scan = (text: string) => {
+    const joined = tail + text
+    for (let index = joined.indexOf(quote); index !== -1; index = joined.indexOf(quote, index + 1)) {
+      start = position - tail.length + index
+      if (++matches > 1) throw Error('collaboration_reference_quote_ambiguous')
+    }
+    position += text.length
+    tail = quote.length > 1 ? joined.slice(-(quote.length - 1)) : ''
+  }
+  for await (const chunk of content.chunks) {
+    signal.throwIfAborted()
+    scan(decoder.decode(chunk, { stream: true }))
+  }
+  signal.throwIfAborted()
+  scan(decoder.decode())
+  if (matches !== 1) throw Error('collaboration_reference_quote_ambiguous')
+  return { bytes: Buffer.from(quote), range: { unit: 'utf16' as const, start, end: start + quote.length } }
+}
+
 /**
  * Parse a locator selection without caller content or computed byte metadata.
- * @param value - Exact original Source, recipients, evidence and explicit whole/range choice.
+ * @param value - Exact original Source, recipients, evidence and explicit whole, range or literal quote choice.
  * @returns detached selection; parsing supplies no sharing intent or transfer authority.
  */
 export function parseCollaborationReferenceSelection(value: unknown): CollaborationReferenceSelection {
@@ -227,7 +253,8 @@ export function parseCollaborationReferenceSelection(value: unknown): Collaborat
  * @param snapshot - Owning Profile's current original Source journal entry.
  * @param read - Independent current-Session message/attachment reader with complete source verification.
  * @param signal - Owning operation cancellation, checked before and after reads and extraction.
- * @returns frozen request and selected bytes with Profile-computed version, range, MIME, length and digests.
+ * @returns frozen request and selected bytes with Profile-computed version, range, MIME, length and digests;
+ * missing or repeated quotes refuse.
  */
 export async function captureCollaborationReferenceSelectionContent(value: unknown, snapshot: CollaborationSourceSnapshot,
   read: (selection: CollaborationReferenceSelection, signal: AbortSignal) => Promise<CollaborationReferenceContentSource>,

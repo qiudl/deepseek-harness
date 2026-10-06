@@ -22,6 +22,16 @@ it('roundtrips the private selection capture command without using an analysis c
   expect(decoded).toEqual(request())
   expect(decodeHostControlFrame(encodeHostControlFrame(decoded))).toEqual(request())
 })
+it('accepts a literal quote only as a selection and rejects it as computed capture metadata', () => {
+  const input = { ...selection(), range: { unit: 'quote', text: '范围😀' } }
+  expect(parseHostCollaborationReferenceSelection(input)).toEqual(input)
+  const frame = request()
+  expect(decodeHostControlFrame(JSON.stringify({ ...frame, params: { ...frame.params, selection: input } }) + '\n')).toMatchObject({ params: { selection: input } })
+  for (const text of ['', '\ud800', '字'.repeat(6000)])
+    expect(() => parseHostCollaborationReferenceSelection({ ...input, range: { unit: 'quote', text } })).toThrow()
+  const result = metadata()
+  expect(() => parseHostCollaborationReferenceCapture({ ...result, request: { ...result.request, range: input.range } })).toThrow()
+})
 
 const metadata = () => ({ descriptor: { workspace_id: workspace, session_id: 'session', source_message_id: 'message',
   source_revision: '1', snapshot_digest: 'a'.repeat(64) }, request: { ...selection(),

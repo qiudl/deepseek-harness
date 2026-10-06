@@ -762,7 +762,8 @@ function referenceSelection(f: Awaited<ReturnType<typeof fixture>>) {
 }
 function captureResponse(selection: HostCollaborationReferenceSelection) {
   const s = selection.source, range = selection.range.unit === 'whole'
-    ? { unit: 'utf16', start: 0, end: 10 } : selection.range
+    ? { unit: 'utf16', start: 0, end: 10 } : selection.range.unit === 'quote'
+      ? { unit: 'utf16', start: 0, end: selection.range.text.length } : selection.range
   return { descriptor: { workspace_id: s.workspace_id, session_id: s.session_id,
     source_message_id: s.source_message_id, source_revision: s.revision, snapshot_digest: 'a'.repeat(64) },
   request: { ...selection, source: { ...s, message_digest: 'a'.repeat(64) }, range,

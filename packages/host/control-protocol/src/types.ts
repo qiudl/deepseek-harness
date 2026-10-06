@@ -662,7 +662,8 @@ export type HostCollaborationReferenceSelection = Readonly<{
   source_kind: 'message' | 'file'
   source_locator: string
   source_version: string
-  range: Readonly<{ unit: 'whole' }> | Readonly<{ unit: 'utf16' | 'byte'; start: number; end: number }>
+  range: Readonly<{ unit: 'whole' }> | Readonly<{ unit: 'quote'; text: string }>
+    | Readonly<{ unit: 'utf16' | 'byte'; start: number; end: number }>
   recipient_mention_ids: readonly HostCollaborationMentionId[]
   source_evidence_spans: readonly Readonly<{ source_message_id: string; source_revision: string; start: number; end: number }>[]
 }>

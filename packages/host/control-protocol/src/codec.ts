@@ -1144,6 +1144,11 @@ export function parseHostCollaborationReferenceSelection(value: unknown): HostCo
   const raw = registrationRecord(r.range)
   let range: HostCollaborationReferenceSelection['range']
   if (raw.unit === 'whole') { referenceKeys(raw, ['unit']); range = Object.freeze({ unit: 'whole' }) }
+  else if (raw.unit === 'quote') {
+    referenceKeys(raw, ['unit', 'text'])
+    if (typeof raw.text !== 'string' || !raw.text.length || !raw.text.isWellFormed() || Buffer.byteLength(raw.text) > 16384) reject()
+    range = Object.freeze({ unit: 'quote', text: raw.text })
+  }
   else {
     referenceKeys(raw, ['unit', 'start', 'end'])
     if (raw.unit !== 'utf16' && raw.unit !== 'byte') reject()
@@ -1190,7 +1195,7 @@ export function parseHostCollaborationReferenceCapture(value: unknown): HostColl
   const selected = parseHostCollaborationReferenceSelection({ source, reference_request_id: request.reference_request_id,
     source_kind: request.source_kind, source_locator: request.source_locator, source_version: request.source_version,
     range: request.range, recipient_mention_ids: request.recipient_mention_ids, source_evidence_spans: request.source_evidence_spans })
-  if (selected.range.unit === 'whole' || typeof request.mime_type !== 'string' || request.mime_type.length > 128
+  if (selected.range.unit === 'whole' || selected.range.unit === 'quote' || typeof request.mime_type !== 'string' || request.mime_type.length > 128
     || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+(?:;[\x20-\x7e]+)?$/u.test(request.mime_type)) reject()
   digest(request.content_digest)
   const length = referenceOffset(request.byte_length), extent = selected.range.end - selected.range.start

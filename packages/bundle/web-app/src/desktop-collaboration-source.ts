@@ -1,5 +1,6 @@
 /** Private worker HTTP read for the authenticated Desktop Host. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { createHash } from 'node:crypto'
 import { handleDesktopPrivateRequest } from './desktop-private-read.ts'
 import { describeCollaborationSource, parseCollaborationSourceSnapshot,
   parseCollaborationReferenceSelection, parseCollaborationReferenceMetadata, collaborationJournalDigest } from '@deepseek-ai/dsh-api-session-controller'
@@ -109,7 +110,11 @@ export async function handleDesktopCollaborationReferenceCaptureRequest(req: Inc
         && collaborationJournalDigest(request.source_evidence_spans) === collaborationJournalDigest(selection.source_evidence_spans)
         && (selection.range.unit === 'whole'
           ? request.range.start === 0 && request.range.unit === (selection.source_kind === 'message' ? 'utf16' : 'byte')
-          : collaborationJournalDigest(request.range) === collaborationJournalDigest(selection.range))
+          : selection.range.unit === 'quote'
+            ? request.range.unit === 'utf16' && request.range.end - request.range.start === selection.range.text.length
+              && request.byte_length === Buffer.byteLength(selection.range.text)
+              && request.content_digest === createHash('sha256').update(selection.range.text).digest('hex')
+            : collaborationJournalDigest(request.range) === collaborationJournalDigest(selection.range))
     }, 32768)
 }
 
