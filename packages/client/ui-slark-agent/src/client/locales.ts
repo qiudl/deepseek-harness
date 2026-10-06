@@ -5,6 +5,16 @@ export const NS = 'slarkAgent'
 
 /** Simplified Chinese copy. */
 export const zh = {
+  'execution.trace': '原始 Trace ID：',
+  'execution.preview': '查看待执行任务',
+  'execution.confirm': '确认执行此任务',
+  'execution.reconcile': '核对受理状态',
+  'execution.disabled': '此环境尚未开放任务执行。',
+  'execution.sending': '正在提交确认…',
+  'execution.recorded': '已受理，等待执行结果。',
+  'execution.uncertain': '尚未确认受理结果，请核对状态。',
+  'execution.not_admitted': '尚未受理，可重新确认执行。',
+
   'scope.selectedPending': '还有 {count} 个已选空间未在当前目录中显示。加载更多可查看，已有选择会保留。',
   'scope.title': 'Slark 协同',
   'scope.description': '选择此 DSH 工作区可 @ 的 Slark 项目空间，可多选。日常任务直接在聊天中 @Agent 并用自然语言描述。',
@@ -67,6 +77,16 @@ export const zh = {
 
 /** English copy. */
 export const en = {
+  'execution.trace': 'Original Trace ID:',
+  'execution.preview': 'Preview tasks',
+  'execution.confirm': 'Confirm this task',
+  'execution.reconcile': 'Check admission',
+  'execution.disabled': 'Task execution is not enabled in this environment.',
+  'execution.sending': 'Submitting confirmation…',
+  'execution.recorded': 'Accepted; awaiting execution results.',
+  'execution.uncertain': 'Admission is uncertain. Check its status.',
+  'execution.not_admitted': 'Not admitted. You can confirm this task again.',
+
   'scope.selectedPending': '{count} selected spaces are outside the loaded list. Load more to view them; existing selections are retained.',
   'scope.title': 'Slark collaboration',
   'scope.description': 'Choose the Slark project spaces this DSH workspace can mention. Select multiple spaces, then describe tasks in chat with @Agent.',

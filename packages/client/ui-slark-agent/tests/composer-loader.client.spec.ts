@@ -1359,3 +1359,36 @@ it.each(['missing','rejected','bad-receipt'] as const)('closed-root recovery ret
   expect(composer.snapshot.draft).toBe(draft);expect(composer.snapshot.occurrences[0]?.ref).toBe(ref)
   expect(submit).not.toHaveBeenCalled();expect(sink).not.toHaveBeenCalled()
 })
+
+it('routes explicit task confirmation through the YAML-loaded original Session binding', async () => {
+  const f = await bench(true)
+  const bridge = window.__DSH_DESKTOP_HOST__
+  if (!bridge) throw Error('missing Desktop fixture')
+  bridge.collaborationPlanningAvailable = true
+  const execution = vi.fn<NonNullable<typeof bridge.collaborationRootExecution>>(async request =>
+    request.action === 'preview' ? { ok:true,previewId:'main-preview',rootTraceId:'b'.repeat(32),executionEnabled:true,
+      tasks:[{ taskId:'task',question:'Do the displayed work',agentName:'Guide',projectName:'Project' }] }
+      : { ok:true,status:'recorded' })
+  bridge.collaborationRootExecution = execution
+  const original = { source:{ workspace_id:f.workspace.id,session_id:'session-1',source_message_id:'first',source_revision:'1' },
+    snapshot_digest:'a'.repeat(64),original_message:'@Guide 原始任务' }
+  f.originals.push(original)
+  const entry=f.ctx.slots.entries('conversation.input.dock').find(item=>item.options.id==='slark-collaboration-results')
+  if(!entry?.inject) throw Error('missing results registration')
+  const value: unknown=Reflect.apply(entry.inject,undefined,[SessionId('session-1')])
+  if(!value || typeof value!=='object' || !('executionAction' in value) || typeof value.executionAction!=='function') throw Error('missing command')
+  const bindings=value as CollaborationResultsInjected
+  await bindings.hooks.slarkResults.refresh()
+  expect(execution).not.toHaveBeenCalled()
+  await bindings.executionAction(original.snapshot_digest)
+  expect(execution).toHaveBeenCalledWith({ action:'preview',source:original.source })
+  await bindings.executionAction(original.snapshot_digest,'task')
+  expect(execution).toHaveBeenLastCalledWith({ action:'confirm',previewId:'main-preview',taskId:'task' })
+  expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('recorded')
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  const plugin=[...f.ctx.loader.entries()].find(item=>item.options.name==='composer-test:source')
+  if(!plugin?.fiber) throw Error('missing loaded source')
+  await plugin.fiber.dispose()
+  await bindings.executionAction(original.snapshot_digest,'task')
+  expect(execution).toHaveBeenCalledTimes(2)
+})

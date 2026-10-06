@@ -43,7 +43,7 @@ it('distinguishes queued, removed and context-applied evidence without treating 
   log.push(event('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [] }, 1))
   expect(observeCollaborationFeedback(log, m).status).toBe('claimed_or_removed')
   log.push(event('step/start', { turn: 1, step: 1 }, 2), event('user/message', m, 3))
-  expect(observeCollaborationFeedback(log, m)).toMatchObject({ status: 'context_applied', session_event_seq: 3, continuation_observed: false })
+  expect(observeCollaborationFeedback(log, m)).toMatchObject({ status: 'context_applied', session_event_seq: 3, consuming_step: { turn:1,step:1,start_event_seq:2 }, continuation_observed: false })
   log.push(event('step/end', { turn: 1, step: 1 }, 4), event('step/start', { turn: 2, step: 1 }, 5), event('assistant/message', {}, 6))
   expect(observeCollaborationFeedback(log, m).continuation_observed).toBe(false)
 })
@@ -56,11 +56,21 @@ it('rejects a rewritten, duplicated or reinserted feedback message instead of ce
 })
 it('requires the same admitted step to contain an assistant settlement before reporting continuation', () => {
   const m = message(), log = [event('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [m] }, 0), event('step/start', { turn: 1, step: 1 }, 1), event('user/message', m, 2), event('assistant/message', {}, 3)]
-  expect(observeCollaborationFeedback(log, m)).toMatchObject({ status: 'context_applied', continuation_observed: true, session_event_seq: 2 })
+  expect(observeCollaborationFeedback(log, m)).toMatchObject({ status: 'context_applied', continuation_observed: true, session_event_seq: 2, consuming_step: { turn:1,step:1,start_event_seq:1 }, assistant_event_seq:3 })
 })
 
 it('refuses invalid durable inbox ranges and context commits without an admitting step', () => {
   const m = message()
   expect(() => observeCollaborationFeedback([event('agent/inbox/spliced', { target: 'next-step', start: 1, inserted: [m] }, 0)], m)).toThrow('history_invalid')
   expect(() => observeCollaborationFeedback([event('user/message', m, 0)], m)).toThrow('message_conflict')
+})
+
+it('retains actual consuming coordinates after later turns and rejects invalid step coordinates', () => {
+  const m=message(), insertion=event('agent/inbox/spliced',{ target:'next-step',start:0,inserted:[m] },0)
+  const log=[insertion,event('step/start',{ turn:7,step:3 },1),event('user/message',m,2),event('assistant/message',{},3),
+    event('step/end',{ turn:7,step:3 },4),event('step/start',{ turn:8,step:1 },5),event('assistant/message',{},6)]
+  expect(observeCollaborationFeedback(log,m)).toMatchObject({ consuming_step:{ turn:7,step:3,start_event_seq:1 },assistant_event_seq:3 })
+  for(const turn of [-1, 0.5, Number.MAX_SAFE_INTEGER+1]) {
+    expect(()=>observeCollaborationFeedback([insertion,event('step/start',{ turn,step:1 },1),event('user/message',m,2)],m)).toThrow('history_invalid')
+  }
 })

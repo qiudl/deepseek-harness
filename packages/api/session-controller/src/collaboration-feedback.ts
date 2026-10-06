@@ -27,6 +27,8 @@ export interface CollaborationFeedbackObservation {
   readonly event_count: number
   readonly log_digest: string
   readonly session_event_seq?: number
+  readonly consuming_step?: { readonly turn: number; readonly step: number; readonly start_event_seq: number }
+  readonly assistant_event_seq?: number
   readonly continuation_observed: boolean
 }
 /** Build one deterministic relay from the original admitted invocation and committed reply.
@@ -65,12 +67,15 @@ export function createCollaborationFeedbackMessage(executionValue: unknown, deli
 export function observeCollaborationFeedback(events: readonly SessionEvent[], message: UserMessage): CollaborationFeedbackObservation {
   const pending = { 'next-turn': [] as UserMessage[], 'next-step': [] as UserMessage[] }
   let inserted = false, consumed: number | undefined, consumingStep = false, continuation = false, stepOpen = false
+  let activeStep: CollaborationFeedbackObservation['consuming_step']
+  let admittedStep: CollaborationFeedbackObservation['consuming_step'], assistantSeq: number | undefined
   const match = (candidate: UserMessage): void => {
     if (!isDeepStrictEqual(candidate, message)) throw Error('collaboration_feedback_message_conflict')
   }
   for (const event of events) {
     if (event.type === 'step/start' || event.type === 'step/end' || event.type === 'turn/end') {
       consumingStep = false; stepOpen = event.type === 'step/start'
+      activeStep = event.type === 'step/start' ? { turn: event.data.turn, step: event.data.step, start_event_seq: event.seq } : undefined
     }
     if (event.type === 'agent/inbox/spliced') {
       const splice = event.data, queue = pending[splice.target], removed = splice.removedCount ?? 0
@@ -87,16 +92,20 @@ export function observeCollaborationFeedback(events: readonly SessionEvent[], me
     if (event.type === 'user/message' && event.data.id === message.id) {
       match(event.data)
       if (!inserted || !stepOpen || consumed !== undefined) throw Error('collaboration_feedback_message_conflict')
-      consumed = event.seq; consumingStep = true
+      if (!activeStep || !Number.isSafeInteger(activeStep.turn) || activeStep.turn < 0
+        || !Number.isSafeInteger(activeStep.step) || activeStep.step < 0) throw Error('collaboration_feedback_history_invalid')
+      consumed = event.seq; consumingStep = true; admittedStep = activeStep
     }
-    if (event.type === 'assistant/message' && consumingStep) continuation = true
+    if (event.type === 'assistant/message' && consumingStep) { continuation = true; assistantSeq ??= event.seq }
   }
   return { message_id: message.id,
     status: consumed !== undefined ? 'context_applied'
       : pending['next-step'].some(m => m.id === message.id) || pending['next-turn'].some(m => m.id === message.id)
         ? 'queued' : inserted ? 'claimed_or_removed' : 'not_enqueued',
     event_count: events.length, log_digest: collaborationJournalDigest(events),
-    ...(consumed === undefined ? {} : { session_event_seq: consumed }), continuation_observed: continuation }
+    ...(consumed === undefined ? {} : { session_event_seq: consumed }),
+    ...(admittedStep === undefined ? {} : { consuming_step: admittedStep }),
+    ...(assistantSeq === undefined ? {} : { assistant_event_seq: assistantSeq }), continuation_observed: continuation }
 }
 
 const targetSchema = z.unknown().transform((value, ctx) => {

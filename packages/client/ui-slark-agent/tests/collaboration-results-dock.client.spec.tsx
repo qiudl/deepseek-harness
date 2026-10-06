@@ -27,6 +27,7 @@ function fixture(answer = '完整回复') {
   const props: Parameters<typeof CollaborationResultsDock>[0] = { ...dockRuntime(),
     useSlarkResults: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
       selector(useSyncExternalStore(model.subscribe, model.getSnapshot)), loadSources: () => model.loadSources(),
+    executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
     loadReplies: (id: string) => model.loadReplies(id), t: dockTranslate }
   return { model, read, readSources, props, original, item, bridge }
 }
@@ -224,4 +225,34 @@ it('shows Source and reply transport failures in the original collaboration regi
   await act(async () => { await f.model.refresh() })
   expect(screen.queryByText(f.original.original_message)).toBeNull()
   expect(screen.getByText(zh['task.readUnavailable'])).toBeTruthy()
+})
+
+it('previews concrete work, confirms only on click, and checks uncertainty without resubmitting', async () => {
+  const f = fixture()
+  f.read.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const execute = vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>(async request =>
+    request.action === 'preview' ? { ok: true, previewId: 'preview', rootTraceId: 'b'.repeat(32), executionEnabled: true,
+      tasks: [{ taskId: 'task', question: '<script>具体任务', agentName: 'Guide', projectName: 'Project' }] }
+      : request.action === 'confirm' ? { ok: false } : { ok: true, status: 'recorded' })
+  f.bridge.collaborationRootExecution = execute
+  const view = render(<CollaborationResultsDock {...f.props} />)
+  await screen.findByTestId('slark-execution-preview')
+  expect(execute).not.toHaveBeenCalled()
+  await act(async () => { screen.getByTestId('slark-execution-preview').click() })
+  expect(screen.getByText('<script>具体任务')).toBeTruthy()
+  expect(view.container.querySelector('script')).toBeNull()
+  expect(execute).toHaveBeenCalledWith({ action: 'preview', source })
+  expect(screen.queryByText(zh['execution.recorded'])).toBeNull()
+  await act(async () => { screen.getByTestId('slark-execution-confirm').click() })
+  expect(execute).toHaveBeenLastCalledWith({ action:'confirm',previewId:'preview',taskId:'task' })
+  expect(screen.getByText(zh['execution.uncertain'])).toBeTruthy()
+  expect(screen.getByTestId('slark-execution-confirm').hasAttribute('disabled')).toBe(true)
+  await act(async () => { screen.getByTestId('slark-execution-reconcile').click() })
+  expect(execute).toHaveBeenLastCalledWith({ action:'reconcile',previewId:'preview',taskId:'task' })
+  expect(screen.getByText(zh['execution.recorded'])).toBeTruthy()
+  expect(screen.queryByText(zh['task.done'])).toBeNull()
+  await act(async () => { await f.model.refresh() })
+  expect(execute).toHaveBeenCalledTimes(3)
+  view.unmount()
 })

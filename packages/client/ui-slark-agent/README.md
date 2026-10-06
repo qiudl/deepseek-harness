@@ -71,10 +71,7 @@ Agent mentions require the current account's Slark Desktop bridge to report invo
 
 - **Desktop-only directory** — a standalone DSH browser session cannot list or invoke Slark Agents.
 - **Text-only scope submission** — scope mode accepts up to ten explicitly selected Slark Agent chips and a nonempty text question per send; mixed references, attachments and repeated chip identities are refused. Legacy mode accepts one Agent.
-- **Collaboration 2.0 integration pending** — scoped chat submission calls Main's original Source capture, planning and automatic admission. Scope and execution switches default off. Original-Session v2 readonly messages and results are connected; the actual provider/GUI loop, durable Host replies and signed acknowledgments, multi-target task interpretation and explicit references still need integration and acceptance; scope mode never uses the legacy invocation as a fallback.
-
-- **Single target** — one explicitly selected Agent and a nonempty text question per send; multiple mentions, mixed references, and attachments are refused.
-- **Collaboration 2.0 integration pending** — scoped single-target chat submission calls Main's original Source capture, planning and automatic admission. Scope, execution and root-planning switches default off. Root planning additionally requires the existing scope/execution rollout and replaces automatic admission with planning only; persistent planning recovery and concrete execution grants remain deferred. Original-Session v2 readonly messages and results are connected; the actual provider/GUI loop, durable Host replies and signed acknowledgments, multiple targets and explicit references still need integration and acceptance; scope mode never uses the legacy invocation as a fallback.
+- **Collaboration 2.0 integration pending** — scope, execution and root-planning switches default off. Root planning preserves the original Source and trace, and concrete tasks require Main-owned preview and confirmation. Original-Session result reads are connected. Actual provider/GUI acceptance, authorized continuation, signed consumption receipts and explicit references remain pending; scope mode never falls back to legacy invocation.
 
 <a id="dev-note"></a>
 
@@ -88,3 +85,5 @@ The [workspace project-scope decision](../../../.agents/notes/implemented/featur
 </details>
 
 Scoped references picked in root-planning mode retain `submission_mode: planning` in the draft. When new planning closes, submitting that retained draft calls only Desktop `collaborationRecover`, even if legacy execution remains enabled. Missing recovery support or an uncertain/mismatched planning receipt preserves the draft; no ordinary chat or legacy execution is started. This path recovers locally acknowledged roots; it does not browse prior roots after a successful draft has been cleared.
+
+In root-planning mode, the original-message result area can preview concrete frozen tasks through Desktop Main. Previewing does not execute work. Confirming a displayed task submits its Main-retained selection; an uncertain response offers a status check without readmission. The original Trace ID remains visible. Account, window, workspace or Connection changes discard old view state, and Main expires previews after five minutes. A disabled environment permits preview only. Acceptance, execution completion and original-Session consumption remain separate facts.

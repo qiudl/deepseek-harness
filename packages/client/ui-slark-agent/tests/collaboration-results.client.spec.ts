@@ -361,3 +361,36 @@ it('discards a fulfilled Source page if workspace ownership changes before the a
   expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
   expect(f.deliveries).not.toHaveBeenCalled()
 })
+
+it.each(['reset', 'move'] as const)('discards late execution previews after %s', async (change) => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  let finish!: (value: unknown) => void
+  f.bridge.collaborationRootExecution = () => new Promise((resolve) => { finish = resolve })
+  await f.model.refresh()
+  const pending = f.model.executionAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]?.execution?.phase).toBe('loading')
+  f[change]()
+  finish({ ok:true,previewId:'old',rootTraceId:'b'.repeat(32),executionEnabled:true,tasks:[{ taskId:'task',question:'old',agentName:'Guide',projectName:'Project' }] })
+  await pending
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+it('rejects malformed or duplicate previews and disabled execution without confirmation', async () => {
+  const f=fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const task={ taskId:'task',question:'Work',agentName:'Guide',projectName:'Project' }
+  const command=vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>()
+  f.bridge.collaborationRootExecution=command
+  await f.model.refresh()
+  for(const value of [null, { ok:false }, { ok:true,previewId:'p',rootTraceId:'b'.repeat(32),executionEnabled:true,tasks:[task,task] },
+    { ok:true,previewId:'p',rootTraceId:'b'.repeat(32),executionEnabled:true,tasks:[{ ...task,question:'x'.repeat(32769) }] }]) {
+    command.mockResolvedValue(value)
+    await f.model.executionAction(original.snapshot_digest)
+    expect(f.model.getSnapshot().groups[0]?.execution?.phase).toBe('error')
+  }
+  command.mockResolvedValue({ ok:true,previewId:'p',rootTraceId:'b'.repeat(32),executionEnabled:false,tasks:[task] })
+  await f.model.executionAction(original.snapshot_digest)
+  const count=command.mock.calls.length
+  await f.model.executionAction(original.snapshot_digest,'task')
+  expect(command).toHaveBeenCalledTimes(count)
+})

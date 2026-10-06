@@ -22,8 +22,20 @@ export interface ScopedCollaborationReply {
 /** Page methods cannot select Account, Host, Computer or authorization proof. */
 export interface CollaborationResultsBridge extends CollaborationDialogueBridge {
   readonly collaborationScopeAvailable?: boolean
+  readonly collaborationPlanningAvailable?: boolean
+  collaborationRootExecution?(request: { action: 'preview'; source: Source } |
+    { action: 'confirm' | 'reconcile'; previewId: string; taskId: string }): Promise<unknown>
   collaborationDeliveries?(request: { source: Source; limit: number; after_delivery_id?: string }): Promise<
     { ok: true; value: { deliveries: readonly ScopedCollaborationReply[]; next_cursor?: string } } | { ok: false; errorCode: string }>
+}
+/** Main-owned preview and local command progress; these labels never assert task completion. */
+export interface CollaborationExecutionView {
+  readonly phase: 'loading' | 'ready' | 'error'
+  readonly previewId?: string
+  readonly rootTraceId?: string
+  readonly enabled?: boolean
+  readonly tasks?: readonly { taskId: string; question: string; agentName: string; projectName: string }[]
+  readonly outcomes?: Readonly<Record<string, 'sending' | 'recorded' | 'uncertain' | 'not_admitted'>>
 }
 /** One original message and the readable results obtained for that exact snapshot. */
 export interface CollaborationResultGroup {
@@ -33,11 +45,13 @@ export interface CollaborationResultGroup {
   readonly pending?: CollaborationPendingPage['pending_items']
   readonly pendingUnavailable?: boolean
   readonly planningState?: string
+  readonly execution?: CollaborationExecutionView
   readonly nextCursor?: string
 }
 /** Stable observable value consumed by the injected framework hook. */
 export interface CollaborationResultsSnapshot {
   readonly phase: 'idle' | 'loading' | 'ready' | 'error'
+  readonly executionAvailable?: boolean
   readonly groups: readonly CollaborationResultGroup[]
   readonly nextCursor?: string
 }
@@ -64,6 +78,7 @@ function wait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 /** Own readonly paging and refresh through the Session, workspace and Connection generation. */
 export class CollaborationResultsModel {
   private state = empty()
+  private executions = new Map<string, CollaborationExecutionView>()
   private observers = new Set<() => void>()
   private generation = 0
   private workspaceId: string | undefined
@@ -94,12 +109,22 @@ export class CollaborationResultsModel {
       ? data.items.find(item => item.sessionIds.includes(this.sessionId))?.workspaceId : undefined
     if (workspaceId === this.workspaceId && host === this.boundBridge && connection === this.connectionGeneration) return false
     this.workspaceId = workspaceId; this.boundBridge = host; this.connectionGeneration = connection
+    this.executions.clear()
     this.generation++; this.sourcePages = 1; this.replyPages.clear(); this.controller?.abort(); this.publish(empty())
     return true
   }
   private current(generation: number): boolean { this.bind(); return !this.closed && generation === this.generation }
   private publish(state: CollaborationResultsSnapshot): void {
-    this.state = state
+    const { executionAvailable: _available, ...base } = state
+    this.state = { ...base,
+      ...(this.boundBridge?.collaborationPlanningAvailable && this.boundBridge.collaborationRootExecution
+        ? { executionAvailable: true } : {}),
+      groups: state.groups.map((group) => {
+        const execution = this.executions.get(group.original.snapshot_digest)
+        if (group.execution === execution) return group
+        const { execution: _old, ...original } = group
+        return { ...original, ...(execution ? { execution } : {}) }
+      }) }
     if (!this.closed) this.observers.forEach((fn) => { fn() })
   }
   /**
@@ -129,7 +154,7 @@ export class CollaborationResultsModel {
     if (this.timer !== undefined) clearInterval(this.timer)
     this.timer = undefined
     if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-collaboration-admitted', this.refreshEvent)
-    this.controller?.abort(); this.generation++
+    this.controller?.abort(); this.generation++; this.executions.clear(); this.publish(this.state)
   }
   private sourcePage(value: SessionCollaborationSourcesValue, cursor?: string): SessionCollaborationSourcesValue {
     if (!array(value.items) || value.items.length > 8 || bytes(value) > 256 * 1024
@@ -263,15 +288,72 @@ export class CollaborationResultsModel {
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
       let next = await this.results(group.original, signal, generation, group.nextCursor, group.replies)
       if (this.current(generation)) {
-        if (bytes(this.state.groups.map(item => item === group ? next : item)) > 16 * 1024 * 1024) {
+        if (bytes(this.state.groups.map(item =>
+          item.original.snapshot_digest === group.original.snapshot_digest ? next : item)) > 16 * 1024 * 1024) {
           next = { original: group.original, replies: [], phase: 'error' }
         }
         if (next.phase === 'ready') this.replyPages.set(snapshotDigest, (this.replyPages.get(snapshotDigest) ?? 1) + 1)
-        this.publish({ ...this.state, phase: 'ready', groups: this.state.groups.map(item => item === group ? next : item) })
+        this.publish({ ...this.state, phase: 'ready', groups: this.state.groups.map(item =>
+          item.original.snapshot_digest === group.original.snapshot_digest ? next : item) })
       }
     } finally {
       this.finishQuery()
     }
+  }
+  /**
+   * Preview work or explicitly confirm one Main-retained task; refresh and recovery never admit new work.
+   * @param digest - Existing original Source group.
+   * @param taskId - Concrete displayed task, omitted for a readonly preview.
+   * @param reconcile - Read the durable confirmation without admitting work.
+   * @returns Completion of the command; obsolete connection results are discarded.
+   */
+  async executionAction(digest: string, taskId?: string, reconcile = false): Promise<void> {
+    this.bind()
+    const original = this.state.groups.find(group => group.original.snapshot_digest === digest)?.original
+    const bridge = this.boundBridge, previous = this.executions.get(digest)
+    if (this.closed || !this.workspaceId || !original || !bridge?.collaborationPlanningAvailable || !bridge.collaborationRootExecution
+      || previous?.phase === 'loading' || Object.values(previous?.outcomes ?? {}).includes('sending')) return
+    let request: Parameters<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>[0]
+    if (taskId === undefined) request = { action: 'preview', source: original.source }
+    else {
+      if (!previous?.previewId || !previous.tasks?.some(task => task.taskId === taskId) || (!reconcile && !previous.enabled)) return
+      request = { action: reconcile ? 'reconcile' : 'confirm', previewId: previous.previewId, taskId }
+    }
+    const prior: CollaborationExecutionView = previous ?? { phase: 'ready' }
+    const generation = this.generation
+    this.executions.set(digest, taskId === undefined ? { phase: 'loading' }
+      : { ...prior, outcomes: { ...prior.outcomes, [taskId]: 'sending' } })
+    this.publish(this.state)
+    try {
+      const result = await wait(bridge.collaborationRootExecution(request), AbortSignal.timeout(35_000))
+      if (!this.current(generation)) return
+      if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) throw Error('unavailable')
+      if (taskId === undefined) {
+        if (!('rootTraceId' in result) || typeof result.rootTraceId !== 'string' || !/^(?!0{32}$)[a-f0-9]{32}$/u.test(result.rootTraceId)
+          || !('previewId' in result) || !safeText(result.previewId, 128) || !result.previewId
+          || !('executionEnabled' in result) || typeof result.executionEnabled !== 'boolean'
+          || !('tasks' in result) || !Array.isArray(result.tasks) || !result.tasks.length || result.tasks.length > 10
+          || bytes(result) > 800 * 1024) throw Error('invalid_preview')
+        const seen = new Set<string>()
+        const tasks = result.tasks.map((value: unknown) => {
+          if (!value || typeof value !== 'object') throw Error('invalid_task')
+          const row = value as Record<string, unknown>
+          if (!safeText(row.taskId, 256) || !row.taskId || seen.has(row.taskId) || !safeText(row.question, 32 * 1024)
+            || !safeText(row.agentName, 512) || !safeText(row.projectName, 512)) throw Error('invalid_task')
+          seen.add(row.taskId)
+          return { taskId: row.taskId, question: row.question, agentName: row.agentName, projectName: row.projectName }
+        })
+        this.executions.set(digest, { phase: 'ready', previewId: result.previewId, rootTraceId: result.rootTraceId, enabled: result.executionEnabled, tasks })
+      } else {
+        if (!('status' in result) || (result.status !== 'recorded' && result.status !== 'not_admitted')) throw Error('invalid_outcome')
+        this.executions.set(digest, { ...prior, outcomes: { ...prior.outcomes, [taskId]: result.status } })
+      }
+    } catch {
+      if (!this.current(generation)) return
+      this.executions.set(digest, taskId === undefined ? { phase: 'error' }
+        : { ...prior, outcomes: { ...prior.outcomes, [taskId]: 'uncertain' } })
+    }
+    if (this.current(generation)) this.publish(this.state)
   }
   /** Release observers and readonly requests; accepted tasks continue independently. */
   dispose(): void {
