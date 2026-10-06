@@ -43,7 +43,8 @@ export const zh = {
   'scope.executorPending': '项目范围可以设置，Agent 目录目前仅供查看；新版任务发送尚未接通。',
   'scope.readOnly': '仅供查看',
   'scope.mentionReady': '可 @ 发送',
-  'scope.chatReady': '在聊天中 @ 下方 Agent，即可用自然语言提交任务。',
+  'scope.chatReady': '点击下方 Agent 插入 @，或在聊天中输入 @，再用自然语言描述任务。',
+  'scope.insertUnavailable': '未能插入该 Agent。请刷新协同目录，并确认输入框可编辑；原草稿已保留。',
 
   'section.agents': 'Slark 企业 Agent',
   'section.scopedAgents': 'Slark Agent',
@@ -122,7 +123,8 @@ export const en = {
   'scope.executorPending': 'Project scope can be saved. The Agent directory is currently read-only; the new task submission is not connected yet.',
   'scope.readOnly': 'Read-only',
   'scope.mentionReady': 'Available for @ tasks',
-  'scope.chatReady': 'Mention an Agent below in chat and describe the task in natural language.',
+  'scope.chatReady': 'Click an Agent below to insert @, or type @ in chat, then describe the task in natural language.',
+  'scope.insertUnavailable': 'The Agent could not be inserted. Refresh the directory and check that the composer is editable. Your draft is retained.',
 
   'section.agents': 'Slark enterprise Agents',
   'section.scopedAgents': 'Slark Agents',

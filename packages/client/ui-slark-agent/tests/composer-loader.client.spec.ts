@@ -18,6 +18,10 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
+import { createElement, useSyncExternalStore } from 'react'
+import { fireEvent, render, within } from '@testing-library/react'
+import { ProjectScopeDock } from '../src/client/ProjectScopeDock.tsx'
+import { dockRuntime, dockTranslate } from './fixture-state.client.ts'
 import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
 import { createScopedCollaborationSource, scopedCollaborationClipboard } from '../src/client/collaboration-source.ts'
@@ -1499,4 +1503,87 @@ it('keeps the scoped draft when its Host disappears before submission', async ()
   expect(f.composer.snapshot.draft).toBe(draft)
   expect(f.submit).not.toHaveBeenCalled()
   expect(f.sink).not.toHaveBeenCalled()
+})
+
+
+it('inserts a directory-selected scoped Agent into the existing composer without sending', async () => {
+  const f = await bench(true)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope panel')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as ProjectScopeInjected
+  await bindings.refreshScope()
+  f.composer.setDraft('请检查这个方案：')
+  expect(typeof Reflect.get(bindings, 'insertAgent')).toBe('function')
+  const model = bindings.hooks.slarkScope, focus = vi.spyOn(f.composer, 'focus')
+  const props: Parameters<typeof ProjectScopeDock>[0] = { ...dockRuntime('session-1'), ...bindings,
+    input: f.composer.snapshot, inputActions: f.composer.actions, t: dockTranslate,
+    useSlarkScope: selector => selector(useSyncExternalStore(model.subscribe, model.getSnapshot)) }
+  const view = render(createElement(ProjectScopeDock, props))
+  onTestFinished(() => { view.unmount() })
+  fireEvent.click(within(view.container).getByTestId('slark-scope-toggle'))
+  const button = await within(view.container).findByTestId('slark-scope-mention-project-1-agent-1')
+  await vi.waitFor(() => { expect((button as HTMLButtonElement).disabled).toBe(false) })
+  fireEvent.click(button)
+  expect(focus).toHaveBeenCalledTimes(1)
+  expect(f.composer.snapshot.draft).toBe('请检查这个方案：@Guide · 项目空间 ')
+  expect(f.composer.snapshot.occurrences).toHaveLength(1)
+  const reference: unknown = JSON.parse(f.composer.snapshot.occurrences[0]?.ref ?? '')
+  expect(reference).toMatchObject({ project_id: agent.project_id, agent_id: agent.agent_id })
+  await expect(`draft=${JSON.stringify(f.composer.snapshot.draft)}\nmention=${f.composer.snapshot.occurrences[0]?.label}\ncollaboration-submissions=${f.submit.mock.calls.length}\nordinary-model-prompts=${f.prompt.mock.calls.length}\n`).toMatchFileSnapshot(join(process.cwd(), 'packages/client/ui-slark-agent/tests/expected/directory-mentions.expected.txt'))
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+})
+
+
+it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'stale-draft', 'archived', 'moved', 'bridge-changed', 'session-closed', 'plugin-closed', 'claimed', 'scope-only'] as const)(
+  'directory insertion preserves the draft and never sends when %s', async (mode) => {
+    const f = await bench(true, true, true, mode !== 'scope-only')
+    const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+    if (!entry?.inject) throw Error('missing scope panel')
+    const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as ProjectScopeInjected
+    await bindings.refreshScope()
+    f.composer.setDraft('保留这个草稿')
+    let span = f.composer.actions.captureInsertion()
+    let projectId = agent.project_id, agentId = agent.agent_id
+    if (mode === 'unknown-project') projectId = 'not-selected'
+    if (mode === 'unknown-agent') agentId = 'not-loaded'
+    if (mode === 'unavailable') {
+      await bindings.applyScope([agent.project_id, 'stopped-project'])
+      projectId = 'stopped-project'; agentId = 'stopped-agent'
+    }
+    if (mode === 'scope-cleared') await bindings.applyScope([])
+    if (mode === 'stale-draft') f.composer.setDraft('用户的新草稿')
+    if (mode === 'archived') f.workspace.archived = true
+    if (mode === 'moved') f.workspace.id = '48c7c5cb-38fc-466f-9d92-89cc49f84051'
+    if (mode === 'bridge-changed') Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...window.__DSH_DESKTOP_HOST__ })
+    if (mode === 'session-closed') await f.closeSession()
+    if (mode === 'plugin-closed') {
+      const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+      await plugin?.fiber?.dispose()
+    }
+    if (mode === 'claimed') {
+      f.composer.setDraft('')
+      expect(f.composer.beginCommand({ name: 'other', token: '/other ', submit: async () => ({ kind: 'success' }) }, f.composer.actions.captureInsertion())).toBe(true)
+      expect(f.composer.snapshot.phase).toBe('claimed')
+      span = f.composer.actions.captureInsertion()
+    }
+    const draft = f.composer.snapshot.draft
+    expect(bindings.insertAgent(projectId, agentId, span)).toBe(false)
+    expect(f.composer.snapshot.draft).toBe(draft)
+    expect(f.composer.snapshot.occurrences).toHaveLength(0)
+    expect(f.submit).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  })
+
+it('directory picks share the original Source with an existing structured Agent mention', async () => {
+  const f = await bench(true)
+  await f.pick('', '检查交互；')
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope panel')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as ProjectScopeInjected
+  await bindings.refreshScope()
+  expect(bindings.insertAgent(agent.project_id, agent.agent_id, f.composer.actions.captureInsertion())).toBe(true)
+  const refs = f.composer.snapshot.occurrences.map(item => JSON.parse(item.ref) as { source_id: string; original_source_id: string })
+  expect(refs).toHaveLength(2)
+  expect(refs[0]?.source_id).not.toBe(refs[1]?.source_id)
+  expect(refs[0]?.original_source_id).toBe(refs[1]?.original_source_id)
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
 })

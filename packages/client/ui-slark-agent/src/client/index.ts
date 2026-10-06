@@ -147,6 +147,8 @@ export function apply(ctx: ClientContext): void {
       },
     }, CollaborationResultsDock))
   })
+  const t = ctx.locale.bind(NS)
+  const scopedSource = createScopedCollaborationSource(ctx, t)
   const scopeModels = new Map<string, { model: ProjectScopeModel; bindings: ProjectScopeInjected }>()
   ctx.inject(['workspaces'], (scopeCtx) => {
     if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return
@@ -160,15 +162,30 @@ export function apply(ctx: ClientContext): void {
           const model = new ProjectScopeModel(sessionId, scopeCtx.workspaces.list, () => window.__DSH_DESKTOP_HOST__)
           entry = { model, bindings: { hooks: { slarkScope: model }, refreshScope: () => model.refresh(),
             applyScope: selected => model.apply(selected), loadProjects: () => model.loadProjects(),
-            loadAgents: () => model.loadAgents() } }
+            loadAgents: () => model.loadAgents(),
+            insertAgent: (projectId, agentId, span) => {
+              const selected = model.agentForMention(projectId, agentId)
+              if (!selected) return false
+              const scoped = scopeCtx.sessions.scope(sessionId)
+              if (!scoped) return false
+              const input = scopeCtx.conversation.input.for(scoped), state = input.state.getSnapshot()
+              if (state.phase !== 'plain' || state.draftRev !== span.draftRev) return false
+              const item = selected.agent, label = `${item.agent_name} · ${item.project_name}`
+              const outcome = scopedSource.onPick({ session: { sessionId }, position: 'inline', via: 'menu', action: 'pick', span,
+                candidate: { name: label, label, value: JSON.stringify({ kind: 'collaboration-v2', workspace_id: selected.workspaceId,
+                  session_id: sessionId, project_id: item.project_id, project_name: item.project_name, agent_id: item.agent_id,
+                  agent_name: item.agent_name, capability_snapshot: item.capability_snapshot }) } })
+              if (!outcome || typeof outcome !== 'object' || !('insert' in outcome)) return false
+              const inserted = input.insertReference(outcome.insert, span)
+              if (inserted) input.focus()
+              return inserted
+            } } }
           scopeModels.set(sessionId, entry)
         }
         return entry.bindings
       },
     }, ProjectScopeDock))
   })
-  const t = ctx.locale.bind(NS)
-  const scopedSource = createScopedCollaborationSource(ctx, t)
   const source: InputTriggerSource = {
     trigger: '@',
     name: 'slark-agent',

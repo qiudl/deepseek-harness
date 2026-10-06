@@ -26,19 +26,20 @@ function fixture(grouped = true, executable = false, initialSelected: readonly s
       capability_snapshot: 'a'.repeat(64), reason_code: executable ? 'ready' : 'executor_unavailable' }] : [],
     next_cursor: null, scope_version: String(version) } }
   })
-  const bridge = { collaborationWorkspace: call }
+  const bridge = { collaborationWorkspace: call, collaborationExecutionAvailable: executable }
   const workspaces: WorkspaceSource = { getSnapshot: () => workspaceSnapshot(workspaceId, 'session', grouped),
     subscribe: () => () => undefined }
   const model = new ProjectScopeModel('session' as never, workspaces, () => bridge)
   onTestFinished(() => { model.dispose() })
+  const insertAgent = vi.fn(() => true)
   const props: Parameters<typeof ProjectScopeDock>[0] = { ...dockRuntime(),
     useSlarkScope: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
       selector(useSyncExternalStore(model.subscribe, model.getSnapshot)),
     refreshScope: () => model.refresh(), applyScope: (ids: readonly string[]) => model.apply(ids),
-    loadProjects: () => model.loadProjects(), loadAgents: () => model.loadAgents(),
+    loadProjects: () => model.loadProjects(), loadAgents: () => model.loadAgents(), insertAgent,
     t: dockTranslate,
   }
-  return { model, call, props }
+  return { model, call, props, insertAgent }
 }
 it('optional collaboration area supports multi-select, apply and explicit clear with Agent space labels', async () => {
   const f = fixture(), view = render(<ProjectScopeDock {...f.props} />)
@@ -61,7 +62,12 @@ it('optional collaboration area supports multi-select, apply and explicit clear 
   view.unmount(); f.model.dispose()
 })
 it('qualified Agents invite chat mentions without adding a task form or send button', async () => {
-  const f = fixture(true, true), view = render(<ProjectScopeDock {...f.props} />)
+  const f = fixture(true, true)
+  const span = { start: 2, end: 2, draftRev: 7 }
+  f.props.inputActions.captureInsertion = vi.fn(() => span)
+  const submit = vi.fn()
+  f.props.inputActions.submit = submit
+  const view = render(<ProjectScopeDock {...f.props} />)
   fireEvent.click(screen.getByTestId('slark-scope-toggle'))
   fireEvent.click(await screen.findByRole('checkbox', { name: '产品空间' }))
   fireEvent.click(screen.getByTestId('slark-scope-apply'))
@@ -70,6 +76,9 @@ it('qualified Agents invite chat mentions without adding a task form or send but
   expect(screen.getByText(zh['scope.chatReady'])).toBeTruthy()
   expect(screen.queryByText(zh['scope.executorPending'])).toBeNull()
   expect(screen.queryByRole('textbox')).toBeNull()
+  fireEvent.click(screen.getByTestId('slark-scope-mention-one-agent'))
+  expect(f.insertAgent).toHaveBeenCalledWith('one', 'agent', span)
+  expect(submit).not.toHaveBeenCalled()
   view.unmount(); f.model.dispose()
 })
 it('cancel discards the local selection without saving or clearing the authority', async () => {
@@ -194,4 +203,26 @@ it('shows empty and loading directories without hiding continuation controls or 
     await act(async () => { release?.(); await pending })
     expect(screen.queryByText(zh['scope.loading'])).toBeNull()
   }
+})
+
+
+it('shows a retained-draft notice when a directory insertion is refused', async () => {
+  const f = fixture(true, true, ['one'])
+  f.insertAgent.mockReturnValue(false)
+  f.props.inputActions.captureInsertion = () => ({ start: 0, end: 0, draftRev: 0 })
+  const view = render(<ProjectScopeDock {...f.props} />)
+  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  fireEvent.click(await screen.findByTestId('slark-scope-mention-one-agent'))
+  expect(screen.getByText(zh['scope.insertUnavailable'])).toBeTruthy()
+  view.unmount()
+})
+it.each(['adjudicating', 'claimed', 'submitting'] as const)('directory mention cannot alter a %s composer', async (phase) => {
+  const f = fixture(true, true, ['one'])
+  const view = render(<ProjectScopeDock {...f.props} input={{ ...f.props.input, phase }} />)
+  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const button = await screen.findByTestId('slark-scope-mention-one-agent')
+  expect((button as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(button)
+  expect(f.insertAgent).not.toHaveBeenCalled()
+  view.unmount()
 })

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Checkbox } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, SlotInjectFace } from '@deepseek-ai/dsh-client-ui-slots'
+import type { TokenSpan } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ProjectScopeModel, ProjectScopeSnapshot } from './project-scope.ts'
 import css from './ProjectScopeDock.module.css'
 
@@ -12,6 +13,14 @@ export interface ProjectScopeInjected {
   applyScope(selected: readonly string[]): Promise<void>
   loadProjects(): Promise<void>
   loadAgents(): Promise<void>
+  /**
+   * Insert a directory Agent into the current draft; never sends a message.
+   * @param projectId - saved-scope project identity.
+   * @param agentId - loaded Agent identity.
+   * @param span - captured editor selection and revision.
+   * @returns whether the editor inserted the structured mention.
+   */
+  insertAgent(projectId: string, agentId: string, span: TokenSpan): boolean
 }
 type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & SlotInjectFace<ProjectScopeInjected>
 
@@ -20,7 +29,8 @@ type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'>
  * @param props - framework scope hook, commands and translated copy.
  * @returns the collapsible collaboration region.
  */
-export function ProjectScopeDock({ useSlarkScope, refreshScope, applyScope, loadProjects, loadAgents, t }: Props) {
+export function ProjectScopeDock({ useSlarkScope, refreshScope, applyScope, loadProjects, loadAgents,
+  insertAgent, input, inputActions, t }: Props) {
   const state = useSlarkScope(x => x)
   const [open, setOpen] = useState(false)
   useEffect(() => { if (state.workspaceId) void refreshScope() }, [state.workspaceId, refreshScope])
@@ -38,19 +48,21 @@ export function ProjectScopeDock({ useSlarkScope, refreshScope, applyScope, load
             <Button size="sm" data-testid="slark-scope-refresh" disabled={state.phase === 'saving'}
               onClick={() => { void refreshScope() }}>{t('scope.refresh')}</Button>
             {state.scope && <ScopeEditor key={`${state.workspaceId}:${state.scope.version}`} state={state} saved={state.scope.selected_project_ids}
-              applyScope={applyScope} loadProjects={loadProjects} loadAgents={loadAgents} t={t}
+              applyScope={applyScope} loadProjects={loadProjects} loadAgents={loadAgents} insertAgent={insertAgent}
+              input={input} inputActions={inputActions} t={t}
               close={() => { setOpen(false) }} />}
           </>}
     </div>}
   </section>
 }
-type EditorProps = Pick<Props, 'applyScope' | 'loadProjects' | 'loadAgents' | 't'> & {
+type EditorProps = Pick<Props, 'applyScope' | 'loadProjects' | 'loadAgents' | 'insertAgent' | 'input' | 'inputActions' | 't'> & {
   state: ProjectScopeSnapshot
   saved: readonly string[]
   close: () => void
 }
-function ScopeEditor({ state, saved, applyScope, loadProjects, loadAgents, close, t }: EditorProps) {
+function ScopeEditor({ state, saved, applyScope, loadProjects, loadAgents, insertAgent, input, inputActions, close, t }: EditorProps) {
   const [draft, setDraft] = useState<readonly string[]>(saved)
+  const [insertFailed, setInsertFailed] = useState(false)
   const busy = state.phase === 'saving'
   const same = [...draft].sort().join('\0') === [...saved].sort().join('\0')
   return <>
@@ -78,13 +90,18 @@ function ScopeEditor({ state, saved, applyScope, loadProjects, loadAgents, close
         onClick={() => { void applyScope(draft) }}>{t(busy ? 'scope.saving' : 'scope.apply')}</Button>
     </div>
     <div className={css.heading}>{t('scope.agents')}</div>
-    <p className={css.hint}>{t(state.agents.some(agent => agent.available) ? 'scope.chatReady' : 'scope.executorPending')}</p>
+    <p className={css.hint}>{t(state.mentionAvailable && state.agents.some(agent => agent.available) ? 'scope.chatReady' : 'scope.executorPending')}</p>
     {saved.length === 0 && <p>{t('scope.empty')}</p>}
     <div className={css.rows}>{state.agents.map(agent => <div className={css.agent}
       key={JSON.stringify([agent.project_id, agent.agent_id])}>
-      <span>{agent.agent_name} · {agent.project_name}</span>
-      <small>{t(agent.available ? 'scope.mentionReady' : 'scope.readOnly')}</small>
+      <Button size="sm" data-testid={`slark-scope-mention-${agent.project_id}-${agent.agent_id}`}
+        disabled={!state.mentionAvailable || state.phase !== 'ready' || !agent.available || agent.reason_code !== 'ready' || input.phase !== 'plain'}
+        onClick={() => { setInsertFailed(!insertAgent(agent.project_id, agent.agent_id, inputActions.captureInsertion())) }}>
+        {agent.agent_name} · {agent.project_name}
+      </Button>
+      <small>{t(state.mentionAvailable && agent.available ? 'scope.mentionReady' : 'scope.readOnly')}</small>
     </div>)}</div>
+    {insertFailed && <p role="status" className={css.hint}>{t('scope.insertUnavailable')}</p>}
     {state.loadingAgents && <p role="status">{t('scope.loading')}</p>}
     {state.agentCursor && <Button size="sm" data-testid="slark-scope-more-agents" disabled={busy || state.loadingAgents}
       onClick={() => { void loadAgents() }}>{t('scope.more')}</Button>}
