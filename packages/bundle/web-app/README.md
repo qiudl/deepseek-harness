@@ -157,6 +157,10 @@ A separate `DSH_PROFILE_REFERENCE_TOKEN` enables `/internal/desktop-collaboratio
 
 The same Source token protects `/internal/desktop-collaboration-reference-grant`. Its private 2 KiB query contains only original Source coordinates and a full reference request digest. The owning Session Controller requires a separately committed selection and independently rechecks its current message or attachment bytes. The sanitized, noncacheable response contains only the Source descriptor and matching digest; browser cookies, caller paths and content cannot authorize it.
 
+### Remote workspace directories
+
+The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
+
 ## Model Experience
 
 ### Harness-source and Web-surface context

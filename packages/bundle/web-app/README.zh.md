@@ -150,6 +150,10 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 同一个 Source token 保护 `/internal/desktop-collaboration-reference-grant`。私有查询限制为 2 KiB，只包含原始 Source 坐标及完整引用请求摘要。所属 Session Controller 要求独立提交的选择，并重新核验当前消息或附件字节。脱敏且不可缓存的响应只包含 Source 描述符与匹配摘要；浏览器 cookie、调用方路径或内容均不能授权此读取。
 
+### 远端工作区目录
+
+远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
+
 ## 模型体验
 
 ### Harness 源码与 Web 表层上下文

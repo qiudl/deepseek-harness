@@ -23,6 +23,9 @@
 /dsh-desktop-host/runtime-invariants:
   en: 1f2cc1d2cd443eb1
   zh: a5f3d9ad212029e9
+/dsh-desktop-host/runtime-invariants/remote-workspace-directories:
+  en: 804610ff0f553589
+  zh: 28b1b6ce9f10a143
 /dsh-desktop-host/model-experience:
   en: 08355616213e6a07
   zh: c5d8472d5e2993e2
