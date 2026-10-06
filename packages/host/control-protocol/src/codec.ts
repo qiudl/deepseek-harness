@@ -1522,7 +1522,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       } else if (command.endpoint === 'session/follow') {
         exactKeys(args, ['request'])
         const request = record(args.request)
-        if (!Object.keys(request).every(key => ['address', 'maxMessages', 'assistantStream'].includes(key))) reject()
+        if (!Object.keys(request).every(key => ['address', 'maxMessages', 'assistantStream', 'turnWindow'].includes(key))) reject()
         const address = record(request.address)
         const sessionId = (value: unknown): string => {
           if (typeof value !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u.test(value)) reject()
@@ -1541,10 +1541,20 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         if (request.maxMessages !== undefined && (!Number.isSafeInteger(request.maxMessages)
         || (request.maxMessages as number) < 1 || (request.maxMessages as number) > 500)) reject()
         if (request.assistantStream !== undefined && request.assistantStream !== true) reject()
+        let turnWindow: { minMessages: number; minTurns: number } | undefined
+        if (request.turnWindow !== undefined) {
+          const window = record(request.turnWindow)
+          exactKeys(window, ['minMessages', 'minTurns'])
+          if (!Number.isSafeInteger(window.minMessages) || (window.minMessages as number) < 1
+            || (window.minMessages as number) > (request.maxMessages as number | undefined ?? 50)
+            || !Number.isSafeInteger(window.minTurns) || (window.minTurns as number) < 1) reject()
+          turnWindow = { minMessages: window.minMessages as number, minTurns: window.minTurns as number }
+        }
         parsed = { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
           address: parsedAddress,
           ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages as number }),
           ...(request.assistantStream === undefined ? {} : { assistantStream: true as const }),
+          ...(turnWindow === undefined ? {} : { turnWindow }),
         } } } }
       } else reject()
     } else reject()
