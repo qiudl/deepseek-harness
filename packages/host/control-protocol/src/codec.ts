@@ -476,9 +476,12 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   }
   if (command.operation === 'session.create') {
     const withWorkspace = 'workspace_id' in command
-    exactKeys(command, ['operation', 'command_id', ...(withWorkspace ? ['workspace_id'] : [])])
+    const withSession = 'session_id' in command
+    exactKeys(command, ['operation', 'command_id', ...(withWorkspace ? ['workspace_id'] : []),
+      ...(withSession ? ['session_id'] : [])])
     return { operation: 'session.create', command_id,
-      ...(withWorkspace ? { workspace_id: remoteIdentifier(command.workspace_id) } : {}) }
+      ...(withWorkspace ? { workspace_id: remoteIdentifier(command.workspace_id) } : {}),
+      ...(withSession ? { session_id: remoteIdentifier(command.session_id) } : {}) }
   }
   if (command.operation === 'remote.event.respond') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'client_id', 'event_id', 'outcome'])

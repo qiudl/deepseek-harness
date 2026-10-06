@@ -167,6 +167,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 - **不支持绑定所有网络接口**——出于安全考虑，`--host 0.0.0.0` 会在启动时被拒绝；请使用默认 loopback 主机。
 - **Desktop 控制权把本地浏览器窗口视为同一方**——Profile 当前将本地浏览器窗口归为一个 Desktop 控制者。证明覆盖 Session Remote 修改与转发的审批答复；终端输入、文件上传和设置写入由其他模块负责，不在此证明范围内。
 
+- Desktop 远程 Session 创建将工作区和会话身份交给原生 Session controller。原生 `session/writer-held` 拒绝以有界的 `sessionCreateFailure` 值返回，供远程 UI 执行已有的空白会话回退规则。
+
 <a id="dev-note"></a>
 ### 开发备注
 

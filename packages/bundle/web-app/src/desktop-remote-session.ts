@@ -122,8 +122,19 @@ export class DesktopRemoteSessionExecutor {
       case 'session.list':
         return this.invoke('list', { _request: {} }, signal)
       case 'session.create':
-        return this.invoke('create', { request: command.workspace_id === undefined
-          ? {} : { workspaceId: command.workspace_id } }, signal)
+        try {
+          return await this.invoke('create', { request: {
+            ...(command.workspace_id === undefined ? {} : { workspaceId: command.workspace_id }),
+            ...(command.session_id === undefined ? {} : { sessionId: command.session_id }),
+          } }, signal)
+        } catch (error) {
+          // Keep the native UI's blank-session fallback tied to the actual Host refusal.
+          if (command.session_id !== undefined && row(error) && error.isDSHRemoteError === true &&
+            error.code === 'session/writer-held') {
+            return { sessionCreateFailure: 'session/writer-held' }
+          }
+          throw error
+        }
       case 'session.prompt':
         return this.invoke('prompt', { request: {
           requestId: command.command_id, sessionId: command.session_id, mode: command.mode,

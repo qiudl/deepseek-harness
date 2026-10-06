@@ -89,7 +89,7 @@ No direct invalidation; the protocol never contributes model context.
 
 ## Known Limitations and Deferred Work
 
-- Remote Session creation accepts an optional opaque Workspace ID; the selected Profile validates its existence. The wire command has no caller path field.
+- Remote Session creation accepts optional opaque Workspace and Session IDs; the selected Profile validates the Workspace and idempotently adopts the Session with the native cwd and writer checks. Session identity reuse requires `profile.remote_session.session_reuse`. The wire command has no caller path field.
 - **Operation set is bounded** — version 1 decodes `host.inspect`, account and local-only Profile provisioning/restore/open, Profile status/lease-close, migration export begin/read, extension commands, remote Session commands, ten remote UI reads, three native streams (`session/follow`, `workspace/follow`, and `$events`), and common errors. The remote methods remain unavailable until a Host executor advertises them; environment, attachment, and upgrade operations require explicit protocol additions.
 - **Transport enforcement is external** — the Unix-domain-socket carrier must stop reading at the byte cap and close on the first codec failure.
 - **Cryptographic policy is external** — key persistence, code-signature inspection, challenge signing and verification, replay storage, and key rotation belong to the Host identity and Desktop broker packages.
