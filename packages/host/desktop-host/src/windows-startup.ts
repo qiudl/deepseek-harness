@@ -39,7 +39,7 @@ import {
   type WindowsVaultNativeModulePin,
 } from './windows-pinned-vault-native.ts'
 import { loadWindowsWorkerIoCancellation } from './windows-worker-io-cancellation.ts'
-import { ProfileWorkerSupervisor } from './worker-supervisor.ts'
+import { ProfileWorkerSupervisor, collaborationWorkerReaders } from './worker-supervisor.ts'
 
 const PUBLIC_KEY = /^[A-Za-z0-9_-]{43}$/u
 const SHA256 = /^[0-9a-f]{64}$/u
@@ -419,9 +419,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
-        inspectWorkspaceModelSelection: (profileId, target, signal) => workers.inspectWorkspaceModelSelection(profileId, target, signal),
-        inspectCollaborationSource: (profileId, target, signal) => workers.inspectCollaborationSource(profileId, target, signal),
-        readCollaborationSourceSnapshot: (profileId, target, signal) => workers.readCollaborationSourceSnapshot(profileId, target, signal),
+        ...collaborationWorkerReaders(workers),
         collaborationDeliveryReceiver: profileId => workers.collaborationDeliveryReceiver(profileId),
         remoteSession,
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),

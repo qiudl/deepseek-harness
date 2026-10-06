@@ -72,6 +72,10 @@ kind: "package-reference"
 
 `profile.source_authority` 接受精确服务器挑战，包含 Account/environment、原始 Source 坐标、完整快照摘要与已登记 Host epoch。专用 UTF-8 签名正文由 `dsh-collaboration-source-authority/v1`、NUL 和固定顺序 JSON 元组组成。授权 Profile 必须确认匹配的持久 journal 记录后才能签名；归属或登记签名不能替代。响应不含消息、凭据或可执行调用。云端必须在核验当前 Account/Host 的同一事务中认证并消费 nonce 和快照；签名不授予目标执行权限。
 
+`profile.reference_authority` 另将 `reference_request_digest` 绑定到独立的 Profile 传递授权。签名字节为 `dsh-collaboration-reference-authority/v1`、NUL 和 JSON `[1, sourceSigningPayload, referenceRequestDigest]`；其中 Source 签名正文保留为精确 UTF-8 字符串。Source、工作区或登记签名不能授权引用传递。Profile 授权读取器必须独立返回已提交的 Source 描述符与完整预登记请求摘要；此操作不暴露正文或文件路径。
+
+`parseHostCollaborationReferenceTarget` 校验私有 worker 查询，其中只有原始 Source 坐标及完整引用请求摘要，不能提供所选字节、快照摘要或授权。`parseHostCollaborationReferenceGrant` 独立校验返回的已提交描述符及请求摘要。
+
 ## API
 
 `profile.collaboration_delivery` 通过顺序上传的规范 base64url 分块传输完整终态答复，每块解码后最多 16 KiB，完整封装最多 1 MiB，答复最多 128 KiB UTF-8。普通 JSON 与 64 KiB 单帧上限保持不变。最终回执不包含答复，使用规范键排序 JSON 签名域 `dsh-collaboration-delivery-receipt-v1`，绑定已验证的 Account、当前安装/进程和原 Profile 提交记录。解析或签名本身均不授予云端确认或执行权威。
@@ -100,6 +104,10 @@ kind: "package-reference"
 ## 运行时不变量
 
 不发布运行时不变量伴随插件：编解码器在输入边界验证完整的消息值结构。
+
+### 远端工作区目录
+
+远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
 
 ## 模型体验
 

@@ -65,7 +65,7 @@ import {
   type UnixHostServerOptions,
   type UnixPeerAttestor,
 } from './unix-transport.ts'
-import { ProfileWorkerSupervisor } from './worker-supervisor.ts'
+import { ProfileWorkerSupervisor, collaborationWorkerReaders } from './worker-supervisor.ts'
 import {
   startWindowsDesktopHostApplicationFromPrivateFiles,
   type WindowsDesktopHostApplication,
@@ -727,9 +727,7 @@ export async function startDesktopHostApplication(
       },
       host,
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
-      inspectWorkspaceModelSelection: (profileId, target, signal) => workers.inspectWorkspaceModelSelection(profileId, target, signal),
-      inspectCollaborationSource: (profileId, target, signal) => workers.inspectCollaborationSource(profileId, target, signal),
-      readCollaborationSourceSnapshot: (profileId, target, signal) => workers.readCollaborationSourceSnapshot(profileId, target, signal),
+      ...collaborationWorkerReaders(workers),
       collaborationAnalysis: (profileId, command, signal) => workers.collaborationAnalysis(profileId, command, signal),
       collaborationDeliveryReceiver: profileId => workers.collaborationDeliveryReceiver(profileId),
       remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({

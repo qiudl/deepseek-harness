@@ -643,6 +643,35 @@ export interface ProfileSourceAuthorityResult extends Omit<ProfileWorkspaceAutho
   readonly result: HostSourceAuthorityAssertion
 }
 
+/** Profile-owned committed transfer grant; coordinates or digests supplied by Desktop grant no access. */
+export interface HostCollaborationReferenceGrant extends HostCollaborationSourceDescriptor {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Exact private lookup of an independently committed Source-bound reference selection. */
+export interface HostCollaborationReferenceTarget extends HostCollaborationSourceTarget {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Server nonce binds the original Source and the complete immutable reference reservation request. */
+export interface HostReferenceAuthorityChallenge extends HostSourceAuthorityChallenge {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Installation signature over a separate Profile transfer grant; no target execution authority. */
+export interface HostReferenceAuthorityAssertion extends Omit<HostSourceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostReferenceAuthorityChallenge
+}
+/** Main-only transfer attestation requires current Account access and a separate committed Profile grant. */
+export interface ProfileReferenceAuthorityRequest extends Omit<ProfileSourceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_authority'
+  readonly params: Omit<ProfileSourceAuthorityRequest['params'], 'challenge'> & {
+    readonly challenge: HostReferenceAuthorityChallenge
+  }
+}
+/** Signed reference reservation digest without content, filesystem paths or credentials. */
+export interface ProfileReferenceAuthorityResult extends Omit<ProfileSourceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_authority'
+  readonly result: HostReferenceAuthorityAssertion
+}
+
 /** One bounded text request authorized by this connection's verified Account grant. */
 export interface ProfileModelTextRequest {
   readonly version: 1
@@ -1119,6 +1148,14 @@ export type HostRemoteSessionCommand =
     readonly epoch: number
   }
   | { readonly operation: 'session.list'; readonly command_id: HostControlRequestId }
+  | { readonly operation: 'directory.pick'
+    readonly command_id: HostControlRequestId
+    readonly client_id: string }
+  | { readonly operation: 'workspace.create'
+    readonly command_id: HostControlRequestId
+    readonly client_id: string
+    readonly grant_id: string
+    readonly path: string }
   | { readonly operation: 'session.create'
     readonly command_id: HostControlRequestId
     readonly workspace_id?: string
@@ -1511,6 +1548,8 @@ export type HostControlFrame =
   | ProfileWorkspaceAuthorityResult
   | ProfileSourceAuthorityRequest
   | ProfileSourceAuthorityResult
+  | ProfileReferenceAuthorityRequest
+  | ProfileReferenceAuthorityResult
   | ProfileCollaborationAnalysisRequest
   | ProfileCollaborationAnalysisResult
   | ProfileCollaborationDeliveryRequest

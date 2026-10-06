@@ -2,7 +2,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest, parseCollaborationClarificationInput } from '@deepseek-ai/dsh-api-session-controller'
+import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest, parseCollaborationClarificationInput, parseCollaborationReferenceMetadata } from '@deepseek-ai/dsh-api-session-controller'
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -10,7 +10,7 @@ import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
-import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { LlmAdapter, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'
 import type { AnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { createServer } from 'node:http'
+import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { installSessionReadTestServices, testSessionPersistence } from '../../../api/session-controller/tests/test-remote.ts'
@@ -33,7 +34,7 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
   const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
@@ -56,6 +57,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
   vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
   vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', mode === 'analysis-profile' || mode === 'analysis-missing-domain' ? 'B'.repeat(43) : '')
   vi.stubEnv('DSH_PROFILE_DELIVERY_TOKEN', mode === 'delivery' ? 'C'.repeat(43) : '')
+  vi.stubEnv('DSH_PROFILE_REFERENCE_TOKEN', mode === 'reference' ? 'D'.repeat(43) : '')
   for (const key of ['DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) vi.stubEnv(key, '')
   // GUI/transport peers are fixtures; Source owners, registry, model runtime and storage load from YAML.
   ctx.provide('webServer', { host: '127.0.0.1', port: 0, register(route: { path: string; handler: typeof routes extends Map<string, infer T> ? T : never }) {
@@ -153,7 +155,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
       { type: 'message_stop' },
     ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''))
   })
-  const adapter = mode === 'source-only' || mode === 'delivery' || mode === 'analysis-missing-domain' ? new FixtureAdapter() : new DeepSeekAdapter({
+  const adapter = mode === 'source-only' || mode === 'delivery' || mode === 'reference' || mode === 'analysis-missing-domain' ? new FixtureAdapter() : new DeepSeekAdapter({
     options: () => resolveAdapterOptions({ baseURL: origin, models: [{ id: 'selected' }] }),
     resolveAuth: async () => ({ headers: { 'x-api-key': 'fixture-source-key' } }), resolveUserId: () => '00000000-0000-4000-8000-000000000001' as AnonymousUserId,
     // Malformed external extension JSON must not introduce tools into the logged Source analysis request.
@@ -167,8 +169,11 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
   await workspace.attachSession(sessionId)
   const session = ctx.sessions.create(sessionId, { meta: { cwd } })
   session.append('model/selection', { provider: 'fixture', model: 'selected' })
+  const referenceText = '\ufeff范围说明😀\r\n只读分析，不修改文件'
+  const referenceMessage = createUserMessage({ content: [{ type: 'text', text: referenceText }], source: { kind: 'user' } })
+  if (mode === 'reference') session.append('user/message', referenceMessage, { surfaceOp: 'append' })
   const seq = session.seq, source = { workspace_id: workspace.id, session_id: sessionId, source_message_id: 'message-1', source_revision: '1',
-    original_message: '@Guide 请分析',
+    original_message: mode === 'reference' ? '@Guide 请引用前面那条范围说明并分析' : '@Guide 请分析',
     active_mentions: [{ mention_id: 'mention-1',
       source_span: { source_message_id: 'message-1', source_revision: '1', start: 0, end: 6 },
       display_snapshot: { agent_name: 'Guide', project_name: 'qiu-slark' },
@@ -226,6 +231,49 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
   expect((await fetch(`${origin}/internal/desktop-collaboration-source-snapshot`,{ method:'POST',headers:{ cookie:'dsh-auth=browser' },body:JSON.stringify(target) })).status).toBe(403)
   expect((await fetch(`${origin}/internal/desktop-collaboration-source`, { method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body: JSON.stringify(target) })).status).toBe(403)
   await expect(factory['inspectCollaborationSource'](origin, token, { ...target, source_message_id: 'missing' }, new AbortController().signal, () => false)).rejects.toThrow()
+  if (mode === 'reference') {
+    const signal = new AbortController().signal
+    const input = {
+      source: { workspace_id: target.workspace_id, session_id: target.session_id,
+        source_message_id: target.source_message_id, revision: target.source_revision },
+      reference_request_id: 'explicit-message-reference', source_kind: 'message', source_locator: referenceMessage.id,
+      source_version: '1', range: { unit: 'whole' }, recipient_mention_ids: ['mention-1'],
+      source_evidence_spans: [{ source_message_id: target.source_message_id, source_revision: target.source_revision,
+        start: 0, end: source.original_message.length }],
+    }
+    const capture = (capability = 'D'.repeat(43)) => factory['captureReferenceSelection'](
+      origin, capability, input, signal, () => false,
+    )
+    await expect(capture(token)).rejects.toThrow()
+    expect((await fetch(`${origin}/internal/desktop-collaboration-reference-capture`, {
+      method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body: JSON.stringify(input),
+    })).status).toBe(403)
+    const metadata = parseCollaborationReferenceMetadata(await capture())
+    expect(metadata.descriptor).toEqual(result)
+    expect(metadata.request.source.message_digest).toBe(createHash('sha256').update(source.original_message).digest('hex'))
+    expect(metadata.request).toMatchObject({ source_kind: 'message', source_locator: referenceMessage.id, source_version: '1',
+      range: { start: 0, end: referenceText.length, unit: 'utf16' }, mime_type: 'text/plain',
+      byte_length: Buffer.byteLength(referenceText), content_digest: createHash('sha256').update(referenceText).digest('hex') })
+    expect(JSON.stringify(metadata)).not.toContain(referenceText)
+    expect(parseCollaborationReferenceMetadata(await capture())).toEqual(metadata)
+    const saved = JSON.parse(await readFile(join(directory, 'state', 'collaboration_reference_v2.json'), 'utf8')) as {
+      tables: { references: Record<string, { content_base64: string; reference_request_digest: string }> }
+    }
+    const records = Object.values(saved.tables.references)
+    expect(records).toHaveLength(1)
+    expect(Buffer.from(records[0]!.content_base64, 'base64').toString('utf8')).toBe(referenceText)
+    expect(records[0]!.reference_request_digest).toBe(metadata.reference_request_digest)
+    expect(await ctx.sessionController.readCollaborationReferenceGrant(target, metadata.reference_request_digest, signal))
+      .toEqual({ ...metadata.descriptor, reference_request_digest: metadata.reference_request_digest })
+    const grantResponse = await fetch(`${origin}/internal/desktop-collaboration-reference-grant`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...target, reference_request_digest: metadata.reference_request_digest }),
+    })
+    expect(grantResponse.status).toBe(200)
+    expect(await grantResponse.json()).toEqual({ ...metadata.descriptor, reference_request_digest: metadata.reference_request_digest })
+    expect(providerRequests).toBe(0)
+    expect(session.seq).toBe(seq)
+  }
   if (mode === 'delivery') {
     const sourcePath = join(directory, 'state', 'collaboration_source_v2.json')
     const sourceBytes = await readFile(sourcePath)
@@ -288,7 +336,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
     await expect(readFile(join(directory, 'state', 'collaboration_analysis_v2.json'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(providerRequests).toBe(0)
   }
-  const analysisJournal = mode !== 'source-only' && mode !== 'analysis-profile' && mode !== 'analysis-missing-domain' && mode !== 'delivery' ? await openCollaborationAnalysisJournal(facility!) : undefined
+  const analysisJournal = mode !== 'source-only' && mode !== 'analysis-profile' && mode !== 'analysis-missing-domain' && mode !== 'delivery' && mode !== 'reference' ? await openCollaborationAnalysisJournal(facility!) : undefined
   const analysisWriter = analysisJournal ? createCollaborationAnalysisWriter(analysisJournal, async (record) => {
     expect(providerRequests).toBe(0)
     return { attempt_request_id: record.attempt_request_id, plan_id: 'fixture-plan', expected_plan_revision: '1',

@@ -135,6 +135,10 @@ Analysis uses one user message containing original text and explicit mention met
 
 <a id="model-experience"></a>
 
+`captureCollaborationReferenceSelection` derives the full immutable request from an already authorized locator/version, recipient mentions, Source evidence and a whole or explicit range selection. The owning Profile computes MIME, UTF-8/binary bytes, digests and resolved range from its actual message or attachment; caller content, paths and digest overrides reject. Whole selections exceed neither the 1 MiB content budget nor the current Source recipients. `describeCollaborationReference` returns only frozen descriptor/request metadata; `parseCollaborationReferenceMetadata` validates it at a wire boundary. These methods neither resolve natural-language references nor authorize sharing.
+
+`captureCollaborationReference` accepts an independently authorized selection and reads only its immutable message or registered attachment identity from the original Source Session. The separate `collaboration_reference_v2` domain stores exact bounded bytes, locator/version, recipients, Source evidence and the full request digest without changing released Session or Source formats. `readCollaborationReferenceGrant` rereads current membership and actual content before returning a descriptor-only grant; a digest cannot create a selection. Caller cancellation releases its wait while Profile disposal drains owned reads and late journal opens. Parsing metadata does not establish user sharing intent; the trusted coordinator must establish it before capture.
+
 ## Model Experience
 
 ### Source analysis system prompt
@@ -156,6 +160,7 @@ Each call includes the complete prompt and Source JSON within a 16 KiB UTF-8 req
 #### KV Cache effect
 
 The stable analysis prompt can be a shared prefix of separate analysis requests; changing original text and mentions stay in the user message. This request does not change the ordinary Session cache prefix.
+
 
 
 ## Known Limitations and Deferred Work

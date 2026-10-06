@@ -1,6 +1,6 @@
 /** Private worker HTTP read for the authenticated Desktop Host. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { handleDesktopPrivateRead } from './desktop-private-read.ts'
+import { handleDesktopPrivateRequest } from './desktop-private-read.ts'
 import {
   parseHostWorkspaceModelSelection, parseHostWorkspaceModelSelectionTarget,
   type HostWorkspaceModelSelection, type HostWorkspaceModelSelectionTarget,
@@ -19,8 +19,9 @@ export async function handleDesktopWorkspaceModelSelectionRequest(
   token: string,
   inspect: (target: HostWorkspaceModelSelectionTarget, signal: AbortSignal) => Promise<HostWorkspaceModelSelection>,
 ): Promise<void> {
-  return handleDesktopPrivateRead(
+  return handleDesktopPrivateRequest(
     req, res, token, inspect, parseHostWorkspaceModelSelectionTarget, parseHostWorkspaceModelSelection,
     (result, target) => result.workspace_id === target.workspace_id && result.session_id === target.session_id,
+    2048,
   )
 }

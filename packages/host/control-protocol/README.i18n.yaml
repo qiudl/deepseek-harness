@@ -18,8 +18,8 @@
   en: b7ad5c543322e62f
   zh: 84842ca8ac094c38
 /dsh-host-control-protocol/challenge-authentication:
-  en: 0046f55770ebffd4
-  zh: 44226200f06202db
+  en: 460c9d360c1e1f9f
+  zh: b6617cffd8ac9084
 /dsh-host-control-protocol/api:
   en: af9691a7c7676329
   zh: 56eaf8ac39c8ae03
@@ -29,6 +29,9 @@
 /dsh-host-control-protocol/runtime-invariants:
   en: b3f7ef53ffc89101
   zh: 90f8cb60256f6917
+/dsh-host-control-protocol/runtime-invariants/remote-workspace-directories:
+  en: 804610ff0f553589
+  zh: 28b1b6ce9f10a143
 /dsh-host-control-protocol/model-experience:
   en: 014d55646fcf02ad
   zh: e290720514952264

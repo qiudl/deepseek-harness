@@ -5,6 +5,29 @@ import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarg
 import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 
+it('reads the exact original worker reference grant and refuses changed digests, cancellation and missing workers', async () => {
+  const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
+    session_id: 'session', source_message_id: 'message', source_revision: '1' })
+  const digest = 'b'.repeat(64) as never
+  const read = vi.fn(async () => ({ ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: digest }))
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    readCollaborationReferenceGrant: read }))
+  onTestFinished(() => workers.disposeAll())
+  const signal = new AbortController().signal
+  await expect(workers.readCollaborationReferenceGrant('profile', target, digest, signal)).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.ensure({ profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+  expect(await workers.readCollaborationReferenceGrant('profile', target, digest, signal)).toEqual(await read())
+  expect(read).toHaveBeenCalledWith(target, digest, signal)
+  read.mockResolvedValue({ ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: 'c'.repeat(64) as never })
+  await expect(workers.readCollaborationReferenceGrant('profile', target, digest, signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(workers.readCollaborationReferenceGrant('profile', target, digest, AbortSignal.abort())).rejects.toThrow()
+  read.mockImplementationOnce(async () => {
+    await workers.disposeAll()
+    return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: digest }
+  })
+  await expect(workers.readCollaborationReferenceGrant('profile', target, digest, signal)).rejects.toMatchObject({ code: 'stale' })
+})
+
 it('denies private collaboration operations when the original worker is missing, unsupported or closed', async () => {
   const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
   const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }

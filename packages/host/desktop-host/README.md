@@ -113,7 +113,11 @@ MCP configuration parsing and runtime acknowledgement share one executor across 
 
 No runtime invariant companion is published: filesystem and wire commit points validate owned state, while lease and crash behavior are covered by integration tests.
 
+The Web worker factory generates and reserves an independent `DSH_PROFILE_REFERENCE_TOKEN` for its parent-only `captureCollaborationReferenceSelection` handle. Selection JSON and returned metadata each permit at most 32 KiB; the request times out after 15 seconds and rejects stopped workers, redirects and cancellation. The handle returns untrusted JSON without content bytes. The parent must validate the computed metadata against its authorized selection before transfer; this handle establishes neither sharing intent nor a Host control-protocol command.
+
 `profile.source_authority` resolves this connection’s verified Account Profile and reads a committed Source descriptor through the supervisor and a dedicated random worker token. Startup installs this reader on macOS and Windows. Missing readers omit the capability; replaced workers, mismatched coordinates/digest, expired challenges or changed Account grants refuse signing. The client verifies the exact challenge, pinned installation/process and Source signature. This operation neither captures a message nor prepares a model; cloud consumption and chat dispatch remain separate.
+
+`profile.reference_authority` is advertised only when both the committed Source reader and `readCollaborationReferenceGrant` are installed. The Host requires a current token-verified Account, compares the independent Profile grant with the requested Source and full reference reservation digest, then rereads the Source before signing. Revocation, expiry, cancellation or changed Profile/Source observations refuse signing. The client verifies the exact challenge and installed peer signature; Source signatures cannot substitute.
 
 `profile.source_snapshot` uses the same current Account and Profile worker reader to transfer original journal content privately. The worker bearer route validates the complete persisted Source, while the supervisor rejects disposed or replaced workers. Fixed 32 KiB byte chunks preserve the existing control-frame budget; the client checks coordinates, consistent descriptor/length, complete UTF-8, cancellation and the inspected peer across a bounded read. It returns original content and redacted model/commit metadata, without credentials, model preparation or a restored call. Startup composes the reader on macOS and Windows; real chat capture and dispatch remain separate.
 
@@ -121,6 +125,9 @@ The Web worker factory creates a separate random `DSH_PROFILE_ANALYSIS_TOKEN`, r
 
 The Web worker factory separately generates and reserves `DSH_PROFILE_DELIVERY_TOKEN` for its parent-only `receiveCollaborationDelivery` handle. Complete delivery JSON is bounded to 1 MiB; the owning Profile validates its schema and returns at most 8 KiB of untrusted local commit JSON without echoing the answer. Stopped workers, redirects, cancellation and malformed responses reject. The capability stays outside view leases. The parent must authenticate the account namespace and readable cloud projection; this private HTTP handle grants neither signed cloud acknowledgement nor a control-protocol upload. Large replies require an authenticated chunked transfer within the existing control-frame limit.
 
+### Remote workspace directories
+
+The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
 
 ## Model Experience
 
@@ -132,6 +139,8 @@ No direct invalidation; Host control facts do not enter model context.
 
 
 ## Known Limitations and Deferred Work
+
+The startup compositions relay reference-grant reads to the original current Profile worker. Grants require a separately committed selection and independently revalidated message or attachment bytes. Natural-language selection production and cloud content upload are not connected; an embedding must complete those consumers before enabling reference transfer.
 
 - **Extension support is executor-specific** — `profile.extensions` accepts inventory, prepare, commit, status, and cancel through a live view lease. Plugin execution requires the configured pnpm artifact. The Windows startup composition supports explicitly enabled MCP; Windows Plugin and Skill executors remain unavailable. The embedding must enable and pin this composition before users receive the capability. Skill inventory uses `transport: markdown` and bounded file-derived identifiers. Desktop must reopen the same Profile view after an installation or restored configuration restarts its worker. Packaged-runtime pinning, full Profile migration preservation, process-kill recovery, and unknown-receipt reconciliation require separate end-to-end validation before release.
 

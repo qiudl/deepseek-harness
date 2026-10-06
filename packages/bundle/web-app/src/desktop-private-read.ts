@@ -1,18 +1,19 @@
-/** Bounded, worker-token-only reads shared by the Desktop Source and model-selection routes. */
+/** Bounded, worker-token-only requests shared by the Desktop Source and model-selection routes. */
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 /**
- * Own one authenticated read while each route retains its target and result validators.
- * @param req - Parent Host POST request with at most 2 KiB of target JSON.
+ * Own one authenticated operation while each route retains its target and result validators.
+ * @param req - Parent Host POST request whose target JSON uses the route's explicit byte limit.
  * @param res - Noncacheable response; no reader error details escape.
  * @param token - Worker-only capability; cookies confer no authority.
- * @param inspect - Read without activating a model or changing the Session.
+ * @param inspect - Route-owned operation after private-token and target validation.
  * @param parseTarget - Route-specific strict target parser.
  * @param parseResult - Route-specific strict result parser.
  * @param matches - Require the result to belong to the original target.
+ * @param requestBytes - Protocol-specific request limit supplied by the owning route.
  */
-export async function handleDesktopPrivateRead<Target, Result>(
+export async function handleDesktopPrivateRequest<Target, Result>(
   req: IncomingMessage,
   res: ServerResponse,
   token: string,
@@ -20,6 +21,7 @@ export async function handleDesktopPrivateRead<Target, Result>(
   parseTarget: (value: unknown) => Target,
   parseResult: (value: unknown) => Result,
   matches: (result: Result, target: Target) => boolean,
+  requestBytes: 2048 | 32768,
 ): Promise<void> {
   const authorization = req.headers.authorization
   const actual = Buffer.from(authorization?.startsWith('Bearer ') ? authorization.slice(7) : '')
@@ -50,7 +52,7 @@ export async function handleDesktopPrivateRead<Target, Result>(
       const chunks: Buffer[] = []
       for await (const chunk of req as AsyncIterable<unknown>) {
         controller.signal.throwIfAborted()
-        if (!(chunk instanceof Uint8Array) || (bytes += chunk.byteLength) > 2048) throw Error('invalid_input')
+        if (!(chunk instanceof Uint8Array) || (bytes += chunk.byteLength) > requestBytes) throw Error('invalid_input')
         chunks.push(Buffer.from(chunk))
       }
       target = parseTarget(JSON.parse(Buffer.concat(chunks).toString('utf8')))
