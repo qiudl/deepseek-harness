@@ -380,6 +380,16 @@ interface MigrationExportChunk {
   readonly final: boolean
 }
 
+/** Reject a reference response when its current Account or Source changed during the provider read. */
+async function recheckReferenceSource(
+  inspect: NonNullable<UnixHostServerOptions['inspectCollaborationSource']>, authorize: () => string,
+  profileId: string, target: HostCollaborationSourceTarget, before: HostCollaborationSourceDescriptor, signal: AbortSignal,
+): Promise<void> {
+  const after = parseHostCollaborationSourceDescriptor(await inspect(profileId, target, signal))
+  if (authorize() !== profileId || JSON.stringify(after) !== JSON.stringify(before))
+    throw new HostAuthorityError('profile_mismatch')
+}
+
 /** Transport-independent Host account, Profile, and migration authority inputs. */
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
@@ -1547,9 +1557,7 @@ export class HostControlAuthority {
           const result = parseHostCollaborationReferenceCapture(await capture(profileId, selection, context.signal))
           if (authorize() !== profileId || JSON.stringify(result.descriptor) !== JSON.stringify(before))
             throw new HostAuthorityError('profile_mismatch')
-          const after = parseHostCollaborationSourceDescriptor(await inspect(profileId, target, context.signal))
-          if (authorize() !== profileId || JSON.stringify(after) !== JSON.stringify(before))
-            throw new HostAuthorityError('profile_mismatch')
+          await recheckReferenceSource(inspect, authorize, profileId, target, before, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.reference_content') {
           const read = this.options.readCollaborationReferenceContent, inspect = this.options.inspectCollaborationSource
@@ -1567,9 +1575,7 @@ export class HostControlAuthority {
           if (authorize() !== profileId || JSON.stringify(result.descriptor) !== JSON.stringify(before)
             || result.reference_request_digest !== query.reference_request_digest || result.offset !== query.offset)
             throw new HostAuthorityError('profile_mismatch')
-          const after = parseHostCollaborationSourceDescriptor(await inspect(profileId, target, context.signal))
-          if (authorize() !== profileId || JSON.stringify(after) !== JSON.stringify(before))
-            throw new HostAuthorityError('profile_mismatch')
+          await recheckReferenceSource(inspect, authorize, profileId, target, before, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.source_snapshot') {
           const read = this.options.readCollaborationSourceSnapshot
