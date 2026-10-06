@@ -33,6 +33,7 @@ async function fixture(
   rootLookupSupported = false, rootPendingLookupSupported = false, rootLiveResumeSupported = false,
   rootPlanningSupported = false, rootExecutionSupported = false, rootFeedbackSupported = false,
   enabled = true, omitRootReaders = false, referenceEnabled = false, captureEnabled = false, contentEnabled = false,
+  sourceAnalysisRecoverySupported = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
@@ -123,6 +124,7 @@ async function fixture(
     rootFeedbackSupported,
     rootAnalysisSupported,
     rootAnalysisRecoverySupported,
+    sourceAnalysisRecoverySupported,
     rootLookupSupported,
     rootPendingLookupSupported,
     rootLiveResumeSupported,
@@ -1404,16 +1406,18 @@ it('signs durable consumption in a separate domain and refuses a changed origina
   await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
 })
 
-it('enforces root rollout capabilities on the server even if the client advertises them', async () => {
+it('enforces Source and root rollout capabilities on the server even if the client advertises them', async () => {
   const { parseHostCollaborationAnalysisCommand } = await import('@deepseek-ai/dsh-host-control-protocol')
   const f = await fixture(), c = f.challenge
   await f.grant()
   const target = { namespace_id: 'n2_' + 'a'.repeat(64), command_id: randomUUID(),
     workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id, source_revision: c.source_revision }
   const input = { namespace_id: target.namespace_id, continuation_policy: 'follow_authorized_plan', source: {} }
-  const caps = ['root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
+  const caps = ['source_analysis_recovery', 'root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
   Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, ...caps.map(c => 'profile.' + c)])
   const commands = [
+    { action: 'read_source_output', target: { workspace_id: c.workspace_id, session_id: c.session_id,
+      source_message_id: c.source_message_id, source_revision: c.source_revision } },
     ...['root_feedback', 'root_execution_journal'].map(action => ({ action, operation: { action: 'read' } })),
     ...['prepare_root_attempt', 'read_root_attempt', 'read_root_output'].map(action => ({ action, target })),
     ...['resume_root', 'reconcile_root', 'recover_root', 'prepare_root'].map(action => ({ action, input })),
@@ -1493,3 +1497,87 @@ it('refuses a fresh planning proof if authorization resolves to another Profile 
   f.setPlanning(async () => { changeCurrentProfile(f.host); return f.descriptor })
   await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toMatchObject({ code: 'profile_mismatch' })
 })
+
+it.each(['saved', 'maximum', 'missing', 'old', 'foreign', 'revoked', 'cancelled', 'digest'] as const)(
+  'saved Source output requires its recovery capability and current Account: %s', async (mode) => {
+    const f = await fixture(false, false, false, false, false, false, false, false, true, false, false, false, false, mode !== 'old')
+    await f.grant()
+    const c = f.challenge, cancel = new AbortController()
+    const descriptor = parseHostCollaborationSourceDescriptor({ workspace_id: c.workspace_id, session_id: c.session_id,
+      source_message_id: c.source_message_id, source_revision: c.source_revision, snapshot_digest: c.snapshot_digest })
+    const { snapshot_digest: _digest, ...target } = descriptor
+    const text = mode === 'maximum' ? JSON.stringify({ text: '\u0000'.repeat(5459) + 'abc' }) : JSON.stringify({ intent: 'delegate' })
+    const outputDigest = createHash('sha256').update(text).digest('hex')
+    const dispatch = { ...analysisGrant(f), lease_expires_at: '2026-10-01T00:00:00.000Z' }
+    let calls = 0
+    f.setAnalysis(async (profileId, command) => {
+      calls++
+      expect(profileId).toBe(f.profile.profileId)
+      expect(command).toMatchObject({ action: 'read_source_output', target })
+      expect(command.binding_key).toMatch(/^[a-f0-9]{64}$/u)
+      if (mode === 'revoked') f.host.revokeOwner(f.ownerId)
+      if (mode === 'cancelled') cancel.abort()
+      if (mode === 'missing') return { state: 'missing', descriptor }
+      return { state: 'saved', descriptor: mode === 'foreign' ? { ...descriptor, source_message_id: 'other' } : descriptor,
+        dispatch, output_digest: mode === 'digest' ? '0'.repeat(64) : outputDigest,
+        json_base64url: Buffer.from(text).toString('base64url') }
+    })
+    const pending = f.client.collaborationAnalysis({ ...f.account, command: { action: 'read_source_output', target }, signal: cancel.signal })
+    if (mode === 'saved' || mode === 'maximum') {
+      const result = await pending
+      expect(result.kind).toBe('source_output')
+      if (result.kind !== 'source_output' || result.evidence.state !== 'saved') throw Error('missing saved output')
+      expect(result.evidence.dispatch).toEqual(dispatch)
+      expect(Buffer.from(result.evidence.json_base64url, 'base64url').toString('utf8')).toBe(text)
+      if (mode === 'maximum') expect(Buffer.byteLength(text)).toBe(32768)
+      expect(result.evidence.analysis_receipt).toMatchObject({ account_binding_handle: f.account.accountBindingHandle,
+        installation_id: f.identity.installationId, dispatch, output_digest: outputDigest })
+    } else if (mode === 'missing') expect(await pending).toEqual({ kind: 'source_output', evidence: { state: 'missing', descriptor } })
+    else await expect(pending).rejects.toThrow()
+    expect(calls).toBe(mode === 'old' ? 0 : 1)
+  },
+)
+
+it.each(['unsigned', 'signature', 'binding', 'peer', 'output', 'grant', 'receipt_grant', 'receipt_digest', 'source'] as const)(
+  'rejects tampered saved Source evidence from an authenticated carrier: %s', async (mode) => {
+    const f = await fixture(false, false, false, false, false, false, false, false, true, false, false, false, false, true)
+    await f.grant()
+    const c = f.challenge
+    const descriptor = parseHostCollaborationSourceDescriptor({ workspace_id: c.workspace_id, session_id: c.session_id,
+      source_message_id: c.source_message_id, source_revision: c.source_revision, snapshot_digest: c.snapshot_digest })
+    const { snapshot_digest: _digest, ...target } = descriptor
+    const text = JSON.stringify({ intent: 'delegate' })
+    f.setAnalysis(async () => ({ state: 'saved', descriptor, dispatch: analysisGrant(f),
+      output_digest: createHash('sha256').update(text).digest('hex'), json_base64url: Buffer.from(text).toString('base64url') }))
+    f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.collaboration_analysis' || frame.result.kind !== 'source_output'
+        || frame.result.evidence.state !== 'saved') return frame
+      const evidence = frame.result.evidence, receipt = evidence.analysis_receipt
+      if (!receipt) throw Error('expected signed original output')
+      if (mode === 'unsigned') {
+        const { analysis_receipt: _receipt, ...unsigned } = evidence
+        return { ...frame, result: { kind: 'source_output', evidence: unsigned } }
+      }
+      if (mode === 'output') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, json_base64url: Buffer.from('{}').toString('base64url'),
+      } } }
+      if (mode === 'source') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, descriptor: { ...descriptor, session_id: 'other' as typeof descriptor.session_id },
+      } } }
+      if (mode === 'grant') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, dispatch: { ...evidence.dispatch, plan_id: 'other' as typeof evidence.dispatch.plan_id },
+        analysis_receipt: { ...receipt, dispatch: { ...receipt.dispatch, plan_id: 'other' } },
+      } } }
+      if (mode === 'receipt_grant') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, analysis_receipt: { ...receipt, dispatch: { ...receipt.dispatch, plan_id: 'other' } },
+      } } }
+      if (mode === 'receipt_digest') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, analysis_receipt: { ...receipt, output_digest: '0'.repeat(64) },
+      } } }
+      const altered = mode === 'binding' ? { ...receipt, authority_binding_version: 2 }
+        : mode === 'peer' ? { ...receipt, process_nonce: 'B'.repeat(43) } : { ...receipt, signature: 'A'.repeat(86) }
+      return { ...frame, result: { kind: 'source_output', evidence: { ...evidence, analysis_receipt: altered } } }
+    })
+    await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'read_source_output', target } })).rejects.toThrow()
+  },
+)

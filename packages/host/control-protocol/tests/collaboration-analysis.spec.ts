@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult, encodeHostControlFrame, decodeHostControlFrame } from '../src/index.ts'
 import type { HostControlFrame } from '../src/index.ts'
@@ -66,4 +67,46 @@ it('roundtrips Account-bound preparation, dispatch and recovered Source response
 
 it('rejects noncanonical base64 before parsing the private JSON output', () => {
   expect(() => parseHostCollaborationAnalysisResult({ kind: 'output', json_base64url: 'e31' })).toThrow()
+})
+
+it('roundtrips saved ordinary Source output with historical dispatch and rejects changed bytes or coordinates', async () => {
+  const { parseHostCollaborationSourceTarget, matchHostSourceAnalysisOutput } = await import('../src/index.ts')
+  const descriptor = { workspace_id: uid, session_id: 's', source_message_id: 'm', source_revision: '1', snapshot_digest: 'a'.repeat(64) }
+  const { snapshot_digest: _digest, ...coordinates } = descriptor
+  const target = parseHostCollaborationSourceTarget(coordinates)
+  const command = { action: 'read_source_output', target }
+  expect(parseHostCollaborationAnalysisCommand(command)).toEqual(command)
+  const text = JSON.stringify({ text: '\u0000'.repeat(5459) })
+  const dispatch = { attempt_request_id: uid, plan_id: 'plan', attempt_id: 'attempt', expected_plan_revision: '1', attempt_fence: '1',
+    input_manifest_digest: 'b'.repeat(64), source_digest: descriptor.snapshot_digest,
+    lease_expires_at: '2026-10-01T00:00:00.000Z', dispatch_granted: true }
+  const evidence = { state: 'saved', descriptor, dispatch, output_digest: createHash('sha256').update(text).digest('hex'),
+    json_base64url: Buffer.from(text).toString('base64url') }
+  const result = { kind: 'source_output', evidence }
+  expect(parseHostCollaborationAnalysisResult(result)).toEqual(result)
+  expect(matchHostSourceAnalysisOutput(evidence, target)).toEqual(evidence)
+  const frame = { version: 1, type: 'result', request_id: uid, method: 'profile.collaboration_analysis', result }
+  expect(decodeHostControlFrame(encodeHostControlFrame(frame as HostControlFrame))).toEqual(frame)
+  expect(parseHostCollaborationAnalysisResult({ kind: 'source_output', evidence: { state: 'missing', descriptor } }))
+    .toEqual({ kind: 'source_output', evidence: { state: 'missing', descriptor } })
+  for (const bad of [{ ...evidence, json_base64url: Buffer.from('{}').toString('base64url') },
+    { ...evidence, state: 'prepared' }, { ...evidence, extra: true },
+    { ...evidence, dispatch: { ...dispatch, source_digest: 'c'.repeat(64) } },
+    { state: 'missing', descriptor, dispatch }])
+    expect(() => parseHostCollaborationAnalysisResult({ kind: 'source_output', evidence: bad })).toThrow()
+  expect(() => matchHostSourceAnalysisOutput(evidence, { ...target, source_message_id: 'other' })).toThrow()
+  expect(() => parseHostCollaborationAnalysisCommand({ ...command, grant: dispatch })).toThrow()
+})
+
+it('refuses non-record Source evidence and invalid common saved fields without evaluating getters', async () => {
+  const { parseHostSourceAnalysisOutput } = await import('../src/index.ts')
+  const { parseHostSavedAnalysisFields } = await import('../src/root-analysis-output.ts')
+  for (const value of [null, undefined, [], true, 'output', {}, { state: 'saved', descriptor: null }])
+    expect(() => parseHostSourceAnalysisOutput(value)).toThrow()
+  for (const value of [null, undefined, true, 'fields', {}, { dispatch: {} }])
+    expect(() => parseHostSavedAnalysisFields(value, 'a'.repeat(64))).toThrow()
+  let reads = 0
+  const value = Object.defineProperty({}, 'state', { enumerable: true, get() { reads++; return 'saved' } })
+  expect(() => parseHostSourceAnalysisOutput(value)).toThrow()
+  expect(reads).toBe(0)
 })

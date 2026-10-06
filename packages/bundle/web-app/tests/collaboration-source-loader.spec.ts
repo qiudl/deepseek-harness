@@ -536,6 +536,42 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       expect(savedOutput).not.toHaveProperty('manifest_json')
       expect(await Promise.all(originalFiles.map(name => readFile(join(directory, 'state', name))))).toEqual(originalBytes)
       expect(providerRequests).toBe(1)
+      const registry = new ProfileRegistry({ root: join(directory, 'source-authority'), deviceIndexKey: Buffer.alloc(32, 7),
+        clock: { now: Date.now } })
+      const account = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:source-loader', authorityBindingVersion: 1,
+        issuer: 'https://accounts.example.test', subject: randomUUID(), keyHandle: 'keychain:source-loader',
+        unlockMaterial: Buffer.alloc(32, 9).toString('base64url') }
+      const profile = await registry.registerAccount(account)
+      const host = new DesktopHost({ registry, clock: { now: Date.now }, runtimeGeneration: 5, ensureProfileWorker: async () => undefined,
+        verifyAccountAccessToken: () => ({ issuer: account.issuer, subject: account.subject }) })
+      const privateKey = createPrivateKey({ format: 'der', type: 'pkcs8', key: Buffer.from(
+        '302e020100300506032b6570042204209d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60', 'hex') })
+      const identity = { installationId: randomUUID(), hostInstanceId: randomUUID(), processNonce: 'A'.repeat(43),
+        installationPublicKey: createPublicKey(privateKey).export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url'),
+        installationPrivateKey: privateKey, executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1 }
+      const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1,
+        sourceAnalysisRecoverySupported: true, collaborationAnalysis: (profileId, payload, active) => {
+          expect(profileId).toBe(profile.profileId)
+          return factory['collaborationAnalysis'](origin, 'B'.repeat(43), payload, active, () => false)
+        } })
+      const ownerId = randomUUID(), lifetime = new AbortController(), control = authority.openSession(ownerId, lifetime.signal)
+      const client = await UnixHostClient.connectAuthenticatedTransport({ trustedInstallationId: identity.installationId,
+        trustedInstallationPublicKey: identity.installationPublicKey,
+        trustedExecutableSignatureDigest: identity.executableSignatureDigest }, {
+        call: async frame => decodeHostControlFrame(encodeHostControlFrame(
+          await control.handleRequest(decodeHostControlFrame(encodeHostControlFrame(frame))))),
+        isConnected: () => !lifetime.signal.aborted, close: () => { lifetime.abort(); control.close() },
+      })
+      onTestFinished(() =>{  client.close() })
+      await host.ensureAccountProfile({ ...account, accountAccessToken: 'test', ownerId })
+      const signed = await client.collaborationAnalysis({ ...account, command: { action: 'read_source_output', target } })
+      if (signed.kind !== 'source_output' || signed.evidence.state !== 'saved') throw Error('expected signed saved Source output')
+      const { analysis_receipt, ...original } = signed.evidence
+      expect(original).toEqual(savedOutput)
+      expect(analysis_receipt).toMatchObject({ dispatch: grant, output_digest: savedOutput.output_digest,
+        account_binding_handle: account.accountBindingHandle, installation_id: identity.installationId })
+      expect(providerRequests).toBe(1)
+      expect(await Promise.all(originalFiles.map(name => readFile(join(directory, 'state', name))))).toEqual(originalBytes)
 
       const replyInput = { ...source, source_message_id: 'reply-1', original_message: '只分析这份方案的规则，不修改文件。', active_mentions: [] }
       const captured = await factory['collaborationAnalysis'](origin, 'B'.repeat(43),

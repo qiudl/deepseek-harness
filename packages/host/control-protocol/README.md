@@ -144,6 +144,8 @@ An unknown package receipt can expose `plugin_complete` with closed `action`, `p
 
 `profile.collaboration_analysis` carries only an Account-bound prepare/dispatch command and a non-executable preparation or original JSON output. It excludes caller binding digests, limits encoded Source input to 32 KiB and decoded output to 32 KiB, and validates canonical base64url/UTF-8/object JSON without increasing the frame limit. Dispatch output additionally carries an installation signature over its verified Account and current Host identity, original dispatch grant and saved raw JSON digest. The Unix client verifies the signature and unchanged output; the server separately checks current Source, attempt and target authority.
 
+`profile.source_analysis_recovery` separately enables `read_source_output` with exact ordinary Source coordinates. Its `source_output` response carries the original descriptor and either explicit missing output or the historical consumed dispatch, raw output digest and bounded base64url JSON. Saved responses carry the installation receipt; the client requires and verifies it against the current Account and Host peer. Changed coordinates, grants, bytes or receipt fields reject. Historical lease expiry permits evidence reads only; cloud attempt and admission checks remain independent.
+
 `capture_reply` and `prepare_clarification` additionally carry bounded private input under `profile.collaboration_analysis`. A reply capture returns `reply_source` with only a captured/recovered Source descriptor; complete-input preparation returns `prepared`. Exact command/result keys and action-specific result kinds are checked without changing the frame or JSON budgets. Reply capture grants no model dispatch.
 
 

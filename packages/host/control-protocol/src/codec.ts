@@ -1,7 +1,7 @@
 import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
 import { parseHostRootPlanningEvidence } from './root-planning-evidence.ts'
 import { parseHostRootPlanningAttemptDescriptor, parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
-import { parseHostRootAnalysisOutput } from './root-analysis-output.ts'
+import { parseHostSavedAnalysisFields, parseHostRootAnalysisOutput } from './root-analysis-output.ts'
 import { parseHostRootSubmissionTarget, parseHostRootAnalysisInput, parseHostRootSubmissionDescriptor, parseHostRootAuthorityChallenge, parseHostRootAuthorityAssertion, parseHostRootJournalCommand, parseHostRootJournalMetadata } from './root-authority.ts'
 import type {
   ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
@@ -46,7 +46,7 @@ import type {
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
-  HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult,
+  HostSourceAnalysisOutput, HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult,
   ProfileCollaborationAnalysisRequest, ProfileCollaborationAnalysisResult,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
   ProfileSourceAuthorityRequest, ProfileSourceAuthorityResult,
@@ -1260,6 +1260,31 @@ export function encodeHostReferenceAuthorityPayload(value: HostReferenceAuthorit
     1, encodeHostSourceAuthorityPayload({ ...r, challenge: source }).toString('utf8'), reference_request_digest,
   ]), 'utf8')
 }
+/** Parse original Source output without testing its historical lease as current authority.
+ * @param value - Private worker or signed Host evidence, bounded by the analysis frame limit.
+ * @returns Detached original bytes and dispatch, or explicit missing output.
+ */
+export function parseHostSourceAnalysisOutput(value: unknown): HostSourceAnalysisOutput {
+  const row = registrationRecord(value), missing = row.state === 'missing'
+  exactKeys(row, ['state', 'descriptor', ...(!missing ? ['dispatch', 'output_digest', 'json_base64url',
+    ...(Object.hasOwn(row, 'analysis_receipt') ? ['analysis_receipt'] : [])] : [])])
+  const descriptor = parseHostCollaborationSourceDescriptor(row.descriptor)
+  if (missing) return Object.freeze({ state: 'missing', descriptor })
+  if (row.state !== 'saved') reject()
+  const { state: _state, descriptor: _descriptor, ...fields } = row
+  return Object.freeze({ state: 'saved', descriptor, ...parseHostSavedAnalysisFields(fields, descriptor.snapshot_digest) })
+}
+/** Match saved evidence to the current Account-authorized original Source lookup.
+ * @param value - Private response; receipt trust is checked by the transport and cloud consumers.
+ * @param target - Original Source coordinates selected before asynchronous reads.
+ * @returns Matched evidence; any changed coordinate rejects without choosing another Source.
+ */
+export function matchHostSourceAnalysisOutput(value: unknown, target: HostCollaborationSourceTarget): HostSourceAnalysisOutput {
+  const result = parseHostSourceAnalysisOutput(value), descriptor = result.descriptor
+  if (descriptor.workspace_id !== target.workspace_id || descriptor.session_id !== target.session_id
+    || descriptor.source_message_id !== target.source_message_id || descriptor.source_revision !== target.source_revision) reject()
+  return result
+}
 /**
  * Parse detached Parent commands without granting Source or Account authority.
  * @param value - Exact prepare/dispatch command; encoded input is limited to 32 KiB.
@@ -1276,6 +1301,10 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
   if (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') {
     exactKeys(row, ['action', 'target'])
     return { action: row.action, target: parseHostRootSubmissionTarget(row.target) }
+  }
+  if (row.action === 'read_source_output') {
+    exactKeys(row, ['action', 'target'])
+    return { action: row.action, target: parseHostCollaborationSourceTarget(row.target) }
   }
   if (row.action === 'read_root_output') {
     exactKeys(row, ['action','target'])
@@ -1326,6 +1355,10 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
   if (row.kind === 'root_attempt_prepared') {
     exactKeys(row, ['kind', 'preparation'])
     return { kind: row.kind, preparation: parseHostRootPlanningAttemptDescriptor(row.preparation) }
+  }
+  if (row.kind === 'source_output') {
+    exactKeys(row, ['kind', 'evidence'])
+    return { kind: row.kind, evidence: parseHostSourceAnalysisOutput(row.evidence) }
   }
   if (row.kind === 'root_output') {
     exactKeys(row, ['kind','evidence'])

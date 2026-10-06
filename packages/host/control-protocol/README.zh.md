@@ -156,7 +156,9 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 
 `profile.collaboration_analysis` 只携带绑定 Account 的准备/派发命令及不可执行的准备描述或原始 JSON 输出。它不接受调用方归属摘要，将编码后的 Source 输入和解码后的输出各限制在32 KiB，验证规范 base64url、UTF-8 和对象 JSON，控制帧限制不变。派发输出另携带安装签名，绑定已验证 Account、当前 Host、原派发 grant 及已保存原始 JSON 摘要。Unix 客户端核验签名和未变输出；服务仍须分别核对当前 Source、attempt 和目标权限。
 
-`profile.collaboration_analysis` 另支持携带有界私有输入的 `capture_reply` 和 `prepare_clarification`。补充捕获返回 `reply_source`，仅包含 captured/recovered Source 描述符；完整输入准备返回 `prepared`。命令与结果字段及操作对应的结果类别均严格核验，帧和 JSON 预算不变。补充捕获不授予模型派发资格。
+`profile.collaboration_analysis` 另支持携带有界私有输入的 `profile.source_analysis_recovery` 单独启用 `read_source_output`，只接受普通 Source 的精确坐标。`source_output` 响应包含原描述符，并明确报告输出缺失，或返回历史已消费派发记录、原始输出摘要及有界 base64url JSON。已保存响应携带安装签名回执；客户端必须按当前 Account 和 Host 身份验证。坐标、派发、字节或回执字段变化均拒绝。历史租约过期只允许读取证据；云端尝试和受理校验仍独立执行。
+
+`capture_reply` 和 `prepare_clarification`。补充捕获返回 `reply_source`，仅包含 captured/recovered Source 描述符；完整输入准备返回 `prepared`。命令与结果字段及操作对应的结果类别均严格核验，帧和 JSON 预算不变。补充捕获不授予模型派发资格。
 
 
 `profile.root_authority` 使用独立的 `dsh-collaboration-root-authority/v1` 签名域。挑战包含完整 Source 挑战，以及 namespace、根任务/trace ID、原始命令 ID 与业务 payload 摘要。Host 在签名前从 Account 已授权的 Profile journal 读取匹配元数据，并在读取后再次检查授权和有效期。仅有 Source 签名不能授权根。新签发证明可以改变传输 nonce、请求 ID 与 Host epoch，原业务绑定保持不变。固定 UTF-8 元组由与 Slark 共用的 `tests/fixtures/root-authority-v1.json` 锁定。云端消费者仍须在根受理事务中独立持久化并消费挑战、重算业务摘要及重新核验当前 grant。

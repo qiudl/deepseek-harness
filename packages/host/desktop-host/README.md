@@ -219,6 +219,8 @@ Root journal operations retain the authenticated Account binding and Host peer, 
 
 Root-aware workers advertise `profile.root_analysis` explicitly. Root preparation uses the current Account-authorized Profile and the same Host binding as dispatch; clients refuse older peers before issuing the new command. Unix and Windows startup wire the same root-aware worker owner. Source-only analysis remains separate, without a fallback from root preparation.
 
+`sourceAnalysisRecoverySupported` separately advertises `profile.source_analysis_recovery`. `read_source_output` accesses only the current Account’s owning Profile with the private analysis token and rechecks authorization after reading. Host validates the original Source, consumed grant and saved output digest, then signs them under the current Account and installation/process identity. The client refuses unsigned saved responses and verifies exact bytes and current peer. The worker uses a dedicated bounded output reader so 32 KiB decoded JSON survives base64 encoding; generic JSON string limits remain unchanged. Missing output grants no call, and an expired saved grant grants no current cloud authority.
+
 Saved-output reads require the separate `profile.root_analysis_recovery` capability. They retain current Account/Profile authorization before and after worker access and use the private analysis token. Older workers reject the command; saved grant metadata never starts another model call.
 
 `rootLookupSupported` advertises `profile.root_lookup` independently of preparation support. `recover_root` uses the same current Account/Profile checks and private worker token as analysis, but accepts only recovered metadata; older peers reject before lookup.
