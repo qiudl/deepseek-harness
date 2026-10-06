@@ -482,7 +482,6 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   if (command.operation === 'workspace.create') {
     exactKeys(command, ['operation', 'command_id', 'client_id', 'grant_id', 'path'])
     const path = wireText(command.path, 4096, true)
-    if (path.includes('\0')) reject()
     return { operation: 'workspace.create', command_id, client_id: uuid(command.client_id),
       grant_id: uuid(command.grant_id), path }
   }

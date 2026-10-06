@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
@@ -409,6 +410,52 @@ describe('REQ-20260930-0015 remote directory confirmation', () => {
     expect(invoke).toHaveBeenLastCalledWith({ namespace: 'workspace', method: 'create',
       args: { request: { path: '/tmp/confirmed-folder' } }, signal })
     expect(invoke).toHaveBeenCalledTimes(2)
+  })
+  it('refuses a concurrent chooser and releases the busy state after settlement', async () => {
+    let settle!: (path: string) => void
+    const invoke = vi.fn().mockImplementationOnce(() => new Promise<string>((resolve) => { settle = resolve }))
+      .mockResolvedValue(null)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const signal = new AbortController().signal
+    const pending = executor.execute({ operation: 'directory.pick', command_id, client_id }, signal)
+    await expect(executor.execute({ operation: 'directory.pick', command_id, client_id }, signal))
+      .rejects.toThrow('directory picker busy')
+    expect(invoke).toHaveBeenCalledOnce()
+    settle('/tmp/confirmed')
+    await pending
+    await expect(executor.execute({ operation: 'directory.pick', command_id, client_id }, signal))
+      .resolves.toEqual({ path: null })
+  })
+  it.each([0, '', 'x'.repeat(4097), 'bad\0path'])('rejects invalid native chooser output %#', async (path) => {
+    const invoke = vi.fn().mockResolvedValueOnce(path).mockResolvedValueOnce(null)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const signal = new AbortController().signal
+    await expect(executor.execute({ operation: 'directory.pick', command_id, client_id }, signal))
+      .rejects.toThrow('directory picker invalid path')
+    await expect(executor.execute({ operation: 'directory.pick', command_id, client_id }, signal))
+      .resolves.toEqual({ path: null })
+  })
+  it('bounds outstanding confirmations and reclaims expired confirmations for other clients', async () => {
+    const invoke = vi.fn().mockResolvedValue('/tmp/confirmed')
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const signal = new AbortController().signal
+    const first = await executor.execute({ operation: 'directory.pick', command_id, client_id }, signal) as { grantId: string }
+    for (let i = 1; i < 32; i++) {
+      await executor.execute({ operation: 'directory.pick', command_id, client_id: randomUUID() }, signal)
+    }
+    await expect(executor.execute({ operation: 'directory.pick', command_id, client_id: randomUUID() }, signal))
+      .rejects.toThrow('directory confirmations full')
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_001)
+    try {
+      const otherClient = randomUUID()
+      const next = await executor.execute({ operation: 'directory.pick', command_id, client_id: otherClient }, signal) as { grantId: string }
+      await expect(executor.execute({ operation: 'workspace.create', command_id, client_id,
+        path: '/tmp/confirmed', grant_id: first.grantId }, signal)).rejects.toThrow('confirmation required')
+      await executor.execute({ operation: 'workspace.create', command_id, client_id: otherClient,
+        path: '/tmp/confirmed', grant_id: next.grantId }, signal)
+      expect(invoke).toHaveBeenLastCalledWith({ namespace: 'workspace', method: 'create',
+        args: { request: { path: '/tmp/confirmed' } }, signal })
+    } finally { clock.mockRestore() }
   })
   it('expires confirmations and isolates them between Profile workers', async () => {
     const invoke = vi.fn().mockResolvedValue('/tmp/confirmed')
