@@ -7,16 +7,17 @@ import {
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostSourceAuthorityPayload,
+  encodeHostReferenceAuthorityPayload,
   encodeHostCollaborationDeliveryReceiptPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson, HostCollaborationReferenceGrant } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from '../src/collaboration-delivery-uploads.ts'
 
-async function fixture(enabled = true) {
+async function fixture(enabled = true, referenceEnabled = false) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
     rmSync(root, { recursive: true, force: true })
@@ -72,11 +73,17 @@ async function fixture(enabled = true) {
   let analysis = async (_profileId: string, command: Record<string, unknown>, _signal: AbortSignal): Promise<unknown> =>
     ({ jsonText: JSON.stringify({ binding: command.binding_key }) })
   let delivery: (profileId: string) => CollaborationDeliveryReceiver = () => { throw Error('not configured') }
+  let reference = async (_profileId: string, target: HostCollaborationSourceTarget, requestDigest: string, _signal: AbortSignal) =>
+    ({ ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest })
   const authority = new HostControlAuthority({
     identity,
     host,
     profilePersistenceGeneration: () => 1,
     now: clock.now,
+    ...(referenceEnabled ? { readCollaborationReferenceGrant: (
+      profileId: string, target: HostCollaborationSourceTarget, requestDigest: string, signal: AbortSignal,
+    ) =>
+      reference(profileId, target, requestDigest, signal) as Promise<HostCollaborationReferenceGrant> } : {}),
     ...(enabled ? { inspectCollaborationSource: (profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal) =>
       inspect(profileId, target, signal) as Promise<HostCollaborationSourceDescriptor>,
     readCollaborationSourceSnapshot: (profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal) =>
@@ -152,6 +159,7 @@ async function fixture(enabled = true) {
       inspect = callback
     },
     setRead:(callback:typeof read)=>{read=callback},
+    setReference:(callback:typeof reference)=>{reference=callback},
     setAnalysis:(callback:typeof analysis)=>{analysis=callback},
     setDelivery: (callback: typeof delivery) => { delivery = callback },
   }
@@ -617,4 +625,107 @@ it.each(['analysis', 'delivery'] as const)('refuses %s certification after a Pro
   }
   expect(replacement).toBeDefined()
   expect(replacement).not.toBe(f.profile.profileId)
+})
+
+const referenceInput = (f: Awaited<ReturnType<typeof fixture>>) => ({ ...f.input,
+  challenge: { ...f.challenge, reference_request_digest: 'b'.repeat(64) as never } })
+
+it('requires a current Account and its separate Profile reference grant before signing any transfer proof', async () => {
+  const f = await fixture(true, true), input = referenceInput(f)
+  let reads = 0
+  f.setReference(async (profileId, target, requestDigest) => {
+    reads++; expect(profileId).toBe(f.profile.profileId)
+    return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest }
+  })
+  await expect(f.client.attestReferenceAuthority(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(reads).toBe(0)
+  await f.grant()
+  const result = await f.client.attestReferenceAuthority(input)
+  expect(result.challenge).toEqual(input.challenge)
+  expect(verify(null, encodeHostReferenceAuthorityPayload(result), f.keys.publicKey, Buffer.from(result.signature, 'base64url'))).toBe(true)
+  const { reference_request_digest: _digest, ...source } = result.challenge
+  expect(verify(null, encodeHostSourceAuthorityPayload({ ...result, challenge: source }), f.keys.publicKey, Buffer.from(result.signature, 'base64url'))).toBe(false)
+  expect(reads).toBe(1)
+})
+it('Source support alone never advertises reference authority or grants a transfer signature', async () => {
+  const f = await fixture(), before = f.seen.length
+  await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen).toHaveLength(before)
+  const noSource = await fixture(false, true)
+  await expect(noSource.client.attestReferenceAuthority(referenceInput(noSource))).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+it('refuses changed Source coordinates or reference request digests returned by the Profile', async () => {
+  const f = await fixture(true, true)
+  await f.grant()
+  for (const change of [{ session_id: 'foreign' as never }, { source_revision: '2' }, { snapshot_digest: 'c'.repeat(64) },
+    { reference_request_digest: 'c'.repeat(64) }]) {
+    f.setReference(async (_profile, target, requestDigest) => ({ ...target, snapshot_digest: 'a'.repeat(64),
+      reference_request_digest: requestDigest, ...change }))
+    await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'profile_mismatch' })
+  }
+})
+it('does not certify a grant after revoke, expiry or cancellation during the Profile read', async () => {
+  for (const mode of ['revoke', 'expire', 'cancel'] as const) {
+    const f = await fixture(true, true), cancellation = new AbortController()
+    await f.grant()
+    f.setReference(async (_profile, target, requestDigest) => {
+      if (mode === 'revoke') f.host.revokeOwner(f.ownerId)
+      if (mode === 'expire') f.time.value = 2000
+      if (mode === 'cancel') cancellation.abort()
+      return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest }
+    })
+    await expect(f.client.attestReferenceAuthority({ ...referenceInput(f), signal: cancellation.signal })).rejects.toThrow()
+  }
+})
+it('refuses altered peer signatures, mismatched environments and post-reply connection loss', async () => {
+  const f = await fixture(true, true), input = referenceInput(f)
+  await f.grant()
+  await expect(f.client.attestReferenceAuthority({ ...input, authorityEnvironmentId: randomUUID() })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(f.client.attestReferenceAuthority({ ...input, signal: AbortSignal.abort() })).rejects.toThrow()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.reference_authority'
+    ? { ...frame, result: { ...frame.result, signature: 'A'.repeat(86) as never } } : frame)
+  await expect(f.client.attestReferenceAuthority(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  f.alter((frame) => { f.client.close(); return frame })
+  await expect(f.client.attestReferenceAuthority(input)).rejects.toThrow()
+})
+
+it('rechecks Source visibility after the asynchronous reference grant read before signing', async () => {
+  const f = await fixture(true, true)
+  await f.grant()
+  f.setReference(async (_profile, target, requestDigest) => {
+    f.setInspect(async (_id, coordinates) => ({ ...coordinates, snapshot_digest: 'c'.repeat(64) }))
+    return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest }
+  })
+  await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'profile_mismatch' })
+})
+
+it('the Host refuses a raw reference request when no committed reference grant reader is installed', async () => {
+  const f = await fixture()
+  await f.grant()
+  await f.client.attestSourceAuthority(f.input)
+  const original = f.seen.at(-1)
+  if (original?.type !== 'request' || original.method !== 'profile.source_authority') throw Error('missing source request')
+  const request = decodeHostControlFrame(JSON.stringify({ ...original, method: 'profile.reference_authority',
+    params: { ...original.params, jti: randomUUID(), challenge: referenceInput(f).challenge } }) + '\n')
+  const result = await f.session.handleRequest(request)
+  expect(result.type === 'error' && result.error.code).toBe('upgrade_required')
+})
+it('refuses a stale Source before reading any committed reference grant', async () => {
+  const f = await fixture(true, true)
+  await f.grant()
+  let reads = 0
+  f.setReference(async (_id, target, requestDigest) => { reads++; return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest } })
+  f.setInspect(async (_id, target) => ({ ...target, snapshot_digest: 'c'.repeat(64) }))
+  await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'profile_mismatch' })
+  expect(reads).toBe(0)
+})
+it('refuses a Source response substituted for the requested reference response', async () => {
+  const f = await fixture(true, true)
+  await f.grant()
+  f.alter((frame) => {
+    if (frame.type !== 'result' || frame.method !== 'profile.reference_authority') return frame
+    const { reference_request_digest: _digest, ...source } = frame.result.challenge
+    return { ...frame, method: 'profile.source_authority', result: { ...frame.result, challenge: source } }
+  })
+  await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'unavailable' })
 })

@@ -643,6 +643,31 @@ export interface ProfileSourceAuthorityResult extends Omit<ProfileWorkspaceAutho
   readonly result: HostSourceAuthorityAssertion
 }
 
+/** Profile-owned committed transfer grant; coordinates or digests supplied by Desktop grant no access. */
+export interface HostCollaborationReferenceGrant extends HostCollaborationSourceDescriptor {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Server nonce binds the original Source and the complete immutable reference reservation request. */
+export interface HostReferenceAuthorityChallenge extends HostSourceAuthorityChallenge {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Installation signature over a separate Profile transfer grant; no target execution authority. */
+export interface HostReferenceAuthorityAssertion extends Omit<HostSourceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostReferenceAuthorityChallenge
+}
+/** Main-only transfer attestation requires current Account access and a separate committed Profile grant. */
+export interface ProfileReferenceAuthorityRequest extends Omit<ProfileSourceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_authority'
+  readonly params: Omit<ProfileSourceAuthorityRequest['params'], 'challenge'> & {
+    readonly challenge: HostReferenceAuthorityChallenge
+  }
+}
+/** Signed reference reservation digest without content, filesystem paths or credentials. */
+export interface ProfileReferenceAuthorityResult extends Omit<ProfileSourceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_authority'
+  readonly result: HostReferenceAuthorityAssertion
+}
+
 /** One bounded text request authorized by this connection's verified Account grant. */
 export interface ProfileModelTextRequest {
   readonly version: 1
@@ -1511,6 +1536,8 @@ export type HostControlFrame =
   | ProfileWorkspaceAuthorityResult
   | ProfileSourceAuthorityRequest
   | ProfileSourceAuthorityResult
+  | ProfileReferenceAuthorityRequest
+  | ProfileReferenceAuthorityResult
   | ProfileCollaborationAnalysisRequest
   | ProfileCollaborationAnalysisResult
   | ProfileCollaborationDeliveryRequest

@@ -46,6 +46,8 @@ import type {
   ProfileCollaborationAnalysisRequest, ProfileCollaborationAnalysisResult,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
   ProfileSourceAuthorityRequest, ProfileSourceAuthorityResult,
+  HostCollaborationReferenceGrant, HostReferenceAuthorityChallenge, HostReferenceAuthorityAssertion,
+  ProfileReferenceAuthorityRequest, ProfileReferenceAuthorityResult,
   HostCollaborationSourceSnapshot, ProfileSourceSnapshotRequest, ProfileSourceSnapshotResult,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
@@ -1058,6 +1060,49 @@ export function encodeHostSourceAuthorityPayload(value: HostSourceAuthorityAsser
   ])}`, 'utf8')
 }
 /**
+ * Validate a separate Profile grant without trusting Desktop-supplied coordinates.
+ * @param value - Exact committed Source descriptor and full reservation digest.
+ * @returns Detached frozen grant; its owning Profile must separately authorize its read.
+ */
+export function parseHostCollaborationReferenceGrant(value: unknown): HostCollaborationReferenceGrant {
+  const r = registrationRecord(value)
+  exactKeys(r, [...SOURCE_TARGET_KEYS, 'snapshot_digest', 'reference_request_digest'])
+  const { reference_request_digest, ...source } = r
+  return Object.freeze({ ...parseHostCollaborationSourceDescriptor(source), reference_request_digest: digest(reference_request_digest) })
+}
+/**
+ * Validate a reference nonce without granting read or transfer access.
+ * @param value - Source challenge plus a canonical full reservation digest.
+ * @returns Frozen Source, Account, Host epoch and reference request fields.
+ */
+export function parseHostReferenceAuthorityChallenge(value: unknown): HostReferenceAuthorityChallenge {
+  const r = registrationRecord(value)
+  const { reference_request_digest, ...source } = r
+  return Object.freeze({ ...parseHostSourceAuthorityChallenge(source), reference_request_digest: digest(reference_request_digest) })
+}
+/**
+ * Validate signed reference fields without trusting their installation or nonce.
+ * @param value - Exact detached assertion, without content or credential fields.
+ * @returns Frozen assertion; consumers verify the current installed key and separate transfer grant.
+ */
+export function parseHostReferenceAuthorityAssertion(value: unknown): HostReferenceAuthorityAssertion {
+  const r = registrationRecord(value), challenge = parseHostReferenceAuthorityChallenge(r.challenge)
+  const { reference_request_digest: _digest, ...source } = challenge
+  return Object.freeze({ ...parseHostSourceAuthorityAssertion({ ...r, challenge: source }), challenge })
+}
+/**
+ * Encode the Slark reference signing domain, distinct from Source membership signatures.
+ * @param value - Exact assertion; the signature is excluded from the signed bytes.
+ * @returns Fixed-order UTF-8 bytes binding Source and the complete reservation digest.
+ */
+export function encodeHostReferenceAuthorityPayload(value: HostReferenceAuthorityAssertion): Buffer {
+  const r = parseHostReferenceAuthorityAssertion(value)
+  const { reference_request_digest, ...source } = r.challenge
+  return Buffer.from('dsh-collaboration-reference-authority/v1\0' + JSON.stringify([
+    1, encodeHostSourceAuthorityPayload({ ...r, challenge: source }).toString('utf8'), reference_request_digest,
+  ]), 'utf8')
+}
+/**
  * Parse detached Parent commands without granting Source or Account authority.
  * @param value - Exact prepare/dispatch command; encoded input is limited to 32 KiB.
  * @returns validated command; invalid keys, identifiers or JSON budgets throw.
@@ -1120,7 +1165,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
-  | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
+  | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileReferenceAuthorityRequest
+  | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
   | ProfileCollaborationDeliveryRequest
   | ProfileModelTextRequest
   | ProfileLeaseCloseRequest | ProfileExtensionsRequest
@@ -1502,7 +1548,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       },
     }
   }
-  if (frame.method === 'profile.source_authority') {
+  if (frame.method === 'profile.source_authority' || frame.method === 'profile.reference_authority') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
     return {
       version: 1,
@@ -1511,9 +1557,10 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       method: frame.method,
       params: {
         ...accountChallengeParams(params),
-        challenge: parseHostSourceAuthorityChallenge(params.challenge),
+        challenge: frame.method === 'profile.reference_authority'
+          ? parseHostReferenceAuthorityChallenge(params.challenge) : parseHostSourceAuthorityChallenge(params.challenge),
       },
-    }
+    } as ProfileSourceAuthorityRequest | ProfileReferenceAuthorityRequest
   }
   if (frame.method === 'profile.collaboration_registration') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
@@ -1561,7 +1608,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
-  | ProfileWorkspaceAuthorityResult | ProfileSourceAuthorityResult
+  | ProfileWorkspaceAuthorityResult | ProfileSourceAuthorityResult | ProfileReferenceAuthorityResult
   | ProfileCollaborationAnalysisResult | ProfileSourceSnapshotResult
   | ProfileCollaborationDeliveryResult
   | ProfileModelTextResult
@@ -1810,6 +1857,9 @@ function decodeProfileResult(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.source_authority') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostSourceAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.reference_authority') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostReferenceAuthorityAssertion(result) }
   }
   if (frame.method === 'profile.collaboration_analysis') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationAnalysisResult(result) }

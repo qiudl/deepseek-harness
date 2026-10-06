@@ -118,6 +118,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 
 `profile.source_authority` 从当前连接已验证的 Account 解析 Profile，经监管器与独立随机 worker 令牌读取持久 Source 描述符。macOS 和 Windows 启动组合安装该读取器。读取器缺失时不发布能力；worker 替换、坐标或摘要不符、挑战过期及 Account 授权变化都会拒绝签名。客户端核验精确挑战、固定的安装/进程及 Source 签名。此操作不捕获消息或准备模型；云端消费和聊天分发仍须单独接入。
 
+`profile.reference_authority` 仅在持久 Source 读取器与 `readCollaborationReferenceGrant` 同时安装时发布。Host 要求当前令牌验证的 Account，将独立 Profile 授权与请求的 Source 和完整引用预登记摘要比对，再于签名前重新读取 Source。撤权、过期、取消或 Profile/Source 观察变化均拒绝签名。客户端核验精确挑战和固定安装进程的签名；Source 签名不能替代引用授权。
+
 `profile.source_snapshot` 使用同一当前 Account 与 Profile worker 读取器私有传输 journal 原始内容。worker bearer 路由校验完整持久 Source；监管器拒绝已销毁或被替换的 worker。固定 32 KiB 字节分块保留现有控制帧预算，客户端在有界读取内跨块核验坐标、描述符和长度一致性、完整 UTF-8、取消及已检查的 peer。返回原文与脱敏模型/提交元数据，不含凭据，不准备模型或恢复调用。macOS 与 Windows 启动组合安装读取器；真实聊天捕获和派发仍须单独接入。
 
 ## 模型体验
@@ -130,6 +132,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延后工作
+
+当前启动组合未安装持久引用授权的生产者或读取器，发行 Host 的引用授权仍不可用。嵌入方启用此能力前，Profile 必须先提供消息/文件选择、不可变内容捕获与云端上传所需的授权生产者。
 
 - **扩展支持由执行器决定** — `profile.extensions` 通过有效窗口租约接受清单、准备、提交、状态和取消请求。插件执行要求配置随包 pnpm 产物。Windows 启动组合支持显式启用的 MCP，Windows 插件及 Skill 执行器仍不可用。嵌入应用必须启用并固定此组合的版本，用户才能获得该能力。技能清单使用 `transport: markdown` 和有长度限制、由文件名生成的标识。安装或恢复配置导致 worker 重启后，Desktop 必须重新打开同一 Profile 视图。打包运行时固定版本、完整 Profile 迁移保留、杀进程恢复和未知回执核对，仍需在发布前单独完成端到端验证。
 
