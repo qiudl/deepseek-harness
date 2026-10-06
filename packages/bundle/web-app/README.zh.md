@@ -146,6 +146,10 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 同一私有令牌另启用 `/internal/desktop-collaboration-source-snapshot`。精确坐标定位所属 Profile 的已有 journal 快照，并严格校验嵌套元数据及内容摘要。响应为描述符与原始 Source JSON，不含凭据或可执行句柄。浏览器 Cookie 不授予路由访问权；归属缺失、journal 损坏和读取失败均返回隐藏详情的拒绝。父 Host 读取完整有界响应，再经固定控制协议分块传输。
 
+### 远端工作区目录
+
+远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
+
 ## 模型体验
 
 ### Harness 源码与 Web 表层上下文

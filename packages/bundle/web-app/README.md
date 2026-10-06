@@ -152,6 +152,9 @@ The same private token additionally enables `/internal/desktop-collaboration-sou
 
 `DSH_PROFILE_DELIVERY_TOKEN` independently enables `/internal/desktop-collaboration-delivery` for the parent Host. It accepts at most 1 MiB of exact readable delivery JSON and delegates original Source and membership checks to the owning Session Controller. It returns a noncacheable first-commit descriptor only after saving the complete reply; the answer is not echoed. Browser cookies, Source-read tokens, caller-supplied commits and restricted projections cannot authorize a save. Cancellation, write failure and post-commit ownership loss withhold a successful receipt without deleting saved data. This route does not sign a cloud acknowledgement or append a chat event.
 
+### Remote workspace directories
+
+The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
 
 ## Model Experience
 

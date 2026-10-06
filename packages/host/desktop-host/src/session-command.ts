@@ -127,7 +127,7 @@ export class SessionCommandAuthority {
 }
 
 const READ_OPERATIONS = new Set<HostRemoteSessionCommand['operation']>([
-  'session.list', 'session.history', 'approval.poll', 'control.status',
+  'session.list', 'session.history', 'approval.poll', 'control.status', 'directory.pick',
 ])
 
 /** Apply durable idempotency to mutations before forwarding them to one Profile worker. */

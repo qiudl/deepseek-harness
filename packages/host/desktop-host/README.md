@@ -121,6 +121,9 @@ The Web worker factory creates a separate random `DSH_PROFILE_ANALYSIS_TOKEN`, r
 
 The Web worker factory separately generates and reserves `DSH_PROFILE_DELIVERY_TOKEN` for its parent-only `receiveCollaborationDelivery` handle. Complete delivery JSON is bounded to 1 MiB; the owning Profile validates its schema and returns at most 8 KiB of untrusted local commit JSON without echoing the answer. Stopped workers, redirects, cancellation and malformed responses reject. The capability stays outside view leases. The parent must authenticate the account namespace and readable cloud projection; this private HTTP handle grants neither signed cloud acknowledgement nor a control-protocol upload. Large replies require an authenticated chunked transfer within the existing control-frame limit.
 
+### Remote workspace directories
+
+The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
 
 ## Model Experience
 

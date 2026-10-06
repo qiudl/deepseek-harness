@@ -93,6 +93,10 @@ No runtime invariant companion is published: the codec validates the complete wi
 
 `parseHostRemoteSessionJson` exposes the existing Host JSON limits to private-worker consumers. It detaches parsed data and rejects nonfinite numbers, unsafe keys, excess depth/count and oversized strings; it grants no operation authority.
 
+### Remote workspace directories
+
+The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
+
 ## Model Experience
 
 None, as this local Host control codec registers nothing model-facing.

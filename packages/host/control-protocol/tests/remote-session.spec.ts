@@ -31,6 +31,8 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'control.release', command_id: commandId, session_id: sessionId,
         controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
       { operation: 'session.list', command_id: commandId },
+      { operation: 'directory.pick', command_id: commandId, client_id: randomUUID() },
+      { operation: 'workspace.create', command_id: commandId, client_id: randomUUID(), grant_id: randomUUID(), path: '/tmp/confirmed' },
       { operation: 'session.create', command_id: commandId },
       { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1' },
       { operation: 'session.create', command_id: commandId, workspace_id: 'workspace-1', session_id: sessionId },
@@ -61,6 +63,9 @@ describe('Profile remote Session wire commands', () => {
   it('rejects unknown operations, injected selectors and malformed command fields', () => {
     const id = randomUUID()
     for (const command of [
+      { operation: 'directory.pick', command_id: id, client_id: randomUUID(), path: '/tmp/forged' },
+      { operation: 'workspace.create', command_id: id, client_id: randomUUID(), grant_id: 'bad', path: '/tmp/confirmed' },
+      { operation: 'workspace.create', command_id: id, client_id: randomUUID(), grant_id: randomUUID(), path: 'bad\0path' },
       { operation: 'api.proxy', command_id: id, path: '/api/settings.describe' },
       { operation: 'session.list', command_id: id, profile_root: '/another-user' },
       { operation: 'session.create', command_id: id, cwd: '/tmp/escape' },
