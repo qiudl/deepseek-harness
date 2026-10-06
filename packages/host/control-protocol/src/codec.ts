@@ -51,6 +51,8 @@ import type {
   HostCollaborationReferenceSelection, HostCollaborationReferenceCapture,
   HostCollaborationReferenceRequestId, HostCollaborationMentionId,
   ProfileReferenceCaptureRequest, ProfileReferenceCaptureResult,
+  HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk,
+  ProfileReferenceContentRequest, ProfileReferenceContentResult,
   HostCollaborationSourceSnapshot, ProfileSourceSnapshotRequest, ProfileSourceSnapshotResult,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
@@ -1097,6 +1099,36 @@ function referenceKeys(value: Record<string, unknown>, keys: readonly string[]):
   if (Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) reject()
 }
 /**
+ * Parse an original reference lookup without caller content or computed metadata.
+ * @param value - Source coordinates, full reservation digest and a byte offset.
+ * @returns Detached target with an offset below the fixed 1 MiB content budget.
+ */
+export function parseHostCollaborationReferenceContentTarget(value: unknown): HostCollaborationReferenceContentTarget {
+  const r = registrationRecord(value)
+  referenceKeys(r, [...SOURCE_TARGET_KEYS, 'reference_request_digest', 'offset'])
+  const offset = referenceOffset(r.offset)
+  if (offset >= 1024 * 1024) reject()
+  return Object.freeze({ ...sourceTargetFields(r), reference_request_digest: digest(r.reference_request_digest), offset })
+}
+/**
+ * Bound one reference response, including its exact canonical byte chunk.
+ * @param value - Original Profile descriptor, digests, total length, offset and bytes.
+ * @returns Detached chunk; callers verify the complete content hash after assembly.
+ */
+export function parseHostCollaborationReferenceContentChunk(value: unknown): HostCollaborationReferenceContentChunk {
+  const r = registrationRecord(value)
+  referenceKeys(r, ['descriptor', 'reference_request_digest', 'content_digest', 'offset', 'total_bytes', 'chunk_base64url'])
+  const descriptor = parseHostCollaborationSourceDescriptor(r.descriptor)
+  const offset = referenceOffset(r.offset), total = referenceOffset(r.total_bytes)
+  if (total > 1024 * 1024 || offset > total || (total > 0 && offset === total)
+    || typeof r.chunk_base64url !== 'string' || !/^[A-Za-z0-9_-]*$/u.test(r.chunk_base64url)
+    || r.chunk_base64url.length > 43691) reject()
+  const bytes = Buffer.from(r.chunk_base64url, 'base64url')
+  if (bytes.toString('base64url') !== r.chunk_base64url || bytes.byteLength !== Math.min(32768, total - offset)) reject()
+  return Object.freeze({ descriptor, reference_request_digest: digest(r.reference_request_digest),
+    content_digest: digest(r.content_digest), offset, total_bytes: total, chunk_base64url: r.chunk_base64url })
+}
+/**
  * Parse a private locator selection without computed metadata or content overrides.
  * @param value - Source coordinates, range, recipients and original evidence spans.
  * @returns detached frozen fields; parsing establishes no user sharing intent.
@@ -1112,6 +1144,11 @@ export function parseHostCollaborationReferenceSelection(value: unknown): HostCo
   const raw = registrationRecord(r.range)
   let range: HostCollaborationReferenceSelection['range']
   if (raw.unit === 'whole') { referenceKeys(raw, ['unit']); range = Object.freeze({ unit: 'whole' }) }
+  else if (raw.unit === 'quote') {
+    referenceKeys(raw, ['unit', 'text'])
+    if (typeof raw.text !== 'string' || !raw.text.length || !raw.text.isWellFormed() || Buffer.byteLength(raw.text) > 16384) reject()
+    range = Object.freeze({ unit: 'quote', text: raw.text })
+  }
   else {
     referenceKeys(raw, ['unit', 'start', 'end'])
     if (raw.unit !== 'utf16' && raw.unit !== 'byte') reject()
@@ -1158,7 +1195,7 @@ export function parseHostCollaborationReferenceCapture(value: unknown): HostColl
   const selected = parseHostCollaborationReferenceSelection({ source, reference_request_id: request.reference_request_id,
     source_kind: request.source_kind, source_locator: request.source_locator, source_version: request.source_version,
     range: request.range, recipient_mention_ids: request.recipient_mention_ids, source_evidence_spans: request.source_evidence_spans })
-  if (selected.range.unit === 'whole' || typeof request.mime_type !== 'string' || request.mime_type.length > 128
+  if (selected.range.unit === 'whole' || selected.range.unit === 'quote' || typeof request.mime_type !== 'string' || request.mime_type.length > 128
     || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+(?:;[\x20-\x7e]+)?$/u.test(request.mime_type)) reject()
   digest(request.content_digest)
   const length = referenceOffset(request.byte_length), extent = selected.range.end - selected.range.start
@@ -1280,6 +1317,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
   | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileReferenceAuthorityRequest | ProfileReferenceCaptureRequest
+  | ProfileReferenceContentRequest
   | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
   | ProfileCollaborationDeliveryRequest
   | ProfileModelTextRequest
@@ -1643,6 +1681,15 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), selection: parseHostCollaborationReferenceSelection(params.selection),
     } }
   }
+  if (frame.method === 'profile.reference_content') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
+      'account_issuer', 'account_subject', 'offset', ...SOURCE_TARGET_KEYS, 'reference_request_digest'])
+    const target = parseHostCollaborationReferenceContentTarget(Object.fromEntries(
+      [...SOURCE_TARGET_KEYS, 'reference_request_digest', 'offset'].map(key => [key, params[key]])))
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...collaborationAccountParams(params), offset: target.offset, ...sourceTargetFields({ ...target }),
+        reference_request_digest: target.reference_request_digest } }
+  }
   if (frame.method === 'profile.source_snapshot') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'offset', ...SOURCE_TARGET_KEYS])
     if (!Number.isSafeInteger(params.offset) || (params.offset as number) < 0 || (params.offset as number) >= 1024 * 1024) reject()
@@ -1729,6 +1776,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
   | ProfileWorkspaceAuthorityResult | ProfileSourceAuthorityResult | ProfileReferenceAuthorityResult | ProfileReferenceCaptureResult
+  | ProfileReferenceContentResult
   | ProfileCollaborationAnalysisResult | ProfileSourceSnapshotResult
   | ProfileCollaborationDeliveryResult
   | ProfileModelTextResult
@@ -1983,6 +2031,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.reference_capture') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationReferenceCapture(result) }
+  }
+  if (frame.method === 'profile.reference_content') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostCollaborationReferenceContentChunk(result) }
   }
   if (frame.method === 'profile.collaboration_analysis') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationAnalysisResult(result) }

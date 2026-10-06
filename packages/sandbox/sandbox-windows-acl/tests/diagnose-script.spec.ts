@@ -114,6 +114,38 @@ function normalized(path: string, lines: readonly string[]): string[] {
   })
 }
 
+function inheritedAllowOrder(sddl: string): string {
+  const start = sddl.indexOf('D:'), end = sddl.indexOf('S:', start)
+  if (start < 0) return sddl
+  const stop = end < 0 ? sddl.length : end
+  // Tree propagation can reorder adjacent inherited simple allows; no deny or explicit rule moves.
+  const dacl = sddl.slice(start, stop).replace(/(?:\(A;[A-Z]*ID[A-Z]*;[^;()]+;;;[^;()]+\))+/gu,
+    run => [...run.matchAll(/\(A;[A-Z]*ID[A-Z]*;[^;()]+;;;[^;()]+\)/gu)].map(match => match[0]).sort().join(''))
+  return sddl.slice(0, start) + dacl + sddl.slice(stop)
+}
+
+describe('inherited allow ordering during tree restore', () => {
+  const system = '(A;OICIID;FA;;;SY)', packageRule = `(A;OICIID;0x1200a9;;;${PACKAGE_SID})`
+  it('accepts reordering of adjacent inherited allow rules only', () => {
+    expect(inheritedAllowOrder(`O:BAD:AI${system}${packageRule}`))
+      .toBe(inheritedAllowOrder(`O:BAD:AI${packageRule}${system}`))
+  })
+  it('retains owner, mask, flags, explicit order and deny positions', () => {
+    const base = `O:BAD:AI${system}${packageRule}`
+    for (const changed of [base.replace('O:BA', 'O:SY'), base.replace('0x1200a9', 'FA'),
+      base.replace('OICIID', 'CIID'), base.replace(PACKAGE_SID, CAPABILITY_SID)])
+      expect(inheritedAllowOrder(changed)).not.toBe(inheritedAllowOrder(base))
+    const deny = '(D;OICIID;WD;;;WD)', explicit = '(A;OICI;FA;;;BA)'
+    for (const separator of [deny, explicit])
+      expect(inheritedAllowOrder(`D:${system}${separator}${packageRule}`))
+        .not.toBe(inheritedAllowOrder(`D:${packageRule}${separator}${system}`))
+    expect(inheritedAllowOrder('(A;;FA;;;SY)(A;;FA;;;BA)'))
+      .not.toBe(inheritedAllowOrder('(A;;FA;;;BA)(A;;FA;;;SY)'))
+    expect(inheritedAllowOrder(`${base}S:(AU;SA;FA;;;WD)`))
+      .not.toBe(inheritedAllowOrder(`${base}S:(AU;FA;FA;;;WD)`))
+  })
+})
+
 describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl script', { timeout }, () => {
   let scratch!: string
   let outDir!: string
@@ -610,7 +642,7 @@ exit $LASTEXITCODE
     icacls(parent, '/grant', `*${PACKAGE_SID}:(OI)(CI)(RX)`)
     if (explicitChild) icacls(child, '/grant', '*S-1-15-2-4-3-2-1:(OI)(CI)(RX)')
     const paths = [parent, child, leaf]
-    const before = paths.map(sddlOf)
+    const before = paths.map(sddlOf).map(inheritedAllowOrder)
     // The fixture's owner is the host token's default owner, which is not the invoking user on an
     // elevated runner; the repair must preserve whatever owner the fixture has.
     const ownersBefore = paths.map(ownerOf)
@@ -626,7 +658,7 @@ exit $LASTEXITCODE
     expect(paths.map(ownerOf)).toEqual(ownersBefore)
     const commands = entries.at(-1)!.details.rollbackCommands as string[]
     for (const command of commands) expect(runPowerShell(['-Command', command]).code).toBe(0)
-    expect(paths.map(sddlOf)).toEqual(before)
+    expect(paths.map(sddlOf).map(inheritedAllowOrder)).toEqual(before)
   })
 
   it('refuses an inherited source outside AllowRoot before touching an in-root explicit entry', () => {
@@ -652,7 +684,7 @@ exit $LASTEXITCODE
     icacls(parent, '/grant', `*${PACKAGE_SID}:(OI)(CI)(RX)`)
     icacls(child, '/grant', '*S-1-15-2-4-3-2-1:(OI)(CI)(RX)')
     const paths = [parent, child, leaf]
-    const before = paths.map(sddlOf)
+    const before = paths.map(sddlOf).map(inheritedAllowOrder)
     const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`
     const wrapper = join(scratch, 'fail-inherited-verification.ps1')
     writeFileSync(wrapper, `
@@ -672,7 +704,7 @@ exit $LASTEXITCODE
     expect(run.code, run.output).toBe(2)
     expect(reports(run).filter(entry => entry.kind === 'verification' && entry.operation === 'restore').map(entry => entry.path)).toEqual([child, parent])
     expect(reports(run).at(-1)).toMatchObject({ details: { rollback: 'verified', nextAction: 'stop' } })
-    expect(paths.map(sddlOf)).toEqual(before)
+    expect(paths.map(sddlOf).map(inheritedAllowOrder)).toEqual(before)
   })
 
   it.each(['-Fix', '-GrantFullControl', '-Restore'])('rejects equivalent spellings of AllowRoot through %s', (mode) => {
@@ -715,10 +747,13 @@ exit $LASTEXITCODE
       expect(grant.output).toContain('managed application directory')
       expect(sddlOf(path)).toBe(before)
     }
+    stamp(child, PACKAGE_SID)
+    const beforeFix = sddlOf(child)
     const fix = run(child, '-Fix')
     expect(fix.code, fix.output).toBe(2)
     expect(fix.output).toContain('managed application directory')
     expect(aclLines(child).join('\n')).toContain(PACKAGE_SID)
+    expect(sddlOf(child)).toBe(beforeFix)
   })
 
   it('rolls back earlier paths too when a later grant fails in the same invocation', () => {

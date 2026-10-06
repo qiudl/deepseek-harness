@@ -282,6 +282,63 @@ function wholeSelection(f: Awaited<ReturnType<typeof fixture>>) {
   const { message_digest: _sourceDigest, ...source } = request.source
   return { ...request, source, range: { unit: 'whole' as const } }
 }
+it('resolves one literal quote across UTF-8 chunks into an immutable UTF-16 range', async () => {
+  const f = await fixture(), text = '😀\r\n仅限'
+  const captured = await referenceCapture.captureCollaborationReferenceSelectionContent(
+    { ...wholeSelection(f), range: { unit: 'quote', text } }, f.source, async () => ({
+      ...f.content(), chunks: (async function* () {
+        for (const byte of Buffer.from(f.text)) yield Uint8Array.of(byte)
+      })(),
+    }), new AbortController().signal,
+  )
+  const start = f.text.indexOf(text)
+  expect(captured.request.range).toEqual({ unit: 'utf16', start, end: start + text.length })
+  expect(Buffer.from(captured.content_base64, 'base64').toString()).toBe(text)
+  expect(captured.request.content_digest).toBe(sha(Buffer.from(text)))
+  expect(captured.request.byte_length).toBe(Buffer.byteLength(text))
+})
+it('requires a unique literal quote and consumes the complete source before accepting it', async () => {
+  const f = await fixture(), signal = new AbortController().signal
+  for (const text of ['absent', 'aaa']) {
+    let closed = false
+    await expect(referenceCapture.captureCollaborationReferenceSelectionContent(
+      { ...wholeSelection(f), range: { unit: 'quote', text } }, f.source, async () => ({
+        ...f.content(), chunks: (async function* () {
+          try { yield Buffer.from('aa'); yield Buffer.from('aa') } finally { closed = true }
+        })(),
+      }), signal,
+    )).rejects.toThrow('collaboration_reference_quote_ambiguous')
+    expect(closed).toBe(true)
+  }
+})
+it('refuses quotes in binary content and malformed or oversized quote inputs', async () => {
+  const f = await fixture(), signal = new AbortController().signal
+  await expect(referenceCapture.captureCollaborationReferenceSelectionContent(
+    { ...wholeSelection(f), source_kind: 'file', range: { unit: 'quote', text: '范围' } }, f.source,
+    async () => ({ ...f.content(), source_kind: 'file', mime_type: 'application/octet-stream' }), signal,
+  )).rejects.toThrow('collaboration_reference_range_invalid')
+  for (const text of ['', '\ud800', '字'.repeat(6000)])
+    expect(() => referenceCapture.parseCollaborationReferenceSelection({ ...wholeSelection(f), range: { unit: 'quote', text } })).toThrow()
+})
+it('rejects malformed text and cancellation after a quoted match and closes the source iterator', async () => {
+  const f = await fixture()
+  for (const mode of ['malformed', 'cancelled']) {
+    const cancel = new AbortController()
+    let closed = false
+    await expect(referenceCapture.captureCollaborationReferenceSelectionContent(
+      { ...wholeSelection(f), range: { unit: 'quote', text: '范围' } }, f.source, async () => ({
+        ...f.content(), chunks: (async function* () {
+          try {
+            yield Buffer.from('范围')
+            if (mode === 'cancelled') cancel.abort()
+            yield Uint8Array.of(255)
+          } finally { closed = true }
+        })(),
+      }), cancel.signal,
+    )).rejects.toThrow()
+    expect(closed).toBe(true)
+  }
+})
 it('generates immutable reservation metadata from actual whole-message bytes without caller digests', async () => {
   const f = await fixture(), selection = wholeSelection(f), signal = new AbortController().signal
   const captured = await referenceCapture.captureCollaborationReferenceSelectionContent(

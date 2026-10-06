@@ -1,6 +1,8 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostCollaborationReferenceGrant } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationReferenceGrant, parseHostCollaborationReferenceContentChunk,
+  parseHostCollaborationReferenceContentTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostCollaborationReferenceTarget, HostControlSha256 } from '@deepseek-ai/dsh-host-control-protocol'
 import { createHash, randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
@@ -295,6 +297,9 @@ export class DshWebProfileWorkerFactory {
       captureCollaborationReferenceSelection: (selection, signal) => this.captureReferenceSelection(
         viewOrigin, referenceToken, selection, signal, () => requestedStop || settled,
       ),
+      readCollaborationReferenceContent: (target, signal) => this.readReferenceContent(
+        viewOrigin, referenceToken, target, signal, () => requestedStop || settled,
+      ),
       readCollaborationReferenceGrant: async (target, requestDigest: HostControlSha256, signal) => {
         const query: HostCollaborationReferenceTarget = { ...target, reference_request_digest: requestDigest }
         const result = await this.readSource(viewOrigin, sourceToken, query, signal, () => requestedStop || settled,
@@ -419,6 +424,16 @@ export class DshWebProfileWorkerFactory {
     })
     return this.readPrivateResponse(response, active, signal, stopped, 32768,
       bytes => parseHostRemoteSessionJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))), 'detach')
+  }
+
+  private async readReferenceContent(origin: string, token: string, target: HostCollaborationReferenceContentTarget,
+    signal: AbortSignal, stopped: () => boolean): Promise<HostCollaborationReferenceContentChunk> {
+    const query = parseHostCollaborationReferenceContentTarget(target)
+    const result = await this.readSource(origin, token, query, signal, stopped,
+      '/internal/desktop-collaboration-reference-content', 49152, parseHostCollaborationReferenceContentChunk, chunk => chunk.descriptor)
+    if (result.offset !== query.offset || result.reference_request_digest !== query.reference_request_digest)
+      throw new HostAuthorityError('profile_mismatch')
+    return result
   }
 
   private async inspectCollaborationSource(

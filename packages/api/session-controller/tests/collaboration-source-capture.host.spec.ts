@@ -99,6 +99,33 @@ async function harness(root?: string, existingCwd?: string, isolateDomain = fals
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it.each(['', '\ufeff仅引用这条😀\r\n'])('reads only separately captured reference bytes while its original Source and content remain current (%j)', async (text) => {
+    const h = await harness(), signal = new AbortController().signal
+    try {
+      const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+      h.events.push({ type: 'user/message', seq: SessionSeq(1), time: 1, data: message, surfaceOp: 'append' })
+      const { snapshot } = await h.controller.captureCollaborationSource(h.source(), signal)
+      const target = { workspace_id: snapshot.workspace_id, session_id: snapshot.session_id,
+        source_message_id: snapshot.source_message_id, source_revision: snapshot.source_revision }
+      expect(typeof h.controller.readCollaborationReferenceContent).toBe('function')
+      await expect(h.controller.readCollaborationReferenceContent(target, 'c'.repeat(64), signal)).rejects.toThrow('not_found')
+      const saved = await h.controller.captureCollaborationReference(referenceFor(snapshot, message.id, text), signal)
+      const content = await h.controller.readCollaborationReferenceContent(target, saved.reference_request_digest, signal)
+      expect(content).toEqual(saved)
+      expect(Buffer.from(content.content_base64, 'base64')).toEqual(Buffer.from(text))
+      expect(h.resume).not.toHaveBeenCalled(); expect(h.prepare).toHaveBeenCalledTimes(1); expect(h.stream).not.toHaveBeenCalled()
+      // A zero-length frozen range has no selected bytes to change.
+      if (text) {
+        const inspected = await h.controller.inspect(h.sessionId, signal)
+        vi.spyOn(h.controller, 'inspect').mockResolvedValue({ ...inspected, events: inspected.events.map(event =>
+          event.type === 'user/message' && event.data.id === message.id
+            ? { ...event, data: { ...event.data, content: [{ type: 'text' as const, text: '内容已变化' }] } } : event) })
+        await expect(h.controller.readCollaborationReferenceContent(target, saved.reference_request_digest, signal)).rejects.toThrow()
+      }
+      await expect(h.controller.readCollaborationReferenceContent(target, saved.reference_request_digest,
+        AbortSignal.abort())).rejects.toThrow()
+    } finally { await h.dispose() }
+  })
   it('refuses changed Source observations before reference persistence and before returning a retained grant', async () => {
     const h = await harness(), signal = new AbortController().signal
     try {

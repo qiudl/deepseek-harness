@@ -14,6 +14,8 @@ import {
   parseHostCollaborationSourceDescriptor,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson, HostCollaborationReferenceGrant, HostCollaborationReferenceSelection } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationReferenceContentChunk, parseHostCollaborationReferenceGrant } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceContentTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { captureCollaborationReferenceSelectionContent, describeCollaborationReference, parseCollaborationReferenceMetadata,
   parseCollaborationSourceSnapshot, collaborationJournalDigest, describeCollaborationSource } from '@deepseek-ai/dsh-api-session-controller'
 import { DesktopHost } from '../src/desktop-host.ts'
@@ -22,7 +24,7 @@ import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from '../src/collaboration-delivery-uploads.ts'
 
-async function fixture(enabled = true, referenceEnabled = false, captureEnabled = false) {
+async function fixture(enabled = true, referenceEnabled = false, captureEnabled = false, contentEnabled = false) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
     rmSync(root, { recursive: true, force: true })
@@ -82,6 +84,12 @@ async function fixture(enabled = true, referenceEnabled = false, captureEnabled 
     ({ ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest })
   let capture = async (_profileId: string, selection: HostCollaborationReferenceSelection,
     _signal: AbortSignal): Promise<HostRemoteSessionJson> => captureResponse(selection)
+  let readContent = async (_profileId: string, target: HostCollaborationReferenceContentTarget, _signal: AbortSignal) => {
+    const { offset, reference_request_digest, ...source } = target
+    return parseHostCollaborationReferenceContentChunk({ descriptor: await inspect(_profileId, source, _signal),
+      reference_request_digest, content_digest: createHash('sha256').update('').digest('hex'),
+      offset, total_bytes: 0, chunk_base64url: '' })
+  }
   const authority = new HostControlAuthority({
     identity,
     host,
@@ -89,6 +97,8 @@ async function fixture(enabled = true, referenceEnabled = false, captureEnabled 
     now: clock.now,
     ...(captureEnabled ? { captureCollaborationReferenceSelection: (profileId: string,
       selection: HostCollaborationReferenceSelection, signal: AbortSignal) => capture(profileId, selection, signal) } : {}),
+    ...(contentEnabled ? { readCollaborationReferenceContent: (profileId: string,
+      target: HostCollaborationReferenceContentTarget, signal: AbortSignal) => readContent(profileId, target, signal) } : {}),
     ...(referenceEnabled ? { readCollaborationReferenceGrant: (
       profileId: string, target: HostCollaborationSourceTarget, requestDigest: string, signal: AbortSignal,
     ) =>
@@ -158,6 +168,7 @@ async function fixture(enabled = true, referenceEnabled = false, captureEnabled 
     identity,
     authority,
     keys,
+    setContent: (reader: typeof readContent) => { readContent = reader },
     challenge,
     input,
     time,
@@ -751,7 +762,8 @@ function referenceSelection(f: Awaited<ReturnType<typeof fixture>>) {
 }
 function captureResponse(selection: HostCollaborationReferenceSelection) {
   const s = selection.source, range = selection.range.unit === 'whole'
-    ? { unit: 'utf16', start: 0, end: 10 } : selection.range
+    ? { unit: 'utf16', start: 0, end: 10 } : selection.range.unit === 'quote'
+      ? { unit: 'utf16', start: 0, end: selection.range.text.length } : selection.range
   return { descriptor: { workspace_id: s.workspace_id, session_id: s.session_id,
     source_message_id: s.source_message_id, source_revision: s.revision, snapshot_digest: 'a'.repeat(64) },
   request: { ...selection, source: { ...s, message_digest: 'a'.repeat(64) }, range,
@@ -882,5 +894,123 @@ for (const mode of ['changed-peer', 'wrong-method', 'wrong-source'] as const) {
       return frame
     })
     await expect(f.client.captureCollaborationReferenceSelection(captureInput(f))).rejects.toThrow()
+  })
+}
+
+function referenceChunk(f: Awaited<ReturnType<typeof fixture>>, bytes: Uint8Array, offset = 0) {
+  const c = f.challenge
+  return parseHostCollaborationReferenceContentChunk({ descriptor: { workspace_id: c.workspace_id, session_id: c.session_id,
+    source_message_id: c.source_message_id, source_revision: c.source_revision, snapshot_digest: c.snapshot_digest },
+  reference_request_digest: 'b'.repeat(64), content_digest: createHash('sha256').update(bytes).digest('hex'),
+  offset, total_bytes: bytes.byteLength, chunk_base64url: Buffer.from(bytes).subarray(offset, offset + 32768).toString('base64url') })
+}
+function referenceContentInput(f: Awaited<ReturnType<typeof fixture>>, bytes = new Uint8Array()) {
+  const { selection: _selection, ...account } = captureInput(f), chunk = referenceChunk(f, bytes)
+  return { ...account, ...parseHostCollaborationReferenceGrant({ ...chunk.descriptor,
+    reference_request_digest: chunk.reference_request_digest }), contentDigest: chunk.content_digest, byteLength: bytes.byteLength }
+}
+for (const kind of ['empty', 'unicode', 'binary', 'maximum'] as const) {
+  it(`assembles exact ${kind} reference bytes through authenticated bounded chunks with complete integrity`, async () => {
+    const f = await fixture(true, false, false, true)
+    const bytes = kind === 'empty' ? new Uint8Array() : kind === 'unicode' ? Buffer.from('\ufeff😀\r\n'.repeat(6000))
+      : Uint8Array.from({ length: kind === 'maximum' ? 1024 * 1024 : 32769 }, (_, i) => i % 256)
+    const offsets: number[] = []
+    f.setContent(async (profileId, query) => {
+      expect(profileId).toBe(f.profile.profileId); offsets.push(query.offset)
+      return referenceChunk(f, bytes, query.offset)
+    })
+    await f.grant()
+    const result = await f.client.readCollaborationReferenceContent(referenceContentInput(f, bytes))
+    expect(Buffer.from(result)).toEqual(Buffer.from(bytes))
+    expect(offsets).toEqual(Array.from({ length: Math.max(1, Math.ceil(bytes.byteLength / 32768)) }, (_, i) => i * 32768))
+    const frames = f.seen.filter(frame => frame.type === 'request' && frame.method === 'profile.reference_content')
+    expect(frames).toHaveLength(offsets.length)
+    expect(frames.every(frame => Buffer.byteLength(encodeHostControlFrame(frame)) < 65536)).toBe(true)
+    expect(f.seen.some(frame => frame.type === 'request' && frame.method === 'profile.collaboration_analysis')).toBe(false)
+  })
+}
+for (const mode of ['revoked', 'expired', 'cancelled', 'disconnected', 'source-changed', 'wrong-digest', 'wrong-offset', 'wrong-source'] as const) {
+  it(`withholds selected reference bytes after ${mode}`, async () => {
+    const f = await fixture(true, false, false, true), controller = new AbortController(), bytes = Buffer.from('selected')
+    f.setContent(async () => {
+      const chunk = referenceChunk(f, bytes)
+      if (mode === 'revoked') f.host.revokeOwner(f.ownerId)
+      if (mode === 'expired') f.time.value = 400000
+      if (mode === 'cancelled') controller.abort()
+      if (mode === 'disconnected') f.client.close()
+      if (mode === 'source-changed')
+        f.setInspect(async (_profileId, target) => ({ ...target, snapshot_digest: 'c'.repeat(64) }))
+      if (mode === 'wrong-digest') return { ...chunk, reference_request_digest: 'c'.repeat(64) } as never
+      if (mode === 'wrong-offset') return referenceChunk(f, bytes, 1)
+      if (mode === 'wrong-source') return { ...chunk, descriptor: parseHostCollaborationSourceDescriptor({ ...chunk.descriptor, session_id: 'other' }) }
+      return chunk
+    })
+    await f.grant()
+    await expect(f.client.readCollaborationReferenceContent({ ...referenceContentInput(f, bytes),
+      signal: controller.signal })).rejects.toThrow()
+  })
+}
+it('requires the content capability and validates full content integrity and captured metadata before use', async () => {
+  const old = await fixture(), f = await fixture(true, false, false, true), bytes = Buffer.from('selected')
+  await expect(old.client.readCollaborationReferenceContent(referenceContentInput(old))).rejects.toThrow('upgrade_required')
+  await f.grant()
+  f.setContent(async () => ({ ...referenceChunk(f, bytes), chunk_base64url: Buffer.from('tampered').toString('base64url') }))
+  await expect(f.client.readCollaborationReferenceContent(referenceContentInput(f, bytes))).rejects.toThrow()
+  for (const byteLength of [-1, 0.5, 1048577])
+    await expect(f.client.readCollaborationReferenceContent({ ...referenceContentInput(f), byteLength })).rejects.toThrow('invalid_input')
+})
+
+for (const mode of ['missing-reader', 'missing-inspector'] as const) {
+  it(`the Host refuses a direct reference content read with ${mode}`, async () => {
+    const f = await fixture(mode === 'missing-reader', false, false, mode === 'missing-inspector')
+    await f.grant()
+    const hello = f.seen.find(frame => frame.type === 'request' && frame.method === 'host.inspect')
+    if (!hello || hello.type !== 'request' || hello.method !== 'host.inspect') throw Error('missing handshake')
+    const input = referenceContentInput(f)
+    const request = decodeHostControlFrame(JSON.stringify({ version: 1, type: 'request', request_id: randomUUID(),
+      method: 'profile.reference_content', params: {
+        client_instance_id: hello.params.client_instance_id, host_instance_id: f.identity.hostInstanceId,
+        process_nonce: f.identity.processNonce, jti: randomUUID(), issued_at: f.time.value, expires_at: f.time.value + 1000,
+        authority_environment_id: f.account.authorityEnvironmentId, account_binding_handle: f.account.accountBindingHandle,
+        authority_binding_version: f.account.authorityBindingVersion, account_issuer: f.account.issuer,
+        account_subject: f.account.subject, offset: 0, workspace_id: input.workspace_id, session_id: input.session_id,
+        source_message_id: input.source_message_id, source_revision: input.source_revision,
+        reference_request_digest: input.reference_request_digest,
+      } }) + '\n')
+    const result = await f.session.handleRequest(request)
+    expect(result.type).toBe('error')
+    if (result.type !== 'error') throw Error('missing refusal')
+    expect(result.error.code).toBe('upgrade_required')
+  })
+}
+it('does not read reference bytes when the initial Source inspection disagrees', async () => {
+  const f = await fixture(true, false, false, true)
+  await f.grant(); let reads = 0
+  f.setContent(async () => { reads++; return referenceChunk(f, new Uint8Array()) })
+  f.setInspect(async (_profileId, target) => ({ ...target, source_message_id: 'other', snapshot_digest: 'a'.repeat(64) }))
+  await expect(f.client.readCollaborationReferenceContent(referenceContentInput(f))).rejects.toThrow()
+  expect(reads).toBe(0)
+})
+for (const mode of ['peer', 'method', 'descriptor', 'digest', 'length', 'offset', 'content-digest'] as const) {
+  it(`the client withholds reference bytes after post-transport ${mode} changes`, async () => {
+    const f = await fixture(true, false, false, true), bytes = Buffer.from('selected')
+    f.setContent(async (_profileId, query) => referenceChunk(f, bytes, query.offset))
+    await f.grant()
+    f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.reference_content') return frame
+      if (mode === 'peer') Object.defineProperty(f.client.inspection, 'process_nonce', { value: 'B'.repeat(43), configurable: true })
+      if (mode === 'method') return { ...frame, method: 'profile.source_snapshot' } as never
+      if (mode === 'descriptor') return { ...frame, result: { ...frame.result,
+        descriptor: parseHostCollaborationSourceDescriptor({ ...frame.result.descriptor, snapshot_digest: 'c'.repeat(64) }) } }
+      if (mode === 'digest') return { ...frame, result: parseHostCollaborationReferenceContentChunk({ ...frame.result,
+        reference_request_digest: 'c'.repeat(64) }) }
+      if (mode === 'content-digest') return { ...frame, result: parseHostCollaborationReferenceContentChunk({ ...frame.result,
+        content_digest: 'c'.repeat(64) }) }
+      if (mode === 'length') return { ...frame, result: { ...referenceChunk(f, Buffer.from('different length')),
+        content_digest: frame.result.content_digest } }
+      if (mode === 'offset') return { ...frame, result: referenceChunk(f, bytes, 1) }
+      return frame
+    })
+    await expect(f.client.readCollaborationReferenceContent(referenceContentInput(f, bytes))).rejects.toThrow()
   })
 }

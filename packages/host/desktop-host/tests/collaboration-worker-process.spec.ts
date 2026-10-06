@@ -5,7 +5,8 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarget,
+  parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 import type { ProfileWorkerHandle } from '../src/types.ts'
 
@@ -46,6 +47,7 @@ async function harness(selectionRedirect?: string) {
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
+      '/internal/desktop-collaboration-reference-content': 'DSH_PROFILE_REFERENCE_TOKEN',
       '/internal/desktop-collaboration-source-snapshot': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-analysis': 'DSH_PROFILE_ANALYSIS_TOKEN',
       '/internal/desktop-collaboration-delivery': 'DSH_PROFILE_DELIVERY_TOKEN',
@@ -68,6 +70,9 @@ async function harness(selectionRedirect?: string) {
         const input = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         const value = url.pathname.endsWith('reference-capture') ? { untrusted_selection: input,
             independent_reference_capability: process.env.DSH_PROFILE_REFERENCE_TOKEN !== process.env.DSH_PROFILE_SOURCE_TOKEN }
+          : url.pathname.endsWith('reference-content') ? { descriptor, reference_request_digest: input.reference_request_digest,
+            content_digest: '${createHash('sha256').update(Buffer.from([0, 255, 128, 1])).digest('hex')}', offset: input.offset,
+            total_bytes: 4, chunk_base64url: Buffer.from([0, 255, 128, 1]).subarray(input.offset, input.offset + 32768).toString('base64url') }
           : url.pathname.endsWith('reference-grant') ? { ...descriptor, reference_request_digest: input.reference_request_digest }
           : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
@@ -97,17 +102,18 @@ async function harness(selectionRedirect?: string) {
   acquired.worker = worker
   const { inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant,
-    captureCollaborationReferenceSelection } = worker
+    captureCollaborationReferenceSelection, readCollaborationReferenceContent } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
-    || !captureCollaborationReferenceSelection) throw new Error('missing private worker capability')
+    || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent) throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
-    receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection }
+    receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
+    readCollaborationReferenceContent }
 }
 
 it('authenticates each original-Profile route and refuses private operations after worker shutdown', async () => {
   const h = await harness(), signal = new AbortController().signal
-  for (const route of ['source', 'source-snapshot', 'reference-grant', 'reference-capture', 'analysis', 'delivery'])
+  for (const route of ['source', 'source-snapshot', 'reference-grant', 'reference-capture', 'reference-content', 'analysis', 'delivery'])
     expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-collaboration-${route}`, { method: 'POST' })).status).toBe(403)
   expect(await h.inspectCollaborationSource(target, signal)).toEqual(descriptor)
   const digest = descriptor.snapshot_digest as Parameters<typeof h.readCollaborationReferenceGrant>[1]
@@ -116,6 +122,9 @@ it('authenticates each original-Profile route and refuses private operations aft
   expect(await h.collaborationAnalysis(command, signal)).toEqual(command)
   expect(await h.captureCollaborationReferenceSelection(command, signal))
     .toEqual({ untrusted_selection: command, independent_reference_capability: true })
+  const contentTarget = parseHostCollaborationReferenceContentTarget({ ...target, reference_request_digest: digest, offset: 0 })
+  const content = await h.readCollaborationReferenceContent(contentTarget, signal)
+  expect(Buffer.from(content.chunk_base64url, 'base64url')).toEqual(Buffer.from([0, 255, 128, 1]))
   expect(await h.receiveCollaborationDelivery(capsule, signal)).toEqual({ delivery_id: 'delivery' })
   const selection = { workspace_id: target.workspace_id, session_id: target.session_id }
   expect(await h.inspectWorkspaceModelSelection(selection, signal)).toEqual({ ...selection, provider: 'deepseek', model: 'chat' })
@@ -124,6 +133,7 @@ it('authenticates each original-Profile route and refuses private operations aft
     () => h.collaborationAnalysis(command, signal), () => h.receiveCollaborationDelivery(capsule, signal),
     () => h.readCollaborationReferenceGrant(target, digest, signal),
     () => h.captureCollaborationReferenceSelection(command, signal),
+    () => h.readCollaborationReferenceContent(contentTarget, signal),
     () => h.inspectWorkspaceModelSelection(selection, signal)])
     await expect(run()).rejects.toMatchObject({ code: 'unavailable' })
   await h.worker.done
@@ -275,4 +285,20 @@ it('refuses an ambient Reference capability before opening any Profile directory
   const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: '/owned-test/entry.mjs' })
   await expect(factory.create({ profileId: 'test', profileRoot: '/not-opened', credentialHandle: 'opaque', pluginRoots: [],
     env: { DSH_PROFILE_REFERENCE_TOKEN: 'injected' } })).rejects.toMatchObject({ code: 'invalid_input' })
+})
+
+it('refuses private reference content responses with changed offsets, reservation digests or malformed bytes', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const query = parseHostCollaborationReferenceContentTarget({ ...target, reference_request_digest: 'b'.repeat(64), offset: 0 })
+  const valid = parseHostCollaborationReferenceContentChunk({ descriptor, reference_request_digest: query.reference_request_digest,
+    content_digest: createHash('sha256').update(Buffer.from([0, 255, 128, 1])).digest('hex'),
+    offset: 0, total_bytes: 4, chunk_base64url: Buffer.from([0, 255, 128, 1]).toString('base64url') })
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  try {
+    for (const change of [{ offset: 1, chunk_base64url: Buffer.from([255, 128, 1]).toString('base64url') },
+      { reference_request_digest: 'c'.repeat(64) }, { chunk_base64url: 'bad!' }]) {
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ ...valid, ...change })))
+      await expect(h.readCollaborationReferenceContent(query, signal)).rejects.toThrow()
+    }
+  } finally { fetchSpy.mockRestore() }
 })

@@ -120,6 +120,9 @@ it('captures computed metadata only under its separate Reference capability and 
   expect(capture).toHaveBeenCalledWith(input, expect.any(AbortSignal))
   expect((await post({ ...input, range: request.range })).status).toBe(200)
   expect((await post({ ...input, range: { ...request.range, end: 2 } })).status).toBe(422)
+  expect((await post({ ...input, range: { unit: 'quote', text: 'ref' } })).status).toBe(200)
+  expect((await post({ ...input, range: { unit: 'quote', text: 'bad' } })).status).toBe(422)
+  expect((await post({ ...input, range: { unit: 'quote', text: 'r' } })).status).toBe(422)
   const fileRequest = { ...request, source_kind: 'file', range: { start: 0, end: 3, unit: 'byte' }, mime_type: 'application/octet-stream' }
   capture.mockResolvedValue({ ...metadata, request: fileRequest, reference_request_digest: collaborationJournalDigest(fileRequest) })
   expect((await post({ ...input, source_kind: 'file' })).status).toBe(200)

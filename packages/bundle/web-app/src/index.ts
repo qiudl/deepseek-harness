@@ -32,6 +32,7 @@ import { describeCollaborationReference } from '@deepseek-ai/dsh-api-session-con
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopCollaborationReferenceGrantRequest, handleDesktopCollaborationReferenceCaptureRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationReferenceContentRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopCollaborationDeliveryRequest } from './desktop-collaboration-delivery.ts'
 import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from './desktop-collaboration-analysis.ts'
 import { openCollaborationAnalysisJournal } from '@deepseek-ai/dsh-api-session-controller'
@@ -299,6 +300,14 @@ export function apply(ctx: Context, config: Config): void {
   const referenceToken = process.env.DSH_PROFILE_REFERENCE_TOKEN
   if (referenceToken && /^[A-Za-z0-9_-]{43}$/u.test(referenceToken)) {
     ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-reference-content',
+        handler: (req, res) => handleDesktopCollaborationReferenceContentRequest(req, res, referenceToken,
+          (query, signal) => {
+            const { offset: _offset, reference_request_digest, ...target } = query
+            return sessionCtx.sessionController.readCollaborationReferenceContent(target, reference_request_digest, signal)
+          }),
+      }))
       sessionCtx.effect(() => sessionCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-collaboration-reference-capture',
         handler: (req, res) => handleDesktopCollaborationReferenceCaptureRequest(req, res, referenceToken,

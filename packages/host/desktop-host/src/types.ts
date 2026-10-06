@@ -1,6 +1,7 @@
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostCollaborationReferenceGrant, HostControlSha256 } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceGrant, HostControlSha256,
+  HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 /** Stable profile id that reveals no account or environment identifier. */
@@ -142,6 +143,10 @@ export interface ProfileWorkerHandle {
   readonly captureCollaborationReferenceSelection?: (
     selection: HostRemoteSessionJson, signal: AbortSignal,
   ) => Promise<HostRemoteSessionJson>
+  /** Current Source-bound selected bytes through the independent Reference token, never a view lease. */
+  readonly readCollaborationReferenceContent?: (
+    target: HostCollaborationReferenceContentTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceContentChunk>
   /** Original journal content for Main cloud admission; never carried by a view lease. */
   readonly readCollaborationSourceSnapshot?: (
     target: HostCollaborationSourceTarget, signal: AbortSignal,

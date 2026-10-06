@@ -654,6 +654,19 @@ export class SessionController extends TypertRemoteService {
   async readCollaborationReferenceGrant(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise<
     CollaborationReferenceRecord['descriptor'] & { readonly reference_request_digest: string }
   > {
+    const record = await this.readCollaborationReferenceContent(target, requestDigest, signal)
+    return { ...record.descriptor, reference_request_digest: record.reference_request_digest }
+  }
+
+  /**
+   * Read bytes only from a separately captured reference after rechecking current ownership and actual content.
+   * @param target - Original Source coordinates; this operation cannot capture a new selection.
+   * @param requestDigest - Full committed reservation digest, including its recipients and evidence.
+   * @param signal - Parent cancellation, combined with Profile disposal and owned read drainage.
+   * @returns Immutable bounded record while Source, locator, version and selected bytes still match; no cloud transfer grant.
+   */
+  async readCollaborationReferenceContent(target: CollaborationSourceCoordinates, requestDigest: string,
+    signal: AbortSignal): Promise<CollaborationReferenceRecord> {
     return this.ownCollaborationReferenceOperation(signal, async (owned) => {
       const source = await this.readCollaborationSourceSnapshot(target, owned)
       const journal = await this.openCollaborationReferences(owned)
@@ -664,7 +677,7 @@ export class SessionController extends TypertRemoteService {
       if (describeCollaborationSource(latest).snapshot_digest !== record.descriptor.snapshot_digest
         || current.content_base64 !== record.content_base64) throw Error('collaboration_reference_source_changed')
       owned.throwIfAborted()
-      return { ...record.descriptor, reference_request_digest: record.reference_request_digest }
+      return record
     })
   }
   private async ownCollaborationReferenceOperation<T>(signal: AbortSignal,

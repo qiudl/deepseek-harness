@@ -146,7 +146,9 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 同一私有令牌另启用 `/internal/desktop-collaboration-source-snapshot`。精确坐标定位所属 Profile 的已有 journal 快照，并严格校验嵌套元数据及内容摘要。响应为描述符与原始 Source JSON，不含凭据或可执行句柄。浏览器 Cookie 不授予路由访问权；归属缺失、journal 损坏和读取失败均返回隐藏详情的拒绝。父 Host 读取完整有界响应，再经固定控制协议分块传输。
 
-独立的 `DSH_PROFILE_REFERENCE_TOKEN` 启用 `/internal/desktop-collaboration-reference-capture`。父 Host 发送最多 32 KiB 的已授权定位、范围与接收对象选择。Session Controller 从实际内容独立生成并持久保存完整请求；响应只含最多 32 KiB 的计算元数据，不返回内容字节。Source 读取令牌和浏览器 cookie 不能捕获引用。可信父 Host 必须在调用前确认用户明确分享意图；自然语言定位和云端传递仍须独立接入。
+独立的 `DSH_PROFILE_REFERENCE_TOKEN` 启用 `/internal/desktop-collaboration-reference-capture`。父 Host 发送最多 32 KiB 的已授权定位、范围与接收对象选择。原文引用要求 Profile 返回确定的 UTF-16 范围，以及与引用文本精确匹配的字节长度和摘要。Session Controller 从实际内容独立生成并持久保存完整请求；响应只含最多 32 KiB 的计算元数据，不返回内容字节。Source 读取令牌和浏览器 cookie 不能捕获引用。可信父 Host 必须在调用前确认用户明确分享意图；自然语言定位和云端传递仍须独立接入。
+
+同一个独立 Reference token 保护 `/internal/desktop-collaboration-reference-content`。私有查询最多 2 KiB，仅含原始 Source 坐标、已提交的完整引用请求摘要和字节偏移。Profile 在每次响应前重新核验当前成员关系和选中内容。响应包含最多 32 KiB 的精确分块，支持空内容且禁止缓存；Source token 和浏览器 cookie 均无读取权限。云端传递和任务附件仍由协调器负责。
 
 同一个 Source token 保护 `/internal/desktop-collaboration-reference-grant`。私有查询限制为 2 KiB，只包含原始 Source 坐标及完整引用请求摘要。所属 Session Controller 要求独立提交的选择，并重新核验当前消息或附件字节。脱敏且不可缓存的响应只包含 Source 描述符与匹配摘要；浏览器 cookie、调用方路径或内容均不能授权此读取。
 

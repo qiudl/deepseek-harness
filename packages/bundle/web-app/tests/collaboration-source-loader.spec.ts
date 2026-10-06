@@ -263,6 +263,22 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
     expect(records).toHaveLength(1)
     expect(Buffer.from(records[0]!.content_base64, 'base64').toString('utf8')).toBe(referenceText)
     expect(records[0]!.reference_request_digest).toBe(metadata.reference_request_digest)
+    const contentQuery = { ...target, reference_request_digest: metadata.reference_request_digest, offset: 0 }
+    for (const headers of [{ authorization: `Bearer ${token}` }, { cookie: 'dsh-auth=browser' }]) {
+      expect((await fetch(`${origin}/internal/desktop-collaboration-reference-content`, {
+        method: 'POST', headers, body: JSON.stringify(contentQuery),
+      })).status).toBe(403)
+    }
+    const chunk = await factory['readReferenceContent'](origin, 'D'.repeat(43), contentQuery as never, signal, () => false)
+    expect(chunk.descriptor).toEqual(metadata.descriptor)
+    expect(chunk.reference_request_digest).toBe(metadata.reference_request_digest)
+    expect(chunk.content_digest).toBe(metadata.request.content_digest)
+    expect(chunk.total_bytes).toBe(Buffer.byteLength(referenceText))
+    expect(Buffer.from(chunk.chunk_base64url, 'base64url')).toEqual(Buffer.from(referenceText).subarray(0, 32768))
+    await expect(factory['readReferenceContent'](origin, 'D'.repeat(43),
+      { ...contentQuery, reference_request_digest: 'c'.repeat(64) } as never, signal, () => false)).rejects.toThrow()
+    await expect(factory['readReferenceContent'](origin, 'D'.repeat(43), contentQuery as never, AbortSignal.abort(), () => false))
+      .rejects.toThrow()
     expect(await ctx.sessionController.readCollaborationReferenceGrant(target, metadata.reference_request_digest, signal))
       .toEqual({ ...metadata.descriptor, reference_request_digest: metadata.reference_request_digest })
     const grantResponse = await fetch(`${origin}/internal/desktop-collaboration-reference-grant`, {

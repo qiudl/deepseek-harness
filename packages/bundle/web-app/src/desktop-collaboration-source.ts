@@ -1,13 +1,16 @@
 /** Private worker HTTP read for the authenticated Desktop Host. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { createHash } from 'node:crypto'
 import { handleDesktopPrivateRequest } from './desktop-private-read.ts'
 import { describeCollaborationSource, parseCollaborationSourceSnapshot,
   parseCollaborationReferenceSelection, parseCollaborationReferenceMetadata, collaborationJournalDigest } from '@deepseek-ai/dsh-api-session-controller'
-import type { CollaborationReferenceSelection } from '@deepseek-ai/dsh-api-session-controller'
+import type { CollaborationReferenceSelection, CollaborationReferenceRecord } from '@deepseek-ai/dsh-api-session-controller'
 import {
   parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceTarget, parseHostCollaborationSourceSnapshot,
   type HostCollaborationSourceTarget,
   parseHostCollaborationReferenceTarget, parseHostCollaborationReferenceGrant, type HostCollaborationReferenceTarget,
+  parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk,
+  type HostCollaborationReferenceContentTarget,
 } from '@deepseek-ai/dsh-host-control-protocol'
 
 /**
@@ -107,6 +110,30 @@ export async function handleDesktopCollaborationReferenceCaptureRequest(req: Inc
         && collaborationJournalDigest(request.source_evidence_spans) === collaborationJournalDigest(selection.source_evidence_spans)
         && (selection.range.unit === 'whole'
           ? request.range.start === 0 && request.range.unit === (selection.source_kind === 'message' ? 'utf16' : 'byte')
-          : collaborationJournalDigest(request.range) === collaborationJournalDigest(selection.range))
+          : selection.range.unit === 'quote'
+            ? request.range.unit === 'utf16' && request.range.end - request.range.start === selection.range.text.length
+              && request.byte_length === Buffer.byteLength(selection.range.text)
+              && request.content_digest === createHash('sha256').update(selection.range.text).digest('hex')
+            : collaborationJournalDigest(request.range) === collaborationJournalDigest(selection.range))
     }, 32768)
+}
+
+/**
+ * Read one chunk from an independently captured and currently revalidated reference.
+ * @param req - Source, reservation digest and offset only, bounded to 2 KiB.
+ * @param res - Noncacheable response with at most 32 KiB of selected bytes.
+ * @param token - Separate Reference capability; Source tokens and browser cookies grant no access.
+ * @param read - Original Profile reader that rechecks membership and actual selected content.
+ */
+export async function handleDesktopCollaborationReferenceContentRequest(req: IncomingMessage, res: ServerResponse, token: string,
+  read: (target: HostCollaborationReferenceContentTarget, signal: AbortSignal) => Promise<CollaborationReferenceRecord>): Promise<void> {
+  return handleDesktopPrivateRequest(req, res, token, async (target, signal) => {
+    const record = await read(target, signal), bytes = Buffer.from(record.content_base64, 'base64')
+    return { descriptor: record.descriptor, reference_request_digest: record.reference_request_digest,
+      content_digest: record.request.content_digest, offset: target.offset, total_bytes: bytes.byteLength,
+      chunk_base64url: bytes.subarray(target.offset, target.offset + 32768).toString('base64url') }
+  }, parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk,
+  (result, target) => result.descriptor.workspace_id === target.workspace_id && result.descriptor.session_id === target.session_id
+    && result.descriptor.source_message_id === target.source_message_id && result.descriptor.source_revision === target.source_revision
+    && result.reference_request_digest === target.reference_request_digest && result.offset === target.offset, 2048)
 }
