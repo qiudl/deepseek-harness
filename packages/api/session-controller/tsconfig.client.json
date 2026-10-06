@@ -8,7 +8,8 @@
   "include": [
     "src/client/**/*.ts",
     "src/types.ts",
-    "src/remote-events.ts"
+    "src/remote-events.ts",
+    "src/collaboration-discussion.ts"
   ],
   "references": [
     { "path": "../../../vendor/cordis" },

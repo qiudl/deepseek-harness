@@ -9,6 +9,7 @@ import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { CollaborationAnalysisRunner } from './collaboration-analysis.ts'
+import { hasCollaborationDiscussion } from './collaboration-discussion.ts'
 import type { CollaborationAnalysisManifest, CollaborationAnalysisResult } from './collaboration-analysis.ts'
 import { parseCollaborationClarificationInput } from './collaboration-clarification-input.ts'
 import type { CollaborationClarificationInput } from './collaboration-clarification-input.ts'
@@ -640,8 +641,11 @@ export class SessionController extends TypertRemoteService {
         .reverse()
       if (cursor !== undefined && !entries.some(entry => entry.descriptor.snapshot_digest === cursor)) throw Error('collaboration_source_cursor_invalid')
       // Immutable cursor lookup keeps older pages stable when a new Source is appended.
-      const remaining = cursor === undefined ? entries
+      const history = entries.length ? (await wait(this.inspect(sessionId, ownedSignal))).events : []
+      ownedSignal.throwIfAborted()
+      const remaining = (cursor === undefined ? entries
         : entries.slice(entries.findIndex(entry => entry.descriptor.snapshot_digest === cursor) + 1)
+      ).filter(entry => !hasCollaborationDiscussion(history, entry.snapshot))
       const items: SessionCollaborationSourceItem[] = []
       const checks: (() => Promise<void>)[] = []
       let bytes = 256

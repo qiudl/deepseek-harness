@@ -13,7 +13,7 @@ import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import FileUploads from '@deepseek-ai/dsh-client-file-upload'
 import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/types'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { ApiSessionAgentController } from '../src/agent.ts'
 import { SessionCommandController } from '../src/commands.ts'
 import type { SessionRequestId } from '../src/types.ts'
@@ -357,6 +357,62 @@ describe('Session file uploads', () => {
 
     await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
     expect(followup).not.toHaveBeenCalled()
+  })
+
+  it.each(['claimed', 'canceled'] as const)('keeps the first prompt acceptance after its inbox entry is %s', async (outcome) => {
+    const { controller, agent, followup, ctx } = await uploadHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    const request = promptRequest([{ type: 'text', text: 'once' }])
+    const message = createUserMessage({
+      content: [{ type: 'text', text: 'once' }],
+      source: { kind: 'user', rpcId: request.requestId },
+    })
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [message] })
+    agent.session.append('agent/inbox/spliced', {
+      target: 'next-turn', start: 0, removedCount: 1, inserted: [],
+      ...(outcome === 'canceled' ? { outcome: 'canceled' as const } : {}),
+    })
+    expect(agent.inbox.nextTurn).toHaveLength(0)
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(followup).not.toHaveBeenCalled()
+  })
+
+  it('admits a new request after unrelated and anonymous inbox messages were removed', async () => {
+    const { controller, agent, followup, ctx } = await uploadHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    agent.session.append('agent/inbox/spliced', {
+      target: 'next-step', start: 0, inserted: [
+        createUserMessage({ content: [{ type: 'text', text: 'anonymous' }], source: { kind: 'user' } }),
+        createUserMessage({ content: [{ type: 'text', text: 'other' }], source: { kind: 'user', rpcId: 'other-request' as SessionRequestId } }),
+      ],
+    })
+    agent.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 2, inserted: [] })
+    await expect(controller.prompt(promptRequest([{ type: 'text', text: 'new' }]))).resolves.toEqual({ accepted: true })
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('commits one ordinary prompt when two retries overlap in asynchronous content admission', async () => {
+    const { controller, agent, followup, ctx } = await uploadHarness()
+    const ready = Promise.withResolvers<undefined>(), release = Promise.withResolvers<undefined>()
+    let admissions = 0
+    const original = ctx.attachments.admitPromptContent.bind(ctx.attachments)
+    vi.spyOn(ctx.attachments, 'admitPromptContent').mockImplementation(async (content) => {
+      admissions++
+      if (admissions === 2) ready.resolve(undefined)
+      await release.promise
+      return original(content)
+    })
+    followup.mockImplementation((message: UserMessage) => {
+      agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [message] })
+    })
+    const request = promptRequest([{ type: 'text', text: 'once' }])
+    const pending = Promise.all([controller.prompt(request), controller.prompt(request)])
+    onTestFinished(async () => { release.resolve(undefined); await pending; await ctx.fiber.dispose() })
+    await ready.promise
+    try { expect(admissions).toBe(2) }
+    finally { release.resolve(undefined) }
+    await expect(pending).resolves.toEqual([{ accepted: true }, { accepted: true }])
+    expect(followup).toHaveBeenCalledOnce()
   })
 
   it('rejects when the Agent disappears during prompt admission', async () => {

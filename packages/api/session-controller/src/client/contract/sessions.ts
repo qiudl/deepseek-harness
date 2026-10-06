@@ -7,6 +7,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { SessionRequestId, SessionCollaborationSourceItem } from '../../types.ts'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { AgentContext } from '../scope.ts'
@@ -47,6 +48,12 @@ export interface SessionRetainInfo {
 
 /** The sessions-service face injected as `ctx.sessions`. */
 export interface ISessions {
+  /**
+   * Derive ordinary-prompt retry identity without submitting or authorizing a Source.
+   * @param source - Exact original coordinates whose discussion route the caller verified.
+   * @returns Stable Session-scoped identity for the same original Source across reconnects.
+   */
+  discussionRequestId(source: SessionCollaborationSourceItem['source']): SessionRequestId
   /** Host catalog and local reference-source counts; navigation belongs to view owners. */
   readonly list: ObservableSnapshot<SessionListState>
   /**

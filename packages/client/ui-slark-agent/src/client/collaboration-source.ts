@@ -37,14 +37,14 @@ type SourceCoordinates = Pick<DesktopCollaborationSourceInput, 'workspace_id' | 
 export type CollaborationSubmissionResponse = {
   ok: true
   value: { source: SourceCoordinates
-    submission_state: 'accepted'
+    submission_state: 'accepted' | 'discussion'
     invocation_id?: string }
 } | { ok: false; errorCode: string; reconciliationRequired: boolean }
 
 function sameAcceptedSource(value: { submission_state: unknown; source: Record<keyof SourceCoordinates, unknown> },
   original: SourceCoordinates): boolean {
   const source = value.source
-  return value.submission_state === 'accepted' && source.workspace_id === original.workspace_id &&
+  return (value.submission_state === 'accepted' || value.submission_state === 'discussion') && source.workspace_id === original.workspace_id &&
     source.session_id === original.session_id && source.source_message_id === original.source_message_id &&
     source.source_revision === original.source_revision
 }
@@ -210,6 +210,24 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
             return { kind: 'error', text: t(result.reconciliationRequired ? 'submit.uncertainV2' : 'submit.unavailableV2') }
           }
           if (!sameAcceptedSource(result.value, original)) return { kind: 'error', text: t('submit.uncertainV2') }
+          if (result.value.submission_state === 'discussion') {
+            if (result.value.invocation_id !== undefined) return { kind: 'error', text: t('submit.uncertainV2') }
+            const ordinary = ctx.sessions.sessionOf(actx)
+            if (!ordinary || ordinary.sessionId !== session.sessionId) return { kind: 'error', text: t('submit.changed') }
+            try {
+              const sent = await ordinary.prompt([{ type: 'text', text: original.original_message }], 'queue', signal,
+                ctx.sessions.discussionRequestId(original))
+              signal.throwIfAborted()
+              if (!sent.ok || window.__DSH_DESKTOP_HOST__ !== host || !available() ||
+                workspaceOf(ctx, session.sessionId) !== first.r.workspace_id || ctx.sessions.sessionOf(actx) !== ordinary)
+                return { kind: 'error', text: t('submit.uncertainV2') }
+            } catch (error) {
+              if (signal.aborted) throw error
+              return { kind: 'error', text: t('submit.uncertainV2') }
+            }
+            window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
+            return { kind: 'success', text: t('submit.discussionV2') }
+          }
           window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
           return { kind: 'success', text: t('submit.acceptedV2') }
         },
