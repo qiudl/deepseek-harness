@@ -7,6 +7,8 @@ import {
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostSourceAuthorityPayload,
+  parseHostRootAuthorityChallenge, encodeHostRootAuthorityPayload,
+  parseHostRootPlanningAttemptAuthorityChallenge, encodeHostRootPlanningAttemptAuthorityPayload,
   encodeHostCollaborationDeliveryReceiptPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
@@ -16,7 +18,11 @@ import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from '../src/collaboration-delivery-uploads.ts'
 
-async function fixture(enabled = true) {
+async function fixture(
+  rootAnalysisSupported = false, rootAnalysisRecoverySupported = false,
+  rootLookupSupported = false, rootPendingLookupSupported = false, rootLiveResumeSupported = false,
+  rootPlanningSupported = false, rootExecutionSupported = false, rootFeedbackSupported = false, enabled = true,
+) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
     rmSync(root, { recursive: true, force: true })
@@ -71,13 +77,30 @@ async function fixture(enabled = true) {
   })
   let analysis = async (_profileId: string, command: Record<string, unknown>, _signal: AbortSignal): Promise<unknown> =>
     ({ jsonText: JSON.stringify({ binding: command.binding_key }) })
+  let rootJournal: NonNullable<import('../src/unix-transport.ts').HostControlAuthorityOptions['rootJournal']> = async () => { throw Error('missing root') }
+  let inspectRoot: NonNullable<import('../src/unix-transport.ts').HostControlAuthorityOptions['inspectCollaborationRoot']> = async () => { throw Error('missing root') }
+  let inspectPlanning: NonNullable<import('../src/unix-transport.ts').HostControlAuthorityOptions['inspectRootPlanningAttempt']> =
+    async () => { throw Error('missing attempt') }
   let delivery: (profileId: string) => CollaborationDeliveryReceiver = () => { throw Error('not configured') }
   const authority = new HostControlAuthority({
     identity,
     host,
     profilePersistenceGeneration: () => 1,
     now: clock.now,
+    ...(rootPlanningSupported ? {
+      inspectRootPlanningAttempt: (...args: Parameters<typeof inspectPlanning>) => inspectPlanning(...args),
+    } : {}),
+    rootExecutionSupported,
+    rootFeedbackSupported,
+    rootAnalysisSupported,
+    rootAnalysisRecoverySupported,
+    rootLookupSupported,
+    rootPendingLookupSupported,
+    rootLiveResumeSupported,
+    rootJournal: (profileId, command, signal) => rootJournal(profileId, command, signal),
+    inspectCollaborationRoot: (profileId, target, signal) => inspectRoot(profileId, target, signal),
     ...(enabled ? { inspectCollaborationSource: (profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal) =>
+
       inspect(profileId, target, signal) as Promise<HostCollaborationSourceDescriptor>,
     readCollaborationSourceSnapshot: (profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal) =>
       read(profileId, target, signal) as Promise<HostCollaborationSourceSnapshot>,
@@ -148,6 +171,9 @@ async function fixture(enabled = true) {
     alter: (callback: typeof alter) => {
       alter = callback
     },
+    setPlanning: (callback: typeof inspectPlanning) => { inspectPlanning = callback },
+    setRootJournal: (callback: typeof rootJournal) => { rootJournal = callback },
+    setRoot: (callback: typeof inspectRoot) => { inspectRoot = callback },
     setInspect: (callback: typeof inspect) => {
       inspect = callback
     },
@@ -191,7 +217,7 @@ it('uploads a complete answer through the real authenticated control carrier and
   expect(receives).toBe(1)
   expect(f.seen.filter(frame => frame.type === 'request' && frame.method === 'profile.collaboration_delivery').length).toBeGreaterThan(1)
   for (const frame of f.seen) expect(Buffer.byteLength(encodeHostControlFrame(frame))).toBeLessThan(65536)
-  const old = await fixture(false), before = old.seen.length
+  const old = await fixture(false, false, false, false, false, false, false, false, false), before = old.seen.length
   await expect(old.client.receiveCollaborationDelivery({ ...input, signal: new AbortController().signal }))
     .rejects.toMatchObject({ code: 'upgrade_required' })
   expect(old.seen).toHaveLength(before)
@@ -492,7 +518,7 @@ it('refuses altered signed output, grant or current installation identity after 
 })
 
 it('refuses unnegotiated collaboration methods at the server before any private worker call', async () => {
-  const f = await fixture(false)
+  const f = await fixture(false, false, false, false, false, false, false, false, false)
   await f.client.ensureAccountProfile({ ...f.account, accountAccessToken: 'valid-token' })
   const request = f.seen.at(-1)
   if (request?.type !== 'request' || request.method !== 'profile.ensure') throw Error('missing Account ensure frame')
@@ -617,4 +643,334 @@ it.each(['analysis', 'delivery'] as const)('refuses %s certification after a Pro
   }
   expect(replacement).toBeDefined()
   expect(replacement).not.toBe(f.profile.profileId)
+})
+
+it('REQ-20261004-0008 signs only a matching durable root under the current Account and verifies the root domain', async () => {
+  const f = await fixture()
+  const challenge = parseHostRootAuthorityChallenge({ schema_version: 1, source_challenge: f.challenge,
+    namespace_id: 'n2_' + 'b'.repeat(64), root_task_id: randomUUID(), root_trace_id: 'c'.repeat(32),
+    command_id: randomUUID(), payload_digest: 'd'.repeat(64) })
+  const input = { ...f.input, challenge }
+  const descriptor = { namespace_id: challenge.namespace_id, command_id: challenge.command_id,
+    root_task_id: challenge.root_task_id, root_trace_id: challenge.root_trace_id, payload_digest: challenge.payload_digest,
+    source_descriptor: { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id,
+      source_message_id: f.challenge.source_message_id, source_revision: f.challenge.source_revision,
+      snapshot_digest: f.challenge.snapshot_digest } }
+  f.setRoot(async (profile, target) => {
+    expect(profile).toBe(f.profile.profileId)
+    expect(target.command_id).toBe(challenge.command_id)
+    return descriptor
+  })
+  await expect(f.client.attestRootAuthority(input)).rejects.toThrow()
+  await f.grant()
+  const proof = await f.client.attestRootAuthority(input)
+  expect(verify(null, encodeHostRootAuthorityPayload(proof), f.keys.publicKey, Buffer.from(proof.signature, 'base64url'))).toBe(true)
+  const renewed = parseHostRootAuthorityChallenge({ ...challenge,
+    source_challenge: { ...challenge.source_challenge, request_id: randomUUID(),
+      challenge_nonce: Buffer.alloc(32, 3).toString('base64url') } })
+  const replayProof = await f.client.attestRootAuthority({ ...input, challenge: renewed })
+  expect(replayProof.challenge.command_id).toBe(proof.challenge.command_id)
+  expect(replayProof.challenge.root_trace_id).toBe(proof.challenge.root_trace_id)
+  expect(replayProof.signature).not.toBe(proof.signature)
+
+  for (const change of [{ root_trace_id: 'e'.repeat(32) }, { payload_digest: 'e'.repeat(64) },
+    { command_id: randomUUID() }]) {
+    const changed = parseHostRootAuthorityChallenge({ ...challenge, ...change })
+    await expect(f.client.attestRootAuthority({ ...input, challenge: changed })).rejects.toThrow()
+  }
+  f.setRoot(async () => { f.time.value = 2000; return descriptor })
+  await expect(f.client.attestRootAuthority(input)).rejects.toThrow()
+})
+
+it.each(['revoke', 'cancel', 'missing', 'foreign', 'replaced'] as const)('root signer rejects %s during journal observation', async (mode) => {
+  const f = await fixture(), cancellation = new AbortController()
+  await f.grant()
+  const challenge = parseHostRootAuthorityChallenge({ schema_version: 1, source_challenge: f.challenge,
+    namespace_id: 'n2_' + 'b'.repeat(64), root_task_id: randomUUID(), root_trace_id: 'c'.repeat(32),
+    command_id: randomUUID(), payload_digest: 'd'.repeat(64) })
+  f.setRoot(async () => {
+    if (mode === 'missing') throw Error('missing')
+    if (mode === 'revoke') f.host.revokeOwner(f.ownerId)
+    if (mode === 'cancel') cancellation.abort()
+    return { namespace_id: challenge.namespace_id, command_id: challenge.command_id, root_task_id: challenge.root_task_id,
+      root_trace_id: challenge.root_trace_id, payload_digest: challenge.payload_digest,
+      source_descriptor: { workspace_id: f.challenge.workspace_id, session_id: (mode === 'foreign' ? 'foreign' : f.challenge.session_id) as never,
+        source_message_id: f.challenge.source_message_id, source_revision: '1', snapshot_digest: f.challenge.snapshot_digest } }
+  })
+  if (mode === 'replaced') f.alter((frame) => { f.client.close(); return frame })
+  await expect(f.client.attestRootAuthority({ ...f.input, challenge, signal: cancellation.signal })).rejects.toThrow()
+})
+
+it('root attestation refuses an older peer before issuing a control request', async () => {
+  const f = await fixture()
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.root_authority')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  const challenge = parseHostRootAuthorityChallenge({ schema_version: 1, source_challenge: f.challenge,
+    namespace_id: 'n2_' + 'b'.repeat(64), root_task_id: randomUUID(), root_trace_id: 'c'.repeat(32),
+    command_id: randomUUID(), payload_digest: 'd'.repeat(64) })
+  const before = f.seen.length
+  await expect(f.client.attestRootAuthority({ ...f.input, challenge })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.length).toBe(before)
+})
+
+it('REQ-20261004-0008 root journal uses current Account, original coordinates and exact receipt', async () => {
+  const f = await fixture(), c = f.challenge
+  const target = { namespace_id:'n2_'+'a'.repeat(64),command_id:randomUUID(),workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,source_revision:c.source_revision }
+  const metadata = { schema_version:1,namespace_id:target.namespace_id,command_id:target.command_id,root_task_id:randomUUID(),root_trace_id:'b'.repeat(32),source_digest:c.snapshot_digest,payload_digest:'c'.repeat(64),objective_ref:'o',task_grant_ref:'g',continuation_policy:'display_only',state:'pending',source_descriptor:{ workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,source_revision:c.source_revision,
+    snapshot_digest:c.snapshot_digest } }
+  const { parseHostRootJournalCommand,parseHostRootJournalMetadata }=await import('@deepseek-ai/dsh-host-control-protocol')
+  let calls=0
+  f.setRootJournal(async(profile,command)=>{calls++;expect(profile).toBe(f.profile.profileId);return parseHostRootJournalMetadata(command.action==='read'?metadata:{ ...metadata,state:'admitted',receipt:command.receipt })})
+  const input = { ...f.account,command:parseHostRootJournalCommand({ action:'read',target }) }
+  await expect(f.client.rootJournal(input)).rejects.toThrow()
+  expect(calls).toBe(0)
+  await f.grant()
+  expect(await f.client.rootJournal(input)).toEqual(metadata)
+  const receipt={ root_task_id:metadata.root_task_id,root_trace_id:metadata.root_trace_id,admission_id:target.command_id,task_revision:1,state_version:1,state:'active' }
+  expect(await f.client.rootJournal({ ...input,command:parseHostRootJournalCommand({ action:'accept',target,receipt }) })).toEqual({ ...metadata,state:'admitted',receipt })
+  f.setRootJournal(async()=>{f.time.value=1_000_000;return parseHostRootJournalMetadata(metadata)})
+  await expect(f.client.rootJournal(input)).rejects.toThrow()
+})
+it.each(['foreign','revoked','cancelled','peer'] as const)('root journal rejects %s replies after worker access',async(mode)=>{
+  const f=await fixture();await f.grant()
+  const { parseHostRootJournalCommand,parseHostRootJournalMetadata }=await import('@deepseek-ai/dsh-host-control-protocol')
+  const c=f.challenge, target={ namespace_id:'n2_'+'a'.repeat(64),command_id:randomUUID(),workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,source_revision:c.source_revision }
+  const controller=new AbortController()
+  f.setRootJournal(async()=>{
+    if(mode==='revoked') f.host.revokeOwner(f.ownerId)
+    if(mode==='cancelled')controller.abort()
+    if(mode==='peer')f.client.close()
+    return parseHostRootJournalMetadata({ schema_version:1,namespace_id:target.namespace_id,command_id:mode==='foreign'?randomUUID():target.command_id,root_task_id:randomUUID(),root_trace_id:'b'.repeat(32),source_digest:c.snapshot_digest,payload_digest:'c'.repeat(64),objective_ref:'o',task_grant_ref:'g',continuation_policy:'display_only',state:'pending',source_descriptor:{ workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,source_revision:c.source_revision,
+      snapshot_digest:c.snapshot_digest } })
+  })
+  await expect(f.client.rootJournal({ ...f.account,command:parseHostRootJournalCommand({ action:'read',target }),signal:controller.signal })).rejects.toThrow()
+})
+
+it('root preparation requires its own capability and current Account, and rejects Source-only downgrades', async()=>{
+  const { parseHostRootAnalysisInput }=await import('@deepseek-ai/dsh-host-control-protocol')
+  const input=parseHostRootAnalysisInput({ namespace_id:'n2_'+'b'.repeat(64),continuation_policy:'follow_authorized_plan',source:{ text:'original' } })
+  const old=await fixture();await old.grant()
+  await expect(old.client.collaborationAnalysis({ ...old.account,command:{ action:'prepare_root',input } })).rejects.toMatchObject({ code:'upgrade_required' })
+  const f=await fixture(true), c=f.challenge
+  const descriptor={
+    workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,
+    source_revision:c.source_revision,
+    snapshot_digest:c.snapshot_digest }
+  const root={ namespace_id:input.namespace_id,command_id:randomUUID(),root_task_id:randomUUID(),root_trace_id:'b'.repeat(32),payload_digest:'c'.repeat(64),source_descriptor:descriptor }
+  let calls=0
+  f.setAnalysis(async()=>{calls++;return { kind:'recovered',descriptor,root }})
+  const request={ ...f.account,command:{ action:'prepare_root' as const,input } }
+  await expect(f.client.collaborationAnalysis(request)).rejects.toThrow();expect(calls).toBe(0)
+  await f.grant()
+  expect(await f.client.collaborationAnalysis(request)).toEqual({ kind:'root_prepared',preparation:{ kind:'recovered',descriptor,root } })
+  f.setAnalysis(async()=>({ kind:'recovered',descriptor }))
+  await expect(f.client.collaborationAnalysis(request)).rejects.toThrow()
+  f.setAnalysis(async()=>{f.host.revokeOwner(f.ownerId);return { kind:'recovered',descriptor,root }})
+  await expect(f.client.collaborationAnalysis(request)).rejects.toThrow()
+})
+
+it.each(['saved','old','foreign','revoked','cancelled'] as const)('saved root output requires recovery capability and rechecks current Account: %s', async(mode)=>{
+  const { parseHostRootSubmissionTarget }=await import('@deepseek-ai/dsh-host-control-protocol')
+  const f=await fixture(true,mode!=='old'),c=f.challenge,abort=new AbortController()
+  const descriptor={
+    workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,source_revision:c.source_revision,
+    snapshot_digest:c.snapshot_digest }
+  const root={ namespace_id:'n2_'+'b'.repeat(64),command_id:randomUUID(),root_task_id:randomUUID(),root_trace_id:'b'.repeat(32),payload_digest:'c'.repeat(64),source_descriptor:descriptor }
+  const target=parseHostRootSubmissionTarget({ namespace_id:root.namespace_id,command_id:root.command_id,
+    workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,source_revision:c.source_revision })
+  let calls=0
+  f.setAnalysis(async()=>{calls++;if(mode==='revoked')f.host.revokeOwner(f.ownerId);if(mode==='cancelled')abort.abort();return { state:'missing',root:mode==='foreign'?{ ...root,command_id:randomUUID() }:root }})
+  await f.grant()
+  const pending=f.client.collaborationAnalysis({ ...f.account,command:{ action:'read_root_output',target },signal:abort.signal })
+  if(mode==='saved')expect(await pending).toEqual({ kind:'root_output',evidence:{ state:'missing',root } })
+  else await expect(pending).rejects.toThrow()
+  expect(calls).toBe(mode==='old'?0:1)
+})
+
+it.each(['existing','old','prepared','revoked'] as const)('root lookup requires a separate capability and cannot return live preparation: %s',async(mode)=>{
+  const { parseHostRootAnalysisInput }=await import('@deepseek-ai/dsh-host-control-protocol')
+  const f=await fixture(false,false,mode!=='old'),c=f.challenge
+  const input=parseHostRootAnalysisInput({ namespace_id:'n2_'+'b'.repeat(64),continuation_policy:'follow_authorized_plan',source:{ text:'original' } })
+  const descriptor={
+    workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,source_revision:c.source_revision,
+    snapshot_digest:c.snapshot_digest }
+  const root={ namespace_id:input.namespace_id,command_id:randomUUID(),root_task_id:randomUUID(),root_trace_id:'b'.repeat(32),payload_digest:'c'.repeat(64),source_descriptor:descriptor }
+  let calls=0
+  const preparation=mode==='prepared'?{ kind:'prepared',descriptor,root,attempt_request_id:randomUUID(),input_manifest_digest:'a'.repeat(64),source_digest:c.snapshot_digest }:{ kind:'recovered',descriptor,root }
+  f.setAnalysis(async()=>{calls++;if(mode==='revoked')f.host.revokeOwner(f.ownerId);return preparation})
+  await f.grant()
+  const pending=f.client.collaborationAnalysis({ ...f.account,command:{ action:'recover_root',input } })
+  if(mode==='existing')expect(await pending).toEqual({ kind:'root_prepared',preparation })
+  else await expect(pending).rejects.toThrow()
+  expect(calls).toBe(mode==='old'?0:1)
+})
+
+it.each(['existing','old','prepared','revoked'] as const)('pending root lookup requires a separate capability and cannot return live preparation: %s',async(mode)=>{
+  const { parseHostRootAnalysisInput }=await import('@deepseek-ai/dsh-host-control-protocol')
+  const f=await fixture(false,false,false,mode!=='old'),c=f.challenge
+  const input=parseHostRootAnalysisInput({ namespace_id:'n2_'+'b'.repeat(64),continuation_policy:'follow_authorized_plan',source:{ text:'original' } })
+  const descriptor={
+    workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,source_revision:c.source_revision,
+    snapshot_digest:c.snapshot_digest }
+  const root={ namespace_id:input.namespace_id,command_id:randomUUID(),root_task_id:randomUUID(),root_trace_id:'b'.repeat(32),payload_digest:'c'.repeat(64),source_descriptor:descriptor }
+  let calls=0
+  const preparation=mode==='prepared'?{ kind:'prepared',descriptor,root,attempt_request_id:randomUUID(),input_manifest_digest:'a'.repeat(64),source_digest:c.snapshot_digest }:{ kind:'recovered',descriptor,root }
+  f.setAnalysis(async()=>{calls++;if(mode==='revoked')f.host.revokeOwner(f.ownerId);return preparation})
+  await f.grant()
+  const pending=f.client.collaborationAnalysis({ ...f.account,command:{ action:'reconcile_root',input } })
+  if(mode==='existing')expect(await pending).toEqual({ kind:'root_prepared',preparation })
+  else await expect(pending).rejects.toThrow()
+  expect(calls).toBe(mode==='old'?0:1)
+})
+
+it.each(['existing','old','recovered','revoked'] as const)('live root resume requires separate capability and a prepared response: %s',async(mode)=>{
+  const { parseHostRootAnalysisInput }=await import('@deepseek-ai/dsh-host-control-protocol')
+  const f=await fixture(false,false,false,false,mode!=='old'),c=f.challenge
+  const input=parseHostRootAnalysisInput({ namespace_id:'n2_'+'b'.repeat(64),continuation_policy:'follow_authorized_plan',source:{ text:'original' } })
+  const descriptor={
+    workspace_id:c.workspace_id,session_id:c.session_id,source_message_id:c.source_message_id,source_revision:c.source_revision,
+    snapshot_digest:c.snapshot_digest }
+  const root={ namespace_id:input.namespace_id,command_id:randomUUID(),root_task_id:randomUUID(),root_trace_id:'b'.repeat(32),payload_digest:'c'.repeat(64),source_descriptor:descriptor }
+  let calls=0
+  const preparation=mode!=='recovered'?{ kind:'prepared',descriptor,root,attempt_request_id:randomUUID(),input_manifest_digest:'a'.repeat(64),source_digest:c.snapshot_digest }:{ kind:'recovered',descriptor,root }
+  const { parseHostCollaborationAnalysisResult }=await import('@deepseek-ai/dsh-host-control-protocol')
+  parseHostCollaborationAnalysisResult({ kind:'root_prepared',preparation })
+  f.setAnalysis(async()=>{calls++;if(mode==='revoked')f.host.revokeOwner(f.ownerId);return preparation})
+  await f.grant()
+  const pending=f.client.collaborationAnalysis({ ...f.account,command:{ action:'resume_root',input } })
+  if(mode==='existing')expect(await pending).toEqual({ kind:'root_prepared',preparation })
+  else await expect(pending).rejects.toThrow()
+  expect(calls).toBe(mode==='old'?0:1)
+})
+
+it('reconnect derives the same root resume identity while rotating the private dispatch owner',async()=>{
+  const { parseHostRootAnalysisInput }=await import('@deepseek-ai/dsh-host-control-protocol')
+  const f=await fixture(true,false,false,false,true),c=f.challenge
+  const descriptor={ workspace_id:c.workspace_id,session_id:c.session_id,
+    source_message_id:c.source_message_id,source_revision:c.source_revision,snapshot_digest:c.snapshot_digest }
+  const input=parseHostRootAnalysisInput({ namespace_id:'n2_'+'b'.repeat(64),continuation_policy:'follow_authorized_plan',source:{ text:'original' } })
+  const root={ namespace_id:input.namespace_id,command_id:randomUUID(),root_task_id:randomUUID(),root_trace_id:'b'.repeat(32),payload_digest:'c'.repeat(64),source_descriptor:descriptor }
+  const preparation={ kind:'prepared',descriptor,attempt_request_id:randomUUID(),input_manifest_digest:'a'.repeat(64),source_digest:c.snapshot_digest,root }
+  const commands:Record<string,unknown>[]=[]
+  f.setAnalysis(async(_profile,command)=>{commands.push(command);return preparation})
+  await f.grant()
+  await f.client.collaborationAnalysis({ ...f.account,command:{ action:'prepare_root',input } })
+  f.client.close()
+  const ownerId=randomUUID(),lifetime=new AbortController(),session=f.authority.openSession(ownerId,lifetime.signal)
+  const client=await UnixHostClient.connectAuthenticatedTransport({ trustedInstallationId:f.identity.installationId,
+    trustedInstallationPublicKey:f.identity.installationPublicKey,
+    trustedExecutableSignatureDigest:f.identity.executableSignatureDigest,now:()=>f.time.value },
+  { call:async frame=>decodeHostControlFrame(encodeHostControlFrame(
+    await session.handleRequest(decodeHostControlFrame(encodeHostControlFrame(frame))),
+  )),
+  isConnected:()=>!lifetime.signal.aborted,close:()=>{lifetime.abort();session.close()} })
+  onTestFinished(()=>{ client.close() })
+  await f.host.ensureAccountProfile({ ...f.account,accountAccessToken:'valid-token',ownerId })
+  await client.collaborationAnalysis({ ...f.account,command:{ action:'resume_root',input } })
+  expect(commands).toHaveLength(2)
+  expect(commands[0]?.resume_binding_key).toMatch(/^[a-f0-9]{64}$/u)
+  expect(commands[1]?.resume_binding_key).toBe(commands[0]?.resume_binding_key)
+  expect(commands[1]?.binding_key).not.toBe(commands[0]?.binding_key)
+  await expect(client.collaborationAnalysis({ ...f.account,command:{ action:'resume_root',input,resume_binding_key:commands[0]?.resume_binding_key } as never })).rejects.toThrow()
+  expect(commands).toHaveLength(2)
+})
+
+async function planningFixture(enabled = true) {
+  const f = await fixture(false, false, false, false, false, enabled)
+  const root = parseHostRootAuthorityChallenge({ schema_version: 1, source_challenge: f.challenge,
+    namespace_id: 'n2_' + 'b'.repeat(64), root_task_id: randomUUID(), root_trace_id: 'c'.repeat(32),
+    command_id: randomUUID(), payload_digest: 'd'.repeat(64) })
+  const challenge = parseHostRootPlanningAttemptAuthorityChallenge({ schema_version: 1, scope: 'planning_attempt', root_challenge: root,
+    expected_plan_revision: '1', input_version: '1', predecessor: null, attempt_request_id: randomUUID(),
+    input_manifest_digest: 'e'.repeat(64), model_policy: 'original_model',
+    model_snapshot: { provider: 'deepseek', model: 'selected', configuration_generation: '2', adapter_fingerprint: 'f'.repeat(64) } })
+  const descriptor = { root: { namespace_id: root.namespace_id, root_task_id: root.root_task_id, root_trace_id: root.root_trace_id,
+    command_id: root.command_id, payload_digest: root.payload_digest,
+    source_descriptor: { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id,
+      source_message_id: f.challenge.source_message_id, source_revision: f.challenge.source_revision,
+      snapshot_digest: f.challenge.snapshot_digest } },
+  input_version: challenge.input_version, predecessor: challenge.predecessor, attempt_request_id: challenge.attempt_request_id,
+  input_manifest_digest: challenge.input_manifest_digest, model_policy: challenge.model_policy, model_snapshot: challenge.model_snapshot }
+  const input = { ...f.input, challenge }
+  return { ...f, challenge, descriptor, input }
+}
+it('signs the exact fresh attempt only after the authorized reader supplies its durable metadata', async () => {
+  const f = await planningFixture(); let reads = 0
+  f.setPlanning(async (profileId, target, attemptId, binding, signal) => {
+    reads++; expect(binding).toMatch(/^[a-f0-9]{64}$/u); expect(profileId).toBe(f.profile.profileId)
+    expect(target.command_id).toBe(f.descriptor.root.command_id)
+    expect(attemptId).toBe(f.challenge.attempt_request_id); signal.throwIfAborted(); return f.descriptor
+  })
+  await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(reads).toBe(0); await f.grant()
+  const proof = await f.client.attestRootPlanningAttemptAuthority(f.input)
+  expect(proof.challenge).toEqual(f.challenge)
+  expect(verify(null, encodeHostRootPlanningAttemptAuthorityPayload(proof), f.keys.publicKey, Buffer.from(proof.signature, 'base64url'))).toBe(true)
+  expect(reads).toBe(1)
+})
+it('does not advertise or downgrade an unavailable planning-attempt reader', async () => {
+  const f = await planningFixture(false); await f.grant()
+  await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.some(x => x.type === 'request' && x.method === 'profile.root_authority')).toBe(false)
+})
+it('refuses mismatched persisted attempt, predecessor, model, manifest, root and original trace', async () => {
+  const f = await planningFixture(); await f.grant()
+  for (const change of [ { attempt_request_id: randomUUID() }, { input_manifest_digest: '1'.repeat(64) },
+    { predecessor: { attempt_request_id: randomUUID(), input_manifest_digest: '1'.repeat(64) } },
+    { model_snapshot: { ...f.descriptor.model_snapshot, configuration_generation: '3' } },
+    { root: { ...f.descriptor.root, root_trace_id: '1'.repeat(32) } },
+    { root: { ...f.descriptor.root, namespace_id: 'n2_' + '1'.repeat(64) } },
+    { root: { ...f.descriptor.root, source_descriptor: { ...f.descriptor.root.source_descriptor, source_revision: '2' } } } ]) {
+    f.setPlanning(async () => ({ ...f.descriptor, ...change }) as typeof f.descriptor)
+    await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toBeDefined()
+  }
+})
+it('rechecks expiry after private read and rejects root-domain signatures from the peer', async () => {
+  const f = await planningFixture(); await f.grant()
+  f.setPlanning(async () => { f.time.value = 2000; return f.descriptor })
+  await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toBeDefined()
+  f.time.value = 1000; f.setPlanning(async () => f.descriptor)
+  f.alter((frame) => {
+    if (frame.type !== 'result' || frame.method !== 'profile.root_planning_attempt_authority') return frame
+    const proof = frame.result
+    const signature = sign(null, encodeHostRootAuthorityPayload({ ...proof, challenge: proof.challenge.root_challenge }), f.keys.privateKey).toString('base64url')
+    return { ...frame, result: { ...proof, signature: signature as never } }
+  })
+  await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it.each(['revoked', 'cancelled', 'owner_replaced', 'dispatched', 'superseded', 'uncertain_write'] as const)(
+  'refuses planning attestation when the private owner becomes %s', async (mode) => {
+    const f = await planningFixture(), cancellation = new AbortController(); await f.grant()
+    f.setPlanning(async () => {
+      if (mode === 'revoked') f.host.revokeOwner(f.ownerId)
+      else if (mode === 'cancelled') cancellation.abort()
+      else throw Error(mode)
+      return f.descriptor
+    })
+    await expect(f.client.attestRootPlanningAttemptAuthority({ ...f.input, signal: cancellation.signal })).rejects.toBeDefined()
+  })
+
+it.each(['root_execution_journal', 'root_feedback'] as const)('gates %s on capability and rechecks current Account after the worker reply', async (action) => {
+  for (const enabled of [false, true]) {
+    const f = await fixture(false, false, false, false, false, false, action === 'root_execution_journal' && enabled, action === 'root_feedback' && enabled)
+    let calls = 0
+    f.setAnalysis(async (profileId, command) => {
+      calls++; expect(profileId).toBe(f.profile.profileId)
+      expect(command.binding_key).toMatch(/^[a-f0-9]{64}$/u)
+      return null
+    })
+    const input = { ...f.account, command: { action, operation: { action: 'read' } } }
+    await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
+    expect(calls).toBe(0)
+    await f.grant()
+    if (!enabled) {
+      await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
+      expect(calls).toBe(0)
+    } else {
+      expect(await f.client.collaborationAnalysis(input)).toEqual({ kind: action, record: null })
+      f.setAnalysis(async () => { f.host.revokeOwner(f.ownerId); return null })
+      await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
+    }
+  }
 })

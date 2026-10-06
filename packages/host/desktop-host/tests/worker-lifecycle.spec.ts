@@ -373,3 +373,98 @@ it('discards a committed Source reply after its worker is disposed or replaced',
     await expect(workers.inspectCollaborationSource(input.profileId, target, AbortSignal.abort())).rejects.toThrow()
   } finally { release?.(); await workers.disposeAll() }
 })
+it('discards root journal metadata after its worker is replaced', async () => {
+  const { parseHostRootSubmissionTarget, parseHostRootSubmissionDescriptor } = await import('@deepseek-ai/dsh-host-control-protocol')
+  const target = parseHostRootSubmissionTarget({ namespace_id: 'n2_' + 'a'.repeat(64),
+    command_id: '10000000-0000-4000-8000-000000000001', workspace_id: '20000000-0000-4000-8000-000000000002',
+    session_id: 'session', source_message_id: 'message', source_revision: '1' })
+  const descriptor = parseHostRootSubmissionDescriptor({ namespace_id: target.namespace_id, command_id: target.command_id,
+    root_task_id: '30000000-0000-4000-8000-000000000003', root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64),
+    source_descriptor: { workspace_id: target.workspace_id, session_id: target.session_id,
+      source_message_id: target.source_message_id, source_revision: '1', snapshot_digest: 'd'.repeat(64) } })
+  let release!: () => void, entered!: () => void, generation = 0
+  const started = new Promise<void>((resolve) => { entered = resolve })
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const own = ++generation
+    return { closeNotifications() {}, abort() {}, done: Promise.resolve(), inspectCollaborationRoot: async () => {
+      if (own === 1) await new Promise<void>((resolve) => { release = resolve; entered() })
+      return descriptor
+    } }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  try {
+    await workers.start(input)
+    const reading = expect(workers.inspectCollaborationRoot(input.profileId, target, new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
+    await started
+    await workers.dispose(input.profileId); await workers.start(input); release(); await reading
+    expect(await workers.inspectCollaborationRoot(input.profileId, target, new AbortController().signal)).toEqual(descriptor)
+    await expect(workers.inspectCollaborationRoot(input.profileId, target, AbortSignal.abort())).rejects.toThrow()
+  } finally { release?.(); await workers.disposeAll() }
+})
+
+it.each(['read', 'accept'] as const)('discards %s acknowledgement after its worker is replaced', async (action) => {
+  const { parseHostRootSubmissionTarget, parseHostRootJournalCommand, parseHostRootJournalMetadata } = await import('@deepseek-ai/dsh-host-control-protocol')
+  const target = parseHostRootSubmissionTarget({ namespace_id: 'n2_' + 'a'.repeat(64),
+    command_id: '10000000-0000-4000-8000-000000000001', workspace_id: '20000000-0000-4000-8000-000000000002',
+    session_id: 'session', source_message_id: 'message', source_revision: '1' })
+  const descriptor = parseHostRootJournalMetadata({ schema_version: 1, source_digest: 'd'.repeat(64), objective_ref: 'o', task_grant_ref: 'g', continuation_policy: 'display_only', state: 'pending', namespace_id: target.namespace_id, command_id: target.command_id,
+    root_task_id: '30000000-0000-4000-8000-000000000003', root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64),
+    source_descriptor: { workspace_id: target.workspace_id, session_id: target.session_id,
+      source_message_id: target.source_message_id, source_revision: '1', snapshot_digest: 'd'.repeat(64) } })
+  const receipt = { root_task_id: descriptor.root_task_id, root_trace_id: descriptor.root_trace_id, admission_id: target.command_id, task_revision: 1, state_version: 1, state: 'active' }
+  const command = parseHostRootJournalCommand(action === 'read' ? { action, target } : { action, target, receipt })
+  const result = parseHostRootJournalMetadata(action === 'read' ? descriptor : { ...descriptor,state:'admitted',receipt })
+  let release!: () => void, entered!: () => void, generation = 0
+  const started = new Promise<void>((resolve) => { entered = resolve })
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const own = ++generation
+    return { closeNotifications() {}, abort() {}, done: Promise.resolve(), rootJournal: async () => {
+      if (own === 1) await new Promise<void>((resolve) => { release = resolve; entered() })
+      return result
+    } }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  try {
+    await workers.start(input)
+    const reading = expect(workers.rootJournal(input.profileId, command, new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
+    await started
+    await workers.dispose(input.profileId); await workers.start(input); release(); await reading
+    expect(await workers.rootJournal(input.profileId, command, new AbortController().signal)).toEqual(result)
+    await expect(workers.rootJournal(input.profileId, command, AbortSignal.abort())).rejects.toThrow()
+  } finally { release?.(); await workers.disposeAll() }
+})
+
+it('discards live planning-attempt metadata after its worker is replaced', async () => {
+  const { parseHostRootSubmissionTarget, parseHostRootSubmissionDescriptor, parseHostRootPlanningAttemptDescriptor } = await import('@deepseek-ai/dsh-host-control-protocol')
+  const target = parseHostRootSubmissionTarget({ namespace_id: 'n2_' + 'a'.repeat(64),
+    command_id: '10000000-0000-4000-8000-000000000001', workspace_id: '20000000-0000-4000-8000-000000000002',
+    session_id: 'session', source_message_id: 'message', source_revision: '1' })
+  const descriptor = parseHostRootSubmissionDescriptor({ namespace_id: target.namespace_id, command_id: target.command_id,
+    root_task_id: '30000000-0000-4000-8000-000000000003', root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64),
+    source_descriptor: { workspace_id: target.workspace_id, session_id: target.session_id,
+      source_message_id: target.source_message_id, source_revision: '1', snapshot_digest: 'd'.repeat(64) } })
+  const attempt = parseHostRootPlanningAttemptDescriptor({ root: descriptor, input_version: '1', model_policy: 'original_model',
+    attempt_request_id: '40000000-0000-4000-8000-000000000004', input_manifest_digest: 'e'.repeat(64), predecessor: null,
+    model_snapshot: { provider: 'fixture', model: 'selected', configuration_generation: '2', adapter_fingerprint: 'f'.repeat(64) } })
+  let release!: () => void, entered!: () => void, generation = 0
+  const started = new Promise<void>((resolve) => { entered = resolve })
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const own = ++generation
+    return { closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      inspectRootPlanningAttempt: async (_target, _attempt, binding) => {
+        expect(binding).toBe('a'.repeat(64))
+
+        if (own === 1) await new Promise<void>((resolve) => { release = resolve; entered() })
+        return attempt
+      } }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  try {
+    await workers.start(input)
+    const reading = expect(workers.inspectRootPlanningAttempt(input.profileId, target, attempt.attempt_request_id, 'a'.repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
+    await started
+    await workers.dispose(input.profileId); await workers.start(input); release(); await reading
+    expect(await workers.inspectRootPlanningAttempt(input.profileId, target, attempt.attempt_request_id, 'a'.repeat(64), new AbortController().signal)).toEqual(attempt)
+    await expect(workers.inspectRootPlanningAttempt(input.profileId, target, attempt.attempt_request_id, 'a'.repeat(64), AbortSignal.abort())).rejects.toThrow()
+  } finally { release?.(); await workers.disposeAll() }
+})

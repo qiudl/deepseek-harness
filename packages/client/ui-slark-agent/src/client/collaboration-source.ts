@@ -17,6 +17,7 @@ interface Reference {
   capability_snapshot: string
   source_id?: string
   original_source_id?: string
+  submission_mode?: 'planning'
 }
 /** Page supplies only original text, editor occurrences and current directory metadata. */
 export interface DesktopCollaborationSourceInput {
@@ -33,20 +34,37 @@ export interface DesktopCollaborationSourceInput {
   }>
 }
 type SourceCoordinates = Pick<DesktopCollaborationSourceInput, 'workspace_id' | 'session_id' | 'source_message_id' | 'source_revision'>
-/** Main's public projection contains no model, proof, token, grant or Task identity. */
+/** Main exposes Source coordinates and planning correlation IDs, without model, proof, token or grant data. */
 export type CollaborationSubmissionResponse = {
   ok: true
   value: { source: SourceCoordinates
     submission_state: 'accepted'
     invocation_id?: string }
-} | { ok: false; errorCode: string; reconciliationRequired: boolean }
+} | { ok: true; value: { source: SourceCoordinates; submission_state: 'planning_recorded'; root_task_id: string; root_trace_id: string } }
+  | { ok: false; errorCode: string; reconciliationRequired: boolean }
 
-function sameAcceptedSource(value: { submission_state: unknown; source: Record<keyof SourceCoordinates, unknown> },
-  original: SourceCoordinates): boolean {
-  const source = value.source
-  return value.submission_state === 'accepted' && source.workspace_id === original.workspace_id &&
-    source.session_id === original.session_id && source.source_message_id === original.source_message_id &&
-    source.source_revision === original.source_revision
+function sameSource(source: Record<string, unknown>, original: SourceCoordinates): boolean {
+  return source.workspace_id === original.workspace_id && source.session_id === original.session_id &&
+    source.source_message_id === original.source_message_id && source.source_revision === original.source_revision
+}
+function submissionMode(host: Window['__DSH_DESKTOP_HOST__']): 'planning' | 'execution' | undefined {
+  if (!host?.collaborationScopeAvailable) return undefined
+  return host.collaborationPlanningAvailable ? 'planning' : host.collaborationExecutionAvailable ? 'execution' : undefined
+}
+function validReceipt(value: unknown, original: SourceCoordinates,
+  mode: 'planning' | 'execution'): boolean {
+  if (!value || typeof value !== 'object' || !('value' in value)) return false
+  const data = value.value
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false
+  const receipt = data as Record<string, unknown>, source = receipt.source
+  if (!source || typeof source !== 'object' || Array.isArray(source) ||
+    !sameSource(source as Record<string, unknown>, original)) return false
+  if (mode === 'execution') return receipt.submission_state === 'accepted'
+  if (receipt.submission_state !== 'planning_recorded') return false
+  const keys = ['source', 'submission_state', 'root_task_id', 'root_trace_id']
+  return Object.keys(receipt).length === keys.length && keys.every(key => Object.hasOwn(receipt, key)) &&
+    typeof receipt.root_task_id === 'string' && uuid.test(receipt.root_task_id) &&
+    typeof receipt.root_trace_id === 'string' && /^(?!0{32})[a-f0-9]{32}$/u.test(receipt.root_trace_id)
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
@@ -55,6 +73,7 @@ const text = (v: unknown, maximum: number): v is string => typeof v === 'string'
 function isReference(r: Record<string, unknown>): r is Record<string, unknown> & Reference {
   const keys = ['kind', 'workspace_id', 'session_id', 'project_id', 'project_name', 'agent_id', 'agent_name', 'capability_snapshot']
   if (Object.hasOwn(r, 'source_id')) keys.push('source_id')
+  if (Object.hasOwn(r, 'submission_mode')) keys.push('submission_mode')
   if (Object.hasOwn(r, 'original_source_id')) keys.push('original_source_id')
   if (Object.keys(r).length !== keys.length || keys.some(k => !Object.hasOwn(r, k)) ||
     r.kind !== 'collaboration-v2' || !text(r.workspace_id, 36) || !uuid.test(r.workspace_id) ||
@@ -62,6 +81,7 @@ function isReference(r: Record<string, unknown>): r is Record<string, unknown> &
     !text(r.project_name, 512) || !text(r.agent_name, 512) ||
     typeof r.capability_snapshot !== 'string' || !/^[a-f0-9]{64}$/u.test(r.capability_snapshot) ||
     (r.source_id !== undefined && (!text(r.source_id, 36) || !uuid.test(r.source_id))) ||
+    (r.submission_mode !== undefined && (r.submission_mode !== 'planning' || r.source_id === undefined)) ||
     (r.original_source_id !== undefined &&
     (!r.source_id || !text(r.original_source_id, 36) || !uuid.test(r.original_source_id)))) return false
   return true
@@ -105,10 +125,9 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
     async candidates(session, { query, signal }) {
       const host = window.__DSH_DESKTOP_HOST__, workspace = workspaceOf(ctx, session.sessionId)
       const current = () => !signal.aborted && window.__DSH_DESKTOP_HOST__ === host &&
-        workspaceOf(ctx, session.sessionId) === workspace &&
-        host?.collaborationScopeAvailable === true && host.collaborationExecutionAvailable === true
-      if (!workspace || !host?.collaborationScopeAvailable || !host.collaborationExecutionAvailable ||
-        !host.collaborationWorkspace || !host.collaborationSubmit || signal.aborted) return []
+        workspaceOf(ctx, session.sessionId) === workspace && submissionMode(host) !== undefined
+      if (!workspace || !submissionMode(host) ||
+        !host?.collaborationWorkspace || !host.collaborationSubmit || signal.aborted) return []
       let response
       try {
         response = await host.collaborationWorkspace({ workspace_id: workspace, session_id: session.sessionId,
@@ -127,7 +146,7 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
     onPick({ candidate, session }) {
       const r = candidate.value === undefined ? undefined : parse(candidate.value)
       const host = window.__DSH_DESKTOP_HOST__
-      if (!r || r.source_id || !host?.collaborationExecutionAvailable || !host.collaborationScopeAvailable ||
+      if (!r || r.source_id || !submissionMode(host) ||
         r.session_id !== session.sessionId || workspaceOf(ctx, session.sessionId) !== r.workspace_id) return undefined
       const scoped = ctx.sessions.scope(session.sessionId)
       if (!scoped) return undefined
@@ -138,7 +157,7 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
         (old.original_source_id ?? old.source_id) !== originalId)) return undefined
       const sourceId = randomUUID()
       return { insert: { source: 'slark-agent', ref: JSON.stringify({ ...r, source_id: sourceId,
-        original_source_id: originalId ?? sourceId }),
+        original_source_id: originalId ?? sourceId, ...(submissionMode(host) === 'planning' ? { submission_mode: 'planning' } : {}) }),
       label: label(r), clipboardText: `@${label(r)}` } }
     },
     async matchEnter(session, line, signal, envelope) {
@@ -148,10 +167,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
       const host = window.__DSH_DESKTOP_HOST__
       if (!snapshot.occurrences.length) return reply(session, line, signal, envelope)
       if (!snapshot.occurrences.some(mention => mention.source === 'slark-agent')) return undefined
-      if (!host?.collaborationExecutionAvailable || !host.collaborationScopeAvailable || !host.collaborationSubmit) throw Error(t('scope.executorPending'))
+      if (!host) throw Error(t('scope.executorPending'))
       if (snapshot.draft.trim() !== line || snapshot.occurrences.length > 10 || envelope.attachments > 0) throw Error(t('submit.textOnlyV2'))
-      const submit = host.collaborationSubmit.bind(host)
-      const available = () => host.collaborationScopeAvailable && host.collaborationExecutionAvailable
       const workspace = workspaceOf(ctx, session.sessionId), mentionIds = new Set<string>()
       let sourceId: string | undefined
       let previousEnd = 0, question = ''
@@ -172,6 +189,16 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
       if (!(question + snapshot.draft.slice(previousEnd)).trim()) throw Error(t('submit.question'))
       const first = selected[0] as (typeof selected)[number]
       const originalId = first.r.original_source_id ?? first.mentionId
+      if (selected.some(item => item.r.submission_mode !== first.r.submission_mode)) throw Error(t('submit.unavailable'))
+      const recovery = first.r.submission_mode === 'planning' && submissionMode(host) !== 'planning'
+      const mode = recovery ? 'planning' : submissionMode(host)
+      // oxlint-disable-next-line typescript/unbound-method -- Bind immediately below and retain identity for cancellation checks.
+      const operation = recovery ? host.collaborationRecover : host.collaborationSubmit
+      if (!mode || !operation) throw Error(t('scope.executorPending'))
+      const submit = operation.bind(host)
+      const available = () => recovery
+        ? submissionMode(host) !== 'planning' && host.collaborationRecover === operation
+        : submissionMode(host) === mode && host.collaborationSubmit === operation
       signal.throwIfAborted()
       const original: DesktopCollaborationSourceInput = { workspace_id: first.r.workspace_id, session_id: session.sessionId,
         source_message_id: originalId, source_revision: '1', original_message: snapshot.draft,
@@ -209,7 +236,9 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
             }
             return { kind: 'error', text: t(result.reconciliationRequired ? 'submit.uncertainV2' : 'submit.unavailableV2') }
           }
-          if (!sameAcceptedSource(result.value, original)) return { kind: 'error', text: t('submit.uncertainV2') }
+          if (!validReceipt(result, original, mode)) return { kind: 'error', text: t('submit.uncertainV2') }
+          if (result.value.submission_state === 'planning_recorded')
+            return { kind: 'success', text: t('submit.plannedV2').replace('{trace}', result.value.root_trace_id) }
           window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
           return { kind: 'success', text: t('submit.acceptedV2') }
         },

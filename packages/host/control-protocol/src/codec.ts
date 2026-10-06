@@ -1,4 +1,8 @@
 import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
+import { parseHostRootPlanningEvidence } from './root-planning-evidence.ts'
+import { parseHostRootPlanningAttemptDescriptor, parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
+import { parseHostRootAnalysisOutput } from './root-analysis-output.ts'
+import { parseHostRootSubmissionTarget, parseHostRootAnalysisInput, parseHostRootSubmissionDescriptor, parseHostRootAuthorityChallenge, parseHostRootAuthorityAssertion, parseHostRootJournalCommand, parseHostRootJournalMetadata } from './root-authority.ts'
 import type {
   ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
@@ -45,7 +49,9 @@ import type {
   HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult,
   ProfileCollaborationAnalysisRequest, ProfileCollaborationAnalysisResult,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
-  ProfileSourceAuthorityRequest, ProfileSourceAuthorityResult,
+  ProfileRootPlanningAttemptAuthorityRequest, ProfileRootPlanningAttemptAuthorityResult,
+  ProfileRootJournalRequest, ProfileRootJournalResult,
+  ProfileSourceAuthorityRequest, ProfileSourceAuthorityResult, ProfileRootAuthorityRequest, ProfileRootAuthorityResult,
   HostCollaborationSourceSnapshot, ProfileSourceSnapshotRequest, ProfileSourceSnapshotResult,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
@@ -1064,15 +1070,34 @@ export function encodeHostSourceAuthorityPayload(value: HostSourceAuthorityAsser
  */
 export function parseHostCollaborationAnalysisCommand(value: unknown): HostCollaborationAnalysisCommand {
   const row = registrationRecord(value)
+  if ((row.action === 'root_execution_journal' || row.action === 'root_feedback')) {
+    exactKeys(row, ['action', 'operation'])
+    const operation = remoteSessionJson(row.operation)
+    if (Buffer.byteLength(JSON.stringify(operation), 'utf8') > 8192) reject()
+    return { action: row.action, operation }
+  }
+  if (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') {
+    exactKeys(row, ['action', 'target'])
+    return { action: row.action, target: parseHostRootSubmissionTarget(row.target) }
+  }
+  if (row.action === 'read_root_output') {
+    exactKeys(row, ['action','target'])
+    return { action: 'read_root_output', target: parseHostRootSubmissionTarget(row.target) }
+  }
+  if (row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root') {
+    exactKeys(row, ['action', 'input'])
+    return { action: row.action, input: parseHostRootAnalysisInput(row.input) }
+  }
   if (row.action === 'prepare' || row.action === 'capture_reply' || row.action === 'prepare_clarification') {
     exactKeys(row, ['action', 'input'])
     const input = remoteSessionJson(row.input)
     if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 32768) reject()
     return { action: row.action, input }
   }
-  if (row.action === 'dispatch') {
+  if (row.action === 'dispatch' || row.action === 'dispatch_root_attempt') {
     exactKeys(row, ['action', 'attempt_request_id', 'grant'])
-    return { action: 'dispatch', attempt_request_id: uuid(row.attempt_request_id) as HostControlRequestId, grant: remoteSessionJson(row.grant) }
+    return { action: row.action, attempt_request_id: uuid(row.attempt_request_id) as HostControlRequestId,
+      grant: remoteSessionJson(row.grant) }
   }
   return reject()
 }
@@ -1090,6 +1115,35 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
     if (capture.kind !== 'captured' && capture.kind !== 'recovered') reject()
     const descriptor = parseHostCollaborationSourceDescriptor(capture.descriptor)
     return { kind: 'reply_source', capture: remoteSessionJson({ kind: capture.kind, descriptor }) }
+  }
+  if ((row.kind === 'root_execution_journal' || row.kind === 'root_feedback')) {
+    exactKeys(row, ['kind', 'record'])
+    const record = remoteSessionJson(row.record)
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > 8192) reject()
+    return { kind: row.kind, record }
+  }
+  if (row.kind === 'root_attempt_evidence') {
+    exactKeys(row, ['kind', 'evidence'])
+    return { kind: row.kind, evidence: parseHostRootPlanningEvidence(row.evidence) }
+  }
+  if (row.kind === 'root_attempt_prepared') {
+    exactKeys(row, ['kind', 'preparation'])
+    return { kind: row.kind, preparation: parseHostRootPlanningAttemptDescriptor(row.preparation) }
+  }
+  if (row.kind === 'root_output') {
+    exactKeys(row, ['kind','evidence'])
+    return { kind: 'root_output', evidence: parseHostRootAnalysisOutput(row.evidence) }
+  }
+  if (row.kind === 'root_prepared') {
+    exactKeys(row, ['kind', 'preparation'])
+    const p = registrationRecord(row.preparation)
+    const root = parseHostRootSubmissionDescriptor(p.root)
+    const { root: _root, ...base } = p
+    const parsed = parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: base })
+    if (parsed.kind !== 'prepared') reject()
+    const descriptor = parseHostCollaborationSourceDescriptor(base.descriptor)
+    if (JSON.stringify(descriptor) !== JSON.stringify(root.source_descriptor)) reject()
+    return { kind: 'root_prepared', preparation: remoteSessionJson({ ...base, root }) }
   }
   if (row.kind === 'prepared') {
     exactKeys(row, ['kind', 'preparation'])
@@ -1120,6 +1174,9 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
+  | ProfileRootJournalRequest
+  | ProfileRootPlanningAttemptAuthorityRequest
+  | ProfileRootAuthorityRequest
   | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
   | ProfileCollaborationDeliveryRequest
   | ProfileModelTextRequest
@@ -1470,6 +1527,16 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       command: parseHostCollaborationDeliveryChunk(params.command),
     } }
   }
+  if (frame.method === 'profile.root_journal') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      account_issuer: accountIssuer(params.account_issuer), account_subject: uuid(params.account_subject),
+      command: parseHostRootJournalCommand(params.command),
+    } } satisfies ProfileRootJournalRequest
+  }
   if (frame.method === 'profile.collaboration_analysis') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
@@ -1499,6 +1566,36 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       params: {
         ...accountChallengeParams(params),
         challenge: parseHostWorkspaceAuthorityChallenge(params.challenge),
+      },
+    }
+  }
+  if (frame.method === 'profile.root_planning_attempt_authority') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return {
+      version: 1,
+      type: 'request',
+      request_id: requestId,
+      method: frame.method,
+      params: {
+        ...authorized(params),
+        account_binding_handle: opaqueHandle(params.account_binding_handle),
+        authority_binding_version: generation(params.authority_binding_version),
+        challenge: parseHostRootPlanningAttemptAuthorityChallenge(params.challenge),
+      },
+    }
+  }
+  if (frame.method === 'profile.root_authority') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return {
+      version: 1,
+      type: 'request',
+      request_id: requestId,
+      method: frame.method,
+      params: {
+        ...authorized(params),
+        account_binding_handle: opaqueHandle(params.account_binding_handle),
+        authority_binding_version: generation(params.authority_binding_version),
+        challenge: parseHostRootAuthorityChallenge(params.challenge),
       },
     }
   }
@@ -1561,7 +1658,9 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
-  | ProfileWorkspaceAuthorityResult | ProfileSourceAuthorityResult
+  | ProfileRootJournalResult
+  | ProfileRootPlanningAttemptAuthorityResult
+  | ProfileRootAuthorityResult | ProfileWorkspaceAuthorityResult | ProfileSourceAuthorityResult
   | ProfileCollaborationAnalysisResult | ProfileSourceSnapshotResult
   | ProfileCollaborationDeliveryResult
   | ProfileModelTextResult
@@ -1807,6 +1906,15 @@ function decodeProfileResult(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.workspace_authority') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostWorkspaceAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.root_journal') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostRootJournalMetadata(result) }
+  }
+  if (frame.method === 'profile.root_planning_attempt_authority') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostRootPlanningAttemptAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.root_authority') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostRootAuthorityAssertion(result) }
   }
   if (frame.method === 'profile.source_authority') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostSourceAuthorityAssertion(result) }

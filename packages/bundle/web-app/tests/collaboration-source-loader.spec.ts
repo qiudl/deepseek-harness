@@ -1,8 +1,14 @@
+import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto'
+import { HostControlAuthority } from '../../../host/desktop-host/src/unix-transport.ts'
+import { UnixHostClient, DesktopHost, ProfileRegistry } from '@deepseek-ai/dsh-slark-desktop-host'
+import { decodeHostControlFrame, encodeHostControlFrame, parseHostRootPlanningAttemptAuthorityChallenge } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootAnalysisOutput, parseHostRootSubmissionTarget, parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 /** REQ-20260930-0004: Loader-mounted Source capture, real JSON journal and private HTTP. */
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest, parseCollaborationClarificationInput } from '@deepseek-ai/dsh-api-session-controller'
+import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest, parseCollaborationClarificationInput, parseCollaborationRootSubmission } from '@deepseek-ai/dsh-api-session-controller'
+import type { CollaborationRootPlanningRecord } from '@deepseek-ai/dsh-api-session-controller'
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -33,7 +39,7 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
   const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
@@ -54,7 +60,7 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
     await rm(directory, { recursive: true, force: true })
   })
   vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
-  vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', mode === 'analysis-profile' || mode === 'analysis-missing-domain' ? 'B'.repeat(43) : '')
+  vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', ((mode === 'analysis-profile' || mode === 'analysis-missing-domain' || mode === 'root-analysis') || mode === 'root-submission') ? 'B'.repeat(43) : '')
   vi.stubEnv('DSH_PROFILE_DELIVERY_TOKEN', mode === 'delivery' ? 'C'.repeat(43) : '')
   for (const key of ['DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) vi.stubEnv(key, '')
   // GUI/transport peers are fixtures; Source owners, registry, model runtime and storage load from YAML.
@@ -125,12 +131,13 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
       system: unknown
       messages: unknown
     }
-    const persisted = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {
-      tables: { attempts: Record<string, { manifest_json: string; dispatch: { attempt_id: string } }> }
+    const persisted = JSON.parse(await readFile(join(directory, 'state', mode === 'root-submission'
+      ? 'collaboration_root_planning_v1.json' : 'collaboration_analysis_v2.json'), 'utf8')) as {
+      tables: { attempts: Record<string, { manifest_json: string; manifest?: unknown; dispatch: { attempt_id: string } }> }
     }
-    const record = Object.values(persisted.tables.attempts).find(value => (JSON.parse(value.manifest_json) as { prompt_version: string }).prompt_version === (providerRequests === 2 ? '2' : '1'))!
+    const record = mode === 'root-submission' ? Object.values(persisted.tables.attempts)[0]! : Object.values(persisted.tables.attempts).find(value => (JSON.parse(value.manifest_json) as { prompt_version: string }).prompt_version === (providerRequests === 2 ? '2' : '1'))!
     expect(record.dispatch.attempt_id).toBe('fixture-attempt')
-    const manifest = JSON.parse(record.manifest_json) as {
+    const manifest = (mode === 'root-submission' ? record.manifest : JSON.parse(record.manifest_json)) as {
       prompt_version: string
       request: { system: string; messages: { content: { text: string }[] }[] }
     }
@@ -184,17 +191,17 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
       body: JSON.stringify(body),
     })
   const preparation =
-    mode === 'analysis-profile'
+    (mode === 'analysis-profile' || mode === 'root-analysis')
       ? ((await factory['collaborationAnalysis'](
         origin,
         'B'.repeat(43),
-        { action: 'prepare', binding_key: 'd'.repeat(64), input: source },
+        { action: mode === 'root-analysis' ? 'prepare_root' : 'prepare', ...(mode==='root-analysis'?{ resume_binding_key:'f'.repeat(64) }:{}), binding_key: 'd'.repeat(64), input: mode === 'root-analysis' ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
         new AbortController().signal,
         () => false,
-      )) as { kind: string; attempt_request_id: string; input_manifest_digest: string; source_digest: string })
+      )) as { kind: string; attempt_request_id: string; input_manifest_digest: string; source_digest: string; root?: unknown })
       : undefined
   const first =
-    mode === 'analysis-profile'
+    (mode === 'analysis-profile' || mode === 'root-analysis')
       ? {
         kind: 'recovered' as const,
         snapshot: await ctx.sessionController.readCollaborationSourceSnapshot(
@@ -207,7 +214,50 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
           new AbortController().signal,
         ),
       }
-      : await ctx.sessionController.captureCollaborationSource(source, new AbortController().signal)
+      : mode === 'root-submission'
+        ? await ctx.sessionController.captureCollaborationRoot({ source, namespace_id: 'n2_' + 'a'.repeat(64),
+          objective_ref: 'objective-1', task_grant_ref: 'grant-1', continuation_policy: 'display_only' }, new AbortController().signal)
+        : await ctx.sessionController.captureCollaborationSource(source, new AbortController().signal)
+  if ('submission' in first) {
+    const submission = parseCollaborationRootSubmission(first.submission)
+    expect(submission.state).toBe('pending')
+    const disk = await readFile(join(directory, 'state', 'collaboration_root_submission_v1.json'), 'utf8')
+    expect(disk).toContain(submission.root_trace_id)
+    expect(disk).toContain(first.snapshot.host_journal_commit.journal_id)
+    expect(providerRequests).toBe(0)
+    const { workspace_id, session_id, source_message_id, source_revision } = first.snapshot
+    const rootTarget = parseHostRootSubmissionTarget({ workspace_id, session_id, source_message_id, source_revision,
+      namespace_id: submission.namespace_id, command_id: submission.command_id })
+    const rootDescriptor = await factory['inspectCollaborationRoot'](origin, token, rootTarget, new AbortController().signal, () => false)
+    expect(rootDescriptor.root_trace_id).toBe(submission.root_trace_id)
+    expect(rootDescriptor.payload_digest).toBe(submission.payload_digest)
+    expect(await ctx.sessionController.readCollaborationRoot(rootTarget, new AbortController().signal)).toEqual(submission)
+    const receipt = { root_task_id: submission.root_task_id, root_trace_id: submission.root_trace_id,
+      admission_id: submission.command_id, task_revision: 1, state_version: 1, state: 'active' }
+    const command = { action: 'accept', target: rootTarget, receipt }
+    await expect(factory['rootJournal'](origin, token, command, new AbortController().signal, () => false)).rejects.toThrow()
+    const metadata = await factory['rootJournal'](origin, 'B'.repeat(43), { action:'read', target:rootTarget }, new AbortController().signal, () => false)
+    expect(metadata).toEqual({ ...submission, source: undefined, source_descriptor: rootDescriptor.source_descriptor })
+    const committed = await factory['rootJournal'](origin, 'B'.repeat(43), command, new AbortController().signal, () => false)
+    expect(committed).toMatchObject({ state:'admitted', receipt })
+    await expect(factory['rootJournal'](origin, 'B'.repeat(43), command, new AbortController().signal, () => true)).rejects.toThrow()
+    await expect(factory['rootJournal'](origin, 'B'.repeat(43), { ...command,receipt:{ ...receipt,root_trace_id:'f'.repeat(32) } }, new AbortController().signal, () => false)).rejects.toThrow()
+    const accepted = await ctx.sessionController.readCollaborationRoot(rootTarget, new AbortController().signal)
+    expect(accepted).toEqual({ ...submission, state: 'admitted', receipt })
+    expect(await ctx.sessionController.acceptCollaborationRoot(rootTarget, receipt, new AbortController().signal)).toEqual(accepted)
+    const admittedDisk = JSON.parse(await readFile(join(directory, 'state', 'collaboration_root_submission_v1.json'), 'utf8')) as {
+      tables: { submissions: Record<string, unknown> }
+    }
+    expect(JSON.stringify(admittedDisk)).toContain('"state":"admitted"')
+    expect(providerRequests).toBe(0)
+    expect(JSON.stringify(rootDescriptor)).not.toContain(first.snapshot.original_message)
+    expect((await fetch(`${origin}/internal/desktop-collaboration-root`, {
+      method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body: JSON.stringify(rootTarget),
+    })).status).toBe(403)
+    await expect(factory['inspectCollaborationRoot'](origin, token, { ...rootTarget, namespace_id: 'n2_' + 'f'.repeat(64) },
+      new AbortController().signal, () => false)).rejects.toThrow()
+    await expect(factory['inspectCollaborationRoot'](origin, token, rootTarget, new AbortController().signal, () => true)).rejects.toThrow()
+  }
   expect(await readFile(join(directory, 'state', 'collaboration_source_v2.json'), 'utf8')).toContain(
     first.snapshot.host_journal_commit.journal_id,
   )
@@ -288,16 +338,54 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
     await expect(readFile(join(directory, 'state', 'collaboration_analysis_v2.json'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(providerRequests).toBe(0)
   }
-  const analysisJournal = mode !== 'source-only' && mode !== 'analysis-profile' && mode !== 'analysis-missing-domain' && mode !== 'delivery' ? await openCollaborationAnalysisJournal(facility!) : undefined
+  const analysisJournal = mode !== 'root-submission' && mode !== 'analysis-missing-domain' && mode !== 'source-only' && mode !== 'analysis-profile' && mode !== 'root-analysis' && mode !== 'delivery' ? await openCollaborationAnalysisJournal(facility!) : undefined
   const analysisWriter = analysisJournal ? createCollaborationAnalysisWriter(analysisJournal, async (record) => {
     expect(providerRequests).toBe(0)
     return { attempt_request_id: record.attempt_request_id, plan_id: 'fixture-plan', expected_plan_revision: '1',
       attempt_id: 'fixture-attempt', attempt_fence: '1', input_manifest_digest: record.input_manifest_digest,
       source_digest: record.source_digest, lease_expires_at: new Date(Date.now() + 30000).toISOString(), dispatch_granted: true }
   }) : undefined
-  if (mode === 'analysis-profile') {
+  if ((mode === 'analysis-profile' || mode === 'root-analysis')) {
     expect(providerRequests).toBe(0)
     expect(preparation?.kind).toBe('prepared')
+    if (mode === 'root-analysis') {
+      const root = parseHostRootSubmissionDescriptor(preparation?.root)
+      expect(root.root_trace_id).toMatch(/^[a-f0-9]{32}$/u)
+      const rootTarget = { ...target, namespace_id:root.namespace_id, command_id:root.command_id }
+      const disk = await ctx.sessionController.readCollaborationRoot(rootTarget, new AbortController().signal)
+      expect(disk.root_trace_id).toBe(root.root_trace_id)
+      expect(disk.source_digest).toBe(preparation!.source_digest)
+      const replay = await factory['collaborationAnalysis'](origin, 'B'.repeat(43), {
+        action:'prepare_root',binding_key:'d'.repeat(64),input:{ source,namespace_id:root.namespace_id,continuation_policy:'follow_authorized_plan' },
+      }, new AbortController().signal, () => false)
+      expect(replay).toEqual({ kind:'recovered',descriptor:root.source_descriptor,root })
+      expect(replay).not.toHaveProperty('attempt_request_id')
+      expect((await postAnalysis({ action:'recover_root',binding_key:'d'.repeat(64),input:{ source,namespace_id:root.namespace_id,continuation_policy:'follow_authorized_plan' } })).status).toBe(422)
+      const pendingRootPath = join(directory,'state','collaboration_root_submission_v1.json')
+      const pendingBytes = await readFile(pendingRootPath)
+      const pendingLookup = await postAnalysis({ action:'reconcile_root',binding_key:'d'.repeat(64),input:{ source,namespace_id:root.namespace_id,continuation_policy:'follow_authorized_plan' } })
+      expect(pendingLookup.status).toBe(200)
+      expect((await pendingLookup.json() as { value: unknown }).value).toEqual({ kind:'recovered',descriptor:root.source_descriptor,root })
+      expect(await ctx.sessionController.readCollaborationRoot(rootTarget,new AbortController().signal)).toEqual(disk)
+      expect(await readFile(pendingRootPath)).toEqual(pendingBytes)
+      expect(providerRequests).toBe(0)
+      expect((await postAnalysis({ action:'reconcile_root',binding_key:'d'.repeat(64),input:{ source:{ ...source,original_message:'changed' },namespace_id:root.namespace_id,continuation_policy:'follow_authorized_plan' } })).status).toBe(422)
+
+
+      const resume = { action:'resume_root',resume_binding_key:'f'.repeat(64),binding_key:'d'.repeat(64),input:{ source,namespace_id:root.namespace_id,continuation_policy:'follow_authorized_plan' } }
+      expect((await postAnalysis(resume)).status).toBe(422)
+      expect((await postAnalysis({ action:'read_root_output',binding_key:'d'.repeat(64),target:rootTarget })).status).toBe(422)
+      await ctx.sessionController.acceptCollaborationRoot(rootTarget,{ root_task_id:root.root_task_id,root_trace_id:root.root_trace_id,
+        admission_id:root.command_id,task_revision:1,state_version:1,state:'active' },new AbortController().signal)
+      expect((await postAnalysis({ action: 'prepare_root_attempt', target: rootTarget, binding_key: 'd'.repeat(64) })).status).toBe(422)
+      const resumed=await postAnalysis(resume)
+      expect(resumed.status).toBe(200)
+      expect((await resumed.json() as { value:unknown }).value).toEqual(preparation)
+      expect((await postAnalysis({ ...resume,resume_binding_key:'e'.repeat(64) })).status).toBe(422)
+      expect((await postAnalysis({ ...resume,input:{ ...resume.input,source:{ ...source,original_message:'changed' } } })).status).toBe(422)
+      expect(providerRequests).toBe(0)
+      expect(prepared).toHaveBeenCalledTimes(1)
+    }
     expect(
       (await postAnalysis({ action: 'prepare', binding_key: 'd'.repeat(64), input: source }, `Bearer ${token}`)).status,
     ).toBe(403)
@@ -343,46 +431,106 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
     )
     expect((await postAnalysis(dispatch)).status).toBe(422)
     expect(providerRequests).toBe(1)
+    if (mode === 'analysis-profile') {
 
-    const replyInput = { ...source, source_message_id: 'reply-1', original_message: '只分析这份方案的规则，不修改文件。', active_mentions: [] }
-    const captured = await factory['collaborationAnalysis'](origin, 'B'.repeat(43),
-      { action: 'capture_reply', binding_key: 'd'.repeat(64), input: replyInput }, new AbortController().signal, () => false)
-    expect(captured).toMatchObject({ kind: 'captured', descriptor: { source_message_id: 'reply-1' } })
-    expect(providerRequests).toBe(1)
-    const reply = await ctx.sessionController.readCollaborationSourceSnapshot({ workspace_id: source.workspace_id,
-      session_id: source.session_id, source_message_id: 'reply-1', source_revision: '1' }, new AbortController().signal)
-    expect(reply.model_snapshot.configuration_generation).not.toBe(first.snapshot.model_snapshot.configuration_generation)
-    const clarification = parseCollaborationClarificationInput({ plan: { plan_id: 'fixture-plan', plan_revision: '3', input_version: '2' },
-      clarification_request_id: 'reply-request', original_snapshot: first.snapshot, reply_snapshot: reply,
-      original_snapshot_digest: collaborationJournalDigest(first.snapshot), reply_snapshot_digest: collaborationJournalDigest(reply),
-      pending_items: [{ pending_item_id: 'pending-1', revision: '1', mention_ids: ['mention-1'], target: { project_id: '212', agent_id: 'guide' },
-        reason: 'task_ambiguous', question: '要分析哪个方面？', source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: source.original_message.length }] }],
-      frozen_task_ids: ['accepted-task'], mention_order: ['mention-1'], prior_replies: [] })
-    const fresh = await factory['collaborationAnalysis'](origin, 'B'.repeat(43),
-      { action: 'prepare_clarification', binding_key: 'd'.repeat(64), input: JSON.parse(JSON.stringify(clarification)) as HostRemoteSessionJson },
-      new AbortController().signal, () => false) as {
-      kind: string
-      attempt_request_id: string
-      input_manifest_digest: string
-      source_digest: string
+      const replyInput = { ...source, source_message_id: 'reply-1', original_message: '只分析这份方案的规则，不修改文件。', active_mentions: [] }
+      const captured = await factory['collaborationAnalysis'](origin, 'B'.repeat(43),
+        { action: 'capture_reply', binding_key: 'd'.repeat(64), input: replyInput }, new AbortController().signal, () => false)
+      expect(captured).toMatchObject({ kind: 'captured', descriptor: { source_message_id: 'reply-1' } })
+      expect(providerRequests).toBe(1)
+      const reply = await ctx.sessionController.readCollaborationSourceSnapshot({ workspace_id: source.workspace_id,
+        session_id: source.session_id, source_message_id: 'reply-1', source_revision: '1' }, new AbortController().signal)
+      expect(reply.model_snapshot.configuration_generation).not.toBe(first.snapshot.model_snapshot.configuration_generation)
+      const clarification = parseCollaborationClarificationInput({ plan: { plan_id: 'fixture-plan', plan_revision: '3', input_version: '2' },
+        clarification_request_id: 'reply-request', original_snapshot: first.snapshot, reply_snapshot: reply,
+        original_snapshot_digest: collaborationJournalDigest(first.snapshot), reply_snapshot_digest: collaborationJournalDigest(reply),
+        pending_items: [{ pending_item_id: 'pending-1', revision: '1', mention_ids: ['mention-1'], target: { project_id: '212', agent_id: 'guide' },
+          reason: 'task_ambiguous', question: '要分析哪个方面？', source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: source.original_message.length }] }],
+        frozen_task_ids: ['accepted-task'], mention_order: ['mention-1'], prior_replies: [] })
+      const fresh = await factory['collaborationAnalysis'](origin, 'B'.repeat(43),
+        { action: 'prepare_clarification', binding_key: 'd'.repeat(64), input: JSON.parse(JSON.stringify(clarification)) as HostRemoteSessionJson },
+        new AbortController().signal, () => false) as {
+        kind: string
+        attempt_request_id: string
+        input_manifest_digest: string
+        source_digest: string
+      }
+      expect(fresh.kind).toBe('prepared'); expect(providerRequests).toBe(1)
+      const nextDispatch = { action: 'dispatch', binding_key: 'd'.repeat(64), attempt_request_id: fresh.attempt_request_id,
+        grant: { ...grant, attempt_request_id: fresh.attempt_request_id, input_manifest_digest: fresh.input_manifest_digest,
+          source_digest: fresh.source_digest, expected_plan_revision: '3' } }
+      await factory['collaborationAnalysis'](origin, 'B'.repeat(43), nextDispatch, new AbortController().signal, () => false)
+      expect(providerRequests).toBe(2)
+      expect((await postAnalysis(nextDispatch)).status).toBe(422)
+      const records = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {
+        tables: { attempts: Record<string, { manifest_json: string }> } }
+      const manifest = Object.values(records.tables.attempts).map(value => JSON.parse(value.manifest_json) as {
+        prompt_version: string
+        request: { system: string; messages: { content: { text: string }[] }[] } }).find(value => value.prompt_version === '2')!
+      const visible = manifest.request.messages[0]!.content[0]!.text
+      expect(visible).not.toContain('accepted-task'); expect(visible).toContain('不修改文件')
+      await expect(JSON.stringify({ prompt_version: manifest.prompt_version, system: manifest.request.system, input: JSON.parse(visible) as Record<string, unknown> }, null, 2) + '\n')
+        .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-clarification.request.expected.txt'))
+      expect(session.seq).toBe(seq)
     }
-    expect(fresh.kind).toBe('prepared'); expect(providerRequests).toBe(1)
-    const nextDispatch = { action: 'dispatch', binding_key: 'd'.repeat(64), attempt_request_id: fresh.attempt_request_id,
-      grant: { ...grant, attempt_request_id: fresh.attempt_request_id, input_manifest_digest: fresh.input_manifest_digest,
-        source_digest: fresh.source_digest, expected_plan_revision: '3' } }
-    await factory['collaborationAnalysis'](origin, 'B'.repeat(43), nextDispatch, new AbortController().signal, () => false)
-    expect(providerRequests).toBe(2)
-    expect((await postAnalysis(nextDispatch)).status).toBe(422)
-    const records = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {
-      tables: { attempts: Record<string, { manifest_json: string }> } }
-    const manifest = Object.values(records.tables.attempts).map(value => JSON.parse(value.manifest_json) as {
-      prompt_version: string
-      request: { system: string; messages: { content: { text: string }[] }[] } }).find(value => value.prompt_version === '2')!
-    const visible = manifest.request.messages[0]!.content[0]!.text
-    expect(visible).not.toContain('accepted-task'); expect(visible).toContain('不修改文件')
-    await expect(JSON.stringify({ prompt_version: manifest.prompt_version, system: manifest.request.system, input: JSON.parse(visible) as Record<string, unknown> }, null, 2) + '\n')
-      .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-clarification.request.expected.txt'))
-    expect(session.seq).toBe(seq)
+    if (mode === 'root-analysis') {
+      const root = parseHostRootSubmissionDescriptor(preparation?.root)
+      const targetRoot = { ...target, namespace_id: root.namespace_id, command_id: root.command_id }
+      const read = { action: 'read_root_output', binding_key: 'd'.repeat(64), target: targetRoot }
+      expect((await postAnalysis({ action:'resume_root',resume_binding_key:'f'.repeat(64),binding_key:'d'.repeat(64),input:{ source,namespace_id:root.namespace_id,continuation_policy:'follow_authorized_plan' } })).status).toBe(422)
+      await ctx.sessionController.acceptCollaborationRoot(targetRoot, { root_task_id: root.root_task_id,
+        root_trace_id: root.root_trace_id, admission_id: root.command_id, task_revision: 1, state_version: 1, state: 'active' }, new AbortController().signal)
+      const selection = { plan_id: 'execution-plan', expected_plan_revision: '1', candidate_digest: 'c'.repeat(64),
+        task_id: 'execution-task', task_revision: '1', task_digest: 'e'.repeat(64), expected_scope_version: '0' }
+      const executionCommand = { action: 'root_execution_journal', binding_key: 'd'.repeat(64),
+        operation: { action: 'prepare', target: targetRoot, selection } }
+      const preparedExecution = await factory['collaborationAnalysis'](origin, 'B'.repeat(43), executionCommand,
+        new AbortController().signal, () => false)
+      const storedExecution = await ctx.sessionController.collaborationRootExecution(
+        { action: 'read', target: targetRoot, selection }, new AbortController().signal)
+      expect(preparedExecution).toEqual(storedExecution)
+      if (!storedExecution) throw Error('execution command was not persisted')
+      expect(storedExecution.root.root_trace_id).toBe(root.root_trace_id)
+      expect(await readFile(join(directory, 'state', 'collaboration_root_execution_v1.json'), 'utf8'))
+        .toContain(storedExecution.execution_command_id)
+      expect(await factory['collaborationAnalysis'](origin, 'B'.repeat(43), executionCommand,
+        new AbortController().signal, () => false)).toEqual(preparedExecution)
+      const executionReceipt = { execution_command_id: storedExecution.execution_command_id,
+        root_task_id: root.root_task_id, root_trace_id: root.root_trace_id, root_revision: '1',
+        plan_id: selection.plan_id, task_id: selection.task_id, task_revision: selection.task_revision,
+        invocation_id: 'fixture-invocation', admission: 'recorded', max_invocations: 1, max_runtime_ms: 1200000,
+        expires_at: '2026-10-01T00:00:00.000Z' }
+      expect(await factory['collaborationAnalysis'](origin, 'B'.repeat(43), { ...executionCommand,
+        operation: { ...executionCommand.operation, action: 'accept', receipt: executionReceipt } },
+      new AbortController().signal, () => false)).toEqual({ ...storedExecution, state: 'admitted', receipt: executionReceipt })
+      expect(providerRequests).toBe(1)
+      expect((await postAnalysis(read, `Bearer ${token}`)).status).toBe(403)
+      const recovered = parseHostRootAnalysisOutput(await factory['collaborationAnalysis'](origin, 'B'.repeat(43), read,
+        new AbortController().signal, () => false))
+      if (recovered.state !== 'saved') throw Error('saved root output was not recovered')
+      expect(recovered.state).toBe('saved')
+      expect(recovered.root).toEqual(root)
+      expect(Buffer.from(recovered.json_base64url, 'base64url').toString('utf8')).toBe(result.jsonText)
+      expect(recovered.dispatch).toEqual(grant)
+      expect(recovered).not.toHaveProperty('manifest_json')
+      expect(providerRequests).toBe(1)
+      const recoverCommand = { action:'recover_root', binding_key:'d'.repeat(64), input:{ source,namespace_id:root.namespace_id,continuation_policy:'follow_authorized_plan' } }
+      const rootPath = join(directory,'state','collaboration_root_submission_v1.json')
+      const beforeRecovery = await readFile(rootPath)
+      expect((await postAnalysis(recoverCommand, `Bearer ${token}`)).status).toBe(403)
+      expect(await factory['collaborationAnalysis'](origin,'B'.repeat(43),recoverCommand,new AbortController().signal,()=>false)).toEqual({ kind:'recovered',descriptor:root.source_descriptor,root })
+      for (const changed of [{ ...source,original_message:'changed' }, { ...source,source_message_id:'missing' }]) {
+        expect((await postAnalysis({ ...recoverCommand,input:{ ...recoverCommand.input,source:changed } })).status).toBe(422)
+      }
+      expect((await postAnalysis({ ...recoverCommand,input:{ ...recoverCommand.input,namespace_id:'n2_'+'f'.repeat(64) } })).status).toBe(422)
+      expect(await readFile(rootPath)).toEqual(beforeRecovery)
+      await workspace.detachSession(sessionId)
+      expect((await postAnalysis(recoverCommand)).status).toBe(422)
+      await workspace.attachSession(sessionId)
+      expect(providerRequests).toBe(1)
+      expect(prepared).toHaveBeenCalledTimes(1)
+    }
+
   }
 
   if (mode === 'analysis-extension') {
@@ -410,12 +558,108 @@ it.each(['source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'a
     expect(providerRequests).toBe(1)
   }
   await analysisJournal?.close()
+  if (mode === 'root-submission' && 'submission' in first) {
+    const originalRoot = parseCollaborationRootSubmission(first.submission)
+    const targetRoot = { ...target, namespace_id: originalRoot.namespace_id, command_id: originalRoot.command_id }
+    const admitted = await ctx.sessionController.readCollaborationRoot(targetRoot, new AbortController().signal)
+    const sourcePath = join(directory, 'state', 'collaboration_source_v2.json')
+    const sourceBytes = await readFile(sourcePath)
+    const rootPath = join(directory, 'state', 'collaboration_root_submission_v1.json'), rootBytes = await readFile(rootPath)
+    const signal = new AbortController().signal, privateToken = 'B'.repeat(43)
+    const registry = new ProfileRegistry({ root: join(directory, 'authority'), deviceIndexKey: Buffer.alloc(32, 7), clock: { now: Date.now } })
+    const account = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:loader', authorityBindingVersion: 1,
+      issuer: 'https://accounts.example.test', subject: randomUUID(), keyHandle: 'keychain:loader',
+      unlockMaterial: Buffer.alloc(32, 9).toString('base64url') }
+    await registry.registerAccount(account)
+    const host = new DesktopHost({ registry, clock: { now: Date.now }, runtimeGeneration: 5, ensureProfileWorker: async () => undefined,
+      verifyAccountAccessToken: () => ({ issuer: account.issuer, subject: account.subject }) })
+    const privateKey = createPrivateKey({ format: 'der', type: 'pkcs8', key: Buffer.from(
+      '302e020100300506032b6570042204209d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60', 'hex') })
+    const identity = { installationId: randomUUID(), hostInstanceId: randomUUID(), processNonce: 'A'.repeat(43),
+      installationPublicKey: createPublicKey(privateKey).export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url'),
+      installationPrivateKey: privateKey, executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1 }
+    const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, rootPlanningSupported: true,
+      inspectRootPlanningAttempt: (_profile, target, id, binding, active) =>
+        factory['inspectRootPlanningAttempt'](origin, privateToken, target, id, binding, active, () => false),
+      collaborationAnalysis: (_profile, payload, active) =>
+        factory['collaborationAnalysis'](origin, privateToken, payload, active, () => false) })
+    const ownerId = randomUUID(), lifetime = new AbortController(), control = authority.openSession(ownerId, lifetime.signal)
+    const client = await UnixHostClient.connectAuthenticatedTransport({ trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: identity.installationPublicKey,
+      trustedExecutableSignatureDigest: identity.executableSignatureDigest }, {
+      call: async frame => decodeHostControlFrame(encodeHostControlFrame(
+        await control.handleRequest(decodeHostControlFrame(encodeHostControlFrame(frame))))),
+      isConnected: () => !lifetime.signal.aborted, close: () => { lifetime.abort(); control.close() },
+    })
+    onTestFinished(() =>{  client.close() })
+    await host.ensureAccountProfile({ ...account, accountAccessToken: 'test', ownerId })
+    const prepare = () => client.collaborationAnalysis({ ...account, command: { action: 'prepare_root_attempt', target: parseHostRootSubmissionTarget(targetRoot) } })
+    const initial = await prepare()
+    if (initial.kind !== 'root_attempt_prepared') throw Error('expected new preparation')
+    const preparation = initial.preparation
+    const proofChallenge = parseHostRootPlanningAttemptAuthorityChallenge({ schema_version: 1, scope: 'planning_attempt',
+      expected_plan_revision: '1', ...Object.fromEntries(Object.entries(preparation).filter(([key]) => key !== 'root')),
+      root_challenge: { schema_version: 1, namespace_id: admitted.namespace_id, command_id: admitted.command_id,
+        root_task_id: admitted.root_task_id, root_trace_id: admitted.root_trace_id, payload_digest: admitted.payload_digest,
+        source_challenge: { request_id: randomUUID(), challenge_nonce: 'A'.repeat(43),
+          expires_at: Date.now() + 30000, audience: 'https://slark.example.test', environment_id: account.authorityEnvironmentId,
+          account_issuer: account.issuer, account_subject: account.subject, ...preparation.root.source_descriptor, host_epoch: '1' } } })
+    const proof = await client.attestRootPlanningAttemptAuthority({ ...account, challenge: proofChallenge })
+    expect(proof.challenge.root_challenge.root_trace_id).toBe(admitted.root_trace_id)
+    const command = (value: HostRemoteSessionJson, key = 'e'.repeat(64)) => factory['collaborationAnalysis'](
+      origin, privateToken, { ...value as Record<string, HostRemoteSessionJson>, binding_key: key }, signal, () => false)
+    expect(preparation.root.root_trace_id).toBe(originalRoot.root_trace_id)
+    expect(preparation.model_snapshot).not.toEqual(first.snapshot.model_snapshot)
+    expect(await prepare()).toEqual(initial)
+    const inspect = { action: 'inspect_root_attempt', target: targetRoot, attempt_request_id: preparation.attempt_request_id }
+    await expect(command(inspect)).rejects.toThrow()
+    await expect(command(inspect, 'e'.repeat(64))).rejects.toThrow()
+    const rows = JSON.parse(await readFile(join(directory, 'state', 'collaboration_root_planning_v1.json'), 'utf8')) as {
+      records: Record<string, unknown>
+    }
+    expect(JSON.stringify(rows)).toContain(preparation.input_manifest_digest)
+    expect(providerRequests).toBe(0)
+    const grant = { attempt_request_id: preparation.attempt_request_id, namespace_id: admitted.namespace_id,
+      root_task_id: admitted.root_task_id, root_trace_id: admitted.root_trace_id, model_snapshot: preparation.model_snapshot,
+      plan_id: 'fixture-plan', expected_plan_revision: '1', attempt_id: 'fixture-attempt', attempt_fence: '1',
+      input_manifest_digest: preparation.input_manifest_digest, source_digest: admitted.source_digest,
+      lease_expires_at: new Date(Date.now() + 30000).toISOString(), dispatch_granted: true }
+    const dispatch = { action: 'dispatch_root_attempt', attempt_request_id: preparation.attempt_request_id, grant }
+    await expect(command(dispatch as HostRemoteSessionJson, 'e'.repeat(64))).rejects.toThrow()
+    const output = await client.collaborationAnalysis({ ...account, command: { action: 'dispatch_root_attempt',
+      attempt_request_id: preparation.attempt_request_id, grant: grant as HostRemoteSessionJson } })
+    if (output.kind !== 'output') throw Error('expected output')
+    const result = { jsonText: Buffer.from(output.json_base64url, 'base64url').toString('utf8') }
+    expect(providerRequests).toBe(1)
+    const recoveredEvidence = await client.collaborationAnalysis({ ...account, command: { action: 'read_root_attempt', target: parseHostRootSubmissionTarget(targetRoot) } })
+    if (recoveredEvidence.kind !== 'root_attempt_evidence') throw Error('expected durable evidence')
+    expect(recoveredEvidence.evidence.attempt?.preparation).toEqual(preparation)
+    expect(recoveredEvidence.evidence.attempt?.dispatch).toEqual(grant)
+    expect(Buffer.from(recoveredEvidence.evidence.attempt!.output!.json_base64url, 'base64url').toString('utf8')).toBe(result.jsonText)
+    expect(providerRequests).toBe(1)
+    await expect(command(dispatch as HostRemoteSessionJson)).rejects.toThrow()
+    await expect(command(inspect)).rejects.toThrow()
+    await expect(prepare()).rejects.toThrow()
+    await expect(client.attestRootPlanningAttemptAuthority({ ...account, challenge: proofChallenge })).rejects.toThrow()
+    const saved = JSON.parse(await readFile(join(directory, 'state', 'collaboration_root_planning_v1.json'), 'utf8')) as {
+      tables: { attempts: Record<string, CollaborationRootPlanningRecord> }
+    }
+    const [record] = Object.values(saved.tables.attempts)
+    expect(record!.manifest.root.source).toEqual(first.snapshot)
+    expect(record!.output!.json_text).toBe(result.jsonText)
+    const m = record!.manifest
+    await expect(JSON.stringify({ prompt_version: m.prompt_version, system: m.request.system,
+      input: JSON.parse(m.request.messages[0].content[0].text) as Record<string, unknown>, output: JSON.parse(result.jsonText) as Record<string, unknown> }, null, 2) + '\n')
+      .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-analysis.request.expected.txt'))
+    expect(await readFile(sourcePath)).toEqual(sourceBytes)
+    expect(await readFile(rootPath)).toEqual(rootBytes)
+  }
   await workspace.detachSession(sessionId)
   await expect(factory['inspectCollaborationSource'](origin, token, target, new AbortController().signal, () => false)).rejects.toThrow()
   await expect(factory['readCollaborationSourceSnapshot'](origin,token,target,new AbortController().signal,()=>false)).rejects.toThrow()
   expect(session.seq).toBe(seq)
   expect(ctx.agents.get(sessionId)).toBeUndefined()
-  expect(prepared).toHaveBeenCalledTimes(mode === 'analysis-profile' || mode === 'analysis-missing-domain' ? 2 : 1)
+  expect(prepared).toHaveBeenCalledTimes(mode === 'root-submission' || mode === 'analysis-profile' || mode === 'analysis-missing-domain' ? 2 : 1)
   expect(stream).not.toHaveBeenCalled()
   await ctx.fiber.dispose()
   routes.delete('/v1/messages')

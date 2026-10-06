@@ -197,3 +197,26 @@ None.
 </details>
 
 The Web composition includes the account Remote controller and Account settings section.
+
+
+The private `/internal/desktop-collaboration-root` endpoint reuses the parent-only Source capability to read durable root metadata through `inspectCollaborationRoot`. It accepts exact namespace, command and original source coordinates, rejects browser cookies and mismatched replies, and returns no source text or executable handle. Route disposal removes the handler.
+
+The private `/internal/desktop-root-journal` endpoint requires `DSH_PROFILE_ANALYSIS_TOKEN`, accepts at most 2 KiB of exact read/accept JSON, and returns root metadata without Source content. Browser cookies and `DSH_PROFILE_SOURCE_TOKEN` grant no access. Session Controller validates membership and persists the exact original receipt before success; neither operation captures a new Source or prepares a model.
+
+`prepare_root` uses `captureCollaborationRoot` and retains its first analysis call in the same two-stage owner. The root is persisted before preparation is acknowledged. Responses contain the original root descriptor alongside prepared or recovered Source metadata; recovery never contains an executable attempt. The existing binding, timeout, cancellation and one-dispatch rules also apply to root preparation. Neither root registration nor a saved planning candidate grants task execution.
+
+`read_root_output` reads an admitted root through current Session/Workspace membership, then joins the saved output to its original durable dispatch record. It rechecks root membership after reading. Missing output is explicit; ambiguous records, changed roots, cancellation and disposal reject. Reopening the journal preserves the original output and grant without preparing or calling a model. Cloud consumers must independently enforce the original lease and fence before committing a candidate.
+
+`recover_root` reads an existing admitted root by namespace and Source coordinates. The original text, mentions and continuation policy must match. It never captures a Source, prepares a model, writes a root or creates dispatch state. Pending or absent roots, changed input, cancellation and lost membership reject; a missing local admission receipt requires separate reconciliation.
+
+`reconcile_root` also reads pending roots for Main to retrieve the original cloud receipt. It applies the same Source, policy and membership checks and never admits the root or prepares a model.
+
+`resume_root` requires an admitted root and the original live preparation under the same Account/Host binding. A reconnect may take over through the Parent-derived Account/Profile/Host-process identity, invalidating the old connection’s dispatch ownership. It returns the same attempt and manifest only while dispatch is unused; it does not prepare a new model call or extend the 30-second deadline. Process restart, timeout, membership loss and a consumed dispatch reject.
+
+The analysis-token endpoint owns `prepare_root_attempt`, `inspect_root_attempt` and `dispatch_root_attempt`. `DesktopRootPlanning` derives the predecessor from the old analysis journal or the current fresh-attempt chain and refuses known dispatch or a still-live original preparation. It retains at most two pending roots for 30 seconds; same-connection retries keep their identity and deadline. It publishes metadata only after complete input persistence and rechecks membership, current journal state and the parent-derived Account/Profile/Host/connection binding before attestation or dispatch. Worker restart creates no executable recovery handle: another unused preparation gets a new attempt and retains its predecessor. Output commits beside the consumed grant, and disposal awaits pending work and journal writes. Cloud eligibility and grant authentication remain parent responsibilities.
+
+The analysis-token `read_root_attempt` operation reads the latest durable attempt and verified saved output after owner restart without model preparation. It checks original-root membership before and after storage reads and discards results after cancellation or owner closure. Expired grants remain visible as consumed history; only a separate current cloud grant can authorize dispatch.
+
+The analysis-token `root_execution_journal` operation delegates exact read/prepare/accept requests to the owning Session Controller. It retains Profile lifetime cancellation, rejects browser-only authorization and unknown fields, and publishes only the durable record or an explicit null read. It performs no model preparation or cloud dispatch.
+
+The analysis-token `root_feedback` operation delegates private read/enqueue commands to Session Controller and retains cancellation and exact-field validation. Responses contain bounded persisted observations without result content. Browser cookies cannot authorize consumption, and the operation does not activate a model.

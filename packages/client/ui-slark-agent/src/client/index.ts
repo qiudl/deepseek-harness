@@ -40,6 +40,8 @@ interface AgentItem {
 interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge {
   collaborationScopeAvailable?: boolean
   collaborationExecutionAvailable?: boolean
+  collaborationPlanningAvailable?: boolean
+  collaborationRecover?(input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse>
   collaborationSubmit?(input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse>
   enterpriseAgents(): Promise<
     { ok: true; items: AgentItem[]; invocationAvailable: boolean } |
@@ -213,7 +215,9 @@ export function apply(ctx: ClientContext): void {
       const state = ctx.conversation.input.for(scoped).state.getSnapshot()
       const matches = state.occurrences.filter(occ => occ.source === 'slark-agent')
       if (state.draft.trim() !== line) return undefined
-      if (window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return scopedSource.matchEnter?.(session, line, signal, envelope)
+      if (window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable
+        || matches.some(occ => scopedCollaborationClipboard(occ.ref) !== undefined))
+        return scopedSource.matchEnter?.(session, line, signal, envelope)
       if (matches.length === 0) return undefined
       if (matches.length !== 1 || state.occurrences.length !== 1 || envelope.attachments > 0) {
         throw new Error(t('submit.single'))

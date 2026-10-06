@@ -1,4 +1,8 @@
+import { DesktopRootPlanning } from './desktop-root-planning.ts'
+import type { CollaborationRootPlanningJournal, CollaborationRootPlanningGrant } from '@deepseek-ai/dsh-api-session-controller'
+import { parseHostRootSubmissionTarget, matchHostRootAnalysisOutput, type HostRootAnalysisOutput, parseHostRootAnalysisInput, parseHostRootSubmissionDescriptor, type HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 /** Profile-owned two-stage analysis; executable calls stay in this worker and never survive recovery. */
+import { isDeepStrictEqual } from 'node:util'
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type SessionController from '@deepseek-ai/dsh-api-session-controller'
@@ -10,6 +14,7 @@ import type {
   CollaborationSourceInput,
   CollaborationSourceSnapshot,
 } from '@deepseek-ai/dsh-api-session-controller'
+type RootCapture = SessionController['captureCollaborationRoot']
 type Capture = SessionController['captureCollaborationSource']
 type Preparation = Readonly<{ kind:'recovered';descriptor:ReturnType<typeof describeCollaborationSource> }>
   | Readonly<{ kind:'prepared';descriptor:ReturnType<typeof describeCollaborationSource> }
@@ -40,9 +45,12 @@ function wait<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 type Pending = {
   binding: string
+  resumeBinding?: string
   controller: AbortController
   reply?: Captured
   record?: CollaborationAnalysisJournalRecord
+  root?: HostRootSubmissionDescriptor
+  sourceDigest?: string
   grant: ReturnType<typeof deferred<CollaborationAnalysisDispatchGrant>>
   result?: Promise<Result>
   started: boolean
@@ -50,6 +58,8 @@ type Pending = {
 }
 /** Private Parent Host coordinator. The caller must keep its original Account/peer binding current. */
 export class DesktopCollaborationAnalysis {
+  /** Fresh-attempt owner; absent unless its durable reader and model preparer are installed. */
+  readonly rootPlanning?: DesktopRootPlanning
   private readonly pending = new Set<Pending>()
   private journal?: Promise<CollaborationAnalysisJournal>
   private closing?: Promise<void>
@@ -57,12 +67,54 @@ export class DesktopCollaborationAnalysis {
    * @param capture - Owning Profile's bound Source capture operation.
    * @param open - Profile-local complete-input journal factory.
    * @param lifetime - Profile cancellation; it never grants Account or cloud authority.
+   * @param readRoot - Current Profile membership-checked root reader for saved output recovery.
+   * @param captureRoot - Original root capture and live analysis handle from the same Profile.
+   * @param execution - Profile-owned concrete execution journal; no model or cloud dispatch.
+   * @param feedback - Profile-owned original Session consumption with persisted evidence.
+   * @param planning - Original-model preparation and independent fresh-attempt journal factories.
    */
   constructor(
     private readonly capture: Capture,
     private readonly open: () => Promise<CollaborationAnalysisJournal>,
     private readonly lifetime: AbortSignal,
-  ) {}
+    private readonly captureRoot?: RootCapture,
+    private readonly readRoot?: SessionController['readCollaborationRoot'],
+    planning?: { prepare: SessionController['prepareCollaborationRootPlanning']; open: () => Promise<CollaborationRootPlanningJournal> },
+    private readonly execution?: SessionController['collaborationRootExecution'],
+    private readonly feedback?: SessionController['collaborationRootFeedback'],
+  ) {
+    if (planning && readRoot) this.rootPlanning = new DesktopRootPlanning(readRoot, planning.prepare, planning.open,
+      () => this.journal ??= this.open(), (root) => {
+        if ([...this.pending].some(p => !p.controller.signal.aborted && (p.sourceDigest === root.source_digest
+          || (p.root?.root_task_id.toString() === root.root_task_id && p.root.namespace_id === root.namespace_id)))) throw Error('collaboration_root_planning_original_alive')
+      }, lifetime)
+  }
+  /** Read or enqueue original Session feedback under the private parent lifetime.
+   * @param operation - Exact root, execution, delivery and observed Session prefix.
+   * @param signal - Parent cancellation; current cloud permission remains the parent's responsibility.
+   * @returns Persisted consumption evidence; enqueue does not wake a model.
+   */
+  async rootFeedback(operation: unknown, signal: AbortSignal): ReturnType<SessionController['collaborationRootFeedback']> {
+    if (this.closing || !this.feedback) throw Error('collaboration_feedback_unavailable')
+    const active = AbortSignal.any([signal, this.lifetime])
+    active.throwIfAborted()
+    const result = await this.feedback(operation, active)
+    active.throwIfAborted()
+    return result
+  }
+  /** Read or persist concrete execution metadata under the owning Profile lifetime.
+   * @param operation - Exact private operation, validated by SessionController before asynchronous reads.
+   * @param signal - Parent request lifetime; no executable handle survives this operation.
+   * @returns Original durable record or null; absent composition rejects explicitly.
+   */
+  async executionJournal(operation: unknown, signal: AbortSignal): ReturnType<SessionController['collaborationRootExecution']> {
+    if (this.closing || !this.execution) throw Error('collaboration_execution_journal_unavailable')
+    const active = AbortSignal.any([signal, this.lifetime])
+    active.throwIfAborted()
+    const result = await this.execution(operation, active)
+    active.throwIfAborted()
+    return result
+  }
   /**
    * Persist original Source and full input, then pause its one-shot call for up to 30 seconds.
    * Recovered Sources return only their descriptor. Caller cancellation before acknowledgement
@@ -73,16 +125,103 @@ export class DesktopCollaborationAnalysis {
    * @returns a non-executable Source descriptor and, for a first capture, its durable attempt identity.
    */
   async prepare(input: CollaborationSourceInput, binding: string, signal: AbortSignal): Promise<Preparation> {
+    return this.prepareOwned(active => this.capture(input, active), binding, signal)
+  }
+  /** Persist the original root before publishing its first live analysis preparation.
+   * @param value - Trusted Main namespace/policy and original Source input, without proposed IDs.
+   * @param binding - Original current Account/Host digest, retained by dispatch.
+   * @param signal - Request cancellation; a recovered root never recreates an executable call.
+   * @param resumeBinding - Parent-derived stable Account/Profile/Host-process identity for reconnect handoff.
+   * @returns Original root descriptor plus first preparation or non-executable recovery.
+   */
+  async prepareRoot(
+    value: unknown, binding: string, signal: AbortSignal, resumeBinding?: string,
+  ): Promise<Preparation & { root: HostRootSubmissionDescriptor }> {
+    signal.throwIfAborted()
+    const input = parseHostRootAnalysisInput(value)
+    const capture = this.captureRoot
+    if (!capture) throw Error('collaboration_root_capture_unavailable')
+    const result = await this.prepareOwned(
+      active => capture({ ...input, source: input.source as CollaborationSourceInput }, active), binding, signal, resumeBinding,
+    )
+    if (!result.root) throw Error('collaboration_root_capture_unavailable')
+    return Object.freeze({ ...result,root:result.root })
+  }
+  /** Read an existing root without capture, preparation or journal writes.
+   * @param value - Original source and namespace/policy selected by Main.
+   * @param signal - Cancellation combined with current Profile lifetime.
+   * @param allowPending - Permit pending records only for the separate reconciliation operation.
+   * @returns Original recovered root; missing or changed input rejects. Pending records otherwise reject.
+   */
+  async recoverRoot(
+    value: unknown, signal: AbortSignal, allowPending = false,
+  ): Promise<Preparation & { root: HostRootSubmissionDescriptor }> {
+    const input = parseHostRootAnalysisInput(value), active = AbortSignal.any([signal,this.lifetime])
+    const assertOpen = () => {active.throwIfAborted(); if(this.closing)throw Error('collaboration_analysis_closed')}
+    assertOpen()
+    if (!this.readRoot || !input.source || typeof input.source !== 'object' || Array.isArray(input.source)) throw Error('collaboration_root_unavailable')
+    const source = input.source as Record<string,unknown>
+    const coordinates = Object.fromEntries(['workspace_id','session_id','source_message_id','source_revision'].map(k=>[k,source[k]]))
+    const entry = await this.readRoot({ namespace_id:input.namespace_id,...coordinates },active)
+    assertOpen()
+    const original = Object.fromEntries(['workspace_id','session_id','source_message_id','source_revision','original_message','active_mentions'].map(k=>[k,entry.source[k as keyof typeof entry.source]]))
+    if((entry.state !== 'admitted' && !allowPending) || entry.continuation_policy !== input.continuation_policy || !isDeepStrictEqual(original,source)) throw Error('collaboration_root_unavailable')
+    const descriptor = describeCollaborationSource(entry.source)
+    const root = parseHostRootSubmissionDescriptor({ namespace_id:entry.namespace_id,command_id:entry.command_id,
+      root_task_id:entry.root_task_id,root_trace_id:entry.root_trace_id,payload_digest:entry.payload_digest,source_descriptor:descriptor })
+    return Object.freeze({ kind:'recovered' as const,descriptor,root })
+  }
+  /** Return the original live preparation only while its dispatch remains unused.
+   * @param value - Original root input; the root must already have a durable admission receipt.
+   * @param binding - Current connection binding becomes the sole dispatch owner after handoff.
+   * @param signal - Current request cancellation; the original preparation deadline is unchanged.
+   * @param resumeBinding - Parent-derived Account/Profile/Host identity must match the original preparation.
+   * @returns Original prepared metadata; restart, timeout, used dispatch and changed input reject.
+   */
+  async resumeRoot(
+    value: unknown, binding: string, signal: AbortSignal, resumeBinding?: string,
+  ): Promise<Preparation & { root: HostRootSubmissionDescriptor }> {
+    const recovered = await this.recoverRoot(value,signal)
+    const candidates=[...this.pending].filter(p=>p.root?.root_task_id===recovered.root.root_task_id &&
+      p.root.namespace_id===recovered.root.namespace_id)
+    const p=candidates[0]
+    const journal=await wait((this.journal ??= this.open()),signal)
+    const current=await this.recoverRoot(value,signal)
+    signal.throwIfAborted()
+    this.lifetime.throwIfAborted()
+    if(!isDeepStrictEqual(current.root,recovered.root)) throw Error('collaboration_analysis_preparation_unavailable')
+    if(this.closing || candidates.length!==1 || !p?.record || !p.result || p.started || p.controller.signal.aborted ||
+      (!resumeBinding || p.resumeBinding!==resumeBinding) || !isDeepStrictEqual(p.root,recovered.root)) throw Error('collaboration_analysis_preparation_unavailable')
+    const record=p.record
+    const stored=[...journal.records()].find(r=>r.attempt_request_id===record.attempt_request_id)
+    if(!stored || stored.dispatch || stored.source_digest!==recovered.descriptor.snapshot_digest ||
+      stored.input_manifest_digest!==p.record.input_manifest_digest) throw Error('collaboration_analysis_preparation_unavailable')
+    p.binding=binding
+    return Object.freeze({ ...recovered,kind:'prepared' as const,attempt_request_id:stored.attempt_request_id,
+      input_manifest_digest:stored.input_manifest_digest,source_digest:stored.source_digest })
+  }
+  private async prepareOwned(
+    captureOriginal: (signal: AbortSignal) => ReturnType<Capture> | ReturnType<RootCapture>,
+    binding: string, signal: AbortSignal, resumeBinding?: string,
+  ): Promise<Preparation & { root?: HostRootSubmissionDescriptor }> {
     signal.throwIfAborted()
     const p = this.reserve(binding), controller = p.controller,
       owned = AbortSignal.any([controller.signal, this.lifetime])
     const cancel = () => { controller.abort(signal.reason) }
     signal.addEventListener('abort', cancel, { once: true })
+    if (resumeBinding) p.resumeBinding = resumeBinding
     try {
-      const capture = await this.capture(input, owned)
+      const capture = await captureOriginal(owned)
+      p.sourceDigest = describeCollaborationSource(capture.snapshot).snapshot_digest
+      const root = 'submission' in capture ? parseHostRootSubmissionDescriptor({
+        namespace_id: capture.submission.namespace_id, command_id: capture.submission.command_id,
+        root_task_id: capture.submission.root_task_id, root_trace_id: capture.submission.root_trace_id,
+        payload_digest: capture.submission.payload_digest, source_descriptor: describeCollaborationSource(capture.snapshot),
+      }) : undefined
+      if (root) p.root=root
       owned.throwIfAborted()
       if (capture.kind === 'recovered') {
-        return Object.freeze({ kind: 'recovered' as const, descriptor: describeCollaborationSource(capture.snapshot) })
+        return Object.freeze({ kind: 'recovered' as const, descriptor: describeCollaborationSource(capture.snapshot), ...(root ? { root } : {}) })
       }
       return await this.begin(p, capture.snapshot, (writer, active) => capture.analyze(writer, active), signal)
     } catch (error) {
@@ -140,6 +279,7 @@ export class DesktopCollaborationAnalysis {
     signal.throwIfAborted()
     return Object.freeze({
       kind: 'prepared' as const,
+      ...(p.root ? { root: p.root } : {}),
       descriptor: describeCollaborationSource(source),
       attempt_request_id: record.attempt_request_id,
       input_manifest_digest: record.input_manifest_digest,
@@ -205,6 +345,41 @@ export class DesktopCollaborationAnalysis {
       if (!p.result) { clearTimeout(p.timer); this.pending.delete(p); p.controller.abort() }
     }
   }
+  /** Read only the original saved output after current root membership is verified.
+   * @param value - Original root and Source lookup; no model or attempt overrides.
+   * @param signal - Parent request cancellation combined with Profile lifetime.
+   * @returns Saved output and consumed grant, or missing; never recreates a model call.
+   */
+  async readRootOutput(value: unknown, signal: AbortSignal): Promise<HostRootAnalysisOutput> {
+    const active = AbortSignal.any([signal,this.lifetime]), target = parseHostRootSubmissionTarget(value)
+    active.throwIfAborted()
+    if (this.closing || !this.readRoot) throw Error('collaboration_analysis_closed')
+    const ensureOpen = () => { active.throwIfAborted(); if (this.closing) throw Error('collaboration_analysis_closed') }
+    const entry = await this.readRoot(target,active)
+    if (entry.state !== 'admitted') throw Error('collaboration_root_not_admitted')
+    const root = parseHostRootSubmissionDescriptor({ namespace_id:entry.namespace_id,command_id:entry.command_id,
+      root_task_id:entry.root_task_id,root_trace_id:entry.root_trace_id,payload_digest:entry.payload_digest,
+      source_descriptor:describeCollaborationSource(entry.source) })
+    const journal = await wait((this.journal ??= this.open()), active)
+    const outputs = [...journal.outputs()].filter(output => output.source_digest === entry.source_digest)
+    if (outputs.length > 1) throw Error('collaboration_analysis_output_ambiguous')
+    const output = outputs[0]
+    let result: HostRootAnalysisOutput = { state:'missing',root }
+    if (output) {
+      const records = [...journal.records()].filter(record => record.input_manifest_digest === output.input_manifest_digest)
+      const record = records[0]
+      if (records.length !== 1 || !record?.dispatch || record.attempt_request_id !== output.attempt_request_id ||
+        record.source_digest !== entry.source_digest) throw Error('collaboration_analysis_output_invalid')
+      result = matchHostRootAnalysisOutput({ state:'saved',root,dispatch:record.dispatch,output_digest:output.output_digest,
+        json_base64url:Buffer.from(output.json_text,'utf8').toString('base64url') },target)
+    }
+    const current = await this.readRoot(target,active)
+    active.throwIfAborted()
+    ensureOpen()
+    if (current.root_task_id !== entry.root_task_id || current.root_trace_id !== entry.root_trace_id ||
+      current.payload_digest !== entry.payload_digest || current.state !== 'admitted') throw Error('collaboration_analysis_output_invalid')
+    return result
+  }
   /**
    * Continue only the matching live preparation. Grant validation and its durable write finish
    * before any model request. Concurrent/repeated dispatch never starts another model call.
@@ -247,6 +422,7 @@ export class DesktopCollaborationAnalysis {
         p.controller.abort(Error('collaboration_analysis_closed'))
         clearTimeout(p.timer)
       }
+      await this.rootPlanning?.close()
       await (await this.journal)?.close()
     })
     return this.closing
@@ -310,19 +486,24 @@ export async function handleDesktopCollaborationAnalysisRequest(
       const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw Error('invalid')
       row = parsed as Record<string, unknown>
-      const keys =
-        (row.action === 'prepare' || row.action === 'capture_reply' || row.action === 'prepare_clarification')
-          ? ['action', 'binding_key', 'input']
-          : row.action === 'dispatch'
-            ? ['action', 'attempt_request_id', 'binding_key', 'grant']
-            : []
+      const keys = (row.action === 'root_execution_journal' || row.action === 'root_feedback') ? ['action', 'operation', 'binding_key'] :
+        (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') ? ['action', 'target', 'binding_key']
+          : row.action === 'inspect_root_attempt' ? ['action', 'target', 'attempt_request_id', 'binding_key']
+            : row.action === 'dispatch_root_attempt' ? ['action', 'attempt_request_id', 'grant', 'binding_key']
+              : (row.action === 'prepare' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
+                ? ['action', 'binding_key', 'input', ...((row.action === 'resume_root' || (row.action === 'prepare_root' && Object.hasOwn(row,'resume_binding_key'))) ? ['resume_binding_key'] : [])]
+                : row.action === 'read_root_output' ? ['action','binding_key','target']
+                  : row.action === 'dispatch'
+                    ? ['action', 'attempt_request_id', 'binding_key', 'grant']
+                    : []
       if (
         !keys.length ||
         Object.keys(row).length !== keys.length ||
         keys.some(key => !Object.hasOwn(row, key)) ||
+        (Object.hasOwn(row,'resume_binding_key') && (typeof row.resume_binding_key!=='string' || !/^[a-f0-9]{64}$/u.test(row.resume_binding_key))) ||
         typeof row.binding_key !== 'string' ||
         !/^[a-f0-9]{64}$/u.test(row.binding_key) ||
-        (row.action === 'dispatch' &&
+        (['dispatch', 'dispatch_root_attempt', 'inspect_root_attempt'].includes(row.action as string) &&
           (typeof row.attempt_request_id !== 'string' || !/^[a-f0-9-]{36}$/u.test(row.attempt_request_id)))
       )
         throw Error('invalid')
@@ -331,19 +512,33 @@ export async function handleDesktopCollaborationAnalysisRequest(
       return
     }
     try {
-      const value =
-        row.action === 'prepare'
-          ? await owner.prepare(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
-          : row.action === 'capture_reply'
-            ? await owner.captureReply(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
-            : row.action === 'prepare_clarification'
-              ? await owner.prepareClarification(row.input, row.binding_key, controller.signal)
-              : await owner.dispatch(
-                row.attempt_request_id as string,
-                row.binding_key,
-                row.grant as CollaborationAnalysisDispatchGrant,
-                controller.signal,
-              )
+      const planning = () => {
+        if (!owner.rootPlanning) throw Error('collaboration_root_planning_unavailable')
+        return owner.rootPlanning
+      }
+      const value = row.action === 'capture_reply' ? await owner.captureReply(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
+        : row.action === 'prepare_clarification' ? await owner.prepareClarification(row.input, row.binding_key, controller.signal)
+          : row.action === 'root_feedback' ? await owner.rootFeedback(row.operation, controller.signal) : row.action === 'root_execution_journal' ? await owner.executionJournal(row.operation, controller.signal) :
+            row.action === 'read_root_attempt' ? await planning().readEvidence(row.target, controller.signal)
+              : row.action === 'prepare_root_attempt' ? await planning().prepare(row.target, row.binding_key, controller.signal)
+                : row.action === 'inspect_root_attempt' ? await planning().inspect(row.target, row.attempt_request_id as string,
+                  row.binding_key, controller.signal)
+                  : row.action === 'dispatch_root_attempt' ? await planning().dispatch(row.attempt_request_id as string,
+                    row.binding_key, row.grant as CollaborationRootPlanningGrant, controller.signal)
+                    : row.action === 'resume_root' ? await owner.resumeRoot(row.input,row.binding_key,controller.signal,row.resume_binding_key as string)
+                      : row.action === 'read_root_output' ? await owner.readRootOutput(row.target, controller.signal)
+                        : (row.action === 'recover_root' || row.action === 'reconcile_root') ? await owner.recoverRoot(row.input,controller.signal,row.action === 'reconcile_root')
+                          : row.action === 'prepare_root'
+                            ? await owner.prepareRoot(row.input, row.binding_key, controller.signal,
+                              row.resume_binding_key as string | undefined)
+                            : row.action === 'prepare'
+                              ? await owner.prepare(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
+                              : await owner.dispatch(
+                                row.attempt_request_id as string,
+                                row.binding_key,
+                                row.grant as CollaborationAnalysisDispatchGrant,
+                                controller.signal,
+                              )
       controller.signal.throwIfAborted()
       send(200, { value })
     } catch {

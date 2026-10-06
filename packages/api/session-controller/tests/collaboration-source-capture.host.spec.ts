@@ -847,3 +847,275 @@ it.each(['membership', 'model'] as const)('refuses clarification dispatch after 
     expect(h.stream).not.toHaveBeenCalled()
   } finally { await h.dispose() }
 })
+
+it('REQ-20261004-0008 captures a stable root before exposing analysis and recovers it without preparing another model', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const input = { source: h.source(), namespace_id: 'n2_' + 'a'.repeat(64), objective_ref: 'objective-1',
+    task_grant_ref: 'grant-1', continuation_policy: 'display_only' as const }
+  const first = await h.controller.captureCollaborationRoot(input, signal)
+  expect(first.kind).toBe('captured')
+  expect(first.submission.source).toEqual(first.snapshot)
+  expect(first.submission.state).toBe('pending')
+  const disk = await readFile(join(h.root, 'state', 'collaboration_root_submission_v1.json'))
+  expect(disk.toString()).toContain(first.submission.root_trace_id)
+  expect(h.stream).not.toHaveBeenCalled()
+  await h.dispose()
+  const restored = await harness(h.root, h.cwd)
+  const replay = await restored.controller.captureCollaborationRoot(input, signal)
+  expect(replay.kind).toBe('recovered')
+  expect(replay.submission).toEqual(first.submission)
+  expect(restored.prepare).not.toHaveBeenCalled()
+  expect(restored.stream).not.toHaveBeenCalled()
+  await expect(restored.controller.captureCollaborationRoot({ ...input, task_grant_ref: 'different' }, signal))
+    .rejects.toThrow('collaboration_root_payload_conflict')
+  expect(await readFile(join(h.root, 'state', 'collaboration_root_submission_v1.json'))).toEqual(disk)
+})
+
+it('REQ-20261004-0008 rejects forged root metadata before Source capture and verifies current membership on recovery', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const input = { source: h.source(), namespace_id: 'n2_' + 'a'.repeat(64), objective_ref: 'objective-1',
+    task_grant_ref: 'grant-1', continuation_policy: 'display_only' as const }
+  await expect(h.controller.captureCollaborationRoot({ ...input, root_task_id: 'forged' } as typeof input, signal)).rejects.toThrow()
+  expect(h.prepare).not.toHaveBeenCalled()
+  await expect(readFile(h.sourceFile)).rejects.toMatchObject({ code: 'ENOENT' })
+  await h.controller.captureCollaborationRoot(input, signal)
+  await h.workspace.detachSession(h.sessionId)
+  await expect(h.controller.captureCollaborationRoot(input, signal)).rejects.toThrow()
+})
+
+it('REQ-20261004-0008 reads proof metadata from the durable root and rejects foreign lookups or changed membership', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const input = { source: h.source(), namespace_id: 'n2_' + 'a'.repeat(64), objective_ref: 'objective-1',
+    task_grant_ref: 'grant-1', continuation_policy: 'display_only' as const }
+  const first = await h.controller.captureCollaborationRoot(input, signal)
+  const { workspace_id, session_id, source_message_id, source_revision } = first.snapshot
+  const target = { workspace_id, session_id, source_message_id, source_revision,
+    namespace_id: input.namespace_id, command_id: first.submission.command_id }
+  const descriptor = await h.controller.inspectCollaborationRoot(target, signal)
+  expect(descriptor).toEqual({ namespace_id: input.namespace_id, command_id: first.submission.command_id,
+    root_task_id: first.submission.root_task_id, root_trace_id: first.submission.root_trace_id,
+    payload_digest: first.submission.payload_digest, source_descriptor: describeCollaborationSource(first.snapshot) })
+  expect(JSON.stringify(descriptor)).not.toContain(input.source.original_message)
+  for (const change of [{ namespace_id: 'n2_' + 'b'.repeat(64) }, { source_message_id: 'other' }, { root_trace_id: 'b'.repeat(32) }])
+    await expect(h.controller.inspectCollaborationRoot({ ...target, ...change }, signal)).rejects.toThrow()
+  await h.workspace.detachSession(h.sessionId)
+  await expect(h.controller.inspectCollaborationRoot(target, signal)).rejects.toThrow()
+  expect(h.prepare).toHaveBeenCalledTimes(1)
+})
+
+it('creates canonical intent references after Source capture without needing a pre-existing cloud Task', async () => {
+  const h = await harness()
+  try {
+    const input = { namespace_id: 'n2_' + 'b'.repeat(64), source: h.source(), continuation_policy: 'follow_authorized_plan' as const }
+    const first = await h.controller.captureCollaborationRoot(input, new AbortController().signal)
+    const entry = first.submission
+    expect(entry.objective_ref).toBe('source-v1:' + entry.source_digest)
+    expect(entry.task_grant_ref).toBe('intent-v1:' + entry.source_digest)
+    expect(first.kind).toBe('captured')
+    const again = await h.controller.captureCollaborationRoot(input, new AbortController().signal)
+    expect(again.submission).toEqual(entry)
+    expect(again.kind).toBe('recovered')
+    expect(h.prepare).toHaveBeenCalledTimes(1)
+    expect(h.stream).not.toHaveBeenCalled()
+    await expect(h.controller.captureCollaborationRoot({ ...input, objective_ref: 'unpaired' }, new AbortController().signal))
+      .rejects.toThrow('collaboration_root_journal_invalid')
+  } finally { await h.dispose() }
+})
+
+it('persists the authenticated original root receipt and restores it without preparing or dispatching again', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const first = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'b'.repeat(64),
+    source: h.source(), continuation_policy: 'display_only' }, signal)
+  const entry = first.submission, { workspace_id, session_id, source_message_id, source_revision } = entry.source
+  const target = { workspace_id, session_id, source_message_id, source_revision,
+    namespace_id: entry.namespace_id, command_id: entry.command_id }
+  expect(await h.controller.readCollaborationRoot(target, signal)).toEqual(entry)
+  const receipt = { root_task_id: entry.root_task_id, root_trace_id: entry.root_trace_id,
+    admission_id: entry.command_id, task_revision: 1, state_version: 1, state: 'active' }
+  const admitted = await h.controller.acceptCollaborationRoot(target, receipt, signal)
+  expect(admitted).toEqual({ ...entry, state: 'admitted', receipt })
+  expect(await h.controller.acceptCollaborationRoot(target, receipt, signal)).toEqual(admitted)
+  await expect(h.controller.acceptCollaborationRoot(target, { ...receipt, state_version: 2 }, signal))
+    .rejects.toThrow('collaboration_root_receipt_conflict')
+  await h.dispose()
+  const reopened = await harness(h.root, h.cwd)
+  expect(await reopened.controller.readCollaborationRoot(target, signal)).toEqual(admitted)
+  expect(reopened.prepare).not.toHaveBeenCalled()
+  expect(reopened.stream).not.toHaveBeenCalled()
+})
+
+it('root receipt writes reject foreign roots, removed membership, cancellation and caller mutation', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const { submission: entry } = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'b'.repeat(64),
+    source: h.source(), continuation_policy: 'display_only' }, signal)
+  const { workspace_id, session_id, source_message_id, source_revision } = entry.source
+  const target = { workspace_id, session_id, source_message_id, source_revision,
+    namespace_id: entry.namespace_id, command_id: entry.command_id }
+  const receipt = { root_task_id: entry.root_task_id, root_trace_id: entry.root_trace_id,
+    admission_id: entry.command_id, task_revision: 1, state_version: 1, state: 'active' }
+  for (const changed of [{ namespace_id: 'n2_' + 'c'.repeat(64) }, { source_message_id: 'foreign' }])
+    await expect(h.controller.acceptCollaborationRoot({ ...target, ...changed }, receipt, signal)).rejects.toThrow()
+  await expect(h.controller.acceptCollaborationRoot(target, { ...receipt, root_trace_id: 'c'.repeat(32) }, signal))
+    .rejects.toThrow('collaboration_root_receipt_invalid')
+  await expect(h.controller.acceptCollaborationRoot(target, receipt, AbortSignal.abort())).rejects.toThrow()
+  const saved = h.controller.acceptCollaborationRoot(target, receipt, signal)
+  receipt.state_version = 99
+  const result = await saved
+  expect(result.state).toBe('admitted')
+  if (result.state !== 'admitted') throw Error('missing receipt')
+  expect(result.receipt.state_version).toBe(1)
+  const bytes = await readFile(join(h.root, 'state', 'collaboration_root_submission_v1.json'))
+  await h.workspace.detachSession(h.sessionId)
+  await expect(h.controller.readCollaborationRoot(target, signal)).rejects.toThrow('collaboration_session_workspace_mismatch')
+  await expect(h.controller.acceptCollaborationRoot(target, result.receipt, signal)).rejects.toThrow('collaboration_session_workspace_mismatch')
+  expect(await readFile(join(h.root, 'state', 'collaboration_root_submission_v1.json'))).toEqual(bytes)
+})
+
+it('a lost root receipt write acknowledgment poisons the owner until reopen, then retains the original admitted record', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const open = h.backend.kv.open.bind(h.backend.kv)
+  let lose = false
+  h.backend.kv.open = async (descriptor) => {
+    const unit = await open(descriptor), put = unit.putRecord.bind(unit)
+    if (descriptor.name === 'collaboration_root_submission_v1') unit.putRecord = async (...args) => {
+      await put(...args)
+      if (lose) { lose = false; throw Error('lost-root-receipt-ack') }
+    }
+    return unit
+  }
+  const { submission: entry } = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'b'.repeat(64),
+    source: h.source(), continuation_policy: 'display_only' }, signal)
+  const { workspace_id, session_id, source_message_id, source_revision } = entry.source
+  const target = { workspace_id, session_id, source_message_id, source_revision,
+    namespace_id: entry.namespace_id, command_id: entry.command_id }
+  const receipt = { root_task_id: entry.root_task_id, root_trace_id: entry.root_trace_id,
+    admission_id: entry.command_id, task_revision: 1, state_version: 1, state: 'active' }
+  lose = true
+  await expect(h.controller.acceptCollaborationRoot(target, receipt, signal)).rejects.toThrow('lost-root-receipt-ack')
+  await expect(h.controller.readCollaborationRoot(target, signal)).rejects.toThrow('collaboration_root_journal_recovery_required')
+  await h.dispose()
+  const reopened = await harness(h.root, h.cwd)
+  expect(await reopened.controller.readCollaborationRoot(target, signal)).toEqual({ ...entry, state: 'admitted', receipt })
+  expect(reopened.prepare).not.toHaveBeenCalled()
+  expect(reopened.stream).not.toHaveBeenCalled()
+})
+
+it('prepares the admitted root original model after a session selection change without rewriting Source', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const first = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64),
+    continuation_policy: 'follow_authorized_plan', source: h.source() }, signal)
+  const e = first.submission, target = { namespace_id: e.namespace_id, command_id: e.command_id,
+    workspace_id: e.source.workspace_id, session_id: e.source.session_id,
+    source_message_id: e.source.source_message_id, source_revision: e.source.source_revision }
+  await expect(h.controller.prepareCollaborationRootPlanning(target, null, signal)).rejects.toThrow('not_admitted')
+  await h.controller.acceptCollaborationRoot(target, { root_task_id: e.root_task_id, root_trace_id: e.root_trace_id,
+    admission_id: e.command_id, task_revision: 1, state_version: 1, state: 'active' }, signal)
+  const before = await readFile(h.sourceFile)
+  h.events.push({ type: 'model/selection', seq: SessionSeq(1), time: 2,
+    data: { provider: 'fixture', model: 'other' } })
+  const fresh = await h.controller.prepareCollaborationRootPlanning(target, null, signal)
+  expect(h.prepare.mock.calls.at(-1)?.[0]).toMatchObject({ provider: 'fixture', model: 'selected', maxTokens: 8192 })
+  expect(fresh.root.root_trace_id).toBe(e.root_trace_id)
+  expect(fresh.root.source).toEqual(first.snapshot)
+  expect(await readFile(h.sourceFile)).toEqual(before)
+  expect(h.stream).not.toHaveBeenCalled(); expect(h.resume).not.toHaveBeenCalled()
+  await h.workspace.detachSession(h.sessionId)
+  const persist = vi.fn()
+  await expect(fresh.analyze(persist, signal)).rejects.toThrow('mismatch')
+  expect(persist).not.toHaveBeenCalled()
+})
+
+it('refuses changed effective reasoning and membership loss during original-model preparation', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const first = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64),
+    continuation_policy: 'follow_authorized_plan', source: h.source() }, signal)
+  const e = first.submission, target = { namespace_id: e.namespace_id, command_id: e.command_id,
+    workspace_id: e.source.workspace_id, session_id: e.source.session_id,
+    source_message_id: e.source.source_message_id, source_revision: e.source.source_revision }
+  await h.controller.acceptCollaborationRoot(target, { root_task_id: e.root_task_id, root_trace_id: e.root_trace_id,
+    admission_id: e.command_id, task_revision: 1, state_version: 1, state: 'active' }, signal)
+  h.adapter.defaultEffort = true
+  await expect(h.controller.prepareCollaborationRootPlanning(target, null, signal)).rejects.toThrow('model_selection_changed')
+  h.adapter.defaultEffort = false
+  h.adapter.prepare = async () => { await h.workspace.detachSession(h.sessionId) }
+  await expect(h.controller.prepareCollaborationRootPlanning(target, null, signal)).rejects.toThrow('mismatch')
+  expect(h.stream).not.toHaveBeenCalled()
+})
+
+it('persists concrete root execution commands under current Profile membership without preparing or activating a model', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const first = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'b'.repeat(64),
+      source: h.source(), continuation_policy: 'follow_authorized_plan' }, signal), e = first.submission
+  const target = { namespace_id: e.namespace_id, command_id: e.command_id, workspace_id: e.source.workspace_id,
+    session_id: e.source.session_id, source_message_id: e.source.source_message_id, source_revision: e.source.source_revision }
+  await h.controller.acceptCollaborationRoot(target, { root_task_id: e.root_task_id, root_trace_id: e.root_trace_id,
+    admission_id: e.command_id, task_revision: 1, state_version: 1, state: 'active' }, signal)
+  const selection = { plan_id: 'plan-1', expected_plan_revision: '1', candidate_digest: 'c'.repeat(64),
+    task_id: 'task-1', task_revision: '1', task_digest: 'd'.repeat(64), expected_scope_version: '0' }
+  const prepares = h.prepare.mock.calls.length, events = [...h.events]
+  expect(await h.controller.collaborationRootExecution({ action: 'read', target, selection }, signal)).toBeNull()
+  const entry = await h.controller.collaborationRootExecution({ action: 'prepare', target, selection }, signal)
+  expect(entry?.root.root_trace_id).toBe(e.root_trace_id)
+  expect(entry?.state).toBe('prepared')
+  expect(await h.controller.collaborationRootExecution({ action: 'prepare', target, selection }, signal)).toEqual(entry)
+  expect(h.prepare).toHaveBeenCalledTimes(prepares)
+  expect(h.stream).not.toHaveBeenCalled()
+  expect(h.resume).not.toHaveBeenCalled()
+  expect(h.events).toEqual(events)
+  for (const changed of [{ namespace_id: 'n2_' + 'f'.repeat(64) }, { session_id: 'other' }, { source_revision: '2' }]) {
+    await expect(h.controller.collaborationRootExecution({ action: 'prepare', target: { ...target, ...changed }, selection }, signal)).rejects.toThrow()
+  }
+  await h.workspace.detachSession(h.sessionId)
+  await expect(h.controller.collaborationRootExecution({ action: 'read', target, selection }, signal)).rejects.toThrow()
+})
+
+it('observes feedback from storage, queues it once and refuses changed Session prefixes', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const captured = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64), source: h.source(), continuation_policy: 'follow_authorized_plan' }, signal)
+  const root = captured.submission, target = { namespace_id: root.namespace_id, command_id: root.command_id,
+    workspace_id: root.source.workspace_id,
+    session_id: root.source.session_id, source_message_id: root.source.source_message_id, source_revision: root.source.source_revision }
+  await h.controller.acceptCollaborationRoot(target, { root_task_id: root.root_task_id, root_trace_id: root.root_trace_id, admission_id: root.command_id, task_revision: 1, state_version: 1, state: 'active' }, signal)
+  const selection = { plan_id: 'plan-1', expected_plan_revision: '1', candidate_digest: 'c'.repeat(64), task_id: 'task-1', task_revision: '1', task_digest: 'd'.repeat(64), expected_scope_version: '0' }
+  const execution = await h.controller.collaborationRootExecution({ action: 'prepare', target, selection }, signal)
+  await h.controller.collaborationRootExecution({ action: 'accept', target, selection, receipt: { execution_command_id: execution!.execution_command_id,
+    root_task_id: root.root_task_id, root_trace_id: root.root_trace_id, root_revision: '1', plan_id: 'plan-1', task_id: 'task-1', task_revision: '1', invocation_id: 'invocation-1', admission: 'recorded', max_invocations: 1, max_runtime_ms: 1000, expires_at: '2026-01-01T00:00:00.000Z' } }, signal)
+  await h.controller.receiveCollaborationDelivery(deliveryFor(captured.snapshot), signal)
+  const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+  h.events.splice(0)
+  let flushFailure = false
+  const flush = vi.fn(async () => {
+    if (flushFailure) throw Error('storage-unavailable')
+    // This unit double copies only on the durability barrier; composition tests exercise the real writer.
+    h.events.splice(0, h.events.length, ...Array.from({ length: session.seq }, (_, n) => session.eventAt(SessionSeq(n))!))
+  })
+  Object.assign(h.ctx.get('sessionPersistence')!, { flush })
+  const inject = vi.fn((message: import('@deepseek-ai/dsh-llm').UserMessage) => { session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [message] }) })
+  const unexpected = () => { throw Error('unexpected agent operation in feedback unit fixture') }
+  const agent: import('@deepseek-ai/dsh-agent').Agent = { id: h.sessionId, session, ctx: h.ctx, status: 'idle', options: {},
+    inbox: { nextTurn: [], nextStep: [], clear: unexpected, append: unexpected, prepend: unexpected,
+      replace: unexpected, remove: unexpected, splice: unexpected }, inject,
+    cancel: unexpected, whenIdle: unexpected, runMaintenance: unexpected, send: unexpected, followup: unexpected, steer: unexpected }
+
+  await h.ctx.agents.register(agent)
+  const query = { action: 'read', target, selection, delivery_id: 'delivery-1' }
+  const before = await h.controller.collaborationRootFeedback(query, signal)
+  expect(before.status).toBe('not_enqueued')
+  const enqueue = { ...query, action: 'enqueue', expected_event_count: before.event_count, expected_log_digest: before.log_digest }
+  await expect(h.controller.collaborationRootFeedback({ ...enqueue, expected_log_digest: '0'.repeat(64) }, signal)).rejects.toThrow('changed')
+  expect(inject).not.toHaveBeenCalled()
+  expect(await h.controller.collaborationRootFeedback(enqueue, signal)).toMatchObject({ status: 'queued', continuation_observed: false })
+  expect(await h.controller.collaborationRootFeedback(enqueue, signal)).toMatchObject({ status: 'queued' })
+  expect(inject).toHaveBeenCalledTimes(1)
+  session.append('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' })
+  expect(await h.controller.collaborationRootFeedback(enqueue, signal)).toMatchObject({ status: 'claimed_or_removed' })
+  expect(inject).toHaveBeenCalledTimes(1)
+  flushFailure = true
+  await expect(h.controller.collaborationRootFeedback(query, signal)).rejects.toThrow('storage-unavailable')
+  flushFailure = false
+  const original = h.events.length
+  await h.workspace.detachSession(h.sessionId)
+  await expect(h.controller.collaborationRootFeedback(query, signal)).rejects.toThrow('mismatch')
+  expect(h.events).toHaveLength(original)
+  expect(h.stream).not.toHaveBeenCalled()
+})

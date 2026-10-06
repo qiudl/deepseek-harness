@@ -54,6 +54,14 @@ Client 列表刷新保留未变化的行对象，并在顺序和值均相同时�
 
 投影读取独立于其值保留加载与失败状态。重连会取消上一连接的读取，并重新加载已请求的投影；实时成员更新通过 control stream 到达。父 Agent 可用性来自 Host 摘要，在收到对应摘要或成功的列表 baseline 前保持未知。地址查找直接解析投影中的子项，不会选择它们或创建 scope。
 
+`captureCollaborationRoot(input, signal)` 是显式启用的 Host 操作，供调用方已判定的新逻辑目标使用。它通过 Profile 协调器捕获原始 Source，然后在独立的 `collaboration_root_submission_v1` domain 中，一次提交完整快照、生成的根任务/trace ID、命令 ID、策略与待提交记录，持久化后才暴露分析调用。调用方负责当前 namespace 和 grant 的授权；该方法不推断消息是新目标还是续接。已有 Source 和 Session 文件保持不变。Source 与根提交之间失败时只留下不可执行的 Source；重放会唯一创建根，不恢复可执行模型调用。
+
+`inspectCollaborationRoot` 在检查当前 Session 和 Workspace 归属后，只读取已经提交的 namespace/命令绑定。响应仅含原始来源坐标/摘要及根元数据，不含消息正文、凭据或模型调用。私有 Host 读取器使用此方法，调用方提交的根字段会被拒绝。
+
+根 journal 使用单文件布局，遇到损坏、未来版本、摘要不符或重复身份记录时拒绝打开并保留原文件。同一 namespace 的重复来源坐标保持原 ID，内容或策略改变时拒绝。写入回执失败后必须关闭、重新打开并核对落盘结果，才能继续读写。journal 将待提交条目限制为 128，保留已受理条目且不设 TTL，只持久接受与原根匹配且已经认证的受理回执。回执认证与授权后的 outbox 派发由 Host 调用方负责，不增加 Session 事件、模型请求或自动云端派发。
+
+Client 适配器提供 `SessionEventStream`，即绑定到一个普通 Session 或 direct subagent address 的 Gateway `RemoteJournalStream`。它在读取首个 page 前打开 follow，只发布连续的 `replace`、`prepend`、`append` 与 `settle-assistant` 变更，并通过 tail page 修复重连或 seq 缺口。向后分页有两个动词：`loadOlder()` 拉一页 50 条消息，而 `loadThrough(seq)`——轮次跳转加载器——按每页 200 条消息循环拉取直到窗口覆盖目标 seq，重复调用会下调共享目标，遇到无进展的页即停止，忙碌状态复用同一个 `loadingOlder` 快照位。Web 适配器显式选择接收无 cursor 的 Assistant frame：每个 opening 携带活跃 attempt 的 `startedAfterSeq`、`nextIndex` 与紧凑 stream，每个 stream member 都成为排在持久 cursor 之间的 Client-only `assistant/live-chunk` 条目。Host 会随该 baseline 捕获 follower 本地到达序号，并抑制该 cut 及之前的 buffered frame；replacement Agent 可以从 revision 一重新开始。活跃 opening 之后到达的持久 `assistant/message` 或 `assistant/attempt` 只有在其 seq 晚于 `startedAfterSeq` 且轮次与步骤匹配时才会保持暂存；匹配的 end type、seq 与 index 会发布一个具名 settlement delta，删除该 attempt 的瞬态 row、加入持久条目，并保留同一步骤中更早的 retry。已知 attempt 的 revision、密集 index 或 settlement 缺口会重新打开 follow；若 controller 错过 start，则忽略 unknown-attempt frame，并正常发布其持久 settlement。Abandoned end 会发布不含持久条目的 settlement delta，使瞬态 row 立即退出。持久缺口修复 page 不携带 Assistant baseline，因此 held notification 会重新打开 follow 一次，以取得配对的 page 与 baseline。每条历史 record 只覆盖自身的事件 seq。业务、persistence 或无法恢复的连续性错误会终止 stream，只有物理载体断开才触发自动恢复。`SessionControlStream` 是 Gateway `RemoteSnapshotStream`；每代都以完整的进程本地 baseline 开始，因此重连会替换 jobs 和 projection 状态，而不会把瞬态值当作 durable event。每次 Host generation 就绪时，同步的 Client 订阅会先清除保留的投影值及其水位，再刷新查询并重新打开 control stream，其中也包括 control baseline 中没有列出的 Session。首次 control stream 会等待 generation 就绪，确保其 opening 值不会先于旧状态清理到达。上一代尚未完成的 list 响应无法重新发布这些值。同一 generation 内，延迟到达的 control baseline 不能覆盖或清除较新的 list、history 或 live 值。持久 `inbox` 投影通过与其他投影相同的冷读取和重连路径传输两份待处理列表。Client Agent 上下文提供独立 [`fileUpload`](../../client/file-upload/README.zh.md) 服务使用的身份；Session 对象提供生命周期、prompt、queue 与历史操作，不提供文件传输。
+
 已受理的提示词与已观察到的运行，会使客户端展示转换跨列表刷新、重连及 Session 对象替换保留。Manager 按 Session id 保留这些观察；它们不证明持久历史已经产生。草稿、投影存储和侧边栏展示规则保留原有行为。[blank 回退修复决策](../../../.agents/notes/implemented/bug-fix/2026-09-15-client-session-blank-reconciliation.zh.md) 定义保留期限及迟到响应处理。
 
 Session 对象还承载本地提交回显：`session.beginSubmission` 在调用方序列化与提示词之前，同步把一条回显写入 `SessionSnapshot.pendingSubmissions`，会话 UI 因此能在点击提交的当帧显示消息。回显按顺序存放图片预览与持久文件引用。Session 根据当前运行状态与请求的投递模式推导其 `transcript`、`queued` 或 `steering` 位置，并保留该位置直到展示接管。提示词的 `requestId` 是关联标识：Host 把它回显为 durable user source 的 `rpcId`，`inbox` 投影中的待处理消息也保留同一 source。排队回显在队列接受后延迟一个动画帧退休；Chat 回显遵循下述入档规则。尚未入档的回显在带标识的提示词失败或被放弃时立即退休。销毁时保留已观察到的入档结果，其余未结算提交按 failed 退休。每次退休恰好触发一次 `onRetire`；observed 退休还会携带有序的持久附件引用，让 composer 释放成功卡片并保留失败草稿。回显只存在于 Client 内存；刷新与重连只从持久事件重建会话。
@@ -127,6 +135,10 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 `CollaborationAnalysisJournal.saveOutput` 另将完整、不可信的模型 JSON 写入独立的单文件 `collaboration_analysis_output_v2` 领域，再向父 Host 返回分析成功。结果绑定原已消耗尝试、Source/输入摘要及原文输出摘要，不能替换已有文本。`outputs()` 仅供读取冻结记录进行对账。非法 JSON、超限结果、损坏关联和写入确认丢失都会拒绝使用，同时保留文件。打开和关闭 journal 管理两个领域；已有输入、Source 与 Session 格式保持独立。
 
+`openCollaborationRootPlanningJournal(facility)` 为新规划尝试管理独立、单文件布局的 `collaboration_root_planning_v1` 领域。每条记录保留原已受理的根、trace、Source 和回执，以及前驱引用、新请求身份、实际准备的模型元数据与完整请求。必须保持原 provider、model 和有效推理设置；generation 与 adapter 注册身份不能冒充原准备。请求包含隔离的分析提示词和一条用户消息，不带工具、采样覆盖或可执行元数据。输入连同消息封装最多 16 KiB，完整记录输入最多 1 MiB，最多保留 256 次尝试。此 journal 不打开或迁移已有 Source、根、分析和 Session 文件。
+
+`CollaborationAnalysisRunner.runRootAttempt` 沿用原分析的单次调用、并发、超时与提供方调用验证限制。可信 Host 调用方必须校验当前归属，并通过 `createCollaborationRootPlanningWriter` 获取当前云端授权：完整输入和绑定根、模型、尝试的匹配许可均提交后，才启动提供方。只允许替代本地当前且未使用的末次尝试；旧输入仍可读取，此后不能派发。本地缺少 dispatch 不证明云端未消费许可；调用方必须核对云端证据，包括旧版前驱和确认未知的情况。输出连同原文 SHA-256 在已消费派发旁只提交一次，不同输出被拒绝。写入确认丢失后 journal 禁止继续使用，须关闭重开；关闭会排空已接受的写入。重开的记录没有可执行句柄。这些 Host 组件不暴露 Remote 恢复命令、当前 Host 签名器或自动重试，也不授予任务执行权限。
+
 `session.collaborationSources({ sessionId, cursor? })` 只读原始 Source journal，按新到旧返回当前 Session 的完整原消息、原坐标与快照摘要。每页最多 8 条及 256 KiB JSON，cursor 是上一页最后一条快照摘要；新 Source 不改变已读取分页的位置。归属变化、归档、取消与非法 cursor 均拒绝，不准备模型、不激活 Agent，也不追加普通 Session 事件。
 
 `analyzeClarification` 使用捕获补充消息时准备的调用，校验独立冻结的原始与补充 Source、选定待澄清项、相关此前回复、已冻结任务 ID 及原始 mention 顺序。Source 解析要求合法 Unicode；每个待澄清项的 mention 列表非空，证据跨度不得拆开代理对。完整 prompt-version-2 manifest 提交前后，均从当前 Profile 重读全部 Source 并检查模型选择与归属。原消息与补充消息保持同一 provider、model、推理配置及 adapter 注册；准备序号可以不同。两种分析方法共用一个调用，不能执行两次。恢复只读任一 manifest 版本，不重写或恢复调用；第二版派发另绑定原计划及修订号。
@@ -156,10 +168,12 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 固定分析提示词可以成为单独分析请求的共享前缀；变化的原文与 mention 在 user 消息中。该请求不改动普通 Session 的缓存前缀。
 
 
+
 ## 已知限制与延期工作
 
 <a id="known-limitations-and-deferred-work"></a>
 
+- 根捕获是显式启用的 Host 库能力，云端根受理、自动提交重放及原会话消费尚未接通。
 - 图片字节上限不校验解码后的尺寸或像素数。
 - follow 恢复失败会对调用方可见，而不会无限重试。
 - 浏览器原始字节上传使用一次不带断点续传偏移的流式 HTTP 请求；重试会从第零字节重新传输整个文件。
@@ -181,3 +195,21 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 </details>
 
 **运行时不变式：** 不发布伴生入口。每个分页与帧都会对照其指向的持久 Session 校验。
+
+首次消息的意图受理调用 `captureCollaborationRoot` 时可以同时省略 `objective_ref` 和 `task_grant_ref`。Source 捕获后，方法在提交原根之前派生 `source-v1:<snapshot_digest>` 与 `intent-v1:<snapshot_digest>`，不要求云端 Task 预先存在。仅提供其中一个引用会在准备模型之前拒绝；现有调用方显式提供的引用对及持久记录仍精确保留。这些引用标识绑定来源的意图，不授予目标执行权限。根/Source 存储格式与重试身份保持不变。
+
+已认证的父 Host 可通过 `readCollaborationRoot` 读取完整已提交根，并通过 `acceptCollaborationRoot` 保存其原始云端受理回执。两个操作都校验当前 Workspace/Session 归属及精确的 namespace、command 和 Source 坐标，不准备或派发模型。云端认证由父 Host 负责。admitted 记录是历史登记证据，不代表当前规划或执行权限。写入确认丢失后必须重新打开日志再恢复，不能新建替代根，也不能凭内存状态推断已成功确认。
+
+`readCollaborationRoot` 也接受不带 command 的精确 namespace/Source 查询，只读取现有日志键，不捕获或写入。显式 command 查询仍须匹配原命令。回执确认与签名元数据读取仍要求原 command；记录缺失或归属变化时拒绝。
+
+`inspectAttempt` 等待已接受的 journal 写入完成，只返回本地当前未使用尝试的有界元数据。尝试缺失、被替代或已派发、写入回执不确定、取消及 journal 关闭均拒绝。返回内容包含原 Source 摘要与 root/trace、实际模型身份和前驱，不包含提示词或可执行句柄。私有 Profile owner 在向 Host 签名器提供这些字段前，仍须独立验证当前归属与模型准备是否存活；本地缺少派发记录不能证明云端允许新尝试。
+
+`prepareCollaborationRootPlanning` 读取原已受理根，以当前凭据准备其中固定的 provider、model 和有效推理设置。会话后来选择的模型不替代这些输入。有效推理设置漂移、归属变化和取消均拒绝，并在输入/grant 持久化前后核验原根。返回的闭包调用隔离的一次性运行器；不提供 Remote 方法，不激活 Agent、不写普通 Session 事件，也不改写 Source。
+
+规划日志的 `readLatest(namespace, rootId, signal)` 等待已接受写入完成，再读取当前链尾，包括已消费派发与保存输出。写入结果不确定或日志已关闭时拒绝读取；它不创建准备，也不改变存储代际。Profile owner 必须在读取前后检查当前归属；本日志缺少记录不说明云端未派发。
+
+`collaborationRootExecution(operation, signal)` 在当前 Workspace/Session 归属下，私有地读取、准备或确认具体执行命令。准备操作将生成的命令 ID、原 root/trace 及冻结的计划、任务、范围版本一起提交到 `collaboration_root_execution_v1`，Main 随后才能提交云端。相同并发确认共享原命令，绑定变化则拒绝。回执确认保留原 invocation 和到期时间。写入结果不确定时须关闭并重开日志，恢复时查询云端状态，不生成替代命令。独立 domain 不改写已发布的 Source、root 或 Session 文件。此方法不激活模型，也不证明 Session 已消费上下文；Main 必须单独建立当前执行授权。
+
+`collaborationRootFeedback` 读取原已受理执行和已提交回执，再检查 Session 的持久化日志前缀。显式入队要求 `follow_authorized_plan`、已挂载且空闲的 Agent、空收件箱及精确匹配的已观察前缀。稳定身份的协作结果转发消息包含原始用户问题、结果和根 trace。现有收件箱与 `user/message` 事件区分等待消费、已被领取或移除、已应用上下文；只有接纳该消息的同一步中出现助手结算，才记录已观察到续跑。持久化屏障限定检查的日志前缀。重复或不确定回执通过读取恢复；已移除消息不会自动重新入队。父进程另外检查当前云端访问权和消费意图。此操作不唤醒模型，也不签发云端消费收据。派发已有持久协作根的 Session 模型请求前，控制器等待该 Session 的 flush；缺少持久化或检查点失败时不调用适配器。
+
+`collaboration-result` 消息来源只记录归属。未加载此生产者的读取器保留完整消息与元数据；来源 kind 不授予执行权限，也不改变重放语义。Session 检查点执行与来源 kind 无关。

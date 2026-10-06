@@ -314,3 +314,31 @@ it('analyzes a fixed clarification with a fresh handle, logging both messages an
     expect(h.adapter.requests).toHaveLength(1)
   } finally { await h.close() }
 })
+
+it('a fresh preparation or runtime cannot reuse the original persisted model identity', async () => {
+  const h = await harness(), restarted = await harness()
+  try {
+    const original = await h.prepare()
+    let saved: import('../src/collaboration-analysis.ts').CollaborationAnalysisManifest | undefined
+    await expect(h.runner.run(original.source, original.prepared, async (m) => {
+      saved = m
+      throw Error('stopped before grant')
+    }, new AbortController().signal)).rejects.toThrow('stopped before grant')
+    expect(h.adapter.requests).toHaveLength(0)
+    if (!saved) throw Error('missing manifest')
+    const frozen = JSON.stringify(saved)
+    const fresh = await h.prepare(), afterRestart = await restarted.prepare()
+    expect(fresh.prepared.snapshot.configuration_generation).not.toBe(original.prepared.snapshot.configuration_generation)
+    expect(fresh.prepared.snapshot.adapter_fingerprint).toBe(original.prepared.snapshot.adapter_fingerprint)
+    expect(afterRestart.prepared.snapshot.adapter_fingerprint).not.toBe(original.prepared.snapshot.adapter_fingerprint)
+    for (const [runner, prepared] of [[h.runner, fresh.prepared], [restarted.runner, afterRestart.prepared]] as const) {
+      const commit = persist()
+      await expect(runner.run(original.source, prepared, commit, new AbortController().signal))
+        .rejects.toThrow('collaboration_analysis_model_changed')
+      expect(commit).not.toHaveBeenCalled()
+    }
+    expect(JSON.stringify(saved)).toBe(frozen)
+    expect(h.adapter.requests).toHaveLength(0)
+    expect(restarted.adapter.requests).toHaveLength(0)
+  } finally { await h.close(); await restarted.close() }
+})

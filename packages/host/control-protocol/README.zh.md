@@ -145,3 +145,28 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 `profile.collaboration_analysis` 只携带绑定 Account 的准备/派发命令及不可执行的准备描述或原始 JSON 输出。它不接受调用方归属摘要，将编码后的 Source 输入和解码后的输出各限制在32 KiB，验证规范 base64url、UTF-8 和对象 JSON，控制帧限制不变。派发输出另携带安装签名，绑定已验证 Account、当前 Host、原派发 grant 及已保存原始 JSON 摘要。Unix 客户端核验签名和未变输出；服务仍须分别核对当前 Source、attempt 和目标权限。
 
 `profile.collaboration_analysis` 另支持携带有界私有输入的 `capture_reply` 和 `prepare_clarification`。补充捕获返回 `reply_source`，仅包含 captured/recovered Source 描述符；完整输入准备返回 `prepared`。命令与结果字段及操作对应的结果类别均严格核验，帧和 JSON 预算不变。补充捕获不授予模型派发资格。
+
+
+`profile.root_authority` 使用独立的 `dsh-collaboration-root-authority/v1` 签名域。挑战包含完整 Source 挑战，以及 namespace、根任务/trace ID、原始命令 ID 与业务 payload 摘要。Host 在签名前从 Account 已授权的 Profile journal 读取匹配元数据，并在读取后再次检查授权和有效期。仅有 Source 签名不能授权根。新签发证明可以改变传输 nonce、请求 ID 与 Host epoch，原业务绑定保持不变。固定 UTF-8 元组由与 Slark 共用的 `tests/fixtures/root-authority-v1.json` 锁定。云端消费者仍须在根受理事务中独立持久化并消费挑战、重算业务摘要及重新核验当前 grant。
+
+`profile.root_journal` 仅接受已有 namespace/command 和原始 Source 坐标上的 `read` 或 `accept`。回复只包含有界元数据，Source 正文通过 `profile.source_snapshot` 传输。accept 回复必须包含原根的完整原始受理回执。解析器校验字段与身份，Host 检查当前 Account 授权；已记录回执不授予执行权限。
+
+`profile.root_analysis` 能力允许在既有分析方法上使用 `prepare_root`。输入只包含 namespace、续接策略和原 Source 输入；`root_prepared` 回复将 prepared 或 recovered 元数据绑定到已持久化根描述。仅含 Source 的回复或不同 Source 描述都会被拒绝。派发仍绑定原存活尝试，恢复出的根元数据不能创建新调用。
+
+`profile.root_analysis_recovery` 单独启用 `read_root_output`。响应绑定原根、已消费的派发元数据与保存的 JSON 摘要，或明确报告输出缺失。历史租约到期不会删除证据，也不会授予派发权限。输出解码后仍限制为 32 KiB，完整控制帧维持 64 KiB 上限；不返回提示词或可执行 handle。
+
+独立能力 `profile.root_lookup` 允许 `recover_root` 携带原 namespace、策略和 Source 输入。响应必须为包含不可执行 `recovered` 元数据的 `root_prepared`；不能回退到 `prepare_root` 或返回存活尝试。
+
+`profile.root_pending_lookup` 独立允许 `reconcile_root` 查询 admitted 或 pending 根。其输入与不可执行的 recovered 响应均与 `recover_root` 相同，不授予受理、准备或派发权限。
+
+`profile.root_live_resume` 独立允许 `resume_root`，根输入必须匹配原始准备。响应必须包含同一根的 prepared 元数据；调用模型前仍须取得当前云端派发许可。
+
+`profile.root_planning_attempt_authority` 将新规划请求、前驱、预期计划版本、完整输入摘要和实际模型身份绑定到原 root/trace 与当前 Source 挑战。独立签名域不能复用根受理或 Source 签名。精确解析器复制并冻结元数据；固定 UTF-8 元组和 Ed25519 夹具与 Slark 共用。`matchHostRootPlanningAttemptDescriptor` 比对私有持久元数据与挑战；解析和签名不确认云端 nonce 消费、前驱可替代性或派发权限。
+
+`profile.root_planning_attempt` 单独声明通过 `profile.collaboration_analysis` 提供新准备和派发。`prepare_root_attempt` 只接受原根查询，返回包含有界持久元数据的 `root_attempt_prepared`；调用方不能覆盖模型、前驱或归属。`dispatch_root_attempt` 携带新请求 ID 和父协调方已认证的 grant。私有检查使用 worker analysis token，不是 Main 命令。描述符解析器匹配根坐标及可选尝试身份，不建立生命周期或云端权限。
+
+`read_root_attempt` 要求 `profile.root_planning_attempt_recovery`，仅返回原根元数据、最新尝试、已消费授权及可选的已保存输出。解析器绑定原 Source、trace、模型和 manifest，核验输出摘要，并保留已过期的派发事实。这些证据不授予新派发或租期延长。
+
+`profile.root_execution_journal` 启用私有 analysis 传输上的 `root_execution_journal` 命令。请求操作及响应记录是最大 8 KiB 的独立 JSON，调用方不能提供 Account 绑定摘要。Profile 校验操作字段及持久化 root/task 身份，Main 校验记录摘要和已认证的云端回执。null 读取结果仅表示本地没有命令，不证明云端未受理，也不授予执行权限。
+
+独立的 `profile.root_feedback` 能力允许在同一私有分析传输中传递有界的 `root_feedback` 操作与观察记录。Account 绑定仍由父进程负责。观察记录区分持久入队、已接纳的 Session 上下文及已观察到的助手续跑；其中不含结果文本或签名，不能独立认证云端消费。

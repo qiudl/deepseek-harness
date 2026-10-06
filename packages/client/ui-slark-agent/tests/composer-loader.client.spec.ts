@@ -1284,3 +1284,78 @@ it('cancels the Session feed read of a passive reply without querying Main or co
   expect(f.pending).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
   expect(f.composer.snapshot.draft).toBe('请检查登录问题')
 })
+
+const rootTaskId = 'bfb432fd-a2a2-4cbd-b1dc-4648c8944081', rootTraceId = 'a'.repeat(32)
+it('shows saved planning with its trace, without emitting execution admission', async () => {
+  const { composer, pick, submit, sink, invoke } = await bench(true)
+  const host = window.__DSH_DESKTOP_HOST__!
+  Reflect.set(host, 'collaborationPlanningAvailable', true)
+  Reflect.set(host, 'collaborationExecutionAvailable', false)
+  await pick('', '请检查登录问题')
+  const admitted = vi.fn()
+  window.addEventListener('dsh-slark-collaboration-admitted', admitted)
+  onTestFinished(() => { window.removeEventListener('dsh-slark-collaboration-admitted', admitted) })
+  submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision },
+  submission_state: 'planning_recorded', root_task_id: rootTaskId, root_trace_id: rootTraceId } } as never))
+  composer.submit()
+  await vi.waitFor(() => { expect(composer.snapshot.draft).toBe('') })
+  expect(composer.notices.getSnapshot()?.text).toBe(`规划已保存，尚未开始执行。追踪编号：${rootTraceId}`)
+  expect(admitted).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled()
+})
+it.each(['accepted', 'bad-trace', 'extra-private', 'missing-root', 'changed-source'] as const)(
+  'root planning refuses %s replies and retains the original draft', async (change) => {
+    const { composer, pick, submit, sink } = await bench(true)
+    const host = window.__DSH_DESKTOP_HOST__!
+    Reflect.set(host, 'collaborationPlanningAvailable', true)
+    Reflect.set(host, 'collaborationExecutionAvailable', false)
+    await pick('', '请检查登录问题')
+    const draft = composer.snapshot.draft
+    submit.mockImplementation(async (input) => {
+      const value = { source: { workspace_id: input.workspace_id, session_id: input.session_id,
+        source_message_id: input.source_message_id, source_revision: input.source_revision },
+      submission_state: 'planning_recorded', root_task_id: rootTaskId, root_trace_id: rootTraceId }
+      if (change === 'accepted') value.submission_state = 'accepted'
+      if (change === 'bad-trace') value.root_trace_id = '0'.repeat(32)
+      if (change === 'missing-root') Reflect.deleteProperty(value, 'root_task_id')
+      if (change === 'extra-private') Reflect.set(value, 'grant', 'private')
+      if (change === 'changed-source') value.source.session_id = 'other'
+      return { ok: true, value } as never
+    })
+    composer.submit()
+    await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.level).toBe('error') })
+    expect(composer.snapshot.draft).toBe(draft); expect(sink).not.toHaveBeenCalled()
+  })
+
+it.each([false,true])('retained root drafts use recovery after root rollout closes, legacy execution=%s',async(legacy)=>{
+  const { composer,pick,submit,sink,invoke }=await bench(true)
+  const host=window.__DSH_DESKTOP_HOST__!
+  Reflect.set(host,'collaborationPlanningAvailable',true)
+  await pick('','请检查登录问题')
+  const draft=composer.snapshot.draft
+  const recovered=vi.fn(async(input:DesktopCollaborationSourceInput)=>({ ok:true as const,value:{ source:{ workspace_id:input.workspace_id,session_id:input.session_id,source_message_id:input.source_message_id,source_revision:input.source_revision },submission_state:'planning_recorded' as const,root_task_id:rootTaskId,root_trace_id:rootTraceId } }))
+  Reflect.set(host,'collaborationRecover',recovered)
+  Reflect.set(host,'collaborationPlanningAvailable',false)
+  Reflect.set(host,'collaborationScopeAvailable',legacy)
+  Reflect.set(host,'collaborationExecutionAvailable',legacy)
+  composer.submit()
+  await vi.waitFor(()=>{expect(composer.snapshot.draft).toBe('')})
+  expect(recovered).toHaveBeenCalledTimes(1)
+  expect(recovered.mock.calls[0]?.[0].original_message).toBe(draft)
+  expect(composer.notices.getSnapshot()?.text).toContain(rootTraceId)
+  expect(submit).not.toHaveBeenCalled();expect(sink).not.toHaveBeenCalled();expect(invoke).not.toHaveBeenCalled()
+})
+
+it.each(['missing','rejected','bad-receipt'] as const)('closed-root recovery retains the original draft when %s',async(mode)=>{
+  const { composer,pick,submit,sink }=await bench(true),host=window.__DSH_DESKTOP_HOST__!
+  Reflect.set(host,'collaborationPlanningAvailable',true)
+  await pick('','请检查登录问题')
+  const draft=composer.snapshot.draft,ref=composer.snapshot.occurrences[0]?.ref
+  Reflect.set(host,'collaborationPlanningAvailable',false)
+  if(mode!=='missing')Reflect.set(host,'collaborationRecover',vi.fn(async()=>mode==='rejected'?{ ok:false,errorCode:'missing',reconciliationRequired:true }:{ ok:true,value:{ submission_state:'accepted' } }))
+  composer.submit()
+  await vi.waitFor(()=>{expect(composer.notices.getSnapshot()?.level).toBe('error')})
+  expect(composer.snapshot.draft).toBe(draft);expect(composer.snapshot.occurrences[0]?.ref).toBe(ref)
+  expect(submit).not.toHaveBeenCalled();expect(sink).not.toHaveBeenCalled()
+})

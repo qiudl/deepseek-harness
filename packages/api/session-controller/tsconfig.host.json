@@ -23,10 +23,14 @@
     "src/archived-session-gate.ts",
     "src/skill-catalog.ts",
     "src/collaboration-source-journal.ts",
+    "src/collaboration-root-journal.ts",
+    "src/collaboration-root-execution-journal.ts",
     "src/collaboration-analysis.ts",
     "src/collaboration-clarification-input.ts",
     "src/collaboration-analysis-journal.ts",
-    "src/collaboration-delivery-journal.ts"
+    "src/collaboration-root-planning-journal.ts",
+    "src/collaboration-delivery-journal.ts",
+    "src/collaboration-feedback.ts"
   ],
   "references": [
     {

@@ -1,3 +1,4 @@
+import { handleDesktopRootJournalRequest } from './desktop-collaboration-source.ts'
 /**
  * @deepseek-ai/dsh-web-app — the browser-surface bundle's runtime glue plugin
  * plus the bundle patch (`cordis.patch.yml`, declared by the `dsh.bundle.patch`
@@ -29,8 +30,9 @@ import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
-import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationRootRequest, handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopCollaborationDeliveryRequest } from './desktop-collaboration-delivery.ts'
+import { openCollaborationRootPlanningJournal } from '@deepseek-ai/dsh-api-session-controller'
 import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from './desktop-collaboration-analysis.ts'
 import { openCollaborationAnalysisJournal } from '@deepseek-ai/dsh-api-session-controller'
 import { handleDesktopWorkspaceModelSelectionRequest } from './desktop-workspace-model-selection.ts'
@@ -255,6 +257,12 @@ export function apply(ctx: Context, config: Config): void {
   const analysisToken = process.env.DSH_PROFILE_ANALYSIS_TOKEN
   if (analysisToken && /^[A-Za-z0-9_-]{43}$/u.test(analysisToken)) {
     ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-root-journal',
+        handler: (req, res) => handleDesktopRootJournalRequest(req, res, analysisToken, (command, signal) =>
+          command.action === 'read' ? sessionCtx.sessionController.readCollaborationRoot(command.target, signal)
+            : sessionCtx.sessionController.acceptCollaborationRoot(command.target, command.receipt, signal)),
+      }))
       const lifetime = new AbortController()
       const owner = new DesktopCollaborationAnalysis(
         (input, signal) => sessionCtx.sessionController.captureCollaborationSource(input, signal),
@@ -263,6 +271,17 @@ export function apply(ctx: Context, config: Config): void {
           if (!facility) throw Error('collaboration_analysis_journal_unavailable')
           return openCollaborationAnalysisJournal(facility)
         }, lifetime.signal,
+        (input, signal) => sessionCtx.sessionController.captureCollaborationRoot(input, signal),
+        (target, signal) => sessionCtx.sessionController.readCollaborationRoot(target, signal),
+        { prepare: (target, predecessor, signal) =>
+          sessionCtx.sessionController.prepareCollaborationRootPlanning(target, predecessor, signal),
+        open: async () => {
+          const facility = sessionCtx.get('storageDomain')
+          if (!facility) throw Error('collaboration_root_planning_journal_unavailable')
+          return openCollaborationRootPlanningJournal(facility)
+        } },
+        (input, signal) => sessionCtx.sessionController.collaborationRootExecution(input, signal),
+        (input, signal) => sessionCtx.sessionController.collaborationRootFeedback(input, signal),
       )
       sessionCtx.effect(() => () => { lifetime.abort(); return owner.close() }, 'web-app: private analysis lifetime')
       sessionCtx.effect(() => sessionCtx.webServer.register({
@@ -274,6 +293,11 @@ export function apply(ctx: Context, config: Config): void {
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
     ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-root',
+        handler: (req, res) => handleDesktopCollaborationRootRequest(req, res, sourceToken,
+          (target, signal) => sessionCtx.sessionController.inspectCollaborationRoot(target, signal)),
+      }))
       sessionCtx.effect(() => sessionCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-collaboration-source',
         handler: (req, res) => handleDesktopCollaborationSourceRequest(req, res, sourceToken,

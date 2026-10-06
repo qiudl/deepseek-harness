@@ -4,6 +4,7 @@ import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import {
+  openCollaborationRootJournal,
   openCollaborationSourceJournal,
   openCollaborationAnalysisJournal,
   parseCollaborationClarificationInput, clarificationAnalysisMessage, collaborationJournalDigest,
@@ -133,7 +134,7 @@ async function harness(journalOpenFailure?: Error) {
     await ctx.fiber.dispose()
     await rm(root, { recursive: true, force: true })
   })
-  return { root, owner, lifetime, capture: captureCall, open, calls: () => calls,
+  return { root, owner, lifetime, facility, capture: captureCall, open, calls: () => calls,
     snapshot: (id: string) => sourceJournal.read({ workspace_id: input().workspace_id, session_id: input().session_id, source_message_id: id, source_revision: '1' })! }
 }
 const grant = (prepared: { attempt_request_id: string; input_manifest_digest: string; source_digest: string }) => ({
@@ -532,4 +533,84 @@ it('private analysis HTTP deadline cancels its request even when capture ignores
     expect([0, 422]).toContain(await outcome)
     expect(h.calls()).toBe(0)
   } finally { capture.resolve(captured); vi.useRealTimers() }
+})
+
+it('reopens saved output from disk with original grant, without another preparation or model call', async () => {
+  const h = await harness(), prepared = receipt(await h.owner.prepare(input(), binding, signal()))
+  const source = (await h.capture(input(), signal())).snapshot
+  const roots = await openCollaborationRootJournal(h.facility)
+  onTestFinished(() => roots.close())
+  const pending = await roots.capture({ namespace_id:'n2_'+'a'.repeat(64),source,objective_ref:'o',task_grant_ref:'g',continuation_policy:'follow_authorized_plan' },signal())
+  const admitted = await roots.accept(pending.command_id,{ root_task_id:pending.root_task_id,root_trace_id:pending.root_trace_id,admission_id:pending.command_id,task_revision:1,state_version:1,state:'active' },signal())
+  const originalGrant = permission(prepared)
+  const output = await h.owner.dispatch(prepared.attempt_request_id,binding,originalGrant,signal())
+  await h.owner.close()
+  const ctx = new Context()
+  await ctx.plugin(Storage)
+  const backend = new JsonStorageBackend(h.root)
+  ctx.storage.backend.register('json',backend)
+  const facility = new DomainFacility(ctx,{ backend:'json' })
+  let reads=0,changed=false
+  const reader: SessionController['readCollaborationRoot'] = async()=>{
+    reads++
+    return changed&&reads%2===0?pending:admitted
+  }
+  const recovered = new DesktopCollaborationAnalysis(async()=>{throw Error('recovery must not capture')},()=>openCollaborationAnalysisJournal(facility),signal(),undefined,reader)
+  try {
+    const target = { namespace_id:admitted.namespace_id,command_id:admitted.command_id,
+      workspace_id:source.workspace_id,session_id:source.session_id,
+      source_message_id:source.source_message_id,source_revision:source.source_revision }
+    const result = await recovered.readRootOutput(target,signal())
+    expect(result.state).toBe('saved')
+    if(result.state!=='saved')throw Error('missing saved output')
+    expect(result.dispatch).toEqual(originalGrant)
+    expect(result.root.root_trace_id).toBe(admitted.root_trace_id)
+    expect(Buffer.from(result.json_base64url,'base64url').toString('utf8')).toBe(output.jsonText)
+    expect(reads).toBe(2)
+    expect(h.calls()).toBe(1)
+    changed=true
+    await expect(recovered.readRootOutput(target,signal())).rejects.toThrow()
+    const abort=new AbortController();abort.abort()
+    await expect(recovered.readRootOutput(target,abort.signal)).rejects.toThrow()
+    await recovered.close()
+    await expect(recovered.readRootOutput(target,signal())).rejects.toThrow()
+  } finally {
+    await recovered.close();await facility.closeAll();await backend.close();await ctx.fiber.dispose()
+  }
+})
+
+it.each(['live','handoff','pending','binding','expired','closed','reopened','membership'] as const)('live root resume retains original attempt and deadline: %s',async(mode)=>{
+  const h=await harness(), roots=await openCollaborationRootJournal(h.facility)
+  let entry:Awaited<ReturnType<typeof roots.capture>>|undefined, member=true
+  const reader:SessionController['readCollaborationRoot']=async()=>{if(!entry||!member)throw Error('membership');return entry}
+  const captureRoot:SessionController['captureCollaborationRoot']=async(value,active)=>{
+    const capture=await h.capture(value.source,active)
+    entry=await roots.capture({ ...value,source:capture.snapshot,objective_ref:'o',task_grant_ref:'g' },active)
+    return { ...capture,submission:entry }
+  }
+  let owner=new DesktopCollaborationAnalysis(
+    h.capture,()=>openCollaborationAnalysisJournal(h.facility),h.lifetime.signal,captureRoot,reader,
+  )
+  onTestFinished(async()=>{await owner.close();await roots.close()})
+  vi.useFakeTimers()
+  try {
+    const request={ source:input(),namespace_id:'n2_'+'a'.repeat(64),continuation_policy:'follow_authorized_plan' }
+    const p=receipt(await owner.prepareRoot(request,binding,signal(),binding))
+    if(!entry)throw Error('missing root')
+    if(mode!=='pending')entry=await roots.accept(entry.command_id,{ root_task_id:entry.root_task_id,root_trace_id:entry.root_trace_id,
+      admission_id:entry.command_id,task_revision:1,state_version:1,state:'active' },signal())
+    if(mode==='expired')await vi.advanceTimersByTimeAsync(30001)
+    if(mode==='closed'||mode==='reopened')await owner.close()
+    if(mode==='reopened')owner=new DesktopCollaborationAnalysis(async()=>{throw Error('must not recapture')},()=>openCollaborationAnalysisJournal(h.facility),signal(),undefined,reader)
+    if(mode==='membership')member=false
+    const resume=owner.resumeRoot(request,mode==='handoff'?'c'.repeat(64):binding,signal(),mode==='binding'?'b'.repeat(64):binding)
+    if(mode==='live'||mode==='handoff'){
+      expect(await resume).toEqual(p)
+      expect(h.calls()).toBe(0)
+      if(mode==='handoff')await expect(owner.dispatch(p.attempt_request_id,binding,permission(p),signal())).rejects.toThrow()
+      await owner.dispatch(p.attempt_request_id,mode==='handoff'?'c'.repeat(64):binding,permission(p),signal())
+      await expect(owner.resumeRoot(request,binding,signal(),binding)).rejects.toThrow()
+      expect(h.calls()).toBe(1)
+    }else{await expect(resume).rejects.toThrow();expect(h.calls()).toBe(0)}
+  } finally {vi.useRealTimers()}
 })
