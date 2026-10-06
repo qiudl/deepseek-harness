@@ -471,3 +471,28 @@ it('REQ-20260930-0004: remote original Source feed pages one complete message in
   invoke.mockResolvedValue({ items:[{ ...first,original_message:'x'.repeat(70_000) }] })
   await expect(executor.execute('session/collaborationSources',{ args:{ request } },signal)).rejects.toThrow('result too large')
 })
+
+it('REQ-20260930-0004: an exhausted original Source feed has no continuation cursor', async () => {
+  const invoke = vi.fn<() => Promise<unknown>>(async () => ({ items: [] }))
+  const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+  const signal = new AbortController().signal
+  const args = { request: { sessionId: 'session-1', cursor: 'a'.repeat(64) } }
+  await expect(executor.execute('session/collaborationSources', { args }, signal))
+    .resolves.toEqual({ items: [] })
+  expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'collaborationSources', args, signal })
+  invoke.mockResolvedValue({ items: [], next_cursor: 'b'.repeat(64) })
+  await expect(executor.execute('session/collaborationSources', { args }, signal))
+    .rejects.toThrow('invalid Source page')
+})
+
+it('REQ-20260930-0004: refuses unusable continuation cursors and malformed Source page envelopes', async () => {
+  const invoke = vi.fn<() => Promise<unknown>>()
+  const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+  const signal = new AbortController().signal
+  for (const page of [null, { items: null }, { items: Array(9).fill({}) },
+    { items: [], extra: true }, { items: [], next_cursor: 1 }, { items: [], next_cursor: 'bad' }]) {
+    invoke.mockResolvedValue(page)
+    await expect(executor.execute('session/collaborationSources',
+      { args: { request: { sessionId: 'session-1' } } }, signal)).rejects.toThrow('invalid Source page')
+  }
+})
