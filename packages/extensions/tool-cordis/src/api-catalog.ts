@@ -4840,7 +4840,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CollaborationFeedbackObservation',
-    declaration: 'export interface CollaborationFeedbackObservation {\n    readonly message_id: MessageId;\n    readonly status: \'not_enqueued\' | \'queued\' | \'claimed_or_removed\' | \'context_applied\';\n    readonly event_count: number;\n    readonly log_digest: string;\n    readonly session_event_seq?: number;\n    readonly continuation_observed: boolean;\n}',
+    declaration: 'export interface CollaborationFeedbackObservation {\n    readonly message_id: MessageId;\n    readonly status: \'not_enqueued\' | \'queued\' | \'claimed_or_removed\' | \'context_applied\';\n    readonly event_count: number;\n    readonly log_digest: string;\n    readonly session_event_seq?: number;\n    readonly consuming_step?: {\n        readonly turn: number;\n        readonly step: number;\n        readonly start_event_seq: number;\n    };\n    readonly assistant_event_seq?: number;\n    readonly continuation_observed: boolean;\n}',
   },
   {
     name: 'CollaborationPlanningPredecessor',
