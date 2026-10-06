@@ -32,7 +32,8 @@ const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id
 
 type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST__']>['invokeEnterpriseAgent']>>[0]
 
-async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration) {
+async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration,
+  executionAvailable = collaboration) {
   vi.stubGlobal('crypto', webcrypto)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
   const ctx = new Context(), id = SessionId('session-1')
@@ -114,7 +115,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     } }
   })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {
-    collaborationScopeAvailable: collaboration, collaborationExecutionAvailable: collaboration,
+    collaborationScopeAvailable: collaboration, collaborationExecutionAvailable: executionAvailable,
     collaborationWorkspace: scopeDirectory, collaborationSubmit: submit,
     collaborationDeliveries: deliveries, collaborationPending: pending, collaborationClarify: clarify,
     enterpriseAgents: async () => ({ ok: true, invocationAvailable: true, items: [agent] }),
@@ -988,6 +989,20 @@ it.each(['args', 'scope', 'draft', 'abort'] as const)('refuses a captured scoped
   if (mode === 'abort') await expect(pending).rejects.toThrow()
   else expect(await pending).toMatchObject({ kind: 'error' })
   expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('registers scope management without result polling or submission for a scope-only bridge', async () => {
+  const f = await bench(true, true, true, false)
+  const entries = f.ctx.slots.entries('conversation.input.dock').map(entry => entry.options.id)
+  expect(entries).toContain('slark-project-scope')
+  expect(entries).not.toContain('slark-collaboration-results')
+  expect(entries).not.toContain('slark-agent-tasks')
+  f.composer.setDraft('@Gui')
+  await vi.waitFor(() => { expect(f.controller.menu.getSnapshot().groups.some(group => group.status === 'pending')).toBe(false) })
+  expect(f.controller.menu.getSnapshot().groups.find(group => group.source === 'slark-agent')?.items ?? []).toEqual([])
+  expect(f.sourceReads).not.toHaveBeenCalled()
+  expect(f.submit).not.toHaveBeenCalled()
+  expect(f.deliveries).not.toHaveBeenCalled()
 })
 
 it('uses the YAML-registered project panel commands and disposes its cached Session model on unload', async () => {

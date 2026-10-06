@@ -4,3 +4,5 @@ agent=Guide · Product
 availability=Read-only
 cancel-retains=product,engineering
 legacy-calls=0
+history=unmounted
+source-reads=0

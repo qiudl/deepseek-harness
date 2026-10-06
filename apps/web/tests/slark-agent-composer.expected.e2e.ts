@@ -180,7 +180,7 @@ it('saves multiple Slark spaces in the built collaboration area and never invoke
       agent_id: 'guide', agent_name: 'Guide', available: false, capability_snapshot: 'a'.repeat(64),
       reason_code: 'executor_unavailable' }] : [], next_cursor: null, scope_version: String(version) } }
   })
-  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true,
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true, collaborationExecutionAvailable: false,
     collaborationWorkspace: bridge, enterpriseAgents: legacy, invokeEnterpriseAgent: legacy })
   const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'] })
   remote.mock.unary('fileReferences/list', { ok: true, value: [] })
@@ -214,6 +214,9 @@ it('saves multiple Slark spaces in the built collaboration area and never invoke
   await waitFor(() => { expect(screen.queryByRole('option', { name: /Guide · Product/ })).toBeNull() })
   expect(legacy).not.toHaveBeenCalled(); expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
   observations.push(`legacy-calls=${legacy.mock.calls.length}`)
+  expect(screen.queryByTestId('slark-collaboration-results')).toBeNull()
+  expect(remote.mock.log.calls('session/collaborationSources')).toHaveLength(0)
+  observations.push('history=unmounted', 'source-reads=0')
   await expect(observations.join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
     'apps/web/tests/expected/slark-agent-composer/project-scope.expected.txt'))
 })

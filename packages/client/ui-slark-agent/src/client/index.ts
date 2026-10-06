@@ -121,7 +121,8 @@ export function apply(ctx: ClientContext): void {
     }, AgentTaskDock)
   })
   ctx.inject(['remote.session', 'connection', 'workspaces'], (resultsCtx) => {
-    if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return
+    if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable ||
+      !window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable) return
     const connection = resultsCtx.get('connection') as ConnectionHandle
     const models = new Map<string, { model: CollaborationResultsModel; bindings: CollaborationResultsInjected }>()
     resultsCtx.effect(() => () => { models.forEach(({ model }) => { model.dispose() }); models.clear() },
