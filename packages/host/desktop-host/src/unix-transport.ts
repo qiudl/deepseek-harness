@@ -4,7 +4,7 @@ import { parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAt
   encodeHostRootPlanningAttemptAuthorityPayload, matchHostRootPlanningAttemptTarget, matchHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion,
   ProfileRootPlanningAttemptAuthorityRequest, HostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostSourceAnalysisOutput, matchHostSourceAnalysisOutput, matchHostRootAnalysisOutput } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostSourceAnalysisOutput, matchHostSourceAnalysisOutput, parseHostRootAnalysisOutput, matchHostRootAnalysisOutput } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata, type ProfileRootJournalRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootAuthorityChallenge, parseHostRootAuthorityAssertion, encodeHostRootAuthorityPayload, parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootSubmissionTarget, HostRootSubmissionDescriptor, ProfileRootAuthorityRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -1641,7 +1641,12 @@ export class HostControlAuthority {
               ? parseHostSourceAnalysisOutput({ ...evidence, analysis_receipt: signOutput(evidence.dispatch, evidence.output_digest) })
               : evidence }
           }
-          else if (command.action === 'read_root_output') result = { kind:'root_output',evidence:matchHostRootAnalysisOutput(value,command.target) }
+          else if (command.action === 'read_root_output') {
+            const evidence = matchHostRootAnalysisOutput(value, command.target)
+            result = { kind: 'root_output', evidence: evidence.state === 'saved'
+              ? parseHostRootAnalysisOutput({ ...evidence, analysis_receipt: signOutput(evidence.dispatch, evidence.output_digest) })
+              : evidence }
+          }
           else if (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') result = parseHostCollaborationAnalysisResult({ kind: 'root_prepared', preparation: value })
           else if (command.action === 'prepare' || command.action === 'prepare_clarification') result = parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: value })
           else if (command.action === 'capture_reply') result = parseHostCollaborationAnalysisResult({ kind: 'reply_source', capture: value })
@@ -2917,7 +2922,8 @@ export class UnixHostClient {
       matchHostRootPlanningAttemptTarget(result.preparation, command.target)
     if (result.kind === 'root_output' && command.action === 'read_root_output') matchHostRootAnalysisOutput(result.evidence,command.target)
     if (result.kind === 'source_output' && command.action === 'read_source_output') matchHostSourceAnalysisOutput(result.evidence, command.target)
-    const saved = result.kind === 'source_output' && result.evidence.state === 'saved' ? result.evidence : undefined
+    const saved = (result.kind === 'source_output' || result.kind === 'root_output') && result.evidence.state === 'saved'
+      ? result.evidence : undefined
     if (saved && !saved.analysis_receipt) throw new HostAuthorityError('unauthorized')
     const dispatch = saved?.dispatch ?? (command.action === 'dispatch' ? command.grant : undefined)
     const receipt = saved?.analysis_receipt ?? (result.kind === 'output' ? result.analysis_receipt : undefined)

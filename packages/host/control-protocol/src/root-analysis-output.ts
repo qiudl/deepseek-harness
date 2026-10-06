@@ -24,7 +24,7 @@ export type HostSavedAnalysisDispatch = Readonly<{
 }>
 /** Bounded original output or an explicit absence; no prompt, credentials or executable preparation. */
 export type HostRootAnalysisOutput = Readonly<{ state: 'missing'; root: HostRootSubmissionDescriptor }>
-  | Readonly<{ state: 'saved'; root: HostRootSubmissionDescriptor; dispatch: HostSavedAnalysisDispatch; output_digest: string; json_base64url: string }>
+  | Readonly<{ state: 'saved'; root: HostRootSubmissionDescriptor } & HostSavedAnalysisFields>
 function exact(v: unknown, keys: string[]): Record<string, unknown> {
   if (!v || typeof v !== 'object' || Object.getPrototypeOf(v) !== Object.prototype || Object.getOwnPropertySymbols(v).length) throw Error('invalid_root_output')
   const d = Object.getOwnPropertyDescriptors(v)
@@ -76,13 +76,14 @@ export function parseHostSavedAnalysisFields(value: unknown, sourceDigest: strin
   return Object.freeze({ dispatch, output_digest, json_base64url: output.json_base64url,
     ...(receipt ? { analysis_receipt: receipt } : {}) })
 }
-/** Validate output bytes, root binding and consumed grant without testing present lease authority.
+/** Validate output bytes, root binding, consumed grant and optional receipt without testing present lease authority.
  * @param value - Private worker evidence bounded below the Host frame budget.
  * @returns Detached evidence; invalid digest, fields, UTF-8 or grant binding rejects.
  */
 export function parseHostRootAnalysisOutput(value: unknown): HostRootAnalysisOutput {
   const state: unknown = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'state')?.value : undefined
-  const r = exact(value, state === 'missing' ? ['state','root'] : ['state','root','dispatch','output_digest','json_base64url'])
+  const signed = value && typeof value === 'object' && Object.hasOwn(value, 'analysis_receipt')
+  const r = exact(value, state === 'missing' ? ['state','root'] : ['state','root','dispatch','output_digest','json_base64url', ...(signed ? ['analysis_receipt'] : [])])
   const root = parseHostRootSubmissionDescriptor(r.root)
   if (state === 'missing') return Object.freeze({ state,root })
   if (state !== 'saved') throw Error('invalid_root_output')

@@ -155,7 +155,7 @@ An unknown package receipt can expose `plugin_complete` with closed `action`, `p
 
 The `profile.root_analysis` capability enables `prepare_root` on the existing analysis method. Its input contains only namespace, continuation policy and original Source input; its `root_prepared` response binds prepared or recovered metadata to a persisted root descriptor. A Source-only response or a different Source descriptor rejects. Dispatch remains bound to the original live attempt; recovered root metadata cannot create a new call.
 
-`profile.root_analysis_recovery` separately enables `read_root_output`. The response binds the original root, consumed dispatch metadata and saved JSON digest, or explicitly reports missing output. Historical lease expiry does not erase evidence or authorize dispatch. Output remains limited to 32 KiB decoded within the existing 64 KiB frame; prompts and executable handles are excluded.
+`profile.root_analysis_recovery` separately enables `read_root_output`. The response binds the original root, consumed dispatch metadata and saved JSON digest, or explicitly reports missing output. Saved responses carry the installation receipt; the client requires and verifies it against the current Account and Host peer. Historical lease expiry does not erase evidence or authorize dispatch. Output remains limited to 32 KiB decoded within the existing 64 KiB frame; prompts and executable handles are excluded.
 
 The separate `profile.root_lookup` capability enables `recover_root` with the original namespace, policy and Source input. Its response must be `root_prepared` with non-executable `recovered` metadata. It cannot fall back to `prepare_root` or return a live attempt.
 

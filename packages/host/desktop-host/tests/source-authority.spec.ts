@@ -485,6 +485,55 @@ it('refuses a Source digest or coordinate mismatch from the private worker', asy
 function analysisGrant(f:Awaited<ReturnType<typeof fixture>>) {
   return { attempt_request_id:f.challenge.request_id,plan_id:'plan',expected_plan_revision:'1',attempt_id:'attempt',attempt_fence:'1',source_digest:f.challenge.snapshot_digest,input_manifest_digest:'b'.repeat(64),lease_expires_at:new Date(20000).toISOString(),dispatch_granted:true }
 }
+it.each(['saved', 'maximum', 'unsigned', 'signature', 'peer'] as const)(
+  'saved Root output carries current installation proof without dispatch: %s', async (mode) => {
+    const { parseHostRootSubmissionTarget, parseHostCollaborationAnalysisReceipt,
+      encodeHostCollaborationAnalysisReceiptPayload } = await import('@deepseek-ai/dsh-host-control-protocol')
+    const f = await fixture(true, true)
+    await f.grant()
+    const c = f.challenge
+    const root = { namespace_id: 'n2_' + 'b'.repeat(64), command_id: randomUUID(), root_task_id: randomUUID(),
+      root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64), source_descriptor: {
+        workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id,
+        source_revision: c.source_revision, snapshot_digest: c.snapshot_digest } }
+    const { snapshot_digest: _digest, ...coordinates } = root.source_descriptor
+    const target = parseHostRootSubmissionTarget({ namespace_id: root.namespace_id, command_id: root.command_id, ...coordinates })
+    const jsonText = mode === 'maximum' ? JSON.stringify({ text: '\u0000'.repeat(5459) + 'abc' }) : '{"intent":"discuss"}'
+    const dispatch = analysisGrant(f), output_digest = createHash('sha256').update(jsonText).digest('hex')
+    let reads = 0
+    f.setAnalysis(async (_profile, command) => {
+      reads++
+      expect(command.action).toBe('read_root_output')
+      return { state: 'saved', root, dispatch, output_digest, json_base64url: Buffer.from(jsonText).toString('base64url') }
+    })
+    if (mode !== 'saved' && mode !== 'maximum') f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.collaboration_analysis' || frame.result.kind !== 'root_output'
+        || frame.result.evidence.state !== 'saved') return frame
+      const evidence = frame.result.evidence
+      const receipt = parseHostCollaborationAnalysisReceipt(Object.getOwnPropertyDescriptor(evidence, 'analysis_receipt')?.value)
+      if (mode === 'unsigned') {
+        const { analysis_receipt: _proof, ...unsigned } = { ...evidence, analysis_receipt: receipt }
+        return { ...frame, result: { kind: 'root_output', evidence: unsigned } }
+      }
+      return { ...frame, result: { kind: 'root_output', evidence: { ...evidence,
+        analysis_receipt: mode === 'peer' ? { ...receipt, process_nonce: 'B'.repeat(43) }
+          : { ...receipt, signature: 'A'.repeat(86) } } } }
+    })
+    const pending = f.client.collaborationAnalysis({ ...f.account, command: { action: 'read_root_output', target } })
+    if (mode === 'saved' || mode === 'maximum') {
+      const result = await pending
+      if (result.kind !== 'root_output' || result.evidence.state !== 'saved') throw Error('missing saved Root output')
+      const proof = parseHostCollaborationAnalysisReceipt(Object.getOwnPropertyDescriptor(result.evidence, 'analysis_receipt')?.value)
+      expect(proof).toMatchObject({ dispatch, output_digest, account_binding_handle: f.account.accountBindingHandle,
+        installation_id: f.identity.installationId })
+      expect(verify(null, Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(proof)), f.keys.publicKey,
+        Buffer.from(proof.signature, 'base64url'))).toBe(true)
+      expect(Buffer.from(result.evidence.json_base64url, 'base64url').toString('utf8')).toBe(jsonText)
+      if (mode === 'maximum') expect(Buffer.byteLength(jsonText)).toBe(32768)
+    } else await expect(pending).rejects.toThrow()
+    expect(reads).toBe(1)
+  },
+)
 it('authorizes analysis under the original connection Account and derives its private binding in Host', async () => {
   const f = await fixture()
   const input = { ...f.account, command: { action: 'dispatch' as const, attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) } }
