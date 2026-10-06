@@ -397,3 +397,93 @@ it('does not expose metadata before an accepted input write finishes or after a 
   release(); await writingCheck; await readCheck
   expect(h.adapter.requests).toHaveLength(0)
 })
+
+it('rejects malformed request JSON, sparse arrays, oversized input and mismatched prepared configuration', async () => {
+  const h = await harness(), journal = await openCollaborationRootPlanningJournal(h.facility)
+  expect(() => createCollaborationRootPlanningManifest(h.root, h.predecessor, h.prepared,
+    { ...h.manifest.request, maxTokens: 8191 })).toThrow('model_changed')
+  const message = h.manifest.request.messages[0]
+  for (const request of [
+    { ...h.manifest.request, messages: [{ ...message, content: [{ type: 'text', text: '{' }] }] },
+    { ...h.manifest.request, messages: Array<unknown>(1) },
+    { ...h.manifest.request, system: 'x'.repeat(1024 * 1024) },
+  ]) await expect(journal.prepare({ ...h.manifest, request } as never, signal())).rejects.toThrow()
+  expect([...journal.records()]).toEqual([])
+})
+it('retains exact saved output and refuses conflicting or malformed replacements and used dispatch writers', async () => {
+  const h = await harness(), journal = await openCollaborationRootPlanningJournal(h.facility)
+  const record = await journal.prepare(h.manifest, signal())
+  await journal.dispatch(record, grant(record), signal())
+  await expect(journal.saveOutput(record, '{', signal())).rejects.toThrow()
+  const saved = await journal.saveOutput(record, '{}', signal())
+  expect(await journal.saveOutput(record, '{}', signal())).toEqual(saved)
+  await expect(journal.saveOutput(record, '{"other":1}', signal())).rejects.toThrow('output_conflict')
+  const claim = vi.fn(async () => grant(record))
+  await expect(createCollaborationRootPlanningWriter(journal, claim)(h.manifest, signal())).rejects.toThrow('dispatch_used')
+  expect(claim).not.toHaveBeenCalled()
+})
+it('reports non-Error cancellation and rejects wrong durable storage keys', async () => {
+  const h = await harness(), journal = await openCollaborationRootPlanningJournal(h.facility)
+  await expect(journal.prepare(h.manifest, AbortSignal.abort('cancelled'))).rejects.toThrow('aborted')
+  await journal.prepare(h.manifest, signal())
+  await journal.close()
+  const file = join(h.directory, 'collaboration_root_planning_v1.json')
+  const data = JSON.parse(await readFile(file, 'utf8')) as { tables: { attempts: Record<string, CollaborationRootPlanningRecord> } }
+  data.tables.attempts = { wrong: Object.values(data.tables.attempts)[0]! }
+  const bytes = JSON.stringify(data)
+  await writeFile(file, bytes)
+  await expect(openCollaborationRootPlanningJournal(h.facility)).rejects.toThrow('history_invalid')
+  expect(await readFile(file, 'utf8')).toBe(bytes)
+})
+
+it('rejects a persisted successor whose predecessor had already consumed dispatch', async () => {
+  const h = await harness(), journal = await openCollaborationRootPlanningJournal(h.facility)
+  const first = await journal.prepare(h.manifest, signal())
+  const next = createCollaborationRootPlanningManifest(h.root,
+    { attempt_request_id: first.manifest.attempt_request_id, input_manifest_digest: first.input_manifest_digest },
+    await h.prepare(), h.manifest.request)
+  await journal.prepare(next, signal())
+  await journal.close()
+  const file = join(h.directory, 'collaboration_root_planning_v1.json')
+  const data = JSON.parse(await readFile(file, 'utf8')) as { tables: { attempts: Record<string, CollaborationRootPlanningRecord> } }
+  data.tables.attempts[first.manifest.attempt_request_id] = { ...first, dispatch: grant(first) }
+  const bytes = JSON.stringify(data)
+  await writeFile(file, bytes)
+  await expect(openCollaborationRootPlanningJournal(h.facility)).rejects.toThrow('history_invalid')
+  expect(await readFile(file, 'utf8')).toBe(bytes)
+})
+it('does not dispatch a Provider when the grant expires while its durable receipt is being saved', async () => {
+  let writes = 0
+  const h = await harness({ after: async () => { if (++writes === 2) vi.setSystemTime(Date.now() + 60000) } })
+  vi.useFakeTimers({ toFake: ['Date'] })
+  cleanup.push(async () => { vi.useRealTimers() })
+  const journal = await openCollaborationRootPlanningJournal(h.facility)
+  const writer = createCollaborationRootPlanningWriter(journal, async record => grant(record))
+  await expect(writer(h.manifest, signal())).rejects.toThrow('grant_expired')
+  expect([...journal.records()][0]?.dispatch).toBeDefined()
+  expect(h.adapter.requests).toHaveLength(0)
+})
+
+it('refuses a new attempt at capacity while preserving the entire predecessor chain', async () => {
+  const h = await harness(), journal = await openCollaborationRootPlanningJournal(h.facility)
+  const first = await journal.prepare(h.manifest, signal())
+  await journal.close()
+  const file = join(h.directory, 'collaboration_root_planning_v1.json')
+  const data = JSON.parse(await readFile(file, 'utf8')) as { tables: { attempts: Record<string, CollaborationRootPlanningRecord> } }
+  let previous = first
+  for (let i = 1; i < 256; i++) {
+    const manifest = createCollaborationRootPlanningManifest(h.root, { attempt_request_id: previous.manifest.attempt_request_id,
+      input_manifest_digest: previous.input_manifest_digest }, h.prepared, h.manifest.request)
+    previous = { manifest, input_manifest_digest: collaborationJournalDigest(manifest) }
+    data.tables.attempts[manifest.attempt_request_id] = previous
+  }
+  const bytes = JSON.stringify(data)
+  await writeFile(file, bytes)
+  const full = await openCollaborationRootPlanningJournal(h.facility)
+  cleanup.push(() => full.close())
+  expect([...full.records()]).toHaveLength(256)
+  const next = createCollaborationRootPlanningManifest(h.root, { attempt_request_id: previous.manifest.attempt_request_id,
+    input_manifest_digest: previous.input_manifest_digest }, h.prepared, h.manifest.request)
+  await expect(full.prepare(next, signal())).rejects.toThrow('capacity_reached')
+  expect(await readFile(file, 'utf8')).toBe(bytes)
+})

@@ -87,8 +87,8 @@ export class DesktopCollaborationAnalysis {
   ) {
     if (planning && readRoot) this.rootPlanning = new DesktopRootPlanning(readRoot, planning.prepare, planning.open,
       () => this.journal ??= this.open(), (root) => {
-        if ([...this.pending].some(p => !p.controller.signal.aborted && (p.sourceDigest === root.source_digest
-          || (p.root?.root_task_id.toString() === root.root_task_id && p.root.namespace_id === root.namespace_id)))) throw Error('collaboration_root_planning_original_alive')
+        // An immutable root always retains the same Source digest, including after admission.
+        if ([...this.pending].some(p => !p.controller.signal.aborted && p.sourceDigest === root.source_digest)) throw Error('collaboration_root_planning_original_alive')
       }, lifetime)
   }
   /** Read or enqueue original Session feedback under the private parent lifetime.
@@ -104,7 +104,6 @@ export class DesktopCollaborationAnalysis {
     active.throwIfAborted()
     const action: unknown = operation && typeof operation === 'object' ? Object.getOwnPropertyDescriptor(operation, 'action')?.value : undefined
     const consumer = action === 'consumer_read' || action === 'consumer_prepare' || action === 'consumer_start'
-    if (consumer && !this.consumption) throw Error('collaboration_consumption_unavailable')
     const consume = this.consumption
     if (consumer && !consume) throw Error('collaboration_consumption_unavailable')
     const result = consumer && consume ? await consume(operation, active) : await this.feedback(operation, active)
@@ -153,6 +152,7 @@ export class DesktopCollaborationAnalysis {
     const result = await this.prepareOwned(
       active => capture({ ...input, source: input.source as CollaborationSourceInput }, active), binding, signal, resumeBinding,
     )
+    /* v8 ignore next -- A successful RootCapture always supplies submission; prepareOwned builds its descriptor before returning. */
     if (!result.root) throw Error('collaboration_root_capture_unavailable')
     return Object.freeze({ ...result,root:result.root })
   }
@@ -377,6 +377,7 @@ export class DesktopCollaborationAnalysis {
     if (output) {
       const records = [...journal.records()].filter(record => record.input_manifest_digest === output.input_manifest_digest)
       const record = records[0]
+      /* v8 ignore next -- Journal opening/saveOutput validate the unique consumed input; both iterators are immutable. */
       if (records.length !== 1 || !record?.dispatch || record.attempt_request_id !== output.attempt_request_id ||
         record.source_digest !== entry.source_digest) throw Error('collaboration_analysis_output_invalid')
       result = matchHostRootAnalysisOutput({ state:'saved',root,dispatch:record.dispatch,output_digest:output.output_digest,

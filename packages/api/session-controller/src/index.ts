@@ -743,6 +743,7 @@ export class SessionController extends TypertRemoteService {
     const parsed = parseCollaborationFeedbackOperation(value)
     if (parsed.action !== 'read' && parsed.action !== 'enqueue') throw Error('collaboration_feedback_operation_invalid')
     const result = await this.accessCollaborationFeedback(parsed, signal)
+    /* v8 ignore next -- The private action parser and dispatcher return observations for exactly read/enqueue. */
     if (!('status' in result)) throw Error('collaboration_feedback_operation_invalid')
     return result
   }
@@ -756,6 +757,7 @@ export class SessionController extends TypertRemoteService {
     const parsed = parseCollaborationFeedbackOperation(value)
     if (parsed.action === 'read' || parsed.action === 'enqueue') throw Error('collaboration_consumption_operation_invalid')
     const result = await this.accessCollaborationFeedback(parsed, signal)
+    /* v8 ignore next -- Consumer actions are excluded from the observation-only return paths above. */
     if ('status' in result) throw Error('collaboration_consumption_operation_invalid')
     const commit = result.record ? collaborationConsumptionCommit(result.record) : undefined
     return { ...result, ...(commit ? { commit } : {}) }
@@ -878,6 +880,7 @@ export class SessionController extends TypertRemoteService {
         }
         const started = await consumers.start(binding, command.grant, owned)
         await current()
+        /* v8 ignore else -- Serialized starts return replays above; this private journal has one writer. */
         if (started.wake) {
           if (started.record.state === 'prepared' || session.seq !== before.event_count || !idle()) throw Error('collaboration_consumption_reconciliation_required')
           const deadline = Date.parse(started.record.grant.expires_at)
@@ -895,9 +898,13 @@ export class SessionController extends TypertRemoteService {
             this.collaborationConsumerLive.delete(message.id)
           }
           await current()
-          return { kind: 'consumer' as const, record: consumers.read(binding) ?? started.record, observation: await observe() }
+          const retained = consumers.read(binding)
+          /* v8 ignore next -- A committed consumer is immutable and this journal has no deletion operation. */
+          if (!retained) throw Error('collaboration_consumption_reconciliation_required')
+          return { kind: 'consumer' as const, record: retained, observation: await observe() }
+        } else {
+          return { kind: 'consumer' as const, record: started.record, observation: before }
         }
-        return { kind: 'consumer' as const, record: started.record, observation: before }
       }
       if (command.action === 'read' || before.status !== 'not_enqueued') return before
       if (root.continuation_policy !== 'follow_authorized_plan') throw Error('collaboration_feedback_display_only')

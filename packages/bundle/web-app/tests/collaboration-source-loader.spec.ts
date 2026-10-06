@@ -336,6 +336,15 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     expect(await response.json()).toEqual({ error: 'unavailable' })
     expect(await readFile(join(directory, 'state', 'collaboration_source_v2.json'), 'utf8')).toContain(nextId)
     await expect(readFile(join(directory, 'state', 'collaboration_analysis_v2.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    const root = (await ctx.sessionController.captureCollaborationRoot({ source, namespace_id: 'n2_' + 'a'.repeat(64),
+      continuation_policy: 'display_only' }, new AbortController().signal)).submission
+    const target = { namespace_id: root.namespace_id, command_id: root.command_id, workspace_id: source.workspace_id,
+      session_id: source.session_id, source_message_id: source.source_message_id, source_revision: source.source_revision }
+    await ctx.sessionController.acceptCollaborationRoot(target, { root_task_id: root.root_task_id, root_trace_id: root.root_trace_id,
+      admission_id: root.command_id, task_revision: 1, state_version: 1, state: 'active' }, new AbortController().signal)
+    const planning = await postAnalysis({ action: 'read_root_attempt', binding_key: 'd'.repeat(64), target })
+    expect(planning.status).toBe(422)
+    expect(await planning.json()).toEqual({ error: 'unavailable' })
     expect(providerRequests).toBe(0)
   }
   const analysisJournal = mode !== 'root-submission' && mode !== 'analysis-missing-domain' && mode !== 'source-only' && mode !== 'analysis-profile' && mode !== 'root-analysis' && mode !== 'delivery' ? await openCollaborationAnalysisJournal(facility!) : undefined

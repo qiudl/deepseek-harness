@@ -1,7 +1,7 @@
 /** REQ-20261004-0008: consumption evidence comes from persisted Session events. */
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { createCollaborationFeedbackMessage, observeCollaborationFeedback } from '../src/collaboration-feedback.ts'
+import { createCollaborationFeedbackMessage, observeCollaborationFeedback, parseCollaborationFeedbackOperation } from '../src/collaboration-feedback.ts'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { collaborationJournalDigest, describeCollaborationSource } from '../src/collaboration-source-journal.ts'
@@ -36,6 +36,21 @@ it('binds the message ID and model-visible text to the original trace, command, 
   for (const changed of [{ invocation_id: 'other' }, { namespace_id: 'n2_' + 'f'.repeat(64) }, { task_revision: '2' }])
     expect(() => createCollaborationFeedbackMessage(execution, { ...reply, ...changed }, source)).toThrow()
   expect(() => createCollaborationFeedbackMessage({ ...execution, state: 'prepared', receipt: undefined }, reply, source)).toThrow()
+})
+it('rejects unrelated but internally consistent delivery facts and private operation overrides', () => {
+  const target = { namespace_id: root.namespace_id, command_id: root.command_id, ...reply.source_locator }
+  for (const patch of [{ target: null }, { selection: null }, { action: 'consumer_start', grant: null }])
+    expect(() => parseCollaborationFeedbackOperation({ action: 'read', target, selection, delivery_id: reply.delivery_id, ...patch })).toThrow('operation_invalid')
+  const { host_journal_commit: commit, ...delivery } = reply
+  for (const patch of [{ invocation_id: 'other' }, { namespace_id: 'n2_' + 'f'.repeat(64) }, { task_revision: '2' }, { plan_id: 'other' }]) {
+    const body = { ...delivery, ...patch }
+    expect(() => createCollaborationFeedbackMessage(execution, { ...body, host_journal_commit: { ...commit, content_digest: collaborationJournalDigest(body) } }, source)).toThrow('execution_mismatch')
+  }
+  const { answer: _answer, ...withoutAnswer } = delivery
+  const failedBody = { ...withoutAnswer, execution_state: 'failed', failure_code: 'failed', result_digest: collaborationJournalDigest({ state: 'failed', answer: null, failure_code: 'failed' }) }
+  expect(JSON.stringify(createCollaborationFeedbackMessage(execution, { ...failedBody, host_journal_commit: { ...commit, content_digest: collaborationJournalDigest(failedBody) } }, source))).toContain('failed')
+  const m = message()
+  expect(observeCollaborationFeedback([event('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [m] }, 0)], m).status).toBe('queued')
 })
 it('distinguishes queued, removed and context-applied evidence without treating enqueue as consumption', () => {
   const m = message(), log = [event('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [m] }, 0)]

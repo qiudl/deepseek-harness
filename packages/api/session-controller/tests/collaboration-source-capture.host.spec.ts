@@ -13,6 +13,7 @@ import { mkdtemp, realpath, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
+import { freshConsumerGrant } from './collaboration-consumption-fixture.ts'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createSessionTestController, testSessionPersistence } from './test-remote.ts'
 import { describeCollaborationSource, collaborationJournalDigest } from '../src/collaboration-source-journal.ts'
@@ -41,7 +42,7 @@ class SnapshotAdapter extends LlmAdapter {
   }
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
-async function harness(root?: string, existingCwd?: string, isolateDomain = false) {
+async function harness(root?: string, existingCwd?: string, isolateDomain: boolean | 'owners' = false) {
   root ??= await mkdtemp(join(tmpdir(), 'req0004-profile-source-'))
   const cwd = existingCwd ?? await realpath(root)
   const sessionId = SessionId('source-session')
@@ -66,7 +67,10 @@ async function harness(root?: string, existingCwd?: string, isolateDomain = fals
   await ctx.plugin(WorkspaceRegistry)
   const workspace = await ctx.workspaceRegistry.create(cwd)
   await workspace.attachSession(sessionId)
-  const controllerContext = isolateDomain ? ctx.isolate('storageDomain') : ctx
+  const domainContext = isolateDomain ? ctx.isolate('storageDomain') : ctx
+  const controllerContext = isolateDomain === 'owners' ? domainContext.isolate('sessionPersistence') : domainContext
+  const removeDomain = isolateDomain === 'owners' ? controllerContext.provide('storageDomain', facility) : undefined
+  const removePersistence = isolateDomain === 'owners' ? controllerContext.provide('sessionPersistence', ctx.get('sessionPersistence')) : undefined
   const controller = createSessionTestController(controllerContext, {
     defaultModelSelection: () => ({ provider: 'fixture', model: 'default' }), cwd,
   })
@@ -80,6 +84,7 @@ async function harness(root?: string, existingCwd?: string, isolateDomain = fals
     }],
   })
   return { root, cwd, ctx, controller, controllerContext, workspace, sessionId, source, adapter, prepare, stream, resume, backend, events,
+    removeDomain, removePersistence,
     sourceFile: join(root, 'state', 'collaboration_source_v2.json'),
     dispose: async () => { await ctx.fiber.dispose(); await facility.closeAll(); await backend.close() },
   }
@@ -1025,7 +1030,7 @@ it('prepares the admitted root original model after a session selection change w
   expect(persist).not.toHaveBeenCalled()
 })
 
-it('refuses changed effective reasoning and membership loss during original-model preparation', async () => {
+it.each(['detached', 'replacement'] as const)('refuses changed effective reasoning and original-model owner loss: %s', async (mode) => {
   const h = await harness(), signal = new AbortController().signal
   const first = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64),
     continuation_policy: 'follow_authorized_plan', source: h.source() }, signal)
@@ -1037,13 +1042,16 @@ it('refuses changed effective reasoning and membership loss during original-mode
   h.adapter.defaultEffort = true
   await expect(h.controller.prepareCollaborationRootPlanning(target, null, signal)).rejects.toThrow('model_selection_changed')
   h.adapter.defaultEffort = false
-  h.adapter.prepare = async () => { await h.workspace.detachSession(h.sessionId) }
+  h.adapter.prepare = async () => {
+    if (mode === 'replacement') h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+    else await h.workspace.detachSession(h.sessionId)
+  }
   await expect(h.controller.prepareCollaborationRootPlanning(target, null, signal)).rejects.toThrow('mismatch')
   expect(h.stream).not.toHaveBeenCalled()
 })
 
-it('persists concrete root execution commands under current Profile membership without preparing or activating a model', async () => {
-  const h = await harness(), signal = new AbortController().signal
+it.each(['normal', 'open_failure', 'replacement'] as const)('persists concrete root execution commands under current Profile membership: %s', async (mode) => {
+  const h = await harness(undefined, undefined, 'owners'), signal = new AbortController().signal
   const first = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'b'.repeat(64),
       source: h.source(), continuation_policy: 'follow_authorized_plan' }, signal), e = first.submission
   const target = { namespace_id: e.namespace_id, command_id: e.command_id, workspace_id: e.source.workspace_id,
@@ -1052,7 +1060,25 @@ it('persists concrete root execution commands under current Profile membership w
     admission_id: e.command_id, task_revision: 1, state_version: 1, state: 'active' }, signal)
   const selection = { plan_id: 'plan-1', expected_plan_revision: '1', candidate_digest: 'c'.repeat(64),
     task_id: 'task-1', task_revision: '1', task_digest: 'd'.repeat(64), expected_scope_version: '0' }
+  if (mode !== 'normal') {
+    const open = h.backend.kv.open.bind(h.backend.kv)
+    h.backend.kv.open = async (descriptor) => {
+      if (descriptor.name === 'collaboration_root_execution_v1') {
+        if (mode === 'open_failure') throw Error('execution-open-failed')
+        h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+      }
+      return open(descriptor)
+    }
+    await expect(h.controller.collaborationRootExecution({ action: 'read', target, selection }, signal)).rejects.toThrow(
+      mode === 'open_failure' ? 'execution-open-failed' : 'session_workspace_mismatch')
+    await h.dispose()
+    return
+  }
   const prepares = h.prepare.mock.calls.length, events = [...h.events]
+  const facility = h.ctx.get('storageDomain')!
+  h.removeDomain!()
+  await expect(h.controller.collaborationRootExecution({ action: 'read', target, selection }, signal)).rejects.toThrow('execution_journal_unavailable')
+  h.controllerContext.provide('storageDomain', facility)
   expect(await h.controller.collaborationRootExecution({ action: 'read', target, selection }, signal)).toBeNull()
   const entry = await h.controller.collaborationRootExecution({ action: 'prepare', target, selection }, signal)
   expect(entry?.root.root_trace_id).toBe(e.root_trace_id)
@@ -1069,9 +1095,9 @@ it('persists concrete root execution commands under current Profile membership w
   await expect(h.controller.collaborationRootExecution({ action: 'read', target, selection }, signal)).rejects.toThrow()
 })
 
-it('observes feedback from storage, queues it once and refuses changed Session prefixes', async () => {
-  const h = await harness(), signal = new AbortController().signal
-  const captured = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64), source: h.source(), continuation_policy: 'follow_authorized_plan' }, signal)
+async function feedbackHarness(skipDelivery = false, isolateOwners = false, policy: 'follow_authorized_plan' | 'display_only' = 'follow_authorized_plan') {
+  const h = await harness(undefined, undefined, isolateOwners ? 'owners' : false), signal = new AbortController().signal
+  const captured = await h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64), source: h.source(), continuation_policy: policy }, signal)
   const root = captured.submission, target = { namespace_id: root.namespace_id, command_id: root.command_id,
     workspace_id: root.source.workspace_id,
     session_id: root.source.session_id, source_message_id: root.source.source_message_id, source_revision: root.source.source_revision }
@@ -1080,10 +1106,12 @@ it('observes feedback from storage, queues it once and refuses changed Session p
   const execution = await h.controller.collaborationRootExecution({ action: 'prepare', target, selection }, signal)
   await h.controller.collaborationRootExecution({ action: 'accept', target, selection, receipt: { execution_command_id: execution!.execution_command_id,
     root_task_id: root.root_task_id, root_trace_id: root.root_trace_id, root_revision: '1', plan_id: 'plan-1', task_id: 'task-1', task_revision: '1', invocation_id: 'invocation-1', admission: 'recorded', max_invocations: 1, max_runtime_ms: 1000, expires_at: '2026-01-01T00:00:00.000Z' } }, signal)
-  await h.controller.receiveCollaborationDelivery(deliveryFor(captured.snapshot), signal)
-  const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+  if (!skipDelivery) await h.controller.receiveCollaborationDelivery(deliveryFor(captured.snapshot), signal)
+  const session = h.ctx.sessions.prepare(h.sessionId, { meta: { cwd: h.cwd } })
+  const detach = h.ctx.sessions.enter(session)
+  h.ctx.sessions.announce(session)
   h.events.splice(0)
-  let flushFailure = false
+  let flushFailure = false, busy = false
   const flush = vi.fn(async () => {
     if (flushFailure) throw Error('storage-unavailable')
     // This unit double copies only on the durability barrier; composition tests exercise the real writer.
@@ -1092,13 +1120,18 @@ it('observes feedback from storage, queues it once and refuses changed Session p
   Object.assign(h.ctx.get('sessionPersistence')!, { flush })
   const inject = vi.fn((message: import('@deepseek-ai/dsh-llm').UserMessage) => { session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [message] }) })
   const unexpected = () => { throw Error('unexpected agent operation in feedback unit fixture') }
-  const agent: import('@deepseek-ai/dsh-agent').Agent = { id: h.sessionId, session, ctx: h.ctx, status: 'idle', options: {},
+  const agent: import('@deepseek-ai/dsh-agent').Agent = { id: h.sessionId, session, ctx: h.ctx, get status() { return busy ? 'running' : 'idle' }, options: {},
     inbox: { nextTurn: [], nextStep: [], clear: unexpected, append: unexpected, prepend: unexpected,
       replace: unexpected, remove: unexpected, splice: unexpected }, inject,
     cancel: unexpected, whenIdle: unexpected, runMaintenance: unexpected, send: unexpected, followup: unexpected, steer: unexpected }
 
-  await h.ctx.agents.register(agent)
+  const unregister = await h.ctx.agents.register(agent)
   const query = { action: 'read', target, selection, delivery_id: 'delivery-1' }
+  return { h, signal, query, session, inject, agent, captured, target, selection, flush, detach, unregister,
+    setFlushFailure: (value: boolean) => { flushFailure = value }, setBusy: (value: boolean) => { busy = value } }
+}
+it('observes feedback from storage, queues it once and refuses changed Session prefixes', async () => {
+  const { h, signal, query, session, inject, setFlushFailure } = await feedbackHarness()
   const before = await h.controller.collaborationRootFeedback(query, signal)
   expect(before.status).toBe('not_enqueued')
   const enqueue = { ...query, action: 'enqueue', expected_event_count: before.event_count, expected_log_digest: before.log_digest }
@@ -1110,12 +1143,206 @@ it('observes feedback from storage, queues it once and refuses changed Session p
   session.append('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' })
   expect(await h.controller.collaborationRootFeedback(enqueue, signal)).toMatchObject({ status: 'claimed_or_removed' })
   expect(inject).toHaveBeenCalledTimes(1)
-  flushFailure = true
+  setFlushFailure(true)
   await expect(h.controller.collaborationRootFeedback(query, signal)).rejects.toThrow('storage-unavailable')
-  flushFailure = false
+  setFlushFailure(false)
   const original = h.events.length
   await h.workspace.detachSession(h.sessionId)
   await expect(h.controller.collaborationRootFeedback(query, signal)).rejects.toThrow('mismatch')
   expect(h.events).toHaveLength(original)
   expect(h.stream).not.toHaveBeenCalled()
+})
+
+it('rejects missing execution, delivery and wrong private actions before preparing a consumer', async () => {
+  const { h, signal, query, selection, target } = await feedbackHarness()
+  await expect(h.controller.collaborationRootFeedback({ ...query, action: 'consumer_read' }, signal)).rejects.toThrow('operation_invalid')
+  await expect(h.controller.collaborationRootConsumption(query, signal)).rejects.toThrow('operation_invalid')
+  await expect(h.controller.collaborationRootFeedback({ ...query, selection: { ...selection, task_id: 'absent' } }, signal)).rejects.toThrow('execution_not_admitted')
+  const other = { ...selection, task_id: 'prepared' }
+  await h.controller.collaborationRootExecution({ action: 'prepare', target, selection: other }, signal)
+  await expect(h.controller.collaborationRootFeedback({ ...query, selection: other }, signal)).rejects.toThrow('execution_not_admitted')
+  await expect(h.controller.collaborationRootFeedback({ ...query, delivery_id: 'missing' }, signal)).rejects.toThrow('delivery_missing')
+  expect(await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_read' }, signal)).toMatchObject({ record: null, observation: { status: 'not_enqueued' } })
+  expect(h.stream).not.toHaveBeenCalled()
+})
+it('requires an idle exact Session prefix and reuses the persisted consumer command', async () => {
+  const { h, signal, query, setBusy, inject } = await feedbackHarness()
+  const before = await h.controller.collaborationRootFeedback(query, signal)
+  const prepare = { ...query, action: 'consumer_prepare', expected_event_count: before.event_count, expected_log_digest: before.log_digest }
+  setBusy(true)
+  await expect(h.controller.collaborationRootConsumption(prepare, signal)).rejects.toThrow('session_busy')
+  await expect(h.controller.collaborationRootFeedback({ ...prepare, action: 'enqueue' }, signal)).rejects.toThrow('session_busy')
+  setBusy(false)
+  await expect(h.controller.collaborationRootConsumption({ ...prepare, expected_event_count: before.event_count + 1 }, signal)).rejects.toThrow('session_changed')
+  const prepared = await h.controller.collaborationRootConsumption(prepare, signal)
+  expect(prepared.record?.state).toBe('prepared')
+  expect(await h.controller.collaborationRootConsumption(prepare, signal)).toEqual(prepared)
+  await expect(h.controller.collaborationRootConsumption({ ...prepare, expected_event_count: before.event_count + 1 }, signal)).rejects.toThrow('conflict')
+  expect(inject).not.toHaveBeenCalled()
+  expect(h.stream).not.toHaveBeenCalled()
+})
+
+it.each(['consumer', 'delivery', 'persistence'] as const)('refuses feedback after its %s owner disappears', async (mode) => {
+  const { h, query, signal } = await feedbackHarness(mode === 'delivery', true)
+  if (mode === 'persistence') h.removePersistence!()
+  else h.removeDomain!()
+  const operation = mode === 'consumer'
+    ? h.controller.collaborationRootConsumption({ ...query, action: 'consumer_read' }, signal)
+    : h.controller.collaborationRootFeedback(query, signal)
+  await expect(operation).rejects.toThrow(mode === 'consumer' ? 'consumption_journal_unavailable'
+    : mode === 'delivery' ? 'delivery_journal_unavailable' : 'feedback_persistence_unavailable')
+  expect(h.stream).not.toHaveBeenCalled()
+})
+it('requires a current storage owner before creating a root or execution journal', async () => {
+  const h = await harness(undefined, undefined, 'owners'), signal = new AbortController().signal
+  await h.controller.captureCollaborationSource(h.source(), signal)
+  h.removeDomain!()
+  await expect(h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64), source: h.source(), continuation_policy: 'display_only' }, signal)).rejects.toThrow('root_journal_unavailable')
+  const missing = { namespace_id: 'n2_' + 'a'.repeat(64), command_id: '10000000-0000-4000-8000-000000000001',
+    workspace_id: h.workspace.id, session_id: h.sessionId, source_message_id: 'message-1', source_revision: '1' }
+  await expect(h.controller.readCollaborationRoot(missing, signal)).rejects.toThrow('root_journal_unavailable')
+})
+
+it.each(['root', 'consumer'] as const)('contains %s journal open failure through Profile disposal', async (mode) => {
+  const f = mode === 'consumer' ? await feedbackHarness() : undefined
+  const h = f?.h ?? await harness(), signal = new AbortController().signal
+  if (mode === 'root') await h.controller.captureCollaborationSource(h.source(), signal)
+  const open = h.backend.kv.open.bind(h.backend.kv)
+  h.backend.kv.open = async (descriptor) => {
+    if (descriptor.name === (mode === 'root' ? 'collaboration_root_submission_v1' : 'collaboration_consumption_v1')) throw Error('storage-open-failed')
+    return open(descriptor)
+  }
+  const operation = f ? h.controller.collaborationRootConsumption({ ...f.query, action: 'consumer_read' }, signal)
+    : h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64), source: h.source(), continuation_policy: 'display_only' }, signal)
+  await expect(operation).rejects.toThrow('storage-open-failed')
+  await h.dispose()
+})
+
+it.each(['enqueue', 'consumer_prepare'] as const)('refuses %s under a display-only root', async (action) => {
+  const { h, query, signal, inject } = await feedbackHarness(false, false, 'display_only')
+  const before = await h.controller.collaborationRootFeedback(query, signal)
+  const command = { ...query, action, expected_event_count: before.event_count, expected_log_digest: before.log_digest }
+  await expect(action === 'enqueue' ? h.controller.collaborationRootFeedback(command, signal)
+    : h.controller.collaborationRootConsumption(command, signal)).rejects.toThrow('display_only')
+  expect(inject).not.toHaveBeenCalled()
+})
+it('rejects a feedback prefix whose persistence adapter does not confirm the live event count', async () => {
+  const { h, query, signal, session, flush } = await feedbackHarness()
+  session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [] })
+  flush.mockImplementation(async () => {})
+  await expect(h.controller.collaborationRootFeedback(query, signal)).rejects.toThrow('persistence_unconfirmed')
+})
+it('does not acknowledge an enqueue when the Agent failed to insert its message', async () => {
+  const { h, query, signal, inject } = await feedbackHarness()
+  const before = await h.controller.collaborationRootFeedback(query, signal)
+  inject.mockImplementation(() => {})
+  await expect(h.controller.collaborationRootFeedback({ ...query, action: 'enqueue', expected_event_count: before.event_count,
+    expected_log_digest: before.log_digest }, signal)).rejects.toThrow('persistence_unconfirmed')
+  expect(h.stream).not.toHaveBeenCalled()
+})
+
+it('reads a detached original Session from storage and refuses to enqueue into a replacement', async () => {
+  const { h, query, signal, detach, inject, unregister } = await feedbackHarness()
+  await unregister()
+  detach()
+  const before = await h.controller.collaborationRootFeedback(query, signal)
+  expect(before.status).toBe('not_enqueued')
+  await expect(h.controller.collaborationRootFeedback({ ...query, action: 'enqueue', expected_event_count: before.event_count,
+    expected_log_digest: before.log_digest }, signal)).rejects.toThrow('session_not_attached')
+  expect(inject).not.toHaveBeenCalled()
+})
+it('discards a feedback observation if its original live Session detaches at the durability barrier', async () => {
+  const { h, query, signal, detach, flush, unregister } = await feedbackHarness()
+  flush.mockImplementation(async () => { await unregister(); detach() })
+  await expect(h.controller.collaborationRootFeedback(query, signal)).rejects.toThrow('session_workspace_mismatch')
+})
+
+it.each(['empty', 'missing_step', 'not_admitted', 'later_turn', 'lost_live_permission', 'missing_persistence'] as const)(
+  'checks durable consumer history before a Session Provider request: %s', async (mode) => {
+    const f = await feedbackHarness(false, true), { h, query, signal, session, agent } = f
+    if (mode !== 'empty') {
+      const before = await h.controller.collaborationRootFeedback(query, signal)
+      const prepared = await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_prepare',
+        expected_event_count: before.event_count, expected_log_digest: before.log_digest }, signal)
+      const record = prepared.record!
+      Object.assign(agent, { send: (message: import('@deepseek-ai/dsh-llm').UserMessage) => {
+        f.inject(message)
+        if (mode === 'missing_step') return
+        session.append('step/start', { turn: 1, step: 1 })
+        if (mode === 'not_admitted') return
+        session.append('user/message', message, { surfaceOp: 'append' })
+        if (mode === 'later_turn') {
+          session.append('step/end', { turn: 1, step: 1 })
+          session.append('step/start', { turn: 2, step: 1 })
+        }
+      }, whenIdle: async () => {} })
+      await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_start', grant: freshConsumerGrant(record.binding, record.command) }, signal)
+    }
+    h.controllerContext.on('session/flush', async () => {
+      await f.flush()
+      if (mode === 'missing_persistence') h.removePersistence!()
+    })
+    const request = async () => { for await (const _ of h.controllerContext.llm.stream({ provider: 'fixture', model: 'selected', messages: [], sessionId: h.sessionId })) { /* Drain the actual runtime hook. */ } }
+    if (mode === 'missing_step' || mode === 'lost_live_permission' || mode === 'missing_persistence') {
+      await expect(request()).rejects.toThrow(mode === 'missing_step' ? 'step_missing'
+        : mode === 'missing_persistence' ? 'consumption_persistence_unavailable' : 'reconciliation_required')
+      expect(h.stream).not.toHaveBeenCalled()
+    } else {
+      await request()
+      expect(h.stream).toHaveBeenCalledTimes(1)
+    }
+  },
+)
+
+it('opens a missing delivery journal and reports absence without inventing a reply', async () => {
+  const { h, query, signal } = await feedbackHarness(true)
+  await expect(h.controller.collaborationRootFeedback(query, signal)).rejects.toThrow('delivery_missing')
+})
+it('withholds root capture after a new live Session replaces the original cold owner during commit', async () => {
+  const h = await harness(), signal = new AbortController().signal, open = h.backend.kv.open.bind(h.backend.kv)
+  h.backend.kv.open = async (descriptor) => {
+    const unit = await open(descriptor), put = unit.putRecord.bind(unit)
+    if (descriptor.name === 'collaboration_root_submission_v1') unit.putRecord = async (...args) => {
+      await put(...args)
+      h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
+    }
+    return unit
+  }
+  await expect(h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64), source: h.source(),
+    continuation_policy: 'display_only' }, signal)).rejects.toThrow('session_workspace_mismatch')
+  expect(h.stream).not.toHaveBeenCalled()
+})
+
+it.each(['prefix', 'busy', 'expired'] as const)('keeps a consumed grant burned when %s changes during its commit', async (mode) => {
+  const f = await feedbackHarness(), { h, query, signal, session } = f
+  const before = await h.controller.collaborationRootFeedback(query, signal), open = h.backend.kv.open.bind(h.backend.kv)
+  let writes = 0
+  h.backend.kv.open = async (descriptor) => {
+    const unit = await open(descriptor), put = unit.putRecord.bind(unit)
+    if (descriptor.name === 'collaboration_consumption_v1') unit.putRecord = async (...args) => {
+      await put(...args)
+      if (++writes !== 2) return
+      if (mode === 'prefix') session.append('step/start', { turn: 1, step: 1 })
+      if (mode === 'busy') f.setBusy(true)
+      if (mode === 'expired') vi.setSystemTime(Date.now() + 61000)
+    }
+    return unit
+  }
+  if (mode === 'expired') { vi.useFakeTimers({ toFake: ['Date'] }); onTestFinished(() => { vi.useRealTimers() }) }
+  const prepared = await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_prepare',
+    expected_event_count: before.event_count, expected_log_digest: before.log_digest }, signal)
+  const record = prepared.record!
+  await expect(h.controller.collaborationRootConsumption({ ...query, action: 'consumer_start', grant: freshConsumerGrant(record.binding, record.command) }, signal))
+    .rejects.toThrow(mode === 'expired' ? 'grant_expired' : 'reconciliation_required')
+  const recovered = await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_read' }, signal)
+  expect(recovered.record?.state).toBe('started')
+  expect(f.inject).not.toHaveBeenCalled()
+  expect(h.stream).not.toHaveBeenCalled()
+})
+
+it.each([true, false])('discovers ordinary Session participation before opening a root journal (storage: %s)', async (storage) => {
+  const h = await harness(undefined, undefined, 'owners')
+  if (!storage) h.removeDomain!()
+  for await (const _ of h.controllerContext.llm.stream({ provider: 'fixture', model: 'selected', messages: [], sessionId: h.sessionId })) { /* Drain ordinary request. */ }
+  expect(h.stream).toHaveBeenCalledTimes(1)
 })

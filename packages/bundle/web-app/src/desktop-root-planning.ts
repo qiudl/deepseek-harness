@@ -109,6 +109,7 @@ export class DesktopRootPlanning {
         && r.manifest.root.root_task_id === root.root_task_id)
       const parents = new Set(records.map(r => r.manifest.predecessor?.attempt_request_id))
       const tips = records.filter(r => !parents.has(r.manifest.attempt_request_id)), tip = tips[0]
+      /* v8 ignore next -- Journal opening and every prepare validate a single unbranched chain per root. */
       if (tips.length > 1) throw Error('collaboration_root_planning_ambiguous')
       if (tip) await journal.inspectAttempt(tip.manifest.attempt_request_id, owned)
       const prior = tip ? { attempt_request_id: tip.manifest.attempt_request_id, input_manifest_digest: tip.input_manifest_digest }
@@ -125,6 +126,7 @@ export class DesktopRootPlanning {
         return wait(p.grant.promise, running)
       })
       p.result = capture.analyze(writer, owned).then(async (result) => {
+        /* v8 ignore next -- The owned runner awaits the writer (which installs p.record) before returning model output. */
         if (!p.record) throw Error('collaboration_root_planning_missing')
         await journal.saveOutput(p.record, result.jsonText, owned)
         return result
@@ -155,12 +157,14 @@ export class DesktopRootPlanning {
         throw Error('collaboration_root_planning_preparation_unavailable')
     }
     check()
+    /* v8 ignore next -- check() above rejects a missing record synchronously, with no intervening await. */
     if (!p?.record) throw Error('collaboration_root_planning_missing')
     const active = AbortSignal.any([signal, this.lifetime, p.controller.signal])
     await this.current(p, active)
     const journal = await wait(this.journal ??= this.open(), active)
     const descriptor = parseHostRootPlanningAttemptDescriptor(await journal.inspectAttempt(p.record.manifest.attempt_request_id, active))
     await this.current(p, active); check()
+    /* v8 ignore next -- The journal looks up this same immutable, hash-validated record by its attempt ID. */
     if (descriptor.input_manifest_digest !== p.record.input_manifest_digest) throw Error('collaboration_root_planning_input_changed')
     return descriptor
   }

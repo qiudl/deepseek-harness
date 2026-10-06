@@ -183,6 +183,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
 }
 
 type PickedScopedReference = {
+  submission_mode?: 'planning'
   kind: 'collaboration-v2'
   workspace_id: string
   session_id: string
@@ -293,14 +294,14 @@ it.each([10, 11])('bounds a scoped message to ten explicit chips (count %i)', as
   expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
 })
 
-it.each(['duplicate', 'other-workspace', 'other-session', 'other-source', 'mixed'])('refuses a second invalid scoped chip (%s) without local fallback', async (mode) => {
+it.each(['duplicate', 'other-workspace', 'other-session', 'other-source', 'mixed', 'submission-mode'])('refuses a second invalid scoped chip (%s) without local fallback', async (mode) => {
   const f = await bench(true)
   await f.pick('', '检查代码；')
   const r = JSON.parse(f.composer.snapshot.occurrences[0]!.ref) as PickedScopedReference
   await appendScoped(f, 2, mode === 'duplicate' ? { source_id: r.source_id }
     : mode === 'other-workspace' ? { workspace_id: '50000000-0000-4000-8000-000000000009' }
       : mode === 'other-session' ? { session_id: 'other-session' }
-        : mode === 'other-source' ? { original_source_id: '50000000-0000-4000-8000-000000000009' } : {}, mode === 'mixed' ? 'local-ref' : 'slark-agent')
+        : mode === 'other-source' ? { original_source_id: '50000000-0000-4000-8000-000000000009' } : mode === 'submission-mode' ? { submission_mode: 'planning' } : {}, mode === 'mixed' ? 'local-ref' : 'slark-agent')
   const original = f.composer.snapshot.draft
   f.composer.submit()
   await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
@@ -1304,7 +1305,7 @@ it('shows saved planning with its trace, without emitting execution admission', 
   expect(composer.notices.getSnapshot()?.text).toBe(`规划已保存，尚未开始执行。追踪编号：${rootTraceId}`)
   expect(admitted).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled()
 })
-it.each(['accepted', 'bad-trace', 'extra-private', 'missing-root', 'changed-source'] as const)(
+it.each(['accepted', 'bad-trace', 'extra-private', 'missing-root', 'changed-source', 'missing-value', 'null-value'] as const)(
   'root planning refuses %s replies and retains the original draft', async (change) => {
     const { composer, pick, submit, sink } = await bench(true)
     const host = window.__DSH_DESKTOP_HOST__!
@@ -1316,6 +1317,8 @@ it.each(['accepted', 'bad-trace', 'extra-private', 'missing-root', 'changed-sour
       const value = { source: { workspace_id: input.workspace_id, session_id: input.session_id,
         source_message_id: input.source_message_id, source_revision: input.source_revision },
       submission_state: 'planning_recorded', root_task_id: rootTaskId, root_trace_id: rootTraceId }
+      if (change === 'missing-value') return { ok: true } as never
+      if (change === 'null-value') return { ok: true, value: null } as never
       if (change === 'accepted') value.submission_state = 'accepted'
       if (change === 'bad-trace') value.root_trace_id = '0'.repeat(32)
       if (change === 'missing-root') Reflect.deleteProperty(value, 'root_task_id')
@@ -1390,5 +1393,18 @@ it('routes explicit task confirmation through the YAML-loaded original Session b
   if(!plugin?.fiber) throw Error('missing loaded source')
   await plugin.fiber.dispose()
   await bindings.executionAction(original.snapshot_digest,'task')
+  await bindings.consumptionAction?.(original.snapshot_digest,'delivery')
   expect(execution).toHaveBeenCalledTimes(2)
+})
+
+it('keeps the scoped draft when its Host disappears before submission', async () => {
+  const f = await bench(true)
+  await f.pick('', '检查代码；')
+  const draft = f.composer.snapshot.draft
+  Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__')
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(draft)
+  expect(f.submit).not.toHaveBeenCalled()
+  expect(f.sink).not.toHaveBeenCalled()
 })

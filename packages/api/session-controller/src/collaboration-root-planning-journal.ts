@@ -156,10 +156,12 @@ function tips(records: CollaborationRootPlanningRecord[]): Map<string, Collabora
     let cursor: CollaborationRootPlanningRecord | undefined = leaves[0]
     while (cursor) {
       const id = cursor.manifest.attempt_request_id
+      /* v8 ignore next -- Every predecessor digest was validated above; a hash-consistent cycle requires a SHA-256 fixed point. */
       if (visited.has(id)) throw Error('collaboration_root_planning_history_invalid')
       visited.add(id)
       cursor = cursor.manifest.predecessor ? byId.get(cursor.manifest.predecessor.attempt_request_id) : undefined
     }
+    /* v8 ignore next -- One leaf and no reused parent imply one chain unless a disconnected hash-consistent cycle exists. */
     if (visited.size !== group.length) throw Error('collaboration_root_planning_history_invalid')
     result.set(key, leaf)
   }

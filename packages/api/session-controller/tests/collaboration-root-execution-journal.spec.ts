@@ -6,10 +6,12 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
+import { collaborationJournalDigest as hash } from '../src/collaboration-source-journal.ts'
 import { join } from 'node:path'
 import { openCollaborationSourceJournal } from '../src/collaboration-source-journal.ts'
 import { openCollaborationRootJournal } from '../src/collaboration-root-journal.ts'
-import { openCollaborationRootExecutionJournal } from '../src/collaboration-root-execution-journal.ts'
+import { parseCollaborationExecutionOperation, openCollaborationRootExecutionJournal } from '../src/collaboration-root-execution-journal.ts'
 
 const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
@@ -139,4 +141,46 @@ for (const boundary of ['before', 'after'] as const) it.each(Array.from({ length
   const admitted = await reopened.accept(h.root, selection(), ack, signal())
   expect(admitted.state).toBe('admitted')
   if (admitted.state === 'admitted') expect(admitted.receipt).toEqual(ack)
+})
+
+it('rejects invalid operation targets and closed handles without writing', async () => {
+  const h = await harness(), journal = await openCollaborationRootExecutionJournal(h.facility)
+  expect(() => parseCollaborationExecutionOperation({ action: 'read', target: {}, selection: selection() })).toThrow('operation_invalid')
+  await journal.close()
+  expect(() => journal.read(h.root, selection())).toThrow('closed')
+  await expect(journal.prepare(h.root, selection(), signal())).rejects.toThrow('closed')
+})
+it('refuses substituted storage keys, duplicate command identities and capacity overflow', async () => {
+  const h = await harness(), journal = await openCollaborationRootExecutionJournal(h.facility)
+  const first = await journal.prepare(h.root, selection(), signal())
+  await journal.close()
+  const original = await readFile(h.file, 'utf8')
+  type Disk = { tables: { commands: Record<string, typeof first> } }
+  for (const count of [1, 4097]) {
+    const disk = JSON.parse(original) as Disk
+    disk.tables.commands = Object.fromEntries(Array.from({ length: count }, (_, i) => [`wrong-${i}`, first]))
+    const bytes = JSON.stringify(disk)
+    await writeFile(h.file, bytes)
+    await expect(openCollaborationRootExecutionJournal(h.facility)).rejects.toThrow(count === 1 ? 'journal_invalid' : 'capacity_reached')
+    expect(await readFile(h.file, 'utf8')).toBe(bytes)
+  }
+})
+
+it('refuses a fresh execution at capacity without evicting an admitted command', async () => {
+  const h = await harness(), journal = await openCollaborationRootExecutionJournal(h.facility)
+  const first = await journal.prepare(h.root, selection(), signal())
+  await journal.close()
+  const data = JSON.parse(await readFile(h.file, 'utf8')) as { tables: { commands: Record<string, unknown> } }
+  data.tables.commands = Object.fromEntries(Array.from({ length: 4096 }, (_, i) => {
+    const entry = { ...first, execution_command_id: randomUUID(), selection: { ...first.selection, task_id: `task-${i}` } }
+    entry.command_digest = hash({ schema_version: 1, root: entry.root, selection: entry.selection,
+      execution_command_id: entry.execution_command_id })
+    return [hash([entry.root.namespace_id, entry.root.root_task_id, entry.selection.plan_id, entry.selection.task_id,
+      entry.selection.task_revision]), entry]
+  }))
+  const bytes = JSON.stringify(data)
+  await writeFile(h.file, bytes)
+  const reopened = await openCollaborationRootExecutionJournal(h.facility)
+  await expect(reopened.prepare(h.root, { ...selection(), task_id: 'extra' }, signal())).rejects.toThrow('capacity_reached')
+  expect(await readFile(h.file, 'utf8')).toBe(bytes)
 })

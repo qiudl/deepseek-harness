@@ -1,8 +1,9 @@
+import { brandString } from '@deepseek-ai/dsh-brand'
 import { createHash, generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import {
   decodeHostControlFrame,
   encodeHostControlFrame,
@@ -21,7 +22,7 @@ import type { CollaborationDeliveryReceiver } from '../src/collaboration-deliver
 async function fixture(
   rootAnalysisSupported = false, rootAnalysisRecoverySupported = false,
   rootLookupSupported = false, rootPendingLookupSupported = false, rootLiveResumeSupported = false,
-  rootPlanningSupported = false, rootExecutionSupported = false, rootFeedbackSupported = false, enabled = true,
+  rootPlanningSupported = false, rootExecutionSupported = false, rootFeedbackSupported = false, enabled = true, omitRootReaders = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
@@ -97,8 +98,10 @@ async function fixture(
     rootLookupSupported,
     rootPendingLookupSupported,
     rootLiveResumeSupported,
-    rootJournal: (profileId, command, signal) => rootJournal(profileId, command, signal),
-    inspectCollaborationRoot: (profileId, target, signal) => inspectRoot(profileId, target, signal),
+    ...(!omitRootReaders ? { rootJournal: (profileId: string, command: Parameters<typeof rootJournal>[1], signal: AbortSignal) =>
+      rootJournal(profileId, command, signal),
+    inspectCollaborationRoot: (profileId: string, target: Parameters<typeof inspectRoot>[1], signal: AbortSignal) =>
+      inspectRoot(profileId, target, signal) } : {}),
     ...(enabled ? { inspectCollaborationSource: (profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal) =>
 
       inspect(profileId, target, signal) as Promise<HostCollaborationSourceDescriptor>,
@@ -672,6 +675,9 @@ it('REQ-20261004-0008 signs only a matching durable root under the current Accou
   expect(replayProof.challenge.command_id).toBe(proof.challenge.command_id)
   expect(replayProof.challenge.root_trace_id).toBe(proof.challenge.root_trace_id)
   expect(replayProof.signature).not.toBe(proof.signature)
+  f.alter(frame => ({ ...frame, type: 'event' } as never))
+  await expect(f.client.attestRootAuthority(input)).rejects.toMatchObject({ code: 'unavailable' })
+  f.alter(undefined)
 
   for (const change of [{ root_trace_id: 'e'.repeat(32) }, { payload_digest: 'e'.repeat(64) },
     { command_id: randomUUID() }]) {
@@ -985,6 +991,7 @@ it('signs durable consumption in a separate domain and refuses a changed origina
   f.setAnalysis(async()=>({ kind:'consumer',commit }))
   const input={ ...f.account,command:{ action:'root_feedback' as const,operation:{ action:'consumer_read',delivery_id:commit.delivery_id,
     target:{ ...commit.source_locator,namespace_id:commit.namespace_id } } } }
+  await expect(f.client.collaborationAnalysis({ ...input, command: { action: 'root_feedback', operation: { action: 'consumer_read' } } })).rejects.toMatchObject({ code: 'unavailable' })
   const result=await f.client.collaborationAnalysis(input)
   if(result.kind!=='root_feedback' || !result.record || typeof result.record!=='object' || !('receipt' in result.record))throw Error('missing receipt')
   const receipt=parseHostCollaborationConsumptionReceipt(result.record.receipt)
@@ -995,4 +1002,94 @@ it('signs durable consumption in a separate domain and refuses a changed origina
   await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
   f.setAnalysis(async()=>{f.host.revokeOwner(f.ownerId);return { kind:'consumer',commit }})
   await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
+})
+
+it('enforces root rollout capabilities on the server even if the client advertises them', async () => {
+  const { parseHostCollaborationAnalysisCommand } = await import('@deepseek-ai/dsh-host-control-protocol')
+  const f = await fixture(), c = f.challenge
+  await f.grant()
+  const target = { namespace_id: 'n2_' + 'a'.repeat(64), command_id: randomUUID(),
+    workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id, source_revision: c.source_revision }
+  const input = { namespace_id: target.namespace_id, continuation_policy: 'follow_authorized_plan', source: {} }
+  const caps = ['root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
+  Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, ...caps.map(c => 'profile.' + c)])
+  const commands = [
+    ...['root_feedback', 'root_execution_journal'].map(action => ({ action, operation: { action: 'read' } })),
+    ...['prepare_root_attempt', 'read_root_attempt', 'read_root_output'].map(action => ({ action, target })),
+    ...['resume_root', 'reconcile_root', 'recover_root', 'prepare_root'].map(action => ({ action, input })),
+  ]
+  for (const command of commands)
+    await expect(f.client.collaborationAnalysis({ ...f.account, command: parseHostCollaborationAnalysisCommand(command) })).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+it('refuses absent root readers, foreign environments and peer replacement', async () => {
+  const { parseHostRootJournalCommand } = await import('@deepseek-ai/dsh-host-control-protocol')
+  const f = await fixture(false, false, false, false, false, false, false, false, true, true)
+  const challenge = parseHostRootAuthorityChallenge({ schema_version: 1, source_challenge: f.challenge,
+    namespace_id: 'n2_' + 'b'.repeat(64), root_task_id: randomUUID(), root_trace_id: 'c'.repeat(32), command_id: randomUUID(), payload_digest: 'd'.repeat(64) })
+  const target = { namespace_id: challenge.namespace_id, command_id: challenge.command_id, workspace_id: f.challenge.workspace_id,
+    session_id: f.challenge.session_id, source_message_id: f.challenge.source_message_id, source_revision: f.challenge.source_revision }
+  const command = parseHostRootJournalCommand({ action: 'read', target })
+  await expect(f.client.rootJournal({ ...f.account, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+  Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, 'profile.root_journal', 'profile.root_authority'])
+  await expect(f.client.attestRootAuthority({ ...f.input, authorityEnvironmentId: randomUUID(), challenge })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await f.grant()
+  await expect(f.client.rootJournal({ ...f.account, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+  await expect(f.client.attestRootAuthority({ ...f.input, challenge })).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+it('rejects planning challenges from another environment and invalid peer response tags', async () => {
+  const f = await planningFixture()
+  await f.grant()
+  await expect(f.client.attestRootPlanningAttemptAuthority({ ...f.input, authorityEnvironmentId: randomUUID() })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(frame => ({ ...frame, type: 'event' } as never))
+  await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it.each(['profile.root_planning_attempt', 'profile.root_planning_attempt_recovery'] as const)('rejects a planning read without %s before sending a frame', async (capability) => {
+  const f = await planningFixture()
+  const { root } = f.descriptor
+  Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, 'profile.root_planning_attempt', 'profile.root_planning_attempt_recovery'].filter(c => c !== capability))
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'read_root_attempt', target: {
+    namespace_id: root.namespace_id, command_id: root.command_id, workspace_id: root.source_descriptor.workspace_id,
+    session_id: root.source_descriptor.session_id, source_message_id: root.source_descriptor.source_message_id,
+    source_revision: root.source_descriptor.source_revision,
+  } } })).rejects.toThrow()
+})
+it.each(['peer', 'policy'] as const)('rejects root journal responses after the authenticated %s changes in flight', async (mode) => {
+  const { parseHostRootJournalCommand, parseHostRootJournalMetadata } = await import('@deepseek-ai/dsh-host-control-protocol')
+  const f = await fixture(); await f.grant()
+  const target = { namespace_id: 'n2_' + 'a'.repeat(64), command_id: randomUUID(), workspace_id: f.challenge.workspace_id,
+    session_id: f.challenge.session_id, source_message_id: f.challenge.source_message_id, source_revision: f.challenge.source_revision }
+  const root = { namespace_id: target.namespace_id, command_id: target.command_id, root_task_id: randomUUID(), root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64),
+    source_descriptor: { workspace_id: target.workspace_id, session_id: target.session_id, source_message_id: target.source_message_id,
+      source_revision: target.source_revision, snapshot_digest: f.challenge.snapshot_digest } }
+  f.setRootJournal(async () => {
+    if (mode === 'policy') changeCurrentProfile(f.host)
+    return parseHostRootJournalMetadata({ ...root, schema_version: 1, state: 'pending', source_digest: f.challenge.snapshot_digest,
+      objective_ref: 'o', task_grant_ref: 'g', continuation_policy: 'display_only' })
+  })
+  if (mode === 'peer') f.alter((frame) => { Reflect.set(f.client.inspection, 'process_nonce', randomUUID()); return frame })
+  await expect(f.client.rootJournal({ ...f.account, command: parseHostRootJournalCommand({ action: 'read', target }) })).rejects.toMatchObject({ code: mode === 'peer' ? 'unavailable' : 'profile_mismatch' })
+})
+
+it('refuses a planning authority request when only its client claims the capability', async () => {
+  const f = await planningFixture(false)
+  Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, 'profile.root_planning_attempt_authority'])
+  await f.grant()
+  await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+function changeCurrentProfile(host: DesktopHost) {
+  const authorize = host.authorizeAccountModelText.bind(host)
+  let calls = 0
+  const spy = vi.spyOn(host, 'authorizeAccountModelText').mockImplementation((input) => {
+    const profile = authorize(input)
+    // Keep the real token/Account check; simulate a policy owner remapping its next result after inspection.
+    return ++calls % 2 === 0 ? brandString<typeof profile>('changed-profile') : profile
+  })
+  onTestFinished(() => { spy.mockRestore() })
+}
+it('refuses a fresh planning proof if authorization resolves to another Profile after inspection', async () => {
+  const f = await planningFixture(); await f.grant()
+  f.setPlanning(async () => { changeCurrentProfile(f.host); return f.descriptor })
+  await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toMatchObject({ code: 'profile_mismatch' })
 })

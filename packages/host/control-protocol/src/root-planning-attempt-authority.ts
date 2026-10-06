@@ -65,7 +65,7 @@ function record(
       k =>
         ![...required, ...optional].includes(k) ||
         !fields[k]?.enumerable ||
-        !('value' in (fields[k] ?? {})),
+        !('value' in fields[k]),
     ) ||
     required.some(k => !Object.hasOwn(fields, k))
   )

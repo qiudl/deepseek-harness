@@ -325,7 +325,6 @@ export async function openCollaborationConsumptionJournal(facility: Pick<DomainF
  * @returns Immutable consumption commit, or undefined before actual Session application.
  */
 export function collaborationConsumptionCommit(record: CollaborationConsumptionRecord): ConsumptionCommit | undefined {
-  if (record.state !== 'consumed') return undefined
   const r = recordSchema.parse(record)
   if (r.state !== 'consumed') return undefined
   return deepFreeze({

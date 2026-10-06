@@ -7,7 +7,7 @@ import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from './r
 function row(v: unknown, keys: string[]): Record<string, unknown> {
   if (!v || typeof v !== 'object' || Object.getPrototypeOf(v) !== Object.prototype || Object.getOwnPropertySymbols(v).length) throw Error('invalid_root_planning_evidence')
   const ds = Object.getOwnPropertyDescriptors(v)
-  if (Object.keys(ds).length !== keys.length || keys.some(k => !ds[k]?.enumerable || !('value' in (ds[k] ?? {})))) throw Error('invalid_root_planning_evidence')
+  if (Object.keys(ds).length !== keys.length || keys.some(k => !ds[k]?.enumerable || !('value' in ds[k]))) throw Error('invalid_root_planning_evidence')
   return v as Record<string, unknown>
 }
 /** Validate original identity and complete stored evidence; historical expiry does not erase dispatch.

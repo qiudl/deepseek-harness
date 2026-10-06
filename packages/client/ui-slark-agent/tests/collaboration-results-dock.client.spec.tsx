@@ -279,3 +279,17 @@ it('consumes a displayed original result only once and keeps consumption distinc
   expect(command.mock.calls.at(-1)?.[0]).toMatchObject({ action:'consumption-status' })
   expect(screen.getByText(zh['consumption.continued'])).toBeTruthy()
 })
+
+it.each(['unavailable', 'disabled'] as const)('shows %s execution without enabling a confirmation', async (mode) => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  f.bridge.collaborationRootExecution = async () => mode === 'unavailable' ? { ok: false }
+    : { ok: true, previewId: 'preview', rootTraceId: 'b'.repeat(32), executionEnabled: false,
+      tasks: [{ taskId: 'task', question: 'Work', agentName: 'Guide', projectName: 'Project' }] }
+  render(<CollaborationResultsDock {...f.props} />)
+  await screen.findByTestId('slark-execution-preview')
+  await act(async () => { screen.getByTestId('slark-execution-preview').click() })
+  expect(screen.getByText(zh[mode === 'disabled' ? 'execution.disabled' : 'task.readUnavailable'])).toBeTruthy()
+  if (mode === 'disabled') expect(screen.getByTestId('slark-execution-confirm').hasAttribute('disabled')).toBe(true)
+  else expect(screen.queryByTestId('slark-execution-confirm')).toBeNull()
+})

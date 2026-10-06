@@ -66,21 +66,24 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
             </div>
           })}
         </div>}
-        {group.replies.map(reply => <div className={css.reply} key={reply.delivery_id}>
-          {reply.target_display_snapshot && <strong>{reply.target_display_snapshot.agent_name}
-            {reply.target_display_snapshot.project_name !== null && <> · {reply.target_display_snapshot.project_name}</>}</strong>}
-          <small>{t(reply.delivery_state === 'restricted' ? 'task.restricted'
-            : reply.execution_state === 'succeeded' ? 'task.done'
-              : reply.execution_state === 'indeterminate' ? 'task.indeterminate' : 'task.failed')}</small>
-          {reply.answer !== undefined && <div className={css.text}>{reply.answer}</div>}
-          {reply.task_id && group.execution?.tasks?.some(task => task.taskId === reply.task_id) && reply.delivery_state !== 'restricted' && <div>
-            {group.execution.consumptions?.[reply.delivery_id] && <p role="status">{t(`consumption.${group.execution.consumptions[reply.delivery_id] ?? 'uncertain'}`)}</p>}
-            <Button size="sm" data-testid="slark-consumption-start" disabled={!group.execution.enabled || group.execution.consumptions?.[reply.delivery_id] !== undefined}
-              onClick={() => { void consumptionAction?.(group.original.snapshot_digest, reply.delivery_id) }}>{t('consumption.start')}</Button>
-            {group.execution.consumptions?.[reply.delivery_id] && <Button size="sm" data-testid="slark-consumption-status" disabled={group.execution.consumptions[reply.delivery_id] === 'sending'}
-              onClick={() => { void consumptionAction?.(group.original.snapshot_digest, reply.delivery_id, true) }}>{t('consumption.status')}</Button>}
-          </div>}
-        </div>)}
+        {group.replies.map((reply) => {
+          const consumption = group.execution?.consumptions?.[reply.delivery_id]
+          return <div className={css.reply} key={reply.delivery_id}>
+            {reply.target_display_snapshot && <strong>{reply.target_display_snapshot.agent_name}
+              {reply.target_display_snapshot.project_name !== null && <> · {reply.target_display_snapshot.project_name}</>}</strong>}
+            <small>{t(reply.delivery_state === 'restricted' ? 'task.restricted'
+              : reply.execution_state === 'succeeded' ? 'task.done'
+                : reply.execution_state === 'indeterminate' ? 'task.indeterminate' : 'task.failed')}</small>
+            {reply.answer !== undefined && <div className={css.text}>{reply.answer}</div>}
+            {reply.task_id && group.execution?.tasks?.some(task => task.taskId === reply.task_id) && reply.delivery_state !== 'restricted' && <div>
+              {consumption && <p role="status">{t(`consumption.${consumption}`)}</p>}
+              <Button size="sm" data-testid="slark-consumption-start" disabled={!group.execution.enabled || group.execution.consumptions?.[reply.delivery_id] !== undefined}
+                onClick={() => { void consumptionAction?.(group.original.snapshot_digest, reply.delivery_id) }}>{t('consumption.start')}</Button>
+              {group.execution.consumptions?.[reply.delivery_id] && <Button size="sm" data-testid="slark-consumption-status" disabled={group.execution.consumptions[reply.delivery_id] === 'sending'}
+                onClick={() => { void consumptionAction?.(group.original.snapshot_digest, reply.delivery_id, true) }}>{t('consumption.status')}</Button>}
+            </div>}
+          </div>
+        })}
         {group.nextCursor && <Button size="sm" disabled={state.phase === 'loading'}
           data-testid="slark-collaboration-results-more"
           onClick={() => { void loadReplies(group.original.snapshot_digest) }}>{t('task.moreResults')}</Button>}

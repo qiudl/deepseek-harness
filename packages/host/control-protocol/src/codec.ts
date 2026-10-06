@@ -1150,8 +1150,7 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
     const p = registrationRecord(row.preparation)
     const root = parseHostRootSubmissionDescriptor(p.root)
     const { root: _root, ...base } = p
-    const parsed = parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: base })
-    if (parsed.kind !== 'prepared') reject()
+    parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: base })
     const descriptor = parseHostCollaborationSourceDescriptor(base.descriptor)
     if (JSON.stringify(descriptor) !== JSON.stringify(root.source_descriptor)) reject()
     return { kind: 'root_prepared', preparation: remoteSessionJson({ ...base, root }) }

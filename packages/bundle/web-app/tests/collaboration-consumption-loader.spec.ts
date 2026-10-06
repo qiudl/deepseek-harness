@@ -28,18 +28,20 @@ import * as WebApp from '../src/index.ts'
 
 class FeedbackAdapter extends LlmAdapter {
   readonly requests: GenerateOptions[] = []
+  before: (options: GenerateOptions) => Promise<void> = async () => {}
   override async prepareSnapshot(provider: string, model: string): Promise<PreparedAdapterCall> {
     return { model: { provider, id: model, name: model }, stream: options => this.stream(options) }
   }
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.requests.push(options)
+    await this.before(options)
     yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text: '已结合协作结果' }
     yield { type: 'block-end', index: 0, block: { type: 'text', text: '已结合协作结果' } }
     yield { type: 'finish', reason: { kind: 'stop' } }
   }
 }
-it.each(['success', 'checkpoint_failure'] as const)('consumes a fresh grant once through the real Loader: %s', async (mode) => {
+it.each(['success', 'checkpoint_failure', 'checkpoint_false', 'cancel'] as const)('consumes a fresh grant once through the real Loader: %s', async (mode) => {
   const directory = await mkdtemp(join(tmpdir(), 'req0008-feedback-loader-')), cwd = await realpath(directory)
   const ctx = new Context(), token = 'B'.repeat(43), routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
   const server = createServer((req, res) => { const handler = routes.get(req.url ?? ''); if (handler) void handler(req, res); else res.writeHead(404).end() })
@@ -127,16 +129,33 @@ it.each(['success', 'checkpoint_failure'] as const)('consumes a fresh grant once
   const { namespace_id:_namespace,...wire }=business
   const grant={ ...wire,command_digest:collaborationJournalDigest(business),consumer_attempt_id:randomUUID(),consumer_step_id:randomUUID(),
     issued_at:new Date(Date.now()-1000).toISOString(),expires_at:new Date(Date.now()+60000).toISOString(),dispatch_granted:true }
-  const checkpoint = mode === 'checkpoint_failure' ? vi.spyOn(ctx.sessions,'flush').mockRejectedValueOnce(Error('checkpoint persistence failed')) : undefined
+  const checkpoint = mode === 'checkpoint_failure' ? vi.spyOn(ctx.sessions,'flush').mockRejectedValueOnce(Error('checkpoint persistence failed'))
+    : mode === 'checkpoint_false' ? vi.spyOn(ctx.sessions,'flush').mockResolvedValueOnce(false) : undefined
   const start = { ...query,action:'consumer_start',grant }
-  const started = await post(start)
-  expect(started.status).toBe(200)
-  await started.body?.cancel() // Parent loses the reply after the Profile completes its durable operation.
+  if (mode === 'cancel') {
+    const parent = new AbortController(), entered = Promise.withResolvers<undefined>()
+    onTestFinished(() => { parent.abort() })
+    adapter.before = async (options) => {
+      entered.resolve(undefined)
+      const active = options.signal
+      if (!active) throw Error('missing Provider cancellation')
+      await new Promise<void>((resolve) => { active.addEventListener('abort', () => { resolve() }, { once: true }) })
+      active.throwIfAborted()
+    }
+    const rejection = expect(controller.collaborationRootConsumption(start, parent.signal)).rejects.toThrow('parent-cancelled')
+    await entered.promise
+    parent.abort(Error('parent-cancelled'))
+    await rejection
+  } else {
+    const started = await post(start)
+    expect(started.status).toBe(200)
+    await started.body?.cancel() // Parent loses the reply after the Profile completes its durable operation.
+  }
   checkpoint?.mockRestore()
   await agent.whenIdle()
-  expect(adapter.requests).toHaveLength(mode === 'success' ? 1 : 0)
+  expect(adapter.requests).toHaveLength(mode === 'success' || mode === 'cancel' ? 1 : 0)
   for(let n=0;n<20;n++) expect((await post(start)).status).toBe(200)
-  expect(adapter.requests).toHaveLength(mode === 'success' ? 1 : 0)
+  expect(adapter.requests).toHaveLength(mode === 'success' || mode === 'cancel' ? 1 : 0)
   const read = await post({ ...query,action:'consumer_read' })
   expect(read.status).toBe(200)
   const consumed = await read.json() as { value:Consumer }

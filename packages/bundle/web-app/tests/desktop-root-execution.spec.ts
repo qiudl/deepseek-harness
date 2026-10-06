@@ -34,3 +34,20 @@ it.each(['root_execution_journal', 'root_feedback'] as const)('requires the priv
   expect(execution).toHaveBeenCalledTimes(1)
   expect(noModel).not.toHaveBeenCalled()
 })
+
+it('refuses missing private owners and closed lifetimes before calling Session operations', async () => {
+  const noModel = vi.fn(async (): Promise<never> => { throw Error('no model') })
+  const owner = new DesktopCollaborationAnalysis(noModel, noModel, new AbortController().signal)
+  onTestFinished(async () => { await owner.close() })
+  await expect(owner.executionJournal({}, new AbortController().signal)).rejects.toThrow('journal_unavailable')
+  await expect(owner.rootFeedback({}, new AbortController().signal)).rejects.toThrow('feedback_unavailable')
+  await expect(owner.prepareRoot({ namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'display_only', source: {} }, 'b'.repeat(64), new AbortController().signal)).rejects.toThrow('capture_unavailable')
+  const feedback = vi.fn(async (): Promise<never> => { throw Error('invalid operation') })
+  const partial = new DesktopCollaborationAnalysis(noModel, noModel, new AbortController().signal, undefined, undefined, undefined,
+    undefined, feedback)
+  onTestFinished(async () => { await partial.close() })
+  await expect(partial.rootFeedback({ action: 'consumer_read' }, new AbortController().signal)).rejects.toThrow('consumption_unavailable')
+  await expect(partial.rootFeedback(null, new AbortController().signal)).rejects.toThrow('invalid operation')
+  expect(feedback).toHaveBeenCalledTimes(1)
+  expect(noModel).not.toHaveBeenCalled()
+})

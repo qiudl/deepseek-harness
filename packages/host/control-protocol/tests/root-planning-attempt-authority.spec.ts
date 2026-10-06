@@ -29,10 +29,12 @@ it('roundtrips planning-attempt request/result frames with exact payloads and re
 
 it('rejects downgrade, reused IDs, unsupported policy and executable metadata', () => {
   const c = vector.assertion.challenge
-  for (const change of [{ scope: 'execute' }, { model_policy: 'current_session_model' }, { expected_plan_revision: '0' },
+  for (const change of [{ scope: 'execute' }, { model_policy: 'current_session_model' }, { input_version: '2' }, { expected_plan_revision: '0' },
     { expected_plan_revision: '9223372036854775808' }, { predecessor: undefined }, { extra: true },
     { attempt_request_id: '90000000-0000-4000-8000-000000000009' }, { input_manifest_digest: 'e'.repeat(64) }])
     expect(() => parseHostRootPlanningAttemptAuthorityChallenge({ ...c, ...change })).toThrow()
+  const valid = parseHostRootPlanningAttemptAuthorityAssertion(vector.assertion).challenge
+  expect(() => parseHostRootPlanningAttemptAuthorityChallenge({ ...valid, predecessor: { ...valid.predecessor, attempt_fence: '9223372036854775808' } })).toThrow()
   let reads = 0
   const dirty = { ...c }
   Object.defineProperty(dirty, 'model_snapshot', { enumerable: true, get() { reads++; return {} } })
@@ -72,7 +74,7 @@ it('requires explicit fresh-attempt commands and forbids caller model or predece
 })
 
 it('roundtrips historical attempt evidence without reviving dispatch and rejects corrupt output or changed roots', async () => {
-  const { parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult, parseHostRootPlanningEvidence, matchHostRootPlanningEvidence } = await import('../src/index.ts')
+  const { parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult, parseHostRootPlanningEvidence, matchHostRootPlanningEvidence, matchHostRootPlanningAttemptTarget, parseHostRootPlanningAttemptDescriptor } = await import('../src/index.ts')
   const { createHash } = await import('node:crypto')
   const c = parseHostRootPlanningAttemptAuthorityAssertion(vector.assertion).challenge, r = c.root_challenge, s = r.source_challenge
   const root = { namespace_id: r.namespace_id, command_id: r.command_id, root_task_id: r.root_task_id,
@@ -82,6 +84,7 @@ it('roundtrips historical attempt evidence without reviving dispatch and rejects
   const preparation = { root, input_version: c.input_version, predecessor: c.predecessor,
     attempt_request_id: c.attempt_request_id, input_manifest_digest: c.input_manifest_digest,
     model_policy: c.model_policy, model_snapshot: c.model_snapshot }
+  expect(() => parseHostRootPlanningAttemptDescriptor({ ...preparation, input_version: '2' })).toThrow('invalid_root_planning_attempt_authority')
   const dispatch = { attempt_request_id: c.attempt_request_id, namespace_id: r.namespace_id, root_task_id: r.root_task_id,
     root_trace_id: r.root_trace_id, model_snapshot: c.model_snapshot, plan_id: 'plan', expected_plan_revision: '1',
     attempt_id: 'attempt', attempt_fence: '2', source_digest: s.snapshot_digest,
@@ -94,6 +97,11 @@ it('roundtrips historical attempt evidence without reviving dispatch and rejects
   expect(parseHostCollaborationAnalysisCommand({ action: 'read_root_attempt', target })).toEqual({ action: 'read_root_attempt', target })
   expect(parseHostCollaborationAnalysisResult({ kind: 'root_attempt_evidence', evidence })).toEqual({ kind: 'root_attempt_evidence', evidence })
   expect(matchHostRootPlanningEvidence(evidence, target)).toEqual(evidence)
+  expect(() => matchHostRootPlanningAttemptTarget(preparation, parseHostRootSubmissionTarget(target), 'other')).toThrow()
+  for (const bad of [null, { ...evidence, [Symbol('extra')]: true },
+    { ...evidence, root: { ...root, root_trace_id: 'f'.repeat(32) } },
+    { root, attempt: { ...evidence.attempt, dispatch: { ...dispatch, lease_expires_at: 1 } } }])
+    expect(() => parseHostRootPlanningEvidence(bad)).toThrow()
   for (const patch of [{ dispatch: null }, { output: { ...output, output_digest: '0'.repeat(64) } },
     { output: { ...output, json_base64url: output.json_base64url + '=' } },
     { dispatch: { ...dispatch, root_trace_id: '0'.repeat(32) } },

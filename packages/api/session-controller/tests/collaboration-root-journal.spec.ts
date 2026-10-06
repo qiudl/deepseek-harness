@@ -11,7 +11,7 @@ import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { openCollaborationSourceJournal } from '../src/collaboration-source-journal.ts'
-import { openCollaborationRootJournal } from '../src/collaboration-root-journal.ts'
+import { parseCollaborationRootCaptureInput, parseCollaborationRootAdmission, parseCollaborationRootLookup, openCollaborationRootJournal } from '../src/collaboration-root-journal.ts'
 
 const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
@@ -217,4 +217,16 @@ it('identifies participating Sessions from durable roots after reopen without re
   expect(reopened.hasSession(SessionId('session-1'))).toBe(true)
   await reopened.close()
   expect(() => reopened.hasSession(SessionId('session-1'))).toThrow('closed')
+})
+
+it('rejects invalid Source captures and lookups before writing and reports absent commands', async () => {
+  const h = await harness(), journal = await openCollaborationRootJournal(h.facility)
+  expect(() => parseCollaborationRootCaptureInput({ ...h.input, source: null })).toThrow('journal_invalid')
+  expect(() => parseCollaborationRootAdmission({})).toThrow('receipt_invalid')
+  expect(() => parseCollaborationRootLookup({})).toThrow('journal_invalid')
+  await expect(journal.capture({ ...h.input, source: null } as never, signal())).rejects.toThrow('journal_invalid')
+  const entry = await journal.capture(h.input, signal())
+  const missing = 'ffffffff-ffff-4fff-8fff-ffffffffffff' as typeof entry.command_id
+  expect(journal.read(missing)).toBeUndefined()
+  await expect(journal.accept(missing, receipt(entry), signal())).rejects.toThrow('receipt_invalid')
 })

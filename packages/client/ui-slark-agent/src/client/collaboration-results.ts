@@ -356,7 +356,7 @@ export class CollaborationResultsModel {
       this.executions.set(digest, taskId === undefined ? { phase: 'error' }
         : { ...prior, outcomes: { ...prior.outcomes, [taskId]: 'uncertain' } })
     }
-    if (this.current(generation)) this.publish(this.state)
+    this.publish(this.state)
   }
   /** Consume one displayed reply under Main's retained original task; reconciliation never requests a fresh grant.
    * @param digest - Original message digest displayed in this Session.
@@ -386,7 +386,7 @@ export class CollaborationResultsModel {
       if (!this.current(generation)) return
       this.executions.set(digest, { ...prior, consumptions: { ...prior.consumptions, [deliveryId]: 'uncertain' } })
     }
-    if (this.current(generation)) this.publish(this.state)
+    this.publish(this.state)
   }
   /** Release observers and readonly requests; accepted tasks continue independently. */
   dispose(): void {

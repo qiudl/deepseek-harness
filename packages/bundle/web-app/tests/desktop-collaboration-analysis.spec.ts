@@ -10,6 +10,7 @@ import {
   parseCollaborationClarificationInput, clarificationAnalysisMessage, collaborationJournalDigest,
 } from '@deepseek-ai/dsh-api-session-controller'
 import type SessionController from '@deepseek-ai/dsh-api-session-controller'
+import type { CollaborationAnalysisManifest } from '../../../api/session-controller/src/collaboration-analysis.ts'
 import { createMessage } from '@deepseek-ai/dsh-llm'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -579,7 +580,7 @@ it('reopens saved output from disk with original grant, without another preparat
   }
 })
 
-it.each(['live','handoff','pending','binding','expired','closed','reopened','membership'] as const)('live root resume retains original attempt and deadline: %s',async(mode)=>{
+it.each(['live','handoff','pending','binding','expired','closed','reopened','membership','external_dispatch'] as const)('live root resume retains original attempt and deadline: %s',async(mode)=>{
   const h=await harness(), roots=await openCollaborationRootJournal(h.facility)
   let entry:Awaited<ReturnType<typeof roots.capture>>|undefined, member=true
   const reader:SessionController['readCollaborationRoot']=async()=>{if(!entry||!member)throw Error('membership');return entry}
@@ -589,7 +590,7 @@ it.each(['live','handoff','pending','binding','expired','closed','reopened','mem
     return { ...capture,submission:entry }
   }
   let owner=new DesktopCollaborationAnalysis(
-    h.capture,()=>openCollaborationAnalysisJournal(h.facility),h.lifetime.signal,captureRoot,reader,
+    h.capture,h.open,h.lifetime.signal,captureRoot,reader,
   )
   onTestFinished(async()=>{await owner.close();await roots.close()})
   vi.useFakeTimers()
@@ -603,6 +604,10 @@ it.each(['live','handoff','pending','binding','expired','closed','reopened','mem
     if(mode==='closed'||mode==='reopened')await owner.close()
     if(mode==='reopened')owner=new DesktopCollaborationAnalysis(async()=>{throw Error('must not recapture')},()=>openCollaborationAnalysisJournal(h.facility),signal(),undefined,reader)
     if(mode==='membership')member=false
+    if(mode==='external_dispatch') {
+      const journal = await h.open.mock.results.at(-1)!.value as Awaited<ReturnType<typeof openCollaborationAnalysisJournal>>
+      await journal.dispatch([...journal.records()][0]!, permission(p), signal())
+    }
     const resume=owner.resumeRoot(request,mode==='handoff'?'c'.repeat(64):binding,signal(),mode==='binding'?'b'.repeat(64):binding)
     if(mode==='live'||mode==='handoff'){
       expect(await resume).toEqual(p)
@@ -613,4 +618,71 @@ it.each(['live','handoff','pending','binding','expired','closed','reopened','mem
       expect(h.calls()).toBe(1)
     }else{await expect(resume).rejects.toThrow();expect(h.calls()).toBe(0)}
   } finally {vi.useRealTimers()}
+})
+
+async function admittedRootFixture() {
+  const h = await harness(), roots = await openCollaborationRootJournal(h.facility)
+  onTestFinished(() => roots.close())
+  const capture = await h.capture(input(), signal())
+  const pending = await roots.capture({ namespace_id: 'n2_' + 'a'.repeat(64), source: capture.snapshot,
+    objective_ref: 'o', task_grant_ref: 'g', continuation_policy: 'follow_authorized_plan' }, signal())
+  const root = await roots.accept(pending.command_id, { root_task_id: pending.root_task_id, root_trace_id: pending.root_trace_id,
+    admission_id: pending.command_id, task_revision: 1, state_version: 1, state: 'active' }, signal())
+  const reader = vi.fn<SessionController['readCollaborationRoot']>(async () => root)
+  const owner = new DesktopCollaborationAnalysis(h.capture, () => openCollaborationAnalysisJournal(h.facility),
+    h.lifetime.signal, undefined, reader)
+  onTestFinished(() => owner.close())
+  const target = { namespace_id: root.namespace_id, command_id: root.command_id, workspace_id: root.source.workspace_id,
+    session_id: root.source.session_id, source_message_id: root.source.source_message_id, source_revision: root.source.source_revision }
+  return { h, root, reader, owner, target, input: { namespace_id: root.namespace_id, source: input(), continuation_policy: 'follow_authorized_plan' } }
+}
+it('reports missing original output without starting a model, and rejects closure during its final read', async () => {
+  const f = await admittedRootFixture()
+  expect(await f.owner.readRootOutput(f.target, signal())).toMatchObject({ state: 'missing' })
+  f.reader.mockResolvedValueOnce(f.root).mockImplementationOnce(async () => { await f.owner.close(); return f.root })
+  await expect(f.owner.readRootOutput(f.target, signal())).rejects.toThrow('analysis_closed')
+  expect(f.h.calls()).toBe(0)
+})
+it('rejects root recovery with unavailable source coordinates or no membership reader', async () => {
+  const f = await admittedRootFixture()
+  for (const source of [null, [], 'source'])
+    await expect(f.owner.recoverRoot({ ...f.input, source }, signal())).rejects.toThrow('root_unavailable')
+  await expect(f.h.owner.recoverRoot(f.input, signal())).rejects.toThrow('root_unavailable')
+  expect(f.reader).not.toHaveBeenCalled()
+})
+it('discards a resumed preparation if its root changes across membership reads', async () => {
+  const f = await admittedRootFixture()
+  f.reader.mockResolvedValueOnce(f.root).mockResolvedValueOnce({ ...f.root, root_trace_id: 'f'.repeat(32) as typeof f.root.root_trace_id })
+  await expect(f.owner.resumeRoot(f.input, binding, signal(), binding)).rejects.toThrow('preparation_unavailable')
+})
+it('refuses ambiguous saved output instead of choosing between separately consumed inputs', async () => {
+  const f = await admittedRootFixture(), prepared = receipt(await f.h.owner.prepare({ ...input(), source_message_id: 'second',
+    active_mentions: input().active_mentions.map(m => ({ ...m, source_span: { ...m.source_span, source_message_id: 'second' } })) }, binding, signal()))
+  // Capture the actual serialized request, then bind two valid requests to the root's original Source.
+  await f.h.owner.close()
+  const writer = await openCollaborationAnalysisJournal(f.h.facility)
+  const original = [...writer.records()].find(r => r.attempt_request_id === prepared.attempt_request_id)!
+  const template = JSON.parse(original.manifest_json) as CollaborationAnalysisManifest
+  onTestFinished(() => writer.close())
+  for (const suffix of ['first', 'second']) {
+    const manifest: CollaborationAnalysisManifest = { ...template, source: f.root.source, request: { ...template.request,
+      system: `${template.request.system}${suffix}`, messages: [createMessage({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: JSON.stringify({
+        source_message_id: f.root.source.source_message_id, source_revision: f.root.source.source_revision,
+        original_message: f.root.source.original_message, active_mentions: f.root.source.active_mentions,
+      }) }] })] } }
+    const record = await writer.prepare(manifest, signal())
+    const dispatched = await writer.dispatch(record, grant({ attempt_request_id: record.attempt_request_id,
+      input_manifest_digest: record.input_manifest_digest, source_digest: record.source_digest }), signal())
+    await writer.saveOutput(dispatched, JSON.stringify({ result: suffix }), signal())
+  }
+  await writer.close()
+  await expect(f.owner.readRootOutput(f.target, signal())).rejects.toThrow('output_ambiguous')
+  expect(f.h.calls()).toBe(0)
+})
+it('returns unavailable over private HTTP when the Profile has no planning owner', async () => {
+  const h = await harness(), f = await httpFixture(h)
+  const response = await f.post({ action: 'read_root_attempt', binding_key: binding, target: {} })
+  expect(response.status).toBe(422)
+  expect(await response.json()).toEqual({ error: 'unavailable' })
+  expect(h.calls()).toBe(0)
 })

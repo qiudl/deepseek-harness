@@ -294,6 +294,7 @@ it('analyzes a fixed clarification with a fresh handle, logging both messages an
         reason: 'task_ambiguous', question: '分析哪个接口？', source_evidence_spans: [{ source_message_id: 'message', source_revision: '1', start: 0, end: source.original_message.length }] }],
       frozen_task_ids: ['accepted-task'], mention_order: ['mention'], prior_replies: [],
     })
+    await expect(h.runner.runClarification(input, (await h.prepare()).prepared, persist(), new AbortController().signal)).rejects.toThrow('model_changed')
     const commit = persist()
     commit.mockImplementation(async (manifest) => {
       expect(h.adapter.requests).toHaveLength(0)
@@ -341,4 +342,15 @@ it('a fresh preparation or runtime cannot reuse the original persisted model ide
     expect(h.adapter.requests).toHaveLength(0)
     expect(restarted.adapter.requests).toHaveLength(0)
   } finally { await h.close(); await restarted.close() }
+})
+
+it('rejects malformed root correlation before persisting or requesting a model', async () => {
+  const h = await harness()
+  try {
+    const { source, prepared } = await h.prepare(), commit = persist()
+    for (const trace of ['0'.repeat(32), 'a'.repeat(32) + '\n'])
+      await expect(h.runner.run(source, prepared, commit, new AbortController().signal, trace)).rejects.toThrow('trace_invalid')
+    expect(commit).not.toHaveBeenCalled()
+    expect(h.adapter.requests).toHaveLength(0)
+  } finally { await h.close() }
 })

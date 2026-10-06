@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
-import * as root from '../src/root-authority.ts'
+import * as rootProtocol from '../src/root-authority.ts'
 import { readFileSync } from 'node:fs'
-const proof = root.parseHostRootAuthorityAssertion(
+const proof = rootProtocol.parseHostRootAuthorityAssertion(
   (JSON.parse(readFileSync(new URL('./fixtures/root-authority-v1.json', import.meta.url), 'utf8')) as { assertion:unknown }).assertion,
 )
 const c = proof.challenge, s = c.source_challenge
@@ -12,12 +12,13 @@ const metadata = { schema_version:1,namespace_id:c.namespace_id,command_id:c.com
   root_task_id:c.root_task_id,root_trace_id:c.root_trace_id,
   payload_digest:c.payload_digest,source_digest:s.snapshot_digest,source_descriptor:{ workspace_id:s.workspace_id,session_id:s.session_id,source_message_id:s.source_message_id,source_revision:s.source_revision,snapshot_digest:s.snapshot_digest },objective_ref:'source-v1:a',task_grant_ref:'intent-v1:a',continuation_policy:'follow_authorized_plan',state:'pending' }
 it('reads pending metadata and accepts only an exact original-root receipt', () => {
-  expect(root.parseHostRootJournalCommand({ action:'read',target })).toEqual({ action:'read',target })
-  expect(root.parseHostRootJournalCommand({ action:'accept',target,receipt })).toEqual({ action:'accept',target,receipt })
-  expect(root.parseHostRootJournalMetadata(metadata)).toEqual(metadata)
-  expect(root.parseHostRootJournalMetadata({ ...metadata,state:'admitted',receipt })).toEqual({ ...metadata,state:'admitted',receipt })
-  for(const bad of [{ ...metadata,source:{} },{ ...metadata,receipt },{ ...metadata,state:'admitted',receipt:{ ...receipt,admission_id:s.request_id } },{ ...metadata,source_digest:'0'.repeat(64) }]) expect(()=>root.parseHostRootJournalMetadata(bad)).toThrow()
-  for(const bad of [{ action:'capture',target },{ action:'read',target,receipt },{ action:'accept',target,receipt:{ ...receipt,task_revision:2 } }]) expect(()=>root.parseHostRootJournalCommand(bad)).toThrow()
+  expect(rootProtocol.parseHostRootJournalCommand({ action:'read',target })).toEqual({ action:'read',target })
+  expect(rootProtocol.parseHostRootJournalCommand({ action:'accept',target,receipt })).toEqual({ action:'accept',target,receipt })
+  expect(rootProtocol.parseHostRootJournalMetadata(metadata)).toEqual(metadata)
+  expect(rootProtocol.parseHostRootJournalMetadata({ ...metadata,state:'admitted',receipt })).toEqual({ ...metadata,state:'admitted',receipt })
+  for(const bad of [{ ...metadata,source:{} },{ ...metadata,receipt },{ ...metadata,state:'admitted',receipt:{ ...receipt,admission_id:s.request_id } },{ ...metadata,source_digest:'0'.repeat(64) }]) expect(()=>rootProtocol.parseHostRootJournalMetadata(bad)).toThrow()
+  for(const bad of [null, { action:'capture',target },{ action:'read',target,receipt },{ action:'accept',target,receipt:{ ...receipt,task_revision:2 } }, { action:'accept',target,receipt:{ ...receipt,admission_id:s.request_id } }]) expect(()=>rootProtocol.parseHostRootJournalCommand(bad)).toThrow()
+  expect(() => rootProtocol.parseHostRootJournalMetadata(null)).toThrow()
 })
 it('roundtrips journal control frames and rejects unexpected metadata',async()=>{
   const { encodeHostControlFrame,decodeHostControlFrame }=await import('../src/index.ts')
@@ -32,6 +33,8 @@ it('root analysis frames cannot downgrade to Source-only preparation or change i
   const input={ namespace_id:c.namespace_id,continuation_policy:'follow_authorized_plan',source:{ text:'original' } }
   expect(parseHostCollaborationAnalysisCommand({ action:'prepare_root',input })).toEqual({ action:'prepare_root',input })
   expect(()=>parseHostCollaborationAnalysisCommand({ action:'prepare_root',input:{ ...input,root_trace_id:c.root_trace_id } })).toThrow()
+  for (const change of [{ continuation_policy: 'auto' }, { source: { text: 'x'.repeat(16384), more: 'y'.repeat(16384) } }])
+    expect(() => rootProtocol.parseHostRootAnalysisInput({ ...input, ...change })).toThrow('invalid_root_authority')
   const root={ namespace_id:c.namespace_id,command_id:c.command_id,root_task_id:c.root_task_id,
     root_trace_id:c.root_trace_id,
     payload_digest:c.payload_digest,source_descriptor:metadata.source_descriptor }
@@ -58,5 +61,9 @@ it('saved output retains expired evidence with bounded frames and rejects altere
   expect(decodeHostControlFrame(encoded)).toEqual(frame)
   expect(parseHostRootAnalysisOutput({ state:'missing',root:savedRoot })).toEqual({ state:'missing',root:savedRoot })
   for(const bad of [{ ...evidence,output_digest:'0'.repeat(64) },{ ...evidence,json_base64url:Buffer.from(JSON.stringify({ value:'x'.repeat(32757) })).toString('base64url') },{ ...evidence,dispatch:{ ...evidence.dispatch,source_digest:'0'.repeat(64) } },{ ...evidence,manifest_json:'private' },{ ...evidence,state:'unknown' }]) expect(()=>parseHostRootAnalysisOutput(bad)).toThrow()
-  expect(()=>matchHostRootAnalysisOutput(evidence,root.parseHostRootSubmissionTarget({ ...target,command_id:s.request_id }))).toThrow()
+  expect(()=>matchHostRootAnalysisOutput(evidence,
+    rootProtocol.parseHostRootSubmissionTarget({ ...target,command_id:s.request_id }))).toThrow()
+  for (const bad of [null, { ...evidence, [Symbol('extra')]: true },
+    ...[{ plan_id: false }, { attempt_id: '' }, { expected_plan_revision: '9223372036854775808' }].map(p => ({ ...evidence, dispatch: { ...evidence.dispatch, ...p } }))])
+    expect(() => parseHostRootAnalysisOutput(bad)).toThrow()
 })

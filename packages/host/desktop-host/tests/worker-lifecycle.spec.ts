@@ -393,11 +393,13 @@ it('discards root journal metadata after its worker is replaced', async () => {
   })
   const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
   try {
+    await expect(workers.inspectCollaborationRoot(input.profileId, target, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
     await workers.start(input)
     const reading = expect(workers.inspectCollaborationRoot(input.profileId, target, new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
     await started
     await workers.dispose(input.profileId); await workers.start(input); release(); await reading
     expect(await workers.inspectCollaborationRoot(input.profileId, target, new AbortController().signal)).toEqual(descriptor)
+    await expect(workers.inspectCollaborationRoot(input.profileId, { ...target, session_id: 'other' as typeof target.session_id }, new AbortController().signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
     await expect(workers.inspectCollaborationRoot(input.profileId, target, AbortSignal.abort())).rejects.toThrow()
   } finally { release?.(); await workers.disposeAll() }
 })
@@ -425,6 +427,7 @@ it.each(['read', 'accept'] as const)('discards %s acknowledgement after its work
   })
   const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
   try {
+    await expect(workers.rootJournal(input.profileId, command, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
     await workers.start(input)
     const reading = expect(workers.rootJournal(input.profileId, command, new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
     await started
@@ -460,6 +463,7 @@ it('discards live planning-attempt metadata after its worker is replaced', async
   })
   const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
   try {
+    await expect(workers.inspectRootPlanningAttempt(input.profileId, target, attempt.attempt_request_id, 'a'.repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
     await workers.start(input)
     const reading = expect(workers.inspectRootPlanningAttempt(input.profileId, target, attempt.attempt_request_id, 'a'.repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
     await started

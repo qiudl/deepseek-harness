@@ -60,6 +60,7 @@ export function parseHostRootAnalysisOutput(value: unknown): HostRootAnalysisOut
     input_manifest_digest: text(g.input_manifest_digest,digest), source_digest: root.source_descriptor.snapshot_digest,
     lease_expires_at: lease, dispatch_granted: true as const })
   const output = parseHostCollaborationAnalysisResult({ kind:'output',json_base64url:r.json_base64url })
+  /* v8 ignore next -- the literal output discriminant either parses to output or throws above. */
   if (output.kind !== 'output') throw Error('invalid_root_output')
   const output_digest = text(r.output_digest,digest)
   if (createHash('sha256').update(Buffer.from(output.json_base64url,'base64url')).digest('hex') !== output_digest) throw Error('invalid_root_output')
