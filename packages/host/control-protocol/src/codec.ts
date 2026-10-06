@@ -1541,10 +1541,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   if (frame.method === 'profile.root_journal') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: uuid(params.account_subject),
+      ...collaborationAccountParams(params),
       command: parseHostRootJournalCommand(params.command),
     } } satisfies ProfileRootJournalRequest
   }
@@ -1559,10 +1556,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'offset', ...SOURCE_TARGET_KEYS])
     if (!Number.isSafeInteger(params.offset) || (params.offset as number) < 0 || (params.offset as number) >= 1024 * 1024) reject()
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: uuid(params.account_subject),
+      ...collaborationAccountParams(params),
       offset: params.offset as number,
       ...sourceTargetFields(params),
     } }
@@ -1588,9 +1582,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       request_id: requestId,
       method: frame.method,
       params: {
-        ...authorized(params),
-        account_binding_handle: opaqueHandle(params.account_binding_handle),
-        authority_binding_version: generation(params.authority_binding_version),
+        ...accountChallengeParams(params),
         challenge: parseHostRootPlanningAttemptAuthorityChallenge(params.challenge),
       },
     }
@@ -1603,9 +1595,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       request_id: requestId,
       method: frame.method,
       params: {
-        ...authorized(params),
-        account_binding_handle: opaqueHandle(params.account_binding_handle),
-        authority_binding_version: generation(params.authority_binding_version),
+        ...accountChallengeParams(params),
         challenge: parseHostRootAuthorityChallenge(params.challenge),
       },
     }

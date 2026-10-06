@@ -228,3 +228,5 @@ The separately advertised `profile.root_execution_journal` capability forwards b
 `profile.root_feedback` is advertised only with its private Profile receiver. Client and authority check this capability, and Account ownership is revalidated after each bounded feedback response. The parent remains responsible for current cloud result visibility and explicit consumption intent; transport success is not a signed cloud consumption acknowledgment.
 
 For persisted consumer evidence returned by `root_feedback`, the Host verifies the original namespace, delivery and Source coordinates before signing a separate consumption receipt. It uses current Account and installation/process metadata and rechecks the current Profile authority after the worker reply. The receipt contains no answer text and grants no new continuation.
+
+macOS and Windows bind root journal, source inspection and planning-attempt inspection through the same worker operations, while each authority protocol retains its own signed payload.

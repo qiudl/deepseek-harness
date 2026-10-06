@@ -102,7 +102,7 @@ export class DesktopCollaborationAnalysis {
     if (this.closing || !this.feedback) throw Error('collaboration_feedback_unavailable')
     const active = AbortSignal.any([signal, this.lifetime])
     active.throwIfAborted()
-    const action = operation && typeof operation === 'object' ? Object.getOwnPropertyDescriptor(operation, 'action')?.value : undefined
+    const action: unknown = operation && typeof operation === 'object' ? Object.getOwnPropertyDescriptor(operation, 'action')?.value : undefined
     const consumer = action === 'consumer_read' || action === 'consumer_prepare' || action === 'consumer_start'
     if (consumer && !this.consumption) throw Error('collaboration_consumption_unavailable')
     const consume = this.consumption

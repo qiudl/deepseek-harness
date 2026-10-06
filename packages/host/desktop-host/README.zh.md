@@ -235,3 +235,5 @@ Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后
 只有配置私有 Profile 接收器时才宣告 `profile.root_feedback`。客户端和授权端均检查该能力，并在每次有界反馈响应后重新校验 Account 归属。父进程仍负责当前云端结果访问权和显式消费意图；传输成功不等同于带签名的云端消费确认。
 
 对于 `root_feedback` 返回的持久消费证据，Host 在签发独立消费回执前核对原 namespace、delivery 和 Source 坐标。签名使用当前 Account、installation 与进程元数据，并在 worker 回复后再次检查当前 Profile 权限。回执不包含答案文本，也不授予新的续跑权限。
+
+macOS 和 Windows 通过共同的 worker 操作绑定根 journal、Source 检查和规划 attempt 检查；各权限协议继续使用独立的签名载荷。

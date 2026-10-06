@@ -134,6 +134,15 @@ function challengeReadAccount(
     subject: challenge.account_subject,
   }
 }
+function sourceChallengeTarget(c: HostSourceAuthorityChallenge): HostCollaborationSourceTarget {
+  return { workspace_id: c.workspace_id, session_id: c.session_id,
+    source_message_id: c.source_message_id, source_revision: c.source_revision }
+}
+function matchesSourceChallenge(result: HostCollaborationSourceDescriptor, c: HostSourceAuthorityChallenge): boolean {
+  return result.workspace_id === c.workspace_id && result.session_id === c.session_id
+    && result.source_message_id === c.source_message_id && result.source_revision === c.source_revision
+    && result.snapshot_digest === c.snapshot_digest
+}
 function assertionIdentityFields(identity: HostIdentity) {
   return {
     installation_id: identity.installationId as InstallationId,
@@ -1657,19 +1666,10 @@ export class HostControlAuthority {
           const inspect = this.options.inspectRootPlanningAttempt
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const challenge = frame.params.challenge, root = challenge.root_challenge, c = root.source_challenge
-          const account = {
-            authorityEnvironmentId: c.environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
-            ownerId,
-            issuer: c.account_issuer,
-            subject: c.account_subject,
-          }
+          const account = challengeReadAccount(frame.params, c, ownerId)
           const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
           const profileId = authorize()
-          const target = { workspace_id: c.workspace_id, session_id: c.session_id,
-            source_message_id: c.source_message_id, source_revision: c.source_revision,
-            namespace_id: root.namespace_id, command_id: root.command_id }
+          const target = { ...sourceChallengeTarget(c), namespace_id: root.namespace_id, command_id: root.command_id }
           const peer = this.options.identity
           const binding = createHash('sha256').update(JSON.stringify(['dsh-analysis-binding-v1', peer.installationId,
             peer.installationPublicKey, peer.hostInstanceId, peer.processNonce, profileId, account])).digest('hex')
@@ -1680,17 +1680,10 @@ export class HostControlAuthority {
           const unsigned: HostRootPlanningAttemptAuthorityAssertion = {
             schema_version: 1,
             challenge,
-            installation_id: identity.installationId as InstallationId,
-            installation_public_key: identity.installationPublicKey as HostControlPublicKey,
-            host_instance_id: identity.hostInstanceId as HostInstanceId,
-            process_nonce: identity.processNonce as HostControlNonce,
+            ...assertionIdentityFields(identity),
             signature: 'A'.repeat(86) as HostControlSignature,
           }
-          const signature = sign(
-            null,
-            encodeHostRootPlanningAttemptAuthorityPayload(unsigned),
-            privateKeyObject(identity.installationPrivateKey),
-          ).toString('base64url') as HostControlSignature
+          const signature = signAuthorityPayload(identity, encodeHostRootPlanningAttemptAuthorityPayload(unsigned))
           channel.send({
             version: 1,
             type: 'result',
@@ -1702,44 +1695,26 @@ export class HostControlAuthority {
           const inspect = this.options.inspectCollaborationRoot
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const root = frame.params.challenge, c = root.source_challenge
-          const account = {
-            authorityEnvironmentId: c.environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
-            ownerId,
-            issuer: c.account_issuer,
-            subject: c.account_subject,
-          }
+          const account = challengeReadAccount(frame.params, c, ownerId)
           const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
           const profileId = authorize()
-          const target = { workspace_id: c.workspace_id, session_id: c.session_id,
-            source_message_id: c.source_message_id, source_revision: c.source_revision,
-            namespace_id: root.namespace_id, command_id: root.command_id }
+          const target = { ...sourceChallengeTarget(c), namespace_id: root.namespace_id, command_id: root.command_id }
           const descriptor = parseHostRootSubmissionDescriptor(await inspect(profileId, target, context.signal))
           const result = descriptor.source_descriptor
           if (descriptor.namespace_id !== root.namespace_id || descriptor.command_id !== root.command_id
             || descriptor.root_task_id !== root.root_task_id || descriptor.root_trace_id !== root.root_trace_id
             || descriptor.payload_digest !== root.payload_digest || authorize() !== profileId
-            || result.workspace_id !== target.workspace_id || result.session_id !== target.session_id
-            || result.source_message_id !== target.source_message_id || result.source_revision !== target.source_revision
-            || result.snapshot_digest !== c.snapshot_digest) {
+            || !matchesSourceChallenge(result, c)) {
             throw new HostAuthorityError('profile_mismatch')
           }
           const identity = this.options.identity
           const unsigned: HostRootAuthorityAssertion = {
             schema_version: 1,
             challenge: root,
-            installation_id: identity.installationId as InstallationId,
-            installation_public_key: identity.installationPublicKey as HostControlPublicKey,
-            host_instance_id: identity.hostInstanceId as HostInstanceId,
-            process_nonce: identity.processNonce as HostControlNonce,
+            ...assertionIdentityFields(identity),
             signature: 'A'.repeat(86) as HostControlSignature,
           }
-          const signature = sign(
-            null,
-            encodeHostRootAuthorityPayload(unsigned),
-            privateKeyObject(identity.installationPrivateKey),
-          ).toString('base64url') as HostControlSignature
+          const signature = signAuthorityPayload(identity, encodeHostRootAuthorityPayload(unsigned))
           channel.send({
             version: 1,
             type: 'result',
@@ -1754,12 +1729,9 @@ export class HostControlAuthority {
           const account = challengeReadAccount(frame.params, c, ownerId)
           const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
           const profileId = authorize()
-          const target = { workspace_id: c.workspace_id, session_id: c.session_id,
-            source_message_id: c.source_message_id, source_revision: c.source_revision }
+          const target = sourceChallengeTarget(c)
           const result = await inspect(profileId, target, context.signal)
-          if (authorize() !== profileId || result.workspace_id !== target.workspace_id || result.session_id !== target.session_id
-            || result.source_message_id !== target.source_message_id || result.source_revision !== target.source_revision
-            || result.snapshot_digest !== c.snapshot_digest) {
+          if (authorize() !== profileId || !matchesSourceChallenge(result, c)) {
             throw new HostAuthorityError('profile_mismatch')
           }
           const identity = this.options.identity
@@ -1792,10 +1764,7 @@ export class HostControlAuthority {
           })
           const identity = this.options.identity
           const unsigned: HostCollaborationRegistrationAssertion = {
-            schema_version: 2, challenge, installation_id: identity.installationId as InstallationId,
-            installation_public_key: identity.installationPublicKey as HostControlPublicKey,
-            host_instance_id: identity.hostInstanceId as HostInstanceId,
-            process_nonce: identity.processNonce as HostControlNonce, signature: 'A'.repeat(86) as HostControlSignature,
+            schema_version: 2, challenge, ...assertionIdentityFields(identity), signature: 'A'.repeat(86) as HostControlSignature,
           }
           const signature = sign(null, encodeHostCollaborationRegistrationSignaturePayload(unsigned),
             privateKeyObject(identity.installationPrivateKey)).toString('base64url') as HostControlSignature
@@ -2651,10 +2620,7 @@ export class UnixHostClient {
       request_id: requestId(),
       method: 'profile.root_authority',
       params: {
-        ...this.auth(),
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
-        challenge,
+        ...this.challengeRequestParams(input, challenge),
       },
     }
     const frame = await this.call(request, signal)
@@ -2662,12 +2628,7 @@ export class UnixHostClient {
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     const result = parseHostRootAuthorityAssertion(frame.result)
     if (
-      !this.isConnected() ||
-      JSON.stringify(result.challenge) !== JSON.stringify(challenge) ||
-      result.installation_id !== this.inspection.installation_id ||
-      result.installation_public_key !== this.inspection.installation_public_key ||
-      result.host_instance_id !== this.inspection.host_instance_id ||
-      result.process_nonce !== this.inspection.process_nonce ||
+      !this.matchesChallengeIdentity(result, challenge) ||
       challenge.source_challenge.expires_at <= this.now() ||
       challenge.source_challenge.expires_at - this.now() > 300_000 ||
       !verify(
@@ -2706,10 +2667,7 @@ export class UnixHostClient {
       request_id: requestId(),
       method: 'profile.root_planning_attempt_authority',
       params: {
-        ...this.auth(),
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
-        challenge,
+        ...this.challengeRequestParams(input, challenge),
       },
     }
     const frame = await this.call(request, signal)
@@ -2717,12 +2675,7 @@ export class UnixHostClient {
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     const result = parseHostRootPlanningAttemptAuthorityAssertion(frame.result)
     if (
-      !this.isConnected() ||
-      JSON.stringify(result.challenge) !== JSON.stringify(challenge) ||
-      result.installation_id !== this.inspection.installation_id ||
-      result.installation_public_key !== this.inspection.installation_public_key ||
-      result.host_instance_id !== this.inspection.host_instance_id ||
-      result.process_nonce !== this.inspection.process_nonce ||
+      !this.matchesChallengeIdentity(result, challenge) ||
       challenge.root_challenge.source_challenge.expires_at <= this.now() ||
       challenge.root_challenge.source_challenge.expires_at - this.now() > 300_000 ||
       !verify(
@@ -2802,20 +2755,11 @@ export class UnixHostClient {
     active.throwIfAborted()
     const command = parseHostRootJournalCommand(input.command)
     if (!this.inspection.capabilities.includes('profile.root_journal' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
-    const peer = JSON.stringify([
-      this.inspection.installation_id, this.inspection.installation_public_key,
-      this.inspection.host_instance_id, this.inspection.process_nonce,
-    ])
     const request: ProfileRootJournalRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.root_journal', params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
-        account_issuer: input.issuer, account_subject: input.subject, command,
+        ...this.collaborationAccountRequestParams(input), command,
       } }
-    const frame = await this.call(request, active)
-    active.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected() ||
-      peer !== JSON.stringify([this.inspection.installation_id, this.inspection.installation_public_key, this.inspection.host_instance_id, this.inspection.process_nonce])) throw new HostAuthorityError('unavailable')
+    const frame = await this.callCurrentPeer(request, active)
     return matchHostRootJournalMetadata(frame.result, command)
   }
 
@@ -2846,20 +2790,11 @@ export class UnixHostClient {
     if (command.action === 'reconcile_root' && !this.inspection.capabilities.includes('profile.root_pending_lookup' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'recover_root' && !this.inspection.capabilities.includes('profile.root_lookup' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'prepare_root' && !this.inspection.capabilities.includes('profile.root_analysis' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
-    const peer = JSON.stringify([
-      this.inspection.installation_id, this.inspection.installation_public_key,
-      this.inspection.host_instance_id, this.inspection.process_nonce,
-    ])
     const request: ProfileCollaborationAnalysisRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_analysis', params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
-        account_issuer: input.issuer, account_subject: input.subject, command,
+        ...this.collaborationAccountRequestParams(input), command,
       } }
-    const frame = await this.call(request, active)
-    active.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected() ||
-      peer !== JSON.stringify([this.inspection.installation_id, this.inspection.installation_public_key, this.inspection.host_instance_id, this.inspection.process_nonce])) throw new HostAuthorityError('unavailable')
+    const frame = await this.callCurrentPeer(request, active)
     const result = parseHostCollaborationAnalysisResult(frame.result)
     const expected = command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
     if (command.action === 'resume_root' && (result.kind !== 'root_prepared' || !result.preparation || typeof result.preparation !== 'object' || Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
@@ -3712,8 +3647,42 @@ export class UnixHostClient {
     }
   }
 
+  private async callCurrentPeer(
+    request: ProfileRootJournalRequest | ProfileCollaborationAnalysisRequest,
+    signal: AbortSignal,
+  ): Promise<Extract<HostControlFrame, { type: 'result' }>> {
+    const peer = this.currentPeerFingerprint()
+    const frame = await this.call(request, signal)
+    signal.throwIfAborted()
+    this.requireCurrentPeer(peer)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame
+  }
+
+  private requireCurrentPeer(peer: string): void {
+    if (!this.isConnected() || peer !== this.currentPeerFingerprint()) throw new HostAuthorityError('unavailable')
+  }
+
+  private currentPeerFingerprint(): string {
+    return JSON.stringify([this.inspection.installation_id, this.inspection.installation_public_key,
+      this.inspection.host_instance_id, this.inspection.process_nonce])
+  }
+
+  private collaborationAccountRequestParams(input: {
+    authorityEnvironmentId: string
+    accountBindingHandle: string
+    authorityBindingVersion: number
+    issuer: string
+    subject: string
+  }) {
+    return { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
+      account_issuer: input.issuer, account_subject: input.subject }
+  }
+
   private challengeRequestParams<Challenge extends
-    HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge>(
+    HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge
+      | HostRootAuthorityChallenge | HostRootPlanningAttemptAuthorityChallenge>(
     input: { readonly accountBindingHandle: string; readonly authorityBindingVersion: number },
     challenge: Challenge,
   ) {
@@ -3726,8 +3695,10 @@ export class UnixHostClient {
   }
 
   private matchesChallengeIdentity(
-    result: HostWorkspaceAuthorityAssertion | HostSourceAuthorityAssertion | HostCollaborationRegistrationAssertion,
-    challenge: HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge,
+    result: HostWorkspaceAuthorityAssertion | HostSourceAuthorityAssertion | HostCollaborationRegistrationAssertion
+      | HostRootAuthorityAssertion | HostRootPlanningAttemptAuthorityAssertion,
+    challenge: HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge
+      | HostRootAuthorityChallenge | HostRootPlanningAttemptAuthorityChallenge,
   ): boolean {
     return this.isConnected() && JSON.stringify(result.challenge) === JSON.stringify(challenge)
       && result.installation_id === this.inspection.installation_id

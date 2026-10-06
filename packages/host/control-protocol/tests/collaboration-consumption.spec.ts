@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createPublicKey, verify } from 'node:crypto'
 import { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from '../src/collaboration-consumption.ts'
 it('shares exact consumption signing bytes with Slark and binds every persisted coordinate', () => {
-  const fixture=JSON.parse(readFileSync(new URL('./fixtures/dsh-collaboration-consumption-v1.json',import.meta.url),'utf8'))
+  const fixture=JSON.parse(readFileSync(new URL('./fixtures/dsh-collaboration-consumption-v1.json',import.meta.url),'utf8')) as { receipt: unknown; payload_hex: string }
   const receipt=parseHostCollaborationConsumptionReceipt(fixture.receipt)
   const bytes=Buffer.from(encodeHostCollaborationConsumptionReceiptPayload(receipt))
   expect(bytes.toString('hex')).toBe(fixture.payload_hex)

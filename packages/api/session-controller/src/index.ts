@@ -865,8 +865,9 @@ export class SessionController extends TypertRemoteService {
           return { kind: 'consumer' as const, record: retained.record, observation: before }
         }
         const agent = this.ctx.agents.get(sessionId)
-        if (!session || !agent || agent.session !== session || agent.status !== 'idle'
-          || agent.inbox.nextTurn.length || agent.inbox.nextStep.length || before.status !== 'not_enqueued') throw Error('collaboration_feedback_session_busy')
+        const idle = () => agent?.status === 'idle' && !agent.inbox.nextTurn.length && !agent.inbox.nextStep.length
+        if (!session || !agent || agent.session !== session || !idle()
+          || before.status !== 'not_enqueued') throw Error('collaboration_feedback_session_busy')
         const expected = command.action === 'consumer_prepare' ? command : record?.command
         if (!expected || session.seq !== before.event_count || expected.expected_event_count !== before.event_count
           || expected.expected_log_digest !== before.log_digest) throw Error('collaboration_feedback_session_changed')
@@ -878,12 +879,11 @@ export class SessionController extends TypertRemoteService {
         const started = await consumers.start(binding, command.grant, owned)
         await current()
         if (started.wake) {
-          if (started.record.state === 'prepared' || session.seq !== before.event_count || agent.status !== 'idle'
-            || agent.inbox.nextTurn.length || agent.inbox.nextStep.length) throw Error('collaboration_consumption_reconciliation_required')
+          if (started.record.state === 'prepared' || session.seq !== before.event_count || !idle()) throw Error('collaboration_consumption_reconciliation_required')
           const deadline = Date.parse(started.record.grant.expires_at)
           if (Date.now() >= deadline) throw Error('collaboration_consumption_grant_expired')
           const active = AbortSignal.any([owned, AbortSignal.timeout(Math.max(1, deadline - Date.now()))])
-          const cancelled = () => agent.cancel({ kind: 'parent' }, { keepInbox: true })
+          const cancelled = () => { agent.cancel({ kind: 'parent' }, { keepInbox: true }) }
           this.collaborationConsumerLive.set(message.id, { sessionId, expiresAt: deadline, signal: active })
           active.addEventListener('abort', cancelled, { once: true })
           try {

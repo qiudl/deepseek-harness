@@ -1,3 +1,4 @@
+import { rootWorkerOperations } from './root-worker-operations.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync,
@@ -728,15 +729,7 @@ export async function startDesktopHostApplication(
       host,
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       inspectWorkspaceModelSelection: (profileId, target, signal) => workers.inspectWorkspaceModelSelection(profileId, target, signal),
-      rootJournal: (profileId, command, signal) => workers.rootJournal(profileId, command, signal),
-      rootPlanningSupported: true,
-      rootExecutionSupported: true,
-      rootFeedbackSupported: true,
-      inspectRootPlanningAttempt: (profileId, target, attemptId, binding, signal) =>
-        workers.inspectRootPlanningAttempt(profileId, target, attemptId, binding, signal),
-      inspectCollaborationRoot: (profileId, target, signal) => workers.inspectCollaborationRoot(profileId, target, signal),
-      inspectCollaborationSource: (profileId, target, signal) => workers.inspectCollaborationSource(profileId, target, signal),
-      readCollaborationSourceSnapshot: (profileId, target, signal) => workers.readCollaborationSourceSnapshot(profileId, target, signal),
+      ...rootWorkerOperations(workers),
       rootAnalysisSupported: true,
       rootAnalysisRecoverySupported: true,
       rootLookupSupported: true,

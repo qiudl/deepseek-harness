@@ -64,7 +64,7 @@ function exact(value: unknown, keys: readonly string[]): Record<string, unknown>
   if (
     !value ||
     typeof value !== 'object' ||
-    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) ||
     Object.getOwnPropertySymbols(value).length
   )
     throw Error('invalid_consumption_receipt')
