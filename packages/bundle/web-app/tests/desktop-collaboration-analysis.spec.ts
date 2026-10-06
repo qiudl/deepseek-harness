@@ -695,6 +695,95 @@ it('returns unavailable over private HTTP when the Profile has no planning owner
   expect(h.calls()).toBe(0)
 })
 
+it.each(['handoff', 'binding', 'missing_binding', 'expired', 'closed', 'reopened', 'membership', 'changed',
+  'consumed', 'cancelled', 'deadline', 'reader_changed'] as const)(
+  'ordinary live Source resume retains the original attempt and deadline: %s', async (mode) => {
+    const h = await harness()
+    let owner = h.owner
+    vi.useFakeTimers()
+    try {
+      const p = receipt(await owner.prepare(input(), binding, signal(), binding))
+      if (mode === 'expired') await vi.advanceTimersByTimeAsync(30001)
+      if (mode === 'closed' || mode === 'reopened') await owner.close()
+      if (mode === 'reopened') {
+        owner = new DesktopCollaborationAnalysis(async () => { throw Error('must not recapture') }, h.open, signal(),
+          undefined, undefined, undefined, undefined, undefined, undefined, h.readSource)
+        onTestFinished(() => owner.close())
+      }
+      if (mode === 'membership') h.readSource.mockRejectedValueOnce(Error('membership'))
+      if (mode === 'reader_changed') h.readSource.mockResolvedValueOnce(h.snapshot('message')).mockResolvedValueOnce({
+        ...h.snapshot('message'), model_snapshot: { ...h.snapshot('message').model_snapshot, model: 'changed' },
+      })
+      if (mode === 'consumed') {
+        const opened = h.open.mock.results.at(-1)
+        if (!opened || opened.type !== 'return') throw Error('expected original journal')
+        const journal = await opened.value
+        await journal.dispatch([...journal.records()][0]!, permission(p), signal())
+      }
+      if (mode === 'deadline') await vi.advanceTimersByTimeAsync(20000)
+      const resumed = owner.resumeSource(mode === 'changed' ? { ...input(), original_message: '@Guide changed' } : input(),
+        'c'.repeat(64), mode === 'cancelled' ? AbortSignal.abort() : signal(),
+        mode === 'missing_binding' ? undefined : mode === 'binding' ? 'b'.repeat(64) : binding)
+      if (mode === 'handoff' || mode === 'deadline') {
+        expect(await resumed).toEqual(p)
+        expect(h.capture).toHaveBeenCalledTimes(1)
+        if (mode === 'deadline') {
+          await vi.advanceTimersByTimeAsync(10001)
+          await expect(owner.dispatch(p.attempt_request_id, 'c'.repeat(64), permission(p), signal())).rejects.toThrow()
+          expect(h.calls()).toBe(0)
+        } else {
+          await expect(owner.dispatch(p.attempt_request_id, binding, permission(p), signal())).rejects.toThrow()
+          await owner.dispatch(p.attempt_request_id, 'c'.repeat(64), permission(p), signal())
+          await expect(owner.resumeSource(input(), 'c'.repeat(64), signal(), binding)).rejects.toThrow()
+          expect(h.calls()).toBe(1)
+        }
+      } else {
+        await expect(resumed).rejects.toThrow()
+        expect(h.calls()).toBe(0)
+      }
+    } finally { vi.useRealTimers() }
+  },
+)
+
+it('refuses Source handoff without a membership reader even when the original call remains live', async () => {
+  const h = await harness()
+  const owner = new DesktopCollaborationAnalysis(h.capture, h.open, signal())
+  onTestFinished(() => owner.close())
+  await owner.prepare(input(), binding, signal(), binding)
+  await expect(owner.resumeSource(input(), 'c'.repeat(64), signal(), binding)).rejects.toThrow('preparation_unavailable')
+  expect(h.calls()).toBe(0)
+})
+it('refuses handoff when the original connection consumes dispatch during membership checking', async () => {
+  const h = await harness(), p = receipt(await h.owner.prepare(input(), binding, signal(), binding))
+  h.readSource.mockResolvedValueOnce(h.snapshot('message')).mockImplementationOnce(async () => {
+    await h.owner.dispatch(p.attempt_request_id, binding, permission(p), signal())
+    return h.snapshot('message')
+  })
+  await expect(h.owner.resumeSource(input(), 'c'.repeat(64), signal(), binding)).rejects.toThrow('preparation_unavailable')
+  expect(h.calls()).toBe(1)
+  await expect(h.owner.dispatch(p.attempt_request_id, 'c'.repeat(64), permission(p), signal())).rejects.toThrow()
+  expect(h.calls()).toBe(1)
+})
+
+it('private HTTP hands off only the original Source preparation and rejects the previous connection dispatch', async () => {
+  const h = await harness(), f = await httpFixture(h)
+  const first = await f.post({ action: 'prepare', binding_key: binding, input: input(), resume_binding_key: binding })
+  expect(first.status).toBe(200)
+  const prepared = (await first.json() as { value: ReturnType<typeof receipt> }).value
+  const resumed = await f.post({ action: 'resume_source', binding_key: 'c'.repeat(64), input: input(), resume_binding_key: binding })
+  expect(resumed.status).toBe(200)
+  expect(await resumed.json()).toEqual({ value: prepared })
+  const previous = await f.post({ action: 'dispatch', binding_key: binding, attempt_request_id: prepared.attempt_request_id,
+    grant: permission(prepared) })
+  expect(previous.status).toBe(422)
+  expect(h.calls()).toBe(0)
+  const result = await f.post({ action: 'dispatch', binding_key: 'c'.repeat(64), attempt_request_id: prepared.attempt_request_id,
+    grant: permission(prepared) })
+  expect(result.status).toBe(200)
+  expect(h.calls()).toBe(1)
+  expect(h.capture).toHaveBeenCalledTimes(1)
+})
+
 it('reads ordinary Source output through private HTTP without preparing another model call', async () => {
   const h = await harness(), prepared = receipt(await h.owner.prepare(input(), binding, signal()))
   const f = await httpFixture(h)

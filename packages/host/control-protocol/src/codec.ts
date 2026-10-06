@@ -1314,7 +1314,7 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
     exactKeys(row, ['action', 'input'])
     return { action: row.action, input: parseHostRootAnalysisInput(row.input) }
   }
-  if (row.action === 'prepare' || row.action === 'capture_reply' || row.action === 'prepare_clarification') {
+  if (row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification') {
     exactKeys(row, ['action', 'input'])
     const input = remoteSessionJson(row.input)
     if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 32768) reject()

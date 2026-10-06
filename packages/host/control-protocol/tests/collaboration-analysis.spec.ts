@@ -110,3 +110,16 @@ it('refuses non-record Source evidence and invalid common saved fields without e
   expect(() => parseHostSourceAnalysisOutput(value)).toThrow()
   expect(reads).toBe(0)
 })
+
+it('roundtrips Source handoff through the bounded frame and refuses caller binding fields', () => {
+  const command = { action: 'resume_source', input: { source_message_id: 'original', original_message: '@Guide inspect' } }
+  expect(parseHostCollaborationAnalysisCommand(command)).toEqual(command)
+  expect(() => parseHostCollaborationAnalysisCommand({ ...command, resume_binding_key: 'a'.repeat(64) })).toThrow()
+  expect(() => parseHostCollaborationAnalysisCommand({ ...command, input: { text: 'a'.repeat(32768) } })).toThrow()
+  const frame = { version: 1, type: 'request', request_id: uid, method: 'profile.collaboration_analysis', params: {
+    client_instance_id: uid, host_instance_id: uid, process_nonce: 'A'.repeat(43), jti: uid,
+    issued_at: 1000, expires_at: 2000, authority_environment_id: uid, account_binding_handle: 'binding',
+    authority_binding_version: 1, account_issuer: 'https://accounts.example.test', account_subject: uid, command,
+  } }
+  expect(decodeHostControlFrame(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)))).toEqual(frame)
+})

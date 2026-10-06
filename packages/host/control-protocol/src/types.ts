@@ -606,6 +606,7 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'reconcile_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'resume_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'prepare'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'resume_source'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'capture_reply'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'prepare_clarification'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>

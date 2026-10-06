@@ -733,6 +733,7 @@ export async function startDesktopHostApplication(
       rootAnalysisSupported: true,
       rootAnalysisRecoverySupported: true,
       sourceAnalysisRecoverySupported: true,
+      sourceLiveResumeSupported: true,
       rootLookupSupported: true,
       rootPendingLookupSupported: true,
       rootLiveResumeSupported: true,

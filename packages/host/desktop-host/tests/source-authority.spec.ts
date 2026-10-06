@@ -34,6 +34,7 @@ async function fixture(
   rootPlanningSupported = false, rootExecutionSupported = false, rootFeedbackSupported = false,
   enabled = true, omitRootReaders = false, referenceEnabled = false, captureEnabled = false, contentEnabled = false,
   sourceAnalysisRecoverySupported = false,
+  sourceLiveResumeSupported = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
@@ -125,6 +126,7 @@ async function fixture(
     rootAnalysisSupported,
     rootAnalysisRecoverySupported,
     sourceAnalysisRecoverySupported,
+    sourceLiveResumeSupported,
     rootLookupSupported,
     rootPendingLookupSupported,
     rootLiveResumeSupported,
@@ -485,6 +487,32 @@ it('refuses a Source digest or coordinate mismatch from the private worker', asy
 function analysisGrant(f:Awaited<ReturnType<typeof fixture>>) {
   return { attempt_request_id:f.challenge.request_id,plan_id:'plan',expected_plan_revision:'1',attempt_id:'attempt',attempt_fence:'1',source_digest:f.challenge.snapshot_digest,input_manifest_digest:'b'.repeat(64),lease_expires_at:new Date(20000).toISOString(),dispatch_granted:true }
 }
+it.each(['live', 'old', 'wrong_kind', 'revoked', 'cancelled'] as const)(
+  'Source live resume uses a separate capability and Host-derived Account identity: %s', async (mode) => {
+    const f = await fixture(false, false, false, false, false, false, false, false, true, false, false, false, false, false, mode !== 'old')
+    await f.grant()
+    const c = f.challenge, cancel = new AbortController(), commands: Record<string, unknown>[] = []
+    const descriptor = { workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id,
+      source_revision: c.source_revision, snapshot_digest: c.snapshot_digest }
+    const preparation = { kind: 'prepared', descriptor, attempt_request_id: c.request_id,
+      input_manifest_digest: 'b'.repeat(64), source_digest: c.snapshot_digest }
+    f.setAnalysis(async (_profile, command) => {
+      commands.push(command)
+      if (command.action === 'resume_source' && mode === 'revoked') f.host.revokeOwner(f.ownerId)
+      if (command.action === 'resume_source' && mode === 'cancelled') cancel.abort()
+      return command.action === 'resume_source' && mode === 'wrong_kind' ? { kind: 'recovered', descriptor } : preparation
+    })
+    await f.client.collaborationAnalysis({ ...f.account, command: { action: 'prepare', input: {} } })
+    const resumed = f.client.collaborationAnalysis({ ...f.account, command: { action: 'resume_source', input: {} }, signal: cancel.signal })
+    if (mode === 'live') {
+      expect(await resumed).toEqual({ kind: 'prepared', preparation })
+      expect(commands[0]?.resume_binding_key).toMatch(/^[a-f0-9]{64}$/u)
+      expect(commands[1]?.resume_binding_key).toBe(commands[0]?.resume_binding_key)
+      expect(commands[1]?.binding_key).not.toBe(commands[1]?.resume_binding_key)
+    } else await expect(resumed).rejects.toThrow()
+    expect(commands).toHaveLength(mode === 'old' ? 1 : 2)
+  },
+)
 it.each(['saved', 'maximum', 'unsigned', 'signature', 'peer'] as const)(
   'saved Root output carries current installation proof without dispatch: %s', async (mode) => {
     const { parseHostRootSubmissionTarget, parseHostCollaborationAnalysisReceipt,

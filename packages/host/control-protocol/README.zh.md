@@ -158,6 +158,8 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 
 `profile.collaboration_analysis` 另支持携带有界私有输入的 `profile.source_analysis_recovery` 单独启用 `read_source_output`，只接受普通 Source 的精确坐标。`source_output` 响应包含原描述符，并明确报告输出缺失，或返回历史已消费派发记录、原始输出摘要及有界 base64url JSON。已保存响应携带安装签名回执；客户端必须按当前 Account 和 Host 身份验证。坐标、派发、字节或回执字段变化均拒绝。历史租约过期只允许读取证据；云端尝试和受理校验仍独立执行。
 
+`profile.source_live_resume` 独立启用 `resume_source`，输入为原始有界 Source 内容。响应必须包含相同 Source 坐标的 prepared 元数据。调用方仍须取得当前云端派发许可；命令不携带模型或调用方提供的绑定身份。
+
 `capture_reply` 和 `prepare_clarification`。补充捕获返回 `reply_source`，仅包含 captured/recovered Source 描述符；完整输入准备返回 `prepared`。命令与结果字段及操作对应的结果类别均严格核验，帧和 JSON 预算不变。补充捕获不授予模型派发资格。
 
 

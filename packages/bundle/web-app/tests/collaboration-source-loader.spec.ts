@@ -204,7 +204,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       ? ((await factory['collaborationAnalysis'](
         origin,
         'B'.repeat(43),
-        { action: mode === 'root-analysis' ? 'prepare_root' : 'prepare', ...(mode==='root-analysis'?{ resume_binding_key:'f'.repeat(64) }:{}), binding_key: 'd'.repeat(64), input: mode === 'root-analysis' ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
+        { action: mode === 'root-analysis' ? 'prepare_root' : 'prepare', ...((mode === 'root-analysis' || mode === 'analysis-profile') ? { resume_binding_key: 'f'.repeat(64) } : {}), binding_key: 'd'.repeat(64), input: mode === 'root-analysis' ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
         new AbortController().signal,
         () => false,
       )) as {
@@ -490,13 +490,25 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       lease_expires_at: new Date(Date.now() + 30000).toISOString(),
       dispatch_granted: true,
     }
+    if (mode === 'analysis-profile') {
+      const missing = await factory['collaborationAnalysis'](origin, 'B'.repeat(43), {
+        action: 'read_source_output', binding_key: 'e'.repeat(64), target,
+      }, new AbortController().signal, () => false)
+      expect(missing).toEqual({ state: 'missing', descriptor: preparation!.descriptor })
+      const resume = { action: 'resume_source', binding_key: 'e'.repeat(64), resume_binding_key: 'f'.repeat(64), input: source }
+      expect((await postAnalysis({ ...resume, resume_binding_key: 'a'.repeat(64) })).status).toBe(422)
+      const resumed = await factory['collaborationAnalysis'](origin, 'B'.repeat(43), resume, new AbortController().signal, () => false)
+      expect(resumed).toEqual(preparation)
+      expect(providerRequests).toBe(0)
+      expect((await postAnalysis({ action: 'dispatch', binding_key: 'd'.repeat(64), attempt_request_id: preparation!.attempt_request_id, grant })).status).toBe(422)
+    }
     const dispatch = {
       action: 'dispatch',
-      binding_key: 'd'.repeat(64),
+      binding_key: (mode === 'analysis-profile' ? 'e' : 'd').repeat(64),
       attempt_request_id: preparation!.attempt_request_id,
       grant,
     }
-    expect((await postAnalysis({ ...dispatch, binding_key: 'e'.repeat(64) })).status).toBe(422)
+    expect((await postAnalysis({ ...dispatch, binding_key: 'a'.repeat(64) })).status).toBe(422)
     expect(providerRequests).toBe(0)
     const result = (await factory['collaborationAnalysis'](
       origin,
@@ -516,6 +528,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     expect((await postAnalysis(dispatch)).status).toBe(422)
     expect(providerRequests).toBe(1)
     if (mode === 'analysis-profile') {
+      expect((await postAnalysis({ action: 'resume_source', binding_key: 'e'.repeat(64), resume_binding_key: 'f'.repeat(64), input: source })).status).toBe(422)
       const readOriginal = { action: 'read_source_output', binding_key: 'd'.repeat(64), target }
       const originalFiles = ['collaboration_source_v2.json', 'collaboration_analysis_v2.json', 'collaboration_analysis_output_v2.json']
       const originalBytes = await Promise.all(originalFiles.map(name => readFile(join(directory, 'state', name))))
