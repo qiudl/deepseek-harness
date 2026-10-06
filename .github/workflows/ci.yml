@@ -714,10 +714,11 @@ jobs:
           pnpm exec vitest run --no-file-parallelism --testTimeout 90000 `
             packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts `
             packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts `
-            -t 'Modify-only|inherit-only|FullControl open' --reporter=json --outputFile=$reportPath
+            -t 'Modify-only|full-control ACE only applies to children|FullControl open' --reporter=json --outputFile=$reportPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
-          $targets = @($report.testResults.assertionResults | Where-Object { $_.fullName -match 'Modify-only|inherit-only|FullControl open' })
+          $targets = @($report.testResults.assertionResults | Where-Object { $_.fullName -match 'Modify-only|full-control ACE only applies to children|FullControl open' })
+          $targets | Select-Object fullName, status | ConvertTo-Json -Compress | Write-Host
           if ($targets.Count -ne 3 -or @($targets | Where-Object { $_.status -ne 'passed' }).Count -ne 0) {
             throw 'All three Windows ACL fixture regressions must execute and pass; skipped targets are not evidence'
           }

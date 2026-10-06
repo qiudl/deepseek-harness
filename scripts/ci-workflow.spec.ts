@@ -369,7 +369,22 @@ describe('CI workflow', () => {
     expect(aclFixtures?.shell).toBe('pwsh')
     expect(aclFixtures?.run).toContain('packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts')
     expect(aclFixtures?.run).toContain('packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts')
-    expect(aclFixtures?.run).toContain("-t 'Modify-only|inherit-only|FullControl open'")
+    const aclRun = aclFixtures?.run
+    if (typeof aclRun !== 'string') throw new TypeError('Windows ACL fixture command is required')
+    const filter = aclRun.match(/-t '([^']+)'/)?.[1]
+    if (!filter) throw new TypeError('Windows ACL fixture command must name its regression filter')
+    expect(aclRun).toContain(`$_.fullName -match '${filter}'`)
+    const pattern = new RegExp(filter)
+    const selected = [
+      'packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts',
+      'packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts',
+    ].flatMap(file => [...readFileSync(resolve(root, file), 'utf8').matchAll(/\bit\('([^']+)'/g)]
+      .flatMap(match => match[1] !== undefined && pattern.test(match[1]) ? [match[1]] : []))
+    expect(selected.sort()).toEqual([
+      'a FullControl open inside a granted root still works for files (the deny inherits to containers only)',
+      'grants full control for a Modify-only DACL without changing the owner',
+      'repairs a directory whose full-control ACE only applies to children',
+    ])
     expect(aclFixtures?.run).toContain('--reporter=json --outputFile=$reportPath')
     expect(aclFixtures?.run).toContain('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }')
     expect(aclFixtures?.run).toContain('$targets.Count -ne 3')

@@ -196,6 +196,8 @@ These limits define when the backend is a poor fit or needs special operational 
 
 Windows ACL fixtures verify their requested DACL before exercising repairs. Modify-only cases remove all prior grants inside their owned temporary roots, disable inheritance, and preserve the owner. Inheritance probes reset child DACLs so an explicit FullControl allow cannot override the inherited deny under test. Host-owned ancestor ACLs remain read-only.
 
+The focused native CI filter matches test titles, and its workflow check compares the selected titles against the owning test files. The runtime report must contain all three passing regressions.
+
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
