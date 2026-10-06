@@ -365,6 +365,17 @@ describe('CI workflow', () => {
     expect(nativeTestCommand).toContain('tool-pwsh/tests/loader.spec.ts')
     expect(nativeTestCommand).toContain('workflow-ptc.spec.ts')
 
+    const aclFixtures = nativeTestCommands.find(step => step.name === 'Run Windows ACL fixture regressions')
+    expect(aclFixtures?.shell).toBe('pwsh')
+    expect(aclFixtures?.run).toContain('packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts')
+    expect(aclFixtures?.run).toContain('packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts')
+    expect(aclFixtures?.run).toContain("-t 'Modify-only|inherit-only|FullControl open'")
+    expect(aclFixtures?.run).toContain('--reporter=json --outputFile=$reportPath')
+    expect(aclFixtures?.run).toContain('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }')
+    expect(aclFixtures?.run).toContain('$targets.Count -ne 3')
+    expect(aclFixtures?.run).toContain("$_.status -ne 'passed'")
+    expect(aclFixtures?.['continue-on-error']).not.toBe(true)
+
     expect(workflow.jobs['windows-observational']).toBeUndefined()
     expect(windowsBuild['continue-on-error']).not.toBe(true)
     const observational = buildCommands.find(step => step.id === 'observational')

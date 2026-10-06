@@ -194,6 +194,8 @@ These limits define when the backend is a poor fit or needs special operational 
 <a id="dev-note"></a>
 ### Dev Note
 
+Windows ACL fixtures verify their requested DACL before exercising repairs. Modify-only cases remove all prior grants inside their owned temporary roots, disable inheritance, and preserve the owner. Inheritance probes reset child DACLs so an explicit FullControl allow cannot override the inherited deny under test. Host-owned ancestor ACLs remain read-only.
+
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 

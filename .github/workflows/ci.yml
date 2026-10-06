@@ -707,6 +707,20 @@ jobs:
           packages/workflow/workflow-ptc/tests/workflow-ptc.spec.ts
           packages/workflow/tool-ralph/tests/integration.spec.ts
           packages/subprocess/subprocess-local/tests/process-exit.spec.ts
+      - name: Run Windows ACL fixture regressions
+        shell: pwsh
+        run: |
+          $reportPath = Join-Path $env:RUNNER_TEMP ("windows-acl-fixtures-" + [guid]::NewGuid().ToString() + ".json")
+          pnpm exec vitest run --no-file-parallelism --testTimeout 90000 `
+            packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts `
+            packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts `
+            -t 'Modify-only|inherit-only|FullControl open' --reporter=json --outputFile=$reportPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+          $targets = @($report.testResults.assertionResults | Where-Object { $_.fullName -match 'Modify-only|inherit-only|FullControl open' })
+          if ($targets.Count -ne 3 -or @($targets | Where-Object { $_.status -ne 'passed' }).Count -ne 0) {
+            throw 'All three Windows ACL fixture regressions must execute and pass; skipped targets are not evidence'
+          }
 
   # Single stable required check for branch protection: require "all checks
   # passed" instead of enumerating matrix legs whose names change as lanes and
