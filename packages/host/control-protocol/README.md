@@ -79,6 +79,10 @@ See the [single Host control protocol Agent Note](../../../.agents/notes/impleme
 
 No runtime invariant companion is published: the codec validates the complete wire value algebra at its input boundary.
 
+### Remote workspace directories
+
+The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
+
 ## Model Experience
 
 None, as this local Host control codec registers nothing model-facing.

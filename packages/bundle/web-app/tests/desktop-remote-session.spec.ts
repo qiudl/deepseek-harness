@@ -385,3 +385,59 @@ describe('Desktop remote Session bridge', () => {
     })
   })
 })
+
+
+describe('REQ-20260930-0015 remote directory confirmation', () => {
+  const command_id = '123e4567-e89b-42d3-a456-426614174000' as never
+  const client_id = '123e4567-e89b-42d3-a456-426614174001'
+  it('registers only a directory confirmed on this Host for the paired client, once', async () => {
+    const invoke = vi.fn().mockResolvedValueOnce('/tmp/confirmed-folder')
+      .mockResolvedValue({ workspace: { workspaceId: 'workspace-new' }, created: true })
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const signal = new AbortController().signal
+    const picked = await executor.execute({ operation: 'directory.pick', command_id, client_id }, signal)
+    expect(picked).toMatchObject({ path: '/tmp/confirmed-folder', grantId: expect.any(String) })
+    const command = { operation: 'workspace.create' as const, command_id, client_id,
+      path: '/tmp/confirmed-folder', grant_id: (picked as { grantId: string }).grantId }
+    await expect(executor.execute({ ...command, path: '/tmp/forged' }, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...command, client_id: '123e4567-e89b-42d3-a456-426614174002' }, signal)).rejects.toThrow()
+    await expect(executor.execute(command, signal)).resolves.toMatchObject({ created: true })
+    await expect(executor.execute(command, signal)).rejects.toThrow()
+    expect(invoke).toHaveBeenCalledWith({ namespace: 'directoryPicker', method: 'pick', args: {}, signal })
+    expect(invoke).toHaveBeenLastCalledWith({ namespace: 'workspace', method: 'create',
+      args: { request: { path: '/tmp/confirmed-folder' } }, signal })
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+  it('expires confirmations and isolates them between Profile workers', async () => {
+    const invoke = vi.fn().mockResolvedValue('/tmp/confirmed')
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const signal = new AbortController().signal
+    const picked = await executor.execute({ operation: 'directory.pick', command_id, client_id }, signal) as { grantId: string }
+    const command = { operation: 'workspace.create' as const, command_id, client_id, path: '/tmp/confirmed', grant_id: picked.grantId }
+    const other = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    await expect(other.execute(command, signal)).rejects.toThrow('confirmation required')
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_001)
+    try { await expect(executor.execute(command, signal)).rejects.toThrow('confirmation required') } finally { clock.mockRestore() }
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+  it('withdraws a previous confirmation when the client opens another chooser and cancels', async () => {
+    const invoke = vi.fn().mockResolvedValueOnce('/tmp/confirmed').mockResolvedValueOnce(null)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const signal = new AbortController().signal
+    const picked = await executor.execute({ operation: 'directory.pick', command_id, client_id }, signal) as { grantId: string }
+    await executor.execute({ operation: 'directory.pick', command_id, client_id }, signal)
+    await expect(executor.execute({ operation: 'workspace.create', command_id, client_id,
+      path: '/tmp/confirmed', grant_id: picked.grantId }, signal)).rejects.toThrow('confirmation required')
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+  it('returns cancellation without granting a path and rejects a late chooser settlement after abort', async () => {
+    const controller = new AbortController()
+    const invoke = vi.fn().mockResolvedValueOnce(null).mockImplementationOnce(async () => {
+      controller.abort(); return '/tmp/late'
+    })
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    await expect(executor.execute({ operation: 'directory.pick', command_id, client_id }, controller.signal))
+      .resolves.toEqual({ path: null })
+    await expect(executor.execute({ operation: 'directory.pick', command_id, client_id }, controller.signal)).rejects.toThrow()
+  })
+})

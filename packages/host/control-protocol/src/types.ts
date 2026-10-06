@@ -911,6 +911,14 @@ export type HostRemoteSessionCommand =
     readonly epoch: number
   }
   | { readonly operation: 'session.list'; readonly command_id: HostControlRequestId }
+  | { readonly operation: 'directory.pick'
+    readonly command_id: HostControlRequestId
+    readonly client_id: string }
+  | { readonly operation: 'workspace.create'
+    readonly command_id: HostControlRequestId
+    readonly client_id: string
+    readonly grant_id: string
+    readonly path: string }
   | { readonly operation: 'session.create'
     readonly command_id: HostControlRequestId
     readonly workspace_id?: string

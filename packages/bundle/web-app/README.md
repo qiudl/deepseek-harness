@@ -136,6 +136,10 @@ Read these pages when you want to go deeper into the shared core, the browser re
 -----
 
 <a id="model-experience"></a>
+### Remote workspace directories
+
+The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
+
 ## Model Experience
 
 ### Harness-source and Web-surface context

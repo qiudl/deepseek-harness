@@ -105,6 +105,10 @@ MCP configuration parsing and runtime acknowledgement share one executor across 
 
 No runtime invariant companion is published: filesystem and wire commit points validate owned state, while lease and crash behavior are covered by integration tests.
 
+### Remote workspace directories
+
+The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.
