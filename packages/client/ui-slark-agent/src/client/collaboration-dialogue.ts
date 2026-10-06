@@ -183,8 +183,7 @@ export function createCollaborationReplyMatcher(ctx: Context, t: (key: keyof typ
       if (!pending.length) return undefined
       const page = pending[0]
       if (pending.length !== 1 || !page || page.pending_items.length !== 1) throw Error(t('submit.multiplePending'))
-      const plan = page.plan
-      if (!plan) throw Error(t('submit.unavailableV2'))
+      const plan = page.plan as NonNullable<CollaborationPendingPage['plan']>
       if (envelope.attachments > 0) throw Error(t('submit.single'))
       if (!text(snapshot.draft, 32 * 1024)) throw Error(t('submit.unavailableV2'))
       const subtle = Reflect.get(globalThis.crypto, 'subtle') as SubtleCrypto | undefined

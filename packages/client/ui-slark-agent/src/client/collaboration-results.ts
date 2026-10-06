@@ -42,6 +42,7 @@ export interface CollaborationResultsSnapshot {
   readonly nextCursor?: string
 }
 type Generation = { getSnapshot(): unknown; subscribe(fn: () => void): () => void }
+type ReadableResultsBridge = CollaborationResultsBridge & Required<Pick<CollaborationResultsBridge, 'collaborationDeliveries'>>
 type ReadSources = (cursor: string | undefined, signal: AbortSignal) => Promise<
   { ok: true; value: SessionCollaborationSourcesValue } | { ok: false }>
 const empty = (): CollaborationResultsSnapshot => ({ phase: 'idle', groups: [] })
@@ -142,12 +143,12 @@ export class CollaborationResultsModel {
     }
     return value
   }
+  /** The caller binds an available reader and verifies the owning generation before each page. */
   private async results(original: SessionCollaborationSourceItem, signal: AbortSignal, generation: number,
     cursor?: string, prior: readonly ScopedCollaborationReply[] = [],
     previous: readonly ScopedCollaborationReply[] = []): Promise<CollaborationResultGroup> {
     try {
-      const host = this.boundBridge
-      if (!host?.collaborationDeliveries) throw Error('unavailable')
+      const host = this.boundBridge as ReadableResultsBridge
       const result = await wait(host.collaborationDeliveries({ source: original.source, limit: 50,
         ...(cursor ? { after_delivery_id: cursor } : {}) }), signal)
       if (!this.current(generation)) throw Error('obsolete')
@@ -227,12 +228,12 @@ export class CollaborationResultsModel {
     } catch {
       if (this.current(generation)) this.publish({ phase: 'error', groups: [] })
     } finally {
-      this.finishQuery(controller)
+      this.finishQuery()
     }
   }
-  private finishQuery(controller: AbortController): void {
+  private finishQuery(): void {
     this.pending = false
-    if (this.controller === controller) this.controller = undefined
+    this.controller = undefined
     if (this.again && !this.closed) { this.again = false; void this.refresh() }
   }
   /**
@@ -269,7 +270,7 @@ export class CollaborationResultsModel {
         this.publish({ ...this.state, phase: 'ready', groups: this.state.groups.map(item => item === group ? next : item) })
       }
     } finally {
-      this.finishQuery(controller)
+      this.finishQuery()
     }
   }
   /** Release observers and readonly requests; accepted tasks continue independently. */

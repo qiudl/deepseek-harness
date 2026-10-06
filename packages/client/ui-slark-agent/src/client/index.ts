@@ -217,8 +217,7 @@ export function apply(ctx: ClientContext): void {
       if (matches.length !== 1 || state.occurrences.length !== 1 || envelope.attachments > 0) {
         throw new Error(t('submit.single'))
       }
-      const mention = matches[0]
-      if (!mention) return undefined
+      const mention = matches[0] as (typeof matches)[number]
       const end = mention.offset + mention.length
       if (!Number.isSafeInteger(mention.offset) || !Number.isSafeInteger(mention.length) ||
         mention.offset < 0 || mention.length < 2 || end > state.draft.length ||

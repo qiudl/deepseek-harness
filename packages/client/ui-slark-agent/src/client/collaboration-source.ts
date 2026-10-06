@@ -93,7 +93,7 @@ function workspaceOf(ctx: Context, sessionId: SessionId): string | undefined {
 }
 
 /**
- * Candidates need no open dock; every send rechecks Session membership and the original chip.
+ * Candidates require current scope and execution availability; every send rechecks Session membership and the original chip.
  * @param ctx - the source entry's Client Context; optional workspace state is read on each operation.
  * @param t - the entry's typed locale dictionary.
  * @returns a source that submits original text through Main and retains failed drafts without fallback.
@@ -105,7 +105,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
     async candidates(session, { query, signal }) {
       const host = window.__DSH_DESKTOP_HOST__, workspace = workspaceOf(ctx, session.sessionId)
       const current = () => !signal.aborted && window.__DSH_DESKTOP_HOST__ === host &&
-        workspaceOf(ctx, session.sessionId) === workspace
+        workspaceOf(ctx, session.sessionId) === workspace &&
+        host?.collaborationScopeAvailable === true && host.collaborationExecutionAvailable === true
       if (!workspace || !host?.collaborationScopeAvailable || !host.collaborationExecutionAvailable ||
         !host.collaborationWorkspace || !host.collaborationSubmit || signal.aborted) return []
       let response
@@ -169,9 +170,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
         return { r, mention, mentionId, end }
       })
       if (!(question + snapshot.draft.slice(previousEnd)).trim()) throw Error(t('submit.question'))
-      const first = selected[0]
-      if (!first || !sourceId) throw Error(t('submit.unavailable'))
-      const originalId = sourceId
+      const first = selected[0] as (typeof selected)[number]
+      const originalId = first.r.original_source_id ?? first.mentionId
       signal.throwIfAborted()
       const original: DesktopCollaborationSourceInput = { workspace_id: first.r.workspace_id, session_id: session.sessionId,
         source_message_id: originalId, source_revision: '1', original_message: snapshot.draft,

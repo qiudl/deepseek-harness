@@ -350,3 +350,14 @@ it('ignores a Source page from a workspace that changes before the read complete
   expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
   expect(f.deliveries).not.toHaveBeenCalled()
 })
+
+it('discards a fulfilled Source page if workspace ownership changes before the awaiting query resumes', async () => {
+  const f = fixture()
+  f.reads.mockImplementationOnce(() => {
+    queueMicrotask(() => { queueMicrotask(() => { f.move() }) })
+    return Promise.resolve({ ok: true, value: { items: [original] } })
+  })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
+  expect(f.deliveries).not.toHaveBeenCalled()
+})

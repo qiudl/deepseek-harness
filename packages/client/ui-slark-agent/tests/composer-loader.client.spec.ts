@@ -8,7 +8,7 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import * as Triggers from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { SessionInputShell } from '@deepseek-ai/dsh-client-ui-conversation/src/client/input/facade.ts'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,9 +17,14 @@ import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
-import { createScopedCollaborationSource } from '../src/client/collaboration-source.ts'
+import { createScopedCollaborationSource, scopedCollaborationClipboard } from '../src/client/collaboration-source.ts'
 import type { CollaborationPendingResponse, DesktopClarificationReplyInput, CollaborationClarificationResponse } from '../src/client/collaboration-dialogue.ts'
+import { createCollaborationReplyMatcher } from '../src/client/collaboration-dialogue.ts'
+import type { DraftAttachmentId } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { CollaborationResultsModel } from '../src/client/collaboration-results.ts'
+import { ProjectScopeModel } from '../src/client/project-scope.ts'
+import type { CollaborationResultsInjected } from '../src/client/CollaborationResultsDock.tsx'
+import type { ProjectScopeInjected } from '../src/client/ProjectScopeDock.tsx'
 
 const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id: 'agent-1',
   enterprise_id: 'enterprise-1', enterprise_name: 'Company', project_name: '项目空间',
@@ -27,10 +32,10 @@ const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id
 
 type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST__']>['invokeEnterpriseAgent']>>[0]
 
-async function bench(collaboration = false) {
+async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration) {
   vi.stubGlobal('crypto', webcrypto)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
-  const ctx = new Context(), id = 'session-1' as SessionId
+  const ctx = new Context(), id = SessionId('session-1')
   const scope = createScope(ctx, id), session = { sessionId: id }
   const binding = { sessionId: id, session, ctx: scope.ctx }
   const mounted: { composer?: SessionInputShell } = {}
@@ -43,7 +48,7 @@ async function bench(collaboration = false) {
   })
   // Session RPC and Desktop transport peers are fixtures; client owners below load through YAML.
   ctx.provide('sessions', {
-    scope: (key: SessionId) => key === id ? scope.ctx : undefined,
+    scope: (key: SessionId) => key === id && scope.fiber.uid !== null ? scope.ctx : undefined,
     scopeOf: (c: Context) => scopeOf(c),
     sessionOf: (c: Context) => c === scope.ctx ? session : undefined,
     binding: (key: SessionId) => key === id ? binding : undefined,
@@ -65,11 +70,13 @@ async function bench(collaboration = false) {
   const originals: { source: { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
     snapshot_digest: string
     original_message: string }[] = []
-  const sourceReads = vi.fn(async () => ({ ok: true, value: { items: originals } }))
-  if (collaboration) {
+  const sourceReads = vi.fn<typeof ctx.remote.session.collaborationSources>(async () => ({ ok: true, value: { items: originals } }))
+  if (servicesAvailable) {
     const namespace = { collaborationSources: sourceReads }
-    ctx.provide('remote', { session: namespace } as never)
-    ctx.provide('remote.session', namespace as never)
+    if (remoteAvailable) {
+      ctx.provide('remote', { session: namespace } as never)
+      ctx.provide('remote.session', namespace as never)
+    }
     ctx.provide('connection', { generation: { getSnapshot: () => 1, subscribe: () => () => {} } } as never)
   }
   const submit = vi.fn(async (input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse> => {
@@ -89,13 +96,23 @@ async function bench(collaboration = false) {
     delivery_id: 'delivery-v2', invocation_id: 'invocation-v2', delivery_state: 'pending', delivery_state_version: '1',
     source_locator: input.source, source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded', invocation_state_version: '2',
     target_display_snapshot: { agent_name: agent.name, project_name: agent.project_name }, answer: 'fixture reply' }] } }))
-  const scopeDirectory = vi.fn(async () => ({ ok: true as const, value: {
-    items: [{ project_id: agent.project_id, agent_id: agent.agent_id, agent_name: agent.name,
-      project_name: agent.project_name, available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
-    { project_id: 'stopped-project', agent_id: 'stopped-agent', agent_name: 'Guide', project_name: 'Stopped',
-      available: false, capability_snapshot: 'b'.repeat(64), reason_code: 'agent_stopped' }],
-    next_cursor: null, scope_version: '1',
-  } }))
+  let scopeVersion = '1', selectedProjects = [agent.project_id]
+  const scopeDirectory = vi.fn<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST__']>['collaborationWorkspace']>>(async (input) => {
+    if (input.operation.kind === 'apply') {
+      scopeVersion = String(Number(scopeVersion) + 1); selectedProjects = [...input.operation.selected_project_ids]
+    }
+    if (input.operation.kind === 'get' || input.operation.kind === 'apply') return { ok: true,
+      value: { workspace_id: input.workspace_id, version: scopeVersion, selected_project_ids: selectedProjects } }
+    if (input.operation.kind === 'projects') return { ok: true,
+      value: { items: [{ project_id: agent.project_id, project_name: agent.project_name }], next_cursor: null } }
+    return { ok: true, value: {
+      items: [{ project_id: agent.project_id, agent_id: agent.agent_id, agent_name: agent.name,
+        project_name: agent.project_name, available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
+      { project_id: 'stopped-project', agent_id: 'stopped-agent', agent_name: 'Guide', project_name: 'Stopped',
+        available: false, capability_snapshot: 'b'.repeat(64), reason_code: 'agent_stopped' }],
+      next_cursor: null, scope_version: scopeVersion,
+    } }
+  })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {
     collaborationScopeAvailable: collaboration, collaborationExecutionAvailable: collaboration,
     collaborationWorkspace: scopeDirectory, collaborationSubmit: submit,
@@ -161,7 +178,7 @@ async function bench(collaboration = false) {
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
   return { ctx, composer, controller, invoke, sink, pick, submit, scopeDirectory, workspace, sourceReads,
-    deliveries, pending, clarify, originals }
+    deliveries, pending, clarify, originals, closeSession: () => scope.fiber.dispose() }
 }
 
 type PickedScopedReference = {
@@ -789,4 +806,466 @@ it('retains a recorded reply after ownership changes while reading its remaining
   await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
   expect(f.composer.snapshot.draft).toBe('检查登录问题')
   expect(f.clarify).toHaveBeenCalledTimes(1); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('discovers the single pending original on a second feed page before routing a plain reply', async () => {
+  const f = await bench(true)
+  const first = { source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'first', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 已完成任务' }
+  const second = { ...first, source: { ...first.source, source_message_id: 'second' }, snapshot_digest: 'b'.repeat(64) }
+  f.sourceReads.mockImplementation(async input => ({ ok: true, value: input.cursor ? { items: [second] }
+    : { items: [first], next_cursor: first.snapshot_digest } }))
+  f.pending.mockImplementation(async input => input.source.source_message_id === 'second' ? pendingPage(input.source)
+    : { ok: true, value: { source: input.source, plan: null, pending_items: [], frozen_task_count: 0 } })
+  f.composer.setDraft('检查登录后返回首页'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.sourceReads).toHaveBeenNthCalledWith(2, { sessionId: SessionId('session-1'), cursor: first.snapshot_digest }, expect.any(AbortSignal))
+  expect(f.clarify.mock.calls[0]?.[0].source.source_message_id).toBe('second')
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['rejected-feed', 'unavailable-feed', 'rejected-plan', 'planning', 'multiple-items', 'oversized-reply', 'missing-crypto'] as const)
+('retains a plain clarification draft when discovery is unsafe (%s)', async (mode) => {
+  const f = await bench(true)
+  const original = { source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' }
+  f.originals.push(original)
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  if (mode === 'rejected-feed') f.sourceReads.mockRejectedValueOnce(Error('private RPC failure'))
+  if (mode === 'unavailable-feed') f.sourceReads.mockResolvedValueOnce({ ok: false,
+    error: Object.assign(new Error('unavailable'), { name: 'RemoteError', isDSHRemoteError: true as const,
+      code: 'gateway/internal' as const, details: {} }) })
+  if (mode === 'rejected-plan') f.pending.mockRejectedValueOnce(Error('private Main failure'))
+  if (mode === 'planning') f.pending.mockResolvedValueOnce({ ok: true, value: { source: original.source,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1', planning_state: 'planning', route_decision: 'undecided' },
+    pending_items: [], frozen_task_count: 0 } })
+  if (mode === 'multiple-items') f.pending.mockImplementationOnce(async (input) => {
+    const value = pendingPage(input.source)
+    if (!value.ok) throw Error('invalid pending fixture')
+    return { ok: true, value: { ...value.value, pending_items: [...value.value.pending_items,
+      { ...value.value.pending_items[0]!, pending_item_id: 'second' }] } }
+  })
+  if (mode === 'missing-crypto') vi.stubGlobal('crypto', {})
+  const draft = mode === 'oversized-reply' ? 'x'.repeat(32 * 1024 + 1) : '请检查登录问题'
+  f.composer.setDraft(draft); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(draft)
+  expect(f.composer.notices.getSnapshot()?.text).not.toMatch(/private/u)
+  expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['wrong-workspace', 'wrong-session', 'invalid-digest', 'duplicate-digest', 'duplicate-source', 'empty-text',
+  'oversized-page', 'too-many-items', 'empty-cursor', 'wrong-cursor', 'repeated-cursor'] as const)
+('refuses an invalid Session feed instead of guessing a pending original (%s)', async (mode) => {
+  const f = await bench(true)
+  const original = { source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' }
+  let items = [original], next_cursor: string | undefined
+  if (mode === 'wrong-workspace') items = [{ ...original, source: { ...original.source, workspace_id: 'other' } }]
+  if (mode === 'wrong-session') items = [{ ...original, source: { ...original.source, session_id: 'other' } }]
+  if (mode === 'invalid-digest') items = [{ ...original, snapshot_digest: 'invalid' }]
+  if (mode === 'duplicate-digest') items = [original, { ...original, source: { ...original.source, source_message_id: 'second' } }]
+  if (mode === 'duplicate-source') items = [original, { ...original, snapshot_digest: 'b'.repeat(64) }]
+  if (mode === 'empty-text') items = [{ ...original, original_message: ' ' }]
+  if (mode === 'oversized-page') items = [{ ...original, original_message: 'x'.repeat(256 * 1024) }]
+  if (mode === 'too-many-items') items = Array.from({ length: 9 }, () => original)
+  if (mode === 'empty-cursor') { items = []; next_cursor = original.snapshot_digest }
+  if (mode === 'wrong-cursor') next_cursor = 'other'
+  if (mode === 'repeated-cursor') next_cursor = original.snapshot_digest
+  f.sourceReads.mockResolvedValue({ ok: true, value: { items, ...(next_cursor === undefined ? {} : { next_cursor }) } })
+  f.composer.setDraft('请检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('请检查登录问题')
+  expect(f.clarify).not.toHaveBeenCalled(); expect(f.pending).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('retains a plain reply after a clarification transport failure and can retry deliberately', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.clarify.mockRejectedValueOnce(Error('private transport failure'))
+  f.composer.setDraft('检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('检查登录问题')
+  const first = f.clarify.mock.calls[0]?.[0]
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.clarify).toHaveBeenCalledTimes(2)
+  expect(f.clarify.mock.calls[1]?.[0]).toEqual(first)
+  expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['empty-question', 'failed-question'] as const)('consumes a committed reply when the remaining-question read is %s', async (mode) => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementationOnce(async input => pendingPage(input.source))
+  if (mode === 'empty-question') f.pending.mockImplementation(async input => ({ ok: true,
+    value: { source: input.source, plan: null, pending_items: [], frozen_task_count: 0 } }))
+  else f.pending.mockRejectedValueOnce(Error('remaining question disconnected'))
+  f.clarify.mockImplementation(async input => ({ ok: true, value: { source: input.source,
+    submission_state: 'clarification_recorded', reply_source: input.reply_input } }))
+  f.composer.setDraft('检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.composer.notices.getSnapshot()?.text).not.toContain('任务已受理')
+  expect(f.clarify).toHaveBeenCalledTimes(1); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['collaborationScopeAvailable', 'collaborationExecutionAvailable'] as const)
+('refuses Agent candidates when %s is disabled during the directory read', async (capability) => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__, read = f.scopeDirectory.getMockImplementation()
+  if (!host || !read) throw Error('missing Main directory fixture')
+  f.scopeDirectory.mockImplementationOnce(async (input) => {
+    const value = await read(input)
+    host[capability] = false
+    return value
+  })
+  const source = createScopedCollaborationSource(f.ctx, key => key)
+  const rows = await source.candidates({ sessionId: SessionId('session-1') }, { query: 'Guide', position: 'inline',
+    drilled: false, signal: new AbortController().signal })
+  expect(rows).toEqual([])
+  expect(f.submit).not.toHaveBeenCalled()
+})
+
+it('refuses malformed clipboard metadata while retaining the full display label of a picked scoped Agent', async () => {
+  const f = await bench(true)
+  await f.pick('', '请检查')
+  const picked = f.composer.snapshot.occurrences[0]
+  if (!picked) throw Error('missing picked Agent')
+  expect(scopedCollaborationClipboard(picked.ref)).toBe('@Guide · 项目空间')
+  const reference = JSON.parse(picked.ref) as PickedScopedReference
+  const { source_id: _sourceId, original_source_id: _originalId, ...unpicked } = reference
+  const invalid = ['{', 'null', '[]', 'x'.repeat(4097), JSON.stringify(unpicked),
+    ...[
+      { ...reference, unexpected: true }, { ...reference, kind: 'other' }, { ...reference, workspace_id: 'bad' },
+      { ...reference, session_id: '' }, { ...reference, project_id: '' }, { ...reference, agent_id: '' },
+      { ...reference, project_name: '' }, { ...reference, agent_name: 'x'.repeat(513) },
+      { ...reference, capability_snapshot: 'bad' }, { ...reference, source_id: 'bad' },
+      { ...reference, original_source_id: 'bad' }, { ...unpicked, original_source_id: reference.source_id },
+    ].map(value => JSON.stringify(value))]
+  for (const value of invalid) expect(scopedCollaborationClipboard(value)).toBeUndefined()
+  const source = createScopedCollaborationSource(f.ctx, key => key), session = { sessionId: SessionId('session-1') }
+  const candidates = await source.candidates(session, { query: '', position: 'inline', drilled: false, signal: new AbortController().signal })
+  const candidate = candidates[0]
+  if (!candidate) throw Error('missing Agent candidate')
+  const pickArgs = { session, position: 'inline' as const, via: 'menu' as const, action: 'pick' as const,
+    span: { start: 0, end: 1, draftRev: f.composer.snapshot.draftRev } }
+  for (const value of invalid.filter(value => value !== JSON.stringify(unpicked)))
+    expect(source.onPick({ ...pickArgs, candidate: { ...candidate, value } })).toBeUndefined()
+  const { value: _candidateValue, ...missingValue } = candidate
+  expect(source.onPick({ ...pickArgs, candidate: missingValue })).toBeUndefined()
+  expect(source.onPick({ ...pickArgs, candidate: { ...candidate, value: picked.ref } })).toBeUndefined()
+})
+
+it.each(['rejected-directory', 'unavailable-directory', 'wrong-category', 'archived', 'no-executor', 'missing-submit'] as const)
+('keeps an unavailable Agent directory out of the composer menu (%s)', async (mode) => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Desktop bridge')
+  if (mode === 'rejected-directory') f.scopeDirectory.mockRejectedValueOnce(Error('directory disconnected'))
+  if (mode === 'unavailable-directory') f.scopeDirectory.mockResolvedValueOnce({ ok: false, errorCode: 'unavailable', refreshRequired: false })
+  if (mode === 'wrong-category') f.scopeDirectory.mockResolvedValueOnce({ ok: true, value: { items: [], next_cursor: null } })
+  if (mode === 'archived') f.workspace.archived = true
+  if (mode === 'no-executor') host.collaborationExecutionAvailable = false
+  if (mode === 'missing-submit') delete host.collaborationSubmit
+  const source = createScopedCollaborationSource(f.ctx, key => key)
+  expect(await source.candidates({ sessionId: SessionId('session-1') }, { query: 'Guide', position: 'inline', drilled: false,
+    signal: new AbortController().signal })).toEqual([])
+  expect(f.submit).not.toHaveBeenCalled()
+})
+
+it.each(['args', 'scope', 'draft', 'abort'] as const)('refuses a captured scoped claim after %s changes', async (mode) => {
+  const f = await bench(true), controller = new AbortController()
+  await f.pick('', '请检查')
+  const draft = f.composer.snapshot.draft
+  const result = await f.controller.adjudicate(draft.trim(), controller.signal, { attachments: 0 })
+  if (!result || typeof result !== 'object' || !('claim' in result)) throw Error('missing collaboration claim')
+  const scoped = f.ctx.sessions.scope(SessionId('session-1'))
+  if (!scoped) throw Error('missing Session scope')
+  if (mode === 'draft') f.composer.setDraft('修改后的任务')
+  if (mode === 'abort') controller.abort()
+  const pending = result.claim.submit(mode === 'args' ? 'unexpected' : '', mode === 'scope' ? f.ctx : scoped, [])
+  if (mode === 'abort') await expect(pending).rejects.toThrow()
+  else expect(await pending).toMatchObject({ kind: 'error' })
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('uses the YAML-registered project panel commands and disposes its cached Session model on unload', async () => {
+  const f = await bench(true)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing project scope registration')
+  const value: unknown = Reflect.apply(entry.inject, undefined, [SessionId('session-1')])
+  if (!value || typeof value !== 'object' || !('hooks' in value) || !value.hooks || typeof value.hooks !== 'object'
+    || !('slarkScope' in value.hooks) || !(value.hooks.slarkScope instanceof ProjectScopeModel)
+    || !['refreshScope', 'applyScope', 'loadProjects', 'loadAgents'].every(key => typeof Reflect.get(value, key) === 'function'))
+    throw Error('invalid registered project scope bindings')
+  const bindings = value as ProjectScopeInjected, model = bindings.hooks.slarkScope
+  expect(Reflect.apply(entry.inject, undefined, [SessionId('session-1')])).toBe(bindings)
+  await bindings.refreshScope()
+  expect(model.getSnapshot().scope?.selected_project_ids).toEqual([agent.project_id])
+  await bindings.applyScope([agent.project_id, 'second-project'])
+  expect(model.getSnapshot().scope?.selected_project_ids).toEqual([agent.project_id, 'second-project'])
+  expect(f.scopeDirectory).toHaveBeenCalledWith(expect.objectContaining({ operation: { kind: 'apply',
+    expected_version: '1', selected_project_ids: [agent.project_id, 'second-project'] } }))
+  f.scopeDirectory.mockResolvedValueOnce({ ok: true, value: { items: [], next_cursor: 'project-page' } })
+  await model.loadProjects(true); await bindings.loadProjects()
+  expect(f.scopeDirectory).toHaveBeenLastCalledWith(expect.objectContaining({ operation: { kind: 'projects', query: { limit: 20, cursor: 'project-page' } } }))
+  f.scopeDirectory.mockResolvedValueOnce({ ok: true, value: { items: [], next_cursor: 'agent-page', scope_version: '2' } })
+  await model.loadAgents(true); await bindings.loadAgents()
+  expect(f.scopeDirectory).toHaveBeenLastCalledWith(expect.objectContaining({ operation: { kind: 'agents', query: { limit: 20, cursor: 'agent-page' } } }))
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing loaded Slark source')
+  await plugin.fiber.dispose()
+  expect(f.ctx.slots.entries('conversation.input.dock').some(item => item.options.id === 'slark-project-scope')).toBe(false)
+  const before = f.scopeDirectory.mock.calls.length
+  await bindings.refreshScope(); await bindings.applyScope(['other'])
+  expect(f.scopeDirectory).toHaveBeenCalledTimes(before)
+  expect(model.getSnapshot().scope).toBeNull()
+})
+
+it('uses YAML-registered result paging commands and retains their model only for the original Session', async () => {
+  const f = await bench(true)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  if (!entry?.inject) throw Error('missing results registration')
+  const value: unknown = Reflect.apply(entry.inject, undefined, [SessionId('session-1')])
+  if (!value || typeof value !== 'object' || !('hooks' in value) || !value.hooks || typeof value.hooks !== 'object'
+    || !('slarkResults' in value.hooks) || !(value.hooks.slarkResults instanceof CollaborationResultsModel)
+    || !['loadSources', 'loadReplies'].every(key => typeof Reflect.get(value, key) === 'function'))
+    throw Error('invalid registered results bindings')
+  const bindings = value as CollaborationResultsInjected, model = bindings.hooks.slarkResults
+  expect(Reflect.apply(entry.inject, undefined, [SessionId('session-1')])).toBe(bindings)
+  const first = { source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'first', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 第一个任务' }
+  const second = { ...first, source: { ...first.source, source_message_id: 'second' }, snapshot_digest: 'b'.repeat(64) }
+  f.sourceReads.mockImplementation(async input => ({ ok: true, value: input.cursor ? { items: [second] }
+    : { items: [first], next_cursor: first.snapshot_digest } }))
+  const delivery = f.deliveries.getMockImplementation()
+  if (!delivery) throw Error('missing Main delivery fixture')
+  f.deliveries.mockImplementation(async (input) => {
+    const result = await delivery(input)
+    return { ok: true, value: { deliveries: result.value.deliveries.map(item => ({ ...item,
+      delivery_id: 'after_delivery_id' in input ? 'second-reply' : 'delivery-v2',
+      source_snapshot_digest: input.source.source_message_id === 'second' ? second.snapshot_digest : first.snapshot_digest })),
+    ...('after_delivery_id' in input || input.source.source_message_id === 'second' ? {} : { next_cursor: 'delivery-v2' }) } }
+  })
+  await model.refresh(); await bindings.loadSources(); await bindings.loadReplies(first.snapshot_digest)
+  expect(model.getSnapshot().groups).toHaveLength(2)
+  expect(model.getSnapshot().groups[0]?.replies.map(item => item.delivery_id)).toEqual(['delivery-v2', 'second-reply'])
+  expect(f.sourceReads).toHaveBeenLastCalledWith({ sessionId: SessionId('session-1'), cursor: first.snapshot_digest }, expect.any(AbortSignal))
+  expect(f.deliveries).toHaveBeenLastCalledWith({ source: first.source, limit: 50, after_delivery_id: 'delivery-v2' })
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing loaded Slark source')
+  await plugin.fiber.dispose()
+  expect(model.getSnapshot().groups).toEqual([])
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('refuses plain reply discovery without the current Session Remote service', async () => {
+  const f = await bench(true, false)
+  f.composer.setDraft('请检查登录问题'); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('请检查登录问题')
+  expect(f.sourceReads).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('does not route a plain clarification reply with an attachment', async () => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.composer.setDraft('请检查登录问题'); f.composer.addAttachments(['image-1' as DraftAttachmentId]); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe('请检查登录问题')
+  expect(f.composer.snapshot.attachmentIds).toHaveLength(1)
+  expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['args', 'scope', 'draft', 'missing-method'] as const)('refuses a captured passive reply after %s changes', async (mode) => {
+  const f = await bench(true)
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  f.pending.mockImplementation(async input => pendingPage(input.source))
+  f.composer.setDraft('请检查登录问题')
+  const result = await f.controller.adjudicate(f.composer.snapshot.draft, new AbortController().signal, { attachments: 0 })
+  if (!result || typeof result !== 'object' || !('claim' in result)) throw Error('missing passive claim')
+  const scoped = f.ctx.sessions.scope(SessionId('session-1')), host = window.__DSH_DESKTOP_HOST__
+  if (!scoped || !host) throw Error('missing current Session or Host')
+  if (mode === 'draft') f.composer.setDraft('修改后的回复')
+  if (mode === 'missing-method') delete host.collaborationClarify
+  expect(await result.claim.submit(mode === 'args' ? 'unexpected' : '', mode === 'scope' ? f.ctx : scoped, []))
+    .toMatchObject({ kind: 'error' })
+  expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('cancels the remaining question read of a committed passive reply without consuming its draft', async () => {
+  const f = await bench(true), controller = new AbortController()
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'prior', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 请检查' })
+  let release: ((value: CollaborationPendingResponse) => void) | undefined
+  f.pending.mockImplementationOnce(async input => pendingPage(input.source))
+    .mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+  f.clarify.mockImplementation(async input => ({ ok: true, value: { source: input.source,
+    submission_state: 'clarification_recorded', reply_source: input.reply_input } }))
+  f.composer.setDraft('请检查登录问题')
+  const result = await f.controller.adjudicate(f.composer.snapshot.draft, controller.signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(SessionId('session-1'))
+  if (!scoped || !result || typeof result !== 'object' || !('claim' in result)) throw Error('missing passive claim')
+  const active = result.claim.submit('', scoped, [])
+  onTestFinished(async () => { release?.(pendingPage(f.originals[0]!.source)); await active.catch(() => {}) })
+  await vi.waitFor(() => { expect(f.pending).toHaveBeenCalledTimes(2) })
+  controller.abort()
+  await expect(active).rejects.toThrow()
+  release?.(pendingPage(f.originals[0]!.source))
+  expect(f.composer.snapshot.draft).toBe('请检查登录问题')
+  expect(f.clarify).toHaveBeenCalledTimes(1); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('public reply and scoped Source owners ignore unknown Sessions and stale input lines', async () => {
+  const f = await bench(true), signal = new AbortController().signal
+  f.composer.setDraft('请检查登录问题')
+  const reply = createCollaborationReplyMatcher(f.ctx, key => key, () => f.workspace.id)
+  expect(await reply({ sessionId: SessionId('other') }, '请检查登录问题', signal, { attachments: 0 })).toBeUndefined()
+  expect(await reply({ sessionId: SessionId('session-1') }, 'other line', signal, { attachments: 0 })).toBeUndefined()
+  const source = createScopedCollaborationSource(f.ctx, key => key)
+  expect(await source.matchEnter?.({ sessionId: SessionId('other') }, '请检查登录问题', signal, { attachments: 0 })).toBeUndefined()
+  await f.pick('', '请检查登录问题')
+  await expect(source.matchEnter?.({ sessionId: SessionId('session-1') }, 'other line', signal, { attachments: 0 }))
+    .rejects.toThrow('submit.textOnlyV2')
+})
+
+it.each(['missing-pending', 'rejected-pending', 'changed-owner'] as const)
+('retains a rejected scoped send when its pending projection is %s', async (mode) => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  await f.pick('', '请检查登录问题')
+  const draft = f.composer.snapshot.draft
+  f.submit.mockResolvedValueOnce({ ok: false, errorCode: 'unavailable', reconciliationRequired: false })
+  if (mode === 'missing-pending') delete host.collaborationPending
+  if (mode === 'rejected-pending') f.pending.mockRejectedValueOnce(Error('Main disconnected'))
+  if (mode === 'changed-owner') f.pending.mockImplementationOnce(async (input) => {
+    f.workspace.archived = true
+    return pendingPage(input.source)
+  })
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(draft)
+  expect(f.submit).toHaveBeenCalledTimes(1); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('does not mount v2 history when connected services exist but scope mode is disabled', async () => {
+  const f = await bench(false, true, true)
+  expect(f.ctx.slots.entries('conversation.input.dock').map(entry => entry.options.id)).toContain('slark-agent-tasks')
+  expect(f.ctx.slots.entries('conversation.input.dock').map(entry => entry.options.id)).not.toContain('slark-collaboration-results')
+  expect(f.sourceReads).not.toHaveBeenCalled()
+})
+
+it('refuses a legacy claim if scope mode is enabled between adjudication and send', async () => {
+  const f = await bench(), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  await f.pick('', '请检查')
+  const outcome = await f.controller.adjudicate(f.composer.snapshot.draft.trim(), new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(SessionId('session-1'))
+  if (!scoped || !outcome || typeof outcome !== 'object' || !('claim' in outcome)) throw Error('missing legacy claim')
+  host.collaborationScopeAvailable = true
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'error' })
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('refuses picking a directory candidate after the real Session scope is disposed', async () => {
+  const f = await bench(true), source = createScopedCollaborationSource(f.ctx, key => key), session = { sessionId: SessionId('session-1') }
+  const rows = await source.candidates(session, { query: '', position: 'inline', drilled: false, signal: new AbortController().signal })
+  const candidate = rows[0]
+  if (!candidate) throw Error('missing directory candidate')
+  await f.closeSession()
+  expect(source.onPick({ candidate, session, position: 'inline', via: 'menu', action: 'pick',
+    span: { start: 0, end: 1, draftRev: f.composer.snapshot.draftRev } })).toBeUndefined()
+  expect(f.submit).not.toHaveBeenCalled()
+})
+
+it.each(['malformed', 'other-workspace', 'other-origin'] as const)
+('refuses extending a restored scoped selection whose existing reference is %s', async (mode) => {
+  const f = await bench(true), source = createScopedCollaborationSource(f.ctx, key => key), session = { sessionId: SessionId('session-1') }
+  await f.pick('', '请检查')
+  const picked = f.composer.snapshot.occurrences[0]
+  if (!picked) throw Error('missing picked Agent')
+  const rows = await source.candidates(session, { query: '', position: 'inline', drilled: false, signal: new AbortController().signal })
+  const candidate = rows[0]
+  if (!candidate) throw Error('missing candidate')
+  if (mode === 'other-origin') await appendScoped(f, 2, { original_source_id: '50000000-0000-4000-8000-000000000099' })
+  else {
+    const reference = JSON.parse(picked.ref) as PickedScopedReference
+    f.composer.setDraft('')
+    expect(f.composer.insertReference({ source: 'slark-agent', ref: mode === 'malformed' ? '{'
+      : JSON.stringify({ ...reference, workspace_id: '50000000-0000-4000-8000-000000000099' }),
+    label: picked.label, clipboardText: picked.clipboardText }, { start: 0, end: 0, draftRev: f.composer.snapshot.draftRev })).toBe(true)
+  }
+  expect(source.onPick({ candidate, session, position: 'inline', via: 'menu', action: 'pick',
+    span: { start: 0, end: 1, draftRev: f.composer.snapshot.draftRev } })).toBeUndefined()
+  expect(f.submit).not.toHaveBeenCalled()
+})
+
+it('preserves the original identity of a restored scoped chip without an original-source field', async () => {
+  const f = await bench(true)
+  await f.pick('', '请检查')
+  const picked = f.composer.snapshot.occurrences[0]
+  if (!picked) throw Error('missing Agent chip')
+  const { original_source_id: _originalId, ...reference } = JSON.parse(picked.ref) as PickedScopedReference
+  f.composer.setDraft('')
+  expect(f.composer.insertReference({ source: picked.source, ref: JSON.stringify(reference), label: picked.label,
+    clipboardText: picked.clipboardText }, { start: 0, end: 0, draftRev: f.composer.snapshot.draftRev })).toBe(true)
+  const source = createScopedCollaborationSource(f.ctx, key => key), session = { sessionId: SessionId('session-1') }
+  const rows = await source.candidates(session, { query: '', position: 'inline', drilled: false, signal: new AbortController().signal })
+  const candidate = rows[0]
+  if (!candidate) throw Error('missing directory candidate')
+  const next = source.onPick({ candidate, session, position: 'inline', via: 'menu', action: 'pick',
+    span: { start: 0, end: 1, draftRev: f.composer.snapshot.draftRev } })
+  if (!next || typeof next !== 'object' || !('insert' in next)) throw Error('missing next scoped reference')
+  expect(JSON.parse(next.insert.ref)).toMatchObject({ original_source_id: reference.source_id })
+  const end = f.composer.snapshot.draft.length - picked.length + 1
+  expect(f.composer.insertText('请检查', { start: end, end, draftRev: f.composer.snapshot.draftRev })).toBe(true)
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.submit.mock.calls[0]?.[0].source_message_id).toBe(reference.source_id)
+  expect(f.submit.mock.calls[0]?.[0].active_mentions[0]?.mention_id).toBe(reference.source_id)
+})
+
+it('declines ordinary references and refuses an Agent-only scoped draft without a task', async () => {
+  const f = await bench(true), source = createScopedCollaborationSource(f.ctx, key => key)
+  expect(f.composer.insertReference({ source: 'ordinary', ref: 'file', label: 'File', clipboardText: '@File' },
+    { start: 0, end: 0, draftRev: f.composer.snapshot.draftRev })).toBe(true)
+  expect(await source.matchEnter?.({ sessionId: SessionId('session-1') }, f.composer.snapshot.draft,
+    new AbortController().signal, { attachments: 0 })).toBeUndefined()
+  await f.pick('', '')
+  const draft = f.composer.snapshot.draft
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(draft)
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('aborts a scoped send while reading its rejected submission projection', async () => {
+  const f = await bench(true), controller = new AbortController()
+  await f.pick('', '请检查')
+  const outcome = await f.controller.adjudicate(f.composer.snapshot.draft.trim(), controller.signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(SessionId('session-1'))
+  if (!scoped || !outcome || typeof outcome !== 'object' || !('claim' in outcome)) throw Error('missing scoped claim')
+  f.submit.mockResolvedValueOnce({ ok: false, errorCode: 'pending', reconciliationRequired: true })
+  f.pending.mockImplementationOnce(async (input) => { controller.abort(); return pendingPage(input.source) })
+  await expect(outcome.claim.submit('', scoped, [])).rejects.toThrow()
+  expect(f.composer.snapshot.draft).not.toBe('')
+  expect(f.submit).toHaveBeenCalledTimes(1); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('cancels the Session feed read of a passive reply without querying Main or consuming the draft', async () => {
+  const f = await bench(true), controller = new AbortController()
+  let release: ((value: Awaited<ReturnType<typeof f.sourceReads>>) => void) | undefined
+  f.sourceReads.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+  f.composer.setDraft('请检查登录问题')
+  const active = f.controller.adjudicate(f.composer.snapshot.draft, controller.signal, { attachments: 0 })
+  onTestFinished(async () => { release?.({ ok: true, value: { items: [] } }); await active.catch(() => {}) })
+  await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalledTimes(1) })
+  controller.abort(); await expect(active).rejects.toThrow()
+  release?.({ ok: true, value: { items: [] } })
+  expect(f.pending).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  expect(f.composer.snapshot.draft).toBe('请检查登录问题')
 })
