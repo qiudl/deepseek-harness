@@ -138,6 +138,7 @@ export function apply(ctx: ClientContext): void {
             (cursor, signal) => resultsCtx.remote.session.collaborationSources({ sessionId, ...(cursor ? { cursor } : {}) }, signal),
             () => window.__DSH_DESKTOP_HOST__)
           entry = { model, bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
+            consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
             executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
             loadReplies: digest => model.loadReplies(digest) } }
           models.set(sessionId, entry)

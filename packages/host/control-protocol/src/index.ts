@@ -163,3 +163,6 @@ export { matchHostRootPlanningAttemptTarget } from './root-planning-attempt-auth
 
 export { parseHostRootPlanningEvidence, matchHostRootPlanningEvidence } from './root-planning-evidence.ts'
 export type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
+
+export { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from './collaboration-consumption.js'
+export type { HostCollaborationConsumptionReceipt, HostCollaborationConsumptionCommit } from './collaboration-consumption.js'

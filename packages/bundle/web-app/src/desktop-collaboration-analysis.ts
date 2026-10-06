@@ -71,6 +71,7 @@ export class DesktopCollaborationAnalysis {
    * @param captureRoot - Original root capture and live analysis handle from the same Profile.
    * @param execution - Profile-owned concrete execution journal; no model or cloud dispatch.
    * @param feedback - Profile-owned original Session consumption with persisted evidence.
+   * @param consumption - Durable one-shot consumer commands and controlled original Agent continuation.
    * @param planning - Original-model preparation and independent fresh-attempt journal factories.
    */
   constructor(
@@ -82,6 +83,7 @@ export class DesktopCollaborationAnalysis {
     planning?: { prepare: SessionController['prepareCollaborationRootPlanning']; open: () => Promise<CollaborationRootPlanningJournal> },
     private readonly execution?: SessionController['collaborationRootExecution'],
     private readonly feedback?: SessionController['collaborationRootFeedback'],
+    private readonly consumption?: SessionController['collaborationRootConsumption'],
   ) {
     if (planning && readRoot) this.rootPlanning = new DesktopRootPlanning(readRoot, planning.prepare, planning.open,
       () => this.journal ??= this.open(), (root) => {
@@ -94,11 +96,18 @@ export class DesktopCollaborationAnalysis {
    * @param signal - Parent cancellation; current cloud permission remains the parent's responsibility.
    * @returns Persisted consumption evidence; enqueue does not wake a model.
    */
-  async rootFeedback(operation: unknown, signal: AbortSignal): ReturnType<SessionController['collaborationRootFeedback']> {
+  async rootFeedback(operation: unknown, signal: AbortSignal): Promise<
+    Awaited<ReturnType<SessionController['collaborationRootFeedback']>> | Awaited<ReturnType<SessionController['collaborationRootConsumption']>>
+  > {
     if (this.closing || !this.feedback) throw Error('collaboration_feedback_unavailable')
     const active = AbortSignal.any([signal, this.lifetime])
     active.throwIfAborted()
-    const result = await this.feedback(operation, active)
+    const action = operation && typeof operation === 'object' ? Object.getOwnPropertyDescriptor(operation, 'action')?.value : undefined
+    const consumer = action === 'consumer_read' || action === 'consumer_prepare' || action === 'consumer_start'
+    if (consumer && !this.consumption) throw Error('collaboration_consumption_unavailable')
+    const consume = this.consumption
+    if (consumer && !consume) throw Error('collaboration_consumption_unavailable')
+    const result = consumer && consume ? await consume(operation, active) : await this.feedback(operation, active)
     active.throwIfAborted()
     return result
   }

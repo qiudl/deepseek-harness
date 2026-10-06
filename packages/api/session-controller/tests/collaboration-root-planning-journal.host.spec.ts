@@ -126,6 +126,7 @@ it('persists exact new input and consumed grant before the actual provider, and 
   expect(record!.dispatch).toBeDefined()
   const { signal: _signal, ...sent } = h.adapter.requests[0]!
   expect(record!.manifest.request).toEqual(sent)
+  expect(sent.traceparent).toMatch(new RegExp('^00-' + h.root.root_trace_id + '-[a-f0-9]{16}-01$'))
   await journal.saveOutput(record!, result.jsonText, signal())
   await journal.close()
   const reopened = await openCollaborationRootPlanningJournal(h.facility), [saved] = [...reopened.records()]
@@ -186,6 +187,7 @@ it('rejects altered origin/model/request, executable metadata and stale or forei
     { root: h.pending }, { root: { ...h.root, root_trace_id: 'f'.repeat(32) } },
     { model_snapshot: { ...h.manifest.model_snapshot, model: 'other' } },
     { request: { ...h.manifest.request, reasoningEffort: 'changed' } },
+    { request: { ...h.manifest.request, traceparent: '00-' + 'f'.repeat(32) + '-' + 'e'.repeat(16) + '-01' } },
     { request: { ...h.manifest.request, tools: [{ name: 'execute' }] } },
     { request: { ...h.manifest.request, api_key: 'secret' } },
     { request: { ...h.manifest.request, signal: signal() } },

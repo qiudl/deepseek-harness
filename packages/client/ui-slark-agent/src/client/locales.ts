@@ -5,6 +5,12 @@ export const NS = 'slarkAgent'
 
 /** Simplified Chinese copy. */
 export const zh = {
+  'consumption.start': '结合结果继续原任务',
+  'consumption.status': '核对消费状态',
+  'consumption.sending': '正在消费结果并继续…',
+  'consumption.context_applied': '结果已进入原会话上下文；续跑结果尚未确认。',
+  'consumption.continued': '原会话已生成后续回复。',
+  'consumption.uncertain': '消费或续跑结果尚未确认，请核对状态。',
   'execution.trace': '原始 Trace ID：',
   'execution.preview': '查看待执行任务',
   'execution.confirm': '确认执行此任务',
@@ -77,6 +83,12 @@ export const zh = {
 
 /** English copy. */
 export const en = {
+  'consumption.start': 'Continue original task with result',
+  'consumption.status': 'Check consumption status',
+  'consumption.sending': 'Consuming result and continuing…',
+  'consumption.context_applied': 'Result entered the original context; continuation is unconfirmed.',
+  'consumption.continued': 'The original Session produced a follow-up reply.',
+  'consumption.uncertain': 'Consumption or continuation is unconfirmed. Check its status.',
   'execution.trace': 'Original Trace ID:',
   'execution.preview': 'Preview tasks',
   'execution.confirm': 'Confirm this task',

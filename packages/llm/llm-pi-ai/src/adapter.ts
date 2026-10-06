@@ -1,3 +1,4 @@
+import { requestTraceHeaders } from '@deepseek-ai/dsh-llm'
 /**
  * Generic pi-ai-backed implementation of the Harness LLM seam.
  *
@@ -412,7 +413,7 @@ export class PiAiAdapter extends LlmAdapter {
         signal: watchdog.signal,
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
-        headers: requestHeaders(profile.headers),
+        headers: requestTraceHeaders(requestHeaders(profile.headers), options.traceparent),
       }
       const events = captured === undefined
         ? snapshot.models.streamSimple(model, context, streamOptions)

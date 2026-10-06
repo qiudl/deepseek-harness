@@ -1,3 +1,5 @@
+import { bindRequestTrace } from '@deepseek-ai/dsh-llm'
+import { parseCollaborationConsumptionGrant } from './collaboration-consumption-journal.ts'
 /** Original-root feedback uses the existing plugin relay and durable inbox vocabulary. */
 import { z } from 'zod'
 import { parseCollaborationRootTarget } from './collaboration-root-journal.ts'
@@ -122,6 +124,10 @@ const shared = { target: targetSchema, selection: selectionSchema,
   delivery_id: z.string().refine(value => /^[!-~]{1,256}$/u.exec(value)?.[0] === value).refine(value => !/[/\\]/u.test(value) && value !== '.' && value !== '..') }
 const operationSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('read'), ...shared }),
+  z.strictObject({ action: z.literal('consumer_read'), ...shared }),
+  z.strictObject({ action: z.literal('consumer_prepare'), ...shared, expected_event_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    expected_log_digest: z.string().regex(/^[0-9a-f]{64}$/u) }),
+  z.strictObject({ action: z.literal('consumer_start'), ...shared, grant: z.unknown().transform((value, ctx) => { try { return parseCollaborationConsumptionGrant(value) } catch { ctx.addIssue({ code: 'custom', message: 'invalid consumer grant' }); return z.NEVER } }) }),
   z.strictObject({ action: z.literal('enqueue'), ...shared, expected_event_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     expected_log_digest: z.string().refine(value => /^[0-9a-f]{64}$/u.exec(value)?.[0] === value) }),
 ])
@@ -137,10 +143,11 @@ export function parseCollaborationFeedbackOperation(value: unknown): z.infer<typ
 
 /** Block participating Session dispatch until its complete logged context has reached durable storage.
  * @param ctx - Session Controller owner; registrations unwind with its Profile lifetime.
+ * @param checkpoint - Optional Profile-owned consumption barrier before adapter dispatch.
  * @param participates - Read participation from durable root records, independently of message-source attribution.
  */
 export function installCollaborationFeedbackCheckpoint(ctx: import('@deepseek-ai/cordis').Context,
-  participates: (sessionId: SessionId) => Promise<boolean>): void {
+  participates: (sessionId: SessionId) => Promise<boolean>, checkpoint?: (sessionId: SessionId) => Promise<string | undefined>): void {
   ctx.on('llm/stream', (options, next) => {
     if (options.sessionId === undefined) return next()
     return (async function* () {
@@ -150,6 +157,9 @@ export function installCollaborationFeedbackCheckpoint(ctx: import('@deepseek-ai
       if (!await ctx.sessions.flush(session)) throw Error('collaboration_feedback_persistence_unconfirmed')
       options.signal?.throwIfAborted()
       if (ctx.sessions.get(session.id) !== session) throw Error('collaboration_feedback_session_changed')
+      const traceparent = await checkpoint?.(session.id)
+      if (traceparent !== undefined) bindRequestTrace(options, traceparent)
+      options.signal?.throwIfAborted()
       yield* next()
     })()
   })

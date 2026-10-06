@@ -27,13 +27,15 @@ const predecessorSchema = z.strictObject({ attempt_request_id: requestId, input_
 /** Non-executable reference to the previous local input; cloud dispatch state requires independent reconciliation. */
 export type CollaborationPlanningPredecessor = Readonly<z.infer<typeof predecessorSchema>> | null
 type Request = Omit<GenerateOptions, 'signal'>
-const requestSchema = z.strictObject({ provider: text(256), model: text(256),
+const requestSchema = z.strictObject({
+  traceparent: exact(/^00-(?!0{32})[a-f0-9]{32}-(?!0{16})[a-f0-9]{16}-01$/u).optional(), provider: text(256), model: text(256),
   reasoningEffort: text(128).transform(ReasoningEffortId).optional(), maxTokens: z.number().int().min(1).max(8192),
   purpose: z.literal('collaboration-analysis'), system: text(16384), tools: z.tuple([]),
   messages: z.tuple([z.strictObject({ id: uuid.transform(brandString<MessageId>), role: z.literal('user'),
     source: z.strictObject({ kind: z.literal('user') }), content: z.tuple([z.strictObject({ type: z.literal('text'), text: text(16384) })]),
   })]),
-}).transform(({ reasoningEffort, ...r }) => ({ ...r, ...reasoningEffort === undefined ? {} : { reasoningEffort } }))
+}).transform(({ reasoningEffort, traceparent, ...r }) => ({ ...r, ...reasoningEffort === undefined ? {} : { reasoningEffort },
+  ...traceparent === undefined ? {} : { traceparent } }))
 const rootSchema = z.unknown().transform((value, ctx) => {
   try {
     const root = parseCollaborationRootSubmission(value)
@@ -47,7 +49,8 @@ const manifestSchema = z.strictObject({ schema_version: z.literal(1), prompt_ver
   request: requestSchema,
 }).refine((m) => {
   const original = m.root.source.model_snapshot, model = m.model_snapshot, r = m.request
-  if (m.predecessor?.attempt_request_id === m.attempt_request_id ||
+  if ((r.traceparent !== undefined && r.traceparent.split('-')[1] !== m.root.root_trace_id) ||
+    m.predecessor?.attempt_request_id === m.attempt_request_id ||
     model.provider !== original.provider || model.model !== original.model || model.reasoning_effort !== original.reasoning_effort ||
     deepEqualJson(model, original) || r.provider !== model.provider || r.model !== model.model ||
     r.reasoningEffort !== model.reasoning_effort || Buffer.byteLength(JSON.stringify(r), 'utf8') + 256 > 16384) return false

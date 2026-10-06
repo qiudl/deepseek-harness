@@ -1,3 +1,4 @@
+import { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningEvidence } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion,
   encodeHostRootPlanningAttemptAuthorityPayload, matchHostRootPlanningAttemptTarget, matchHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
@@ -1504,7 +1505,8 @@ export class HostControlAuthority {
             const identity = this.options.identity
             const unsigned = parseHostCollaborationDeliveryReceipt({ schema_version: 1,
               authority_environment_id: account.authorityEnvironmentId, account_binding_handle: account.accountBindingHandle,
-              authority_binding_version: account.authorityBindingVersion, account_issuer: account.issuer, account_subject: account.subject,
+              authority_binding_version: account.authorityBindingVersion,
+              account_issuer: account.issuer, account_subject: account.subject,
               installation_id: identity.installationId, installation_public_key: identity.installationPublicKey,
               host_instance_id: identity.hostInstanceId, process_nonce: identity.processNonce, commit: result.commit, signature: 'A'.repeat(86) })
             const signature = sign(null, encodeHostCollaborationDeliveryReceiptPayload(unsigned), privateKeyObject(identity.installationPrivateKey)).toString('base64url')
@@ -1550,7 +1552,29 @@ export class HostControlAuthority {
           const value = await execute(profileId, payload, context.signal)
           if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
           let result: HostCollaborationAnalysisResult
-          if (command.action === 'root_feedback') result = parseHostCollaborationAnalysisResult({ kind: 'root_feedback', record: value })
+          if (command.action === 'root_feedback') {
+            let record: unknown = value
+            if (value && typeof value === 'object' && 'kind' in value && value.kind === 'consumer' && 'commit' in value) {
+              const op = command.operation
+              if (!op || typeof op !== 'object' || Array.isArray(op) || !('target' in op) || !('delivery_id' in op)) throw Error('consumption_binding_invalid')
+              const target = op.target
+              const commit = value.commit
+              if (!target || typeof target !== 'object' || Array.isArray(target) || !commit || typeof commit !== 'object' || Array.isArray(commit)
+                || !('namespace_id' in commit) || commit.namespace_id !== Object.getOwnPropertyDescriptor(target, 'namespace_id')?.value || !('delivery_id' in commit) || commit.delivery_id !== op.delivery_id
+                || !('source_locator' in commit) || !commit.source_locator || typeof commit.source_locator !== 'object' || Array.isArray(commit.source_locator)
+                || ['workspace_id', 'session_id', 'source_message_id', 'source_revision'].some(k => Object.getOwnPropertyDescriptor(commit.source_locator, k)?.value !== Object.getOwnPropertyDescriptor(target, k)?.value))
+                throw Error('consumption_binding_invalid')
+              const unsigned = parseHostCollaborationConsumptionReceipt({ schema_version: 1,
+                authority_environment_id: account.authorityEnvironmentId, account_binding_handle: account.accountBindingHandle,
+                authority_binding_version: account.authorityBindingVersion,
+                account_issuer: account.issuer, account_subject: account.subject,
+                installation_id: identity.installationId, installation_public_key: identity.installationPublicKey,
+                host_instance_id: identity.hostInstanceId, process_nonce: identity.processNonce, commit: value.commit, signature: 'A'.repeat(86) })
+              const signature = sign(null, encodeHostCollaborationConsumptionReceiptPayload(unsigned), privateKeyObject(identity.installationPrivateKey)).toString('base64url')
+              record = { ...value, receipt: { ...unsigned, signature } }
+            }
+            result = parseHostCollaborationAnalysisResult({ kind: 'root_feedback', record })
+          }
           else if (command.action === 'root_execution_journal') result = parseHostCollaborationAnalysisResult({ kind: 'root_execution_journal', record: value })
           else if (command.action === 'read_root_attempt') result = { kind: 'root_attempt_evidence', evidence: matchHostRootPlanningEvidence(value, command.target) }
           else if (command.action === 'prepare_root_attempt') result = { kind: 'root_attempt_prepared',

@@ -174,3 +174,5 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 `profile.root_execution_journal` 启用私有 analysis 传输上的 `root_execution_journal` 命令。请求操作及响应记录是最大 8 KiB 的独立 JSON，调用方不能提供 Account 绑定摘要。Profile 校验操作字段及持久化 root/task 身份，Main 校验记录摘要和已认证的云端回执。null 读取结果仅表示本地没有命令，不证明云端未受理，也不授予执行权限。
 
 独立的 `profile.root_feedback` 能力允许在同一私有分析传输中传递有界的 `root_feedback` 操作与观察记录。Account 绑定仍由父进程负责。观察记录区分持久入队、已接纳的 Session 上下文及已观察到的助手续跑；其中不含结果文本或签名，不能独立认证云端消费。
+
+消费回执采用独立的 `dsh-collaboration-consumption-receipt-v1` 签名域。提交将原根 trace、执行命令、消费尝试和逻辑步骤绑定到实际 Session 事件坐标、首次持久化前缀及本地 journal 提交。投递签名不能替代消费证据。这些编解码器仅确立语法，不授予权限。

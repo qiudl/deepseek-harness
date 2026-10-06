@@ -27,6 +27,7 @@ function fixture(answer = '完整回复') {
   const props: Parameters<typeof CollaborationResultsDock>[0] = { ...dockRuntime(),
     useSlarkResults: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
       selector(useSyncExternalStore(model.subscribe, model.getSnapshot)), loadSources: () => model.loadSources(),
+    consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
     executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
     loadReplies: (id: string) => model.loadReplies(id), t: dockTranslate }
   return { model, read, readSources, props, original, item, bridge }
@@ -255,4 +256,26 @@ it('previews concrete work, confirms only on click, and checks uncertainty witho
   await act(async () => { await f.model.refresh() })
   expect(execute).toHaveBeenCalledTimes(3)
   view.unmount()
+})
+
+it('consumes a displayed original result only once and keeps consumption distinct from continuation', async () => {
+  const f=fixture()
+  Reflect.set(f.item,'task_id','task')
+  Reflect.set(f.bridge,'collaborationPlanningAvailable',true)
+  const command=vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>(async request =>
+    request.action === 'preview' ? { ok:true,previewId:'p',rootTraceId:'b'.repeat(32),executionEnabled:true,tasks:[{ taskId:'task',question:'Work',agentName:'Guide',projectName:'Project' }] }
+      : { ok:true,rootTraceId:'b'.repeat(32),consumptionAcknowledged:true,status:'context_applied',continuationObserved:request.action==='consumption-status' })
+  f.bridge.collaborationRootExecution=command
+  render(<CollaborationResultsDock {...f.props} />)
+  await screen.findByTestId('slark-execution-preview')
+  await act(async()=>{screen.getByTestId('slark-execution-preview').click()})
+  await act(async()=>{screen.getByTestId('slark-consumption-start').click()})
+  expect(command.mock.calls.at(-1)?.[0]).toEqual({ action:'consume',previewId:'p',taskId:'task',deliveryId:'delivery' })
+  expect(screen.getByText(zh['consumption.context_applied'])).toBeTruthy()
+  const count=command.mock.calls.length
+  await act(async()=>{screen.getByTestId('slark-consumption-start').click();await f.model.refresh()})
+  expect(command).toHaveBeenCalledTimes(count)
+  await act(async()=>{screen.getByTestId('slark-consumption-status').click()})
+  expect(command.mock.calls.at(-1)?.[0]).toMatchObject({ action:'consumption-status' })
+  expect(screen.getByText(zh['consumption.continued'])).toBeTruthy()
 })

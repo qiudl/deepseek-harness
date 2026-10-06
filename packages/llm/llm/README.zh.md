@@ -184,3 +184,5 @@ Prepared `stream(options, assertRequest?)` 在中间件及请求投影之后、�
 - `llm/adapters-updated` 事件按设计不携带载荷；消费方重新读取注册表，而不是在事件中接收新拓扑。
 
 </details>
+
+`bindRequestTrace` 将已持久化的 W3C 传输关联绑定到不可变中间件请求。最终适配器边界将关联复制到 `GenerateOptions.traceparent`，不修改冻结请求或模型可见消息。`requestTraceHeaders` 校验 trace，并移除大小写不敏感的部署请求头冲突。关联信息不具有授权含义。

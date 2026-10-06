@@ -10,6 +10,7 @@ type Source = SessionCollaborationSourceItem['source']
 export interface ScopedCollaborationReply {
   readonly delivery_id: string
   readonly invocation_id: string
+  readonly task_id?: string
   readonly delivery_state: string
   readonly delivery_state_version: string
   readonly source_locator: Source
@@ -24,7 +25,8 @@ export interface CollaborationResultsBridge extends CollaborationDialogueBridge 
   readonly collaborationScopeAvailable?: boolean
   readonly collaborationPlanningAvailable?: boolean
   collaborationRootExecution?(request: { action: 'preview'; source: Source } |
-    { action: 'confirm' | 'reconcile'; previewId: string; taskId: string }): Promise<unknown>
+    { action: 'confirm' | 'reconcile'; previewId: string; taskId: string } |
+    { action: 'consume' | 'consumption-status'; previewId: string; taskId: string; deliveryId: string }): Promise<unknown>
   collaborationDeliveries?(request: { source: Source; limit: number; after_delivery_id?: string }): Promise<
     { ok: true; value: { deliveries: readonly ScopedCollaborationReply[]; next_cursor?: string } } | { ok: false; errorCode: string }>
 }
@@ -36,6 +38,7 @@ export interface CollaborationExecutionView {
   readonly enabled?: boolean
   readonly tasks?: readonly { taskId: string; question: string; agentName: string; projectName: string }[]
   readonly outcomes?: Readonly<Record<string, 'sending' | 'recorded' | 'uncertain' | 'not_admitted'>>
+  readonly consumptions?: Readonly<Record<string, 'sending' | 'context_applied' | 'continued' | 'uncertain'>>
 }
 /** One original message and the readable results obtained for that exact snapshot. */
 export interface CollaborationResultGroup {
@@ -352,6 +355,36 @@ export class CollaborationResultsModel {
       if (!this.current(generation)) return
       this.executions.set(digest, taskId === undefined ? { phase: 'error' }
         : { ...prior, outcomes: { ...prior.outcomes, [taskId]: 'uncertain' } })
+    }
+    if (this.current(generation)) this.publish(this.state)
+  }
+  /** Consume one displayed reply under Main's retained original task; reconciliation never requests a fresh grant.
+   * @param digest - Original message digest displayed in this Session.
+   * @param deliveryId - Immutable result identity, resolved to its task from the current readable projection.
+   * @param reconcile - Read historical evidence only after an uncertain outcome.
+   */
+  async consumptionAction(digest: string, deliveryId: string, reconcile = false): Promise<void> {
+    this.bind()
+    const group = this.state.groups.find(g => g.original.snapshot_digest === digest), prior = this.executions.get(digest)
+    const reply = group?.replies.find(r => r.delivery_id === deliveryId), bridge = this.boundBridge
+    if (this.closed || !this.workspaceId || !bridge?.collaborationRootExecution || !bridge.collaborationPlanningAvailable
+      || !prior?.previewId || !reply?.task_id || reply.delivery_state === 'restricted'
+      || !prior.tasks?.some(t => t.taskId === reply.task_id) || Object.values(prior.consumptions ?? {}).includes('sending')
+      || (!reconcile && (!prior.enabled || prior.consumptions?.[deliveryId] !== undefined))) return
+    const generation = this.generation
+    this.executions.set(digest, { ...prior, consumptions: { ...prior.consumptions, [deliveryId]: 'sending' } })
+    this.publish(this.state)
+    try {
+      const value = await wait(bridge.collaborationRootExecution({ action:reconcile?'consumption-status':'consume',
+        previewId:prior.previewId,taskId:reply.task_id,deliveryId }),AbortSignal.timeout(35000))
+      if (!this.current(generation)) return
+      if (!value || typeof value !== 'object' || !('ok' in value) || value.ok !== true || !('rootTraceId' in value)
+        || value.rootTraceId !== prior.rootTraceId || !('consumptionAcknowledged' in value) || value.consumptionAcknowledged !== true
+        || !('status' in value) || value.status !== 'context_applied' || !('continuationObserved' in value) || typeof value.continuationObserved !== 'boolean') throw Error('unavailable')
+      this.executions.set(digest, { ...prior, consumptions: { ...prior.consumptions, [deliveryId]: value.continuationObserved?'continued':'context_applied' } })
+    } catch {
+      if (!this.current(generation)) return
+      this.executions.set(digest, { ...prior, consumptions: { ...prior.consumptions, [deliveryId]: 'uncertain' } })
     }
     if (this.current(generation)) this.publish(this.state)
   }

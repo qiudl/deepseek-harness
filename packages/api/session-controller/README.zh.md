@@ -173,7 +173,7 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- 根捕获是显式启用的 Host 库能力，云端根受理、自动提交重放及原会话消费尚未接通。
+- 根捕获是显式启用的 Host 库能力，云端授权与自动调度由已认证父进程负责，本库不创建这些权限。
 - 图片字节上限不校验解码后的尺寸或像素数。
 - follow 恢复失败会对调用方可见，而不会无限重试。
 - 浏览器原始字节上传使用一次不带断点续传偏移的流式 HTTP 请求；重试会从第零字节重新传输整个文件。
@@ -213,3 +213,5 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 `collaborationRootFeedback` 读取原已受理执行和已提交回执，再检查 Session 的持久化日志前缀。显式入队要求 `follow_authorized_plan`、已挂载且空闲的 Agent、空收件箱及精确匹配的已观察前缀。稳定身份的协作结果转发消息包含原始用户问题、结果和根 trace。现有收件箱与 `user/message` 事件区分等待消费、已被领取或移除、已应用上下文；只有接纳该消息的同一步中出现助手结算，才记录已观察到续跑。持久化屏障限定检查的日志前缀。重复或不确定回执通过读取恢复；已移除消息不会自动重新入队。父进程另外检查当前云端访问权和消费意图。此操作不唤醒模型，也不签发云端消费收据。派发已有持久协作根的 Session 模型请求前，控制器等待该 Session 的 flush；缺少持久化或检查点失败时不调用适配器。
 
 `collaboration-result` 消息来源只记录归属。未加载此生产者的读取器保留完整消息与元数据；来源 kind 不授予执行权限，也不改变重放语义。Session 检查点执行与来源 kind 无关。
+
+`collaborationRootConsumption` 接受私有 `consumer_prepare`、`consumer_start` 与 `consumer_read`。独立的 `collaboration_consumption_v1` domain 在云端授权前提交稳定命令，并在唤醒原会话空闲 Agent 前一次性记录带期限的首次授权。写入确认丢失会停用当前句柄；重开和重复请求不能恢复唤醒许可。LLM 检查点先 flush 实际 Session 输入，提交其 turn/step/event 坐标，再沿原根 trace 持久记录 Provider 请求 span，最后调用适配器。历史读取可恢复消费事实，不触发派发。首次消费前缀不可变；后续助手回复观察与消费事实分离，也不证明整个任务完成。当前云端授权仍由已认证父进程负责。

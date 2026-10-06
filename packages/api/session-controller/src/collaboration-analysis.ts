@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 /** REQ-20260930-0004: Host-only Source analysis through the captured provider call. */
 import { createMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
@@ -41,14 +42,15 @@ export class CollaborationAnalysisRunner {
    * @param prepared - original executable snapshot handle; recovered Sources have none.
    * @param persist - Host-owned durable attempt writer; commits the full manifest before resolving.
    * @param cancellation - current attempt cancellation, combined with Profile lifetime and 30-second limit.
+   * @param rootTraceId - Optional original root derived by the Profile owner before analysis capture is published.
    * @returns syntactically valid, untrusted model JSON; not a plan or accepted task.
    */
   async run(source: CollaborationSourceSnapshot, prepared: PreparedLlmSnapshotCall,
     persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
-    cancellation: AbortSignal): Promise<CollaborationAnalysisResult> {
+    cancellation: AbortSignal, rootTraceId?: string): Promise<CollaborationAnalysisResult> {
     if (!deepEqualJson(source.model_snapshot, prepared.snapshot)) throw new Error('collaboration_analysis_model_changed')
     return this.runPrepared(source, prepared, persist, cancellation,
-      request => deepFreeze({ prompt_version: '1' as const, source, request }))
+      request => deepFreeze({ prompt_version: '1' as const, source, request }), undefined, rootTraceId)
   }
 
   /**
@@ -68,7 +70,7 @@ export class CollaborationAnalysisRunner {
     persist: (manifest: CollaborationRootPlanningManifest, signal: AbortSignal) => Promise<void>,
     cancellation: AbortSignal): Promise<CollaborationAnalysisResult> {
     return this.runPrepared(root.source, prepared, persist, cancellation,
-      request => createCollaborationRootPlanningManifest(root, predecessor, prepared, request))
+      request => createCollaborationRootPlanningManifest(root, predecessor, prepared, request), undefined, root.root_trace_id)
   }
 
   /**
@@ -89,7 +91,7 @@ export class CollaborationAnalysisRunner {
 
   private async runPrepared<T extends { readonly request: Omit<GenerateOptions, 'signal'> }>(source: CollaborationSourceSnapshot,
     prepared: PreparedLlmSnapshotCall, persist: (manifest: T, signal: AbortSignal) => Promise<void>,
-    cancellation: AbortSignal, wrap: (request: Omit<GenerateOptions, 'signal'>) => T, clarification?: CollaborationClarificationInput): Promise<CollaborationAnalysisResult> {
+    cancellation: AbortSignal, wrap: (request: Omit<GenerateOptions, 'signal'>) => T, clarification?: CollaborationClarificationInput, rootTraceId?: string): Promise<CollaborationAnalysisResult> {
     const controller = new AbortController()
     const signal = AbortSignal.any([this.lifetime, cancellation, controller.signal])
     signal.throwIfAborted()
@@ -102,7 +104,14 @@ export class CollaborationAnalysisRunner {
     }
     const original = { source_message_id: source.source_message_id, source_revision: source.source_revision,
       original_message: source.original_message, active_mentions: source.active_mentions }
-    const request = deepFreeze({ ...prepared.config, purpose: 'collaboration-analysis' as const, tools: [],
+    let traceparent: string | undefined
+    if (rootTraceId !== undefined) {
+      if (/^(?!0{32})[a-f0-9]{32}$/u.exec(rootTraceId)?.[0] !== rootTraceId) throw Error('collaboration_analysis_trace_invalid')
+      let span: string
+      do { span = randomBytes(8).toString('hex') } while (span === '0'.repeat(16))
+      traceparent = '00-' + rootTraceId + '-' + span + '-01'
+    }
+    const request = deepFreeze({ ...prepared.config, ...(traceparent === undefined ? {} : { traceparent }), purpose: 'collaboration-analysis' as const, tools: [],
       system: clarification ? clarificationPrompt : prompt,
       messages: [createMessage({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: clarification ? clarificationAnalysisMessage(clarification) : JSON.stringify(original) }] })],
     })

@@ -233,3 +233,5 @@ Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后
 单独声明的 `profile.root_execution_journal` 能力仅通过当前已认证 Account Profile 转发有界的具体执行日志操作。Host 派生连接绑定，并在 worker 响应后重新校验归属。客户端和授权端均拒绝缺少该能力的请求。worker 使用私有 analysis token；日志读写不派发模型、不授予新的执行权限，也不确认 Session 已消费结果。
 
 只有配置私有 Profile 接收器时才宣告 `profile.root_feedback`。客户端和授权端均检查该能力，并在每次有界反馈响应后重新校验 Account 归属。父进程仍负责当前云端结果访问权和显式消费意图；传输成功不等同于带签名的云端消费确认。
+
+对于 `root_feedback` 返回的持久消费证据，Host 在签发独立消费回执前核对原 namespace、delivery 和 Source 坐标。签名使用当前 Account、installation 与进程元数据，并在 worker 回复后再次检查当前 Profile 权限。回执不包含答案文本，也不授予新的续跑权限。

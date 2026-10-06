@@ -6141,7 +6141,7 @@ Sources: [`packages/core/session/src/types.ts:206`](../packages/core/session/src
 
 SHA-256: `28b6a6e0cff037e1e8c63343cd304dbb617c4c0f9c128254d3680bb52a9e33d4`
 
-Sources: [`packages/api/session-controller/src/collaboration-feedback.ts:19`](../packages/api/session-controller/src/collaboration-feedback.ts)
+Sources: [`packages/api/session-controller/src/collaboration-feedback.ts:21`](../packages/api/session-controller/src/collaboration-feedback.ts)
 
 | Property | Presence | Type |
 |---|---|---|

@@ -904,6 +904,13 @@ async collaborationRootExecution(value: unknown, signal: AbortSignal): Promise<C
  */
 async collaborationRootFeedback(value: unknown, signal: AbortSignal): Promise<CollaborationFeedbackObservation>
 
+/** Execute a private durable consumer command under authenticated Main's current authority.
+ * @param value - Consumer read/prepare/start, original root and exact delivery; start requires a fresh cloud grant.
+ * @param signal - Current parent and Profile lifetime; recovery never restores live wake permission.
+ * @returns Durable record and observation; only first start may wake the attached original Agent.
+ */
+async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionResult>
+
 /**
  * Read one durable Source from the owning Profile without model preparation or Agent activation.
  * @param target - Exact original Source identity; caller metadata is rejected.

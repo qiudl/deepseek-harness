@@ -1990,6 +1990,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Persisted enqueue/consumption evidence. Removed or claimed messages are never automatically reinserted.',
       },
       {
+        signature: 'async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionResult>',
+        description: 'Execute a private durable consumer command under authenticated Main\'s current authority.',
+        parameters: [{ name: 'value', description: 'Consumer read/prepare/start, original root and exact delivery; start requires a fresh cloud grant.' }, { name: 'signal', description: 'Current parent and Profile lifetime; recovery never restores live wake permission.' }],
+        returns: 'Durable record and observation; only first start may wake the attached original Agent.',
+      },
+      {
         signature: 'async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise< CollaborationSourceCoordinates & { readonly snapshot_digest: string } >',
         description: 'Read one durable Source from the owning Profile without model preparation or Agent activation.',
         parameters: [{ name: 'target', description: 'Exact original Source identity; caller metadata is rejected.' }, { name: 'signal', description: 'Caller cancellation combined with Profile disposal.' }],
@@ -4831,6 +4837,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CollaborationClarificationInput = DeepReadonly<z.infer<typeof schema>>;',
   },
   {
+    name: 'CollaborationConsumptionRecord',
+    declaration: 'export type CollaborationConsumptionRecord = Readonly<z.infer<typeof recordSchema>>;',
+  },
+  {
+    name: 'CollaborationConsumptionResult',
+    declaration: 'export type CollaborationConsumptionResult = Readonly<{\n    kind: \'consumer\';\n    record: CollaborationConsumptionRecord | null;\n    observation: CollaborationFeedbackObservation;\n    commit?: ReturnType<typeof collaborationConsumptionCommit>;\n}>;',
+  },
+  {
     name: 'CollaborationDeliveryRecord',
     declaration: 'export type CollaborationDeliveryRecord = DeepReadonly<z.infer<typeof rawRecordSchema>>;',
   },
@@ -5428,7 +5442,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GenerateOptions',
-    declaration: 'export interface GenerateOptions {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: RequestMessage[];\n    system?: string;\n    tools?: ToolSchema[];\n    toolHistory?: ToolHistory;\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    purpose?: \'compaction\' | \'session-title\' | \'collaboration-analysis\';\n}',
+    declaration: 'export interface GenerateOptions {\n    traceparent?: string;\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: RequestMessage[];\n    system?: string;\n    tools?: ToolSchema[];\n    toolHistory?: ToolHistory;\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    purpose?: \'compaction\' | \'session-title\' | \'collaboration-analysis\';\n}',
   },
   {
     name: 'GenericCallView',

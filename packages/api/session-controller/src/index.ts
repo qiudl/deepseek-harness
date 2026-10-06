@@ -1,3 +1,5 @@
+import type { CollaborationConsumptionResult } from './collaboration-consumption-journal.ts'
+import { openCollaborationConsumptionJournal, collaborationConsumptionCommit } from './collaboration-consumption-journal.ts'
 import { createCollaborationFeedbackMessage, observeCollaborationFeedback, installCollaborationFeedbackCheckpoint, parseCollaborationFeedbackOperation } from './collaboration-feedback.ts'
 import type { CollaborationFeedbackObservation } from './collaboration-feedback.ts'
 import { openCollaborationRootExecutionJournal, parseCollaborationExecutionOperation } from './collaboration-root-execution-journal.ts'
@@ -199,6 +201,9 @@ export class SessionController extends TypertRemoteService {
   private collaborationRootExecutionJournal?: Promise<CollaborationRootExecutionJournal>
   private collaborationRootJournal?: Promise<CollaborationRootJournal>
   private collaborationJournal?: Promise<CollaborationSourceJournal>
+  private readonly collaborationRootTransportTraces = new WeakMap<CollaborationSourceSnapshot, string>()
+  private collaborationConsumptionJournal?: Promise<Awaited<ReturnType<typeof openCollaborationConsumptionJournal>>>
+  private readonly collaborationConsumerLive = new Map<string, { sessionId: SessionId; expiresAt: number; signal: AbortSignal }>()
   private collaborationDeliveryJournal?: Promise<CollaborationDeliveryJournal>
 
   /**
@@ -212,6 +217,7 @@ export class SessionController extends TypertRemoteService {
     this.inspectWorkspaceModelSelection = this.inspectWorkspaceModelSelection.bind(this)
     this.prepareCollaborationRootPlanning = this.prepareCollaborationRootPlanning.bind(this)
     this.prepareWorkspaceModelSnapshot = this.prepareWorkspaceModelSnapshot.bind(this)
+    this.collaborationRootConsumption = this.collaborationRootConsumption.bind(this)
     this.collaborationRootFeedback = this.collaborationRootFeedback.bind(this)
     this.collaborationRootExecution = this.collaborationRootExecution.bind(this)
     this.readCollaborationRoot = this.readCollaborationRoot.bind(this)
@@ -233,6 +239,9 @@ export class SessionController extends TypertRemoteService {
       await roots?.close()
       const replies = await this.collaborationDeliveryJournal?.catch(() => undefined)
       await replies?.close()
+      const consumptions = await this.collaborationConsumptionJournal?.catch(() => undefined)
+      await consumptions?.close()
+      this.collaborationConsumerLive.clear()
     }, 'session-controller.collaboration-sources')
     installCollaborationFeedbackCheckpoint(ctx, async (sessionId) => {
       this.collaborationLifetime.signal.throwIfAborted()
@@ -244,7 +253,7 @@ export class SessionController extends TypertRemoteService {
       const roots = await this.collaborationRootJournal
       this.collaborationLifetime.signal.throwIfAborted()
       return roots.hasSession(sessionId)
-    })
+    }, sessionId => this.checkpointCollaborationConsumption(sessionId))
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
     this.commands = new SessionCommandController(ctx, this.agents, process.cwd())
@@ -538,7 +547,7 @@ export class SessionController extends TypertRemoteService {
             signal.throwIfAborted()
             await inspectCurrent()
             signal.throwIfAborted()
-          }, analysisSignal)
+          }, analysisSignal, this.collaborationRootTransportTraces.get(snapshot))
         },
         analyzeClarification: async (input: CollaborationClarificationInput,
           persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
@@ -609,6 +618,7 @@ export class SessionController extends TypertRemoteService {
         objective_ref: input.objective_ref ?? ('source-v1:' + sourceDigest),
         task_grant_ref: input.task_grant_ref ?? ('intent-v1:' + sourceDigest) }, owned)
       await current()
+      this.collaborationRootTransportTraces.set(captured.snapshot, submission.root_trace_id)
       return Object.freeze({ ...captured, submission })
     })
     this.collaborationCaptureTail = operation.then(() => {}, () => {})
@@ -730,6 +740,65 @@ export class SessionController extends TypertRemoteService {
    * @returns Persisted enqueue/consumption evidence. Removed or claimed messages are never automatically reinserted.
    */
   async collaborationRootFeedback(value: unknown, signal: AbortSignal): Promise<CollaborationFeedbackObservation> {
+    const parsed = parseCollaborationFeedbackOperation(value)
+    if (parsed.action !== 'read' && parsed.action !== 'enqueue') throw Error('collaboration_feedback_operation_invalid')
+    const result = await this.accessCollaborationFeedback(parsed, signal)
+    if (!('status' in result)) throw Error('collaboration_feedback_operation_invalid')
+    return result
+  }
+
+  /** Execute a private durable consumer command under authenticated Main's current authority.
+   * @param value - Consumer read/prepare/start, original root and exact delivery; start requires a fresh cloud grant.
+   * @param signal - Current parent and Profile lifetime; recovery never restores live wake permission.
+   * @returns Durable record and observation; only first start may wake the attached original Agent.
+   */
+  async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionResult> {
+    const parsed = parseCollaborationFeedbackOperation(value)
+    if (parsed.action === 'read' || parsed.action === 'enqueue') throw Error('collaboration_consumption_operation_invalid')
+    const result = await this.accessCollaborationFeedback(parsed, signal)
+    if ('status' in result) throw Error('collaboration_consumption_operation_invalid')
+    const commit = result.record ? collaborationConsumptionCommit(result.record) : undefined
+    return { ...result, ...(commit ? { commit } : {}) }
+  }
+
+  private async openConsumptionJournal() {
+    if (!this.collaborationConsumptionJournal) {
+      const facility = this.ctx.get('storageDomain')
+      if (!facility) throw Error('collaboration_consumption_journal_unavailable')
+      this.collaborationConsumptionJournal = openCollaborationConsumptionJournal(facility)
+    }
+    return this.collaborationConsumptionJournal
+  }
+
+  private async checkpointCollaborationConsumption(sessionId: SessionId): Promise<string | undefined> {
+    const journal = await this.openConsumptionJournal()
+    const records = journal.records().filter(r => r.binding.source_locator.session_id === sessionId && r.state !== 'prepared')
+    if (!records.length) return
+    const persistence = this.ctx.get('sessionPersistence')
+    if (!persistence) throw Error('collaboration_consumption_persistence_unavailable')
+    const handle = await persistence.open(sessionId, 'read')
+    try {
+      const { events } = await handle.read()
+      const currentStep = events.findLast(e => e.type === 'step/start')
+      if (currentStep?.type !== 'step/start') throw Error('collaboration_consumption_step_missing')
+      for (const record of records) {
+        const admitted = events.find(e => e.type === 'user/message' && e.data.id === record.binding.message_id)
+        if (admitted?.type !== 'user/message') continue
+        const observation = observeCollaborationFeedback(events, admitted.data)
+        if (observation.consuming_step?.turn !== currentStep.data.turn) continue
+        const live = this.collaborationConsumerLive.get(record.binding.message_id)
+        if (!live || live.sessionId !== sessionId || live.signal.aborted || Date.now() >= live.expiresAt)
+          throw Error('collaboration_consumption_reconciliation_required')
+        await journal.consume(record.binding, observation, this.collaborationLifetime.signal)
+        live.signal.throwIfAborted()
+        const request = await journal.request(record.binding, currentStep.data, live.signal)
+        live.signal.throwIfAborted()
+        return request.traceparent
+      }
+    } finally { await handle.close() }
+  }
+
+  private async accessCollaborationFeedback(value: unknown, signal: AbortSignal) {
     const command = parseCollaborationFeedbackOperation(value)
     const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
     const sessionId = SessionId(command.target.session_id), workspaceId = WorkspaceId(command.target.workspace_id)
@@ -774,6 +843,62 @@ export class SessionController extends TypertRemoteService {
         } finally { await handle.close() }
       }
       const before = await observe()
+      if (command.action === 'consumer_read' || command.action === 'consumer_prepare' || command.action === 'consumer_start') {
+        const consumers = await this.openConsumptionJournal()
+        const binding = { namespace_id: root.namespace_id, root_task_id: root.root_task_id, root_trace_id: root.root_trace_id,
+          execution_command_id: execution.execution_command_id, invocation_id: delivery.invocation_id, delivery_id: delivery.delivery_id,
+          result_digest: delivery.result_digest, message_id: message.id, source_snapshot_digest: delivery.source_snapshot_digest,
+          source_locator: delivery.source_locator }
+        let record = consumers.read(binding)
+        if (command.action === 'consumer_read') {
+          if (record && record.state !== 'prepared' && before.status === 'context_applied') record = await consumers.consume(binding, before, owned)
+          return { kind: 'consumer' as const, record: record ?? null, observation: before }
+        }
+        if (root.continuation_policy !== 'follow_authorized_plan') throw Error('collaboration_feedback_display_only')
+        if (command.action === 'consumer_prepare' && record) {
+          record = await consumers.prepare(binding,
+            { event_count: command.expected_event_count, log_digest: command.expected_log_digest }, owned)
+          return { kind: 'consumer' as const, record, observation: before }
+        }
+        if (command.action === 'consumer_start' && record?.state !== 'prepared' && record) {
+          const retained = await consumers.start(binding, command.grant, owned)
+          return { kind: 'consumer' as const, record: retained.record, observation: before }
+        }
+        const agent = this.ctx.agents.get(sessionId)
+        if (!session || !agent || agent.session !== session || agent.status !== 'idle'
+          || agent.inbox.nextTurn.length || agent.inbox.nextStep.length || before.status !== 'not_enqueued') throw Error('collaboration_feedback_session_busy')
+        const expected = command.action === 'consumer_prepare' ? command : record?.command
+        if (!expected || session.seq !== before.event_count || expected.expected_event_count !== before.event_count
+          || expected.expected_log_digest !== before.log_digest) throw Error('collaboration_feedback_session_changed')
+        if (command.action === 'consumer_prepare') {
+          record = await consumers.prepare(binding, { event_count: before.event_count, log_digest: before.log_digest }, owned)
+          await current()
+          return { kind: 'consumer' as const, record, observation: before }
+        }
+        const started = await consumers.start(binding, command.grant, owned)
+        await current()
+        if (started.wake) {
+          if (started.record.state === 'prepared' || session.seq !== before.event_count || agent.status !== 'idle'
+            || agent.inbox.nextTurn.length || agent.inbox.nextStep.length) throw Error('collaboration_consumption_reconciliation_required')
+          const deadline = Date.parse(started.record.grant.expires_at)
+          if (Date.now() >= deadline) throw Error('collaboration_consumption_grant_expired')
+          const active = AbortSignal.any([owned, AbortSignal.timeout(Math.max(1, deadline - Date.now()))])
+          const cancelled = () => agent.cancel({ kind: 'parent' }, { keepInbox: true })
+          this.collaborationConsumerLive.set(message.id, { sessionId, expiresAt: deadline, signal: active })
+          active.addEventListener('abort', cancelled, { once: true })
+          try {
+            active.throwIfAborted()
+            agent.send(message, 'next-step', true)
+            await agent.whenIdle()
+          } finally {
+            active.removeEventListener('abort', cancelled)
+            this.collaborationConsumerLive.delete(message.id)
+          }
+          await current()
+          return { kind: 'consumer' as const, record: consumers.read(binding) ?? started.record, observation: await observe() }
+        }
+        return { kind: 'consumer' as const, record: started.record, observation: before }
+      }
       if (command.action === 'read' || before.status !== 'not_enqueued') return before
       if (root.continuation_policy !== 'follow_authorized_plan') throw Error('collaboration_feedback_display_only')
       const agent = this.ctx.agents.get(sessionId)

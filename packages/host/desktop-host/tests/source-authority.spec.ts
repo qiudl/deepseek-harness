@@ -9,7 +9,7 @@ import {
   encodeHostSourceAuthorityPayload,
   parseHostRootAuthorityChallenge, encodeHostRootAuthorityPayload,
   parseHostRootPlanningAttemptAuthorityChallenge, encodeHostRootPlanningAttemptAuthorityPayload,
-  encodeHostCollaborationDeliveryReceiptPayload,
+  encodeHostCollaborationDeliveryReceiptPayload, parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
@@ -973,4 +973,26 @@ it.each(['root_execution_journal', 'root_feedback'] as const)('gates %s on capab
       await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
     }
   }
+})
+
+it('signs durable consumption in a separate domain and refuses a changed original Session', async () => {
+  const f = await fixture(false,false,false,false,false,false,false,true), original = replyFixture(f).commit
+  const commit = { ...original,root_task_id:randomUUID(),root_trace_id:'d'.repeat(32),task_revision:1,
+    execution_command_id:randomUUID(),consumption_id:randomUUID(),consumer_attempt_id:randomUUID(),consumer_step_id:randomUUID(),
+    message_id:'collaboration-feedback-'+'e'.repeat(64),consumer_started_at:'2026-10-06T00:00:00.000Z',session_event_seq:9,
+    consuming_step:{ turn:1,step:1,start_event_seq:8 },session_prefix:{ event_count:10,log_digest:'f'.repeat(64) } }
+  await f.grant()
+  f.setAnalysis(async()=>({ kind:'consumer',commit }))
+  const input={ ...f.account,command:{ action:'root_feedback' as const,operation:{ action:'consumer_read',delivery_id:commit.delivery_id,
+    target:{ ...commit.source_locator,namespace_id:commit.namespace_id } } } }
+  const result=await f.client.collaborationAnalysis(input)
+  if(result.kind!=='root_feedback' || !result.record || typeof result.record!=='object' || !('receipt' in result.record))throw Error('missing receipt')
+  const receipt=parseHostCollaborationConsumptionReceipt(result.record.receipt)
+  expect(receipt.commit).toEqual(commit)
+  expect(verify(null,encodeHostCollaborationConsumptionReceiptPayload(receipt),f.keys.publicKey,Buffer.from(receipt.signature,'base64url'))).toBe(true)
+  const changed={ ...commit,source_locator:{ ...commit.source_locator,session_id:'foreign-session' } }
+  f.setAnalysis(async()=>({ kind:'consumer',commit:changed }))
+  await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
+  f.setAnalysis(async()=>{f.host.revokeOwner(f.ownerId);return { kind:'consumer',commit }})
+  await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
 })

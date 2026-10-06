@@ -597,6 +597,8 @@ type RequestMessage = Message | RequestUserInput
 ```ts type-equiv
 /** A single model request, fully assembled. */
 interface GenerateOptions {
+  /** W3C transport correlation from the owning operation; grants no execution authority. */
+  traceparent?: string
   /** Registered provider route selecting the adapter instance. */
   provider: string
   model: string
