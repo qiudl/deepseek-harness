@@ -1206,7 +1206,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog'
+    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog'
     readonly payload: { readonly args: HostRemoteSessionJson }

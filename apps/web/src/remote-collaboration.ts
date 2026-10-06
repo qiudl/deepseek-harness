@@ -1,5 +1,6 @@
 /** Project scope calls over the authenticated Slark parent port; execution is advertised separately. */
 import type { TunnelFetch } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
+import { createRemoteCollaborationExecution } from './remote-collaboration-execution.ts'
 
 const schema = 'dsh-remote-collaboration/v1'
 const encoder = new TextEncoder()
@@ -83,8 +84,8 @@ function wait<T>(signal: AbortSignal, pending: Promise<T>): Promise<T> {
       (error: unknown) => { signal.removeEventListener('abort', abort); reject(reasonError(error)) })
   })
 }
-async function readJson(response: Response, signal: AbortSignal): Promise<unknown> {
-  if (!response.body || Number(response.headers.get('content-length')) > 256 * 1024) {
+async function readJson(response: Response, signal: AbortSignal, maxBytes = 256 * 1024): Promise<unknown> {
+  if (!response.body || Number(response.headers.get('content-length')) > maxBytes) {
     void response.body?.cancel().catch(() => undefined)
     throw Error('remote collaboration response too large')
   }
@@ -97,7 +98,7 @@ async function readJson(response: Response, signal: AbortSignal): Promise<unknow
       signal.throwIfAborted()
       if (next.done) break
       bytes += next.value.length
-      if (bytes > 256 * 1024) throw Error('remote collaboration response too large')
+      if (bytes > maxBytes) throw Error('remote collaboration response too large')
       chunks.push(next.value)
     }
     const body = new Uint8Array(bytes)
@@ -143,13 +144,30 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
       return
     } finally { clearTimeout(discoveryTimer) }
     lifetime.signal.throwIfAborted()
-    if (!exact(advertised, ['schema', 'methods']) || advertised.schema !== schema ||
-      !Array.isArray(advertised.methods) || advertised.methods.length !== 1 || advertised.methods[0] !== 'workspace') return
+    if (!exact(advertised, ['schema', 'methods']) || advertised.schema !== schema || !Array.isArray(advertised.methods)) return
+    const methods: readonly unknown[] = advertised.methods
+    const execution = methods.length === 4
+      && ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
+    if (!execution && (methods.length !== 1 || methods[0] !== 'workspace')) return
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
     const bridge = {
       collaborationScopeAvailable: true,
-      collaborationExecutionAvailable: false,
+      collaborationExecutionAvailable: execution,
+      ...(execution ? createRemoteCollaborationExecution({ signal: lifetime.signal,
+        async call(method, input, signal) {
+          const rpcId = 'collaboration-' + String(++sequence)
+          const response = await exchange(fetch, '/api/' + method, { method: 'POST',
+            headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request',
+              rpcId, method, payload: { args: { request: input } } }) }, signal)
+          if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw Error('remote collaboration refused') }
+          const value = await readJson(response, signal, 800 * 1024)
+          signal.throwIfAborted()
+          if (!exact(value, ['type', 'rpcId', 'result']) || value.type !== 'server-response' || value.rpcId !== rpcId
+            || !exact(value.result, ['ok', 'value']) || value.result.ok !== true) throw Error('invalid collaboration response')
+          return value.result.value
+        },
+      }) : {}),
       async collaborationWorkspace(raw: unknown): Promise<unknown> {
         let input: Record<string, unknown> | undefined
         let sent = false

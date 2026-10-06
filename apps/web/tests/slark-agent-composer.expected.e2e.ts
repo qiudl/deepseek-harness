@@ -5,6 +5,7 @@ import { webcrypto } from 'node:crypto'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { installAssembledBootEnv, mountAssembledApp } from './assembled-boot.ts'
+import { installRemoteCollaboration } from '../src/remote-collaboration.ts'
 type WorkspaceRequest = { workspace_id: string
   operation: { kind: 'get' | 'apply' | 'projects' | 'agents'
     selected_project_ids?: readonly string[] } }
@@ -12,7 +13,7 @@ type WorkspaceRequest = { workspace_id: string
 const EXPECTED = join(process.cwd(), 'apps/web/tests/expected/slark-agent-composer/natural-language.expected.txt')
 
 installAssembledBootEnv()
-afterEach(() => { Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
+afterEach(() => { window.dispatchEvent(new Event('pagehide')); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
 
 it('sends two scoped Agents from the built composer as one original message without opening a task form', async () => {
   vi.stubGlobal('crypto', webcrypto)
@@ -31,20 +32,26 @@ it('sends two scoped Agents from the built composer as one original message with
       source_message_id: input.source_message_id, source_revision: input.source_revision },
     submission_state: 'accepted', invocation_id: 'batch-accepted',
   } }))
-  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true, collaborationExecutionAvailable: true,
-    collaborationWorkspace: async ({ workspace_id, operation }: WorkspaceRequest) => {
-      if (operation.kind === 'get') return { ok: true,
-        value: { workspace_id, version: '1', selected_project_ids: ['product', 'engineering'] } }
-      return { ok: true, value: { items: [
-        { project_id: 'product', project_name: 'Product', agent_id: 'guide', agent_name: 'Guide',
-          available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
-        { project_id: 'engineering', project_name: 'Engineering', agent_id: 'tester', agent_name: 'Tester',
-          available: true, capability_snapshot: 'b'.repeat(64), reason_code: 'ready' },
-      ], next_cursor: null, scope_version: '1' } }
-    },
-    collaborationSubmit: submit,
-    collaborationDeliveries: async () => ({ ok: true, value: { deliveries: [] } }),
-    enterpriseAgents: legacy, invokeEnterpriseAgent: legacy,
+  const workspaceCall = async ({ workspace_id, operation }: WorkspaceRequest) => {
+    if (operation.kind === 'get') return { ok: true,
+      value: { workspace_id, version: '1', selected_project_ids: ['product', 'engineering'] } }
+    return { ok: true, value: { items: [
+      { project_id: 'product', project_name: 'Product', agent_id: 'guide', agent_name: 'Guide',
+        available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
+      { project_id: 'engineering', project_name: 'Engineering', agent_id: 'tester', agent_name: 'Tester',
+        available: true, capability_snapshot: 'b'.repeat(64), reason_code: 'ready' },
+    ], next_cursor: null, scope_version: '1' } }
+  }
+  await installRemoteCollaboration(async (path, init) => {
+    if (String(path) === '/__collaboration__') return Response.json({ schema: 'dsh-remote-collaboration/v1',
+      methods: ['workspace', 'submit', 'pending', 'deliveries'] })
+    if (typeof init?.body !== 'string') throw Error('missing parent request')
+    const rpc = JSON.parse(init.body) as { rpcId: string; method: string; payload: { args: { request: unknown } } }
+    const value = rpc.method === 'collaboration/workspace' ? await workspaceCall(rpc.payload.args.request as WorkspaceRequest)
+      : rpc.method === 'collaboration/submit' ? await submit(rpc.payload.args.request as Input)
+        : rpc.method === 'collaboration/deliveries' ? { ok: true, value: { deliveries: [] } }
+          : { ok: false, errorCode: 'collaboration_result_unavailable' }
+    return Response.json({ type: 'server-response', rpcId: rpc.rpcId, result: { ok: true, value } })
   })
   const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'], remote: { workspaceId: workspace } })
   remote.mock.unary('fileReferences/list', { ok: true, value: [] })
@@ -83,7 +90,9 @@ it('sends two scoped Agents from the built composer as one original message with
   }
   expect(legacy).not.toHaveBeenCalled()
   expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
-  await expect([`original=${sent.original_message}`,
+  const host: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
+  if (host === null || typeof host !== 'object') throw Error('missing execution consumer')
+  await expect([`parent-execution=${String(Reflect.get(host, 'collaborationExecutionAvailable'))}`, `original=${sent.original_message}`,
     ...sent.active_mentions.map(mention => `target=${mention.binding.target.project_id}/${mention.binding.target.agent_id}`),
     'shared-original-source=true', 'distinct-mention-ids=2', 'original-submissions=1', 'ordinary-model-prompts=0', 'draft=empty',
   ].join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),

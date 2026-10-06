@@ -1201,7 +1201,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
     if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
-      && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'settings/describe'
+      && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
+      && params.endpoint !== 'settings/describe'
       && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
       && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog') reject()
     const payload = record(params.payload)
@@ -1212,6 +1213,15 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     if ((params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
       || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog')
       && Object.keys(args).length !== 0) reject()
+    if (params.endpoint === 'session/collaborationSources') {
+      const sourceArgs = args as Record<string, unknown>
+      exactKeys(sourceArgs, ['request'])
+      const request = record(sourceArgs.request)
+      exactKeys(request, Object.hasOwn(request, 'cursor') ? ['sessionId', 'cursor'] : ['sessionId'])
+      if (typeof request.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(request.sessionId)
+        || /[/\\]/u.test(request.sessionId) || request.sessionId === '.' || request.sessionId === '..'
+        || (Object.hasOwn(request, 'cursor') && (typeof request.cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(request.cursor)))) reject()
+    }
     if (params.endpoint === 'credentials/describe') {
       const credentialArgs = args as Record<string, unknown>
       exactKeys(credentialArgs, ['refs'])

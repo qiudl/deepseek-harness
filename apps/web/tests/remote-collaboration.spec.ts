@@ -11,7 +11,7 @@ const input = { workspace_id: workspace, session_id: 'session-1', operation: { k
 const saved = { workspace_id: workspace, version: '2', selected_project_ids: ['project-1'] }
 const capability = { schema: 'dsh-remote-collaboration/v1', methods: ['workspace'] }
 interface RequestFrame { t: string; id: number; url?: string; body?: ArrayBuffer }
-interface Rpc { type: string; rpcId: string; method: string; payload: { args: { request: typeof input } } }
+interface Rpc { type: string; rpcId: string; method: string; payload: { args: { request: unknown } } }
 type Reply = (path: string, rpc: Rpc | undefined) => Promise<{ status: number; value?: unknown }> | { status: number; value?: unknown }
 const cleanups: Array<() => void> = []
 
@@ -47,7 +47,10 @@ function harness(reply: Reply) {
 function bridge(): {
   collaborationScopeAvailable: boolean
   collaborationExecutionAvailable: boolean
-  collaborationWorkspace(value: unknown): Promise<unknown> } {
+  collaborationWorkspace(value: unknown): Promise<unknown>
+  collaborationSubmit(value: unknown): Promise<unknown>
+  collaborationPending(value: unknown): Promise<unknown>
+  collaborationDeliveries(value: unknown): Promise<unknown> } {
   const host: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
   if (typeof host !== 'object' || host === null || !('collaborationWorkspace' in host)) throw Error('bridge is missing')
   return host as ReturnType<typeof bridge>
@@ -206,4 +209,61 @@ it('covers response-body reads with the operation deadline and cancels the stall
   expect(await pending).toMatchObject({ ok: false, refreshRequired: true })
   expect(cancel).toHaveBeenCalledOnce()
   expect(vi.getTimerCount()).toBe(0)
+})
+
+
+const executionCapability = { ...capability,methods:['workspace','submit','pending','deliveries'] }
+const original = { workspace_id:workspace,session_id:'session-1',source_message_id:'message-1',source_revision:'1' }
+const originalRequest = { ...original,original_message:'@Guide · 项目一 检查方案',active_mentions:[{ mention_id:'mention-1',
+  source_span:{ source_message_id:'message-1',source_revision:'1',start:0,end:12 },
+  display_snapshot:{ agent_name:'Guide',project_name:'项目一' },binding:{ kind:'resolved',target:{ project_id:'212',agent_id:'guide' },capability_snapshot:'a'.repeat(64) } }] }
+const submitted = { ok:true,value:{ source:original,submission_state:'accepted',invocation_id:'invocation-1' } }
+it('REQ-20260930-0004: complete parent capability installs ordinary @ submission and original result reads', async () => {
+  const requests:Rpc[] = []
+  const h = harness((path,rpc) => {
+    if (path === '/__collaboration__') return { status:200,value:executionCapability }
+    if (rpc === undefined) throw Error('missing RPC')
+    requests.push(rpc)
+    const result = path.endsWith('/submit') ? submitted : path.endsWith('/pending')
+      ? { ok:true,value:{ source:original,plan:null,pending_items:[],frozen_task_count:0 } } : { ok:true,value:{ deliveries:[] } }
+    return { status:200,value:envelope(rpc,result) }
+  })
+  await installRemoteCollaboration(h.fetch)
+  expect(bridge().collaborationExecutionAvailable).toBe(true)
+  expect(await bridge().collaborationSubmit(originalRequest)).toEqual(submitted)
+  expect(await bridge().collaborationPending({ source:original })).toEqual(
+    { ok:true,value:{ source:original,plan:null,pending_items:[],frozen_task_count:0 } })
+  expect(await bridge().collaborationDeliveries({ source:original,limit:5 })).toEqual({ ok:true,value:{ deliveries:[] } })
+  expect(requests.map(request => request.method)).toEqual(['collaboration/submit','collaboration/pending','collaboration/deliveries'])
+  expect(requests[0]?.payload.args.request).toEqual(originalRequest)
+  expect(requests[1]?.payload.args.request).toEqual({ source:original })
+})
+it('REQ-20260930-0004: execution consumer refuses injected authority and altered original coordinates without retry', async () => {
+  const requests:Rpc[] = []
+  const h = harness((path,rpc) => {
+    if (path === '/__collaboration__') return { status:200,value:executionCapability }
+    if (rpc === undefined) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status:200,value:envelope(rpc,{ ...submitted,value:{ ...submitted.value,source:{ ...original,session_id:'other' } } }) }
+  })
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationSubmit({ ...originalRequest,token:'child' })).toMatchObject({ ok:false,reconciliationRequired:false })
+  expect(await bridge().collaborationSubmit(originalRequest)).toMatchObject({ ok:false,reconciliationRequired:true })
+  expect(requests).toHaveLength(1)
+  expect(await bridge().collaborationDeliveries({ source:original,namespace_id:'other' })).toMatchObject({ ok:false })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pagehide without resubmitting the Agent', async () => {
+  const started = Promise.withResolvers<undefined>()
+  const h = harness((path) => {
+    if (path === '/__collaboration__') return { status:200,value:executionCapability }
+    started.resolve(undefined); return new Promise(() => {})
+  })
+  await installRemoteCollaboration(h.fetch)
+  const host = bridge(),reading = host.collaborationSubmit(originalRequest)
+  await started.promise; window.dispatchEvent(new Event('pagehide'))
+  expect(await reading).toMatchObject({ ok:false,reconciliationRequired:true })
+  expect(Reflect.get(window,'__DSH_DESKTOP_HOST__')).toBeUndefined()
+  expect(h.frames.filter(frame => frame.t === 'req')).toHaveLength(2)
+  expect(await host.collaborationDeliveries({ source:original })).toMatchObject({ ok:false })
 })
