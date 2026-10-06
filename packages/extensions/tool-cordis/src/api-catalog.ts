@@ -1978,6 +1978,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Source-bound grant only while the current Source, locator, version and selected bytes still match.',
       },
       {
+        signature: 'async readCollaborationReferenceContent(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise<CollaborationReferenceRecord>',
+        description: 'Read bytes only from a separately captured reference after rechecking current ownership and actual content.',
+        parameters: [{ name: 'target', description: 'Original Source coordinates; this operation cannot capture a new selection.' }, { name: 'requestDigest', description: 'Full committed reservation digest, including its recipients and evidence.' }, { name: 'signal', description: 'Parent cancellation, combined with Profile disposal and owned read drainage.' }],
+        returns: 'Immutable bounded record while Source, locator, version and selected bytes still match; no cloud transfer grant.',
+      },
+      {
         signature: 'async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise<CollaborationDeliveryRecord>',
         description: 'Save a readable cloud reply in the owning Profile without appending model-visible Session events. The authenticated parent must establish namespace/target cloud authority. This operation checks current local ownership and the original Source; it grants no cloud delivery acknowledgment.',
         parameters: [{ name: 'value', description: 'Exact private delivery input; caller-supplied local commits are rejected.' }, { name: 'signal', description: 'Parent cancellation, combined with Profile disposal.' }],

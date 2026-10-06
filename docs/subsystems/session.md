@@ -880,6 +880,15 @@ async captureCollaborationReferenceSelection(value: unknown, signal: AbortSignal
 async readCollaborationReferenceGrant(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise< CollaborationReferenceRecord['descriptor'] & { readonly reference_request_digest: string } >
 
 /**
+ * Read bytes only from a separately captured reference after rechecking current ownership and actual content.
+ * @param target - Original Source coordinates; this operation cannot capture a new selection.
+ * @param requestDigest - Full committed reservation digest, including its recipients and evidence.
+ * @param signal - Parent cancellation, combined with Profile disposal and owned read drainage.
+ * @returns Immutable bounded record while Source, locator, version and selected bytes still match; no cloud transfer grant.
+ */
+async readCollaborationReferenceContent(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise<CollaborationReferenceRecord>
+
+/**
  * Save a readable cloud reply in the owning Profile without appending model-visible Session events.
  * The authenticated parent must establish namespace/target cloud authority. This operation checks
  * current local ownership and the original Source; it grants no cloud delivery acknowledgment.

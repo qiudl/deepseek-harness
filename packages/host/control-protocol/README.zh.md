@@ -76,6 +76,8 @@ kind: "package-reference"
 
 `profile.reference_capture` 在当前令牌已验证的 Account 下接受最多 32 KiB、绑定 Source 的定位、全部或范围选择、接收对象和用户证据。它规范化私有 Profile 字段顺序，返回最多 32 KiB 的计算描述符、请求和摘要元数据，不含选中字节。父协调器须在捕获前独立确认明确分享意图，并在收到结果后校验完整请求；捕获不授予内容传递或任务受理权限。
 
+`profile.reference_content` 仅接受当前 Account 下的原始 Source、已提交引用请求摘要和字节偏移。每次响应包含一致的 Source 描述符、请求与内容摘要、总长度和最多 32 KiB 的精确规范分块。总内容最多 1 MiB，零字节有效；客户端拼接后核验完整内容。引用字节不扩大 64 KiB 帧预算，也不确认分享或任务受理授权。
+
 `parseHostCollaborationReferenceTarget` 校验私有 worker 查询，其中只有原始 Source 坐标及完整引用请求摘要，不能提供所选字节、快照摘要或授权。`parseHostCollaborationReferenceGrant` 独立校验返回的已提交描述符及请求摘要。
 
 ## API

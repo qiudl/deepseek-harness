@@ -124,6 +124,8 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 `profile.reference_capture` 解析当前 Account 的 Profile，在调用独立令牌保护的 worker 捕获前读取其 Source。捕获后和返回元数据前再次核验 Account、Profile 与完整 Source 摘要。客户端将操作限制为 18 秒并固定已检查的 peer；监管器代际替换、销毁、过期、取消或归属丢失均不返回成功结果。macOS 与 Windows 共用的启动读取器安装此操作。Main 仍须独立确认分享意图并校验计算请求，再进行单独的引用签名或传递。
 
+`profile.reference_content` 使用当前 Account Profile 及独立的 Reference worker 能力。每个分块重新核验实际选中内容、Account 归属、worker 世代和已提交 Source。客户端固定原始 Account 及捕获的描述符、请求和内容元数据，检查每个偏移与长度，并在 18 秒操作时限内核验完整 SHA-256 后返回精确字节；支持空内容。云端传递和接收任务访问仍须独立授权。
+
 `profile.source_snapshot` 使用同一当前 Account 与 Profile worker 读取器私有传输 journal 原始内容。worker bearer 路由校验完整持久 Source；监管器拒绝已销毁或被替换的 worker。固定 32 KiB 字节分块保留现有控制帧预算，客户端在有界读取内跨块核验坐标、描述符和长度一致性、完整 UTF-8、取消及已检查的 peer。返回原文与脱敏模型/提交元数据，不含凭据，不准备模型或恢复调用。macOS 与 Windows 启动组合安装读取器；真实聊天捕获和派发仍须单独接入。
 
 ### 远端工作区目录

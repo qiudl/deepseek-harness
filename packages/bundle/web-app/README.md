@@ -155,6 +155,8 @@ The same private token additionally enables `/internal/desktop-collaboration-sou
 
 A separate `DSH_PROFILE_REFERENCE_TOKEN` enables `/internal/desktop-collaboration-reference-capture`. The parent sends at most 32 KiB of already authorized locator/range/recipient selection. Session Controller independently derives and persists the full request from actual content; the response contains at most 32 KiB of computed metadata and no content bytes. Source-read tokens and browser cookies cannot capture references. The trusted parent must establish explicit user sharing intent before calling; natural-language resolution and cloud transfer remain separate.
 
+The same independent Reference token protects `/internal/desktop-collaboration-reference-content`. Its private query contains only original Source coordinates, the committed full reference request digest and a byte offset, within 2 KiB. The Profile rechecks current membership and selected content for every response. Responses contain exact chunks of at most 32 KiB, support empty content and remain noncacheable; Source tokens and browser cookies grant no access. Cloud transfer and task attachment remain coordinator-owned.
+
 The same Source token protects `/internal/desktop-collaboration-reference-grant`. Its private 2 KiB query contains only original Source coordinates and a full reference request digest. The owning Session Controller requires a separately committed selection and independently rechecks its current message or attachment bytes. The sanitized, noncacheable response contains only the Source descriptor and matching digest; browser cookies, caller paths and content cannot authorize it.
 
 ### Remote workspace directories

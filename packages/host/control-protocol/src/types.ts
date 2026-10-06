@@ -684,6 +684,29 @@ export interface ProfileReferenceCaptureResult extends Omit<ProfileSourceSnapsho
   readonly method: 'profile.reference_capture'
   readonly result: HostCollaborationReferenceCapture
 }
+/** Original Source and committed reference identity, with a byte offset for bounded reads. */
+export interface HostCollaborationReferenceContentTarget extends HostCollaborationReferenceTarget {
+  readonly offset: number
+}
+/** One exact reference byte chunk; consumers verify the complete content hash before use. */
+export interface HostCollaborationReferenceContentChunk {
+  readonly descriptor: HostCollaborationSourceDescriptor
+  readonly reference_request_digest: HostControlSha256
+  readonly content_digest: HostControlSha256
+  readonly offset: number
+  readonly total_bytes: number
+  readonly chunk_base64url: string
+}
+/** Parent-only byte read using the current token-verified Account and separate Reference capability. */
+export interface ProfileReferenceContentRequest extends Omit<ProfileSourceSnapshotRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_content'
+  readonly params: ProfileSourceSnapshotRequest['params'] & { readonly reference_request_digest: HostControlSha256 }
+}
+/** Bounded reference bytes; this response does not authorize cloud sharing or recipient task admission. */
+export interface ProfileReferenceContentResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_content'
+  readonly result: HostCollaborationReferenceContentChunk
+}
 /** Server nonce binds the original Source and the complete immutable reference reservation request. */
 export interface HostReferenceAuthorityChallenge extends HostSourceAuthorityChallenge {
   readonly reference_request_digest: HostControlSha256
@@ -1585,6 +1608,8 @@ export type HostControlFrame =
   | ProfileReferenceAuthorityResult
   | ProfileReferenceCaptureRequest
   | ProfileReferenceCaptureResult
+  | ProfileReferenceContentRequest
+  | ProfileReferenceContentResult
   | ProfileCollaborationAnalysisRequest
   | ProfileCollaborationAnalysisResult
   | ProfileCollaborationDeliveryRequest

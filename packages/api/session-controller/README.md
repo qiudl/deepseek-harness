@@ -139,6 +139,8 @@ Analysis uses one user message containing original text and explicit mention met
 
 `captureCollaborationReference` accepts an independently authorized selection and reads only its immutable message or registered attachment identity from the original Source Session. The separate `collaboration_reference_v2` domain stores exact bounded bytes, locator/version, recipients, Source evidence and the full request digest without changing released Session or Source formats. `readCollaborationReferenceGrant` rereads current membership and actual content before returning a descriptor-only grant; a digest cannot create a selection. Caller cancellation releases its wait while Profile disposal drains owned reads and late journal opens. Parsing metadata does not establish user sharing intent; the trusted coordinator must establish it before capture.
 
+`readCollaborationReferenceContent` returns only a separately captured immutable record after checking current membership, the original Source and actual selected bytes. It cannot create a selection from a supplied digest. Records contain at most 1 MiB, including valid empty content; cancellation and Profile disposal use the same owned-read drainage as grant checks. This Host-only method has no Remote endpoint and grants no cloud transfer authority.
+
 ## Model Experience
 
 ### Source analysis system prompt

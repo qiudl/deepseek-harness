@@ -70,6 +70,8 @@ The public key in an answer is not trust by itself. The Desktop broker must matc
 
 `profile.reference_capture` accepts at most 32 KiB of Source-bound locator, whole/range selection, recipients and user evidence under the current token-verified Account. It normalizes private Profile field ordering and returns at most 32 KiB of computed descriptor/request/digest metadata, without selected bytes. The parent establishes explicit sharing intent before capture and independently validates the full request afterward; capture grants neither content transfer nor task admission.
 
+`profile.reference_content` reads only an original Source, committed reference request digest and byte offset under the current Account. Each response carries a consistent Source descriptor, request/content digests, total length and an exact canonical chunk of at most 32 KiB. The total is at most 1 MiB; zero bytes are valid. Complete content integrity belongs to the client after assembly. Reference bytes do not increase the 64 KiB frame budget or establish sharing or task admission.
+
 `parseHostCollaborationReferenceTarget` validates a private worker lookup containing only original Source coordinates and the complete reference request digest. It cannot supply selected bytes, a snapshot digest or a grant. `parseHostCollaborationReferenceGrant` independently validates the returned committed descriptor and request digest.
 
 ## API
