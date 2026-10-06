@@ -147,3 +147,33 @@ export type {
 
 export { parseHostCollaborationAnalysisReceipt, encodeHostCollaborationAnalysisReceiptPayload } from './collaboration-analysis-receipt.js'
 export type { HostCollaborationAnalysisReceipt } from './types.js'
+export { parseHostRootAuthorityChallenge, parseHostRootAuthorityAssertion, encodeHostRootAuthorityPayload } from './root-authority.ts'
+export type { HostRootAuthorityChallenge, HostRootAuthorityAssertion } from './root-authority.ts'
+
+export { parseHostRootSubmissionTarget, parseHostRootSubmissionDescriptor } from './root-authority.ts'
+export type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from './root-authority.ts'
+export type { ProfileRootAuthorityRequest, ProfileRootAuthorityResult } from './types.ts'
+
+export { parseHostRootAdmissionReceipt, parseHostRootJournalCommand, parseHostRootJournalMetadata } from './root-authority.ts'
+export type { HostRootAdmissionReceipt, HostRootJournalCommand, HostRootJournalMetadata } from './root-authority.ts'
+export type { ProfileRootJournalRequest, ProfileRootJournalResult } from './types.ts'
+export { matchHostRootJournalMetadata } from './root-authority.ts'
+
+export { parseHostRootAnalysisInput } from './root-authority.ts'
+export type { HostRootAnalysisInput } from './root-authority.ts'
+export { parseHostRootAnalysisOutput, matchHostRootAnalysisOutput } from './root-analysis-output.ts'
+export type { HostRootAnalysisOutput, HostSavedAnalysisDispatch, HostRootAnalysisPlanId, HostRootAnalysisAttemptId } from './root-analysis-output.ts'
+
+export { parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion, encodeHostRootPlanningAttemptAuthorityPayload } from './root-planning-attempt-authority.ts'
+export type { HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion, HostRootPlanningModelSnapshot } from './root-planning-attempt-authority.ts'
+export type { ProfileRootPlanningAttemptAuthorityRequest, ProfileRootPlanningAttemptAuthorityResult } from './types.ts'
+export { matchHostRootPlanningAttemptDescriptor } from './root-planning-attempt-authority.ts'
+export type { HostRootPlanningAttemptDescriptor } from './root-planning-attempt-authority.ts'
+export { parseHostRootPlanningAttemptDescriptor } from './root-planning-attempt-authority.ts'
+export { matchHostRootPlanningAttemptTarget } from './root-planning-attempt-authority.ts'
+
+export { parseHostRootPlanningEvidence, matchHostRootPlanningEvidence } from './root-planning-evidence.ts'
+export type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
+
+export { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from './collaboration-consumption.js'
+export type { HostCollaborationConsumptionReceipt, HostCollaborationConsumptionCommit } from './collaboration-consumption.js'

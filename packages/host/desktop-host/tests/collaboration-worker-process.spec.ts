@@ -7,12 +7,21 @@ import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarget,
   parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootSubmissionTarget, parseHostRootJournalCommand, parseHostRootJournalMetadata, parseHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 import type { ProfileWorkerHandle } from '../src/types.ts'
 
 const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
   session_id: 'session', source_message_id: 'message', source_revision: '1' })
 const descriptor = { ...target, snapshot_digest: 'a'.repeat(64) }
+const rootTarget = parseHostRootSubmissionTarget({ ...target, namespace_id: 'n2_' + 'b'.repeat(64), command_id: '10000000-0000-4000-8000-000000000001' })
+const rootDescriptor = { namespace_id: rootTarget.namespace_id, command_id: rootTarget.command_id,
+  root_task_id: '20000000-0000-4000-8000-000000000002', root_trace_id: 'c'.repeat(32), payload_digest: 'd'.repeat(64), source_descriptor: descriptor }
+const rootMetadata = parseHostRootJournalMetadata({ ...rootDescriptor, schema_version: 1, state: 'pending', source_digest: descriptor.snapshot_digest,
+  objective_ref: 'objective', task_grant_ref: 'intent', continuation_policy: 'follow_authorized_plan' })
+const planning = parseHostRootPlanningAttemptDescriptor({ root: rootDescriptor, input_version: '1', predecessor: null,
+  attempt_request_id: '30000000-0000-4000-8000-000000000003', input_manifest_digest: 'e'.repeat(64), model_policy: 'original_model',
+  model_snapshot: { provider: 'fixture', model: 'selected', configuration_generation: '2', adapter_fingerprint: 'f'.repeat(64) } })
 const snapshot = { descriptor, snapshot_json: JSON.stringify({ ...target, original_message: '@Guide · Project repair',
   active_mentions: [], model_snapshot: { provider: 'deepseek', model: 'chat' },
   host_journal_commit: { journal_id: 'source-journal', commit_version: '1', content_digest: 'b'.repeat(64) },
@@ -48,6 +57,8 @@ async function harness(selectionRedirect?: string) {
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
       '/internal/desktop-collaboration-reference-content': 'DSH_PROFILE_REFERENCE_TOKEN',
+      '/internal/desktop-collaboration-root': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-root-journal': 'DSH_PROFILE_ANALYSIS_TOKEN',
       '/internal/desktop-collaboration-source-snapshot': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-analysis': 'DSH_PROFILE_ANALYSIS_TOKEN',
       '/internal/desktop-collaboration-delivery': 'DSH_PROFILE_DELIVERY_TOKEN',
@@ -74,6 +85,9 @@ async function harness(selectionRedirect?: string) {
             content_digest: '${createHash('sha256').update(Buffer.from([0, 255, 128, 1])).digest('hex')}', offset: input.offset,
             total_bytes: 4, chunk_base64url: Buffer.from([0, 255, 128, 1]).subarray(input.offset, input.offset + 32768).toString('base64url') }
           : url.pathname.endsWith('reference-grant') ? { ...descriptor, reference_request_digest: input.reference_request_digest }
+          : url.pathname.endsWith('collaboration-root') ? ${JSON.stringify(rootDescriptor)}
+          : url.pathname.endsWith('root-journal') ? ${JSON.stringify(rootMetadata)}
+          : input.action === 'inspect_root_attempt' ? { value: ${JSON.stringify(planning)} }
           : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
@@ -301,4 +315,20 @@ it('refuses private reference content responses with changed offsets, reservatio
       await expect(h.readCollaborationReferenceContent(query, signal)).rejects.toThrow()
     }
   } finally { fetchSpy.mockRestore() }
+})
+
+it('authenticates root journal and planning inspection and rejects stopped-worker observations', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const { inspectCollaborationRoot, rootJournal, inspectRootPlanningAttempt } = h.worker
+  if (!inspectCollaborationRoot || !rootJournal || !inspectRootPlanningAttempt) throw Error('missing root capability')
+  const command = parseHostRootJournalCommand({ action: 'read', target: rootTarget })
+  expect(await inspectCollaborationRoot(rootTarget, signal)).toEqual(rootDescriptor)
+  expect(await rootJournal(command, signal)).toEqual(rootMetadata)
+  expect(await inspectRootPlanningAttempt(rootTarget, planning.attempt_request_id, 'a'.repeat(64), signal)).toEqual(planning)
+  await expect(inspectCollaborationRoot(parseHostRootSubmissionTarget({ ...rootTarget, command_id: planning.attempt_request_id }), signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  h.worker.abort()
+  for (const run of [() => inspectCollaborationRoot(rootTarget, signal), () => rootJournal(command, signal),
+    () => inspectRootPlanningAttempt(rootTarget, planning.attempt_request_id, 'a'.repeat(64), signal)])
+    await expect(run()).rejects.toMatchObject({ code: 'unavailable' })
+  await h.worker.done
 })

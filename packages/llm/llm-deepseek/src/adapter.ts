@@ -1,3 +1,4 @@
+import { requestTraceHeaders } from '@deepseek-ai/dsh-llm'
 /** Direct Messages transport with one cancellable lifecycle per model request. */
 
 import { attributionHeaders, LlmAdapter, LlmError } from '@deepseek-ai/dsh-llm'
@@ -131,7 +132,7 @@ export class DeepSeekAdapter<C extends Connection = Connection> extends LlmAdapt
           headers: {
             ...attributionHeaders(),
             'content-type': 'application/json', 'accept': 'text/event-stream',
-            ...auth.headers,
+            ...requestTraceHeaders(auth.headers, options.traceparent),
             'anthropic-version': '2023-06-01',
             ...betas.length === 0 ? {} : { 'anthropic-beta': betas.join(',') },
             'x-deepseek-harness-user-id': this.dependencies.resolveUserId(),

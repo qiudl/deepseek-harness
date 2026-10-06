@@ -1948,6 +1948,54 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['on invalid input, unavailable journal, changed ownership/selection, conflict or cancellation.'],
       },
       {
+        signature: 'async captureCollaborationRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture>',
+        description: 'Persist a new logical root before exposing its prepared analysis call. This opt-in Host API does not classify continuations, authenticate namespaces/grants or submit to the cloud. The source journal may commit first; failure leaves an inert source, never a published partial root.',
+        parameters: [{ name: 'value', description: 'Original source and current Host-authorized namespace/policy; root IDs are generated locally.' }, { name: 'signal', description: 'Cancellation combined with Profile disposal; accepted writes drain on disposal.' }],
+        returns: 'Original source and atomic source/root/outbox aggregate; recovered input has no executable call.',
+      },
+      {
+        signature: 'async prepareCollaborationRootPlanning(value: unknown, predecessor: CollaborationPlanningPredecessor, signal: AbortSignal): Promise<CollaborationRootPlanningPreparation>',
+        description: 'Prepare a fresh one-shot analysis using an admitted root\'s original model and current credentials. The original Source remains immutable. Membership is rechecked after preparation and around input/grant persistence. This Host-only method has no Remote endpoint and grants no cloud authority.',
+        parameters: [{ name: 'value', description: 'Original namespace, command and Source lookup; no model overrides.' }, { name: 'predecessor', description: 'Local journal reference selected by the private owner; cloud eligibility remains separate.' }, { name: 'signal', description: 'Operation cancellation retained through the prepared call.' }],
+        returns: 'original admitted root and private one-shot analysis closure, never a recovered executable handle.',
+      },
+      {
+        signature: 'async inspectCollaborationRoot(value: unknown, signal: AbortSignal): Promise<CollaborationRootDescriptor>',
+        description: 'Read root signing metadata from the committed aggregate under current Profile membership.',
+        parameters: [{ name: 'value', description: 'Exact namespace, original command and Source coordinates; root overrides reject.' }, { name: 'signal', description: 'Parent cancellation combined with Profile disposal.' }],
+        returns: 'Frozen original binding without Source content, model preparation or signing authority.',
+      },
+      {
+        signature: 'async readCollaborationRoot(value: unknown, signal: AbortSignal): Promise<CollaborationRootSubmission>',
+        description: 'Read the committed root aggregate without model preparation or activation.',
+        parameters: [{ name: 'value', description: 'Namespace and original Source coordinates, optionally with the original command; supplied by the authenticated parent.' }, { name: 'signal', description: 'Request cancellation combined with Profile disposal.' }],
+        returns: 'Immutable pending or admitted record; changed membership and unknown roots reject.',
+      },
+      {
+        signature: 'async acceptCollaborationRoot(value: unknown, receipt: unknown, signal: AbortSignal): Promise<CollaborationRootSubmission>',
+        description: 'Durably retain the original cloud admission receipt after parent Host authentication.',
+        parameters: [{ name: 'value', description: 'Original namespace, command and Source coordinates.' }, { name: 'receipt', description: 'Cloud receipt verified by the parent; this method validates identity, not cloud authority.' }, { name: 'signal', description: 'Cancellation before write; accepted writes drain, but cancellation may hide the acknowledgment.' }],
+        returns: 'Committed admitted record; uncertainty requires rereading the original root, never recapture.',
+      },
+      {
+        signature: 'async collaborationRootExecution(value: unknown, signal: AbortSignal): Promise<CollaborationExecutionRecord | null>',
+        description: 'Retain exact concrete execution confirmations in this Profile before Main sends them to the cloud. This private operation has no Remote endpoint and supplies no cloud authorization or model activity.',
+        parameters: [{ name: 'value', description: 'Exact read/prepare/accept operation with original root lookup and frozen task references.' }, { name: 'signal', description: 'Caller cancellation combined with Profile disposal; accepted writes drain.' }],
+        returns: 'Durable command/receipt, or null for a missing read. Current membership is checked around storage.',
+      },
+      {
+        signature: 'async collaborationRootFeedback(value: unknown, signal: AbortSignal): Promise<CollaborationFeedbackObservation>',
+        description: 'Read durable original-Session consumption evidence or queue an explicitly authorized result once. The parent authenticates current cloud result/continuation authority; root admission alone is insufficient. Enqueue requires an attached idle Agent, an empty inbox and the exact observed Session prefix. It never wakes a model.',
+        parameters: [{ name: 'value', description: 'Private read/enqueue command with original root, frozen task and immutable delivery lookup.' }, { name: 'signal', description: 'Parent lifetime combined with Profile disposal; accepted Session writes drain through flush.' }],
+        returns: 'Persisted enqueue/consumption evidence. Removed or claimed messages are never automatically reinserted.',
+      },
+      {
+        signature: 'async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionResult>',
+        description: 'Execute a private durable consumer command under authenticated Main\'s current authority.',
+        parameters: [{ name: 'value', description: 'Consumer read/prepare/start, original root and exact delivery; start requires a fresh cloud grant.' }, { name: 'signal', description: 'Current parent and Profile lifetime; recovery never restores live wake permission.' }],
+        returns: 'Durable record and observation; only first start may wake the attached original Agent.',
+      },
+      {
         signature: 'async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise< CollaborationSourceCoordinates & { readonly snapshot_digest: string } >',
         description: 'Read one durable Source from the owning Profile without model preparation or Agent activation.',
         parameters: [{ name: 'target', description: 'Exact original Source identity; caller metadata is rejected.' }, { name: 'signal', description: 'Caller cancellation combined with Profile disposal.' }],
@@ -4813,12 +4861,56 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CollaborationClarificationInput = DeepReadonly<z.infer<typeof schema>>;',
   },
   {
+    name: 'CollaborationConsumptionRecord',
+    declaration: 'export type CollaborationConsumptionRecord = Readonly<z.infer<typeof recordSchema>>;',
+  },
+  {
+    name: 'CollaborationConsumptionResult',
+    declaration: 'export type CollaborationConsumptionResult = Readonly<{\n    kind: \'consumer\';\n    record: CollaborationConsumptionRecord | null;\n    observation: CollaborationFeedbackObservation;\n    commit?: ReturnType<typeof collaborationConsumptionCommit>;\n}>;',
+  },
+  {
     name: 'CollaborationDeliveryRecord',
     declaration: 'export type CollaborationDeliveryRecord = DeepReadonly<z.infer<typeof rawRecordSchema>>;',
   },
   {
+    name: 'CollaborationExecutionRecord',
+    declaration: 'export type CollaborationExecutionRecord = Readonly<z.infer<typeof recordSchema>>;',
+  },
+  {
+    name: 'CollaborationFeedbackObservation',
+    declaration: 'export interface CollaborationFeedbackObservation {\n    readonly message_id: MessageId;\n    readonly status: \'not_enqueued\' | \'queued\' | \'claimed_or_removed\' | \'context_applied\';\n    readonly event_count: number;\n    readonly log_digest: string;\n    readonly session_event_seq?: number;\n    readonly consuming_step?: {\n        readonly turn: number;\n        readonly step: number;\n        readonly start_event_seq: number;\n    };\n    readonly assistant_event_seq?: number;\n    readonly continuation_observed: boolean;\n}',
+  },
+  {
+    name: 'CollaborationPlanningPredecessor',
+    declaration: 'export type CollaborationPlanningPredecessor = Readonly<z.infer<typeof predecessorSchema>> | null;',
+  },
+  {
     name: 'CollaborationReferenceRecord',
     declaration: 'export type CollaborationReferenceRecord = Readonly<z.infer<typeof recordSchema>>;',
+  },
+  {
+    name: 'CollaborationRootCapture',
+    declaration: 'export type CollaborationRootCapture = Awaited<ReturnType<SessionController[\'captureCollaborationSource\']>> & {\n    readonly submission: CollaborationRootSubmission;\n};',
+  },
+  {
+    name: 'CollaborationRootCaptureInput',
+    declaration: 'export type CollaborationRootCaptureInput = Readonly<z.infer<typeof captureSchema>>;',
+  },
+  {
+    name: 'CollaborationRootDescriptor',
+    declaration: 'export type CollaborationRootDescriptor = Pick<CollaborationRootSubmission, \'namespace_id\' | \'command_id\' | \'root_task_id\' | \'root_trace_id\' | \'payload_digest\'> & {\n    readonly source_descriptor: ReturnType<typeof describeCollaborationSource>;\n};',
+  },
+  {
+    name: 'CollaborationRootPlanningManifest',
+    declaration: 'export type CollaborationRootPlanningManifest = Readonly<z.infer<typeof manifestSchema>>;',
+  },
+  {
+    name: 'CollaborationRootPlanningPreparation',
+    declaration: 'export type CollaborationRootPlanningPreparation = Readonly<{\n    root: CollaborationRootSubmission;\n    analyze: (persist: (manifest: CollaborationRootPlanningManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult>;\n}>;',
+  },
+  {
+    name: 'CollaborationRootSubmission',
+    declaration: 'export type CollaborationRootSubmission = Readonly<z.infer<typeof recordSchema>>;',
   },
   {
     name: 'CollaborationSourceBody',
@@ -5378,7 +5470,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GenerateOptions',
-    declaration: 'export interface GenerateOptions {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: RequestMessage[];\n    system?: string;\n    tools?: ToolSchema[];\n    toolHistory?: ToolHistory;\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    purpose?: \'compaction\' | \'session-title\' | \'collaboration-analysis\';\n}',
+    declaration: 'export interface GenerateOptions {\n    traceparent?: string;\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: RequestMessage[];\n    system?: string;\n    tools?: ToolSchema[];\n    toolHistory?: ToolHistory;\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    purpose?: \'compaction\' | \'session-title\' | \'collaboration-analysis\';\n}',
   },
   {
     name: 'GenericCallView',
@@ -6659,6 +6751,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionControlFrame',
     declaration: 'export type SessionControlFrame = {\n    readonly type: \'baseline\';\n    readonly value: SessionControlBaseline;\n} | ({\n    readonly type: \'projection\';\n} & SessionProjectionUpdate);',
+  },
+  {
+    name: 'SessionController',
+    declaration: 'export class SessionController extends TypertRemoteService {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config, internals: SessionControllerInternals = {});\n    resolveAgent(sessionId: SessionId): Promise<ApiSessionAgentResult>;\n    inspect(sessionId: SessionId, signal?: AbortSignal): Promise<SessionInspection>;\n    async inspectWorkspaceModelSelection(sessionId: SessionId, workspaceId: WorkspaceId, signal?: AbortSignal): Promise<WorkspaceModelSelection>;\n    async prepareWorkspaceModelSnapshot(sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal): Promise<Readonly<{\n        workspaceId: WorkspaceId;\n        sessionId: SessionId;\n        prepared: PreparedLlmSnapshotCall;\n    }>>;\n    async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise<Readonly<{\n        kind: \'captured\';\n        snapshot: CollaborationSourceSnapshot;\n        prepared: PreparedLlmSnapshotCall;\n        analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult>;\n        analyzeClarification: (input: CollaborationClarificationInput, persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult>;\n    }> | Readonly<{\n        kind: \'recovered\';\n        snapshot: CollaborationSourceSnapshot;\n    }>>;\n    async captur /* …truncated — full shape in source */',
+  },
+  {
+    name: 'SessionControllerInternals',
+    declaration: 'export interface SessionControllerInternals {\n    readonly openPath?: (path: string, signal: AbortSignal) => Promise<void>;\n    readonly fileApplications?: typeof nativeFileApplications;\n    readonly openFileApplication?: typeof openNativeFileApplication;\n    readonly revealPath?: (path: string, signal: AbortSignal) => Promise<void>;\n    readonly canOpenPath?: () => boolean;\n}',
   },
   {
     name: 'SessionCreateRequest',

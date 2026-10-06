@@ -294,6 +294,7 @@ it('analyzes a fixed clarification with a fresh handle, logging both messages an
         reason: 'task_ambiguous', question: '分析哪个接口？', source_evidence_spans: [{ source_message_id: 'message', source_revision: '1', start: 0, end: source.original_message.length }] }],
       frozen_task_ids: ['accepted-task'], mention_order: ['mention'], prior_replies: [],
     })
+    await expect(h.runner.runClarification(input, (await h.prepare()).prepared, persist(), new AbortController().signal)).rejects.toThrow('model_changed')
     const commit = persist()
     commit.mockImplementation(async (manifest) => {
       expect(h.adapter.requests).toHaveLength(0)
@@ -312,5 +313,44 @@ it('analyzes a fixed clarification with a fresh handle, logging both messages an
     expect(request.system).toContain('only the supplied pending items')
     await expect(h.runner.runClarification(input, prepared, persist(), new AbortController().signal)).rejects.toThrow('collaboration_analysis_call_used')
     expect(h.adapter.requests).toHaveLength(1)
+  } finally { await h.close() }
+})
+
+it('a fresh preparation or runtime cannot reuse the original persisted model identity', async () => {
+  const h = await harness(), restarted = await harness()
+  try {
+    const original = await h.prepare()
+    let saved: import('../src/collaboration-analysis.ts').CollaborationAnalysisManifest | undefined
+    await expect(h.runner.run(original.source, original.prepared, async (m) => {
+      saved = m
+      throw Error('stopped before grant')
+    }, new AbortController().signal)).rejects.toThrow('stopped before grant')
+    expect(h.adapter.requests).toHaveLength(0)
+    if (!saved) throw Error('missing manifest')
+    const frozen = JSON.stringify(saved)
+    const fresh = await h.prepare(), afterRestart = await restarted.prepare()
+    expect(fresh.prepared.snapshot.configuration_generation).not.toBe(original.prepared.snapshot.configuration_generation)
+    expect(fresh.prepared.snapshot.adapter_fingerprint).toBe(original.prepared.snapshot.adapter_fingerprint)
+    expect(afterRestart.prepared.snapshot.adapter_fingerprint).not.toBe(original.prepared.snapshot.adapter_fingerprint)
+    for (const [runner, prepared] of [[h.runner, fresh.prepared], [restarted.runner, afterRestart.prepared]] as const) {
+      const commit = persist()
+      await expect(runner.run(original.source, prepared, commit, new AbortController().signal))
+        .rejects.toThrow('collaboration_analysis_model_changed')
+      expect(commit).not.toHaveBeenCalled()
+    }
+    expect(JSON.stringify(saved)).toBe(frozen)
+    expect(h.adapter.requests).toHaveLength(0)
+    expect(restarted.adapter.requests).toHaveLength(0)
+  } finally { await h.close(); await restarted.close() }
+})
+
+it('rejects malformed root correlation before persisting or requesting a model', async () => {
+  const h = await harness()
+  try {
+    const { source, prepared } = await h.prepare(), commit = persist()
+    for (const trace of ['0'.repeat(32), 'a'.repeat(32) + '\n'])
+      await expect(h.runner.run(source, prepared, commit, new AbortController().signal, trace)).rejects.toThrow('trace_invalid')
+    expect(commit).not.toHaveBeenCalled()
+    expect(h.adapter.requests).toHaveLength(0)
   } finally { await h.close() }
 })

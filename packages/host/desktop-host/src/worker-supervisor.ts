@@ -1,3 +1,7 @@
+import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection,
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
@@ -110,6 +114,68 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
+  /**
+   * Read the selected worker and discard replies after its generation is disposed.
+   * @param profileId - Account Profile resolved by the Host authority.
+   * @param input - Original journal read or receipt acknowledgement.
+   * @param signal - Owning connection cancellation.
+   * @returns Matched committed metadata from the unchanged worker generation.
+   */
+  async rootJournal(profileId: string, input: HostRootJournalCommand, signal: AbortSignal): Promise<HostRootJournalMetadata> {
+    signal.throwIfAborted()
+    const command = parseHostRootJournalCommand(input), worker = this.workers.get(profileId)
+    if (this.closed || !worker?.rootJournal) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.rootJournal(command, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    return matchHostRootJournalMetadata(result, command)
+  }
+  /** Read live attempt metadata and discard replies from replaced or stopped workers.
+   * @param profileId - Account-authorized Profile.
+   * @param target - Original root lookup.
+   * @param attemptId - Persisted fresh attempt identity.
+   * @param binding - Current parent-derived connection ownership digest.
+   * @param signal - Request cancellation.
+   * @returns Matched metadata from the unchanged worker generation.
+   */
+  async inspectRootPlanningAttempt(profileId: string, target: HostRootSubmissionTarget, attemptId: HostControlRequestId,
+    binding: string, signal: AbortSignal): Promise<HostRootPlanningAttemptDescriptor> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.inspectRootPlanningAttempt) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.inspectRootPlanningAttempt(target, attemptId, binding, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    return matchHostRootPlanningAttemptTarget(result, target, attemptId)
+  }
+  /** Read committed root binding metadata.
+   * @param profileId - Current Account Profile.
+   * @param target - Original journal lookup.
+   * @param signal - Owning connection cancellation.
+   * @returns Metadata from the unchanged worker generation.
+   */
+  async inspectCollaborationRoot(
+    profileId: string,
+    target: HostRootSubmissionTarget,
+    signal: AbortSignal,
+  ): Promise<HostRootSubmissionDescriptor> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.inspectCollaborationRoot) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.inspectCollaborationRoot(target, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    const source = result.source_descriptor
+    if (result.namespace_id !== target.namespace_id || result.command_id !== target.command_id
+      || source.workspace_id !== target.workspace_id || source.session_id !== target.session_id
+      || source.source_message_id !== target.source_message_id || source.source_revision !== target.source_revision) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
+    return result
+  }
   /**
    * Read the selected worker and discard replies after its generation is disposed.
    * @param profileId - Account Profile resolved by the Host authority.

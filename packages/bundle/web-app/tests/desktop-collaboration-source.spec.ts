@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from '../src/desktop-collaboration-source.ts'
 import { handleDesktopCollaborationReferenceGrantRequest, handleDesktopCollaborationReferenceCaptureRequest } from '../src/desktop-collaboration-source.ts'
+import { handleDesktopCollaborationRootRequest } from '../src/desktop-collaboration-source.ts'
 
 const token = 'A'.repeat(43)
 const target = { workspace_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session' as never, source_message_id: 'message-1', source_revision: '1' }
@@ -38,8 +39,8 @@ it('reads only separately committed reference grants over the private worker tok
   expect(await (await post(query)).text()).toBe('{"error":"unavailable"}')
 })
 
-async function fixture(inspect = vi.fn(async ():Promise<unknown> => selection),full=false) {
-  const handler = full ? handleDesktopCollaborationSourceSnapshotRequest : handleDesktopCollaborationSourceRequest
+async function fixture(inspect = vi.fn(async ():Promise<unknown> => selection),full: boolean | 'root' = false) {
+  const handler = full === 'root' ? handleDesktopCollaborationRootRequest : full ? handleDesktopCollaborationSourceSnapshotRequest : handleDesktopCollaborationSourceRequest
   const server = createServer((req, res) => { void handler(req, res, token, inspect) })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   onTestFinished(async () => {
@@ -131,4 +132,18 @@ it('captures computed metadata only under its separate Reference capability and 
   expect((await post(input)).status).toBe(422)
   capture.mockRejectedValue(Error('private path and credential'))
   expect(await (await post(input)).json()).toEqual({ error: 'unavailable' })
+})
+
+it('refuses root metadata belonging to another namespace or admission command', async () => {
+  const input = { ...target, namespace_id: 'n2_' + 'b'.repeat(64), command_id: '10000000-0000-4000-8000-000000000001' }
+  const value = { namespace_id: input.namespace_id, command_id: input.command_id,
+    root_task_id: '20000000-0000-4000-8000-000000000002', root_trace_id: 'c'.repeat(32), payload_digest: 'd'.repeat(64), source_descriptor: selection }
+  const inspect = vi.fn(async (): Promise<unknown> => value), f = await fixture(inspect, 'root')
+  expect((await f.post(input)).status).toBe(200)
+  for (const patch of [{ namespace_id: 'n2_' + 'f'.repeat(64) }, { command_id: value.root_task_id }]) {
+    inspect.mockResolvedValueOnce({ ...value, ...patch })
+    const response = await f.post(input)
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ error: 'unavailable' })
+  }
 })

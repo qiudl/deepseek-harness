@@ -189,6 +189,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
 }
 
 type PickedScopedReference = {
+  submission_mode?: 'planning'
   kind: 'collaboration-v2'
   workspace_id: string
   session_id: string
@@ -385,14 +386,14 @@ it.each([10, 11])('bounds a scoped message to ten explicit chips (count %i)', as
   expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
 })
 
-it.each(['duplicate', 'other-workspace', 'other-session', 'other-source', 'mixed'])('refuses a second invalid scoped chip (%s) without local fallback', async (mode) => {
+it.each(['duplicate', 'other-workspace', 'other-session', 'other-source', 'mixed', 'submission-mode'])('refuses a second invalid scoped chip (%s) without local fallback', async (mode) => {
   const f = await bench(true)
   await f.pick('', '检查代码；')
   const r = JSON.parse(f.composer.snapshot.occurrences[0]!.ref) as PickedScopedReference
   await appendScoped(f, 2, mode === 'duplicate' ? { source_id: r.source_id }
     : mode === 'other-workspace' ? { workspace_id: '50000000-0000-4000-8000-000000000009' }
       : mode === 'other-session' ? { session_id: 'other-session' }
-        : mode === 'other-source' ? { original_source_id: '50000000-0000-4000-8000-000000000009' } : {}, mode === 'mixed' ? 'local-ref' : 'slark-agent')
+        : mode === 'other-source' ? { original_source_id: '50000000-0000-4000-8000-000000000009' } : mode === 'submission-mode' ? { submission_mode: 'planning' } : {}, mode === 'mixed' ? 'local-ref' : 'slark-agent')
   const original = f.composer.snapshot.draft
   f.composer.submit()
   await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
@@ -1375,4 +1376,127 @@ it('cancels the Session feed read of a passive reply without querying Main or co
   release?.({ ok: true, value: { items: [] } })
   expect(f.pending).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
   expect(f.composer.snapshot.draft).toBe('请检查登录问题')
+})
+
+const rootTaskId = 'bfb432fd-a2a2-4cbd-b1dc-4648c8944081', rootTraceId = 'a'.repeat(32)
+it('shows saved planning with its trace, without emitting execution admission', async () => {
+  const { composer, pick, submit, sink, invoke } = await bench(true)
+  const host = window.__DSH_DESKTOP_HOST__!
+  Reflect.set(host, 'collaborationPlanningAvailable', true)
+  Reflect.set(host, 'collaborationExecutionAvailable', false)
+  await pick('', '请检查登录问题')
+  const admitted = vi.fn()
+  window.addEventListener('dsh-slark-collaboration-admitted', admitted)
+  onTestFinished(() => { window.removeEventListener('dsh-slark-collaboration-admitted', admitted) })
+  submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision },
+  submission_state: 'planning_recorded', root_task_id: rootTaskId, root_trace_id: rootTraceId } } as never))
+  composer.submit()
+  await vi.waitFor(() => { expect(composer.snapshot.draft).toBe('') })
+  expect(composer.notices.getSnapshot()?.text).toBe(`规划已保存，尚未开始执行。追踪编号：${rootTraceId}`)
+  expect(admitted).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled()
+})
+it.each(['accepted', 'bad-trace', 'extra-private', 'missing-root', 'changed-source', 'missing-value', 'null-value'] as const)(
+  'root planning refuses %s replies and retains the original draft', async (change) => {
+    const { composer, pick, submit, sink } = await bench(true)
+    const host = window.__DSH_DESKTOP_HOST__!
+    Reflect.set(host, 'collaborationPlanningAvailable', true)
+    Reflect.set(host, 'collaborationExecutionAvailable', false)
+    await pick('', '请检查登录问题')
+    const draft = composer.snapshot.draft
+    submit.mockImplementation(async (input) => {
+      const value = { source: { workspace_id: input.workspace_id, session_id: input.session_id,
+        source_message_id: input.source_message_id, source_revision: input.source_revision },
+      submission_state: 'planning_recorded', root_task_id: rootTaskId, root_trace_id: rootTraceId }
+      if (change === 'missing-value') return { ok: true } as never
+      if (change === 'null-value') return { ok: true, value: null } as never
+      if (change === 'accepted') value.submission_state = 'accepted'
+      if (change === 'bad-trace') value.root_trace_id = '0'.repeat(32)
+      if (change === 'missing-root') Reflect.deleteProperty(value, 'root_task_id')
+      if (change === 'extra-private') Reflect.set(value, 'grant', 'private')
+      if (change === 'changed-source') value.source.session_id = 'other'
+      return { ok: true, value } as never
+    })
+    composer.submit()
+    await vi.waitFor(() => { expect(composer.notices.getSnapshot()?.level).toBe('error') })
+    expect(composer.snapshot.draft).toBe(draft); expect(sink).not.toHaveBeenCalled()
+  })
+
+it.each([false,true])('retained root drafts use recovery after root rollout closes, legacy execution=%s',async(legacy)=>{
+  const { composer,pick,submit,sink,invoke }=await bench(true)
+  const host=window.__DSH_DESKTOP_HOST__!
+  Reflect.set(host,'collaborationPlanningAvailable',true)
+  await pick('','请检查登录问题')
+  const draft=composer.snapshot.draft
+  const recovered=vi.fn(async(input:DesktopCollaborationSourceInput)=>({ ok:true as const,value:{ source:{ workspace_id:input.workspace_id,session_id:input.session_id,source_message_id:input.source_message_id,source_revision:input.source_revision },submission_state:'planning_recorded' as const,root_task_id:rootTaskId,root_trace_id:rootTraceId } }))
+  Reflect.set(host,'collaborationRecover',recovered)
+  Reflect.set(host,'collaborationPlanningAvailable',false)
+  Reflect.set(host,'collaborationScopeAvailable',legacy)
+  Reflect.set(host,'collaborationExecutionAvailable',legacy)
+  composer.submit()
+  await vi.waitFor(()=>{expect(composer.snapshot.draft).toBe('')})
+  expect(recovered).toHaveBeenCalledTimes(1)
+  expect(recovered.mock.calls[0]?.[0].original_message).toBe(draft)
+  expect(composer.notices.getSnapshot()?.text).toContain(rootTraceId)
+  expect(submit).not.toHaveBeenCalled();expect(sink).not.toHaveBeenCalled();expect(invoke).not.toHaveBeenCalled()
+})
+
+it.each(['missing','rejected','bad-receipt'] as const)('closed-root recovery retains the original draft when %s',async(mode)=>{
+  const { composer,pick,submit,sink }=await bench(true),host=window.__DSH_DESKTOP_HOST__!
+  Reflect.set(host,'collaborationPlanningAvailable',true)
+  await pick('','请检查登录问题')
+  const draft=composer.snapshot.draft,ref=composer.snapshot.occurrences[0]?.ref
+  Reflect.set(host,'collaborationPlanningAvailable',false)
+  if(mode!=='missing')Reflect.set(host,'collaborationRecover',vi.fn(async()=>mode==='rejected'?{ ok:false,errorCode:'missing',reconciliationRequired:true }:{ ok:true,value:{ submission_state:'accepted' } }))
+  composer.submit()
+  await vi.waitFor(()=>{expect(composer.notices.getSnapshot()?.level).toBe('error')})
+  expect(composer.snapshot.draft).toBe(draft);expect(composer.snapshot.occurrences[0]?.ref).toBe(ref)
+  expect(submit).not.toHaveBeenCalled();expect(sink).not.toHaveBeenCalled()
+})
+
+it('routes explicit task confirmation through the YAML-loaded original Session binding', async () => {
+  const f = await bench(true)
+  const bridge = window.__DSH_DESKTOP_HOST__
+  if (!bridge) throw Error('missing Desktop fixture')
+  bridge.collaborationPlanningAvailable = true
+  const execution = vi.fn<NonNullable<typeof bridge.collaborationRootExecution>>(async request =>
+    request.action === 'preview' ? { ok:true,previewId:'main-preview',rootTraceId:'b'.repeat(32),executionEnabled:true,
+      tasks:[{ taskId:'task',question:'Do the displayed work',agentName:'Guide',projectName:'Project' }] }
+      : { ok:true,status:'recorded' })
+  bridge.collaborationRootExecution = execution
+  const original = { source:{ workspace_id:f.workspace.id,session_id:'session-1',source_message_id:'first',source_revision:'1' },
+    snapshot_digest:'a'.repeat(64),original_message:'@Guide 原始任务' }
+  f.originals.push(original)
+  const entry=f.ctx.slots.entries('conversation.input.dock').find(item=>item.options.id==='slark-collaboration-results')
+  if(!entry?.inject) throw Error('missing results registration')
+  const value: unknown=Reflect.apply(entry.inject,undefined,[SessionId('session-1')])
+  if(!value || typeof value!=='object' || !('executionAction' in value) || typeof value.executionAction!=='function') throw Error('missing command')
+  const bindings=value as CollaborationResultsInjected
+  await bindings.hooks.slarkResults.refresh()
+  expect(execution).not.toHaveBeenCalled()
+  await bindings.executionAction(original.snapshot_digest)
+  expect(execution).toHaveBeenCalledWith({ action:'preview',source:original.source })
+  await bindings.executionAction(original.snapshot_digest,'task')
+  expect(execution).toHaveBeenLastCalledWith({ action:'confirm',previewId:'main-preview',taskId:'task' })
+  expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('recorded')
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  const plugin=[...f.ctx.loader.entries()].find(item=>item.options.name==='composer-test:source')
+  if(!plugin?.fiber) throw Error('missing loaded source')
+  await plugin.fiber.dispose()
+  await bindings.executionAction(original.snapshot_digest,'task')
+  await bindings.consumptionAction?.(original.snapshot_digest,'delivery')
+  expect(execution).toHaveBeenCalledTimes(2)
+})
+
+it('keeps the scoped draft when its Host disappears before submission', async () => {
+  const f = await bench(true)
+  await f.pick('', '检查代码；')
+  const draft = f.composer.snapshot.draft
+  Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__')
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(draft)
+  expect(f.submit).not.toHaveBeenCalled()
+  expect(f.sink).not.toHaveBeenCalled()
 })

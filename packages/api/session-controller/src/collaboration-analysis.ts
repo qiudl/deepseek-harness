@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 /** REQ-20260930-0004: Host-only Source analysis through the captured provider call. */
 import { createMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
@@ -5,6 +6,9 @@ import { deepEqualJson, deepFreeze } from '@deepseek-ai/dsh-util-values'
 import { clarificationAnalysisMessage } from './collaboration-clarification-input.ts'
 import type { CollaborationClarificationInput } from './collaboration-clarification-input.ts'
 import type { CollaborationSourceSnapshot } from './collaboration-source-journal.ts'
+import type { CollaborationRootSubmission } from './collaboration-root-journal.ts'
+import { createCollaborationRootPlanningManifest } from './collaboration-root-planning-journal.ts'
+import type { CollaborationRootPlanningManifest } from './collaboration-root-planning-journal.ts'
 
 /** Exact model-visible analysis input; the owning Host must commit it before dispatch. */
 export type CollaborationAnalysisManifest = Readonly<{
@@ -38,12 +42,35 @@ export class CollaborationAnalysisRunner {
    * @param prepared - original executable snapshot handle; recovered Sources have none.
    * @param persist - Host-owned durable attempt writer; commits the full manifest before resolving.
    * @param cancellation - current attempt cancellation, combined with Profile lifetime and 30-second limit.
+   * @param rootTraceId - Optional original root derived by the Profile owner before analysis capture is published.
    * @returns syntactically valid, untrusted model JSON; not a plan or accepted task.
    */
   async run(source: CollaborationSourceSnapshot, prepared: PreparedLlmSnapshotCall,
     persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
+    cancellation: AbortSignal, rootTraceId?: string): Promise<CollaborationAnalysisResult> {
+    if (!deepEqualJson(source.model_snapshot, prepared.snapshot)) throw new Error('collaboration_analysis_model_changed')
+    return this.runPrepared(source, prepared, persist, cancellation,
+      request => deepFreeze({ prompt_version: '1' as const, source, request }), undefined, rootTraceId)
+  }
+
+  /**
+   * Analyze a new attempt under an unchanged admitted root using a current prepared model.
+   * The Host must reconcile its predecessor, validate current membership and persist current authority
+   * in the supplied writer. This method supplies no cloud permission or cross-process executable handle.
+   * @param root - Original admitted root and immutable Source.
+   * @param predecessor - Previous local input reference, or null when none was persisted.
+   * @param prepared - Fresh captured call with the original provider/model/reasoning setting.
+   * @param persist - Trusted writer committing the complete new manifest and current one-use grant.
+   * @param cancellation - Current operation signal, combined with Profile lifetime and the 30-second limit.
+   * @returns untrusted model JSON after one verified provider call, with the same budgets as original analysis.
+   */
+  async runRootAttempt(root: CollaborationRootSubmission,
+    predecessor: { readonly attempt_request_id: string; readonly input_manifest_digest: string } | null,
+    prepared: PreparedLlmSnapshotCall,
+    persist: (manifest: CollaborationRootPlanningManifest, signal: AbortSignal) => Promise<void>,
     cancellation: AbortSignal): Promise<CollaborationAnalysisResult> {
-    return this.runAnalysis(source, prepared, persist, cancellation)
+    return this.runPrepared(root.source, prepared, persist, cancellation,
+      request => createCollaborationRootPlanningManifest(root, predecessor, prepared, request), undefined, root.root_trace_id)
   }
 
   /**
@@ -57,26 +84,34 @@ export class CollaborationAnalysisRunner {
   async runClarification(input: CollaborationClarificationInput, prepared: PreparedLlmSnapshotCall,
     persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
     cancellation: AbortSignal): Promise<CollaborationAnalysisResult> {
-    return this.runAnalysis(input.original_snapshot, prepared, persist, cancellation, input)
+    if (!deepEqualJson(input.reply_snapshot.model_snapshot, prepared.snapshot)) throw new Error('collaboration_analysis_model_changed')
+    return this.runPrepared(input.original_snapshot, prepared, persist, cancellation,
+      request => deepFreeze({ prompt_version: '2' as const, source: input.original_snapshot, request, clarification: input }), input)
   }
 
-  private async runAnalysis(source: CollaborationSourceSnapshot, prepared: PreparedLlmSnapshotCall,
-    persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
-    cancellation: AbortSignal, clarification?: CollaborationClarificationInput): Promise<CollaborationAnalysisResult> {
+  private async runPrepared<T extends { readonly request: Omit<GenerateOptions, 'signal'> }>(source: CollaborationSourceSnapshot,
+    prepared: PreparedLlmSnapshotCall, persist: (manifest: T, signal: AbortSignal) => Promise<void>,
+    cancellation: AbortSignal, wrap: (request: Omit<GenerateOptions, 'signal'>) => T, clarification?: CollaborationClarificationInput, rootTraceId?: string): Promise<CollaborationAnalysisResult> {
     const controller = new AbortController()
     const signal = AbortSignal.any([this.lifetime, cancellation, controller.signal])
     signal.throwIfAborted()
     if (this.used.has(prepared)) throw new Error('collaboration_analysis_call_used')
     if (this.running >= 2) throw new Error('collaboration_analysis_busy')
     if (!source.active_mentions.length) throw new Error('collaboration_analysis_no_mention')
-    if (!deepEqualJson(clarification?.reply_snapshot.model_snapshot ?? source.model_snapshot, prepared.snapshot)) throw new Error('collaboration_analysis_model_changed')
     const maxTokens = prepared.config.maxTokens
     if (maxTokens === undefined || !Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > outputTokens) {
       throw new Error('collaboration_analysis_output_cap_unavailable')
     }
     const original = { source_message_id: source.source_message_id, source_revision: source.source_revision,
       original_message: source.original_message, active_mentions: source.active_mentions }
-    const request = deepFreeze({ ...prepared.config, purpose: 'collaboration-analysis' as const, tools: [],
+    let traceparent: string | undefined
+    if (rootTraceId !== undefined) {
+      if (/^(?!0{32})[a-f0-9]{32}$/u.exec(rootTraceId)?.[0] !== rootTraceId) throw Error('collaboration_analysis_trace_invalid')
+      let span: string
+      do { span = randomBytes(8).toString('hex') } while (span === '0'.repeat(16))
+      traceparent = '00-' + rootTraceId + '-' + span + '-01'
+    }
+    const request = deepFreeze({ ...prepared.config, ...(traceparent === undefined ? {} : { traceparent }), purpose: 'collaboration-analysis' as const, tools: [],
       system: clarification ? clarificationPrompt : prompt,
       messages: [createMessage({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: clarification ? clarificationAnalysisMessage(clarification) : JSON.stringify(original) }] })],
     })
@@ -84,9 +119,7 @@ export class CollaborationAnalysisRunner {
     const inputBytes = Buffer.byteLength(JSON.stringify(request), 'utf8') + 256
     if (inputBytes > inputBudget || (prepared.context !== undefined
       && inputBytes + maxTokens > prepared.context.contextWindow)) throw new Error('collaboration_analysis_input_budget')
-    const manifest: CollaborationAnalysisManifest = deepFreeze(clarification
-      ? { prompt_version: '2' as const, source, request, clarification }
-      : { prompt_version: '1' as const, source, request })
+    const manifest = wrap(request)
     const timer = setTimeout(() => { controller.abort(new Error('collaboration_analysis_timeout')) }, 30_000)
     timer.unref()
     this.used.add(prepared)
@@ -99,8 +132,8 @@ export class CollaborationAnalysisRunner {
     }
   }
 
-  private async execute(manifest: CollaborationAnalysisManifest, prepared: PreparedLlmSnapshotCall,
-    persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
+  private async execute<T extends { readonly request: Omit<GenerateOptions, 'signal'> }>(manifest: T, prepared: PreparedLlmSnapshotCall,
+    persist: (manifest: T, signal: AbortSignal) => Promise<void>,
     signal: AbortSignal): Promise<CollaborationAnalysisResult> {
     await persist(manifest, signal)
     signal.throwIfAborted()

@@ -361,3 +361,112 @@ it('discards a fulfilled Source page if workspace ownership changes before the a
   expect(f.model.getSnapshot()).toEqual({ phase: 'idle', groups: [] })
   expect(f.deliveries).not.toHaveBeenCalled()
 })
+
+it.each(['reset', 'move'] as const)('discards late execution previews after %s', async (change) => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  let finish!: (value: unknown) => void
+  f.bridge.collaborationRootExecution = () => new Promise((resolve) => { finish = resolve })
+  await f.model.refresh()
+  const pending = f.model.executionAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]?.execution?.phase).toBe('loading')
+  f[change]()
+  finish({ ok:true,previewId:'old',rootTraceId:'b'.repeat(32),executionEnabled:true,tasks:[{ taskId:'task',question:'old',agentName:'Guide',projectName:'Project' }] })
+  await pending
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+it('rejects malformed or duplicate previews and disabled execution without confirmation', async () => {
+  const f=fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const task={ taskId:'task',question:'Work',agentName:'Guide',projectName:'Project' }
+  const command=vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>()
+  f.bridge.collaborationRootExecution=command
+  await f.model.refresh()
+  for(const value of [null, { ok:false }, { ok:true,previewId:'p',rootTraceId:'b'.repeat(32),executionEnabled:true,tasks:[task,task] },
+    { ok:true,previewId:'p',rootTraceId:'b'.repeat(32),executionEnabled:true,tasks:[{ ...task,question:'x'.repeat(32769) }] }]) {
+    command.mockResolvedValue(value)
+    await f.model.executionAction(original.snapshot_digest)
+    expect(f.model.getSnapshot().groups[0]?.execution?.phase).toBe('error')
+  }
+  command.mockResolvedValue({ ok:true,previewId:'p',rootTraceId:'b'.repeat(32),executionEnabled:false,tasks:[task] })
+  await f.model.executionAction(original.snapshot_digest)
+  const count=command.mock.calls.length
+  await f.model.executionAction(original.snapshot_digest,'task')
+  expect(command).toHaveBeenCalledTimes(count)
+})
+
+async function executableFixture() {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [{ ...reply, task_id: 'task' }] } })
+  const command = vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>()
+  f.bridge.collaborationRootExecution = command
+  await f.model.refresh()
+  const preview = { ok: true, previewId: 'preview', rootTraceId: 'b'.repeat(32), executionEnabled: true,
+    tasks: [{ taskId: 'task', question: 'Work', agentName: 'Guide', projectName: 'Project' }] }
+  command.mockResolvedValue(preview)
+  await f.model.executionAction(original.snapshot_digest)
+  return { ...f, command, preview }
+}
+it('keeps invalid execution acknowledgments uncertain and ignores rejection from an old connection', async () => {
+  const f = await executableFixture()
+  f.command.mockResolvedValue({ ok: true, status: 'wrong' })
+  await f.model.executionAction(original.snapshot_digest, 'task')
+  expect(f.model.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('uncertain')
+  f.command.mockImplementationOnce(async () => { f.reset(); throw Error('old connection') })
+  await f.model.executionAction(original.snapshot_digest, 'task', true)
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+it('rejects malformed task arrays and trace previews instead of enabling confirmation', async () => {
+  const f = await executableFixture()
+  for (const patch of [{ rootTraceId: '0'.repeat(32) }, { tasks: [null] }, { tasks: [] }, { previewId: '' }]) {
+    f.command.mockResolvedValue({ ...f.preview, ...patch })
+    await f.model.executionAction(original.snapshot_digest)
+    expect(f.model.getSnapshot().groups[0]?.execution?.phase).toBe('error')
+  }
+})
+it('records acknowledged consumption separately from continuation and never repeats a fresh grant', async () => {
+  const f = await executableFixture()
+  const ack = { ok: true, rootTraceId: f.preview.rootTraceId, status: 'context_applied', consumptionAcknowledged: true, continuationObserved: false }
+  f.command.mockResolvedValue(ack)
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command).toHaveBeenLastCalledWith({ action: 'consume', previewId: 'preview', taskId: 'task', deliveryId: 'delivery' })
+  expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('context_applied')
+  const calls = f.command.mock.calls.length
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command).toHaveBeenCalledTimes(calls)
+  f.command.mockResolvedValue({ ...ack, continuationObserved: true })
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery', true)
+  expect(f.command).toHaveBeenLastCalledWith({ action: 'consumption-status', previewId: 'preview', taskId: 'task', deliveryId: 'delivery' })
+  expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('continued')
+})
+it('does not certify consumption from absent, unacknowledged or foreign-root replies', async () => {
+  const f = await executableFixture()
+  for (const value of [null, { ok: false }, { ok: true, rootTraceId: 'f'.repeat(32) },
+    { ok: true, rootTraceId: f.preview.rootTraceId, consumptionAcknowledged: false },
+    { ok: true, rootTraceId: f.preview.rootTraceId, consumptionAcknowledged: true, status: 'queued' }]) {
+    f.command.mockResolvedValue(value)
+    await f.model.consumptionAction(original.snapshot_digest, 'delivery', true)
+    expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('uncertain')
+  }
+})
+it.each(['resolve', 'reject'] as const)('discards %s after consumption ownership changes', async (mode) => {
+  const f = await executableFixture()
+  f.command.mockImplementationOnce(async () => {
+    f.reset()
+    if (mode === 'reject') throw Error('old connection')
+    return { ok: true, rootTraceId: f.preview.rootTraceId, consumptionAcknowledged: true, status: 'context_applied', continuationObserved: true }
+  })
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+it('allows a new explicit confirmation only after the original command is known not admitted', async () => {
+  const f = await executableFixture()
+  f.command.mockResolvedValue({ ok: true, status: 'not_admitted' })
+  await f.model.executionAction(original.snapshot_digest, 'task')
+  expect(f.model.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('not_admitted')
+  f.command.mockResolvedValue({ ok: true, status: 'recorded' })
+  await f.model.executionAction(original.snapshot_digest, 'task')
+  expect(f.model.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('recorded')
+})

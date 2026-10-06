@@ -1,3 +1,4 @@
+import { rootWorkerOperations } from './root-worker-operations.ts'
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
 import { win32 } from 'node:path'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
@@ -420,6 +421,13 @@ async function startWindowsDesktopHostApplicationWithTrust(
         },
         host,
         ...collaborationWorkerReaders(workers),
+        rootAnalysisSupported: true,
+        rootAnalysisRecoverySupported: true,
+        rootLookupSupported: true,
+        rootPendingLookupSupported: true,
+        rootLiveResumeSupported: true,
+        collaborationAnalysis: (profileId, command, signal) => workers.collaborationAnalysis(profileId, command, signal),
+        ...rootWorkerOperations(workers),
         collaborationDeliveryReceiver: profileId => workers.collaborationDeliveryReceiver(profileId),
         remoteSession,
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),

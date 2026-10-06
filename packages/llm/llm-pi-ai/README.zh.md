@@ -247,3 +247,5 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 </details>
 
 **运行时不变式：** 不发布伴生入口。本包没有独立事件序列或可变数据关系，相关约定在所属 seam 强制执行。
+
+Provider 流式选项通过通用请求头保留操作经校验的 `GenerateOptions.traceparent`，覆盖大小写不敏感的静态 trace 请求头，不改变凭据或模型输入。

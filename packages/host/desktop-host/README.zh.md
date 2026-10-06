@@ -216,3 +216,34 @@ Web worker 工厂另生成并保留 `DSH_PROFILE_DELIVERY_TOKEN`，供仅父 Hos
 Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。worker 保存输出后，Host 签署原始 JSON 摘要、派发 grant 及当前 Account/安装/进程身份。保存失败或权限变化不会返回签名结果。取消关闭原操作；签名将已保存输出绑定到原派发及当前 Account 和 Host，不建立任务语义或 Agent 执行权限。
 
 相同的当前 Account/Profile 校验覆盖 `capture_reply` 与 `prepare_clarification`。补充捕获、完整输入准备和派发全过程保留 Host 派生的归属摘要；客户端核验各操作对应的不可执行描述或准备结果类别。客户端仅在派发时接纳输出，并将其签名凭据与该派发核对。这两项操作不改变视图租约，不授予云端权限，也不受理任务。
+
+Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。取消关闭原操作；该方法不校验任务，也不受理 Agent 执行。
+
+
+`attestRootAuthority` 仅在对端声明能力时请求 `profile.root_authority`。授权服务解析当前已验证的 Account Profile，通过 worker 监管器读取原始根描述符，比对所有根、来源、命令和摘要字段，并在签名前再次检查 Account grant。客户端核验精确挑战、当前安装/进程、有效期及专用根签名。两种启动组合均安装读取器；worker 替换、根缺失、坐标不符、授权撤销或取消都会拒绝签名。worker 根元数据使用私有 Source 读取令牌，不进入浏览器 view lease。这只证明根绑定已持久提交，不提交根、不授予执行权限，也不确认云端受理。
+
+根日志操作保留认证后的 Account 绑定与 Host 身份，在访问 worker 前后检查授权，并丢弃已替换 worker 的回复。worker 通过私有分析/写入 token 访问 `/internal/desktop-root-journal`，Source 只读 token 不能确认受理。回执响应丢失后仍须对账，即使原回执可能已经保存。
+
+支持根分析的 worker 显式公布 `profile.root_analysis`。根准备使用当前 Account 授权的 Profile，并与派发保留同一 Host 绑定；客户端在发送新命令前拒绝旧端。Unix 和 Windows 启动接入同一种根分析 worker owner。旧 Source 分析保持独立，根准备不会回退到旧流程。
+
+读取已保存输出要求独立的 `profile.root_analysis_recovery` 能力。访问 worker 前后均检查当前 Account/Profile 授权，并使用私有分析 token。旧 worker 拒绝该命令；保存的派发元数据不会触发第二次模型调用。
+
+`rootLookupSupported` 独立于准备能力公布 `profile.root_lookup`。`recover_root` 复用当前 Account/Profile 校验及私有 worker token，但只接受 recovered 元数据；旧端在查询前拒绝。
+
+`rootPendingLookupSupported` 独立公布 `profile.root_pending_lookup`，用于 `reconcile_root`；只有通过当前 Account/Profile 授权的 recovered 元数据可返回。
+
+`rootLiveResumeSupported` 为当前 worker 公布 `profile.root_live_resume`。Parent 根据 Account 授权版本、Profile 与 Host 进程派生续接身份，仅排除 socket owner。当前 Account/Profile 校验通过后，worker 交接才替换派发 owner；worker 重启后无法借此重建可执行调用。
+
+`attestRootPlanningAttemptAuthority` 要求对端单独声明能力。授权服务仅在安装 `inspectRootPlanningAttempt` 时声明此能力。私有读取器必须核验当前 Profile 归属、存活的模型准备及已持久化且当前未使用的尝试；记录缺失、被替代、已派发、过期或写入状态不确定时拒绝。授权服务只传入原 Source/root 查询坐标与尝试 ID，比对返回的全部输入、模型、前驱和根字段，并在读取后重新检查 Account 授权。客户端验证精确挑战、当前对端、有效期及专用签名。证明不授予模型派发或任务执行权限。
+
+两种启动组合都通过 worker 监管器与 analysis-token HTTP 客户端安装新尝试读取器。签名观察与准备使用相同的父 Host 推导 Account/Profile/Host/连接摘要；其他连接不能为该存活准备签名或派发。监管器在 worker 替换、销毁或取消后拒绝返回结果。准备和派发要求独立的 `profile.root_planning_attempt` 能力，签名观察还要求专用读取器。这些操作不创建云端替换事务，也不授予任务执行权限。
+
+`profile.root_planning_attempt_recovery` 开放只读的 `read_root_attempt` 命令。客户端在发送前检查能力；Host 解析当前令牌验证过的 Account Profile，并在私有 worker 读取前后检查授权。响应绑定所查询的原根和 Source，包括派发过期后的记录，但仅作为事实证据。
+
+单独声明的 `profile.root_execution_journal` 能力仅通过当前已认证 Account Profile 转发有界的具体执行日志操作。Host 派生连接绑定，并在 worker 响应后重新校验归属。客户端和授权端均拒绝缺少该能力的请求。worker 使用私有 analysis token；日志读写不派发模型、不授予新的执行权限，也不确认 Session 已消费结果。
+
+只有配置私有 Profile 接收器时才宣告 `profile.root_feedback`。客户端和授权端均检查该能力，并在每次有界反馈响应后重新校验 Account 归属。父进程仍负责当前云端结果访问权和显式消费意图；传输成功不等同于带签名的云端消费确认。
+
+对于 `root_feedback` 返回的持久消费证据，Host 在签发独立消费回执前核对原 namespace、delivery 和 Source 坐标。签名使用当前 Account、installation 与进程元数据，并在 worker 回复后再次检查当前 Profile 权限。回执不包含答案文本，也不授予新的续跑权限。
+
+macOS 和 Windows 通过共同的 worker 操作绑定根 journal、Source 检查和规划 attempt 检查；各权限协议继续使用独立的签名载荷。

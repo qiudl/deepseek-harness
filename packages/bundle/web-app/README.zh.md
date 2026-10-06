@@ -204,3 +204,30 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 `capture_reply` 先保存不含新增 active mention 的补充 Source，仅保留进程内调用，不开始分析。协调器提交补充消息与选定待澄清项的关联后，`prepare_clarification` 由所属 Profile 核验完整原文及补充输入，保存新 manifest，再等待匹配计划及修订号的资格。分析身份仍为原始 Source 描述符。重复捕获仅返回不可执行恢复；并发准备、归属变化、过期与销毁均不能重建或重复派发调用。这些操作共用两个进行中操作及 30 秒限制。
 
 Web 组合包含账号 Remote 控制器和账号设置页面。
+
+`DSH_PROFILE_DELIVERY_TOKEN` 独立为父 Host 启用 `/internal/desktop-collaboration-delivery`。入口接受最多 1 MiB 的精确可读投递 JSON，由所属 Session Controller 校验原 Source 与当前归属。完整回复保存后才返回禁止缓存的首次提交描述符，不回传答案。浏览器 Cookie、Source 读取令牌、调用方提交字段及受限投影不能授权保存。取消、写入失败和提交后的归属丢失均不返回成功回执，也不删除已保存的数据。此路由不签发云端确认，不追加聊天事件。
+
+
+私有 `/internal/desktop-collaboration-root` 端点复用仅父进程持有的 Source 能力，通过 `inspectCollaborationRoot` 读取持久根元数据。它只接受精确的 namespace、命令及原始来源坐标，拒绝浏览器 cookie 和绑定不符的响应，不返回来源正文或可执行 handle。路由释放时移除处理器。
+
+私有端点 `/internal/desktop-root-journal` 要求 `DSH_PROFILE_ANALYSIS_TOKEN`，只接收不超过 2 KiB、字段严格匹配的 read/accept JSON，并返回不含 Source 正文的根元数据。浏览器 cookie 和 `DSH_PROFILE_SOURCE_TOKEN` 均不授予访问权限。Session Controller 校验归属并持久化完整原回执后才返回成功；两种操作都不会重新捕获 Source 或准备模型。
+
+`prepare_root` 调用 `captureCollaborationRoot`，由同一个两阶段 owner 保留首次分析调用；根持久化后才确认准备完成。回复同时包含原根描述与 prepared 或 recovered Source 元数据；恢复结果不包含可执行尝试。根准备同样遵循原绑定、超时、取消和单次派发规则。根登记或规划候选保存均不授予任务执行权限。
+
+`read_root_output` 经当前 Session/Workspace 归属校验读取已受理根，再将保存输出与原始持久派发记录关联；读取后再次校验根归属。输出缺失会明确返回；记录歧义、根变化、取消或释放都会拒绝。重新打开日志仍保留原输出与派发凭据，不准备或调用模型。云端消费者提交候选前仍须独立执行原租约与栅栏校验。
+
+`recover_root` 按 namespace 与 Source 坐标读取已有 admitted 根，要求原正文、mentions 和续接策略一致。它不捕获 Source、不准备模型、不写根，也不创建派发状态。pending 或不存在的根、输入变化、取消及归属丢失都会拒绝；本地受理回执缺失须另行对账。
+
+`reconcile_root` 还可读取 pending 根，供 Main 查询原始云端回执；它执行相同的 Source、策略和归属校验，不受理根，也不准备模型。
+
+`resume_root` 要求根已 admitted，且原始准备仍在相同 Account/Host 绑定下存活。重连可通过 Parent 派生的 Account/Profile/Host 进程身份交接，旧连接随即失去派发权。仅在派发尚未使用时返回相同 attempt 与 manifest；不准备新的模型调用，不延长30秒期限。进程重启、超时、归属丢失或派发已消费时拒绝。
+
+analysis token 端点管理 `prepare_root_attempt`、`inspect_root_attempt` 和 `dispatch_root_attempt`。`DesktopRootPlanning` 从旧分析 journal 或当前新尝试链确定前驱；已知派发记录或仍存活的原准备会阻止新准备。最多保留两个待处理根，期限 30 秒；同连接重试保持身份和截止时间。完整输入持久化后才发布元数据，签名观察与派发前重新核验归属、当前 journal 状态，以及父 Host 推导的 Account/Profile/Host/连接绑定。worker 重启不恢复可执行句柄：重新准备未使用输入会产生新尝试，并保留前驱关系。输出保存在已消费 grant 旁，销毁等待进行中工作和 journal 写入结束。云端可替代性和 grant 认证仍由父协调方负责。
+
+analysis-token 的 `read_root_attempt` 操作在 owner 重建后读取最新持久尝试及校验过的已保存输出，不准备模型。它在存储读取前后检查原根归属，取消或 owner 关闭后丢弃结果。过期授权仍作为已消费历史可见；派发必须另有当前云端授权。
+
+analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/accept 请求交给所属 Session Controller。它保留 Profile 生命周期取消约束，拒绝仅浏览器授权及未知字段，仅返回持久化记录或明确的 null 读取结果，不准备模型、不向云端派发。
+
+分析令牌保护的 `root_feedback` 操作将私有读取或入队命令交给 Session Controller，并保留取消和精确字段校验。响应只包含有界的持久化观察记录，不含结果正文。浏览器 Cookie 不能授权消费，该操作也不激活模型。
+
+同一私有 `root_feedback` 通道也将 `consumer_prepare`、`consumer_start` 与 `consumer_read` 交给持久消费 owner。只有当前首次授权可唤醒原 Agent；start 请求的取消生命周期持续到 Agent 结算。历史读取不会恢复唤醒句柄。浏览器结果控件只经已认证 Desktop Main 提交保留的预览、任务及投递身份。

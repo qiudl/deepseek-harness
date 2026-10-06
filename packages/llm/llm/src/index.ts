@@ -1,3 +1,4 @@
+import { boundRequestTrace } from './trace-headers.ts'
 /**
  * LLM service: adapter registry with a waterfall-interceptable streaming call
  * API. Exports the `LlmRuntime` default, the abstract `LlmAdapter` for
@@ -1189,6 +1190,8 @@ export class LlmRuntime extends TypertRemoteService {
         }
         if (Object.isFrozen(resolvedOptions)) deepFreeze(projectedOptions)
       }
+      const traceparent = boundRequestTrace(options)
+      if (traceparent !== undefined) projectedOptions = { ...projectedOptions, traceparent }
       const stream = dispatch(this.forAdapter(projectedOptions, adapter))
       iterator = stream[Symbol.asyncIterator]()
     } catch (error: unknown) {
@@ -1280,3 +1283,5 @@ interface PreparedDispatch {
 }
 
 export default LlmRuntime
+
+export { requestTraceHeaders, bindRequestTrace } from './trace-headers.ts'

@@ -1,3 +1,6 @@
+import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootJournalCommand, HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostCollaborationReferenceGrant, HostControlSha256,
@@ -127,6 +130,13 @@ export interface ProfileWorkerHandle {
    * @returns Bounded untrusted local commit JSON, without an answer echo or cloud authorization.
    */
   readonly receiveCollaborationDelivery?: (command: HostCollaborationDeliveryCapsule, signal: AbortSignal) => Promise<HostRemoteSessionJson>
+  /** Host-only root binding read; private token never enters a view lease. */
+  readonly rootJournal?: (command: HostRootJournalCommand, signal: AbortSignal) => Promise<HostRootJournalMetadata>
+  /** Host-only root metadata; no view lease access. */
+  /** Current unused attempt from this worker's live owner and original parent binding. */
+  readonly inspectRootPlanningAttempt?: (target: HostRootSubmissionTarget, attemptId: HostControlRequestId,
+    binding: string, signal: AbortSignal) => Promise<HostRootPlanningAttemptDescriptor>
+  readonly inspectCollaborationRoot?: (target: HostRootSubmissionTarget, signal: AbortSignal) => Promise<HostRootSubmissionDescriptor>
   /** Host-only committed Source read; no message content or worker token enters a view lease. */
   readonly inspectCollaborationSource?: (
     target: HostCollaborationSourceTarget,

@@ -5,6 +5,22 @@ export const NS = 'slarkAgent'
 
 /** Simplified Chinese copy. */
 export const zh = {
+  'consumption.start': '结合结果继续原任务',
+  'consumption.status': '核对消费状态',
+  'consumption.sending': '正在消费结果并继续…',
+  'consumption.context_applied': '结果已进入原会话上下文；续跑结果尚未确认。',
+  'consumption.continued': '原会话已生成后续回复。',
+  'consumption.uncertain': '消费或续跑结果尚未确认，请核对状态。',
+  'execution.trace': '原始 Trace ID：',
+  'execution.preview': '查看待执行任务',
+  'execution.confirm': '确认执行此任务',
+  'execution.reconcile': '核对受理状态',
+  'execution.disabled': '此环境尚未开放任务执行。',
+  'execution.sending': '正在提交确认…',
+  'execution.recorded': '已受理，等待执行结果。',
+  'execution.uncertain': '尚未确认受理结果，请核对状态。',
+  'execution.not_admitted': '尚未受理，可重新确认执行。',
+
   'scope.selectedPending': '还有 {count} 个已选空间未在当前目录中显示。加载更多可查看，已有选择会保留。',
   'scope.title': 'Slark 协同',
   'scope.description': '选择此 DSH 工作区可 @ 的 Slark 项目空间，可多选。日常任务直接在聊天中 @Agent 并用自然语言描述。',
@@ -41,6 +57,7 @@ export const zh = {
   'submit.accepted': 'Agent 调用已受理，结果将在本会话显示。',
   'submit.acceptedV2': '任务已受理。',
   'submit.discussionV2': '已发送到当前聊天。',
+  'submit.plannedV2': '规划已保存，尚未开始执行。追踪编号：{trace}',
   'submit.uncertainV2': '发送结果尚未确认，原消息已保留。再次发送会核对同一条消息。',
   'submit.unavailableV2': '当前无法受理这条任务，原消息已保留。',
   'task.title': 'Agent 任务',
@@ -67,6 +84,22 @@ export const zh = {
 
 /** English copy. */
 export const en = {
+  'consumption.start': 'Continue original task with result',
+  'consumption.status': 'Check consumption status',
+  'consumption.sending': 'Consuming result and continuing…',
+  'consumption.context_applied': 'Result entered the original context; continuation is unconfirmed.',
+  'consumption.continued': 'The original Session produced a follow-up reply.',
+  'consumption.uncertain': 'Consumption or continuation is unconfirmed. Check its status.',
+  'execution.trace': 'Original Trace ID:',
+  'execution.preview': 'Preview tasks',
+  'execution.confirm': 'Confirm this task',
+  'execution.reconcile': 'Check admission',
+  'execution.disabled': 'Task execution is not enabled in this environment.',
+  'execution.sending': 'Submitting confirmation…',
+  'execution.recorded': 'Accepted; awaiting execution results.',
+  'execution.uncertain': 'Admission is uncertain. Check its status.',
+  'execution.not_admitted': 'Not admitted. You can confirm this task again.',
+
   'scope.selectedPending': '{count} selected spaces are outside the loaded list. Load more to view them; existing selections are retained.',
   'scope.title': 'Slark collaboration',
   'scope.description': 'Choose the Slark project spaces this DSH workspace can mention. Select multiple spaces, then describe tasks in chat with @Agent.',
@@ -103,6 +136,7 @@ export const en = {
   'submit.accepted': 'Agent invocation accepted. The result will appear in this session.',
   'submit.acceptedV2': 'Task accepted.',
   'submit.discussionV2': 'Sent to this conversation.',
+  'submit.plannedV2': 'Plan saved; execution has not started. Trace ID: {trace}',
   'submit.uncertainV2': 'Submission could not be confirmed. The draft is retained; sending again checks the same message.',
   'submit.unavailableV2': 'This task could not be accepted. The draft is retained.',
   'task.title': 'Agent tasks',

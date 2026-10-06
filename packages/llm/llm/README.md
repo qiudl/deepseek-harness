@@ -184,3 +184,5 @@ This Dev Note is non-authoritative working context: open questions and undecided
 - The `llm/adapters-updated` event is payload-free by design; consumers re-read the registries instead of receiving the new topology in the event.
 
 </details>
+
+`bindRequestTrace` associates persisted W3C transport correlation with an immutable middleware request. The final adapter boundary copies that correlation into `GenerateOptions.traceparent` without mutating the frozen request or model-visible messages. `requestTraceHeaders` validates the trace and removes case-insensitive deployment-header collisions. Correlation carries no authorization.

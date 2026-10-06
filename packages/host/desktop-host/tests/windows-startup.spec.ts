@@ -206,13 +206,14 @@ describe('Windows Desktop Host startup', () => {
       host_journal_commit: { journal_id: 'journal', commit_version: '1', content_digest: 'b'.repeat(64) },
     }) }
     const inspect = vi.fn(async () => descriptor), read = vi.fn(async () => snapshot)
-    const receive = vi.fn(async () => null)
+    const receive = vi.fn(async () => null), analysis = vi.fn(async () => null)
     state.createProfileWorker.mockImplementation(async () => ({
       closeNotifications: vi.fn(), abort: vi.fn(), done: Promise.resolve(),
       viewOrigin: 'http://127.0.0.1:49152', generation: 1,
       bootstrapCookie: { name: 'dsh-auth-test', value: 'v1.test.test' },
       inspectWorkspaceModelSelection: async value => ({ ...value, provider: 'deepseek', model: 'chat' }),
       inspectCollaborationSource: inspect, readCollaborationSourceSnapshot: read, receiveCollaborationDelivery: receive,
+      collaborationAnalysis: analysis,
     }))
     const application = await startWindowsDesktopHostApplication(state.options, { now: () => now }, state.dependencies)
     onTestFinished(async () => { await application.close() })
@@ -233,6 +234,8 @@ describe('Windows Desktop Host startup', () => {
       keyHandle: 'windows-credential:account', unlockMaterial })
     await expect(client.inspectWorkspaceModelSelection(selection))
       .resolves.toEqual({ workspace_id: target.workspace_id, session_id: target.session_id, provider: 'deepseek', model: 'chat' })
+    expect(await client.collaborationAnalysis({ ...account, command: { action: 'root_feedback', operation: { action: 'read' } } })).toEqual({ kind: 'root_feedback', record: null })
+    expect(analysis).toHaveBeenCalledOnce()
     const challenge = parseHostSourceAuthorityChallenge({ request_id: randomUUID(), challenge_nonce: 'A'.repeat(43),
       expires_at: now + 1000, audience: 'https://slark.example.test', environment_id: account.authorityEnvironmentId,
       account_issuer: issuer, account_subject: accountId, ...target, snapshot_digest: descriptor.snapshot_digest, host_epoch: '1' })

@@ -1,5 +1,13 @@
+import type { CollaborationConsumptionResult } from './collaboration-consumption-journal.ts'
+import { openCollaborationConsumptionJournal, collaborationConsumptionCommit } from './collaboration-consumption-journal.ts'
+import { createCollaborationFeedbackMessage, observeCollaborationFeedback, installCollaborationFeedbackCheckpoint, parseCollaborationFeedbackOperation } from './collaboration-feedback.ts'
+import type { CollaborationFeedbackObservation } from './collaboration-feedback.ts'
+import { openCollaborationRootExecutionJournal, parseCollaborationExecutionOperation } from './collaboration-root-execution-journal.ts'
+import type { CollaborationRootExecutionJournal, CollaborationExecutionRecord } from './collaboration-root-execution-journal.ts'
 /** Session Remote owner: cold reads, explicit Agent commands, and live control state. */
 
+import { isDeepStrictEqual } from 'node:util'
+import type { CollaborationPlanningPredecessor, CollaborationRootPlanningManifest } from './collaboration-root-planning-journal.ts'
 import { hostname } from 'node:os'
 import { resolve } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -18,6 +26,8 @@ import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
+import { openCollaborationRootJournal, parseCollaborationRootLookup, parseCollaborationRootCaptureInput, parseCollaborationRootTarget, parseCollaborationRootAdmission } from './collaboration-root-journal.ts'
+import type { CollaborationRootJournal, CollaborationRootCaptureInput, CollaborationRootSubmission, CollaborationRootDescriptor, CollaborationRootAdmission } from './collaboration-root-journal.ts'
 import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates, describeCollaborationSource } from './collaboration-source-journal.ts'
 import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot, CollaborationSourceCoordinates } from './collaboration-source-journal.ts'
 import { captureCollaborationReferenceContent, openCollaborationReferenceJournal,
@@ -91,6 +101,8 @@ export type * from './types.ts'
 export { ApiSessionNotFound } from './agent.ts'
 export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
+export { openCollaborationRootJournal, parseCollaborationRootSubmission } from './collaboration-root-journal.ts'
+export type { CollaborationRootTarget, CollaborationRootDescriptor, CollaborationRootCaptureInput, CollaborationRootInput, CollaborationRootSubmission, CollaborationRootAdmission, CollaborationRootJournal } from './collaboration-root-journal.ts'
 export { openCollaborationSourceJournal, describeCollaborationSource, parseCollaborationSourceInput, parseCollaborationSourceSnapshot, collaborationJournalDigest } from './collaboration-source-journal.ts'
 export { openCollaborationReferenceJournal, captureCollaborationReferenceContent,
   parseCollaborationReferenceRequest, parseCollaborationReferenceSelection, captureCollaborationReferenceSelectionContent,
@@ -106,8 +118,24 @@ export { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter } f
 export type { CollaborationAnalysisJournal, CollaborationAnalysisJournalRecord, CollaborationAnalysisDispatchGrant } from './collaboration-analysis-journal.ts'
 export { parseCollaborationClarificationInput, clarificationAnalysisMessage } from './collaboration-clarification-input.ts'
 export type { CollaborationClarificationInput } from './collaboration-clarification-input.ts'
+/** Process-local new preparation; its caller must durably authorize each fresh attempt before model dispatch. */
+export type CollaborationRootPlanningPreparation = Readonly<{
+  root: CollaborationRootSubmission
+  analyze: (persist: (manifest: CollaborationRootPlanningManifest, signal: AbortSignal) => Promise<void>,
+    cancellation: AbortSignal) => Promise<CollaborationAnalysisResult>
+}>
+export { openCollaborationRootPlanningJournal, createCollaborationRootPlanningWriter } from './collaboration-root-planning-journal.ts'
+export type { CollaborationRootPlanningJournal, CollaborationRootPlanningManifest, CollaborationRootPlanningRecord,
+  CollaborationRootPlanningDescriptor,
+  CollaborationRootPlanningGrant, CollaborationPlanningPredecessor, CollaborationPlanningRequestId } from './collaboration-root-planning-journal.ts'
+export { openCollaborationRootExecutionJournal, parseCollaborationExecutionOperation, parseCollaborationExecutionSelection, parseCollaborationExecutionReceipt } from './collaboration-root-execution-journal.ts'
+export type { CollaborationRootExecutionJournal, CollaborationExecutionRecord, CollaborationExecutionCommandId, CollaborationExecutionSelection, CollaborationExecutionReceipt, CollaborationExecutionOperation } from './collaboration-root-execution-journal.ts'
 export { openCollaborationDeliveryJournal, parseCollaborationDeliveryInput, parseCollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
 export type { CollaborationDeliveryJournal, CollaborationDeliveryInput, CollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
+
+/** Durable root metadata with either the first process-local analysis call or non-executable recovery. */
+export type CollaborationRootCapture = Awaited<ReturnType<SessionController['captureCollaborationSource']>>
+  & { readonly submission: CollaborationRootSubmission }
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -181,9 +209,14 @@ export class SessionController extends TypertRemoteService {
   private readonly collaborationLifetime = new AbortController()
   private readonly collaborationAnalysis = new CollaborationAnalysisRunner(this.collaborationLifetime.signal)
   private collaborationCaptureTail: Promise<void> = Promise.resolve()
+  private collaborationRootExecutionJournal?: Promise<CollaborationRootExecutionJournal>
+  private collaborationRootJournal?: Promise<CollaborationRootJournal>
   private collaborationJournal?: Promise<CollaborationSourceJournal>
   private collaborationReferenceJournal?: Promise<CollaborationReferenceJournal>
   private readonly collaborationReferenceOperations = new Set<Promise<unknown>>()
+  private readonly collaborationRootTransportTraces = new WeakMap<CollaborationSourceSnapshot, string>()
+  private collaborationConsumptionJournal?: Promise<Awaited<ReturnType<typeof openCollaborationConsumptionJournal>>>
+  private readonly collaborationConsumerLive = new Map<string, { sessionId: SessionId; expiresAt: number; signal: AbortSignal }>()
   private collaborationDeliveryJournal?: Promise<CollaborationDeliveryJournal>
 
   /**
@@ -195,7 +228,15 @@ export class SessionController extends TypertRemoteService {
     super(ctx, 'sessionController', { namespace: 'session' })
     // Host identity reads use the owning Profile's registry, never a caller's Cordis scope.
     this.inspectWorkspaceModelSelection = this.inspectWorkspaceModelSelection.bind(this)
+    this.prepareCollaborationRootPlanning = this.prepareCollaborationRootPlanning.bind(this)
     this.prepareWorkspaceModelSnapshot = this.prepareWorkspaceModelSnapshot.bind(this)
+    this.collaborationRootConsumption = this.collaborationRootConsumption.bind(this)
+    this.collaborationRootFeedback = this.collaborationRootFeedback.bind(this)
+    this.collaborationRootExecution = this.collaborationRootExecution.bind(this)
+    this.readCollaborationRoot = this.readCollaborationRoot.bind(this)
+    this.acceptCollaborationRoot = this.acceptCollaborationRoot.bind(this)
+    this.inspectCollaborationRoot = this.inspectCollaborationRoot.bind(this)
+    this.captureCollaborationRoot = this.captureCollaborationRoot.bind(this)
     this.captureCollaborationSource = this.captureCollaborationSource.bind(this)
     this.readCollaborationSourceSnapshot = this.readCollaborationSourceSnapshot.bind(this)
     this.inspectCollaborationSource = this.inspectCollaborationSource.bind(this)
@@ -209,11 +250,29 @@ export class SessionController extends TypertRemoteService {
       await this.collaborationCaptureTail
       const journal = await this.collaborationJournal?.catch(() => undefined)
       await journal?.close()
+      const executions = await this.collaborationRootExecutionJournal?.catch(() => undefined)
+      await executions?.close()
+      const roots = await this.collaborationRootJournal?.catch(() => undefined)
+      await roots?.close()
       const replies = await this.collaborationDeliveryJournal?.catch(() => undefined)
       await replies?.close()
       const references = await this.collaborationReferenceJournal?.catch(() => undefined)
       await references?.close()
+      const consumptions = await this.collaborationConsumptionJournal?.catch(() => undefined)
+      await consumptions?.close()
+      this.collaborationConsumerLive.clear()
     }, 'session-controller.collaboration-sources')
+    installCollaborationFeedbackCheckpoint(ctx, async (sessionId) => {
+      this.collaborationLifetime.signal.throwIfAborted()
+      if (this.collaborationRootJournal === undefined) {
+        const facility = ctx.get('storageDomain')
+        if (!facility) return false
+        this.collaborationRootJournal = openCollaborationRootJournal(facility)
+      }
+      const roots = await this.collaborationRootJournal
+      this.collaborationLifetime.signal.throwIfAborted()
+      return roots.hasSession(sessionId)
+    }, sessionId => this.checkpointCollaborationConsumption(sessionId))
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
     this.commands = new SessionCommandController(ctx, this.agents, process.cwd())
@@ -507,7 +566,7 @@ export class SessionController extends TypertRemoteService {
             signal.throwIfAborted()
             await inspectCurrent()
             signal.throwIfAborted()
-          }, analysisSignal)
+          }, analysisSignal, this.collaborationRootTransportTraces.get(snapshot))
         },
         analyzeClarification: async (input: CollaborationClarificationInput,
           persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
@@ -537,6 +596,388 @@ export class SessionController extends TypertRemoteService {
           }, analysisSignal)
         },
       })
+    })
+    this.collaborationCaptureTail = operation.then(() => {}, () => {})
+    return operation
+  }
+
+  /**
+   * Persist a new logical root before exposing its prepared analysis call. This opt-in Host API
+   * does not classify continuations, authenticate namespaces/grants or submit to the cloud.
+   * The source journal may commit first; failure leaves an inert source, never a published partial root.
+   * @param value - Original source and current Host-authorized namespace/policy; root IDs are generated locally.
+   * @param signal - Cancellation combined with Profile disposal; accepted writes drain on disposal.
+   * @returns Original source and atomic source/root/outbox aggregate; recovered input has no executable call.
+   */
+  async captureCollaborationRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture> {
+    const input = parseCollaborationRootCaptureInput(value)
+    const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    const captured = await this.captureCollaborationSource(input.source, owned)
+    const operation = this.collaborationCaptureTail.then(async () => {
+      owned.throwIfAborted()
+      const sessionId = SessionId(input.source.session_id), workspaceId = WorkspaceId(input.source.workspace_id)
+      const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
+      const current = async () => {
+        await waitForCollaborationSourceRead(this.inspectCollaborationMembership(sessionId, workspaceId, owned), owned)
+        if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== session) {
+          throw Error('collaboration_session_workspace_mismatch')
+        }
+        owned.throwIfAborted()
+      }
+      await current()
+      if (this.collaborationRootJournal === undefined) {
+        const facility = this.ctx.get('storageDomain')
+        if (facility === undefined) throw Error('collaboration_root_journal_unavailable')
+        this.collaborationRootJournal = openCollaborationRootJournal(facility)
+      }
+      const journal = await waitForCollaborationSourceRead(this.collaborationRootJournal, owned)
+      await current()
+      const sourceDigest = describeCollaborationSource(captured.snapshot).snapshot_digest
+      const submission = await journal.capture({ ...input, source: captured.snapshot,
+        objective_ref: input.objective_ref ?? ('source-v1:' + sourceDigest),
+        task_grant_ref: input.task_grant_ref ?? ('intent-v1:' + sourceDigest) }, owned)
+      await current()
+      this.collaborationRootTransportTraces.set(captured.snapshot, submission.root_trace_id)
+      return Object.freeze({ ...captured, submission })
+    })
+    this.collaborationCaptureTail = operation.then(() => {}, () => {})
+    return operation
+  }
+
+  /** Prepare a fresh one-shot analysis using an admitted root's original model and current credentials.
+   * The original Source remains immutable. Membership is rechecked after preparation and around input/grant persistence.
+   * This Host-only method has no Remote endpoint and grants no cloud authority.
+   * @param value - Original namespace, command and Source lookup; no model overrides.
+   * @param predecessor - Local journal reference selected by the private owner; cloud eligibility remains separate.
+   * @param signal - Operation cancellation retained through the prepared call.
+   * @returns original admitted root and private one-shot analysis closure, never a recovered executable handle.
+   */
+  async prepareCollaborationRootPlanning(value: unknown, predecessor: CollaborationPlanningPredecessor,
+    signal: AbortSignal): Promise<CollaborationRootPlanningPreparation> {
+    const target = parseCollaborationRootTarget(value), owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    const root = await this.readCollaborationRoot(target, owned)
+    if (root.state !== 'admitted') throw Error('collaboration_root_not_admitted')
+    const workspaceId = WorkspaceId(root.source.workspace_id), sessionId = SessionId(root.source.session_id)
+    const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
+    const current = async (active: AbortSignal) => {
+      const latest = await this.readCollaborationRoot(target, active)
+      active.throwIfAborted()
+      if (!isDeepStrictEqual(latest, root) || this.ctx.workspaceRegistry.get(workspaceId) !== workspace
+        || this.ctx.sessions.get(sessionId) !== session) throw Error('collaboration_session_workspace_mismatch')
+    }
+    const model = root.source.model_snapshot
+    const prepared = await waitForCollaborationSourceRead(this.ctx.llm.prepareSnapshot({ provider: model.provider,
+      model: model.model, maxTokens: 8192,
+      ...(model.reasoning_effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(model.reasoning_effort) }),
+    }, owned), owned)
+    await current(owned)
+    if (prepared.snapshot.provider !== model.provider || prepared.snapshot.model !== model.model
+      || prepared.snapshot.reasoning_effort !== model.reasoning_effort) throw Error('collaboration_model_selection_changed')
+    return Object.freeze({ root, analyze: (persist, cancellation) => {
+      const active = AbortSignal.any([owned, cancellation])
+      return this.collaborationAnalysis.runRootAttempt(root, predecessor, prepared, async (manifest, running) => {
+        await current(running)
+        await persist(manifest, running)
+        await current(running)
+      }, active)
+    } })
+  }
+
+  /**
+   * Read root signing metadata from the committed aggregate under current Profile membership.
+   * @param value - Exact namespace, original command and Source coordinates; root overrides reject.
+   * @param signal - Parent cancellation combined with Profile disposal.
+   * @returns Frozen original binding without Source content, model preparation or signing authority.
+   */
+  async inspectCollaborationRoot(value: unknown, signal: AbortSignal): Promise<CollaborationRootDescriptor> {
+    const entry = await this.readCollaborationRoot(parseCollaborationRootTarget(value), signal)
+    return Object.freeze({ namespace_id: entry.namespace_id, command_id: entry.command_id,
+      root_task_id: entry.root_task_id, root_trace_id: entry.root_trace_id, payload_digest: entry.payload_digest,
+      source_descriptor: describeCollaborationSource(entry.source) })
+  }
+
+  /**
+   * Read the committed root aggregate without model preparation or activation.
+   * @param value - Namespace and original Source coordinates, optionally with the original command; supplied by the authenticated parent.
+   * @param signal - Request cancellation combined with Profile disposal.
+   * @returns Immutable pending or admitted record; changed membership and unknown roots reject.
+   */
+  async readCollaborationRoot(value: unknown, signal: AbortSignal): Promise<CollaborationRootSubmission> {
+    return this.accessCollaborationRoot(value, signal)
+  }
+
+  /**
+   * Durably retain the original cloud admission receipt after parent Host authentication.
+   * @param value - Original namespace, command and Source coordinates.
+   * @param receipt - Cloud receipt verified by the parent; this method validates identity, not cloud authority.
+   * @param signal - Cancellation before write; accepted writes drain, but cancellation may hide the acknowledgment.
+   * @returns Committed admitted record; uncertainty requires rereading the original root, never recapture.
+   */
+  async acceptCollaborationRoot(value: unknown, receipt: unknown, signal: AbortSignal): Promise<CollaborationRootSubmission> {
+    return this.accessCollaborationRoot(parseCollaborationRootTarget(value), signal, parseCollaborationRootAdmission(receipt))
+  }
+
+  /**
+   * Retain exact concrete execution confirmations in this Profile before Main sends them to the cloud.
+   * This private operation has no Remote endpoint and supplies no cloud authorization or model activity.
+   * @param value - Exact read/prepare/accept operation with original root lookup and frozen task references.
+   * @param signal - Caller cancellation combined with Profile disposal; accepted writes drain.
+   * @returns Durable command/receipt, or null for a missing read. Current membership is checked around storage.
+   */
+  async collaborationRootExecution(value: unknown, signal: AbortSignal): Promise<CollaborationExecutionRecord | null> {
+    const command = parseCollaborationExecutionOperation(value)
+    const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    const workspaceId = WorkspaceId(command.target.workspace_id), sessionId = SessionId(command.target.session_id)
+    const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
+    const root = await this.readCollaborationRoot(command.target, owned)
+    const current = this.collaborationMembershipCheck(sessionId, workspaceId, owned, session, workspace)
+    const operation = this.collaborationCaptureTail.then(async () => {
+      await current()
+      if (this.collaborationRootExecutionJournal === undefined) {
+        const facility = this.ctx.get('storageDomain')
+        if (!facility) throw Error('collaboration_execution_journal_unavailable')
+        this.collaborationRootExecutionJournal = openCollaborationRootExecutionJournal(facility)
+      }
+      const journal = await waitForCollaborationSourceRead(this.collaborationRootExecutionJournal, owned)
+      await current()
+      const result = command.action === 'read' ? journal.read(root, command.selection) ?? null
+        : command.action === 'prepare' ? await journal.prepare(root, command.selection, owned)
+          : await journal.accept(root, command.selection, command.receipt, owned)
+      await current()
+      return result
+    })
+    this.collaborationCaptureTail = operation.then(() => {}, () => {})
+    return operation
+  }
+
+  /**
+   * Read durable original-Session consumption evidence or queue an explicitly authorized result once.
+   * The parent authenticates current cloud result/continuation authority; root admission alone is insufficient.
+   * Enqueue requires an attached idle Agent, an empty inbox and the exact observed Session prefix. It never wakes a model.
+   * @param value - Private read/enqueue command with original root, frozen task and immutable delivery lookup.
+   * @param signal - Parent lifetime combined with Profile disposal; accepted Session writes drain through flush.
+   * @returns Persisted enqueue/consumption evidence. Removed or claimed messages are never automatically reinserted.
+   */
+  async collaborationRootFeedback(value: unknown, signal: AbortSignal): Promise<CollaborationFeedbackObservation> {
+    const parsed = parseCollaborationFeedbackOperation(value)
+    if (parsed.action !== 'read' && parsed.action !== 'enqueue') throw Error('collaboration_feedback_operation_invalid')
+    const result = await this.accessCollaborationFeedback(parsed, signal)
+    /* v8 ignore next -- The private action parser and dispatcher return observations for exactly read/enqueue. */
+    if (!('status' in result)) throw Error('collaboration_feedback_operation_invalid')
+    return result
+  }
+
+  /** Execute a private durable consumer command under authenticated Main's current authority.
+   * @param value - Consumer read/prepare/start, original root and exact delivery; start requires a fresh cloud grant.
+   * @param signal - Current parent and Profile lifetime; recovery never restores live wake permission.
+   * @returns Durable record and observation; only first start may wake the attached original Agent.
+   */
+  async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionResult> {
+    const parsed = parseCollaborationFeedbackOperation(value)
+    if (parsed.action === 'read' || parsed.action === 'enqueue') throw Error('collaboration_consumption_operation_invalid')
+    const result = await this.accessCollaborationFeedback(parsed, signal)
+    /* v8 ignore next -- Consumer actions are excluded from the observation-only return paths above. */
+    if ('status' in result) throw Error('collaboration_consumption_operation_invalid')
+    const commit = result.record ? collaborationConsumptionCommit(result.record) : undefined
+    return { ...result, ...(commit ? { commit } : {}) }
+  }
+
+  private async openConsumptionJournal() {
+    if (!this.collaborationConsumptionJournal) {
+      const facility = this.ctx.get('storageDomain')
+      if (!facility) throw Error('collaboration_consumption_journal_unavailable')
+      this.collaborationConsumptionJournal = openCollaborationConsumptionJournal(facility)
+    }
+    return this.collaborationConsumptionJournal
+  }
+
+  private async checkpointCollaborationConsumption(sessionId: SessionId): Promise<string | undefined> {
+    const journal = await this.openConsumptionJournal()
+    const records = journal.records().filter(r => r.binding.source_locator.session_id === sessionId && r.state !== 'prepared')
+    if (!records.length) return
+    const persistence = this.ctx.get('sessionPersistence')
+    if (!persistence) throw Error('collaboration_consumption_persistence_unavailable')
+    const handle = await persistence.open(sessionId, 'read')
+    try {
+      const { events } = await handle.read()
+      const currentStep = events.findLast(e => e.type === 'step/start')
+      if (currentStep?.type !== 'step/start') throw Error('collaboration_consumption_step_missing')
+      for (const record of records) {
+        const admitted = events.find(e => e.type === 'user/message' && e.data.id === record.binding.message_id)
+        if (admitted?.type !== 'user/message') continue
+        const observation = observeCollaborationFeedback(events, admitted.data)
+        if (observation.consuming_step?.turn !== currentStep.data.turn) continue
+        const live = this.collaborationConsumerLive.get(record.binding.message_id)
+        if (!live || live.sessionId !== sessionId || live.signal.aborted || Date.now() >= live.expiresAt)
+          throw Error('collaboration_consumption_reconciliation_required')
+        await journal.consume(record.binding, observation, this.collaborationLifetime.signal)
+        live.signal.throwIfAborted()
+        const request = await journal.request(record.binding, currentStep.data, live.signal)
+        live.signal.throwIfAborted()
+        return request.traceparent
+      }
+    } finally { await handle.close() }
+  }
+
+  private async accessCollaborationFeedback(value: unknown, signal: AbortSignal) {
+    const command = parseCollaborationFeedbackOperation(value)
+    const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    const sessionId = SessionId(command.target.session_id), workspaceId = WorkspaceId(command.target.workspace_id)
+    const session = this.ctx.sessions.get(sessionId), workspace = this.ctx.workspaceRegistry.get(workspaceId)
+    const execution = await this.collaborationRootExecution({ action: 'read', target: command.target, selection: command.selection }, owned)
+    if (!execution || execution.state !== 'admitted') throw Error('collaboration_feedback_execution_not_admitted')
+    const root = await this.readCollaborationRoot(command.target, owned)
+    const current = async (): Promise<void> => {
+      await waitForCollaborationSourceRead(this.inspectCollaborationMembership(sessionId, workspaceId, owned), owned)
+      if (this.ctx.sessions.get(sessionId) !== session || this.ctx.workspaceRegistry.get(workspaceId) !== workspace)
+        throw Error('collaboration_session_workspace_mismatch')
+      owned.throwIfAborted()
+    }
+    const operation = this.collaborationCaptureTail.then(async () => {
+      await current()
+      if (!this.collaborationDeliveryJournal) {
+        const facility = this.ctx.get('storageDomain')
+        if (!facility) throw Error('collaboration_delivery_journal_unavailable')
+        this.collaborationDeliveryJournal = openCollaborationDeliveryJournal(facility)
+      }
+      const journal = await waitForCollaborationSourceRead(this.collaborationDeliveryJournal, owned)
+      const delivery = [...journal.records(root.namespace_id, { workspace_id: root.source.workspace_id, session_id: root.source.session_id,
+        source_message_id: root.source.source_message_id, source_revision: root.source.source_revision })]
+        .find(entry => entry.delivery_id === command.delivery_id)
+      if (!delivery) throw Error('collaboration_feedback_delivery_missing')
+      const message = createCollaborationFeedbackMessage(execution, delivery, root.source)
+      const persistence = this.ctx.get('sessionPersistence')
+      if (!persistence) throw Error('collaboration_feedback_persistence_unavailable')
+      const observe = async (): Promise<CollaborationFeedbackObservation> => {
+        // Read through a fresh storage handle: a live query can include events that have not reached disk.
+        const count = session?.seq
+        if (count !== undefined) { await persistence.flush(); await current() }
+        const handle = await persistence.open(sessionId, 'read', { signal: owned })
+        try {
+          // Cold reads capture their prefix before flushing; live reads cap at the pre-barrier Session sequence.
+          const cold = count === undefined ? await handle.read(0, undefined, { signal: owned }) : undefined
+          if (cold) { await persistence.flush(); await current() }
+          const { events } = cold ?? await handle.read(0, count, { signal: owned })
+          if (count !== undefined && events.length !== count) throw Error('collaboration_feedback_persistence_unconfirmed')
+          await current()
+          return observeCollaborationFeedback(events, message)
+        } finally { await handle.close() }
+      }
+      const before = await observe()
+      if (command.action === 'consumer_read' || command.action === 'consumer_prepare' || command.action === 'consumer_start') {
+        const consumers = await this.openConsumptionJournal()
+        const binding = { namespace_id: root.namespace_id, root_task_id: root.root_task_id, root_trace_id: root.root_trace_id,
+          execution_command_id: execution.execution_command_id, invocation_id: delivery.invocation_id, delivery_id: delivery.delivery_id,
+          result_digest: delivery.result_digest, message_id: message.id, source_snapshot_digest: delivery.source_snapshot_digest,
+          source_locator: delivery.source_locator }
+        let record = consumers.read(binding)
+        if (command.action === 'consumer_read') {
+          if (record && record.state !== 'prepared' && before.status === 'context_applied') record = await consumers.consume(binding, before, owned)
+          return { kind: 'consumer' as const, record: record ?? null, observation: before }
+        }
+        if (root.continuation_policy !== 'follow_authorized_plan') throw Error('collaboration_feedback_display_only')
+        if (command.action === 'consumer_prepare' && record) {
+          record = await consumers.prepare(binding,
+            { event_count: command.expected_event_count, log_digest: command.expected_log_digest }, owned)
+          return { kind: 'consumer' as const, record, observation: before }
+        }
+        if (command.action === 'consumer_start' && record?.state !== 'prepared' && record) {
+          const retained = await consumers.start(binding, command.grant, owned)
+          return { kind: 'consumer' as const, record: retained.record, observation: before }
+        }
+        const agent = this.ctx.agents.get(sessionId)
+        const idle = () => agent?.status === 'idle' && !agent.inbox.nextTurn.length && !agent.inbox.nextStep.length
+        if (!session || !agent || agent.session !== session || !idle()
+          || before.status !== 'not_enqueued') throw Error('collaboration_feedback_session_busy')
+        const expected = command.action === 'consumer_prepare' ? command : record?.command
+        if (!expected || session.seq !== before.event_count || expected.expected_event_count !== before.event_count
+          || expected.expected_log_digest !== before.log_digest) throw Error('collaboration_feedback_session_changed')
+        if (command.action === 'consumer_prepare') {
+          record = await consumers.prepare(binding, { event_count: before.event_count, log_digest: before.log_digest }, owned)
+          await current()
+          return { kind: 'consumer' as const, record, observation: before }
+        }
+        const started = await consumers.start(binding, command.grant, owned)
+        await current()
+        /* v8 ignore else -- Serialized starts return replays above; this private journal has one writer. */
+        if (started.wake) {
+          if (started.record.state === 'prepared' || session.seq !== before.event_count || !idle()) throw Error('collaboration_consumption_reconciliation_required')
+          const deadline = Date.parse(started.record.grant.expires_at)
+          if (Date.now() >= deadline) throw Error('collaboration_consumption_grant_expired')
+          const active = AbortSignal.any([owned, AbortSignal.timeout(Math.max(1, deadline - Date.now()))])
+          const cancelled = () => { agent.cancel({ kind: 'parent' }, { keepInbox: true }) }
+          this.collaborationConsumerLive.set(message.id, { sessionId, expiresAt: deadline, signal: active })
+          active.addEventListener('abort', cancelled, { once: true })
+          try {
+            active.throwIfAborted()
+            agent.send(message, 'next-step', true)
+            await agent.whenIdle()
+          } finally {
+            active.removeEventListener('abort', cancelled)
+            this.collaborationConsumerLive.delete(message.id)
+          }
+          await current()
+          const retained = consumers.read(binding)
+          /* v8 ignore next -- A committed consumer is immutable and this journal has no deletion operation. */
+          if (!retained) throw Error('collaboration_consumption_reconciliation_required')
+          return { kind: 'consumer' as const, record: retained, observation: await observe() }
+        } else {
+          return { kind: 'consumer' as const, record: started.record, observation: before }
+        }
+      }
+      if (command.action === 'read' || before.status !== 'not_enqueued') return before
+      if (root.continuation_policy !== 'follow_authorized_plan') throw Error('collaboration_feedback_display_only')
+      const agent = this.ctx.agents.get(sessionId)
+      if (!session || !agent || agent.session !== session) throw Error('collaboration_feedback_session_not_attached')
+      if (agent.status !== 'idle' || (agent.inbox.nextTurn.length > 0 || agent.inbox.nextStep.length > 0)) throw Error('collaboration_feedback_session_busy')
+      if (session.seq !== before.event_count || before.event_count !== command.expected_event_count
+        || before.log_digest !== command.expected_log_digest) throw Error('collaboration_feedback_session_changed')
+      owned.throwIfAborted()
+      // No await separates the exact-prefix check from the single synchronous inbox insertion.
+      agent.inject(message)
+      const after = await observe()
+      if (after.status === 'not_enqueued') throw Error('collaboration_feedback_persistence_unconfirmed')
+      return after
+    })
+    this.collaborationCaptureTail = operation.then(() => {}, () => {})
+    return operation
+  }
+
+  private collaborationMembershipCheck(sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal,
+    session: ReturnType<Context['sessions']['get']>, workspace: ReturnType<Context['workspaceRegistry']['get']>) {
+    return async () => {
+      await waitForCollaborationSourceRead(this.inspectCollaborationMembership(sessionId, workspaceId, signal), signal)
+      if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== session)
+        throw Error('collaboration_session_workspace_mismatch')
+      signal.throwIfAborted()
+    }
+  }
+
+  private accessCollaborationRoot(value: unknown, signal: AbortSignal, receipt?: CollaborationRootAdmission)
+    : Promise<CollaborationRootSubmission> {
+    const command = value && typeof value === 'object' && Object.hasOwn(value,'command_id')
+      ? parseCollaborationRootTarget(value) : undefined
+    const target = command ?? parseCollaborationRootLookup(value)
+    const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    const operation = this.collaborationCaptureTail.then(async () => {
+      owned.throwIfAborted()
+      const sessionId = SessionId(target.session_id), workspaceId = WorkspaceId(target.workspace_id)
+      const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
+      const current = this.collaborationMembershipCheck(sessionId, workspaceId, owned, session, workspace)
+      await current()
+      if (this.collaborationRootJournal === undefined) {
+        const facility = this.ctx.get('storageDomain')
+        if (!facility) throw Error('collaboration_root_journal_unavailable')
+        this.collaborationRootJournal = openCollaborationRootJournal(facility)
+      }
+      const journal = await waitForCollaborationSourceRead(this.collaborationRootJournal, owned)
+      const entry = command ? journal.read(command.command_id) : journal.find(target)
+      if (!entry || entry.namespace_id !== target.namespace_id || entry.source.workspace_id !== target.workspace_id
+        || entry.source.session_id !== target.session_id || entry.source.source_message_id !== target.source_message_id
+        || entry.source.source_revision !== target.source_revision) throw Error('collaboration_root_not_found')
+      const result = receipt === undefined ? entry : await journal.accept(entry.command_id, receipt, owned)
+      await current()
+      return result
     })
     this.collaborationCaptureTail = operation.then(() => {}, () => {})
     return operation

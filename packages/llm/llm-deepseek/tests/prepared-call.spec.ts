@@ -57,3 +57,11 @@ it('keeps the prepared credential reference and endpoint after configuration cha
   expect(second.requests).toHaveLength(1)
   expect(second.requests[0]).toMatchObject({ path: '/anthropic/v1/messages', headers: { 'x-api-key': 'key-for-SECOND_KEY' } })
 })
+
+it('propagates the original operation trace to the actual Provider HTTP request', async () => {
+  const http = await endpoint(), traceparent = '00-' + 'a'.repeat(32) + '-' + 'b'.repeat(16) + '-01'
+  const connection = resolveAdapterOptions({ baseURL: http.url })
+  await assemble(adapter(() => connection).stream({ ...options(), traceparent }))
+  expect(http.requests).toHaveLength(1)
+  expect(http.requests[0]?.headers.traceparent).toBe(traceparent)
+})

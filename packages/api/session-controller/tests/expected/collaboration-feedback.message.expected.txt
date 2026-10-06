@@ -1,0 +1,14 @@
+{
+  "id": "collaboration-feedback-259b5ca1bade4d12c0b69e14335923140d7e07de15f1d379f165e1b73b80c9c2",
+  "role": "user",
+  "source": {
+    "kind": "collaboration-result",
+    "form": "relay"
+  },
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"kind\":\"collaboration_result\",\"namespace_id\":\"n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"root_task_id\":\"00000000-0000-4000-8000-000000000001\",\"root_trace_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"execution_command_id\":\"00000000-0000-4000-8000-000000000003\",\"invocation_id\":\"invocation-1\",\"delivery_id\":\"delivery-1\",\"result_digest\":\"f2eca2d9199e92e7df75e5e0e0df9f43cd7281c2a9a843aff147c179b6bb8d6e\",\"plan_id\":\"plan-1\",\"task_id\":\"task-1\",\"task_revision\":\"1\",\"source\":{\"workspace_id\":\"00000000-0000-4000-8000-000000000004\",\"session_id\":\"session-1\",\"source_message_id\":\"source-1\",\"source_revision\":\"1\"},\"original_message\":\"完成原始任务\",\"target\":{\"project_id\":\"212\",\"agent_id\":\"guide\"},\"execution_state\":\"succeeded\",\"answer\":\"完成\",\"failure_code\":null}"
+    }
+  ]
+}

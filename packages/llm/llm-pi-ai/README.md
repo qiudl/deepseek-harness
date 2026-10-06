@@ -247,3 +247,5 @@ This Dev Note is non-authoritative working context: undecided directions and not
 </details>
 
 **Runtime invariant:** No companion is published. This package exposes no independent event sequence or mutable data relation beyond contracts enforced at its owning seam.
+
+Provider stream options preserve an operation’s validated `GenerateOptions.traceparent` through the common request headers, overriding case-insensitive static trace headers without changing credentials or model input.

@@ -1,3 +1,7 @@
+import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
+import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
+import type { HostRootAnalysisOutput } from './root-analysis-output.ts'
+import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJournalCommand, HostRootJournalMetadata, HostRootAnalysisInput, HostRootSubmissionTarget } from './root-authority.ts'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
 
@@ -587,12 +591,27 @@ export interface ProfileSourceSnapshotResult extends Omit<ProfileWorkspaceModelS
 }
 /** Parent commands retain no caller-selected model or Account binding digest. */
 export type HostCollaborationAnalysisCommand =
+  | Readonly<{ action: 'root_execution_journal'; operation: HostRemoteSessionJson }>
+  | Readonly<{ action: 'root_feedback'; operation: HostRemoteSessionJson }>
+  | Readonly<{ action: 'read_root_attempt'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'prepare_root_attempt'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'dispatch_root_attempt'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
+  | Readonly<{ action: 'read_root_output'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'prepare_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'recover_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'reconcile_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'resume_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'prepare'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'capture_reply'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'prepare_clarification'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
 /** Original analysis JSON uses base64url to stay within the existing frame limit after escaping. */
 export type HostCollaborationAnalysisResult =
+  | Readonly<{ kind: 'root_execution_journal' | 'root_feedback'; record: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'root_attempt_evidence'; evidence: HostRootPlanningEvidence }>
+  | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>
+  | Readonly<{ kind: 'root_output'; evidence: HostRootAnalysisOutput }>
+  | Readonly<{ kind: 'root_prepared'; preparation: HostRemoteSessionJson }>
   | Readonly<{ kind: 'prepared'; preparation: HostRemoteSessionJson }>
   | Readonly<{ kind: 'reply_source'; capture: HostRemoteSessionJson }>
   | Readonly<{ kind: 'output'; json_base64url: string; analysis_receipt?: HostCollaborationAnalysisReceipt }>
@@ -627,6 +646,16 @@ export interface HostSourceAuthorityChallenge extends HostWorkspaceAuthorityChal
 /** Installation signature for committed Source contents; no target execution grant. */
 export interface HostSourceAuthorityAssertion extends Omit<HostWorkspaceAuthorityAssertion, 'challenge'> {
   readonly challenge: HostSourceAuthorityChallenge
+}
+/** Account-verified root observation; the signer must read the original journal binding. */
+export interface ProfileRootAuthorityRequest extends Omit<ProfileSourceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.root_authority'
+  readonly params: Omit<ProfileSourceAuthorityRequest['params'], 'challenge'> & { readonly challenge: HostRootAuthorityChallenge }
+}
+/** Signature in the dedicated root domain, retaining the original source/root/command. */
+export interface ProfileRootAuthorityResult extends Omit<ProfileSourceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.root_authority'
+  readonly result: HostRootAuthorityAssertion
 }
 /** Account-verified, Main-only persistent Source observation and signature. */
 export interface ProfileSourceAuthorityRequest extends Omit<ProfileWorkspaceAuthorityRequest, 'method' | 'params'> {
@@ -1603,6 +1632,12 @@ export type HostControlFrame =
   | ProfileCollaborationRegistrationResult
   | ProfileWorkspaceAuthorityRequest
   | ProfileWorkspaceAuthorityResult
+  | ProfileRootJournalRequest
+  | ProfileRootJournalResult
+  | ProfileRootPlanningAttemptAuthorityRequest
+  | ProfileRootPlanningAttemptAuthorityResult
+  | ProfileRootAuthorityRequest
+  | ProfileRootAuthorityResult
   | ProfileSourceAuthorityRequest
   | ProfileSourceAuthorityResult
   | ProfileReferenceAuthorityRequest
@@ -1667,3 +1702,24 @@ export type HostCollaborationAnalysisReceipt = Readonly<{
   output_digest: string
   signature: string
 }>
+/** Account-authorized private root journal read or acknowledgement. */
+export interface ProfileRootJournalRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.root_journal'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & { readonly command: HostRootJournalCommand }
+}
+/** Bounded metadata; complete Source bytes use profile.source_snapshot. */
+export interface ProfileRootJournalResult extends Omit<ProfileRootAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.root_journal'
+  readonly result: HostRootJournalMetadata
+}
+
+/** Authenticated current-Account request for one persisted fresh planning attempt. */
+export interface ProfileRootPlanningAttemptAuthorityRequest extends Omit<ProfileRootAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.root_planning_attempt_authority'
+  readonly params: Omit<ProfileRootAuthorityRequest['params'], 'challenge'> & { readonly challenge: HostRootPlanningAttemptAuthorityChallenge }
+}
+/** Fresh attempt proof, never an execution or dispatch grant. */
+export interface ProfileRootPlanningAttemptAuthorityResult extends Omit<ProfileRootAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.root_planning_attempt_authority'
+  readonly result: HostRootPlanningAttemptAuthorityAssertion
+}

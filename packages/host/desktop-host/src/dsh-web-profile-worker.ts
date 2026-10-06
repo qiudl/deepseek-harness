@@ -1,3 +1,8 @@
+import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationReferenceGrant, parseHostCollaborationReferenceContentChunk,
@@ -291,6 +296,13 @@ export class DshWebProfileWorkerFactory {
       receiveCollaborationDelivery: (command, signal) => this.receiveCollaborationDelivery(
         viewOrigin, deliveryToken, command, signal, () => requestedStop || settled,
       ),
+      inspectRootPlanningAttempt: (target, attemptId, binding, signal) => this.inspectRootPlanningAttempt(
+        viewOrigin, analysisToken, target, attemptId, binding, signal, () => requestedStop || settled,
+      ),
+      rootJournal: (command, signal) => this.rootJournal(viewOrigin, analysisToken, command, signal, () => requestedStop || settled),
+      inspectCollaborationRoot: (target, signal) => this.inspectCollaborationRoot(
+        viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
+      ),
       inspectCollaborationSource: (target, signal) => this.inspectCollaborationSource(
         viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
       ),
@@ -436,6 +448,32 @@ export class DshWebProfileWorkerFactory {
     return result
   }
 
+  private async inspectRootPlanningAttempt(origin: string, token: string, target: HostRootSubmissionTarget,
+    attemptId: HostControlRequestId, binding: string, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostRootPlanningAttemptDescriptor> {
+    const result = await this.collaborationAnalysis(origin, token, { action: 'inspect_root_attempt', target: { ...target },
+      attempt_request_id: attemptId, binding_key: binding }, signal, stopped)
+    return matchHostRootPlanningAttemptTarget(result, target, attemptId)
+  }
+
+  private async rootJournal(
+    origin: string, token: string, input: HostRootJournalCommand, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostRootJournalMetadata> {
+    const command = parseHostRootJournalCommand(input)
+    return this.readSource(origin, token, command.target, signal, stopped, '/internal/desktop-root-journal', 8192,
+      value => matchHostRootJournalMetadata(value, command), value => value.source_descriptor, command)
+  }
+
+  private async inspectCollaborationRoot(
+    viewOrigin: string, token: string, target: HostRootSubmissionTarget, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostRootSubmissionDescriptor> {
+    return this.readSource(viewOrigin, token, target, signal, stopped, '/internal/desktop-collaboration-root', 8192, (value) => {
+      const result = parseHostRootSubmissionDescriptor(value)
+      if (result.namespace_id !== target.namespace_id || result.command_id !== target.command_id) throw new HostAuthorityError('profile_mismatch')
+      return result
+    }, result => result.source_descriptor)
+  }
+
   private async inspectCollaborationSource(
     viewOrigin: string,
     token: string,
@@ -476,6 +514,7 @@ export class DshWebProfileWorkerFactory {
     maxBytes: number,
     parse: (value: unknown) => T,
     coordinates: (value: T) => HostCollaborationSourceTarget,
+    body: unknown = target,
   ): Promise<T> {
     const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
     active.throwIfAborted()
@@ -484,7 +523,7 @@ export class DshWebProfileWorkerFactory {
       method: 'POST',
       redirect: 'error',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(target),
+      body: JSON.stringify(body),
       signal: active,
     })
     return this.readPrivateResponse(response, active, signal, stopped, maxBytes, (bytes) => {
