@@ -167,6 +167,8 @@ These limits tell you what to expect in unusual setups — a source checkout, SS
 - **Binding all network interfaces is not supported** — `--host 0.0.0.0` is rejected at startup for safety; use the default loopback host.
 - **Desktop control groups local browser windows** — the Profile currently treats local browser windows as one Desktop owner. Its claim covers Session Remote mutations and forwarded approval replies; terminal input, file upload, and settings writes have separate owners and are outside this claim.
 
+- Desktop remote Session creation forwards Workspace and Session identities to the native Session controller. A native `session/writer-held` refusal is returned as a bounded `sessionCreateFailure` value so the remote UI can apply its existing blank-session fallback.
+
 <a id="dev-note"></a>
 ### Dev Note
 
