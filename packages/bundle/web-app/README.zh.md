@@ -201,6 +201,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 `DSH_PROFILE_ANALYSIS_TOKEN` 单独为父 Host 启用 `/internal/desktop-collaboration-analysis`。`prepare` 捕获所属 Profile 的 Source 并保存完整分析输入，等待云端资格而不调用模型。`dispatch` 仅在原归属摘要下继续同一个一次性调用，先持久保存结果再响应。最多两个待完成操作，准备和执行共用 30 秒生命周期；取消、销毁、过期资格和重复请求均拒绝继续。浏览器 Cookie 和 Source 读取令牌不能授权此入口。该私有路由不授予任务受理资格，不提供可执行恢复或 Renderer API。
 
+`read_source_output` 通过同一私有令牌读取普通 Source 已保存的原始分析。读取前后均核验当前 Session 归属，返回原描述符、已消费派发凭据、输出摘要及最多 32 KiB、以 base64url 编码的 JSON。澄清输出单独保留。缺失输出会明确返回；多个原始输出、Source 变化、归属丢失、取消或释放均拒绝。重新打开 journal 后，即使租约过期仍可读取历史证据，但不会准备模型或授予派发、云端受理资格。
+
 `capture_reply` 先保存不含新增 active mention 的补充 Source，仅保留进程内调用，不开始分析。协调器提交补充消息与选定待澄清项的关联后，`prepare_clarification` 由所属 Profile 核验完整原文及补充输入，保存新 manifest，再等待匹配计划及修订号的资格。分析身份仍为原始 Source 描述符。重复捕获仅返回不可执行恢复；并发准备、归属变化、过期与销毁均不能重建或重复派发调用。这些操作共用两个进行中操作及 30 秒限制。
 
 Web 组合包含账号 Remote 控制器和账号设置页面。

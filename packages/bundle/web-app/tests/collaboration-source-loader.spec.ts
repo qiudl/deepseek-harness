@@ -207,7 +207,14 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
         { action: mode === 'root-analysis' ? 'prepare_root' : 'prepare', ...(mode==='root-analysis'?{ resume_binding_key:'f'.repeat(64) }:{}), binding_key: 'd'.repeat(64), input: mode === 'root-analysis' ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
         new AbortController().signal,
         () => false,
-      )) as { kind: string; attempt_request_id: string; input_manifest_digest: string; source_digest: string; root?: unknown })
+      )) as {
+        kind: string
+        attempt_request_id: string
+        input_manifest_digest: string
+        source_digest: string
+        descriptor: unknown
+        root?: unknown
+      })
       : undefined
   const first =
     (mode === 'analysis-profile' || mode === 'root-analysis')
@@ -509,6 +516,26 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     expect((await postAnalysis(dispatch)).status).toBe(422)
     expect(providerRequests).toBe(1)
     if (mode === 'analysis-profile') {
+      const readOriginal = { action: 'read_source_output', binding_key: 'd'.repeat(64), target }
+      const originalFiles = ['collaboration_source_v2.json', 'collaboration_analysis_v2.json', 'collaboration_analysis_output_v2.json']
+      const originalBytes = await Promise.all(originalFiles.map(name => readFile(join(directory, 'state', name))))
+      const savedOutput = await factory['collaborationAnalysis'](origin, 'B'.repeat(43), readOriginal,
+        new AbortController().signal, () => false) as {
+        state: string
+        descriptor: unknown
+        dispatch: unknown
+        output_digest: string
+        json_base64url: string
+      }
+      expect(savedOutput.state).toBe('saved')
+      expect(savedOutput.dispatch).toEqual(grant)
+      expect(savedOutput.descriptor).toEqual(preparation!.descriptor)
+      expect(savedOutput.output_digest).toBe(createHash('sha256').update(result.jsonText, 'utf8').digest('hex'))
+      expect(Buffer.from(savedOutput.json_base64url, 'base64url').toString('utf8')).toBe(result.jsonText)
+      expect(savedOutput).not.toHaveProperty('root')
+      expect(savedOutput).not.toHaveProperty('manifest_json')
+      expect(await Promise.all(originalFiles.map(name => readFile(join(directory, 'state', name))))).toEqual(originalBytes)
+      expect(providerRequests).toBe(1)
 
       const replyInput = { ...source, source_message_id: 'reply-1', original_message: '只分析这份方案的规则，不修改文件。', active_mentions: [] }
       const captured = await factory['collaborationAnalysis'](origin, 'B'.repeat(43),
@@ -537,6 +564,9 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
         grant: { ...grant, attempt_request_id: fresh.attempt_request_id, input_manifest_digest: fresh.input_manifest_digest,
           source_digest: fresh.source_digest, expected_plan_revision: '3' } }
       await factory['collaborationAnalysis'](origin, 'B'.repeat(43), nextDispatch, new AbortController().signal, () => false)
+      expect(providerRequests).toBe(2)
+      expect(await factory['collaborationAnalysis'](origin, 'B'.repeat(43), readOriginal,
+        new AbortController().signal, () => false)).toEqual(savedOutput)
       expect(providerRequests).toBe(2)
       expect((await postAnalysis(nextDispatch)).status).toBe(422)
       const records = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {

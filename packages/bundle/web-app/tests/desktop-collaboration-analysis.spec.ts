@@ -1,5 +1,6 @@
 /** REQ-20260930-0004: private Profile preparation waits for the original coordinator grant. */
 import { Context } from '@deepseek-ai/cordis'
+import { createHash } from 'node:crypto'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
@@ -121,10 +122,17 @@ async function harness(journalOpenFailure?: Error) {
   const captureCall = vi.fn(capture)
   const open = vi.fn(() => openCollaborationAnalysisJournal(facility))
   if (journalOpenFailure) open.mockRejectedValueOnce(journalOpenFailure)
+  const readSource = vi.fn<SessionController['readCollaborationSourceSnapshot']>(async (target, active) => {
+    active.throwIfAborted()
+    const snapshot = sourceJournal.read(target)
+    if (!snapshot) throw Error('membership')
+    return snapshot
+  })
   const owner = new DesktopCollaborationAnalysis(
     captureCall,
     open,
     lifetime.signal,
+    undefined, undefined, undefined, undefined, undefined, undefined, readSource,
   )
   onTestFinished(async () => {
     if (journalOpenFailure) await expect(owner.close()).rejects.toBe(journalOpenFailure)
@@ -135,7 +143,7 @@ async function harness(journalOpenFailure?: Error) {
     await ctx.fiber.dispose()
     await rm(root, { recursive: true, force: true })
   })
-  return { root, owner, lifetime, facility, capture: captureCall, open, calls: () => calls,
+  return { root, owner, lifetime, facility, readSource, capture: captureCall, open, calls: () => calls,
     snapshot: (id: string) => sourceJournal.read({ workspace_id: input().workspace_id, session_id: input().session_id, source_message_id: id, source_revision: '1' })! }
 }
 const grant = (prepared: { attempt_request_id: string; input_manifest_digest: string; source_digest: string }) => ({
@@ -685,4 +693,116 @@ it('returns unavailable over private HTTP when the Profile has no planning owner
   expect(response.status).toBe(422)
   expect(await response.json()).toEqual({ error: 'unavailable' })
   expect(h.calls()).toBe(0)
+})
+
+it('reads ordinary Source output through private HTTP without preparing another model call', async () => {
+  const h = await harness(), prepared = receipt(await h.owner.prepare(input(), binding, signal()))
+  const f = await httpFixture(h)
+  const { original_message: _text, active_mentions: _mentions, ...target } = input()
+  const before = await f.post({ action: 'read_source_output', binding_key: binding, target })
+  expect(before.status).toBe(200)
+  expect(await before.json()).toMatchObject({ value: { state: 'missing', descriptor: prepared.descriptor } })
+  const originalGrant = permission(prepared)
+  const result = await h.owner.dispatch(prepared.attempt_request_id, binding, originalGrant, signal())
+  const response = await f.post({ action: 'read_source_output', binding_key: binding, target })
+  expect(response.status).toBe(200)
+  const body = await response.json() as { value: { state: string; dispatch: unknown; output_digest: string; json_base64url: string } }
+  expect(body.value.state).toBe('saved')
+  expect(body.value.dispatch).toEqual(originalGrant)
+  expect(body.value.output_digest).toBe(createHash('sha256').update(result.jsonText, 'utf8').digest('hex'))
+  expect(Buffer.from(body.value.json_base64url, 'base64url').toString('utf8')).toBe(result.jsonText)
+  expect(body.value).not.toHaveProperty('manifest_json')
+  expect(body.value).not.toHaveProperty('root')
+  expect(h.calls()).toBe(1)
+  expect(h.capture).toHaveBeenCalledTimes(1)
+  expect(h.readSource).toHaveBeenCalledTimes(4)
+})
+it('reopens ordinary Source output with its expired original grant and no executable call', async () => {
+  const h = await harness(), prepared = receipt(await h.owner.prepare(input(), binding, signal()))
+  const originalGrant = permission(prepared)
+  await h.owner.dispatch(prepared.attempt_request_id, binding, originalGrant, signal())
+  await h.owner.close()
+  const recovered = new DesktopCollaborationAnalysis(async () => { throw Error('must not recapture') },
+    () => openCollaborationAnalysisJournal(h.facility), signal(),
+    undefined, undefined, undefined, undefined, undefined, undefined, h.readSource)
+  onTestFinished(() => recovered.close())
+  const { original_message: _text, active_mentions: _mentions, ...target } = input()
+  vi.useFakeTimers()
+  try {
+    vi.setSystemTime(Date.parse(originalGrant.lease_expires_at) + 1)
+    const result = await recovered.readSourceOutput(target, signal())
+    expect(result.state).toBe('saved')
+    if (result.state !== 'saved') throw Error('expected persisted output')
+    expect(result.dispatch).toEqual(originalGrant)
+    expect(h.calls()).toBe(1)
+    expect(h.capture).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
+})
+it.each(['revoked', 'final_membership', 'changed', 'cancelled', 'lifetime', 'closed', 'closing', 'invalid', 'unknown'] as const)(
+  'refuses ordinary Source output after %s without invoking a model', async (mode) => {
+    const h = await harness()
+    await h.capture(input(), signal())
+    const { original_message: _text, active_mentions: _mentions, ...target } = input()
+    const cancel = new AbortController()
+    if (mode === 'revoked') h.readSource.mockRejectedValueOnce(Error('membership'))
+    if (mode === 'final_membership') h.readSource.mockResolvedValueOnce(h.snapshot('message')).mockRejectedValueOnce(Error('membership'))
+    if (mode === 'lifetime') h.lifetime.abort()
+    if (mode === 'changed') h.readSource.mockResolvedValueOnce(h.snapshot('message')).mockResolvedValueOnce({ ...h.snapshot('message'), original_message: 'changed' })
+    if (mode === 'cancelled') cancel.abort()
+    if (mode === 'closed') await h.owner.close()
+    if (mode === 'closing') h.readSource.mockResolvedValueOnce(h.snapshot('message')).mockImplementationOnce(async () => { await h.owner.close(); return h.snapshot('message') })
+    const request = mode === 'invalid' ? { ...target, json_text: '{}' } : mode === 'unknown' ? { ...target, source_message_id: 'missing' } : target
+    await expect(h.owner.readSourceOutput(request, cancel.signal)).rejects.toThrow()
+    expect(h.calls()).toBe(0)
+    expect(h.capture).toHaveBeenCalledTimes(1)
+  },
+)
+
+it('refuses ordinary Source output without a membership reader', async () => {
+  const h = await harness()
+  const owner = new DesktopCollaborationAnalysis(h.capture, h.open, signal())
+  onTestFinished(() => owner.close())
+  const { original_message: _text, active_mentions: _mentions, ...target } = input()
+  await expect(owner.readSourceOutput(target, signal())).rejects.toThrow('source_output_unavailable')
+  expect(h.calls()).toBe(0)
+  expect(h.open).not.toHaveBeenCalled()
+  expect(h.capture).not.toHaveBeenCalled()
+})
+it('keeps original Source output distinct from subsequent clarification output', async () => {
+  const h = await harness(), original = receipt(await h.owner.prepare(input('original'), binding, signal()))
+  const originalGrant = permission(original)
+  const originalOutput = await h.owner.dispatch(original.attempt_request_id, binding, originalGrant, signal())
+  await h.owner.captureReply(replyInput(), binding, signal())
+  const clarification = receipt(await h.owner.prepareClarification(context(h), binding, signal()))
+  await h.owner.dispatch(clarification.attempt_request_id, binding, { ...permission(clarification), expected_plan_revision: '3' }, signal())
+  const { original_message: _text, active_mentions: _mentions, ...target } = input('original')
+  const recovered = await h.owner.readSourceOutput(target, signal())
+  expect(recovered.state).toBe('saved')
+  if (recovered.state !== 'saved') throw Error('expected original output')
+  expect(recovered.dispatch).toEqual(originalGrant)
+  expect(Buffer.from(recovered.json_base64url, 'base64url').toString('utf8')).toBe(originalOutput.jsonText)
+  expect(h.calls()).toBe(2)
+})
+it('refuses multiple original Source outputs instead of selecting the first saved analysis', async () => {
+  const h = await harness(), prepared = receipt(await h.owner.prepare(input(), binding, signal()))
+  await h.owner.close()
+  const writer = await openCollaborationAnalysisJournal(h.facility)
+  const template = JSON.parse([...writer.records()][0]!.manifest_json) as CollaborationAnalysisManifest
+  try {
+    for (const suffix of ['first', 'second']) {
+      const record = await writer.prepare({ ...template, request: { ...template.request, system: `${template.request.system}${suffix}` } }, signal())
+      const dispatched = await writer.dispatch(record, grant({
+        attempt_request_id: record.attempt_request_id, input_manifest_digest: record.input_manifest_digest,
+        source_digest: record.source_digest,
+      }), signal())
+      await writer.saveOutput(dispatched, JSON.stringify({ result: suffix }), signal())
+    }
+  } finally { await writer.close() }
+  const recovered = new DesktopCollaborationAnalysis(h.capture, h.open, signal(),
+    undefined, undefined, undefined, undefined, undefined, undefined, h.readSource)
+  onTestFinished(() => recovered.close())
+  const { snapshot_digest: _digest, ...target } = prepared.descriptor
+  await expect(recovered.readSourceOutput(target, signal())).rejects.toThrow('output_ambiguous')
+  expect(h.calls()).toBe(0)
+  expect(h.capture).toHaveBeenCalledTimes(1)
 })
