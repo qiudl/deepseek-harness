@@ -1,5 +1,6 @@
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceGrant, HostControlSha256 } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 /** Stable profile id that reveals no account or environment identifier. */
@@ -130,6 +131,10 @@ export interface ProfileWorkerHandle {
     target: HostCollaborationSourceTarget,
     signal: AbortSignal,
   ) => Promise<HostCollaborationSourceDescriptor>
+  /** Independent committed selection lookup; a supplied digest never creates or authorizes a grant. */
+  readonly readCollaborationReferenceGrant?: (
+    target: HostCollaborationSourceTarget, requestDigest: HostControlSha256, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceGrant>
   /** Original journal content for Main cloud admission; never carried by a view lease. */
   readonly readCollaborationSourceSnapshot?: (
     target: HostCollaborationSourceTarget, signal: AbortSignal,

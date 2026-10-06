@@ -126,6 +126,15 @@ function challengeReadAccount(
     subject: challenge.account_subject,
   }
 }
+function challengeReadAuthorizer(host: DesktopHost, params: Parameters<typeof challengeReadAccount>[0],
+  challenge: Parameters<typeof challengeReadAccount>[1] & { expires_at: number },
+  ownerId: Parameters<typeof challengeReadAccount>[2], signal: AbortSignal, clock: () => number): () => string {
+  return collaborationReadAuthorizer(host, challengeReadAccount(params, challenge, ownerId), challenge.expires_at, signal, clock)
+}
+function sourceChallengeTarget(challenge: HostSourceAuthorityChallenge): HostCollaborationSourceTarget {
+  return { workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+    source_message_id: challenge.source_message_id, source_revision: challenge.source_revision }
+}
 function assertionIdentityFields(identity: HostIdentity) {
   return {
     installation_id: identity.installationId as InstallationId,
@@ -1435,8 +1444,7 @@ export class HostControlAuthority {
           const inspect = this.options.inspectWorkspaceModelSelection
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const c = frame.params.challenge
-          const account = challengeReadAccount(frame.params, c, ownerId)
-          const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
           const profileId = authorize()
           const target = { workspace_id: c.workspace_id, session_id: c.session_id }
           const result = await inspect(profileId, target, context.signal)
@@ -1567,11 +1575,9 @@ export class HostControlAuthority {
           const inspect = this.options.inspectCollaborationSource
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const c = frame.params.challenge
-          const account = challengeReadAccount(frame.params, c, ownerId)
-          const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
           const profileId = authorize()
-          const target = { workspace_id: c.workspace_id, session_id: c.session_id,
-            source_message_id: c.source_message_id, source_revision: c.source_revision }
+          const target = sourceChallengeTarget(c)
           const result = await inspect(profileId, target, context.signal)
           if (authorize() !== profileId || result.workspace_id !== target.workspace_id || result.session_id !== target.session_id
             || result.source_message_id !== target.source_message_id || result.source_revision !== target.source_revision
@@ -1597,11 +1603,9 @@ export class HostControlAuthority {
           const inspect = this.options.inspectCollaborationSource, readGrant = this.options.readCollaborationReferenceGrant
           if (!inspect || !readGrant) throw new HostAuthorityError('upgrade_required')
           const c = frame.params.challenge
-          const account = challengeReadAccount(frame.params, c, ownerId)
-          const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
           const profileId = authorize()
-          const target = { workspace_id: c.workspace_id, session_id: c.session_id,
-            source_message_id: c.source_message_id, source_revision: c.source_revision }
+          const target = sourceChallengeTarget(c)
           const source = await inspect(profileId, target, context.signal)
           if (authorize() !== profileId || source.workspace_id !== target.workspace_id || source.session_id !== target.session_id
             || source.source_message_id !== target.source_message_id || source.source_revision !== target.source_revision

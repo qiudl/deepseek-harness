@@ -853,6 +853,24 @@ async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal:
 async readCollaborationSourceSnapshot(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise<CollaborationSourceSnapshot>
 
 /**
+ * Freeze an independently authorized selection from this original Source's own Session.
+ * The trusted coordinator establishes explicit user sharing intent before calling; metadata parsing alone does not.
+ * @param value - Exact retained request without credentials, caller content, paths or renewable proofs.
+ * @param signal - Parent operation cancellation, combined with current Profile disposal.
+ * @returns immutable content after independent message/attachment reads, durable save and ownership revalidation.
+ */
+async captureCollaborationReference(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord>
+
+/**
+ * Read a separately committed reference selection and revalidate its original content before attestation.
+ * @param target - Exact original Source coordinates, without caller-supplied content or commit fields.
+ * @param requestDigest - Full immutable reference request digest; no record is created from this value.
+ * @param signal - Current Parent operation cancellation, combined with Profile disposal.
+ * @returns Source-bound grant only while the current Source, locator, version and selected bytes still match.
+ */
+async readCollaborationReferenceGrant(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise< CollaborationReferenceRecord['descriptor'] & { readonly reference_request_digest: string } >
+
+/**
  * Save a readable cloud reply in the owning Profile without appending model-visible Session events.
  * The authenticated parent must establish namespace/target cloud authority. This operation checks
  * current local ownership and the original Source; it grants no cloud delivery acknowledgment.

@@ -44,6 +44,7 @@ async function harness(selectionRedirect?: string) {
     const tokens = {
       '/internal/desktop-workspace-model-selection': 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-source-snapshot': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-analysis': 'DSH_PROFILE_ANALYSIS_TOKEN',
       '/internal/desktop-collaboration-delivery': 'DSH_PROFILE_DELIVERY_TOKEN',
@@ -64,7 +65,8 @@ async function harness(selectionRedirect?: string) {
         }
         const chunks = []; for await (const chunk of request) chunks.push(chunk)
         const input = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        const value = url.pathname.endsWith('source-snapshot') ? snapshot
+        const value = url.pathname.endsWith('reference-grant') ? { ...descriptor, reference_request_digest: input.reference_request_digest }
+          : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
           : url.pathname.endsWith('analysis') ? { value: input }
@@ -91,18 +93,20 @@ async function harness(selectionRedirect?: string) {
   const worker = await factory.create({ profileId: 'profile', profileRoot: root, credentialHandle: 'fixture-key', pluginRoots: [], env: {} })
   acquired.worker = worker
   const { inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
-    receiveCollaborationDelivery, inspectWorkspaceModelSelection } = worker
+    receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
-    || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection) throw new Error('missing private worker capability')
+    || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant) throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
-    receiveCollaborationDelivery, inspectWorkspaceModelSelection }
+    receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant }
 }
 
 it('authenticates each original-Profile route and refuses private operations after worker shutdown', async () => {
   const h = await harness(), signal = new AbortController().signal
-  for (const route of ['source', 'source-snapshot', 'analysis', 'delivery'])
+  for (const route of ['source', 'source-snapshot', 'reference-grant', 'analysis', 'delivery'])
     expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-collaboration-${route}`, { method: 'POST' })).status).toBe(403)
   expect(await h.inspectCollaborationSource(target, signal)).toEqual(descriptor)
+  const digest = descriptor.snapshot_digest as Parameters<typeof h.readCollaborationReferenceGrant>[1]
+  expect(await h.readCollaborationReferenceGrant(target, digest, signal)).toEqual({ ...descriptor, reference_request_digest: digest })
   expect(await h.readCollaborationSourceSnapshot(target, signal)).toEqual(snapshot)
   expect(await h.collaborationAnalysis(command, signal)).toEqual(command)
   expect(await h.receiveCollaborationDelivery(capsule, signal)).toEqual({ delivery_id: 'delivery' })
@@ -111,6 +115,7 @@ it('authenticates each original-Profile route and refuses private operations aft
   h.worker.abort()
   for (const run of [() => h.inspectCollaborationSource(target, signal), () => h.readCollaborationSourceSnapshot(target, signal),
     () => h.collaborationAnalysis(command, signal), () => h.receiveCollaborationDelivery(capsule, signal),
+    () => h.readCollaborationReferenceGrant(target, digest, signal),
     () => h.inspectWorkspaceModelSelection(selection, signal)])
     await expect(run()).rejects.toMatchObject({ code: 'unavailable' })
   await h.worker.done

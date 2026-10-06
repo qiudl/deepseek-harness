@@ -848,6 +848,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   WorkspaceModelSelection: 'Host-only workspace model inspection fields are owned by packages/api/session-controller/README.md',
   CollaborationSourceInput: 'Host-only queued Source input is owned by packages/api/session-controller/README.md',
   CollaborationSourceSnapshot: 'Profile-local journal snapshot is owned by packages/api/session-controller/README.md',
+  CollaborationReferenceRecord: 'Profile-local committed reference selections are owned by packages/api/session-controller/README.md',
   CollaborationSourceCoordinates: 'Private journal read identity is owned by packages/api/session-controller/README.md',
   CollaborationAnalysisManifest: 'Host-only attempt input is owned by packages/api/session-controller/README.md',
   CollaborationClarificationInput: 'Private original/reply analysis input is owned by packages/api/session-controller/README.md',

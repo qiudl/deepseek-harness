@@ -5,6 +5,7 @@ import { describeCollaborationSource, parseCollaborationSourceSnapshot } from '@
 import {
   parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceTarget, parseHostCollaborationSourceSnapshot,
   type HostCollaborationSourceTarget,
+  parseHostCollaborationReferenceTarget, parseHostCollaborationReferenceGrant, type HostCollaborationReferenceTarget,
 } from '@deepseek-ai/dsh-host-control-protocol'
 
 /**
@@ -66,4 +67,19 @@ async function handle<T>(
         && selected.source_message_id === target.source_message_id && selected.source_revision === target.source_revision
     },
   )
+}
+
+/**
+ * Read one separately committed Profile reference grant; caller content and cookies grant no access.
+ * @param req - Parent request with exact Source coordinates and full reservation digest, bounded to 2 KiB.
+ * @param res - Noncacheable grant metadata, without content, paths, credentials or reader error details.
+ * @param token - Private Source capability owned by the Parent Host and this worker.
+ * @param read - Current Profile's independent selection reader, without capture or model preparation.
+ */
+export async function handleDesktopCollaborationReferenceGrantRequest(req: IncomingMessage, res: ServerResponse, token: string,
+  read: (target: HostCollaborationReferenceTarget, signal: AbortSignal) => Promise<unknown>): Promise<void> {
+  return handleDesktopPrivateRead(req, res, token, read, parseHostCollaborationReferenceTarget, parseHostCollaborationReferenceGrant,
+    (result, target) => result.workspace_id === target.workspace_id && result.session_id === target.session_id
+      && result.source_message_id === target.source_message_id && result.source_revision === target.source_revision
+      && result.reference_request_digest === target.reference_request_digest)
 }

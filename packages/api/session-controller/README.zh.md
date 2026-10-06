@@ -133,6 +133,8 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 <a id="model-experience"></a>
 
+`captureCollaborationReference` 接收已经独立确认授权的选择，只从原始 Source 所属会话读取不可变消息或已登记附件身份。独立的 `collaboration_reference_v2` 领域保存有界的原始字节、定位与版本、接收对象、Source 证据及完整请求摘要，不修改已发行的 Session 或 Source 格式。`readCollaborationReferenceGrant` 重新读取当前成员关系与实际内容后，只返回描述符授权；摘要不能创建选择。调用方取消会结束自身等待，Profile 退出仍等待其拥有的读取和迟到的 journal 打开操作完成。元数据解析不能确认用户分享意图，可信协调器必须在捕获前确认授权。
+
 ## 模型体验
 
 ### Source 分析提示词

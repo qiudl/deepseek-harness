@@ -68,6 +68,8 @@ The public key in an answer is not trust by itself. The Desktop broker must matc
 
 `profile.reference_authority` additionally binds `reference_request_digest` to a separate Profile transfer grant. Its signing bytes are `dsh-collaboration-reference-authority/v1`, NUL, and JSON `[1, sourceSigningPayload, referenceRequestDigest]`; the Source signing payload is included as its exact UTF-8 string. Source, workspace and registration signatures cannot authorize reference transfer. The Profile grant reader must independently return the committed Source descriptor and complete reservation digest; the operation exposes neither content nor file paths.
 
+`parseHostCollaborationReferenceTarget` validates a private worker lookup containing only original Source coordinates and the complete reference request digest. It cannot supply selected bytes, a snapshot digest or a grant. `parseHostCollaborationReferenceGrant` independently validates the returned committed descriptor and request digest.
+
 ## API
 
 `profile.collaboration_delivery` uploads a complete terminal reply through sequential canonical base64url fragments of at most 16 KiB decoded, with a total capsule limit of 1 MiB and an answer limit of 128 KiB UTF-8. Ordinary JSON and 64 KiB frame limits stay unchanged. The final answer-free receipt uses the canonical sorted-key JSON signing domain `dsh-collaboration-delivery-receipt-v1` and binds the verified Account, current installation/process and original Profile commit. Parsing or a signature alone grants no cloud acknowledgement or execution authority.

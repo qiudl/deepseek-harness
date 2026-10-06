@@ -153,6 +153,8 @@ The same private token additionally enables `/internal/desktop-collaboration-sou
 `DSH_PROFILE_DELIVERY_TOKEN` independently enables `/internal/desktop-collaboration-delivery` for the parent Host. It accepts at most 1 MiB of exact readable delivery JSON and delegates original Source and membership checks to the owning Session Controller. It returns a noncacheable first-commit descriptor only after saving the complete reply; the answer is not echoed. Browser cookies, Source-read tokens, caller-supplied commits and restricted projections cannot authorize a save. Cancellation, write failure and post-commit ownership loss withhold a successful receipt without deleting saved data. This route does not sign a cloud acknowledgement or append a chat event.
 
 
+The same Source token protects `/internal/desktop-collaboration-reference-grant`. Its private 2 KiB query contains only original Source coordinates and a full reference request digest. The owning Session Controller requires a separately committed selection and independently rechecks its current message or attachment bytes. The sanitized, noncacheable response contains only the Source descriptor and matching digest; browser cookies, caller paths and content cannot authorize it.
+
 ## Model Experience
 
 ### Harness-source and Web-surface context
@@ -168,6 +170,7 @@ One source line and one prompt paragraph per session plus two managed-environmen
 #### KV Cache effect
 
 Source and Web sections follow first-party reusable instructions. Different checkout paths or local ports leave that preceding prefix unchanged when tools and configuration match; provider cache reuse is not guaranteed.
+
 
 ## Known Limitations and Deferred Work
 

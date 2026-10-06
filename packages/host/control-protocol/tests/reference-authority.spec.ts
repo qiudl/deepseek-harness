@@ -2,6 +2,7 @@ import { expect, it } from 'vitest'
 import { decodeHostControlFrame, encodeHostControlFrame, encodeHostSourceAuthorityPayload,
   parseHostSourceAuthorityAssertion, parseHostReferenceAuthorityChallenge,
   parseHostReferenceAuthorityAssertion, parseHostCollaborationReferenceGrant,
+  parseHostCollaborationReferenceTarget,
   encodeHostReferenceAuthorityPayload } from '../src/index.ts'
 
 const challenge = () => ({ request_id: '10000000-0000-4000-8000-000000000001', challenge_nonce: 'A'.repeat(43),
@@ -14,6 +15,13 @@ const proof = () => ({ schema_version: 1, challenge: challenge(), installation_i
   process_nonce: 'A'.repeat(43), signature: 'A'.repeat(86) })
 const grant = () => ({ workspace_id: challenge().workspace_id, session_id: challenge().session_id,
   source_message_id: 'message-1', source_revision: '1', snapshot_digest: 'a'.repeat(64), reference_request_digest: 'b'.repeat(64) })
+
+it('parses an exact private reference grant target without accepting a caller snapshot or body', () => {
+  const { snapshot_digest: _digest, ...target } = grant()
+  expect(parseHostCollaborationReferenceTarget(target)).toEqual(target)
+  for (const value of [grant(), { ...target, reference_request_digest: 'B'.repeat(64) }, { ...target, content: 'secret' }])
+    expect(() => parseHostCollaborationReferenceTarget(value)).toThrow()
+})
 
 it('binds the complete request digest to a distinct fixed reference signature domain', () => {
   const value = parseHostReferenceAuthorityAssertion(proof())

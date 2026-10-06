@@ -135,7 +135,7 @@ No direct invalidation; Host control facts do not enter model context.
 
 ## Known Limitations and Deferred Work
 
-The startup compositions do not install a committed reference-grant producer or reader, so reference authority remains unavailable in the shipped Host. Message/file selection, immutable content capture and cloud upload require that Profile-owned producer before an embedding can enable the capability.
+The startup compositions relay reference-grant reads to the original current Profile worker. Grants require a separately committed selection and independently revalidated message or attachment bytes. Natural-language selection production and cloud content upload are not connected; an embedding must complete those consumers before enabling reference transfer.
 
 - **Extension support is executor-specific** — `profile.extensions` accepts inventory, prepare, commit, status, and cancel through a live view lease. Plugin execution requires the configured pnpm artifact. The Windows startup composition supports explicitly enabled MCP; Windows Plugin and Skill executors remain unavailable. The embedding must enable and pin this composition before users receive the capability. Skill inventory uses `transport: markdown` and bounded file-derived identifiers. Desktop must reopen the same Profile view after an installation or restored configuration restarts its worker. Packaged-runtime pinning, full Profile migration preservation, process-kill recovery, and unknown-receipt reconciliation require separate end-to-end validation before release.
 

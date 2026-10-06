@@ -1,5 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationReferenceGrant } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceTarget, HostControlSha256 } from '@deepseek-ai/dsh-host-control-protocol'
 import { createHash, randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
@@ -287,6 +289,13 @@ export class DshWebProfileWorkerFactory {
       inspectCollaborationSource: (target, signal) => this.inspectCollaborationSource(
         viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
       ),
+      readCollaborationReferenceGrant: async (target, requestDigest: HostControlSha256, signal) => {
+        const query: HostCollaborationReferenceTarget = { ...target, reference_request_digest: requestDigest }
+        const result = await this.readSource(viewOrigin, sourceToken, query, signal, () => requestedStop || settled,
+          '/internal/desktop-collaboration-reference-grant', 8192, parseHostCollaborationReferenceGrant, value => value)
+        if (result.reference_request_digest !== requestDigest) throw new HostAuthorityError('profile_mismatch')
+        return result
+      },
       inspectWorkspaceModelSelection: (target, signal) => this.inspectWorkspaceModelSelection(
         viewOrigin, workspaceModelToken, target, signal, () => requestedStop || settled,
       ),

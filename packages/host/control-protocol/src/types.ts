@@ -647,6 +647,10 @@ export interface ProfileSourceAuthorityResult extends Omit<ProfileWorkspaceAutho
 export interface HostCollaborationReferenceGrant extends HostCollaborationSourceDescriptor {
   readonly reference_request_digest: HostControlSha256
 }
+/** Exact private lookup of an independently committed Source-bound reference selection. */
+export interface HostCollaborationReferenceTarget extends HostCollaborationSourceTarget {
+  readonly reference_request_digest: HostControlSha256
+}
 /** Server nonce binds the original Source and the complete immutable reference reservation request. */
 export interface HostReferenceAuthorityChallenge extends HostSourceAuthorityChallenge {
   readonly reference_request_digest: HostControlSha256

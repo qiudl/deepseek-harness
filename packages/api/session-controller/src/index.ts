@@ -20,6 +20,10 @@ import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates, describeCollaborationSource } from './collaboration-source-journal.ts'
 import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot, CollaborationSourceCoordinates } from './collaboration-source-journal.ts'
+import { captureCollaborationReferenceContent, openCollaborationReferenceJournal,
+  parseCollaborationReferenceRequest } from './collaboration-reference-journal.ts'
+import type { CollaborationReferenceJournal, CollaborationReferenceRecord } from './collaboration-reference-journal.ts'
+import { resolveCollaborationReferenceContentSource } from './collaboration-reference-content-source.ts'
 import { openCollaborationDeliveryJournal, parseCollaborationDeliveryInput } from './collaboration-delivery-journal.ts'
 import type { CollaborationDeliveryJournal, CollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
@@ -88,6 +92,10 @@ export { ApiSessionNotFound } from './agent.ts'
 export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
 export { openCollaborationSourceJournal, describeCollaborationSource, parseCollaborationSourceInput, parseCollaborationSourceSnapshot, collaborationJournalDigest } from './collaboration-source-journal.ts'
+export { openCollaborationReferenceJournal, captureCollaborationReferenceContent,
+  parseCollaborationReferenceRequest } from './collaboration-reference-journal.ts'
+export type { CollaborationReferenceJournal, CollaborationReferenceRequest, CollaborationReferenceRecord,
+  CollaborationReferenceContentSource } from './collaboration-reference-journal.ts'
 export type {
   CollaborationSourceBody, CollaborationSourceSnapshot, CollaborationSourceJournal, CollaborationSourceInput,
   CollaborationSourceCoordinates,
@@ -172,6 +180,8 @@ export class SessionController extends TypertRemoteService {
   private readonly collaborationAnalysis = new CollaborationAnalysisRunner(this.collaborationLifetime.signal)
   private collaborationCaptureTail: Promise<void> = Promise.resolve()
   private collaborationJournal?: Promise<CollaborationSourceJournal>
+  private collaborationReferenceJournal?: Promise<CollaborationReferenceJournal>
+  private readonly collaborationReferenceOperations = new Set<Promise<unknown>>()
   private collaborationDeliveryJournal?: Promise<CollaborationDeliveryJournal>
 
   /**
@@ -187,14 +197,19 @@ export class SessionController extends TypertRemoteService {
     this.captureCollaborationSource = this.captureCollaborationSource.bind(this)
     this.readCollaborationSourceSnapshot = this.readCollaborationSourceSnapshot.bind(this)
     this.inspectCollaborationSource = this.inspectCollaborationSource.bind(this)
+    this.captureCollaborationReference = this.captureCollaborationReference.bind(this)
+    this.readCollaborationReferenceGrant = this.readCollaborationReferenceGrant.bind(this)
     this.receiveCollaborationDelivery = this.receiveCollaborationDelivery.bind(this)
     ctx.effect(() => async () => {
       this.collaborationLifetime.abort(new DOMException('Profile source capture disposed', 'AbortError'))
+      await Promise.allSettled([...this.collaborationReferenceOperations])
       await this.collaborationCaptureTail
       const journal = await this.collaborationJournal?.catch(() => undefined)
       await journal?.close()
       const replies = await this.collaborationDeliveryJournal?.catch(() => undefined)
       await replies?.close()
+      const references = await this.collaborationReferenceJournal?.catch(() => undefined)
+      await references?.close()
     }, 'session-controller.collaboration-sources')
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
@@ -570,6 +585,82 @@ export class SessionController extends TypertRemoteService {
     })
     this.collaborationCaptureTail = operation.then(() => {}, () => {})
     return wait(operation)
+  }
+
+  /**
+   * Freeze an independently authorized selection from this original Source's own Session.
+   * The trusted coordinator establishes explicit user sharing intent before calling; metadata parsing alone does not.
+   * @param value - Exact retained request without credentials, caller content, paths or renewable proofs.
+   * @param signal - Parent operation cancellation, combined with current Profile disposal.
+   * @returns immutable content after independent message/attachment reads, durable save and ownership revalidation.
+   */
+  async captureCollaborationReference(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord> {
+    return this.ownCollaborationReferenceOperation(signal, async (owned) => {
+      const request = parseCollaborationReferenceRequest(value)
+      const target = { workspace_id: request.source.workspace_id, session_id: request.source.session_id,
+        source_message_id: request.source.source_message_id, source_revision: request.source.revision }
+      const source = await this.readCollaborationSourceSnapshot(target, owned)
+      const record = await captureCollaborationReferenceContent(request, source, async (selection, active) => {
+        const inspection = await this.inspect(SessionId(source.session_id), active)
+        active.throwIfAborted()
+        return resolveCollaborationReferenceContentSource(selection, inspection.events, this.ctx.get('attachments'), active)
+      }, owned)
+      const current = await this.readCollaborationSourceSnapshot(target, owned)
+      if (describeCollaborationSource(current).snapshot_digest !== record.descriptor.snapshot_digest)
+        throw Error('collaboration_reference_source_changed')
+      const journal = await this.openCollaborationReferences(owned)
+      const saved = await journal.capture(record, owned)
+      await this.readCollaborationSourceSnapshot(target, owned)
+      owned.throwIfAborted()
+      return saved
+    })
+  }
+  /**
+   * Read a separately committed reference selection and revalidate its original content before attestation.
+   * @param target - Exact original Source coordinates, without caller-supplied content or commit fields.
+   * @param requestDigest - Full immutable reference request digest; no record is created from this value.
+   * @param signal - Current Parent operation cancellation, combined with Profile disposal.
+   * @returns Source-bound grant only while the current Source, locator, version and selected bytes still match.
+   */
+  async readCollaborationReferenceGrant(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise<
+    CollaborationReferenceRecord['descriptor'] & { readonly reference_request_digest: string }
+  > {
+    return this.ownCollaborationReferenceOperation(signal, async (owned) => {
+      const source = await this.readCollaborationSourceSnapshot(target, owned)
+      const journal = await this.openCollaborationReferences(owned)
+      const record = journal.read(source, requestDigest)
+      if (!record) throw Error('collaboration_reference_not_found')
+      const current = await captureCollaborationReferenceContent(record.request, source, async (selection, active) => {
+        const inspection = await this.inspect(SessionId(source.session_id), active)
+        active.throwIfAborted()
+        return resolveCollaborationReferenceContentSource(selection, inspection.events, this.ctx.get('attachments'), active)
+      }, owned)
+      const latest = await this.readCollaborationSourceSnapshot(target, owned)
+      if (describeCollaborationSource(latest).snapshot_digest !== record.descriptor.snapshot_digest
+        || current.content_base64 !== record.content_base64) throw Error('collaboration_reference_source_changed')
+      owned.throwIfAborted()
+      return { ...record.descriptor, reference_request_digest: record.reference_request_digest }
+    })
+  }
+  private async ownCollaborationReferenceOperation<T>(signal: AbortSignal,
+    run: (owned: AbortSignal) => Promise<T>): Promise<T> {
+    const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    owned.throwIfAborted()
+    const operation = run(owned)
+    this.collaborationReferenceOperations.add(operation)
+    const release = () => { this.collaborationReferenceOperations.delete(operation) }
+    void operation.then(release, release)
+    return waitForCollaborationSourceRead(operation, owned)
+  }
+
+  private async openCollaborationReferences(signal: AbortSignal): Promise<CollaborationReferenceJournal> {
+    signal.throwIfAborted()
+    if (!this.collaborationReferenceJournal) {
+      const facility = this.ctx.get('storageDomain')
+      if (!facility) throw Error('collaboration_reference_journal_unavailable')
+      this.collaborationReferenceJournal = openCollaborationReferenceJournal(facility)
+    }
+    return waitForCollaborationSourceRead(this.collaborationReferenceJournal, signal)
   }
 
   /**

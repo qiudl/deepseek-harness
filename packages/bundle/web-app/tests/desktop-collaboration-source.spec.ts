@@ -2,10 +2,39 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from '../src/desktop-collaboration-source.ts'
+import { handleDesktopCollaborationReferenceGrantRequest } from '../src/desktop-collaboration-source.ts'
 
 const token = 'A'.repeat(43)
 const target = { workspace_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session' as never, source_message_id: 'message-1', source_revision: '1' }
 const selection = { ...target, snapshot_digest: 'a'.repeat(64) }
+
+function privatePoster(url: string, token: string) {
+  return (body: object, authorization = `Bearer ${token}`) => fetch(url, {
+    method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body),
+  })
+}
+
+it('reads only separately committed reference grants over the private worker token and exact request digest', async () => {
+  const query = { ...target, reference_request_digest: 'b'.repeat(64) }
+  const inspect = vi.fn(async (): Promise<unknown> => ({ ...selection, reference_request_digest: query.reference_request_digest }))
+  const server = createServer((req, res) => { void handleDesktopCollaborationReferenceGrantRequest(req, res, token, inspect) })
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
+  onTestFinished(async () => {
+    server.closeAllConnections()
+    await new Promise<void>((resolve, reject) => server.close((error) => { if (error) reject(error); else resolve() }))
+  })
+  const url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+  const post = privatePoster(url, token)
+  expect((await post(query, '')).status).toBe(403)
+  expect((await post({ ...query, snapshot_digest: selection.snapshot_digest })).status).toBe(400)
+  expect(inspect).not.toHaveBeenCalled()
+  expect(await (await post(query)).json()).toEqual({ ...selection, reference_request_digest: query.reference_request_digest })
+  expect(inspect).toHaveBeenCalledWith(query, expect.any(AbortSignal))
+  inspect.mockResolvedValue({ ...selection, reference_request_digest: 'c'.repeat(64) })
+  expect((await post(query)).status).toBe(422)
+  inspect.mockRejectedValue(Error('private path secret'))
+  expect(await (await post(query)).text()).toBe('{"error":"unavailable"}')
+})
 
 async function fixture(inspect = vi.fn(async ():Promise<unknown> => selection),full=false) {
   const handler = full ? handleDesktopCollaborationSourceSnapshotRequest : handleDesktopCollaborationSourceRequest
@@ -16,9 +45,7 @@ async function fixture(inspect = vi.fn(async ():Promise<unknown> => selection),f
     await new Promise<void>((resolve, reject) => server.close((error) => { if (error) reject(error); else resolve() }))
   })
   const url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
-  const post = (body: object, authorization = `Bearer ${token}`) => fetch(url, {
-    method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body),
-  })
+  const post = privatePoster(url, token)
   return { inspect, post }
 }
 

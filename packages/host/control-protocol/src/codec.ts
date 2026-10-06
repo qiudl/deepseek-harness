@@ -46,7 +46,7 @@ import type {
   ProfileCollaborationAnalysisRequest, ProfileCollaborationAnalysisResult,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
   ProfileSourceAuthorityRequest, ProfileSourceAuthorityResult,
-  HostCollaborationReferenceGrant, HostReferenceAuthorityChallenge, HostReferenceAuthorityAssertion,
+  HostCollaborationReferenceGrant, HostCollaborationReferenceTarget, HostReferenceAuthorityChallenge, HostReferenceAuthorityAssertion,
   ProfileReferenceAuthorityRequest, ProfileReferenceAuthorityResult,
   HostCollaborationSourceSnapshot, ProfileSourceSnapshotRequest, ProfileSourceSnapshotResult,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
@@ -1059,6 +1059,17 @@ export function encodeHostSourceAuthorityPayload(value: HostSourceAuthorityAsser
     r.installation_id, r.installation_public_key, r.host_instance_id, r.process_nonce,
   ])}`, 'utf8')
 }
+/**
+ * Validate a private Profile reference lookup without supplying content or a grant.
+ * @param value - Exact original Source coordinates and full reservation digest.
+ * @returns Detached frozen query; only the owning Profile can read a separately committed selection.
+ */
+export function parseHostCollaborationReferenceTarget(value: unknown): HostCollaborationReferenceTarget {
+  const r = registrationRecord(value)
+  exactKeys(r, [...SOURCE_TARGET_KEYS, 'reference_request_digest'])
+  return Object.freeze({ ...sourceTargetFields(r), reference_request_digest: digest(r.reference_request_digest) })
+}
+
 /**
  * Validate a separate Profile grant without trusting Desktop-supplied coordinates.
  * @param value - Exact committed Source descriptor and full reservation digest.
