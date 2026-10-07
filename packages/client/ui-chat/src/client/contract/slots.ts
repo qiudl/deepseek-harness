@@ -22,6 +22,7 @@ import type {
 } from './snapshot.ts'
 import type { TurnProcessSpec } from './turn-process.ts'
 import type { PerformanceUsageMode } from '../../chat-settings.ts'
+import type { ChatTimeline, ChatTimelineRecord } from '../timeline.ts'
 
 /** Selector hook over the current Conversation binding's Chat target. */
 export type UseChat = SnapshotSelectorHook<ChatSnapshot>
@@ -120,6 +121,8 @@ export interface ChatFileMentions {
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
+    /** Independent display records, rendered through Chat-owned child slots. */
+    chatTimeline: ChatTimeline
     /** Optional prose file-mention provider. */
     chatFileMentions: ChatFileMentions
   }
@@ -233,6 +236,8 @@ export interface ChatViewInjected {
   hooks: {
     /** Live presentation policy derived from the accepted work-details mode. */
     presentation: ObservableSnapshot<ChatPresentationPolicy>
+    /** Independent record positions; observing does not start execution. */
+    timeline: ObservableSnapshot<readonly ChatTimelineRecord[]>
   }
   keyedHooks: {
     /** Resolve the stable source for one Chat Node key. */
@@ -259,10 +264,23 @@ export interface ChatViewInjected {
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
 }
 
+/** One ordinary row's display identity and immutable sequence, without React content. */
+export interface ChatTimelineRow {
+  readonly key: string
+  readonly sequence: number | null
+  /** Group members allow a display extension to expose an intervening independent record. */
+  readonly members?: readonly ChatTimelineRow[]
+}
+
+/** Independent record occurrence; null identifies the history header and its paging controls. */
+export interface ChatTimelineOwnerProps {
+  readonly recordId: string | null
+}
+
 /** Full Chat view props. */
 export type ChatViewSlotProps =
   PropsRuntime<'conversation.view'>
-  & PropsRenderSlots<'conversation.chat.node' | 'conversation.message.images'>
+  & PropsRenderSlots<'conversation.chat.node' | 'conversation.message.images' | 'conversation.chat.timeline'>
   & PropsStore<ChatStore>
   & InjectFace<ChatViewInjected>
   & PropsLocale<'chat'>
@@ -282,6 +300,11 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 
   interface SlotMap {
+    /**
+     * One independent display record, or its readonly history header.
+     * Ordinary rows remain rendered by Chat. This slot creates no Session events or model inputs.
+     */
+    'conversation.chat.timeline': { kind: 'single'; scope: 'session'; owner: ChatTimelineOwnerProps }
     /**
      * Final Chat node renderer, keyed by `ChatNodeKind`. The component receives
      * the typed node, shared Chat actions, and Turn-data hook. Reusing a key

@@ -1,16 +1,16 @@
 // An enclosing `[data-conversation-scroll]` owns scrolling when present;
 // otherwise this view owns it. Each row subscribes to one stable node key.
 
-import { memo, useCallback, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { Fragment, memo, useCallback, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import type {
-  NodeKey, RenderEntry, RenderMessageImages,
+  ConversationGroupData, ConversationGroupedView, NodeKey, RenderEntry, RenderMessageImages,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
 import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
   Button, IconChevronDownOutlineRegular, MarkdownDelegateProvider, Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChatViewSlotProps, OpenFileOptions } from '../contract/slots.ts'
+import type { ChatTimelineRow, ChatViewSlotProps, OpenFileOptions } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { PendingSteeringBubble, PendingSubmissionBubble } from './MessageItem.tsx'
 import { ChatNodeSeat } from './ChatNodeSeat.tsx'
@@ -22,6 +22,8 @@ import { RunningStatus } from './RunningStatus.tsx'
 import { mergeTurnRailItems } from './turn-rail-items.ts'
 import { useChatScroll } from './use-chat-scroll.ts'
 import { fileMediaUrl, resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
+import { mergeChatTimeline } from './timeline-order.ts'
+import type { ChatTimelineRecord } from '../timeline.ts'
 import css from './ChatView.module.css'
 
 /** Host/OS refusal text for the file-open dialog; empty throws keep a locale fallback. */
@@ -61,27 +63,39 @@ type ChatNodeListProps = Omit<ComponentProps<typeof ChatNodeSeat>, 'nodeKey' | '
   readonly useChatGroup: ChatViewSlotProps['useChatGroup']
   readonly pendingInputs: readonly PendingInput[]
   readonly lastInputTurn: number | undefined
+  readonly groupedView: ConversationGroupedView<ConversationGroupData<'chat'>> | undefined
+  readonly timelineRecords: readonly ChatTimelineRecord[]
+  readonly renderTimeline: ChatViewSlotProps['renderSlot']
 }
 
-const ChatNodeList = memo(function ChatNodeList({ entries, useChatGroup, pendingInputs, lastInputTurn, ...seatProps }: ChatNodeListProps) {
-  const rows = entries.map((entry) => {
+const ChatNodeList = memo(function ChatNodeList({ entries, useChatGroup, pendingInputs, lastInputTurn,
+  groupedView, timelineRecords, renderTimeline, ...seatProps }: ChatNodeListProps) {
+  const contents = new Map<string, ReactNode>()
+  const nodeRow = (entry: Extract<RenderEntry, { kind: 'node' }>): ChatTimelineRow => {
+    const key = chatRenderKey(entry)
+    contents.set(key, <ChatNodeSeat {...seatProps} nodeKey={entry.key}
+      {...entry.groupPart === undefined ? {} : { groupPart: entry.groupPart }} />)
+    return { key, sequence: seatProps.nodeStore.get(entry.key)?.anchorSeq ?? null }
+  }
+  const rows: ChatTimelineRow[] = entries.map((entry) => {
     switch (entry.kind) {
-      case 'node':
-        return <ChatNodeSeat {...seatProps} key={chatRenderKey(entry)} nodeKey={entry.key}
-          {...entry.groupPart === undefined ? {} : { groupPart: entry.groupPart }} />
-      case 'group':
-        return <ChatGroupSeat {...seatProps} key={chatRenderKey(entry)} groupKey={entry.key} useChatGroup={useChatGroup} />
-      default:
-        return assertNever(entry)
+      case 'node': return nodeRow(entry)
+      case 'group': {
+        const members = groupedView?.groupSource(entry.key).getSnapshot()?.members.map(nodeRow) ?? []
+        const key = chatRenderKey(entry)
+        contents.set(key, <ChatGroupSeat {...seatProps} groupKey={entry.key} useChatGroup={useChatGroup} />)
+        return { key, sequence: members[0]?.sequence ?? null, members }
+      }
+      default: return assertNever(entry)
     }
   })
-  const pendingRows = pendingInputs.map(item => 'requestId' in item ? (
-    <PendingSubmissionBubble key={item.requestId} submission={item}
+  const pendingRows = pendingInputs.map((item): ChatTimelineRow => {
+    const key = `pending:${'requestId' in item ? item.requestId : item.id}`
+    contents.set(key, 'requestId' in item ? <PendingSubmissionBubble submission={item}
       renderMessageImages={seatProps.renderMessageImages} t={seatProps.t} />
-  ) : (
-    <PendingSteeringBubble key={item.id} content={item.content}
-      renderMessageImages={seatProps.renderMessageImages} t={seatProps.t} />
-  ))
+      : <PendingSteeringBubble content={item.content} renderMessageImages={seatProps.renderMessageImages} t={seatProps.t} />)
+    return { key, sequence: null }
+  })
   const tail = entries.at(-1)
   const node = tail?.kind === 'node' ? seatProps.nodeStore.get(tail.key) : undefined
   // An empty opening control follows one local transcript echo, never steering.
@@ -89,9 +103,19 @@ const ChatNodeList = memo(function ChatNodeList({ entries, useChatGroup, pending
   if (node?.kind === 'turn-process' && node.location.kind === 'turn'
     && node.location.turn.status === 'open' && node.location.turn.turn !== lastInputTurn) {
     const index = pendingInputs.findIndex(item => 'requestId' in item && item.placement === 'transcript')
-    if (index !== -1) rows.splice(rows.length - 1, 0, ...pendingRows.splice(index, 1))
+    if (index !== -1) {
+      rows.splice(rows.length - 1, 0, ...pendingRows.splice(index, 1))
+    }
   }
-  return [...rows, ...pendingRows]
+  return <>
+    {renderTimeline('conversation.chat.timeline', { recordId: null })}
+    {[...mergeChatTimeline(rows, timelineRecords), ...pendingRows.map(row => ({ kind: 'ordinary' as const, row }))]
+      .map(entry => entry.kind === 'ordinary'
+        ? <Fragment key={entry.row.key}>{contents.get(entry.row.key)}</Fragment>
+        : <Fragment key={`independent:${entry.record.recordId}`}>
+          {renderTimeline('conversation.chat.timeline', { recordId: entry.record.recordId })}
+        </Fragment>)}
+  </>
 })
 
 /**
@@ -101,12 +125,14 @@ const ChatNodeList = memo(function ChatNodeList({ entries, useChatGroup, pending
 export function ChatView({
   useSession, useChat, useChatNode, useChatNodeProcess, useChatGroup, useConversation, useSessions, useStore, actions, renderSlot,
   sessionId, openFile, openSkill, openExternalLink, loadOlder, loadThrough, loadImage, inspectCall, chatScroll, forkAt, fileMentions,
-  usePresentation, useProjection, t,
+  usePresentation, useTimeline, useProjection, t,
 }: ChatViewSlotProps) {
   const order = useChat(s => s.order)
+  const timelineRecords = useTimeline(value => value)
+  const groupedView = useConversation(snapshot => snapshot.views.grouped('chat'))
   const groupedEntries = useConversation(snapshot => snapshot.views.grouped('chat')?.entries)
-  const entries = useMemo<readonly RenderEntry[]>(() => groupedEntries
-    ?? order.map(key => ({ kind: 'node', key: key as NodeKey })), [groupedEntries, order])
+  const entries = useMemo<readonly RenderEntry[]>(() => groupedEntries === undefined
+    ? order.map(key => ({ kind: 'node', key: key as NodeKey })) : [...groupedEntries], [groupedEntries, order])
   const nodeStore = useChat(s => s.nodes)
   // The rail's items are accumulated in the Chat snapshot, so this selector is
   // both the data and its change signal: the array identity moves only when a
@@ -259,6 +285,9 @@ export function ChatView({
             <MarkdownDelegateProvider openExternalLink={openExternalLink} openFile={requestOpenFile} fileImages={fileImages}>
               <ChatNodeList
                 entries={entries}
+                groupedView={groupedView}
+                timelineRecords={timelineRecords}
+                renderTimeline={renderSlot}
                 pendingInputs={pendingInputs}
                 lastInputTurn={lastInputTurn}
                 nodeStore={nodeStore}

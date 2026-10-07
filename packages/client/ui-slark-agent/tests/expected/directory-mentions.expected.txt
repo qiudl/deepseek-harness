@@ -1,0 +1,4 @@
+draft="请检查这个方案：@Guide · 项目空间 "
+mention=Guide · 项目空间
+collaboration-submissions=0
+ordinary-model-prompts=0

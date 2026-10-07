@@ -11,7 +11,7 @@ import { zh } from '../src/client/locales.ts'
 
 afterEach(cleanup)
 const source = { workspace_id: '40000000-0000-4000-8000-000000000004', session_id: 'session', source_message_id: 'message', source_revision: '1' }
-function fixture(answer = '完整回复') {
+function fixture(answer = '完整回复', workspace = false, locator = false) {
   const original = { source, snapshot_digest: 'a'.repeat(64), original_message: '@Guide · Project 检查页面' }
   const item = { delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1', source_locator: source,
     source_snapshot_digest: original.snapshot_digest, execution_state: 'succeeded', invocation_state_version: '2',
@@ -20,18 +20,66 @@ function fixture(answer = '完整回复') {
   const bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true, collaborationDeliveries: read }
   const readSources = vi.fn<ConstructorParameters<typeof CollaborationResultsModel>[3]>(async () =>
     ({ ok: true, value: { items: [original] } }))
+  const readOriginal = vi.fn<NonNullable<ConstructorParameters<typeof CollaborationResultsModel>[6]>>(async item =>
+    ({ ok: true, value: { items: [item] } }))
   const model = new CollaborationResultsModel(SessionId('session'), { getSnapshot: () => workspaceSnapshot(source.workspace_id), subscribe: () => () => {} },
     { getSnapshot: () => 1, subscribe: () => () => {} }, readSources,
-    () => bridge)
+    () => bridge, workspace ? 'workspace' : 'session', locator ? readOriginal : undefined)
   onTestFinished(() => { model.dispose() })
   const props: Parameters<typeof CollaborationResultsDock>[0] = { ...dockRuntime(),
+    locateOriginal: digest => model.locateOriginal(digest, (item) => { model.revealOriginal(item); void model.refresh() }),
     useSlarkResults: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
       selector(useSyncExternalStore(model.subscribe, model.getSnapshot)), loadSources: () => model.loadSources(),
     consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
     executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
     loadReplies: (id: string) => model.loadReplies(id), t: dockTranslate }
-  return { model, read, readSources, props, original, item, bridge }
+  return { model, read, readSources, readOriginal, props, original, item, bridge }
 }
+it('focuses the exact original after clicking its locator and does not steal focus on readonly polling', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView'), scroll = vi.fn()
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll })
+  onTestFinished(() => {
+    if (descriptor) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', descriptor)
+    else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+  })
+  const f = fixture('完整回复', true, true), view = render(<CollaborationResultsDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  await screen.findByText('完整回复')
+  await act(async () => { screen.getByTestId('slark-source-locate').click() })
+  await waitFor(() => { expect(document.activeElement).toBe(screen.getByTestId('slark-collaboration-original')) })
+  expect(f.readOriginal).toHaveBeenCalledWith(f.original, expect.any(AbortSignal))
+  expect(scroll).toHaveBeenCalledOnce()
+  await act(async () => { await f.model.refresh() })
+  expect(scroll).toHaveBeenCalledOnce()
+  await act(async () => { screen.getByTestId('slark-source-locate').click() })
+  await waitFor(() => { expect(scroll).toHaveBeenCalledTimes(2) })
+})
+it('explains a refused original lookup without replacing the displayed record or starting a conversation', async () => {
+  const f = fixture('完整回复', true, true), view = render(<CollaborationResultsDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  await screen.findByText('完整回复')
+  f.readOriginal.mockResolvedValue({ ok: false })
+  await act(async () => { screen.getByTestId('slark-source-locate').click() })
+  await screen.findByText(zh['task.sourceUnavailable'])
+  expect(screen.getByText(f.original.original_message)).toBeTruthy()
+  expect(screen.queryByRole('textbox')).toBeNull()
+})
+it('shows a read failure instead of focusing a record removed before the browser paints', async () => {
+  const f = fixture('完整回复', true, true), view = render(<CollaborationResultsDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  await screen.findByText('完整回复')
+  f.readSources.mockResolvedValue({ ok: false })
+  await act(async () => { f.model.revealOriginal(f.original); await f.model.refresh() })
+  expect(screen.queryByTestId('slark-collaboration-original')).toBeNull()
+  expect(screen.getByText(zh['task.readUnavailable'])).toBeTruthy()
+})
+it('labels workspace history separately from the current Session history', async () => {
+  const f = fixture('完整回复', true), view = render(<CollaborationResultsDock {...f.props} />)
+  await screen.findByText(zh['task.workspaceHistory'])
+  expect(screen.queryByText(zh['task.collaborationHistory'])).toBeNull()
+  expect(screen.queryByRole('textbox')).toBeNull()
+  view.unmount()
+})
 it('automatically displays the original message and complete plain text result without a task form', async () => {
   const prefix = '<img src=x onerror=alert(1)>\n'
   const answer = prefix + 'x'.repeat(128 * 1024 - prefix.length)
@@ -173,8 +221,8 @@ it('disables paging during a slow result read and appends only that original mes
   expect(screen.queryByRole('textbox')).toBeNull()
 })
 
-it('loads older messages from the visible Source cursor without a new chat submission', async () => {
-  const f = fixture(), older = { ...f.original, snapshot_digest: 'b'.repeat(64),
+it.each([false, true])('loads more history from its Source cursor without a new chat submission (workspace %s)', async (workspace) => {
+  const f = fixture('完整回复', workspace), older = { ...f.original, snapshot_digest: 'b'.repeat(64),
     source: { ...source, source_message_id: 'older' }, original_message: '@Guide · Project 之前的任务' }
   f.readSources.mockImplementation(async cursor => ({ ok: true,
     value: cursor ? { items: [older] } : { items: [f.original], next_cursor: f.original.snapshot_digest } }))
@@ -184,8 +232,9 @@ it('loads older messages from the visible Source cursor without a new chat submi
   const view = render(<CollaborationResultsDock {...f.props} />)
   onTestFinished(() => { view.unmount() })
   await screen.findByText('完整回复')
+  expect(screen.getByText(zh[workspace ? 'task.moreWorkspaceMessages' : 'task.moreMessages'])).toBeTruthy()
   await act(async () => { screen.getByTestId('slark-collaboration-messages-more').click() })
-  expect(f.readSources).toHaveBeenLastCalledWith(f.original.snapshot_digest, expect.any(AbortSignal))
+  expect(f.readSources).toHaveBeenLastCalledWith(f.original.snapshot_digest, expect.any(AbortSignal), SessionId('session'))
   expect(screen.getByText(older.original_message)).toBeTruthy()
   expect(screen.getByText('之前的回复')).toBeTruthy()
   expect(screen.getByText('完整回复')).toBeTruthy()

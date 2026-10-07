@@ -1,4 +1,4 @@
-import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
@@ -396,7 +396,12 @@ export class DshWebProfileWorkerFactory {
         !Object.hasOwn(parsed, 'value')
       )
         throw new HostAuthorityError('unavailable')
-      return parseHostRemoteSessionJson((parsed as { value: unknown }).value)
+      const value = (parsed as { value: unknown }).value
+      if (command && typeof command === 'object' && !Array.isArray(command) && 'action' in command && command.action === 'read_source_output') {
+        const evidence = parseHostSourceAnalysisOutput(value)
+        return { ...evidence, descriptor: { ...evidence.descriptor } }
+      }
+      return parseHostRemoteSessionJson(value)
     }, 'detach')
   }
 

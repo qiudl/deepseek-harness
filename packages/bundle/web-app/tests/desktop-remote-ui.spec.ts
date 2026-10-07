@@ -107,7 +107,7 @@ describe('Desktop remote UI read-only bridge', () => {
     const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))
     const signal = new AbortController().signal
     const payload = { args: { request: { address: { kind: 'session', sessionId: 'session-1' },
-      maxMessages: 50, assistantStream: true } } }
+      maxMessages: 500, assistantStream: true, turnWindow: { minMessages: 50, minTurns: 2 } } } }
     const opened = await executor.open('session/follow', payload, signal)
     const iterator = opened[Symbol.asyncIterator]()
     await expect(iterator.next()).resolves.toEqual({ value: { type: 'snapshot' }, done: false })
@@ -117,6 +117,14 @@ describe('Desktop remote UI read-only bridge', () => {
       kind: 'session', sessionId: '' } } } }, signal)).rejects.toThrow('invalid payload')
     expect(stream).toHaveBeenCalledOnce()
     for (const invalid of [null, {}, { args: null }, { args: {} }, { args: { request: null } },
+      ...[null, [], {}, { minMessages: 50 }, { minMessages: 0, minTurns: 2 },
+        { minMessages: 501, minTurns: 2 }, { minMessages: 50, minTurns: 0 },
+        { minMessages: 50, minTurns: 1.5 }, { minMessages: 50, minTurns: Number.MAX_SAFE_INTEGER + 1 },
+        { minMessages: 50, minTurns: 2, path: '/tmp' }].map(turnWindow => ({ args: { request: {
+        ...payload.args.request, turnWindow,
+      } } })),
+      { args: { request: { address: payload.args.request.address,
+        turnWindow: { minMessages: 51, minTurns: 2 } } } },
       { args: { request: { address: { kind: 'session', sessionId: 'session-1' }, extra: true } } },
       { args: { request: { address: null } } },
       { args: { request: { address: { kind: 'session', sessionId: 1 } } } },
@@ -470,6 +478,61 @@ it('REQ-20260930-0004: remote original Source feed pages one complete message in
   await expect(executor.execute('session/collaborationSources',{ args:{ request } },signal)).rejects.toThrow('invalid Source page')
   invoke.mockResolvedValue({ items:[{ ...first,original_message:'x'.repeat(70_000) }] })
   await expect(executor.execute('session/collaborationSources',{ args:{ request } },signal)).rejects.toThrow('result too large')
+})
+
+it('Source locator forwards exact lookup and refuses a cursor or unrelated first item', async () => {
+  const signal = new AbortController().signal
+  const item = { source: { workspace_id: '11111111-1111-4111-8111-111111111111', session_id: 'session-1',
+    source_message_id: 'message-1', source_revision: '1' },
+  snapshot_digest: 'a'.repeat(64), original_message: '@Guide · Project original' }
+  const invoke = vi.fn<() => Promise<unknown>>(async () => ({ items: [item] }))
+  const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+  const args = { request: { sessionId: 'session-1', snapshotDigest: item.snapshot_digest } }
+  await expect(executor.execute('session/collaborationSources', { args }, signal)).resolves.toEqual({ items: [item] })
+  expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'collaborationSources', args, signal })
+  for (const request of [{ ...args.request, cursor: item.snapshot_digest }, { ...args.request, snapshotDigest: 'bad' },
+    { ...args.request, workspace_id: 'foreign' }]) {
+    await expect(executor.execute('session/collaborationSources', { args: { request } }, signal)).rejects.toThrow('invalid payload')
+  }
+  for (const page of [{ items: [item], next_cursor: item.snapshot_digest }, { items: [item, item] },
+    { items: [{ ...item, snapshot_digest: 'b'.repeat(64) }] }]) {
+    invoke.mockResolvedValue(page)
+    await expect(executor.execute('session/collaborationSources', { args }, signal)).rejects.toThrow('invalid Source page')
+  }
+})
+
+it('forwards explicit timeline opt-in and retains validated complete positions through single-original remote paging', async () => {
+  const item = { source: { workspace_id: '11111111-1111-4111-8111-111111111111', session_id: 'session-1',
+    source_message_id: 'message-1', source_revision: '1' }, snapshot_digest: 'a'.repeat(64), original_message: '@Guide · Project original',
+  timeline_position: { after_sequence: 5, local_order: '2' } }
+  const invoke = vi.fn<() => Promise<unknown>>(async () => ({ items: [item, { ...item, snapshot_digest: 'b'.repeat(64) }] }))
+  const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => []), signal = new AbortController().signal
+  const args = { request: { sessionId: 'session-1', includeTimeline: true } }
+  await expect(executor.execute('session/collaborationSources', { args }, signal)).resolves.toEqual({
+    items: [item], next_cursor: item.snapshot_digest,
+  })
+  expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'collaborationSources', args, signal })
+  for (const timeline_position of [null, { after_sequence: null, local_order: '9223372036854775807' }]) {
+    invoke.mockResolvedValue({ items: [{ ...item, timeline_position }] })
+    await expect(executor.execute('session/collaborationSources', { args }, signal)).resolves.toEqual({
+      items: [{ ...item, timeline_position }],
+    })
+  }
+  for (const includeTimeline of [false, null, 1, 'true']) {
+    await expect(executor.execute('session/collaborationSources', { args: { request: { sessionId: 'session-1', includeTimeline } } }, signal))
+      .rejects.toThrow('invalid payload')
+  }
+  for (const timeline_position of [undefined, {}, { after_sequence: -1, local_order: '2' },
+    { after_sequence: 1.5, local_order: '2' }, { after_sequence: Number.MAX_SAFE_INTEGER + 1, local_order: '2' },
+    { after_sequence: '5', local_order: '2' }, { after_sequence: 5, local_order: '0' },
+    { after_sequence: 5, local_order: '9223372036854775808' }, { after_sequence: 5, local_order: 'bad' },
+    { after_sequence: 5, local_order: 2 }, { after_sequence: 5, local_order: '2', message: 'private' }]) {
+    invoke.mockResolvedValue({ items: [{ ...item, timeline_position }] })
+    await expect(executor.execute('session/collaborationSources', { args }, signal)).rejects.toThrow('invalid Source page')
+  }
+  invoke.mockResolvedValue({ items: [item] })
+  await expect(executor.execute('session/collaborationSources', { args: { request: { sessionId: 'session-1' } } }, signal))
+    .rejects.toThrow('invalid Source page')
 })
 
 it('REQ-20260930-0004: an exhausted original Source feed has no continuation cursor', async () => {

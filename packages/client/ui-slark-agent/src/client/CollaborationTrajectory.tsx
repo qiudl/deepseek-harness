@@ -24,6 +24,15 @@ const runtimeEvents = new Map<string, keyof typeof zh>([
 ])
 const terminalPhases = new Set(['execution_succeeded', 'execution_failed', 'execution_cancelled', 'execution_revoked', 'execution_indeterminate'])
 type Props = PropsRuntime<'conversation.trajectory.external'> & PropsLocale<'slarkAgent'> & SlotInjectFace<CollaborationResultsInjected>
+/**
+ * Observe original Sources while the composer is mounted, including before Chat has any ordinary events.
+ * @param props - Session-bound readonly model observed through the framework hook.
+ * @returns No additional composer content.
+ */
+export function CollaborationActivity({ useSlarkResults }: SlotInjectFace<CollaborationResultsInjected>) {
+  useSlarkResults(state => state.groups.length > 0)
+  return null
+}
 /** Render audited stages independently of ordinary Session tools and assistant replies.
  * @param props - Session-bound readonly history and paging commands.
  * @returns A bounded audit region, or nothing when no original collaboration message exists.

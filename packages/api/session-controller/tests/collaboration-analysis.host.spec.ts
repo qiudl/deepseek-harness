@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
 import { collaborationJournalDigest } from '../src/collaboration-source-journal.ts'
 import { CollaborationAnalysisRunner } from '../src/collaboration-analysis.ts'
+import type { CollaborationReferenceCatalogue } from '../src/collaboration-reference-catalogue.ts'
 import type { CollaborationSourceSnapshot } from '../src/collaboration-source-journal.ts'
 
 class Adapter extends LlmAdapter {
@@ -43,6 +44,48 @@ async function harness() {
   return { ctx, lifetime, adapter, runner, prepare, close: () => ctx.fiber.dispose() }
 }
 const persist = () => vi.fn(async (_manifest: import('../src/collaboration-analysis.ts').CollaborationAnalysisManifest, _signal: AbortSignal) => {})
+
+it.each(['previous', 'invented'])('only returns a reference present in the captured metadata (%s)', async (locator) => {
+  const h = await harness()
+  try {
+    const c = await h.prepare(), commit = persist()
+    const catalogue: CollaborationReferenceCatalogue = { source_position: 2, total_messages: 1, omitted_entries: false,
+      entries: [{ source_kind: 'message', source_locator: 'previous', source_version: '1', message_position: 1, author: 'user' }] }
+    h.adapter.response = async function* () {
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: JSON.stringify({ intent: 'delegate', task_candidates: [], pending_candidates: [],
+        reference_candidates: [{ source_kind: 'message', source_locator: locator, source_version: '1', selection: { unit: 'whole' } }] }) } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const run = h.runner.run(c.source, c.prepared, commit, new AbortController().signal, undefined, catalogue)
+    if (locator === 'previous') expect((await run).jsonText).toContain('"source_locator":"previous"')
+    else await expect(run).rejects.toThrow('collaboration_analysis_reference_unavailable')
+    expect(commit).toHaveBeenCalledOnce()
+    const manifest = commit.mock.calls[0]![0]
+    expect(manifest.prompt_version).toBe('3')
+    expect(manifest.request.system).toContain('selection ({unit:"whole"}')
+    expect(manifest.request.system).not.toContain('selection_range')
+    expect(h.adapter.requests).toHaveLength(1)
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+it.each([{ proposals: [null] }, { proposals: [[]] }, { proposals: ['previous'] }, { proposals: [] },
+  { proposals: {} }, { proposals: Array.from({ length: 81 }, () => ({ source_kind: 'message', source_locator: 'previous', source_version: '1' })) }])(
+  'refuses malformed or over-budget model reference proposals ($proposals)', async ({ proposals }) => {
+    const h = await harness()
+    try {
+      const c = await h.prepare()
+      h.adapter.response = async function* () {
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: JSON.stringify({ reference_candidates: proposals }) } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      }
+      await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal, undefined,
+        { source_position: 2, total_messages: 1, omitted_entries: false, entries: [
+          { source_kind: 'message', source_locator: 'previous', source_version: '1', message_position: 1, author: 'user' }] }))
+        .rejects.toThrow('collaboration_analysis_reference_unavailable')
+      expect(h.runner.active).toBe(0)
+    } finally { await h.close() }
+  })
 
 it.each([undefined, 0, -1, 1.5, 8193])('refuses an unavailable analysis output cap (%s) before writing or dispatching', async (maxTokens) => {
   const h = await harness()

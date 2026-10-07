@@ -17,7 +17,7 @@ import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
-import LlmRuntime, { LlmAdapter, createUserMessage } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { LlmAdapter, createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
 import { DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'
 import type { AnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -138,7 +138,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       ? 'collaboration_root_planning_v1.json' : 'collaboration_analysis_v2.json'), 'utf8')) as {
       tables: { attempts: Record<string, { manifest_json: string; manifest?: unknown; dispatch: { attempt_id: string } }> }
     }
-    const record = mode === 'root-submission' ? Object.values(persisted.tables.attempts)[0]! : Object.values(persisted.tables.attempts).find(value => (JSON.parse(value.manifest_json) as { prompt_version: string }).prompt_version === (providerRequests === 2 ? '2' : '1'))!
+    const record = mode === 'root-submission' ? Object.values(persisted.tables.attempts)[0]! : Object.values(persisted.tables.attempts).find(value => (JSON.parse(value.manifest_json) as { prompt_version: string }).prompt_version === (providerRequests === 2 ? '4' : '3'))!
     expect(record.dispatch.attempt_id).toBe('fixture-attempt')
     const manifest = (mode === 'root-submission' ? record.manifest : JSON.parse(record.manifest_json)) as {
       prompt_version: string
@@ -151,8 +151,10 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     expect(wire.messages).toHaveLength(1)
     expect(req.headers['x-api-key']).toBe('fixture-source-key')
     const result = JSON.stringify({ intent: 'delegate', task_candidates: [{ mention_ids: ['mention-1'],
-      question: '@Guide 请分析', source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: 10 }],
-      reference_ids: [], independent: true, dependency_candidate_indices: [] }], pending_candidates: [] })
+      question: source.original_message, source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: source.original_message.length }],
+      reference_ids: mode === 'analysis' ? ['reference-0'] : [], independent: true, dependency_candidate_indices: [] }], pending_candidates: [],
+    ...(mode === 'analysis' ? { reference_candidates: [{ source_kind: 'message', source_locator: 'previous-message', source_version: '1',
+      selection: { unit: 'whole' }, source_evidence_spans: [{ source_message_id: 'message-1', source_revision: '1', start: 0, end: source.original_message.length }] }] } : {}) })
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.end([
       { type: 'message_start', message: { id: 'fixture-response', model: 'selected', usage: { input_tokens: 3, output_tokens: 0 } } },
@@ -180,8 +182,10 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
   const referenceText = '\ufeff范围说明😀\r\n只读分析，不修改文件'
   const referenceMessage = createUserMessage({ content: [{ type: 'text', text: referenceText }], source: { kind: 'user' } })
   if (mode === 'reference') session.append('user/message', referenceMessage, { surfaceOp: 'append' })
+  if (mode === 'analysis') session.append('user/message', { ...referenceMessage, id: MessageId('previous-message') }, { surfaceOp: 'append' })
   const seq = session.seq, source = { workspace_id: workspace.id, session_id: sessionId, source_message_id: 'message-1', source_revision: '1',
-    original_message: mode === 'reference' ? '@Guide 请引用前面那条范围说明并分析' : '@Guide 请分析',
+    original_message: mode === 'reference' ? '@Guide 请引用前面那条范围说明并分析'
+      : mode === 'analysis' ? '@Guide 请引用上一条消息并分析' : '@Guide 请分析',
     active_mentions: [{ mention_id: 'mention-1',
       source_span: { source_message_id: 'message-1', source_revision: '1', start: 0, end: 6 },
       display_snapshot: { agent_name: 'Guide', project_name: 'qiu-slark' },
@@ -201,10 +205,17 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       ? ((await factory['collaborationAnalysis'](
         origin,
         'B'.repeat(43),
-        { action: mode === 'root-analysis' ? 'prepare_root' : 'prepare', ...(mode==='root-analysis'?{ resume_binding_key:'f'.repeat(64) }:{}), binding_key: 'd'.repeat(64), input: mode === 'root-analysis' ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
+        { action: mode === 'root-analysis' ? 'prepare_root' : 'prepare', ...((mode === 'root-analysis' || mode === 'analysis-profile') ? { resume_binding_key: 'f'.repeat(64) } : {}), binding_key: 'd'.repeat(64), input: mode === 'root-analysis' ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
         new AbortController().signal,
         () => false,
-      )) as { kind: string; attempt_request_id: string; input_manifest_digest: string; source_digest: string; root?: unknown })
+      )) as {
+        kind: string
+        attempt_request_id: string
+        input_manifest_digest: string
+        source_digest: string
+        descriptor: unknown
+        root?: unknown
+      })
       : undefined
   const first =
     (mode === 'analysis-profile' || mode === 'root-analysis')
@@ -480,13 +491,25 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       lease_expires_at: new Date(Date.now() + 30000).toISOString(),
       dispatch_granted: true,
     }
+    if (mode === 'analysis-profile') {
+      const missing = await factory['collaborationAnalysis'](origin, 'B'.repeat(43), {
+        action: 'read_source_output', binding_key: 'e'.repeat(64), target,
+      }, new AbortController().signal, () => false)
+      expect(missing).toEqual({ state: 'missing', descriptor: preparation!.descriptor })
+      const resume = { action: 'resume_source', binding_key: 'e'.repeat(64), resume_binding_key: 'f'.repeat(64), input: source }
+      expect((await postAnalysis({ ...resume, resume_binding_key: 'a'.repeat(64) })).status).toBe(422)
+      const resumed = await factory['collaborationAnalysis'](origin, 'B'.repeat(43), resume, new AbortController().signal, () => false)
+      expect(resumed).toEqual(preparation)
+      expect(providerRequests).toBe(0)
+      expect((await postAnalysis({ action: 'dispatch', binding_key: 'd'.repeat(64), attempt_request_id: preparation!.attempt_request_id, grant })).status).toBe(422)
+    }
     const dispatch = {
       action: 'dispatch',
-      binding_key: 'd'.repeat(64),
+      binding_key: (mode === 'analysis-profile' ? 'e' : 'd').repeat(64),
       attempt_request_id: preparation!.attempt_request_id,
       grant,
     }
-    expect((await postAnalysis({ ...dispatch, binding_key: 'e'.repeat(64) })).status).toBe(422)
+    expect((await postAnalysis({ ...dispatch, binding_key: 'a'.repeat(64) })).status).toBe(422)
     expect(providerRequests).toBe(0)
     const result = (await factory['collaborationAnalysis'](
       origin,
@@ -506,6 +529,63 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     expect((await postAnalysis(dispatch)).status).toBe(422)
     expect(providerRequests).toBe(1)
     if (mode === 'analysis-profile') {
+      expect((await postAnalysis({ action: 'resume_source', binding_key: 'e'.repeat(64), resume_binding_key: 'f'.repeat(64), input: source })).status).toBe(422)
+      const readOriginal = { action: 'read_source_output', binding_key: 'd'.repeat(64), target }
+      const originalFiles = ['collaboration_source_v2.json', 'collaboration_analysis_v2.json', 'collaboration_analysis_output_v2.json']
+      const originalBytes = await Promise.all(originalFiles.map(name => readFile(join(directory, 'state', name))))
+      const savedOutput = await factory['collaborationAnalysis'](origin, 'B'.repeat(43), readOriginal,
+        new AbortController().signal, () => false) as {
+        state: string
+        descriptor: unknown
+        dispatch: unknown
+        output_digest: string
+        json_base64url: string
+      }
+      expect(savedOutput.state).toBe('saved')
+      expect(savedOutput.dispatch).toEqual(grant)
+      expect(savedOutput.descriptor).toEqual(preparation!.descriptor)
+      expect(savedOutput.output_digest).toBe(createHash('sha256').update(result.jsonText, 'utf8').digest('hex'))
+      expect(Buffer.from(savedOutput.json_base64url, 'base64url').toString('utf8')).toBe(result.jsonText)
+      expect(savedOutput).not.toHaveProperty('root')
+      expect(savedOutput).not.toHaveProperty('manifest_json')
+      expect(await Promise.all(originalFiles.map(name => readFile(join(directory, 'state', name))))).toEqual(originalBytes)
+      expect(providerRequests).toBe(1)
+      const registry = new ProfileRegistry({ root: join(directory, 'source-authority'), deviceIndexKey: Buffer.alloc(32, 7),
+        clock: { now: Date.now }, ...registryFileFixture() })
+      const account = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:source-loader', authorityBindingVersion: 1,
+        issuer: 'https://accounts.example.test', subject: randomUUID(), keyHandle: 'keychain:source-loader',
+        unlockMaterial: Buffer.alloc(32, 9).toString('base64url') }
+      const profile = await registry.registerAccount(account)
+      const host = new DesktopHost({ registry, clock: { now: Date.now }, runtimeGeneration: 5, ensureProfileWorker: async () => undefined,
+        verifyAccountAccessToken: () => ({ issuer: account.issuer, subject: account.subject }) })
+      const privateKey = createPrivateKey({ format: 'der', type: 'pkcs8', key: Buffer.from(
+        '302e020100300506032b6570042204209d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60', 'hex') })
+      const identity = { installationId: randomUUID(), hostInstanceId: randomUUID(), processNonce: 'A'.repeat(43),
+        installationPublicKey: createPublicKey(privateKey).export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url'),
+        installationPrivateKey: privateKey, executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1 }
+      const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1,
+        sourceAnalysisRecoverySupported: true, collaborationAnalysis: (profileId, payload, active) => {
+          expect(profileId).toBe(profile.profileId)
+          return factory['collaborationAnalysis'](origin, 'B'.repeat(43), payload, active, () => false)
+        } })
+      const ownerId = randomUUID(), lifetime = new AbortController(), control = authority.openSession(ownerId, lifetime.signal)
+      const client = await UnixHostClient.connectAuthenticatedTransport({ trustedInstallationId: identity.installationId,
+        trustedInstallationPublicKey: identity.installationPublicKey,
+        trustedExecutableSignatureDigest: identity.executableSignatureDigest }, {
+        call: async frame => decodeHostControlFrame(encodeHostControlFrame(
+          await control.handleRequest(decodeHostControlFrame(encodeHostControlFrame(frame))))),
+        isConnected: () => !lifetime.signal.aborted, close: () => { lifetime.abort(); control.close() },
+      })
+      onTestFinished(() =>{  client.close() })
+      await host.ensureAccountProfile({ ...account, accountAccessToken: 'test', ownerId })
+      const signed = await client.collaborationAnalysis({ ...account, command: { action: 'read_source_output', target } })
+      if (signed.kind !== 'source_output' || signed.evidence.state !== 'saved') throw Error('expected signed saved Source output')
+      const { analysis_receipt, ...original } = signed.evidence
+      expect(original).toEqual(savedOutput)
+      expect(analysis_receipt).toMatchObject({ dispatch: grant, output_digest: savedOutput.output_digest,
+        account_binding_handle: account.accountBindingHandle, installation_id: identity.installationId })
+      expect(providerRequests).toBe(1)
+      expect(await Promise.all(originalFiles.map(name => readFile(join(directory, 'state', name))))).toEqual(originalBytes)
 
       const replyInput = { ...source, source_message_id: 'reply-1', original_message: '只分析这份方案的规则，不修改文件。', active_mentions: [] }
       const captured = await factory['collaborationAnalysis'](origin, 'B'.repeat(43),
@@ -535,12 +615,15 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
           source_digest: fresh.source_digest, expected_plan_revision: '3' } }
       await factory['collaborationAnalysis'](origin, 'B'.repeat(43), nextDispatch, new AbortController().signal, () => false)
       expect(providerRequests).toBe(2)
+      expect(await factory['collaborationAnalysis'](origin, 'B'.repeat(43), readOriginal,
+        new AbortController().signal, () => false)).toEqual(savedOutput)
+      expect(providerRequests).toBe(2)
       expect((await postAnalysis(nextDispatch)).status).toBe(422)
       const records = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_v2.json'), 'utf8')) as {
         tables: { attempts: Record<string, { manifest_json: string }> } }
       const manifest = Object.values(records.tables.attempts).map(value => JSON.parse(value.manifest_json) as {
         prompt_version: string
-        request: { system: string; messages: { content: { text: string }[] }[] } }).find(value => value.prompt_version === '2')!
+        request: { system: string; messages: { content: { text: string }[] }[] } }).find(value => value.prompt_version === '4')!
       const visible = manifest.request.messages[0]!.content[0]!.text
       expect(visible).not.toContain('accepted-task'); expect(visible).toContain('不修改文件')
       await expect(JSON.stringify({ prompt_version: manifest.prompt_version, system: manifest.request.system, input: JSON.parse(visible) as Record<string, unknown> }, null, 2) + '\n')
@@ -616,13 +699,17 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     if (first.kind !== 'captured') throw Error('expected original capture')
     const result = await first.analyze(analysisWriter!, new AbortController().signal)
     const output: unknown = JSON.parse(result.jsonText)
-    expect(output).toMatchObject({ task_candidates: [{ mention_ids: ['mention-1'] }] })
+    expect(output).toMatchObject({ task_candidates: [{ mention_ids: ['mention-1'], question: source.original_message, reference_ids: ['reference-0'] }],
+      reference_candidates: [{ source_kind: 'message', source_locator: 'previous-message', selection: { unit: 'whole' } }] })
     expect(providerRequests).toBe(1)
     const manifest = JSON.parse([...analysisJournal!.records()][0]!.manifest_json) as {
       prompt_version: string
       request: { system: string; messages: { content: { text: string }[] }[] }
     }
     const input: unknown = JSON.parse(manifest.request.messages[0]!.content[0]!.text)
+    expect(input).toMatchObject({ reference_catalogue: { source_position: 2, entries: [
+      { source_kind: 'message', source_locator: 'previous-message', source_version: '1', message_position: 1, author: 'user' }] } })
+    expect(manifest.request.messages[0]!.content[0]!.text).not.toContain(referenceText)
     await expect(JSON.stringify({ prompt_version: manifest.prompt_version, system: manifest.request.system,
       input, output }, null, 2) + '\n')
       .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-analysis.request.expected.txt'))
@@ -726,7 +813,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     const m = record!.manifest
     await expect(JSON.stringify({ prompt_version: m.prompt_version, system: m.request.system,
       input: JSON.parse(m.request.messages[0].content[0].text) as Record<string, unknown>, output: JSON.parse(result.jsonText) as Record<string, unknown> }, null, 2) + '\n')
-      .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-analysis.request.expected.txt'))
+      .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-root-planning.request.expected.txt'))
     expect(await readFile(sourcePath)).toEqual(sourceBytes)
     expect(await readFile(rootPath)).toEqual(rootBytes)
   }

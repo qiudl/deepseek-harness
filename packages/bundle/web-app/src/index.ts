@@ -287,6 +287,7 @@ export function apply(ctx: Context, config: Config): void {
         (input, signal) => sessionCtx.sessionController.collaborationRootExecution(input, signal),
         (input, signal) => sessionCtx.sessionController.collaborationRootFeedback(input, signal),
         (input, signal) => sessionCtx.sessionController.collaborationRootConsumption(input, signal),
+        (target, signal) => sessionCtx.sessionController.readCollaborationSourceSnapshot(target, signal),
       )
       sessionCtx.effect(() => () => { lifetime.abort(); return owner.close() }, 'web-app: private analysis lifetime')
       sessionCtx.effect(() => sessionCtx.webServer.register({

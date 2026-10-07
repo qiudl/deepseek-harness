@@ -27,8 +27,8 @@
   en: e8d8ac2eec5c149a
   zh: fd5c00e4f2b6a0b7
 /session-controller/collaboration-sources-and-journals:
-  en: 6a4b33723d4a4da6
-  zh: d9bc3ac70b66b824
+  en: 030491fed5c2865b
+  zh: bc7f8f2951c4acda
 /session-controller/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
@@ -36,14 +36,14 @@
   en: 31bc2658e3ac212e
   zh: c3613cbdf067a328
 /session-controller/model-experience/source-analysis-system-prompt/what-the-model-sees:
-  en: 0f7118b6ad12b79b
-  zh: 2b2979e02d8d6718
+  en: 74e3247df0dd971d
+  zh: 75f232b3c4dd96e0
 /session-controller/model-experience/source-analysis-system-prompt/what-the-model-sees/analysis-policy:
   en: 63b20277f7ed3474
   zh: 71e421d9005f7954
 /session-controller/model-experience/source-analysis-system-prompt/token-effect:
-  en: e56cc598dbac0b16
-  zh: a4b4613b71cd2beb
+  en: 9e11fff2b102bcc3
+  zh: 787eed8649d3da60
 /session-controller/model-experience/source-analysis-system-prompt/kv-cache-effect:
   en: 8a460b133ff8b19b
   zh: 6e1270958ce0ca66
