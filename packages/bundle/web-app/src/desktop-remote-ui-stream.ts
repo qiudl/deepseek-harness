@@ -14,7 +14,7 @@ function followPayload(value: unknown): value is { args: Record<string, unknown>
   if (!record(value) || Object.keys(value).length !== 1 || !record(value.args) ||
     Object.keys(value.args).length !== 1 || !record(value.args.request)) return false
   const request = value.args.request
-  if (!Object.keys(request).every(key => ['address', 'maxMessages', 'assistantStream'].includes(key)) ||
+  if (!Object.keys(request).every(key => ['address', 'maxMessages', 'assistantStream', 'turnWindow'].includes(key)) ||
     !record(request.address)) return false
   const address = request.address
   const session = address.kind === 'session' && Object.keys(address).length === 2 &&
@@ -23,7 +23,13 @@ function followPayload(value: unknown): value is { args: Record<string, unknown>
     typeof address.parentSessionId === 'string' && SESSION_ID.test(address.parentSessionId) &&
     typeof address.childSessionId === 'string' && SESSION_ID.test(address.childSessionId) &&
     (address.mode === 'one-shot' || address.mode === 'continuable')
-  return (session || subagent) &&
+  const window = request.turnWindow
+  const validWindow = window === undefined || (record(window)
+    && Object.keys(window).length === 2
+    && typeof window.minMessages === 'number' && Number.isSafeInteger(window.minMessages)
+    && window.minMessages > 0 && window.minMessages <= (typeof request.maxMessages === 'number' ? request.maxMessages : 50)
+    && typeof window.minTurns === 'number' && Number.isSafeInteger(window.minTurns) && window.minTurns > 0)
+  return (session || subagent) && validWindow &&
     (request.maxMessages === undefined || (typeof request.maxMessages === 'number' &&
       Number.isSafeInteger(request.maxMessages) && request.maxMessages > 0 && request.maxMessages <= 500)) &&
     (request.assistantStream === undefined || request.assistantStream === true)
