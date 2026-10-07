@@ -93,3 +93,15 @@ it('expands persisted execution details and pages observations without executing
     execution: { ...execution, page: { ...execution.page, events: [], next_after_sequence: null } } } }] })} />)
   expect(screen.getByText(zh['trace.noEvidence'])).toBeTruthy()
 })
+
+it('shows committed original reply while keeping root progress partial and active', () => {
+  const state = snapshot()
+  const group = state.groups[0]!
+  const page = group.trace!.page!
+  const next = { ...state, groups: [{ ...group, trace: { ...group.trace!, page: { ...page,
+    events: page.events.map(event => ({ ...event, phase: 'assistant_message_committed' })) } } }] }
+  const view = render(<CollaborationTrajectory {...props(next)} />)
+  expect(view.container.textContent).toContain(zh['trace.assistantCommitted'])
+  expect(screen.getByText(zh['trace.partial'])).toBeTruthy()
+  expect(screen.queryByText(zh['trace.rootSucceeded'])).toBeNull()
+})

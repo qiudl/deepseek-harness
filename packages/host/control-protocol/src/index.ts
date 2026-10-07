@@ -177,3 +177,6 @@ export type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
 
 export { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from './collaboration-consumption.js'
 export type { HostCollaborationConsumptionReceipt, HostCollaborationConsumptionCommit } from './collaboration-consumption.js'
+
+export { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from './collaboration-continuation.js'
+export type { HostCollaborationContinuationReceipt, HostCollaborationContinuationCommit } from './collaboration-continuation.js'

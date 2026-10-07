@@ -184,3 +184,5 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 独立的 `profile.root_feedback` 能力允许在同一私有分析传输中传递有界的 `root_feedback` 操作与观察记录。Account 绑定仍由父进程负责。观察记录区分持久入队、已接纳的 Session 上下文及已观察到的助手续跑；其中不含结果文本或签名，不能独立认证云端消费。
 
 消费回执采用独立的 `dsh-collaboration-consumption-receipt-v1` 签名域。提交将原根 trace、执行命令、消费尝试和逻辑步骤绑定到实际 Session 事件坐标、首次持久化前缀及本地 journal 提交。投递签名不能替代消费证据。这些编解码器仅确立语法，不授予权限。
+
+首条回复凭据使用 `dsh-collaboration-continuation-observation-v1` 签名域。commit 嵌套原消费 commit，并独立绑定观察 ID、`assistant_message_committed`、助手事件序号和观察到的持久前缀。消费签名不能证明此域；凭据不包含回复正文或完成声明。

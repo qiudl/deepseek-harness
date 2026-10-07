@@ -95,3 +95,5 @@ In the original Session’s Trajectory tab, Slark collaboration history reads th
 An original collaboration Source keeps the Conversation shell active even before ordinary chat starts, so its Trajectory tab remains reachable. The model releases this activity when its Source history is cleared or the plugin is disposed.
 
 The [collaboration trajectory decision](../../../.agents/notes/implemented/feature/2026-10-07-slark-collaboration-trajectory.md) describes readonly history and external shell activity.
+
+The Trajectory tab labels `assistant_message_committed` as a reply committed in the original conversation. It keeps partial coverage and the independently reported root state; this observation does not mark the entire task complete.

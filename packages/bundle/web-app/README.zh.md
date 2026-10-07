@@ -231,3 +231,5 @@ analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/acce
 分析令牌保护的 `root_feedback` 操作将私有读取或入队命令交给 Session Controller，并保留取消和精确字段校验。响应只包含有界的持久化观察记录，不含结果正文。浏览器 Cookie 不能授权消费，该操作也不激活模型。
 
 同一私有 `root_feedback` 通道也将 `consumer_prepare`、`consumer_start` 与 `consumer_read` 交给持久消费 owner。只有当前首次授权可唤醒原 Agent；start 请求的取消生命周期持续到 Agent 结算。历史读取不会恢复唤醒句柄。浏览器结果控件只经已认证 Desktop Main 提交保留的预览、任务及投递身份。
+
+私有反馈通道还将 `continuation_read` 路由到原 Session Controller。它返回尚无已提交观察或不可变的首条回复坐标；重复读取保持原 trace，不会启动新的模型请求。

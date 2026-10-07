@@ -125,6 +125,7 @@ const shared = { target: targetSchema, selection: selectionSchema,
 const operationSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('read'), ...shared }),
   z.strictObject({ action: z.literal('consumer_read'), ...shared }),
+  z.strictObject({ action: z.literal('continuation_read'), ...shared }),
   z.strictObject({ action: z.literal('consumer_prepare'), ...shared, expected_event_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     expected_log_digest: z.string().regex(/^[0-9a-f]{64}$/u) }),
   z.strictObject({ action: z.literal('consumer_start'), ...shared, grant: z.unknown().transform((value, ctx) => { try { return parseCollaborationConsumptionGrant(value) } catch { ctx.addIssue({ code: 'custom', message: 'invalid consumer grant' }); return z.NEVER } }) }),

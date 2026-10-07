@@ -8,6 +8,7 @@ import css from './CollaborationResultsDock.module.css'
 const phases = new Map<string, keyof typeof zh>([
   ['root_accepted', 'trace.accepted'], ['revision_created', 'trace.revised'], ['root_state_changed', 'trace.stateChanged'],
   ['execution_admitted', 'trace.admitted'], ['consumer_authorized', 'trace.consumer'], ['context_applied', 'trace.consumed'],
+  ['assistant_message_committed', 'trace.assistantCommitted'],
   ['execution_succeeded', 'trace.succeeded'], ['execution_failed', 'trace.failed'], ['execution_cancelled', 'trace.cancelled'],
   ['execution_revoked', 'trace.revoked'], ['execution_indeterminate', 'trace.indeterminate'],
   ['delivery_local_committed', 'trace.delivered'], ['delivery_rendered', 'trace.rendered'],
