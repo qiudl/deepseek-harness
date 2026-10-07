@@ -248,7 +248,7 @@ describe('Profile remote UI stream wire commands', () => {
       { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: '$events', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
-        address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 100, assistantStream: true,
+        address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 500, assistantStream: true, turnWindow: { minMessages: 50, minTurns: 2 },
       } } } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: 'session-1' },
@@ -265,6 +265,17 @@ describe('Profile remote UI stream wire commands', () => {
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
     }
     for (const command of [
+      ...[null, [], {}, { minMessages: 50 }, { minMessages: 0, minTurns: 2 },
+        { minMessages: 501, minTurns: 2 }, { minMessages: 50, minTurns: 0 },
+        { minMessages: 50, minTurns: 1.5 }, { minMessages: 50, minTurns: Number.MAX_SAFE_INTEGER + 1 },
+        { minMessages: 50, minTurns: 2, path: '/tmp' }].map(turnWindow => ({
+        action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+          address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 500, turnWindow,
+        } } },
+      })),
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, turnWindow: { minMessages: 51, minTurns: 2 },
+      } } } },
       { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: { path: '/tmp' } } },
       { action: 'open', stream_id, endpoint: '$events', payload: { args: { all: true } } },
       { action: 'open', stream_id, endpoint: 'asset/read', payload: { args: {} } },
