@@ -1,8 +1,9 @@
 /** Optional Slark collaboration area; ordinary chat requires no panel action. */
 import { useEffect, useState } from 'react'
-import { Button, Checkbox } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { PropsLocale, PropsRuntime, SlotInjectFace } from '@deepseek-ai/dsh-client-ui-slots'
-import type { TokenSpan } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { Button, Checkbox, IconQueueOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { PropsLocale, PropsRenderSlots, PropsRuntime, SlotInjectFace } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InputState, TokenSpan } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type { ProjectScopeModel, ProjectScopeSnapshot } from './project-scope.ts'
 import css from './ProjectScopeDock.module.css'
 
@@ -22,24 +23,49 @@ export interface ProjectScopeInjected {
    */
   insertAgent(projectId: string, agentId: string, span: TokenSpan): boolean
 }
-type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & SlotInjectFace<ProjectScopeInjected>
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface SlotMap {
+    /** Workspace history displayed inside the optional collaboration sidebar. */
+    'slark.collaboration.history': { kind: 'single'; scope: 'session' }
+  }
+}
+
+/** The composer opens the existing sidebar without modifying the draft. */
+export interface ScopeLauncherInjected {
+  hooks: ProjectScopeInjected['hooks']
+  refreshScope(): Promise<void>
+  openCollaboration(): void
+}
+type LauncherProps = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & SlotInjectFace<ScopeLauncherInjected>
+type Props = PropsRuntime<'sidebar.right.pane.tab'> & PropsLocale<'slarkAgent'> & SlotInjectFace<ProjectScopeInjected>
+  & PropsRenderSlots<'slark.collaboration.history'>
 
 /**
- * Render project multi-selection and current scoped Agent eligibility.
+ * Open the collaboration sidebar from the ordinary composer.
  * @param props - framework scope hook, commands and translated copy.
- * @returns the collapsible collaboration region.
+ * @returns the optional sidebar launcher and saved scope count.
  */
-export function ProjectScopeDock({ useSlarkScope, refreshScope, applyScope, loadProjects, loadAgents,
-  insertAgent, input, inputActions, t }: Props) {
+export function ProjectScopeDock({ useSlarkScope, refreshScope, openCollaboration, t }: LauncherProps) {
   const state = useSlarkScope(x => x)
-  const [open, setOpen] = useState(false)
+  useEffect(() => { if (state.workspaceId) void refreshScope() }, [state.workspaceId, refreshScope])
+  return <Button size="sm" variant="toolbar" data-testid="slark-scope-toggle" onClick={openCollaboration}>
+    <IconQueueOutlineRegular size={16} />{t('scope.title')}
+    {state.scope && <span className={css.count}>{t('scope.count', { count: state.scope.selected_project_ids.length })}</span>}
+  </Button>
+}
+
+/**
+ * Manage project scope and read workspace history in the existing sidebar.
+ * @param props - Session input actions, tab lifecycle, readonly sources and commands.
+ * @returns the collaboration page, with no additional composer.
+ */
+export function ProjectScopePanel({ useSlarkScope, refreshScope, applyScope, loadProjects, loadAgents,
+  insertAgent, useInput, inputActions, useTabInfo, renderSlot, t }: Props) {
+  const state = useSlarkScope(x => x), input = useInput(x => x)
+  const tab = useTabInfo()
   useEffect(() => { if (state.workspaceId) void refreshScope() }, [state.workspaceId, refreshScope])
   return <section className={css.panel} aria-label={t('scope.title')} data-testid="slark-scope-panel">
-    <Button size="sm" variant="toolbar" data-testid="slark-scope-toggle" aria-expanded={open}
-      onClick={() => { setOpen(!open) }}>{t('scope.title')}
-      {state.scope && <span className={css.count}>{t('scope.count', { count: state.scope.selected_project_ids.length })}</span>}
-    </Button>
-    {open && <div className={css.body}>
+    <div className={css.body}>
       <p className={css.hint}>{t('scope.description')}</p>
       {!state.workspaceId ? <p role="status">{t('scope.ungrouped')}</p>
         : state.phase === 'loading' || state.phase === 'idle' ? <p role="status">{t('scope.loading')}</p>
@@ -48,17 +74,33 @@ export function ProjectScopeDock({ useSlarkScope, refreshScope, applyScope, load
             <Button size="sm" data-testid="slark-scope-refresh" disabled={state.phase === 'saving'}
               onClick={() => { void refreshScope() }}>{t('scope.refresh')}</Button>
             {state.scope && <ScopeEditor key={`${state.workspaceId}:${state.scope.version}`} state={state} saved={state.scope.selected_project_ids}
-              applyScope={applyScope} loadProjects={loadProjects} loadAgents={loadAgents} insertAgent={insertAgent}
+              applyScope={applyScope} loadProjects={loadProjects} loadAgents={loadAgents}
+              insertAgent={(projectId, agentId, span) => {
+                const inserted = insertAgent(projectId, agentId, span)
+                if (inserted && tab.sidebar.fullscreen) tab.tab.actions.close()
+                return inserted
+              }}
               input={input} inputActions={inputActions} t={t}
-              close={() => { setOpen(false) }} />}
+              close={() => { tab.tab.actions.close() }} />}
           </>}
-    </div>}
+    </div>
+    {renderSlot('slark.collaboration.history', {})}
   </section>
 }
-type EditorProps = Pick<Props, 'applyScope' | 'loadProjects' | 'loadAgents' | 'insertAgent' | 'input' | 'inputActions' | 't'> & {
+type EditorProps = Pick<Props, 'applyScope' | 'loadProjects' | 'loadAgents' | 'insertAgent' | 'inputActions' | 't'> & {
+  input: InputState
   state: ProjectScopeSnapshot
   saved: readonly string[]
   close: () => void
+}
+
+/**
+ * Label the collaboration tab with its existing product glyph.
+ * @param props - locale copy from the slot registration.
+ * @returns the icon and localized tab title.
+ */
+export function CollaborationTabTitle({ t }: PropsLocale<'slarkAgent'>) {
+  return <><IconQueueOutlineRegular size={16} />{t('scope.title')}</>
 }
 function ScopeEditor({ state, saved, applyScope, loadProjects, loadAgents, insertAgent, input, inputActions, close, t }: EditorProps) {
   const [draft, setDraft] = useState<readonly string[]>(saved)

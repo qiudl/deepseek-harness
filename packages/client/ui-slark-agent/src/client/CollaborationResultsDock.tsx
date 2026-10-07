@@ -15,7 +15,9 @@ export interface CollaborationResultsInjected {
   loadSources(): Promise<void>
   loadReplies(snapshotDigest: string): Promise<void>
 }
-type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & SlotInjectFace<CollaborationResultsInjected>
+import type {} from './ProjectScopeDock.tsx'
+
+type Props = PropsRuntime<'slark.collaboration.history'> & PropsLocale<'slarkAgent'> & SlotInjectFace<CollaborationResultsInjected>
 /** Locale keys for the coordinator's readonly planning states. */
 export const planningStatus: Partial<Record<string, keyof typeof zh>> = {
   queued: 'task.planningQueued',

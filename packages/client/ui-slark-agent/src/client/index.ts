@@ -9,6 +9,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+import { IconQueueOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
@@ -17,8 +19,8 @@ import { en, NS, zh } from './locales.ts'
 import { AgentTaskDock } from './AgentTaskDock.tsx'
 import { ProjectScopeModel } from './project-scope.ts'
 import type { WorkspaceBridge } from './project-scope.ts'
-import { ProjectScopeDock } from './ProjectScopeDock.tsx'
-import type { ProjectScopeInjected } from './ProjectScopeDock.tsx'
+import { ProjectScopeDock, ProjectScopePanel, CollaborationTabTitle } from './ProjectScopeDock.tsx'
+import type { ProjectScopeInjected, ScopeLauncherInjected } from './ProjectScopeDock.tsx'
 import { createScopedCollaborationSource, scopedCollaborationClipboard } from './collaboration-source.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from './collaboration-source.ts'
 import type { CollaborationDialogueBridge } from './collaboration-dialogue.ts'
@@ -227,8 +229,8 @@ export function apply(ctx: ClientContext): void {
       }
       return entry
     }
-    resultsCtx.slots.inject('conversation.input.dock', () => resultsCtx.slots.register({
-      name: 'conversation.input.dock', id: 'slark-collaboration-results', order: 25, locale: NS,
+    resultsCtx.slots.inject('slark.collaboration.history', () => resultsCtx.slots.register({
+      name: 'slark.collaboration.history', locale: NS,
       inject: sessionId => entryFor(sessionId).bindings,
     }, CollaborationResultsDock))
     resultsCtx.slots.inject('conversation.chat.timeline', () => resultsCtx.slots.register({
@@ -238,20 +240,41 @@ export function apply(ctx: ClientContext): void {
   })
   const t = ctx.locale.bind(NS)
   const scopedSource = createScopedCollaborationSource(ctx, t)
-  const scopeModels = new Map<string, { model: ProjectScopeModel; bindings: ProjectScopeInjected }>()
-  ctx.inject(['workspaces'], (scopeCtx) => {
+  const scopeModels = new Map<string, {
+    owner: NonNullable<ReturnType<ClientContext['sessions']['binding']>>
+    model: ProjectScopeModel
+    release: () => void
+    bindings: ProjectScopeInjected & ScopeLauncherInjected
+  }>()
+  ctx.inject(['workspaces', 'sidebarRight', 'sidebarRightTabs'], (scopeCtx) => {
     if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return
-    scopeCtx.effect(() => () => { scopeModels.forEach(({ model }) => { model.dispose() }); scopeModels.clear() },
+    scopeCtx.effect(() => () => { scopeModels.forEach(({ release }) => { release() }); scopeModels.clear() },
       'ui-slark-agent: scope projections')
-    scopeCtx.slots.inject('conversation.input.dock', () => scopeCtx.slots.register({
-      name: 'conversation.input.dock', id: 'slark-project-scope', order: 20, locale: NS,
-      inject: (sessionId) => {
-        let entry = scopeModels.get(sessionId)
-        if (!entry) {
-          const model = new ProjectScopeModel(sessionId, scopeCtx.workspaces.list, () => window.__DSH_DESKTOP_HOST__)
-          entry = { model, bindings: { hooks: { slarkScope: model }, refreshScope: () => model.refresh(),
+    const bindingsFor = (sessionId: SessionId): ProjectScopeInjected & ScopeLauncherInjected => {
+      if (scopeCtx.fiber.uid === null) throw Error('collaboration_view_closed')
+      const owner = scopeCtx.sessions.binding(sessionId)
+      if (!owner || owner.ctx.fiber.uid === null) throw Error('collaboration_view_closed')
+      let entry = scopeModels.get(sessionId)
+      if (entry && entry.owner !== owner) {
+        entry.release()
+        entry = undefined
+      }
+      if (!entry) {
+        const model = new ProjectScopeModel(sessionId, scopeCtx.workspaces.list, () => window.__DSH_DESKTOP_HOST__)
+        const releaseEffect = owner.ctx.effect(() => () => {
+          model.dispose()
+          scopeModels.delete(sessionId)
+        }, 'ui-slark-agent: Session scope projection')
+        entry = { owner, model, release: () => { void releaseEffect() },
+          bindings: { hooks: { slarkScope: model }, refreshScope: () => model.refresh(),
             applyScope: selected => model.apply(selected), loadProjects: () => model.loadProjects(),
             loadAgents: () => model.loadAgents(),
+            openCollaboration: () => {
+              if (scopeCtx.fiber.uid !== null && scopeCtx.sessions.binding(sessionId) === owner &&
+                owner.ctx.fiber.uid !== null && scopeCtx.sidebarRight.mounted.getSnapshot() === sessionId) {
+                scopeCtx.sidebarRight.openTab('slark-collaboration')
+              }
+            },
             insertAgent: (projectId, agentId, span) => {
               const selected = model.agentForMention(projectId, agentId)
               if (!selected) return false
@@ -269,10 +292,27 @@ export function apply(ctx: ClientContext): void {
               if (inserted) input.focus()
               return inserted
             } } }
-          scopeModels.set(sessionId, entry)
-        }
-        return entry.bindings
-      },
+        scopeModels.set(sessionId, entry)
+      }
+      return entry.bindings
+    }
+    const tabId = '@deepseek-ai/dsh-client-ui-slark-agent/collaboration'
+    scopeCtx.effect(() => scopeCtx.sidebarRightTabs.register({
+      id: tabId, kind: 'slark-collaboration', priority: 'builtin', title: () => t('scope.title'),
+      guide: [{ id: 'slark-collaboration', order: 60, title: () => t('scope.title'),
+        description: () => t('scope.description'), icon: IconQueueOutlineRegular }],
+    }), 'ui-slark-agent: collaboration sidebar type')
+    scopeCtx.slots.inject('sidebar.right.pane.tab', () => scopeCtx.slots.register({
+      name: 'sidebar.right.pane.tab', key: tabId, locale: NS,
+      children: { 'slark.collaboration.history': { kind: 'single', scope: 'session' } },
+      inject: bindingsFor,
+    }, ProjectScopePanel))
+    scopeCtx.slots.inject('sidebar.right.pane.tab.title', () => scopeCtx.slots.register({
+      name: 'sidebar.right.pane.tab.title', key: tabId, locale: NS,
+    }, CollaborationTabTitle))
+    scopeCtx.slots.inject('conversation.input.dock', () => scopeCtx.slots.register({
+      name: 'conversation.input.dock', id: 'slark-project-scope', order: 20, locale: NS,
+      inject: bindingsFor,
     }, ProjectScopeDock))
   })
   const source: InputTriggerSource = {

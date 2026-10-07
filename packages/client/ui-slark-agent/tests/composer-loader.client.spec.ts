@@ -5,6 +5,9 @@ import { collaborationDiscussionRequestId } from '@deepseek-ai/dsh-api-session-c
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 /** REQ-20260930-0004: YAML-loaded source through the real editor, trigger controller and submit machine. */
 import { Context } from '@deepseek-ai/cordis'
+import { SidebarRightTabRegistry } from '@deepseek-ai/dsh-client-ui-sidebar-right/src/client/tab-registry.ts'
+import { createSidebarRightController } from '@deepseek-ai/dsh-client-ui-sidebar-right/src/client/service.ts'
+import { createSidebarRightStore } from '@deepseek-ai/dsh-client-ui-sidebar-right/src/client/stores.ts'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { createScope, scopeOf, MutableSessionEventSource } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -22,8 +25,8 @@ import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { createElement, useSyncExternalStore } from 'react'
 import { fireEvent, render, within } from '@testing-library/react'
-import { ProjectScopeDock } from '../src/client/ProjectScopeDock.tsx'
-import { dockRuntime, dockTranslate } from './fixture-state.client.ts'
+import { ProjectScopePanel } from '../src/client/ProjectScopeDock.tsx'
+import { panelRuntime, dockTranslate } from './fixture-state.client.ts'
 import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
 import { createScopedCollaborationSource, scopedCollaborationClipboard } from '../src/client/collaboration-source.ts'
@@ -34,6 +37,7 @@ import { CollaborationResultsModel } from '../src/client/collaboration-results.t
 import { ProjectScopeModel } from '../src/client/project-scope.ts'
 import type { CollaborationResultsInjected } from '../src/client/CollaborationResultsDock.tsx'
 import type { ProjectScopeInjected } from '../src/client/ProjectScopeDock.tsx'
+import type { ScopeLauncherInjected } from '../src/client/ProjectScopeDock.tsx'
 
 const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id: 'agent-1',
   enterprise_id: 'enterprise-1', enterprise_name: 'Company', project_name: '项目空间',
@@ -83,6 +87,19 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     sessionOf,
     binding: (key: SessionId) => key === id ? binding : otherBindings.get(key),
   } as never)
+  const sidebarTabs = new SidebarRightTabRegistry(ctx)
+  sidebarTabs.register({ id: 'fixture/guide', kind: 'guide', title: () => 'Guide' })
+  const { controller: sidebar, adopt } = createSidebarRightController(sidebarTabs, () => {})
+  const sidebarStore = createSidebarRightStore(() => ({ kind: 'guide', title: 'Guide' })).create()
+  const releaseSidebar = adopt(id, sidebarStore)
+  const publishSidebar = () => sidebar.bind({ sessionId: id, actions: sidebarStore.actions,
+    surfaces: sidebarStore.getSnapshot().bySession, canSplitPane: () => true,
+    closeWithFocus: (_pane, close) => { close() }, openWithFocus: (open) => { open() } })
+  let unbindSidebar = publishSidebar()
+  const stopSidebar = sidebarStore.subscribe(() => { unbindSidebar(); unbindSidebar = publishSidebar() })
+  ctx.provide('sidebarRightTabs', sidebarTabs)
+  ctx.provide('sidebarRight', sidebar)
+  ctx.effect(() => () => { stopSidebar(); unbindSidebar(); releaseSidebar(); sidebar.tabDomain.dispose() })
   new UiConversation(ctx, ctx.sessions)
   const chatTimeline = new ChatTimelineRegistry()
   ctx.provide('chatTimeline', chatTimeline)
@@ -171,6 +188,8 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
         'conversation.input.overlay': { kind: 'list', scope: 'session' },
         'conversation.input.dock': { kind: 'list', scope: 'session' },
         'conversation.chat.timeline': { kind: 'single', scope: 'session' },
+        'sidebar.right.pane.tab': { kind: 'keyed', scope: 'session' },
+        'sidebar.right.pane.tab.title': { kind: 'keyed', scope: 'session' },
       } } as never, () => null)
     } },
     triggers: Triggers, source: SlarkSource,
@@ -217,9 +236,11 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     const end = prefix.length + 2
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
-  return { rebind: async () => {
-    await binding.ctx.fiber.dispose()
+  return { rebind: async (keepPrevious = false) => {
+    const previous = binding
+    if (!keepPrevious) await previous.ctx.fiber.dispose()
     binding = { ...binding, ctx: createScope(ctx, id).ctx, eventSource: new MutableSessionEventSource() }
+    return () => previous.ctx.fiber.dispose()
   }, releaseLocator, chatTimeline, ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf,
   scopeDirectory, workspace, sourceReads,
   deliveries, pending, clarify, originals, openSession, closeSession: () => scope.fiber.dispose() }
@@ -257,9 +278,8 @@ async function appendScoped(f: Awaited<ReturnType<typeof bench>>, index: number,
 
 it('YAML-loaded result registration receives the real composer admission event and reads its original coordinates', async () => {
   const f = await bench(true)
-  const entries = f.ctx.slots.entries('conversation.input.dock')
-  expect(entries.some(entry => entry.options.id === 'slark-agent-tasks')).toBe(false)
-  const entry = entries.find(entry => entry.options.id === 'slark-collaboration-results')
+  expect(f.ctx.slots.entries('conversation.input.dock').some(entry => entry.options.id === 'slark-agent-tasks')).toBe(false)
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
   expect(entry).toBeDefined()
   const bindings: unknown = Reflect.apply(entry!.inject!, undefined, ['session-1'])
   if (!bindings || typeof bindings !== 'object' || !('hooks' in bindings) ||
@@ -1170,7 +1190,7 @@ it('uses the YAML-registered project panel commands and disposes its cached Sess
 
 it('uses YAML-registered result paging commands and retains their model only for the original Session', async () => {
   const f = await bench(true)
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
   if (!entry?.inject) throw Error('missing results registration')
   const value: unknown = Reflect.apply(entry.inject, undefined, [SessionId('session-1')])
   if (!value || typeof value !== 'object' || !('hooks' in value) || !value.hooks || typeof value.hooks !== 'object'
@@ -1210,7 +1230,7 @@ it('loads sibling collaboration history through the YAML-registered workspace re
   f.workspace.siblings.push(SessionId('session-2'))
   f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-2', source_message_id: 'sibling', source_revision: '1' },
     snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 其他会话的任务' })
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
   if (!entry?.inject) throw Error('missing results registration')
   const value: unknown = Reflect.apply(entry.inject, undefined, [SessionId('session-1')])
   if (!value || typeof value !== 'object' || !('hooks' in value) || !value.hooks || typeof value.hooks !== 'object'
@@ -1237,7 +1257,7 @@ it('navigates from a YAML-registered record to its verified original Session wit
   const original = { source: { workspace_id: f.workspace.id, session_id: 'session-2', source_message_id: 'older', source_revision: '1' },
     snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 原始任务' }
   f.originals.push(original)
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
   if (!entry?.inject) throw Error('missing results registration')
   const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
   await bindings.hooks.slarkResults.refresh()
@@ -1258,7 +1278,7 @@ it.each(['missing-navigation', 'membership-change'] as const)('explains an unava
   const original = { source: { workspace_id: f.workspace.id, session_id: 'session-2', source_message_id: 'original', source_revision: '1' },
     snapshot_digest: 'a'.repeat(64), original_message: '@Guide original' }
   f.originals.push(original)
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
   if (!entry?.inject) throw Error('missing results registration')
   const value = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
   await value.hooks.slarkResults.refresh()
@@ -1275,7 +1295,7 @@ it.each(['missing-navigation', 'membership-change'] as const)('explains an unava
 
 it('Source locator cannot recreate a registered result model after its owning YAML plugin is disposed', async () => {
   const f = await bench(true)
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
   if (!entry?.inject) throw Error('missing results registration')
   const value = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
   const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
@@ -1586,7 +1606,7 @@ it('routes explicit task confirmation through the YAML-loaded original Session b
   const original = { source:{ workspace_id:f.workspace.id,session_id:'session-1',source_message_id:'first',source_revision:'1' },
     snapshot_digest:'a'.repeat(64),original_message:'@Guide 原始任务' }
   f.originals.push(original)
-  const entry=f.ctx.slots.entries('conversation.input.dock').find(item=>item.options.id==='slark-collaboration-results')
+  const entry=f.ctx.slots.entries('slark.collaboration.history')[0]
   if(!entry?.inject) throw Error('missing results registration')
   const value: unknown=Reflect.apply(entry.inject,undefined,[SessionId('session-1')])
   if(!value || typeof value!=='object' || !('executionAction' in value) || typeof value.executionAction!=='function') throw Error('missing command')
@@ -1629,15 +1649,22 @@ it('inserts a directory-selected scoped Agent into the existing composer without
   f.composer.setDraft('请检查这个方案：')
   expect(typeof Reflect.get(bindings, 'insertAgent')).toBe('function')
   const model = bindings.hooks.slarkScope, focus = vi.spyOn(f.composer, 'focus')
-  const props: Parameters<typeof ProjectScopeDock>[0] = { ...dockRuntime('session-1'), ...bindings,
-    input: f.composer.snapshot, inputActions: f.composer.actions, t: dockTranslate,
+  const insert = vi.spyOn(bindings, 'insertAgent')
+  const props: Parameters<typeof ProjectScopePanel>[0] = { ...panelRuntime('session-1'), ...bindings, renderSlot: () => null,
+    useInput: selector => selector(useSyncExternalStore(
+      listener => f.composer.state.subscribe(listener), () => f.composer.state.getSnapshot())),
+    inputActions: f.composer.actions, t: dockTranslate,
     useSlarkScope: selector => selector(useSyncExternalStore(model.subscribe, model.getSnapshot)) }
-  const view = render(createElement(ProjectScopeDock, props))
+  const view = render(createElement(ProjectScopePanel, props))
   onTestFinished(() => { view.unmount() })
-  fireEvent.click(within(view.container).getByTestId('slark-scope-toggle'))
-  const button = await within(view.container).findByTestId('slark-scope-mention-project-1-agent-1')
-  await vi.waitFor(() => { expect((button as HTMLButtonElement).disabled).toBe(false) })
-  fireEvent.click(button)
+  await vi.waitFor(() => { expect(within(view.container).getByTestId<HTMLButtonElement>('slark-scope-mention-project-1-agent-1').disabled).toBe(false) })
+  await vi.waitFor(() => { expect(model.agentForMention(agent.project_id, agent.agent_id)).toBeDefined() })
+  const capture = vi.spyOn(f.composer.actions, 'captureInsertion')
+  const edit = vi.spyOn(f.composer, 'insertReference')
+  fireEvent.click(within(view.container).getByTestId('slark-scope-mention-project-1-agent-1'))
+  expect(capture).toHaveBeenCalledOnce()
+  expect(edit).toHaveBeenCalledOnce()
+  expect(insert).toHaveReturnedWith(true)
   expect(focus).toHaveBeenCalledTimes(1)
   expect(f.composer.snapshot.draft).toBe('请检查这个方案：@Guide · 项目空间 ')
   expect(f.composer.snapshot.occurrences).toHaveLength(1)
@@ -1648,7 +1675,7 @@ it('inserts a directory-selected scoped Agent into the existing composer without
 })
 
 
-it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'stale-draft', 'archived', 'moved', 'bridge-changed', 'session-closed', 'plugin-closed', 'claimed', 'scope-only', 'mode-closed', 'invalid-span'] as const)(
+it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'stale-draft', 'archived', 'moved', 'bridge-changed', 'session-closed', 'scope-missing', 'plugin-closed', 'claimed', 'scope-only', 'mode-closed', 'invalid-span'] as const)(
   'directory insertion preserves the draft and never sends when %s', async (mode) => {
     const f = await bench(true, true, true, mode !== 'scope-only')
     const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
@@ -1672,6 +1699,7 @@ it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'st
     if (mode === 'mode-closed' && window.__DSH_DESKTOP_HOST__) window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable = false
     if (mode === 'invalid-span') span = { ...span, start: -1, end: -1 }
     if (mode === 'session-closed') await f.closeSession()
+    if (mode === 'scope-missing') vi.spyOn(f.ctx.sessions, 'scope').mockReturnValue(undefined)
     if (mode === 'plugin-closed') {
       const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
       await plugin?.fiber?.dispose()
@@ -1702,6 +1730,86 @@ it('directory picks share the original Source with an existing structured Agent 
   expect(refs[0]?.source_id).not.toBe(refs[1]?.source_id)
   expect(refs[0]?.original_source_id).toBe(refs[1]?.original_source_id)
   expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('opens one real sidebar page from the YAML launcher and removes its type and history slot on unload', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope launcher')
+  const bindings = Reflect.apply(entry.inject, undefined, [id]) as ProjectScopeInjected & ScopeLauncherInjected
+  f.composer.setDraft('保留聊天草稿')
+  bindings.openCollaboration(); bindings.openCollaboration()
+  const tabs = f.ctx.sidebarRight.tabsIn(id).filter(tab => tab.kind === 'slark-collaboration')
+  expect(tabs).toHaveLength(1)
+  expect(tabs[0]?.title).toBe('Slark 协同')
+  const definition = f.ctx.sidebarRightTabs.get('slark-collaboration')
+  const guide = definition?.guide?.[0]
+  if (!guide?.title || !guide.description) throw Error('missing collaboration guide')
+  expect(guide.icon).toBeDefined()
+  expect(guide.title()).toBe('Slark 协同')
+  expect(guide.description()).toContain('@Agent')
+  expect(f.ctx.slots.entries('conversation.input.dock').map(item => item.options.id)).toEqual(['slark-project-scope'])
+  expect(f.ctx.slots.entries('slark.collaboration.history')).toHaveLength(1)
+  const panel = f.ctx.slots.entries('sidebar.right.pane.tab').find(item => item.options.key === definition?.id)
+  if (!panel?.inject) throw Error('missing collaboration page')
+  const injectPanel = panel.inject
+  expect(Reflect.apply(injectPanel, undefined, [id])).toBe(bindings)
+  expect(f.composer.snapshot.draft).toBe('保留聊天草稿')
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  await plugin?.fiber?.dispose()
+  expect(f.ctx.sidebarRightTabs.get('slark-collaboration')).toBeUndefined()
+  expect(f.ctx.slots.entries('slark.collaboration.history')).toHaveLength(0)
+  bindings.openCollaboration()
+  expect(f.ctx.sidebarRight.tabsIn(id).filter(tab => tab.kind === 'slark-collaboration')).toHaveLength(1)
+  expect(() => { Reflect.apply(injectPanel, undefined, [id]) }).toThrow('collaboration_view_closed')
+})
+
+it('does not open another Session from a stale collaboration launcher', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope launcher')
+  const bindings = Reflect.apply(entry.inject, undefined, [id]) as ScopeLauncherInjected
+  const opened = vi.spyOn(f.ctx.sidebarRight, 'openTab')
+  f.ctx.sidebarRight.bind({ sessionId: SessionId('other'), actions: {} as never, surfaces: {},
+    closeWithFocus: () => {}, openWithFocus: () => {}, canSplitPane: () => true })
+  bindings.openCollaboration()
+  expect(opened).not.toHaveBeenCalled()
+})
+
+it.each(['missing', 'closed'] as const)('refuses a collaboration page without a live Session owner (%s)', async (mode) => {
+  const f = await bench(true)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope launcher')
+  const injectLauncher = entry.inject
+  const bindings = Reflect.apply(injectLauncher, undefined, [SessionId('session-1')]) as ProjectScopeInjected
+  await bindings.refreshScope()
+  if (mode === 'closed') {
+    await f.closeSession()
+    expect(bindings.hooks.slarkScope.agentForMention(agent.project_id, agent.agent_id)).toBeUndefined()
+  }
+  const id = SessionId(mode === 'missing' ? 'missing' : 'session-1')
+  expect(() => { Reflect.apply(injectLauncher, undefined, [id]) }).toThrow('collaboration_view_closed')
+  expect(f.composer.snapshot.draft).toBe('')
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+})
+
+it.each([false, true])('replaces the sidebar scope model when the same Session receives a new Controller owner (previous live=%s)', async (keepPrevious) => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope launcher')
+  const first = Reflect.apply(entry.inject, undefined, [id]) as ProjectScopeInjected
+  await first.refreshScope()
+  const closePrevious = await f.rebind(keepPrevious)
+  const next = Reflect.apply(entry.inject, undefined, [id]) as ProjectScopeInjected
+  expect(next.hooks.slarkScope).not.toBe(first.hooks.slarkScope)
+  expect(first.hooks.slarkScope.agentForMention(agent.project_id, agent.agent_id)).toBeUndefined()
+  expect(first.insertAgent(agent.project_id, agent.agent_id, f.composer.actions.captureInsertion())).toBe(false)
+  await next.refreshScope()
+  expect(next.hooks.slarkScope.getSnapshot().scope?.selected_project_ids).toEqual([agent.project_id])
+  await closePrevious()
+  expect(Reflect.apply(entry.inject, undefined, [id])).toBe(next)
+  expect(next.hooks.slarkScope.getSnapshot().scope?.selected_project_ids).toEqual([agent.project_id])
 })
 
 

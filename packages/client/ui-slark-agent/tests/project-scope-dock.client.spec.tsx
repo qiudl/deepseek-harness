@@ -3,10 +3,10 @@ import { useSyncExternalStore } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
-import { workspaceSnapshot, dockRuntime, dockTranslate } from './fixture-state.client.ts'
+import { workspaceSnapshot, dockRuntime, panelRuntime, dockTranslate } from './fixture-state.client.ts'
 import { ProjectScopeModel } from '../src/client/project-scope.ts'
 import type { WorkspaceBridge } from '../src/client/project-scope.ts'
-import { ProjectScopeDock } from '../src/client/ProjectScopeDock.tsx'
+import { ProjectScopeDock, ProjectScopePanel, CollaborationTabTitle } from '../src/client/ProjectScopeDock.tsx'
 import { zh } from '../src/client/locales.ts'
 
 const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
@@ -32,7 +32,7 @@ function fixture(grouped = true, executable = false, initialSelected: readonly s
   const model = new ProjectScopeModel('session' as never, workspaces, () => bridge)
   onTestFinished(() => { model.dispose() })
   const insertAgent = vi.fn(() => true)
-  const props: Parameters<typeof ProjectScopeDock>[0] = { ...dockRuntime(),
+  const props: Parameters<typeof ProjectScopePanel>[0] = { ...panelRuntime(), renderSlot: () => null,
     useSlarkScope: <T,>(selector: (s: ReturnType<typeof model.getSnapshot>) => T) =>
       selector(useSyncExternalStore(model.subscribe, model.getSnapshot)),
     refreshScope: () => model.refresh(), applyScope: (ids: readonly string[]) => model.apply(ids),
@@ -42,9 +42,7 @@ function fixture(grouped = true, executable = false, initialSelected: readonly s
   return { model, call, props, insertAgent }
 }
 it('optional collaboration area supports multi-select, apply and explicit clear with Agent space labels', async () => {
-  const f = fixture(), view = render(<ProjectScopeDock {...f.props} />)
-  expect(screen.queryByRole('checkbox')).toBeNull()
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const f = fixture(), view = render(<ProjectScopePanel {...f.props} />)
   const first = await screen.findByRole('checkbox', { name: '产品空间' })
   fireEvent.click(first); fireEvent.click(screen.getByRole<HTMLInputElement>('checkbox', { name: '研发空间' }))
   expect(f.call.mock.calls.filter(([x]) => x.operation.kind === 'apply')).toHaveLength(0)
@@ -67,8 +65,7 @@ it('qualified Agents invite chat mentions without adding a task form or send but
   f.props.inputActions.captureInsertion = vi.fn(() => span)
   const submit = vi.fn()
   f.props.inputActions.submit = submit
-  const view = render(<ProjectScopeDock {...f.props} />)
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const view = render(<ProjectScopePanel {...f.props} />)
   fireEvent.click(await screen.findByRole('checkbox', { name: '产品空间' }))
   fireEvent.click(screen.getByTestId('slark-scope-apply'))
   await screen.findByText('<script>Guide · 产品空间')
@@ -82,25 +79,24 @@ it('qualified Agents invite chat mentions without adding a task form or send but
   view.unmount(); f.model.dispose()
 })
 it('cancel discards the local selection without saving or clearing the authority', async () => {
-  const f = fixture(), view = render(<ProjectScopeDock {...f.props} />)
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const f = fixture(), view = render(<ProjectScopePanel {...f.props} />)
   fireEvent.click(await screen.findByRole('checkbox', { name: '产品空间' }))
   fireEvent.click(screen.getByTestId('slark-scope-cancel'))
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
-  expect((screen.getByRole<HTMLInputElement>('checkbox', { name: '产品空间' })).checked).toBe(false)
+  view.unmount()
+  const reopened = render(<ProjectScopePanel {...f.props} />)
+  onTestFinished(() => { reopened.unmount() })
+  await waitFor(() => { expect((screen.getByRole<HTMLInputElement>('checkbox', { name: '产品空间' })).checked).toBe(false) })
   expect(f.call.mock.calls.every(([x]) => x.operation.kind !== 'apply')).toBe(true)
   view.unmount(); f.model.dispose()
 })
 it('ungrouped Session makes no range requests and names the required workspace', () => {
-  const f = fixture(false), view = render(<ProjectScopeDock {...f.props} />)
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const f = fixture(false), view = render(<ProjectScopePanel {...f.props} />)
   expect(screen.getByText(zh['scope.ungrouped'])).toBeTruthy()
   expect(f.call).not.toHaveBeenCalled(); expect(screen.queryByRole('checkbox')).toBeNull()
   view.unmount(); f.model.dispose()
 })
 it('save conflict replaces the stale selection, shows recovery copy, and does not replay', async () => {
-  const f = fixture(), view = render(<ProjectScopeDock {...f.props} />)
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const f = fixture(), view = render(<ProjectScopePanel {...f.props} />)
   fireEvent.click(await screen.findByRole('checkbox', { name: '产品空间' }))
   f.call.mockImplementationOnce(async () => ({ ok: false, errorCode: 'scope_conflict', refreshRequired: true }) as never)
   await act(async () => { fireEvent.click(screen.getByTestId('slark-scope-apply')) })
@@ -111,9 +107,8 @@ it('save conflict replaces the stale selection, shows recovery copy, and does no
 })
 
 it('retains unloaded selected spaces, supports deselection and directory paging, and refreshes saved authority', async () => {
-  const f = fixture(true, true, ['one', 'unloaded']), view = render(<ProjectScopeDock {...f.props} />)
+  const f = fixture(true, true, ['one', 'unloaded']), view = render(<ProjectScopePanel {...f.props} />)
   onTestFinished(() => { view.unmount() })
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
   const first = await screen.findByRole<HTMLInputElement>('checkbox', { name: '产品空间' })
   expect(first.checked).toBe(true)
   expect(screen.getByText(dockTranslate('scope.selectedPending', { count: 1 }))).toBeTruthy()
@@ -143,9 +138,8 @@ it('retains unloaded selected spaces, supports deselection and directory paging,
 
 it('limits new selections to fifty spaces while allowing deselection and blocks edits during an outstanding save', async () => {
   const saved = ['one', ...Array.from({ length: 49 }, (_, i) => `unloaded-${i}`)]
-  const f = fixture(true, false, saved), view = render(<ProjectScopeDock {...f.props} />)
+  const f = fixture(true, false, saved), view = render(<ProjectScopePanel {...f.props} />)
   onTestFinished(() => { view.unmount() })
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
   const first = await screen.findByRole<HTMLInputElement>('checkbox', { name: '产品空间' })
   const second = screen.getByRole<HTMLInputElement>('checkbox', { name: '研发空间' })
   expect(first.disabled).toBe(false); expect(second.disabled).toBe(true)
@@ -174,9 +168,8 @@ it('limits new selections to fifty spaces while allowing deselection and blocks 
 })
 
 it('shows empty and loading directories without hiding continuation controls or allowing a second page request', async () => {
-  const f = fixture(), view = render(<ProjectScopeDock {...f.props} />)
+  const f = fixture(), view = render(<ProjectScopePanel {...f.props} />)
   onTestFinished(() => { view.unmount() })
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
   await screen.findByRole('checkbox', { name: '产品空间' })
   f.call.mockResolvedValueOnce({ ok: true, value: { items: [], next_cursor: null } })
   await act(async () => { await f.model.loadProjects(true) })
@@ -210,19 +203,61 @@ it('shows a retained-draft notice when a directory insertion is refused', async 
   const f = fixture(true, true, ['one'])
   f.insertAgent.mockReturnValue(false)
   f.props.inputActions.captureInsertion = () => ({ start: 0, end: 0, draftRev: 0 })
-  const view = render(<ProjectScopeDock {...f.props} />)
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const view = render(<ProjectScopePanel {...f.props} />)
   fireEvent.click(await screen.findByTestId('slark-scope-mention-one-agent'))
   expect(screen.getByText(zh['scope.insertUnavailable'])).toBeTruthy()
   view.unmount()
 })
 it.each(['adjudicating', 'claimed', 'submitting'] as const)('directory mention cannot alter a %s composer', async (phase) => {
   const f = fixture(true, true, ['one'])
-  const view = render(<ProjectScopeDock {...f.props} input={{ ...f.props.input, phase }} />)
-  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  const view = render(<ProjectScopePanel {...f.props} useInput={selector => selector({ ...dockRuntime().input, phase })} />)
   const button = await screen.findByTestId('slark-scope-mention-one-agent')
   expect((button as HTMLButtonElement).disabled).toBe(true)
   fireEvent.click(button)
   expect(f.insertAgent).not.toHaveBeenCalled()
   view.unmount()
+})
+
+it.each([false, true])('the composer launcher opens the existing sidebar without project controls, history or another input (grouped=%s)', async (grouped) => {
+  const f = fixture(grouped, true, ['one']), openCollaboration = vi.fn()
+  const view = render(<ProjectScopeDock {...dockRuntime()} useSlarkScope={f.props.useSlarkScope}
+    refreshScope={f.props.refreshScope} openCollaboration={openCollaboration} t={dockTranslate} />)
+  if (grouped) await screen.findByText(dockTranslate('scope.count', { count: 1 }))
+  else expect(f.call).not.toHaveBeenCalled()
+  expect(screen.queryByRole('checkbox')).toBeNull()
+  expect(screen.queryByRole('textbox')).toBeNull()
+  expect(screen.queryByTestId('slark-scope-panel')).toBeNull()
+  fireEvent.click(screen.getByTestId('slark-scope-toggle'))
+  expect(openCollaboration).toHaveBeenCalledOnce()
+  expect(f.insertAgent).not.toHaveBeenCalled()
+  expect(f.call.mock.calls.every(([x]) => x.operation.kind !== 'apply')).toBe(true)
+  view.unmount()
+})
+
+it.each([false, true])('a sidebar directory insertion closes only a fullscreen presentation (%s)', async (fullscreen) => {
+  const f = fixture(true, true, ['one']), close = vi.fn()
+  f.props.inputActions.captureInsertion = () => ({ start: 0, end: 0, draftRev: 0 })
+  const view = render(<ProjectScopePanel {...f.props} useTabInfo={panelRuntime('session', close, fullscreen).useTabInfo} />)
+  fireEvent.click(await screen.findByTestId('slark-scope-mention-one-agent'))
+  expect(f.insertAgent).toHaveBeenCalledOnce()
+  expect(close).toHaveBeenCalledTimes(fullscreen ? 1 : 0)
+  view.unmount()
+})
+
+it('a failed narrow-screen insertion keeps the directory and original draft available', async () => {
+  const f = fixture(true, true, ['one']), close = vi.fn()
+  f.insertAgent.mockReturnValue(false)
+  f.props.inputActions.captureInsertion = () => ({ start: 0, end: 0, draftRev: 0 })
+  const view = render(<ProjectScopePanel {...f.props} useTabInfo={panelRuntime('session', close, true).useTabInfo} />)
+  fireEvent.click(await screen.findByTestId('slark-scope-mention-one-agent'))
+  expect(close).not.toHaveBeenCalled()
+  expect(screen.getByText(zh['scope.insertUnavailable'])).toBeTruthy()
+  expect(screen.getByRole('checkbox', { name: '产品空间' })).toBeTruthy()
+  view.unmount()
+})
+
+it('the sidebar title uses localized copy and an existing decorative icon', () => {
+  const view = render(<CollaborationTabTitle t={dockTranslate} />)
+  expect(screen.getByText(zh['scope.title'])).toBeTruthy()
+  expect(view.container.querySelector('svg[aria-hidden="true"]')).toBeTruthy()
 })
