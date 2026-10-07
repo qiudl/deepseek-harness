@@ -43,6 +43,7 @@ import { PerformanceUsageRow, type PerformanceUsageRowInjected } from './setting
 import { PerformanceUsagePolicy } from './performance-usage.ts'
 import { useTurnDataValue } from './chat/use-turn-data.ts'
 import { bindDisclosure } from './chat/use-disclosure.ts'
+import { ChatTimelineRegistry } from './timeline.ts'
 
 const CHAT_NODE_INJECT: ChatNodeInjected = {
   hooks: {
@@ -64,6 +65,9 @@ export const inject = [
  * @param ctx - Client root context.
  */
 export function apply(ctx: Context): void {
+  const timeline = new ChatTimelineRegistry()
+  ctx.provide('chatTimeline', timeline)
+  ctx.effect(() => () => { timeline.dispose() })
   const quotaNotice = createSnapshotStore<QuotaNoticeState | null>(null)
   let quotaNoticeSeq = 0
   // Each hold is its own token, so a release can only drop the hold it was
@@ -185,6 +189,7 @@ export function apply(ctx: Context): void {
       children: {
         'conversation.chat.node': { kind: 'keyed', scope: 'session', inject: CHAT_NODE_INJECT },
         'conversation.message.images': { kind: 'single', scope: 'session' },
+        'conversation.chat.timeline': { kind: 'single', scope: 'session' },
       },
       store: chatStore,
       inject: (sessionId: SessionId): ChatViewInjected => {
@@ -194,7 +199,7 @@ export function apply(ctx: Context): void {
         const chat = chatSource(binding)
         const conversation = ctx.uiConversation.binding(binding)
         return {
-          hooks: { presentation },
+          hooks: { presentation, timeline: timeline.source(sessionId) },
           keyedHooks: {
             chatNode: key => chat.getSnapshot().nodes.source(key),
             chatNodeProcess: key => chat.getSnapshot().nodes.processSource(key),

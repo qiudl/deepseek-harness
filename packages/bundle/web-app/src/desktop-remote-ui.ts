@@ -46,13 +46,14 @@ export class DesktopRemoteUiExecutor {
     if (endpoint === 'session/collaborationSources') {
       const request = payload.args.request
       if (Object.keys(payload.args).length !== 1 || !record(request)
-        || Object.keys(request).some(key => key !== 'sessionId' && key !== 'cursor' && key !== 'snapshotDigest')
+        || Object.keys(request).some(key => key !== 'sessionId' && key !== 'cursor' && key !== 'snapshotDigest' && key !== 'includeTimeline')
         || typeof request.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(request.sessionId)
         || /[/\\]/u.test(request.sessionId) || request.sessionId === '.' || request.sessionId === '..'
         || (request.cursor !== undefined && (typeof request.cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(request.cursor)))
         || (request.snapshotDigest !== undefined
           && (typeof request.snapshotDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(request.snapshotDigest)))
-        || (Object.hasOwn(request, 'cursor') && Object.hasOwn(request, 'snapshotDigest'))) {
+        || (Object.hasOwn(request, 'cursor') && Object.hasOwn(request, 'snapshotDigest'))
+        || (Object.hasOwn(request, 'includeTimeline') && request.includeTimeline !== true)) {
         throw new Error('desktop remote UI: invalid payload')
       }
       const page: unknown = await this.gateway.invoke({ namespace: 'session', method: 'collaborationSources', args: payload.args, signal })
@@ -69,13 +70,23 @@ export class DesktopRemoteUiExecutor {
         return { items: [] }
       }
       const first: unknown = page.items[0]
-      if (!record(first) || Object.keys(first).sort().join(',') !== 'original_message,snapshot_digest,source'
+      const itemKeys = request.includeTimeline ? 'original_message,snapshot_digest,source,timeline_position'
+        : 'original_message,snapshot_digest,source'
+      if (!record(first) || Object.keys(first).sort().join(',') !== itemKeys
         || typeof first.snapshot_digest !== 'string' || !/^[0-9a-f]{64}$/u.test(first.snapshot_digest)
         || (request.snapshotDigest !== undefined && first.snapshot_digest !== request.snapshotDigest)
         || !record(first.source) || Object.keys(first.source).sort().join(',') !== 'session_id,source_message_id,source_revision,workspace_id'
         || first.source.session_id !== request.sessionId || typeof first.original_message !== 'string'
         || Buffer.from(first.original_message, 'utf8').toString('utf8') !== first.original_message) {
         throw new Error('desktop remote UI: invalid Source page')
+      }
+      if (request.includeTimeline && first.timeline_position !== null) {
+        const position = first.timeline_position
+        if (!record(position) || Object.keys(position).sort().join(',') !== 'after_sequence,local_order'
+          || (position.after_sequence !== null && (typeof position.after_sequence !== 'number'
+            || !Number.isSafeInteger(position.after_sequence) || position.after_sequence < 0))
+          || typeof position.local_order !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(position.local_order)
+          || BigInt(position.local_order) > 9223372036854775807n) throw new Error('desktop remote UI: invalid Source page')
       }
       parseHostCollaborationSourceDescriptor({ ...first.source, snapshot_digest: first.snapshot_digest })
       // Remote control reads use a 64 KiB frame; the immutable digest pages complete originals individually.

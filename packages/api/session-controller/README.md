@@ -157,6 +157,8 @@ Analysis uses one user message containing original text and explicit mention met
 
 `readCollaborationReferenceContent` returns only a separately captured immutable record after checking current membership, the original Source and actual selected bytes. It cannot create a selection from a supplied digest. Records contain at most 1 MiB, including valid empty content; cancellation and Profile disposal use the same owned-read drainage as grant checks. This Host-only method has no Remote endpoint and grants no cloud transfer authority.
 
+Opt-in `session.collaborationSources` requests with `includeTimeline: true` return each original’s immutable `timeline_position`. Older originals return `null`; requests without the option retain their existing response fields. Position reads verify the captured input digest and never add ordinary Session events, prepare a model, or create a new position for legacy history.
+
 ## Model Experience
 
 ### Source analysis system prompt

@@ -57,6 +57,8 @@ Source navigation freshly checks the displayed immutable snapshot before opening
 
 <a id="model-experience"></a>
 
+The original Chat view and workspace history use separate readonly models. Opt-in Source positions place complete original messages and independently identified replies beside ordinary Chat rows, with no extra input or task form. Unpositioned legacy originals have a labeled history region. Source paging and reply paging are independent; a verified locator focuses its original once. Merely viewing, refreshing, or closing this display does not dispatch tasks, acknowledge replies, or begin a local model turn.
+
 ## Model Experience
 
 Indirectly, through Session Controller's original collaboration Source analysis; ordinary chat serialization still refuses Agent chips.

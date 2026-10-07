@@ -6738,15 +6738,19 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionCollaborationSourceItem',
-    declaration: 'export interface SessionCollaborationSourceItem {\n    readonly source: {\n        readonly workspace_id: string;\n        readonly session_id: string;\n        readonly source_message_id: string;\n        readonly source_revision: string;\n    };\n    readonly snapshot_digest: string;\n    readonly original_message: string;\n}',
+    declaration: 'export interface SessionCollaborationSourceItem {\n    readonly source: {\n        readonly workspace_id: string;\n        readonly session_id: string;\n        readonly source_message_id: string;\n        readonly source_revision: string;\n    };\n    readonly snapshot_digest: string;\n    readonly original_message: string;\n    readonly timeline_position?: SessionCollaborationTimelinePosition | null;\n}',
   },
   {
     name: 'SessionCollaborationSourcesRequest',
-    declaration: 'export interface SessionCollaborationSourcesRequest {\n    readonly sessionId: SessionId;\n    readonly cursor?: string;\n    readonly snapshotDigest?: string;\n}',
+    declaration: 'export interface SessionCollaborationSourcesRequest {\n    readonly sessionId: SessionId;\n    readonly cursor?: string;\n    readonly snapshotDigest?: string;\n    readonly includeTimeline?: true;\n}',
   },
   {
     name: 'SessionCollaborationSourcesValue',
     declaration: 'export interface SessionCollaborationSourcesValue {\n    readonly items: readonly SessionCollaborationSourceItem[];\n    readonly next_cursor?: string;\n}',
+  },
+  {
+    name: 'SessionCollaborationTimelinePosition',
+    declaration: 'export interface SessionCollaborationTimelinePosition {\n    readonly after_sequence: number | null;\n    readonly local_order: string;\n}',
   },
   {
     name: 'SessionControlBaseline',

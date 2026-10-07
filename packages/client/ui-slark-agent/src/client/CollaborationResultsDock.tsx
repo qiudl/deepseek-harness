@@ -16,7 +16,8 @@ export interface CollaborationResultsInjected {
   loadReplies(snapshotDigest: string): Promise<void>
 }
 type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & SlotInjectFace<CollaborationResultsInjected>
-const planningStatus: Partial<Record<string, keyof typeof zh>> = {
+/** Locale keys for the coordinator's readonly planning states. */
+export const planningStatus: Partial<Record<string, keyof typeof zh>> = {
   queued: 'task.planningQueued',
   planning: 'task.planning',
   failed: 'task.planningFailed',

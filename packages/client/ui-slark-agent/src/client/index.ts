@@ -1,4 +1,6 @@
 /** DSH `@` source for the live, employee-assigned Slark Agent directory. */
+import type { ChatTimelineRecord } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { ConversationBinding } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-api-session-controller/remote'
@@ -23,10 +25,18 @@ import type { CollaborationDialogueBridge } from './collaboration-dialogue.ts'
 import { CollaborationResultsModel } from './collaboration-results.ts'
 import type { CollaborationResultsBridge } from './collaboration-results.ts'
 import { CollaborationResultsDock } from './CollaborationResultsDock.tsx'
+import { CollaborationTimeline } from './CollaborationTimeline.tsx'
 import type { CollaborationResultsInjected } from './CollaborationResultsDock.tsx'
 
 /** Required client services. */
 export const inject = ['inputTriggers', 'locale', 'sessions', 'conversation', 'slots']
+
+declare module '@deepseek-ai/dsh-api-session-controller/client' {
+  interface SessionReferenceSourceMap {
+    /** Temporary original-Session ownership while a readonly history locator prepares navigation. */
+    collaborationLocator: unknown
+  }
+}
 
 interface AgentItem {
   assignment_id: string
@@ -92,6 +102,16 @@ type AgentReference = Pick<AgentItem, 'assignment_id' | 'project_id' | 'agent_id
   logical_key_version?: 2
 }
 
+type ResultsEntry = {
+  owner: ConversationBinding
+  model: CollaborationResultsModel
+  bindings: CollaborationResultsInjected
+  timelineModel: CollaborationResultsModel
+  timelineBindings: CollaborationResultsInjected
+  stopActivity: () => void
+  stopTimeline: () => void
+}
+
 function isAgentReference(item: Record<string, unknown>): item is Record<string, unknown> & AgentReference {
   return ['assignment_id', 'project_id', 'agent_id', 'enterprise_id', 'name'].every(
     key => typeof item[key] === 'string' && item[key].length > 0,
@@ -124,36 +144,85 @@ export function apply(ctx: ClientContext): void {
       inject: sessionId => ({ sessionId }),
     }, AgentTaskDock)
   })
-  ctx.inject(['remote.session', 'connection', 'workspaces'], (resultsCtx) => {
+  ctx.inject(['remote.session', 'connection', 'workspaces', 'uiConversation', 'chatTimeline'], (resultsCtx) => {
     if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable ||
       !window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable) return
     const connection = resultsCtx.get('connection') as ConnectionHandle
-    const models = new Map<string, { model: CollaborationResultsModel; bindings: CollaborationResultsInjected }>()
-    resultsCtx.effect(() => () => { models.forEach(({ model }) => { model.dispose() }); models.clear() },
-      'ui-slark-agent: workspace results')
-    const entryFor = (sessionId: SessionId): { model: CollaborationResultsModel; bindings: CollaborationResultsInjected } => {
+    const models = new Map<string, ResultsEntry>()
+    resultsCtx.effect(() => () => {
+      models.forEach(({ model, timelineModel, stopActivity, stopTimeline }) => {
+        stopTimeline(); stopActivity(); timelineModel.dispose(); model.dispose()
+      })
+      models.clear()
+    },
+    'ui-slark-agent: workspace results')
+    const entryFor = (sessionId: SessionId): ResultsEntry => {
       if (resultsCtx.fiber.uid === null) throw Error('collaboration_view_closed')
+      const owner = resultsCtx.uiConversation.binding(sessionId)
       let entry = models.get(sessionId)
+      if (entry && entry.owner !== owner) {
+        entry.stopTimeline(); entry.stopActivity(); entry.timelineModel.dispose(); entry.model.dispose()
+        models.delete(sessionId)
+        entry = undefined
+      }
       if (!entry) {
-        const model = new CollaborationResultsModel(sessionId, resultsCtx.workspaces.list, connection.generation,
+        const createModel = (history: 'session' | 'workspace') => new CollaborationResultsModel(
+          sessionId, resultsCtx.workspaces.list, connection.generation,
           (cursor, signal, sourceSessionId) => resultsCtx.remote.session.collaborationSources({
-            sessionId: sourceSessionId, ...(cursor ? { cursor } : {}),
-          }, signal), () => window.__DSH_DESKTOP_HOST__, 'workspace',
+            sessionId: sourceSessionId, includeTimeline: true, ...(cursor ? { cursor } : {}),
+          }, signal), () => window.__DSH_DESKTOP_HOST__, history,
           (original, signal) => resultsCtx.remote.session.collaborationSources({
-            sessionId: SessionId(original.source.session_id), snapshotDigest: original.snapshot_digest,
-          }, signal))
-        entry = { model, bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
-          locateOriginal: digest => model.locateOriginal(digest, (original) => {
-            const navigation = resultsCtx.get('uiWorkspace')
-            if (!navigation) throw Error('source_navigation_unavailable')
-            const target = entryFor(SessionId(original.source.session_id))
-            if (!target.model.revealOriginal(original)) throw Error('source_navigation_unavailable')
-            navigation.openSession(SessionId(original.source.session_id))
-            void target.model.refresh()
-          }),
-          consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
-          executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
-          loadReplies: digest => model.loadReplies(digest) } }
+            sessionId: SessionId(original.source.session_id), snapshotDigest: original.snapshot_digest, includeTimeline: true,
+          }, signal), true)
+        const model = createModel('workspace'), timelineModel = createModel('session')
+        const stopActivity = owner.registerActivity('slark-collaboration', {
+          getSnapshot: () => timelineModel.getSnapshot().groups.length > 0,
+          subscribe: listener => timelineModel.subscribe(listener),
+        })
+        let previous: ReturnType<typeof timelineModel.getSnapshot> | undefined
+        let records: readonly ChatTimelineRecord[] = []
+        const stopTimeline = resultsCtx.chatTimeline.register(sessionId, {
+          getSnapshot: () => {
+            const snapshot = timelineModel.getSnapshot()
+            if (snapshot !== previous) {
+              previous = snapshot
+              const next = snapshot.groups.flatMap((group) => {
+                const position = group.original.timeline_position
+                return position ? [{
+                  recordId: group.original.snapshot_digest, afterSequence: position.after_sequence,
+                  localOrder: position.local_order,
+                }] : []
+              })
+              if (JSON.stringify(next) !== JSON.stringify(records)) records = next
+            }
+            return records
+          },
+          subscribe: listener => timelineModel.subscribe(listener),
+        })
+        entry = { owner, model, timelineModel, stopActivity, stopTimeline,
+          timelineBindings: { hooks: { slarkResults: timelineModel }, loadSources: () => timelineModel.loadSources(),
+            loadReplies: digest => timelineModel.loadReplies(digest),
+            executionAction: (digest, taskId, reconcile) => timelineModel.executionAction(digest, taskId, reconcile) },
+          bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
+            locateOriginal: digest => model.locateOriginal(digest, (original) => {
+              const navigation = resultsCtx.get('uiWorkspace')
+              if (!navigation) throw Error('source_navigation_unavailable')
+              const reference = ctx.sessions.retain(SessionId(original.source.session_id), { source: 'collaborationLocator' })
+              try {
+                const target = entryFor(reference.sessionId)
+                if (!target.timelineModel.revealOriginal(original) || !target.model.revealOriginal(original)) {
+                  throw Error('source_navigation_unavailable')
+                }
+                navigation.openSession(reference.sessionId)
+                void target.model.refresh()
+                void target.timelineModel.refresh()
+              } finally {
+                reference.release()
+              }
+            }),
+            consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
+            executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
+            loadReplies: digest => model.loadReplies(digest) } }
         models.set(sessionId, entry)
       }
       return entry
@@ -162,6 +231,10 @@ export function apply(ctx: ClientContext): void {
       name: 'conversation.input.dock', id: 'slark-collaboration-results', order: 25, locale: NS,
       inject: sessionId => entryFor(sessionId).bindings,
     }, CollaborationResultsDock))
+    resultsCtx.slots.inject('conversation.chat.timeline', () => resultsCtx.slots.register({
+      name: 'conversation.chat.timeline', locale: NS,
+      inject: sessionId => entryFor(sessionId).timelineBindings,
+    }, CollaborationTimeline))
   })
   const t = ctx.locale.bind(NS)
   const scopedSource = createScopedCollaborationSource(ctx, t)

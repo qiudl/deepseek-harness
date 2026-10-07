@@ -33,7 +33,7 @@ export type { TranscriptViewMode } from '../chat-settings.ts'
 export type { ChatPresentationPolicy } from './presentation-policy.ts'
 export type {
   AssistantActionOwnerProps, ChatFileMentions, ChatNodeHookContext, ChatNodeInjected, ChatNodeOwnerProps,
-  ChatNodeViewProps, ChatScrollPosition, ChatStore, ChatViewInjected, ChatViewSlotProps,
+  ChatNodeViewProps, ChatScrollPosition, ChatStore, ChatTimelineOwnerProps, ChatTimelineRow, ChatViewInjected, ChatViewSlotProps,
   CommandRowOwnerProps, CommandRowProps, MessageImagesProps, OpenFileOptions, PresentationInjected,
   QuotaNoticeCode, QuotaNoticeHostProps, QuotaNoticeInjected, QuotaNoticeOwnerProps, QuotaNoticeState,
   TurnProcessOwnerProps, TurnTailOwnerProps, UseChat, UseChatNodeTurnData, UseDisclosure, UsePresentation,
@@ -62,3 +62,5 @@ declare module './contract/chat-nodes.ts' {
   interface ChatNodeDataMap extends PublicChatNodeDataMap {}
 }
 export type { ProcessActivity, ProcessActivitySummary, ProcessGroupData } from './contract/process-groups.ts'
+
+export type { ChatTimeline, ChatTimelineRecord } from './timeline.ts'

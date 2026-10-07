@@ -75,6 +75,21 @@ const bytes = (value: unknown): number => new TextEncoder().encode(JSON.stringif
 const array = (value: unknown): boolean => Array.isArray(value)
 const safeText = (value: unknown, max: number): value is string => typeof value === 'string'
   && !/\p{Surrogate}/u.test(value) && new TextEncoder().encode(value).length <= max
+function validPosition(value: unknown): boolean {
+  if (value === null) return true
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const row = value as Record<string, unknown>
+  return Object.keys(row).sort().join(',') === 'after_sequence,local_order'
+    && (row.after_sequence === null || typeof row.after_sequence === 'number'
+      && Number.isSafeInteger(row.after_sequence) && row.after_sequence >= 0)
+    && typeof row.local_order === 'string' && /^[1-9][0-9]{0,18}$/u.test(row.local_order)
+    && BigInt(row.local_order) <= 9223372036854775807n
+}
+function samePosition(a: SessionCollaborationSourceItem, b: SessionCollaborationSourceItem): boolean {
+  const first = a.timeline_position, second = b.timeline_position
+  return first === second || first != null && second != null
+    && first.after_sequence === second.after_sequence && first.local_order === second.local_order
+}
 function wait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const abort = () => { reject(new DOMException('Cancelled', 'AbortError')) }
@@ -114,7 +129,7 @@ export class CollaborationResultsModel {
 
   constructor(private sessionId: SessionId, private workspaces: WorkspaceSource, private connection: Generation,
     private readSources: ReadSources, private bridge: () => CollaborationResultsBridge | undefined,
-    private history: 'session' | 'workspace' = 'session', private readOriginal?: ReadOriginal) {
+    private history: 'session' | 'workspace' = 'session', private readOriginal?: ReadOriginal, private timeline = false) {
     const changed = () => { if (this.bind() && this.observers.size) void this.refresh() }
     this.unsubscribe = [workspaces.subscribe(changed), connection.subscribe(changed)]
     this.bind()
@@ -198,7 +213,8 @@ export class CollaborationResultsModel {
     for (const item of value.items) {
       if (item.source.session_id !== sessionId || item.source.workspace_id !== this.workspaceId
         || !/^[a-f0-9]{64}$/u.test(item.snapshot_digest) || seen.has(item.snapshot_digest)
-        || !safeText(item.original_message, 32 * 1024)) throw Error('invalid_source_page')
+        || !safeText(item.original_message, 32 * 1024)
+        || (Object.hasOwn(item, 'timeline_position') ? !validPosition(item.timeline_position) : this.timeline)) throw Error('invalid_source_page')
       seen.add(item.snapshot_digest)
     }
     return value
@@ -239,7 +255,7 @@ export class CollaborationResultsModel {
     const page = this.sourcePage(read.value, undefined, SessionId(original.source.session_id))
     const item = page.items[0] as SessionCollaborationSourceItem
     if (!sameSource(item.source, original.source) || item.snapshot_digest !== original.snapshot_digest
-      || item.original_message !== original.original_message) throw Error('source_substituted')
+      || item.original_message !== original.original_message || !samePosition(item, original)) throw Error('source_substituted')
     return item
   }
   /**
@@ -356,7 +372,10 @@ export class CollaborationResultsModel {
         const items = page.items.filter((item) => {
           const located = this.locatedOriginal
           if (located?.snapshot_digest === item.snapshot_digest && (!sameSource(located.source, item.source)
-            || located.original_message !== item.original_message)) throw Error('source_substituted')
+            || located.original_message !== item.original_message || !samePosition(located, item))) throw Error('source_substituted')
+          const previous = oldGroups.find(group => group.original.snapshot_digest === item.snapshot_digest)?.original
+          if (previous && (!sameSource(previous.source, item.source) || previous.original_message !== item.original_message
+            || !samePosition(previous, item))) throw Error('source_substituted')
           if (!known.has(item.snapshot_digest)) return true
           if (located?.snapshot_digest === item.snapshot_digest) return false
           throw Error('invalid_source_cursor')
@@ -389,6 +408,8 @@ export class CollaborationResultsModel {
         }
       }
       if (groups.length > 128) throw Error('result_view_budget')
+      const orders = groups.flatMap(group => group.original.timeline_position ? [group.original.timeline_position.local_order] : [])
+      if (new Set(orders).size !== orders.length) throw Error('invalid_source_page')
       if (bytes(groups) > 16 * 1024 * 1024) throw Error('result_view_budget')
       if (more) this.sourcePages++
       this.sourceCursors = cursors

@@ -104,6 +104,73 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('returns verified display positions only for opt-in reads, without model preparation or writes', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const first = await h.controller.captureCollaborationSource(h.source(), signal)
+    const digest = describeCollaborationSource(first.snapshot).snapshot_digest
+    const path = join(h.root, 'state', 'collaboration_timeline_v2.json'), bytes = await readFile(path)
+    const old = await h.controller.collaborationSources({ sessionId: h.sessionId }, signal)
+    expect(old.items[0]).not.toHaveProperty('timeline_position')
+    for (const selector of [{}, { snapshotDigest: digest }]) {
+      const value = await h.controller.collaborationSources({ sessionId: h.sessionId, ...selector, includeTimeline: true }, signal)
+      expect(value.items).toEqual([{ ...old.items[0], timeline_position: { after_sequence: 0, local_order: '1' } }])
+    }
+    expect(await readFile(path)).toEqual(bytes)
+    expect(h.prepare).toHaveBeenCalledTimes(1); expect(h.stream).not.toHaveBeenCalled(); expect(h.resume).not.toHaveBeenCalled()
+    for (const includeTimeline of [false, undefined, 1, 'true']) {
+      await expect(h.controller.collaborationSources({ sessionId: h.sessionId, includeTimeline } as never, signal))
+        .rejects.toThrow('collaboration_source_query_invalid')
+    }
+  })
+
+  it('cold opt-in reads report an older Source without a recorded position as null, without inventing or saving one', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    await h.controller.captureCollaborationSource(h.source(), signal)
+    await h.dispose()
+    const path = join(h.root, 'state', 'collaboration_timeline_v2.json')
+    await rm(path)
+    const next = await harness(h.root, h.cwd)
+    const value = await next.controller.collaborationSources({ sessionId: next.sessionId, includeTimeline: true }, signal)
+    expect(value.items[0]?.timeline_position).toBeNull()
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(next.prepare).not.toHaveBeenCalled(); expect(next.resume).not.toHaveBeenCalled()
+  })
+
+  it('refuses a position whose input digest differs from the captured Source while preserving legacy reads and bytes', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    await h.controller.captureCollaborationSource(h.source(), signal)
+    await h.dispose()
+    const path = join(h.root, 'state', 'collaboration_timeline_v2.json')
+    const file = JSON.parse(await readFile(path, 'utf8')) as { tables: { placements: Record<string, { input_digest: string }> } }
+    Object.values(file.tables.placements)[0]!.input_digest = 'f'.repeat(64)
+    const bytes = JSON.stringify(file)
+    await writeFile(path, bytes)
+    const next = await harness(h.root, h.cwd)
+    expect((await next.controller.collaborationSources({ sessionId: next.sessionId }, signal)).items).toHaveLength(1)
+    await expect(next.controller.collaborationSources({ sessionId: next.sessionId, includeTimeline: true }, signal))
+      .rejects.toThrow('collaboration_timeline_input_conflict')
+    expect(await readFile(path, 'utf8')).toBe(bytes)
+    expect(next.prepare).not.toHaveBeenCalled(); expect(next.resume).not.toHaveBeenCalled()
+  })
+
+  it('retains first display order across Source pages and reports an empty ordinary prefix accurately', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    h.events.length = 0
+    for (let i = 0; i < 9; i++) {
+      const source = h.source(), id = `display-${i}`
+      source.source_message_id = id; source.active_mentions[0]!.source_span.source_message_id = id
+      await h.controller.captureCollaborationSource(source, signal)
+    }
+    const first = await h.controller.collaborationSources({ sessionId: h.sessionId, includeTimeline: true }, signal)
+    expect(first.items.map(item => item.timeline_position)).toEqual(Array.from({ length: 8 }, (_, i) => ({
+      after_sequence: null, local_order: String(9 - i),
+    })))
+    const second = await h.controller.collaborationSources({
+      sessionId: h.sessionId, cursor: first.next_cursor!, includeTimeline: true,
+    }, signal)
+    expect(second.items[0]?.timeline_position).toEqual({ after_sequence: null, local_order: '1' })
+  })
+
   it('records the original display position before Source publication and leaves ordinary history unchanged', async () => {
     const h = await harness(), signal = new AbortController().signal
     const events = JSON.stringify(h.events)

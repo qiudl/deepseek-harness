@@ -1,0 +1,7 @@
+.original { align-self: flex-end; justify-self: end; margin-left: auto; width: fit-content; max-width: 88%; padding: 12px 16px; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+.original:focus { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 4px; }
+.reply { display: grid; gap: 6px; padding: 12px 0; min-width: 0; }
+.original small, .reply small, .status, .legacy > small { color: var(--dsw-alias-label-secondary); }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.earlier { display: flex; justify-content: center; }
+.legacy { display: grid; gap: 8px; padding-block: 12px; }

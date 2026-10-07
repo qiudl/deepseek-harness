@@ -209,6 +209,20 @@ describe('Profile remote UI read wire commands', () => {
       expect(() => decode(readFrame('session/collaborationSources', { args: { request: invalid } }))).toThrow()
     }
   })
+  it('carries explicit display-position opt-in without accepting caller positions or disabling it silently', () => {
+    for (const selector of [{}, { cursor: 'a'.repeat(64) }, { snapshotDigest: 'b'.repeat(64) }]) {
+      const request = { sessionId: 'session-1', ...selector, includeTimeline: true }
+      const frame = readFrame('session/collaborationSources', { args: { request } })
+      expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    }
+    for (const includeTimeline of [false, null, 1, 'true']) {
+      expect(() => decode(readFrame('session/collaborationSources', { args: { request: { sessionId: 'session-1', includeTimeline } } })))
+        .toThrow()
+    }
+    expect(() => decode(readFrame('session/collaborationSources', { args: {
+      request: { sessionId: 'session-1', includeTimeline: true, after_sequence: 1 },
+    } }))).toThrow()
+  })
   it('rejects extra selectors, unsafe JSON, and overlarge results', () => {
     expect(() => decode(readFrame('session/list', { args: {}, profile_root: '/tmp/other' }))).toThrow()
     expect(() => decode(readFrame('session/list', { args: null }))).toThrow()

@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
+import { UiConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { ChatTimelineRegistry } from '@deepseek-ai/dsh-client-ui-chat/src/client/timeline.ts'
 import { collaborationDiscussionRequestId } from '@deepseek-ai/dsh-api-session-controller/src/collaboration-discussion.ts'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 /** REQ-20260930-0004: YAML-loaded source through the real editor, trigger controller and submit machine. */
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import { createScope, scopeOf } from '@deepseek-ai/dsh-api-session-controller/client'
+import { createScope, scopeOf, MutableSessionEventSource } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -46,7 +48,20 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   const ctx = new Context(), id = SessionId('session-1')
   const prompt = vi.fn<SessionFace['prompt']>(async () => ({ ok: true, value: { accepted: true } }))
   const scope = createScope(ctx, id), session = { sessionId: id, prompt }
-  const binding = { sessionId: id, session, ctx: scope.ctx }
+  let binding = { sessionId: id, session, ctx: scope.ctx, eventSource: new MutableSessionEventSource() }
+  const otherBindings = new Map<SessionId, typeof binding>()
+  const releaseLocator = vi.fn()
+  const materialize = (key: SessionId) => {
+    if (key === id) return binding
+    let other = otherBindings.get(key)
+    if (!other) {
+      other = { sessionId: key, session: { sessionId: key, prompt }, ctx: createScope(ctx, key).ctx,
+        eventSource: new MutableSessionEventSource() }
+      otherBindings.set(key, other)
+    }
+    return other
+  }
+
   const sessionOf = vi.fn((c: Context) => c === scope.ctx ? session : undefined)
   const mounted: { composer?: SessionInputShell } = {}
   onTestFinished(async () => {
@@ -58,12 +73,20 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   })
   // Session RPC and Desktop transport peers are fixtures; client owners below load through YAML.
   ctx.provide('sessions', {
+    retain: (key: SessionId) => {
+      const owned = materialize(key)
+      return { sessionId: key, binding: owned, release: releaseLocator }
+    },
     discussionRequestId: collaborationDiscussionRequestId,
     scope: (key: SessionId) => key === id && scope.fiber.uid !== null ? scope.ctx : undefined,
     scopeOf: (c: Context) => scopeOf(c),
     sessionOf,
-    binding: (key: SessionId) => key === id ? binding : undefined,
+    binding: (key: SessionId) => key === id ? binding : otherBindings.get(key),
   } as never)
+  new UiConversation(ctx, ctx.sessions)
+  const chatTimeline = new ChatTimelineRegistry()
+  ctx.provide('chatTimeline', chatTimeline)
+  ctx.effect(() => () => { chatTimeline.dispose() })
   ctx.provide('conversation', { input: { for: () => {
     if (!mounted.composer) throw Error('composer not mounted')
     return mounted.composer
@@ -83,8 +106,9 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     original_message: string }[] = []
   const sourceReads = vi.fn<typeof ctx.remote.session.collaborationSources>(async input => ({ ok: true,
     value: { items: originals.filter(item => item.source.session_id === input.sessionId
-      && (input.snapshotDigest === undefined || item.snapshot_digest === input.snapshotDigest)) } }))
-  const openSession = vi.fn<(sessionId: SessionId) => void>()
+      && (input.snapshotDigest === undefined || item.snapshot_digest === input.snapshotDigest))
+      .map(item => ({ ...item, ...(input.includeTimeline ? { timeline_position: null } : {}) })) } }))
+  const openSession = vi.fn((key: SessionId): void => { materialize(key) })
   if (servicesAvailable) {
     const namespace = { collaborationSources: sourceReads }
     if (remoteAvailable) {
@@ -146,6 +170,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
       c.slots.register({ name: 'root', children: {
         'conversation.input.overlay': { kind: 'list', scope: 'session' },
         'conversation.input.dock': { kind: 'list', scope: 'session' },
+        'conversation.chat.timeline': { kind: 'single', scope: 'session' },
       } } as never, () => null)
     } },
     triggers: Triggers, source: SlarkSource,
@@ -192,8 +217,12 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     const end = prefix.length + 2
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
-  return { ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf, scopeDirectory, workspace, sourceReads,
-    deliveries, pending, clarify, originals, openSession, closeSession: () => scope.fiber.dispose() }
+  return { rebind: async () => {
+    await binding.ctx.fiber.dispose()
+    binding = { ...binding, ctx: createScope(ctx, id).ctx, eventSource: new MutableSessionEventSource() }
+  }, releaseLocator, chatTimeline, ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf,
+  scopeDirectory, workspace, sourceReads,
+  deliveries, pending, clarify, originals, openSession, closeSession: () => scope.fiber.dispose() }
 }
 
 type PickedScopedReference = {
@@ -1151,7 +1180,7 @@ it('uses YAML-registered result paging commands and retains their model only for
   const bindings = value as CollaborationResultsInjected, model = bindings.hooks.slarkResults
   expect(Reflect.apply(entry.inject, undefined, [SessionId('session-1')])).toBe(bindings)
   const first = { source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'first', source_revision: '1' },
-    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 第一个任务' }
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 第一个任务', timeline_position: null }
   const second = { ...first, source: { ...first.source, source_message_id: 'second' }, snapshot_digest: 'b'.repeat(64) }
   f.sourceReads.mockImplementation(async input => ({ ok: true, value: input.cursor ? { items: [second] }
     : { items: [first], next_cursor: first.snapshot_digest } }))
@@ -1167,7 +1196,7 @@ it('uses YAML-registered result paging commands and retains their model only for
   await model.refresh(); await bindings.loadSources(); await bindings.loadReplies(first.snapshot_digest)
   expect(model.getSnapshot().groups).toHaveLength(2)
   expect(model.getSnapshot().groups[0]?.replies.map(item => item.delivery_id)).toEqual(['delivery-v2', 'second-reply'])
-  expect(f.sourceReads).toHaveBeenLastCalledWith({ sessionId: SessionId('session-1'), cursor: first.snapshot_digest }, expect.any(AbortSignal))
+  expect(f.sourceReads).toHaveBeenLastCalledWith({ sessionId: SessionId('session-1'), cursor: first.snapshot_digest, includeTimeline: true }, expect.any(AbortSignal))
   expect(f.deliveries).toHaveBeenLastCalledWith({ source: first.source, limit: 50, after_delivery_id: 'delivery-v2' })
   const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
   if (!plugin?.fiber) throw Error('missing loaded Slark source')
@@ -1214,11 +1243,12 @@ it('navigates from a YAML-registered record to its verified original Session wit
   await bindings.hooks.slarkResults.refresh()
   await bindings.locateOriginal?.(original.snapshot_digest)
   expect(f.openSession).toHaveBeenCalledWith(SessionId('session-2'))
-  expect(f.sourceReads).toHaveBeenCalledWith({ sessionId: SessionId('session-2'), snapshotDigest: original.snapshot_digest }, expect.any(AbortSignal))
+  expect(f.releaseLocator).toHaveBeenCalledOnce()
+  expect(f.sourceReads).toHaveBeenCalledWith({ sessionId: SessionId('session-2'), snapshotDigest: original.snapshot_digest, includeTimeline: true }, expect.any(AbortSignal))
   const target = Reflect.apply(entry.inject, undefined, [SessionId('session-2')]) as CollaborationResultsInjected
   await vi.waitFor(() => { expect(target.hooks.slarkResults.getSnapshot().phase).toBe('ready') })
   expect(target.hooks.slarkResults.getSnapshot().focus?.snapshotDigest).toBe(original.snapshot_digest)
-  expect(target.hooks.slarkResults.getSnapshot().groups[0]?.original).toEqual(original)
+  expect(target.hooks.slarkResults.getSnapshot().groups[0]?.original).toEqual({ ...original, timeline_position: null })
   expect(f.submit).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
 })
 
@@ -1236,7 +1266,10 @@ it.each(['missing-navigation', 'membership-change'] as const)('explains an unava
   await value.locateOriginal?.(original.snapshot_digest)
   expect(f.openSession).not.toHaveBeenCalled()
   if (mode === 'missing-navigation') expect(value.hooks.slarkResults.getSnapshot().location?.status).toBe('unavailable')
-  else expect(value.hooks.slarkResults.getSnapshot().groups).toEqual([])
+  else {
+    expect(value.hooks.slarkResults.getSnapshot().groups).toEqual([])
+    expect(f.releaseLocator).toHaveBeenCalledOnce()
+  }
   expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
 })
 
@@ -1669,4 +1702,58 @@ it('directory picks share the original Source with an existing structured Agent 
   expect(refs[0]?.source_id).not.toBe(refs[1]?.source_id)
   expect(refs[0]?.original_source_id).toBe(refs[1]?.original_source_id)
   expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+
+it('publishes YAML-owned timeline records only while viewed, keeps ordinary events empty and clears on plugin removal', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  if (!entry?.inject) throw Error('missing timeline registration')
+  const bindings = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+  const model = bindings.hooks.slarkResults
+  const original = { source: { workspace_id: f.workspace.id, session_id: id, source_message_id: 'original', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · Project original',
+    timeline_position: { after_sequence: null, local_order: '1' } }
+  f.sourceReads.mockImplementation(async () => ({ ok: true, value: { items: [original] } }))
+  const records = f.chatTimeline.source(id), changed = vi.fn(), off = records.subscribe(changed)
+  const conversation = f.ctx.uiConversation.binding(id), stopActivity = conversation.snapshot.subscribe(() => {})
+  await vi.waitFor(() => { expect(records.getSnapshot()).toEqual([
+    { recordId: original.snapshot_digest, afterSequence: null, localOrder: '1' },
+  ]) })
+  const before = records.getSnapshot()
+  await model.refresh()
+  expect(records.getSnapshot()).toBe(before)
+  expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(true)
+  expect(f.ctx.sessions.binding(id)!.eventSource.getSnapshot().entries).toEqual([])
+  await bindings.loadSources(); await bindings.loadReplies(original.snapshot_digest)
+  await bindings.executionAction(original.snapshot_digest, 'task', true)
+  f.sourceReads.mockImplementation(async () => ({ ok: true, value: { items: [{ ...original, timeline_position: null }] } }))
+  await model.refresh()
+  expect(records.getSnapshot()).toEqual([])
+  await model.refresh()
+  expect(model.getSnapshot().groups[0]?.original.timeline_position).toBeNull()
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  off(); stopActivity()
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing Slark plugin')
+  await plugin.fiber.dispose()
+  expect(records.getSnapshot()).toEqual([])
+  expect(() => { Reflect.apply(entry.inject!, undefined, [id]) }).toThrow('collaboration_view_closed')
+})
+
+
+it('rebinds collaboration activity and readonly history when the same Session receives a fresh Controller scope', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  if (!entry?.inject) throw Error('missing timeline registration')
+  const before = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+  await f.rebind()
+  const after = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+  expect(after).not.toBe(before)
+  expect(after.hooks.slarkResults).not.toBe(before.hooks.slarkResults)
+  await before.hooks.slarkResults.refresh()
+  expect(f.sourceReads).not.toHaveBeenCalled()
+  await after.hooks.slarkResults.refresh()
+  expect(f.sourceReads).toHaveBeenCalledOnce()
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
 })

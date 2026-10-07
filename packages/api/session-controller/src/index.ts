@@ -29,7 +29,8 @@ import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { openCollaborationRootJournal, parseCollaborationRootLookup, parseCollaborationRootCaptureInput, parseCollaborationRootTarget, parseCollaborationRootAdmission } from './collaboration-root-journal.ts'
 import type { CollaborationRootJournal, CollaborationRootCaptureInput, CollaborationRootSubmission, CollaborationRootDescriptor, CollaborationRootAdmission } from './collaboration-root-journal.ts'
-import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates, describeCollaborationSource } from './collaboration-source-journal.ts'
+import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates,
+  describeCollaborationSource, collaborationJournalDigest } from './collaboration-source-journal.ts'
 import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot, CollaborationSourceCoordinates } from './collaboration-source-journal.ts'
 import { openCollaborationTimelineJournal } from './collaboration-timeline-journal.ts'
 import type { CollaborationTimelineJournal } from './collaboration-timeline-journal.ts'
@@ -1242,10 +1243,27 @@ export class SessionController extends TypertRemoteService {
       ).filter(entry => snapshotDigest !== undefined || !hasCollaborationDiscussion(history, entry.snapshot))
       const items: SessionCollaborationSourceItem[] = []
       const checks: (() => Promise<void>)[] = []
+      let timeline: CollaborationTimelineJournal | undefined
+      if (request.includeTimeline && remaining.length) {
+        if (this.collaborationTimelineJournal === undefined) {
+          const facility = this.ctx.get('storageDomain')
+          if (facility === undefined) throw Error('collaboration_source_journal_unavailable')
+          this.collaborationTimelineJournal = openCollaborationTimelineJournal(facility)
+        }
+        timeline = await wait(this.collaborationTimelineJournal)
+      }
       let bytes = 256
       for (const { snapshot, descriptor } of remaining) {
         const { snapshot_digest, ...source } = descriptor
-        const item = Object.freeze({ source: Object.freeze(source), snapshot_digest, original_message: snapshot.original_message })
+        const placement = timeline?.read(source)
+        if (placement) {
+          const { model_snapshot: _model, host_journal_commit: _commit, ...input } = snapshot
+          if (placement.input_digest !== collaborationJournalDigest(input)) throw Error('collaboration_timeline_input_conflict')
+        }
+        const item = Object.freeze({ source: Object.freeze(source), snapshot_digest, original_message: snapshot.original_message,
+          ...(request.includeTimeline ? { timeline_position: placement ? Object.freeze({
+            after_sequence: placement.after_sequence, local_order: placement.local_order,
+          }) : null } : {}) })
         const size = Buffer.byteLength(JSON.stringify(item), 'utf8') + 1
         if (items.length === 8 || bytes + size > 256 * 1024) break
         const workspaceId = WorkspaceId(snapshot.workspace_id)
@@ -1548,11 +1566,12 @@ export class SessionController extends TypertRemoteService {
 function validCollaborationSourcesRequest(value: unknown): value is SessionCollaborationSourcesRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
-  return Object.keys(row).every(key => key === 'sessionId' || key === 'cursor' || key === 'snapshotDigest')
+  return Object.keys(row).every(key => key === 'sessionId' || key === 'cursor' || key === 'snapshotDigest' || key === 'includeTimeline')
     && typeof row.sessionId === 'string' && /^[!-~]{1,256}$/u.test(row.sessionId)
     && !/[/\\]/u.test(row.sessionId) && row.sessionId !== '.' && row.sessionId !== '..'
     && (row.cursor === undefined || (typeof row.cursor === 'string' && /^[0-9a-f]{64}$/u.test(row.cursor)))
     && (row.snapshotDigest === undefined || (typeof row.snapshotDigest === 'string' && /^[0-9a-f]{64}$/u.test(row.snapshotDigest)))
+    && (!Object.hasOwn(row, 'includeTimeline') || row.includeTimeline === true)
     && !(Object.hasOwn(row, 'cursor') && Object.hasOwn(row, 'snapshotDigest'))
 }
 
