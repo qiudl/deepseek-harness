@@ -1401,6 +1401,7 @@ it('requires an idle exact Session prefix and reuses the persisted consumer comm
   setBusy(false)
   await expect(h.controller.collaborationRootConsumption({ ...prepare, expected_event_count: before.event_count + 1 }, signal)).rejects.toThrow('session_changed')
   const prepared = await h.controller.collaborationRootConsumption(prepare, signal)
+  if (prepared.kind !== 'consumer') throw Error('unexpected observation')
   expect(prepared.record?.state).toBe('prepared')
   expect(await h.controller.collaborationRootConsumption(prepare, signal)).toEqual(prepared)
   await expect(h.controller.collaborationRootConsumption({ ...prepare, expected_event_count: before.event_count + 1 }, signal)).rejects.toThrow('conflict')
@@ -1490,6 +1491,7 @@ it.each(['empty', 'missing_step', 'not_admitted', 'later_turn', 'lost_live_permi
       const before = await h.controller.collaborationRootFeedback(query, signal)
       const prepared = await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_prepare',
         expected_event_count: before.event_count, expected_log_digest: before.log_digest }, signal)
+      if (prepared.kind !== 'consumer') throw Error('unexpected observation')
       const record = prepared.record!
       Object.assign(agent, { send: (message: import('@deepseek-ai/dsh-llm').UserMessage) => {
         f.inject(message)
@@ -1557,10 +1559,12 @@ it.each(['prefix', 'busy', 'expired'] as const)('keeps a consumed grant burned w
   if (mode === 'expired') { vi.useFakeTimers({ toFake: ['Date'] }); onTestFinished(() => { vi.useRealTimers() }) }
   const prepared = await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_prepare',
     expected_event_count: before.event_count, expected_log_digest: before.log_digest }, signal)
+  if (prepared.kind !== 'consumer') throw Error('unexpected observation')
   const record = prepared.record!
   await expect(h.controller.collaborationRootConsumption({ ...query, action: 'consumer_start', grant: freshConsumerGrant(record.binding, record.command) }, signal))
     .rejects.toThrow(mode === 'expired' ? 'grant_expired' : 'reconciliation_required')
   const recovered = await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_read' }, signal)
+  if (recovered.kind !== 'consumer') throw Error('unexpected observation')
   expect(recovered.record?.state).toBe('started')
   expect(f.inject).not.toHaveBeenCalled()
   expect(h.stream).not.toHaveBeenCalled()
@@ -1571,4 +1575,29 @@ it.each([true, false])('discovers ordinary Session participation before opening 
   if (!storage) h.removeDomain!()
   for await (const _ of h.controllerContext.llm.stream({ provider: 'fixture', model: 'selected', messages: [], sessionId: h.sessionId })) { /* Drain ordinary request. */ }
   expect(h.stream).toHaveBeenCalledTimes(1)
+})
+
+it('refuses a first-reply observation when its independent storage owner is missing', async () => {
+  const f = await feedbackHarness(false, true), { h, query, signal, session, agent } = f
+  const before = await h.controller.collaborationRootFeedback(query, signal)
+  const prepared = await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_prepare',
+    expected_event_count: before.event_count, expected_log_digest: before.log_digest }, signal)
+  if (prepared.kind !== 'consumer' || !prepared.record) throw Error('consumer missing')
+  const record = prepared.record
+  Object.assign(agent, { send: (message: import('@deepseek-ai/dsh-llm').UserMessage) => {
+    f.inject(message)
+    session.append('step/start', { turn: 1, step: 1 })
+    session.append('user/message', message, { surfaceOp: 'append' })
+  }, whenIdle: async () => {} })
+  await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_start',
+    grant: freshConsumerGrant(record.binding, record.command) }, signal)
+  const consumed = await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_read' }, signal)
+  expect(consumed).toMatchObject({ kind: 'consumer', record: { state: 'consumed' } })
+  const get = h.controllerContext.get.bind(h.controllerContext)
+  const missing = vi.spyOn(h.controllerContext, 'get').mockImplementation((name, strict): unknown =>
+    name === 'storageDomain' ? undefined : get(name, strict))
+  try {
+    await expect(h.controller.collaborationRootConsumption({ ...query, action: 'continuation_read' }, signal))
+      .rejects.toThrow('continuation_journal_unavailable')
+  } finally { missing.mockRestore() }
 })

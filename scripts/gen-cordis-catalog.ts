@@ -846,6 +846,7 @@ export const FOUNDATION_TYPE_NAMES: ReadonlySet<string> = new Set([
 /** Project types deliberately documented outside the subsystems catalog. */
 export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   WorkspaceModelSelection: 'Host-only workspace model inspection fields are owned by packages/api/session-controller/README.md',
+  CollaborationContinuationResult: 'Private durable reply observations are owned by packages/api/session-controller/README.md',
   CollaborationConsumptionResult: 'Private durable consumer responses are owned by packages/api/session-controller/README.md',
   CollaborationFeedbackObservation: 'Private persisted feedback observations are owned by packages/api/session-controller/README.md',
   CollaborationExecutionRecord: 'Private durable concrete execution commands are owned by packages/api/session-controller/README.md',

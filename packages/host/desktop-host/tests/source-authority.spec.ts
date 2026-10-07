@@ -16,6 +16,7 @@ import {
   parseHostRootAuthorityChallenge, encodeHostRootAuthorityPayload,
   parseHostRootPlanningAttemptAuthorityChallenge, encodeHostRootPlanningAttemptAuthorityPayload,
   parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload,
+  parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson, HostCollaborationReferenceGrant, HostCollaborationReferenceSelection } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationReferenceContentChunk, parseHostCollaborationReferenceGrant } from '@deepseek-ai/dsh-host-control-protocol'
@@ -33,6 +34,7 @@ async function fixture(
   rootLookupSupported = false, rootPendingLookupSupported = false, rootLiveResumeSupported = false,
   rootPlanningSupported = false, rootExecutionSupported = false, rootFeedbackSupported = false,
   enabled = true, omitRootReaders = false, referenceEnabled = false, captureEnabled = false, contentEnabled = false,
+  rootContinuationSupported = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
@@ -121,6 +123,7 @@ async function fixture(
     } : {}),
     rootExecutionSupported,
     rootFeedbackSupported,
+    rootContinuationSupported,
     rootAnalysisSupported,
     rootAnalysisRecoverySupported,
     rootLookupSupported,
@@ -1404,6 +1407,31 @@ it('signs durable consumption in a separate domain and refuses a changed origina
   await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
 })
 
+it('signs first-reply observations under the current Host without treating consumption signatures as reply evidence', async () => {
+  const f = await fixture(false,false,false,false,false,false,false,true,true,false,false,false,false,true)
+  const original = replyFixture(f).commit
+  const consumption = { ...original,root_task_id:randomUUID(),root_trace_id:'d'.repeat(32),task_revision:1,
+    execution_command_id:randomUUID(),consumption_id:randomUUID(),consumer_attempt_id:randomUUID(),consumer_step_id:randomUUID(),
+    message_id:'collaboration-feedback-'+'e'.repeat(64),consumer_started_at:'2026-10-06T00:00:00.000Z',session_event_seq:9,
+    consuming_step:{ turn:1,step:1,start_event_seq:8 },session_prefix:{ event_count:10,log_digest:'f'.repeat(64) } }
+  const commit = { consumption, observation_id: randomUUID(), observation_kind: 'assistant_message_committed', assistant_event_seq: 10, session_prefix: { event_count:11,log_digest:'a'.repeat(64) } }
+  await f.grant()
+  f.setAnalysis(async()=>({ kind:'continuation',commit }))
+  const input={ ...f.account,command:{ action:'root_feedback' as const,operation:{ action:'continuation_read',delivery_id:consumption.delivery_id,
+    target:{ ...consumption.source_locator,namespace_id:consumption.namespace_id } } } }
+  await expect(f.client.collaborationAnalysis({ ...input, command: { action: 'root_feedback', operation: { action: 'continuation_read' } } })).rejects.toMatchObject({ code: 'unavailable' })
+  const result=await f.client.collaborationAnalysis(input)
+  if(result.kind!=='root_feedback' || !result.record || typeof result.record!=='object' || !('receipt' in result.record))throw Error('missing receipt')
+  const receipt=parseHostCollaborationContinuationReceipt(result.record.receipt)
+  expect(receipt.commit).toEqual(commit)
+  expect(verify(null,encodeHostCollaborationContinuationReceiptPayload(receipt),f.keys.publicKey,Buffer.from(receipt.signature,'base64url'))).toBe(true)
+  const changed={ ...commit,consumption:{ ...consumption,source_locator:{ ...consumption.source_locator,session_id:'foreign-session' } } }
+  f.setAnalysis(async()=>({ kind:'continuation',commit:changed }))
+  await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
+  f.setAnalysis(async()=>{f.host.revokeOwner(f.ownerId);return { kind:'continuation',commit }})
+  await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
+})
+
 it('enforces root rollout capabilities on the server even if the client advertises them', async () => {
   const { parseHostCollaborationAnalysisCommand } = await import('@deepseek-ai/dsh-host-control-protocol')
   const f = await fixture(), c = f.challenge
@@ -1411,9 +1439,10 @@ it('enforces root rollout capabilities on the server even if the client advertis
   const target = { namespace_id: 'n2_' + 'a'.repeat(64), command_id: randomUUID(),
     workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id, source_revision: c.source_revision }
   const input = { namespace_id: target.namespace_id, continuation_policy: 'follow_authorized_plan', source: {} }
-  const caps = ['root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
+  const caps = ['root_continuation', 'root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
   Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, ...caps.map(c => 'profile.' + c)])
   const commands = [
+    { action: 'root_feedback', operation: { action: 'continuation_read' } },
     ...['root_feedback', 'root_execution_journal'].map(action => ({ action, operation: { action: 'read' } })),
     ...['prepare_root_attempt', 'read_root_attempt', 'read_root_output'].map(action => ({ action, target })),
     ...['resume_root', 'reconcile_root', 'recover_root', 'prepare_root'].map(action => ({ action, input })),
@@ -1492,4 +1521,10 @@ it('refuses a fresh planning proof if authorization resolves to another Profile 
   const f = await planningFixture(); await f.grant()
   f.setPlanning(async () => { changeCurrentProfile(f.host); return f.descriptor })
   await expect(f.client.attestRootPlanningAttemptAuthority(f.input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+})
+
+it('refuses continuation reads before sending when the current Host lacks its capability', async () => {
+  const f = await fixture(false,false,false,false,false,false,false,true)
+  await f.grant()
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'root_feedback', operation: { action: 'continuation_read' } } })).rejects.toMatchObject({ code: 'upgrade_required' })
 })

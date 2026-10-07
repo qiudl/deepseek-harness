@@ -240,3 +240,5 @@ The separately advertised `profile.root_execution_journal` capability forwards b
 For persisted consumer evidence returned by `root_feedback`, the Host verifies the original namespace, delivery and Source coordinates before signing a separate consumption receipt. It uses current Account and installation/process metadata and rechecks the current Profile authority after the worker reply. The receipt contains no answer text and grants no new continuation.
 
 macOS and Windows bind root journal, source inspection and planning-attempt inspection through the same worker operations, while each authority protocol retains its own signed payload.
+
+`profile.root_continuation` gates `continuation_read` independently on the client and Host. After the original Profile returns a committed observation, Host verifies its nested consumption namespace, delivery and Source coordinates and signs the independent observation domain using the current Account and installation/process binding. Account revocation before the reply prevents signing.

@@ -34,7 +34,8 @@
     "src/collaboration-root-execution-journal.ts",
     "src/collaboration-root-planning-journal.ts",
     "src/collaboration-feedback.ts",
-    "src/collaboration-consumption-journal.ts"
+    "src/collaboration-consumption-journal.ts",
+    "src/collaboration-continuation-journal.ts"
   ],
   "references": [
     {
