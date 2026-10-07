@@ -8,7 +8,7 @@
 }
 .records { max-height: 240px; overflow: auto; }
 .message { margin-top: 12px; }
-.message:focus { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 4px; }
+.message:focus { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 4px; }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .reply { display: grid; gap: 6px; margin-top: 12px; }
 .panel small { color: var(--dsw-alias-label-secondary); }
