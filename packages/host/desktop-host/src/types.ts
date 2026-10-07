@@ -3,6 +3,8 @@ import type { HostRootJournalCommand, HostRootJournalMetadata } from '@deepseek-
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceGrant, HostControlSha256,
+  HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 /** Stable profile id that reveals no account or environment identifier. */
@@ -140,6 +142,21 @@ export interface ProfileWorkerHandle {
     target: HostCollaborationSourceTarget,
     signal: AbortSignal,
   ) => Promise<HostCollaborationSourceDescriptor>
+  /** Independent committed selection lookup; a supplied digest never creates or authorizes a grant. */
+  readonly readCollaborationReferenceGrant?: (
+    target: HostCollaborationSourceTarget, requestDigest: HostControlSha256, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceGrant>
+  /**
+   * Capture an already authorized selection through the independent private Reference capability.
+   * Returns bounded untrusted metadata; the parent must validate it before cloud use, and it grants no transfer authority.
+   */
+  readonly captureCollaborationReferenceSelection?: (
+    selection: HostRemoteSessionJson, signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
+  /** Current Source-bound selected bytes through the independent Reference token, never a view lease. */
+  readonly readCollaborationReferenceContent?: (
+    target: HostCollaborationReferenceContentTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceContentChunk>
   /** Original journal content for Main cloud admission; never carried by a view lease. */
   readonly readCollaborationSourceSnapshot?: (
     target: HostCollaborationSourceTarget, signal: AbortSignal,

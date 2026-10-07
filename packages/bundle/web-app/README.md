@@ -152,6 +152,13 @@ The same private token additionally enables `/internal/desktop-collaboration-sou
 
 `DSH_PROFILE_DELIVERY_TOKEN` independently enables `/internal/desktop-collaboration-delivery` for the parent Host. It accepts at most 1 MiB of exact readable delivery JSON and delegates original Source and membership checks to the owning Session Controller. It returns a noncacheable first-commit descriptor only after saving the complete reply; the answer is not echoed. Browser cookies, Source-read tokens, caller-supplied commits and restricted projections cannot authorize a save. Cancellation, write failure and post-commit ownership loss withhold a successful receipt without deleting saved data. This route does not sign a cloud acknowledgement or append a chat event.
 
+
+A separate `DSH_PROFILE_REFERENCE_TOKEN` enables `/internal/desktop-collaboration-reference-capture`. The parent sends at most 32 KiB of already authorized locator/range/recipient selection. A literal quote is accepted only when the Profile returns its resolved UTF-16 range and exact computed quote byte length and digest. Session Controller independently derives and persists the full request from actual content; the response contains at most 32 KiB of computed metadata and no content bytes. Source-read tokens and browser cookies cannot capture references. The trusted parent must establish explicit user sharing intent before calling; natural-language resolution and cloud transfer remain separate.
+
+The same independent Reference token protects `/internal/desktop-collaboration-reference-content`. Its private query contains only original Source coordinates, the committed full reference request digest and a byte offset, within 2 KiB. The Profile rechecks current membership and selected content for every response. Responses contain exact chunks of at most 32 KiB, support empty content and remain noncacheable; Source tokens and browser cookies grant no access. Cloud transfer and task attachment remain coordinator-owned.
+
+The same Source token protects `/internal/desktop-collaboration-reference-grant`. Its private 2 KiB query contains only original Source coordinates and a full reference request digest. The owning Session Controller requires a separately committed selection and independently rechecks its current message or attachment bytes. The sanitized, noncacheable response contains only the Source descriptor and matching digest; browser cookies, caller paths and content cannot authorize it.
+
 ### Remote workspace directories
 
 The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
@@ -171,6 +178,7 @@ One source line and one prompt paragraph per session plus two managed-environmen
 #### KV Cache effect
 
 Source and Web sections follow first-party reusable instructions. Different checkout paths or local ports leave that preceding prefix unchanged when tools and configuration match; provider cache reuse is not guaranteed.
+
 
 ## Known Limitations and Deferred Work
 

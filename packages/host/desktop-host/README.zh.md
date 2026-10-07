@@ -116,7 +116,15 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 
 不发布运行时不变量伴随插件：文件与消息提交点验证自身状态，租约与崩溃行为由集成测试覆盖。
 
+Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 句柄生成并保留独立的 `DSH_PROFILE_REFERENCE_TOKEN`。选择 JSON 和返回元数据各不超过 32 KiB，请求 15 秒后超时，拒绝已停止 worker、重定向与取消。句柄返回不含内容字节的不可信 JSON。父 Host 必须先将计算元数据与已授权选择比对，才能传递；该句柄不确认分享意图，也不新增 Host 控制协议命令。
+
 `profile.source_authority` 从当前连接已验证的 Account 解析 Profile，经监管器与独立随机 worker 令牌读取持久 Source 描述符。macOS 和 Windows 启动组合安装该读取器。读取器缺失时不发布能力；worker 替换、坐标或摘要不符、挑战过期及 Account 授权变化都会拒绝签名。客户端核验精确挑战、固定的安装/进程及 Source 签名。此操作不捕获消息或准备模型；云端消费和聊天分发仍须单独接入。
+
+`profile.reference_authority` 仅在持久 Source 读取器与 `readCollaborationReferenceGrant` 同时安装时发布。Host 要求当前令牌验证的 Account，将独立 Profile 授权与请求的 Source 和完整引用预登记摘要比对，再于签名前重新读取 Source。撤权、过期、取消或 Profile/Source 观察变化均拒绝签名。客户端核验精确挑战和固定安装进程的签名；Source 签名不能替代引用授权。
+
+`profile.reference_capture` 解析当前 Account 的 Profile，在调用独立令牌保护的 worker 捕获前读取其 Source。捕获后和返回元数据前再次核验 Account、Profile 与完整 Source 摘要。客户端将操作限制为 18 秒并固定已检查的 peer；监管器代际替换、销毁、过期、取消或归属丢失均不返回成功结果。macOS 与 Windows 共用的启动读取器安装此操作。Main 仍须独立确认分享意图并校验计算请求，再进行单独的引用签名或传递。
+
+`profile.reference_content` 使用当前 Account Profile 及独立的 Reference worker 能力。每个分块重新核验实际选中内容、Account 归属、worker 世代和已提交 Source。客户端固定原始 Account 及捕获的描述符、请求和内容元数据，检查每个偏移与长度，并在 18 秒操作时限内核验完整 SHA-256 后返回精确字节；支持空内容。云端传递和接收任务访问仍须独立授权。
 
 `profile.source_snapshot` 使用同一当前 Account 与 Profile worker 读取器私有传输 journal 原始内容。worker bearer 路由校验完整持久 Source；监管器拒绝已销毁或被替换的 worker。固定 32 KiB 字节分块保留现有控制帧预算，客户端在有界读取内跨块核验坐标、描述符和长度一致性、完整 UTF-8、取消及已检查的 peer。返回原文与脱敏模型/提交元数据，不含凭据，不准备模型或恢复调用。macOS 与 Windows 启动组合安装读取器；真实聊天捕获和派发仍须单独接入。
 
@@ -134,6 +142,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延后工作
+
+当前启动组合把引用授权读取转发给原始且仍有效的 Profile worker。授权要求独立提交的选择，并重新核验消息或附件字节。自然语言选择的生产者和云端内容上传尚未接通；嵌入方必须先补齐这些消费端，才能启用引用传递。
 
 - **扩展支持由执行器决定** — `profile.extensions` 通过有效窗口租约接受清单、准备、提交、状态和取消请求。插件执行要求配置随包 pnpm 产物。Windows 启动组合支持显式启用的 MCP，Windows 插件及 Skill 执行器仍不可用。嵌入应用必须启用并固定此组合的版本，用户才能获得该能力。技能清单使用 `transport: markdown` 和有长度限制、由文件名生成的标识。安装或恢复配置导致 worker 重启后，Desktop 必须重新打开同一 Profile 视图。打包运行时固定版本、完整 Profile 迁移保留、杀进程恢复和未知回执核对，仍需在发布前单独完成端到端验证。
 

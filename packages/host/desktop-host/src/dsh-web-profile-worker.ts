@@ -5,6 +5,10 @@ import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationReferenceGrant, parseHostCollaborationReferenceContentChunk,
+  parseHostCollaborationReferenceContentTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceTarget, HostControlSha256 } from '@deepseek-ai/dsh-host-control-protocol'
 import { createHash, randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
@@ -22,7 +26,7 @@ const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
-  'DSH_PROFILE_ANALYSIS_TOKEN',
+  'DSH_PROFILE_ANALYSIS_TOKEN', 'DSH_PROFILE_REFERENCE_TOKEN',
   'DSH_PROFILE_DELIVERY_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
@@ -138,6 +142,7 @@ export class DshWebProfileWorkerFactory {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
     const sourceToken = randomBytes(32).toString('base64url')
+    const referenceToken = randomBytes(32).toString('base64url')
     const analysisToken = randomBytes(32).toString('base64url')
     const deliveryToken = randomBytes(32).toString('base64url')
     const workspaceModelToken = randomBytes(32).toString('base64url')
@@ -157,6 +162,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_MODEL_TOKEN: modelToken,
         DSH_PROFILE_WORKSPACE_MODEL_TOKEN: workspaceModelToken,
         DSH_PROFILE_SOURCE_TOKEN: sourceToken,
+        DSH_PROFILE_REFERENCE_TOKEN: referenceToken,
         DSH_PROFILE_ANALYSIS_TOKEN: analysisToken,
         DSH_PROFILE_DELIVERY_TOKEN: deliveryToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
@@ -168,7 +174,7 @@ export class DshWebProfileWorkerFactory {
     const activated = await this.waitForOrigin(child)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
-      modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, sourceToken, analysisToken, deliveryToken)
+      modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, sourceToken, analysisToken, deliveryToken, referenceToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -231,6 +237,7 @@ export class DshWebProfileWorkerFactory {
     sourceToken: string,
     analysisToken: string,
     deliveryToken: string,
+    referenceToken: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -299,6 +306,19 @@ export class DshWebProfileWorkerFactory {
       inspectCollaborationSource: (target, signal) => this.inspectCollaborationSource(
         viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
       ),
+      captureCollaborationReferenceSelection: (selection, signal) => this.captureReferenceSelection(
+        viewOrigin, referenceToken, selection, signal, () => requestedStop || settled,
+      ),
+      readCollaborationReferenceContent: (target, signal) => this.readReferenceContent(
+        viewOrigin, referenceToken, target, signal, () => requestedStop || settled,
+      ),
+      readCollaborationReferenceGrant: async (target, requestDigest: HostControlSha256, signal) => {
+        const query: HostCollaborationReferenceTarget = { ...target, reference_request_digest: requestDigest }
+        const result = await this.readSource(viewOrigin, sourceToken, query, signal, () => requestedStop || settled,
+          '/internal/desktop-collaboration-reference-grant', 8192, parseHostCollaborationReferenceGrant, value => value)
+        if (result.reference_request_digest !== requestDigest) throw new HostAuthorityError('profile_mismatch')
+        return result
+      },
       inspectWorkspaceModelSelection: (target, signal) => this.inspectWorkspaceModelSelection(
         viewOrigin, workspaceModelToken, target, signal, () => requestedStop || settled,
       ),
@@ -401,6 +421,31 @@ export class DshWebProfileWorkerFactory {
     return this.readPrivateResponse(response, active, signal, stopped, 8192,
       bytes => parseHostRemoteSessionJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))),
       'detach')
+  }
+
+  private async captureReferenceSelection(origin: string, token: string, selection: HostRemoteSessionJson,
+    signal: AbortSignal, stopped: () => boolean): Promise<HostRemoteSessionJson> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15000)])
+    active.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const body = JSON.stringify(parseHostRemoteSessionJson(selection))
+    if (Buffer.byteLength(body) > 32768) throw new HostAuthorityError('invalid_input')
+    const response = await fetch(`${origin}/internal/desktop-collaboration-reference-capture`, {
+      method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body, signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 32768,
+      bytes => parseHostRemoteSessionJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))), 'detach')
+  }
+
+  private async readReferenceContent(origin: string, token: string, target: HostCollaborationReferenceContentTarget,
+    signal: AbortSignal, stopped: () => boolean): Promise<HostCollaborationReferenceContentChunk> {
+    const query = parseHostCollaborationReferenceContentTarget(target)
+    const result = await this.readSource(origin, token, query, signal, stopped,
+      '/internal/desktop-collaboration-reference-content', 49152, parseHostCollaborationReferenceContentChunk, chunk => chunk.descriptor)
+    if (result.offset !== query.offset || result.reference_request_digest !== query.reference_request_digest)
+      throw new HostAuthorityError('profile_mismatch')
+    return result
   }
 
   private async inspectRootPlanningAttempt(origin: string, token: string, target: HostRootSubmissionTarget,

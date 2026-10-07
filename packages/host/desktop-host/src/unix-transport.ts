@@ -48,6 +48,9 @@ import type {
   HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult, ProfileCollaborationAnalysisRequest,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
   ProfileSourceAuthorityRequest,
+  HostCollaborationReferenceGrant, HostReferenceAuthorityChallenge, HostReferenceAuthorityAssertion, ProfileReferenceAuthorityRequest,
+  HostCollaborationReferenceSelection, HostCollaborationReferenceCapture, ProfileReferenceCaptureRequest,
+  HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk, ProfileReferenceContentRequest,
   ProfileSourceSnapshotRequest, HostCollaborationSourceSnapshot,
   HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
   ProfileWorkspaceModelSelectionRequest,
@@ -78,11 +81,15 @@ import {
   encodeHostInspectSignaturePayload,
   encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
   encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
+  encodeHostReferenceAuthorityPayload, parseHostReferenceAuthorityChallenge, parseHostReferenceAuthorityAssertion,
+  parseHostCollaborationReferenceSelection, parseHostCollaborationReferenceCapture,
+  parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk, parseHostCollaborationReferenceGrant,
   parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult,
   parseHostCollaborationAnalysisReceipt, encodeHostCollaborationAnalysisReceiptPayload,
   parseHostCollaborationDeliveryCapsule, parseHostCollaborationDeliveryReceipt, parseHostCollaborationDeliveryResult,
   matchesHostCollaborationDeliveryCommit, encodeHostCollaborationDeliveryReceiptPayload,
   parseHostCollaborationSourceSnapshot, parseHostCollaborationSourceSnapshotChunk, parseHostCollaborationSourceTarget,
+  parseHostCollaborationSourceDescriptor,
   encodeHostCollaborationRegistrationSignaturePayload,
   parseHostCollaborationRegistrationChallenge,
   parseHostCollaborationRegistrationAssertion,
@@ -134,9 +141,14 @@ function challengeReadAccount(
     subject: challenge.account_subject,
   }
 }
-function sourceChallengeTarget(c: HostSourceAuthorityChallenge): HostCollaborationSourceTarget {
-  return { workspace_id: c.workspace_id, session_id: c.session_id,
-    source_message_id: c.source_message_id, source_revision: c.source_revision }
+function challengeReadAuthorizer(host: DesktopHost, params: Parameters<typeof challengeReadAccount>[0],
+  challenge: Parameters<typeof challengeReadAccount>[1] & { expires_at: number },
+  ownerId: Parameters<typeof challengeReadAccount>[2], signal: AbortSignal, clock: () => number): () => string {
+  return collaborationReadAuthorizer(host, challengeReadAccount(params, challenge, ownerId), challenge.expires_at, signal, clock)
+}
+function sourceChallengeTarget(challenge: HostSourceAuthorityChallenge): HostCollaborationSourceTarget {
+  return { workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+    source_message_id: challenge.source_message_id, source_revision: challenge.source_revision }
 }
 function matchesSourceChallenge(result: HostCollaborationSourceDescriptor, c: HostSourceAuthorityChallenge): boolean {
   return result.workspace_id === c.workspace_id && result.session_id === c.session_id
@@ -215,6 +227,18 @@ export interface UnixHostServerOptions {
     target: HostCollaborationSourceTarget,
     signal: AbortSignal,
   ) => Promise<HostCollaborationSourceDescriptor>
+  /** Read an independently committed user transfer grant in the current Account Profile; never echo a caller challenge. */
+  readonly readCollaborationReferenceGrant?: (
+    profileId: string, target: HostCollaborationSourceTarget, requestDigest: HostControlSha256, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceGrant>
+  /** Capture an explicitly authorized selection through the current Account Profile's private Reference capability. */
+  readonly captureCollaborationReferenceSelection?: (
+    profileId: string, selection: HostCollaborationReferenceSelection, signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
+  /** Selected-byte chunks through the current Account Profile's independent Reference capability. */
+  readonly readCollaborationReferenceContent?: (
+    profileId: string, target: HostCollaborationReferenceContentTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceContentChunk>
   /** Original Source JSON from the verified Account Profile; no prepared or credential fields. */
   readonly readCollaborationSourceSnapshot?: (
     profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal,
@@ -397,12 +421,22 @@ interface MigrationExportChunk {
   readonly final: boolean
 }
 
+/** Reject a reference response when its current Account or Source changed during the provider read. */
+async function recheckReferenceSource(
+  inspect: NonNullable<UnixHostServerOptions['inspectCollaborationSource']>, authorize: () => string,
+  profileId: string, target: HostCollaborationSourceTarget, before: HostCollaborationSourceDescriptor, signal: AbortSignal,
+): Promise<void> {
+  const after = parseHostCollaborationSourceDescriptor(await inspect(profileId, target, signal))
+  if (authorize() !== profileId || JSON.stringify(after) !== JSON.stringify(before))
+    throw new HostAuthorityError('profile_mismatch')
+}
+
 /** Transport-independent Host account, Profile, and migration authority inputs. */
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'rootAnalysisSupported' | 'rootAnalysisRecoverySupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootAnalysisRecoverySupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported'
     | 'remoteUiStream'
 >
 
@@ -1474,8 +1508,7 @@ export class HostControlAuthority {
           const inspect = this.options.inspectWorkspaceModelSelection
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const c = frame.params.challenge
-          const account = challengeReadAccount(frame.params, c, ownerId)
-          const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
           const profileId = authorize()
           const target = { workspace_id: c.workspace_id, session_id: c.session_id }
           const result = await inspect(profileId, target, context.signal)
@@ -1610,6 +1643,41 @@ export class HostControlAuthority {
             }
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.reference_capture') {
+          const capture = this.options.captureCollaborationReferenceSelection, inspect = this.options.inspectCollaborationSource
+          if (!capture || !inspect) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
+          const profileId = authorize(), selection = frame.params.selection
+          const target = parseHostCollaborationSourceTarget({ workspace_id: selection.source.workspace_id,
+            session_id: selection.source.session_id, source_message_id: selection.source.source_message_id,
+            source_revision: selection.source.revision })
+          const before = parseHostCollaborationSourceDescriptor(await inspect(profileId, target, context.signal))
+          if (authorize() !== profileId || Object.entries(target).some(([key, value]) => before[key as keyof typeof before] !== value))
+            throw new HostAuthorityError('profile_mismatch')
+          const result = parseHostCollaborationReferenceCapture(await capture(profileId, selection, context.signal))
+          if (authorize() !== profileId || JSON.stringify(result.descriptor) !== JSON.stringify(before))
+            throw new HostAuthorityError('profile_mismatch')
+          await recheckReferenceSource(inspect, authorize, profileId, target, before, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.reference_content') {
+          const read = this.options.readCollaborationReferenceContent, inspect = this.options.inspectCollaborationSource
+          if (!read || !inspect) throw new HostAuthorityError('upgrade_required')
+          const authorize = collaborationReadAuthorizer(this.options.host, commandReadAccount(frame.params, ownerId),
+            frame.params.expires_at, context.signal, clock)
+          const profileId = authorize(), query = parseHostCollaborationReferenceContentTarget(Object.fromEntries(
+            ['workspace_id', 'session_id', 'source_message_id', 'source_revision', 'reference_request_digest', 'offset']
+              .map(key => [key, frame.params[key as keyof typeof frame.params]])))
+          const { offset: _offset, reference_request_digest: _digest, ...target } = query
+          const before = parseHostCollaborationSourceDescriptor(await inspect(profileId, target, context.signal))
+          if (authorize() !== profileId || Object.entries(target).some(([key, value]) => before[key as keyof typeof before] !== value))
+            throw new HostAuthorityError('profile_mismatch')
+          const result = parseHostCollaborationReferenceContentChunk(await read(profileId, query, context.signal))
+          if (authorize() !== profileId || JSON.stringify(result.descriptor) !== JSON.stringify(before)
+            || result.reference_request_digest !== query.reference_request_digest || result.offset !== query.offset)
+            throw new HostAuthorityError('profile_mismatch')
+          await recheckReferenceSource(inspect, authorize, profileId, target, before, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.source_snapshot') {
           const read = this.options.readCollaborationSourceSnapshot
           if (!read) throw new HostAuthorityError('upgrade_required')
@@ -1726,8 +1794,7 @@ export class HostControlAuthority {
           const inspect = this.options.inspectCollaborationSource
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const c = frame.params.challenge
-          const account = challengeReadAccount(frame.params, c, ownerId)
-          const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
           const profileId = authorize()
           const target = sourceChallengeTarget(c)
           const result = await inspect(profileId, target, context.signal)
@@ -1749,6 +1816,31 @@ export class HostControlAuthority {
             method: frame.method,
             result: { ...unsigned, signature },
           })
+        } else if (frame.method === 'profile.reference_authority') {
+          const inspect = this.options.inspectCollaborationSource, readGrant = this.options.readCollaborationReferenceGrant
+          if (!inspect || !readGrant) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const target = sourceChallengeTarget(c)
+          const source = await inspect(profileId, target, context.signal)
+          if (authorize() !== profileId || source.workspace_id !== target.workspace_id || source.session_id !== target.session_id
+            || source.source_message_id !== target.source_message_id || source.source_revision !== target.source_revision
+            || source.snapshot_digest !== c.snapshot_digest) throw new HostAuthorityError('profile_mismatch')
+          const grant = await readGrant(profileId, target, c.reference_request_digest, context.signal)
+          if (authorize() !== profileId || grant.workspace_id !== target.workspace_id || grant.session_id !== target.session_id
+            || grant.source_message_id !== target.source_message_id || grant.source_revision !== target.source_revision
+            || grant.snapshot_digest !== c.snapshot_digest || grant.reference_request_digest !== c.reference_request_digest)
+            throw new HostAuthorityError('profile_mismatch')
+          const current = await inspect(profileId, target, context.signal)
+          if (authorize() !== profileId || current.workspace_id !== target.workspace_id || current.session_id !== target.session_id
+            || current.source_message_id !== target.source_message_id || current.source_revision !== target.source_revision
+            || current.snapshot_digest !== c.snapshot_digest) throw new HostAuthorityError('profile_mismatch')
+          const unsigned: HostReferenceAuthorityAssertion = { schema_version: 1, challenge: c,
+            ...assertionIdentityFields(this.options.identity), signature: 'A'.repeat(86) as HostControlSignature }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { ...unsigned,
+              signature: signAuthorityPayload(this.options.identity, encodeHostReferenceAuthorityPayload(unsigned)) } })
         } else if (frame.method === 'profile.collaboration_registration') {
           const challenge = frame.params.challenge
           context.signal.throwIfAborted()
@@ -1878,6 +1970,9 @@ export class HostControlAuthority {
           ...(this.options.inspectCollaborationRoot ? ['profile.root_authority'] : []),
           ...(this.options.inspectRootPlanningAttempt ? ['profile.root_planning_attempt_authority'] : []),
           ...(this.options.inspectCollaborationSource ? ['profile.source_authority'] : []),
+          ...(this.options.inspectCollaborationSource && this.options.readCollaborationReferenceGrant ? ['profile.reference_authority'] : []),
+          ...(this.options.inspectCollaborationSource && this.options.captureCollaborationReferenceSelection ? ['profile.reference_capture'] : []),
+          ...(this.options.inspectCollaborationSource && this.options.readCollaborationReferenceContent ? ['profile.reference_content'] : []),
           ...(this.options.readCollaborationSourceSnapshot ? ['profile.source_snapshot'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootLookupSupported ? ['profile.root_lookup'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootLiveResumeSupported ? ['profile.root_live_resume'] : []),
@@ -2878,6 +2973,94 @@ export class UnixHostClient {
   }
 
   /**
+   * Capture an independently authorized reference selection in this Account's current Profile.
+   * @param input - Main-held binding and explicit selection; no caller bytes or computed metadata.
+   * @returns bounded computed metadata, not a sharing grant; the coordinator validates the full request.
+   */
+  async captureCollaborationReferenceSelection(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly accountIssuer: string
+    readonly accountSubject: string
+    readonly selection: HostCollaborationReferenceSelection
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationReferenceCapture> {
+    const signal = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(18_000)])
+    signal.throwIfAborted()
+    const selection = parseHostCollaborationReferenceSelection(input.selection)
+    if (!this.inspection.capabilities.includes('profile.reference_capture' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const peer = JSON.stringify(this.inspection)
+    const request: ProfileReferenceCaptureRequest = { version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.reference_capture', params: { ...this.auth(),
+        authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
+        account_issuer: input.accountIssuer, account_subject: input.accountSubject, selection } }
+    const frame = await this.call(request, signal)
+    signal.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected()
+      || JSON.stringify(this.inspection) !== peer) throw new HostAuthorityError('stale')
+    const result = parseHostCollaborationReferenceCapture(frame.result), s = selection.source, d = result.descriptor
+    if (d.workspace_id !== s.workspace_id || d.session_id !== s.session_id
+      || d.source_message_id !== s.source_message_id || d.source_revision !== s.revision)
+      throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  /**
+   * Assemble only the selected reference bytes under the current Account and installed peer.
+   * @param input - Committed Source/request identities and independently validated expected content digest and length.
+   * @returns Exact bytes after every chunk's metadata and the complete SHA-256 match; grants no cloud or task access.
+   */
+  async readCollaborationReferenceContent(input: HostCollaborationReferenceGrant & {
+    readonly contentDigest: HostControlSha256
+    readonly byteLength: number
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly accountIssuer: string
+    readonly accountSubject: string
+    readonly signal?: AbortSignal
+  }): Promise<Uint8Array> {
+    const signal = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(18_000)])
+    signal.throwIfAborted()
+    const grant = parseHostCollaborationReferenceGrant({ workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision, snapshot_digest: input.snapshot_digest,
+      reference_request_digest: input.reference_request_digest })
+    const byteLength = input.byteLength, contentDigest = input.contentDigest
+    if (!Number.isSafeInteger(byteLength) || byteLength < 0 || byteLength > 1024 * 1024
+      || !/^[a-f0-9]{64}$/u.test(contentDigest)) throw new HostAuthorityError('invalid_input')
+    if (!this.inspection.capabilities.includes('profile.reference_content' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const peer = JSON.stringify(this.inspection), parts: Buffer[] = []
+    const { reference_request_digest, ...descriptor } = grant
+    const account = { authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
+      account_issuer: input.accountIssuer, account_subject: input.accountSubject }
+    let offset = 0
+    do {
+      const request: ProfileReferenceContentRequest = { version: 1, type: 'request', request_id: requestId(),
+        method: 'profile.reference_content', params: { ...this.auth(), ...account,
+          offset, workspace_id: grant.workspace_id, session_id: grant.session_id,
+          source_message_id: grant.source_message_id, source_revision: grant.source_revision, reference_request_digest } }
+      const frame = await this.call(request, signal)
+      signal.throwIfAborted()
+      if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected()
+        || JSON.stringify(this.inspection) !== peer) throw new HostAuthorityError('stale')
+      const chunk = parseHostCollaborationReferenceContentChunk(frame.result)
+      if (JSON.stringify(chunk.descriptor) !== JSON.stringify(descriptor) || chunk.reference_request_digest !== reference_request_digest
+        || chunk.content_digest !== contentDigest || chunk.total_bytes !== byteLength || chunk.offset !== offset)
+        throw new HostAuthorityError('profile_mismatch')
+      const bytes = Buffer.from(chunk.chunk_base64url, 'base64url')
+      parts.push(bytes); offset += bytes.byteLength
+    } while (offset < byteLength)
+    const bytes = Buffer.concat(parts)
+    if (createHash('sha256').update(bytes).digest('hex') !== contentDigest) throw new HostAuthorityError('profile_mismatch')
+    return Uint8Array.from(bytes)
+  }
+
+  /**
    * Read original journal content through bounded chunks under this verified Account and current peer.
    * @param input - Main-held binding and Source coordinates; no content or model overrides.
    * @returns Original JSON capsule after consistent descriptor, length, coordinates, UTF-8 and connection checks.
@@ -3647,6 +3830,37 @@ export class UnixHostClient {
     }
   }
 
+  /**
+   * Attest a committed Profile transfer grant through the currently verified Account and installed Host.
+   * @param input - Current Account binding, immutable reference nonce and optional cancellation.
+   * @returns Verified installation assertion; missing capability, changed ownership or invalid signatures refuse.
+   */
+  async attestReferenceAuthority(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostReferenceAuthorityChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostReferenceAuthorityAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostReferenceAuthorityChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.reference_authority' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileReferenceAuthorityRequest = { version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.reference_authority', params: this.challengeRequestParams(input, challenge) }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostReferenceAuthorityAssertion(frame.result)
+    if (!this.matchesChallengeIdentity(result, challenge) || challenge.expires_at <= this.now()
+      || challenge.expires_at - this.now() > 300_000 || !verify(null, encodeHostReferenceAuthorityPayload(result),
+      publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url')))
+      throw new HostAuthorityError('unauthorized')
+    return result
+  }
+
   private async callCurrentPeer(
     request: ProfileRootJournalRequest | ProfileCollaborationAnalysisRequest,
     signal: AbortSignal,
@@ -3735,8 +3949,14 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
-      | ProfileRootJournalRequest | ProfileRootPlanningAttemptAuthorityRequest | ProfileRootAuthorityRequest
-      | ProfileWorkspaceAuthorityRequest | ProfileSourceAuthorityRequest
+  | ProfileWorkspaceAuthorityRequest
+  | ProfileSourceAuthorityRequest
+  | ProfileReferenceAuthorityRequest
+  | ProfileReferenceCaptureRequest
+  | ProfileReferenceContentRequest
+  | ProfileRootJournalRequest
+  | ProfileRootPlanningAttemptAuthorityRequest
+  | ProfileRootAuthorityRequest
       | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
       | ProfileCollaborationDeliveryRequest
       | ProfileModelTextRequest | ProfileLeaseCloseRequest

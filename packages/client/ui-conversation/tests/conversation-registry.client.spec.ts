@@ -1,3 +1,4 @@
+import { collaborationDiscussionRequestId } from '@deepseek-ai/dsh-api-session-controller/src/collaboration-discussion.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { SessionSeq } from '@deepseek-ai/dsh-session/types'
@@ -81,6 +82,7 @@ function fakeSessions(ctx: Context): { sessions: ISessions; binding: SessionBind
     [Symbol.dispose]() {},
   }
   const sessions: ISessions = {
+    discussionRequestId: collaborationDiscussionRequestId,
     list,
     searchResultLimit: 50,
     create: () => Promise.reject(new Error('unused fake Sessions operation')),

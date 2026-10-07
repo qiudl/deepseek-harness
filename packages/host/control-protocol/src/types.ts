@@ -672,6 +672,92 @@ export interface ProfileSourceAuthorityResult extends Omit<ProfileWorkspaceAutho
   readonly result: HostSourceAuthorityAssertion
 }
 
+/** Profile-owned committed transfer grant; coordinates or digests supplied by Desktop grant no access. */
+export interface HostCollaborationReferenceGrant extends HostCollaborationSourceDescriptor {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Exact private lookup of an independently committed Source-bound reference selection. */
+export interface HostCollaborationReferenceTarget extends HostCollaborationSourceTarget {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Correlates one independently authorized reference selection. */
+export type HostCollaborationReferenceRequestId = Branded<'HostCollaborationReferenceRequestId'>
+/** One addressed recipient in the original Source. */
+export type HostCollaborationMentionId = Branded<'HostCollaborationMentionId'>
+/** Locator selection without caller bytes, paths, media type or computed digests. */
+export type HostCollaborationReferenceSelection = Readonly<{
+  source: Readonly<{ workspace_id: string; session_id: string; source_message_id: string; revision: string }>
+  reference_request_id: HostCollaborationReferenceRequestId
+  source_kind: 'message' | 'file'
+  source_locator: string
+  source_version: string
+  range: Readonly<{ unit: 'whole' }> | Readonly<{ unit: 'quote'; text: string }>
+    | Readonly<{ unit: 'utf16' | 'byte'; start: number; end: number }>
+  recipient_mention_ids: readonly HostCollaborationMentionId[]
+  source_evidence_spans: readonly Readonly<{ source_message_id: string; source_revision: string; start: number; end: number }>[]
+}>
+/** Computed Profile metadata; consumers still validate the full request and user sharing intent. */
+export type HostCollaborationReferenceCapture = Readonly<{
+  descriptor: HostCollaborationSourceDescriptor
+  request: HostRemoteSessionJson
+  reference_request_digest: HostControlSha256
+}>
+/** Parent-only capture in this connection's current token-verified Account Profile. */
+export interface ProfileReferenceCaptureRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_capture'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & {
+    readonly selection: HostCollaborationReferenceSelection
+  }
+}
+/** Selection metadata without selected bytes or a reference transfer assertion. */
+export interface ProfileReferenceCaptureResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_capture'
+  readonly result: HostCollaborationReferenceCapture
+}
+/** Original Source and committed reference identity, with a byte offset for bounded reads. */
+export interface HostCollaborationReferenceContentTarget extends HostCollaborationReferenceTarget {
+  readonly offset: number
+}
+/** One exact reference byte chunk; consumers verify the complete content hash before use. */
+export interface HostCollaborationReferenceContentChunk {
+  readonly descriptor: HostCollaborationSourceDescriptor
+  readonly reference_request_digest: HostControlSha256
+  readonly content_digest: HostControlSha256
+  readonly offset: number
+  readonly total_bytes: number
+  readonly chunk_base64url: string
+}
+/** Parent-only byte read using the current token-verified Account and separate Reference capability. */
+export interface ProfileReferenceContentRequest extends Omit<ProfileSourceSnapshotRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_content'
+  readonly params: ProfileSourceSnapshotRequest['params'] & { readonly reference_request_digest: HostControlSha256 }
+}
+/** Bounded reference bytes; this response does not authorize cloud sharing or recipient task admission. */
+export interface ProfileReferenceContentResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_content'
+  readonly result: HostCollaborationReferenceContentChunk
+}
+/** Server nonce binds the original Source and the complete immutable reference reservation request. */
+export interface HostReferenceAuthorityChallenge extends HostSourceAuthorityChallenge {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Installation signature over a separate Profile transfer grant; no target execution authority. */
+export interface HostReferenceAuthorityAssertion extends Omit<HostSourceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostReferenceAuthorityChallenge
+}
+/** Main-only transfer attestation requires current Account access and a separate committed Profile grant. */
+export interface ProfileReferenceAuthorityRequest extends Omit<ProfileSourceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_authority'
+  readonly params: Omit<ProfileSourceAuthorityRequest['params'], 'challenge'> & {
+    readonly challenge: HostReferenceAuthorityChallenge
+  }
+}
+/** Signed reference reservation digest without content, filesystem paths or credentials. */
+export interface ProfileReferenceAuthorityResult extends Omit<ProfileSourceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_authority'
+  readonly result: HostReferenceAuthorityAssertion
+}
+
 /** One bounded text request authorized by this connection's verified Account grant. */
 export interface ProfileModelTextRequest {
   readonly version: 1
@@ -1554,6 +1640,12 @@ export type HostControlFrame =
   | ProfileRootAuthorityResult
   | ProfileSourceAuthorityRequest
   | ProfileSourceAuthorityResult
+  | ProfileReferenceAuthorityRequest
+  | ProfileReferenceAuthorityResult
+  | ProfileReferenceCaptureRequest
+  | ProfileReferenceCaptureResult
+  | ProfileReferenceContentRequest
+  | ProfileReferenceContentResult
   | ProfileCollaborationAnalysisRequest
   | ProfileCollaborationAnalysisResult
   | ProfileCollaborationDeliveryRequest

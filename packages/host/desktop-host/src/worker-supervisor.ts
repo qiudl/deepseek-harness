@@ -3,8 +3,11 @@ import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@d
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection,
+  HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
+import type { HostControlAuthorityOptions } from './unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 
 interface StartProfileWorkerInput {
@@ -199,6 +202,67 @@ export class ProfileWorkerSupervisor {
     return result
   }
   /**
+   * Read a separately committed reference selection from the original current worker.
+   * @param profileId - Account Profile resolved by the parent authority.
+   * @param target - Exact original Source coordinates.
+   * @param requestDigest - Complete reference reservation digest; it creates no record.
+   * @param signal - Current connection cancellation.
+   * @returns original grant; missing, replaced, cancelled or mismatched workers refuse.
+   */
+  async readCollaborationReferenceGrant(profileId: string, target: HostCollaborationSourceTarget,
+    requestDigest: HostControlSha256, signal: AbortSignal): Promise<HostCollaborationReferenceGrant> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readCollaborationReferenceGrant) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.readCollaborationReferenceGrant(target, requestDigest, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id
+      || result.source_message_id !== target.source_message_id || result.source_revision !== target.source_revision
+      || result.reference_request_digest !== requestDigest) throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  /**
+   * Capture authorized locator metadata with the current worker's separate Reference token.
+   * @param profileId - Current Account Profile resolved by Host authority.
+   * @param selection - Coordinator-authorized selection; no content or computed fields.
+   * @param signal - Current connection cancellation.
+   * @returns untrusted computed metadata; disposed, replaced and cancelled workers refuse.
+   */
+  async captureCollaborationReferenceSelection(profileId: string, selection: HostCollaborationReferenceSelection,
+    signal: AbortSignal): Promise<HostRemoteSessionJson> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.captureCollaborationReferenceSelection) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.captureCollaborationReferenceSelection(selection, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    return result
+  }
+
+  /**
+   * Read a selected-byte chunk through the current worker's independent Reference capability.
+   * @param profileId - Current Account Profile resolved by Host authority.
+   * @param target - Original Source, full committed reservation digest and byte offset.
+   * @param signal - Current connection cancellation.
+   * @returns Chunk only while the original worker is current; disposed, replaced and cancelled reads refuse.
+   */
+  async readCollaborationReferenceContent(profileId: string, target: HostCollaborationReferenceContentTarget,
+    signal: AbortSignal): Promise<HostCollaborationReferenceContentChunk> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readCollaborationReferenceContent) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.readCollaborationReferenceContent(target, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    return result
+  }
+
+  /**
    * Execute private analysis using the original Account worker generation.
    * @param profileId - Host-authorized Profile identity.
    * @param command - Bounded prepare/dispatch JSON with Host-derived binding digest.
@@ -345,5 +409,23 @@ export class ProfileWorkerSupervisor {
     const results = await Promise.allSettled([...ids].map(profileId => this.dispose(profileId)))
     const failed = results.find(result => result.status === 'rejected')
     if (failed?.status === 'rejected') throw failed.reason
+  }
+}
+
+/**
+ * Bind original Profile readers for the platform startup compositions.
+ * @param workers - Supervisor owning the current unlocked Profile generations.
+ * @returns Source and reference readers with their supervisor receiver retained; cloud transfer requires separate authority.
+ */
+export function collaborationWorkerReaders(workers: ProfileWorkerSupervisor): Pick<HostControlAuthorityOptions,
+  'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'readCollaborationReferenceGrant'
+  | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent'> {
+  return {
+    inspectWorkspaceModelSelection: workers.inspectWorkspaceModelSelection.bind(workers),
+    inspectCollaborationSource: workers.inspectCollaborationSource.bind(workers),
+    readCollaborationSourceSnapshot: workers.readCollaborationSourceSnapshot.bind(workers),
+    readCollaborationReferenceGrant: workers.readCollaborationReferenceGrant.bind(workers),
+    captureCollaborationReferenceSelection: workers.captureCollaborationReferenceSelection.bind(workers),
+    readCollaborationReferenceContent: workers.readCollaborationReferenceContent.bind(workers),
   }
 }

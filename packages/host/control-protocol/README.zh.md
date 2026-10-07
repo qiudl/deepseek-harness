@@ -72,6 +72,14 @@ kind: "package-reference"
 
 `profile.source_authority` 接受精确服务器挑战，包含 Account/environment、原始 Source 坐标、完整快照摘要与已登记 Host epoch。专用 UTF-8 签名正文由 `dsh-collaboration-source-authority/v1`、NUL 和固定顺序 JSON 元组组成。授权 Profile 必须确认匹配的持久 journal 记录后才能签名；归属或登记签名不能替代。响应不含消息、凭据或可执行调用。云端必须在核验当前 Account/Host 的同一事务中认证并消费 nonce 和快照；签名不授予目标执行权限。
 
+`profile.reference_authority` 另将 `reference_request_digest` 绑定到独立的 Profile 传递授权。签名字节为 `dsh-collaboration-reference-authority/v1`、NUL 和 JSON `[1, sourceSigningPayload, referenceRequestDigest]`；其中 Source 签名正文保留为精确 UTF-8 字符串。Source、工作区或登记签名不能授权引用传递。Profile 授权读取器必须独立返回已提交的 Source 描述符与完整预登记请求摘要；此操作不暴露正文或文件路径。
+
+`profile.reference_capture` 在当前令牌已验证的 Account 下接受最多 32 KiB、绑定 Source 的定位、全部或范围选择，或最多 16 KiB 的非空 Unicode 原文引用、接收对象和用户证据。它规范化私有 Profile 字段顺序，返回最多 32 KiB 的计算描述符、请求和摘要元数据，不含选中字节。父协调器须在捕获前独立确认明确分享意图，并在收到结果后校验完整请求；捕获不授予内容传递或任务受理权限。
+
+`profile.reference_content` 仅接受当前 Account 下的原始 Source、已提交引用请求摘要和字节偏移。每次响应包含一致的 Source 描述符、请求与内容摘要、总长度和最多 32 KiB 的精确规范分块。总内容最多 1 MiB，零字节有效；客户端拼接后核验完整内容。引用字节不扩大 64 KiB 帧预算，也不确认分享或任务受理授权。
+
+`parseHostCollaborationReferenceTarget` 校验私有 worker 查询，其中只有原始 Source 坐标及完整引用请求摘要，不能提供所选字节、快照摘要或授权。`parseHostCollaborationReferenceGrant` 独立校验返回的已提交描述符及请求摘要。
+
 ## API
 
 `profile.collaboration_delivery` 通过顺序上传的规范 base64url 分块传输完整终态答复，每块解码后最多 16 KiB，完整封装最多 1 MiB，答复最多 128 KiB UTF-8。普通 JSON 与 64 KiB 单帧上限保持不变。最终回执不包含答复，使用规范键排序 JSON 签名域 `dsh-collaboration-delivery-receipt-v1`，绑定已验证的 Account、当前安装/进程和原 Profile 提交记录。解析或签名本身均不授予云端确认或执行权威。

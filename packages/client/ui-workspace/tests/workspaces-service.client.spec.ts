@@ -1,3 +1,4 @@
+import { collaborationDiscussionRequestId } from '@deepseek-ai/dsh-api-session-controller/src/collaboration-discussion.ts'
 import { setImmediate } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -133,6 +134,7 @@ interface RetainedSession {
 }
 
 class FakeSessions implements ISessions {
+  readonly discussionRequestId = collaborationDiscussionRequestId
   readonly list: MutableSource<SessionListState>
   readonly create: ReturnType<typeof vi.fn<ISessions['create']>>
   readonly fork = vi.fn<ISessions['fork']>(async () => sid('forked'))

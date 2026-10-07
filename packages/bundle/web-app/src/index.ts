@@ -29,8 +29,12 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
+import { describeCollaborationReference } from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
-import { handleDesktopCollaborationRootRequest, handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationReferenceGrantRequest, handleDesktopCollaborationReferenceCaptureRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationReferenceContentRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationRootRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopCollaborationDeliveryRequest } from './desktop-collaboration-delivery.ts'
 import { openCollaborationRootPlanningJournal } from '@deepseek-ai/dsh-api-session-controller'
 import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from './desktop-collaboration-analysis.ts'
@@ -308,6 +312,35 @@ export function apply(ctx: Context, config: Config): void {
         kind:'exact',path:'/internal/desktop-collaboration-source-snapshot',
         handler:(req,res)=>handleDesktopCollaborationSourceSnapshotRequest(req,res,sourceToken,
           (target,signal)=>sessionCtx.sessionController.readCollaborationSourceSnapshot(target,signal)),
+      }))
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-reference-grant',
+        handler: (req, res) => handleDesktopCollaborationReferenceGrantRequest(req, res, sourceToken,
+          (query, signal) => {
+            const { reference_request_digest, ...target } = query
+            return sessionCtx.sessionController.readCollaborationReferenceGrant(target, reference_request_digest, signal)
+          }),
+      }))
+    })
+  }
+  const referenceToken = process.env.DSH_PROFILE_REFERENCE_TOKEN
+  if (referenceToken && /^[A-Za-z0-9_-]{43}$/u.test(referenceToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-reference-content',
+        handler: (req, res) => handleDesktopCollaborationReferenceContentRequest(req, res, referenceToken,
+          (query, signal) => {
+            const { offset: _offset, reference_request_digest, ...target } = query
+            return sessionCtx.sessionController.readCollaborationReferenceContent(target, reference_request_digest, signal)
+          }),
+      }))
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-reference-capture',
+        handler: (req, res) => handleDesktopCollaborationReferenceCaptureRequest(req, res, referenceToken,
+          async (selection, signal) => {
+            const record = await sessionCtx.sessionController.captureCollaborationReferenceSelection(selection, signal)
+            return describeCollaborationReference(record)
+          }),
       }))
     })
   }

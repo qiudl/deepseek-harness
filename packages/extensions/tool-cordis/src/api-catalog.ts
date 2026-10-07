@@ -2008,6 +2008,30 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Original frozen journal snapshot after current Session and Workspace ownership checks; no executable handle.',
       },
       {
+        signature: 'async captureCollaborationReference(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord>',
+        description: 'Freeze an independently authorized selection from this original Source\'s own Session. The trusted coordinator establishes explicit user sharing intent before calling; metadata parsing alone does not.',
+        parameters: [{ name: 'value', description: 'Exact retained request without credentials, caller content, paths or renewable proofs.' }, { name: 'signal', description: 'Parent operation cancellation, combined with current Profile disposal.' }],
+        returns: 'immutable content after independent message/attachment reads, durable save and ownership revalidation.',
+      },
+      {
+        signature: 'async captureCollaborationReferenceSelection(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord>',
+        description: 'Derive a reservation request from independently authorized message/file selection and actual Profile content. The trusted coordinator establishes explicit sharing intent before this Host-only operation; no Remote endpoint is provided.',
+        parameters: [{ name: 'value', description: 'Exact Source coordinates, locator/version, explicit range/whole choice, recipients and evidence.' }, { name: 'signal', description: 'Parent cancellation, combined with current Profile disposal and owned read drainage.' }],
+        returns: 'persisted immutable request and selected bytes with Profile-computed MIME, range, length and digests.',
+      },
+      {
+        signature: 'async readCollaborationReferenceGrant(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise< CollaborationReferenceRecord[\'descriptor\'] & { readonly reference_request_digest: string } >',
+        description: 'Read a separately committed reference selection and revalidate its original content before attestation.',
+        parameters: [{ name: 'target', description: 'Exact original Source coordinates, without caller-supplied content or commit fields.' }, { name: 'requestDigest', description: 'Full immutable reference request digest; no record is created from this value.' }, { name: 'signal', description: 'Current Parent operation cancellation, combined with Profile disposal.' }],
+        returns: 'Source-bound grant only while the current Source, locator, version and selected bytes still match.',
+      },
+      {
+        signature: 'async readCollaborationReferenceContent(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise<CollaborationReferenceRecord>',
+        description: 'Read bytes only from a separately captured reference after rechecking current ownership and actual content.',
+        parameters: [{ name: 'target', description: 'Original Source coordinates; this operation cannot capture a new selection.' }, { name: 'requestDigest', description: 'Full committed reservation digest, including its recipients and evidence.' }, { name: 'signal', description: 'Parent cancellation, combined with Profile disposal and owned read drainage.' }],
+        returns: 'Immutable bounded record while Source, locator, version and selected bytes still match; no cloud transfer grant.',
+      },
+      {
         signature: 'async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise<CollaborationDeliveryRecord>',
         description: 'Save a readable cloud reply in the owning Profile without appending model-visible Session events. The authenticated parent must establish namespace/target cloud authority. This operation checks current local ownership and the original Source; it grants no cloud delivery acknowledgment.',
         parameters: [{ name: 'value', description: 'Exact private delivery input; caller-supplied local commits are rejected.' }, { name: 'signal', description: 'Parent cancellation, combined with Profile disposal.' }],
@@ -4859,6 +4883,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CollaborationPlanningPredecessor',
     declaration: 'export type CollaborationPlanningPredecessor = Readonly<z.infer<typeof predecessorSchema>> | null;',
+  },
+  {
+    name: 'CollaborationReferenceRecord',
+    declaration: 'export type CollaborationReferenceRecord = Readonly<z.infer<typeof recordSchema>>;',
   },
   {
     name: 'CollaborationRootCapture',

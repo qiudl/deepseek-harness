@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
+import { collaborationDiscussionRequestId } from '@deepseek-ai/dsh-api-session-controller/src/collaboration-discussion.ts'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 /** REQ-20260930-0004: YAML-loaded source through the real editor, trigger controller and submit machine. */
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { createScope, scopeOf } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import * as Triggers from '@deepseek-ai/dsh-client-ui-input-trigger/client'
@@ -37,8 +40,10 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   vi.stubGlobal('crypto', webcrypto)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
   const ctx = new Context(), id = SessionId('session-1')
-  const scope = createScope(ctx, id), session = { sessionId: id }
+  const prompt = vi.fn<SessionFace['prompt']>(async () => ({ ok: true, value: { accepted: true } }))
+  const scope = createScope(ctx, id), session = { sessionId: id, prompt }
   const binding = { sessionId: id, session, ctx: scope.ctx }
+  const sessionOf = vi.fn((c: Context) => c === scope.ctx ? session : undefined)
   const mounted: { composer?: SessionInputShell } = {}
   onTestFinished(async () => {
     mounted.composer?.dispose()
@@ -49,9 +54,10 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   })
   // Session RPC and Desktop transport peers are fixtures; client owners below load through YAML.
   ctx.provide('sessions', {
+    discussionRequestId: collaborationDiscussionRequestId,
     scope: (key: SessionId) => key === id && scope.fiber.uid !== null ? scope.ctx : undefined,
     scopeOf: (c: Context) => scopeOf(c),
-    sessionOf: (c: Context) => c === scope.ctx ? session : undefined,
+    sessionOf,
     binding: (key: SessionId) => key === id ? binding : undefined,
   } as never)
   ctx.provide('conversation', { input: { for: () => {
@@ -181,7 +187,8 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     const end = prefix.length + 2
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
-  return { ctx, composer, controller, invoke, sink, pick, submit, scopeDirectory, workspace, sourceReads, retainActivity, releaseActivity,
+  return { ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf, scopeDirectory, workspace, sourceReads,
+    retainActivity, releaseActivity,
     deliveries, pending, clarify, originals, closeSession: () => scope.fiber.dispose() }
 }
 
@@ -254,6 +261,92 @@ it('sends an explicit scoped Agent from the real composer without opening the co
   expect(scopeDirectory).toHaveBeenCalledWith({ workspace_id: '38c7c5cb-38fc-466f-9d92-89cc49f84051', session_id: 'session-1',
     operation: { kind: 'agents', query: { limit: 20, query: 'Gui' } } })
   expect(invoke).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled()
+})
+
+it('routes a frozen discussion from the YAML-loaded composer as one exact ordinary prompt', async () => {
+  const f = await bench(true)
+  await f.pick('\n  只讨论 ', '\n先不要执行或分配。')
+  const original = f.composer.snapshot.draft
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision,
+  }, submission_state: 'discussion' } }))
+  f.composer.submit(); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.submit).toHaveBeenCalledOnce(); expect(f.prompt).toHaveBeenCalledOnce()
+  expect(f.prompt).toHaveBeenCalledWith([{ type: 'text', text: original }], 'queue', expect.any(AbortSignal),
+    collaborationDiscussionRequestId(f.submit.mock.calls[0]![0]))
+  expect(JSON.stringify(f.prompt.mock.calls[0]!.slice(0, 2))).toMatchInlineSnapshot('"[[{"type":"text","text":"\\n  只讨论 @Guide · 项目空间 \\n先不要执行或分配。"}],"queue"]"')
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('retains an uncertain ordinary discussion and retries its same Source and prompt identity', async () => {
+  const f = await bench(true)
+  await f.pick('', '只讨论，不执行。')
+  const original = f.composer.snapshot.draft
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision,
+  }, submission_state: 'discussion' } }))
+  f.prompt.mockRejectedValueOnce(Error('lost normal prompt reply'))
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(original)
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.submit.mock.calls[1]![0]).toEqual(f.submit.mock.calls[0]![0])
+  expect(f.prompt.mock.calls[1]?.[3]).toBe(f.prompt.mock.calls[0]?.[3])
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['invocation', 'session', 'unconfirmed'] as const)('never routes a malformed discussion (%s) to normal chat', async (mode) => {
+  const f = await bench(true)
+  await f.pick('', '只讨论，不执行。')
+  const original = f.composer.snapshot.draft
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: mode === 'session' ? 'other' : input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision,
+  }, submission_state: mode === 'unconfirmed' ? 'unconfirmed' as 'discussion' : 'discussion',
+  ...(mode === 'invocation' ? { invocation_id: 'foreign' } : {}) } }))
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(original)
+  expect(f.prompt).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['missing-session', 'refused', 'changed-workspace'] as const)('retains a frozen discussion when normal chat is %s', async (mode) => {
+  const f = await bench(true)
+  await f.pick('', '只讨论。')
+  const original = f.composer.snapshot.draft
+  f.submit.mockImplementation(async (input) => {
+    if (mode === 'missing-session') f.sessionOf.mockReturnValue(undefined)
+    return { ok: true, value: { source: { workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision }, submission_state: 'discussion' } }
+  })
+  f.prompt.mockImplementationOnce(async () => {
+    if (mode === 'refused') return { ok: false, error: new RemoteError('session/agent-busy', 'unavailable', { reason: 'fixture' }) }
+    f.workspace.id = '50000000-0000-4000-8000-000000000099'
+    return { ok: true, value: { accepted: true } }
+  })
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(original)
+  expect(f.prompt).toHaveBeenCalledTimes(mode === 'missing-session' ? 0 : 1)
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('aborts the confirmed discussion prompt without consuming its original draft', async () => {
+  const f = await bench(true), controller = new AbortController()
+  await f.pick('', '只讨论。')
+  const outcome = await f.controller.adjudicate(f.composer.snapshot.draft.trim(), controller.signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(SessionId('session-1'))
+  if (!scoped || !outcome || typeof outcome !== 'object' || !('claim' in outcome)) throw Error('missing scoped claim')
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: { workspace_id: input.workspace_id,
+    session_id: input.session_id, source_message_id: input.source_message_id, source_revision: input.source_revision }, submission_state: 'discussion' } }))
+  f.prompt.mockImplementationOnce(async () => { controller.abort(); return { ok: true, value: { accepted: true } } })
+  await expect(outcome.claim.submit('', scoped, [])).rejects.toThrow()
+  expect(f.composer.snapshot.draft).not.toBe('')
+  expect(f.prompt).toHaveBeenCalledOnce(); expect(f.sink).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled()
 })
 
 it('submits two explicit scoped Agent chips as one original Source without ordinary chat or duplicate sends', async () => {

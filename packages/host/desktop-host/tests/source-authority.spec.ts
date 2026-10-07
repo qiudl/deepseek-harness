@@ -8,11 +8,20 @@ import {
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostSourceAuthorityPayload,
+  encodeHostReferenceAuthorityPayload,
+  encodeHostCollaborationDeliveryReceiptPayload,
+  parseHostCollaborationReferenceSelection,
+  parseHostCollaborationReferenceCapture,
+  parseHostCollaborationSourceDescriptor,
   parseHostRootAuthorityChallenge, encodeHostRootAuthorityPayload,
   parseHostRootPlanningAttemptAuthorityChallenge, encodeHostRootPlanningAttemptAuthorityPayload,
-  encodeHostCollaborationDeliveryReceiptPayload, parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload,
+  parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostControlFrame, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionJson, HostCollaborationReferenceGrant, HostCollaborationReferenceSelection } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationReferenceContentChunk, parseHostCollaborationReferenceGrant } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceContentTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { captureCollaborationReferenceSelectionContent, describeCollaborationReference, parseCollaborationReferenceMetadata,
+  parseCollaborationSourceSnapshot, collaborationJournalDigest, describeCollaborationSource } from '@deepseek-ai/dsh-api-session-controller'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
@@ -22,7 +31,8 @@ import type { CollaborationDeliveryReceiver } from '../src/collaboration-deliver
 async function fixture(
   rootAnalysisSupported = false, rootAnalysisRecoverySupported = false,
   rootLookupSupported = false, rootPendingLookupSupported = false, rootLiveResumeSupported = false,
-  rootPlanningSupported = false, rootExecutionSupported = false, rootFeedbackSupported = false, enabled = true, omitRootReaders = false,
+  rootPlanningSupported = false, rootExecutionSupported = false, rootFeedbackSupported = false,
+  enabled = true, omitRootReaders = false, referenceEnabled = false, captureEnabled = false, contentEnabled = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
@@ -83,11 +93,29 @@ async function fixture(
   let inspectPlanning: NonNullable<import('../src/unix-transport.ts').HostControlAuthorityOptions['inspectRootPlanningAttempt']> =
     async () => { throw Error('missing attempt') }
   let delivery: (profileId: string) => CollaborationDeliveryReceiver = () => { throw Error('not configured') }
+  let reference = async (_profileId: string, target: HostCollaborationSourceTarget, requestDigest: string, _signal: AbortSignal) =>
+    ({ ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest })
+  let capture = async (_profileId: string, selection: HostCollaborationReferenceSelection,
+    _signal: AbortSignal): Promise<HostRemoteSessionJson> => captureResponse(selection)
+  let readContent = async (_profileId: string, target: HostCollaborationReferenceContentTarget, _signal: AbortSignal) => {
+    const { offset, reference_request_digest, ...source } = target
+    return parseHostCollaborationReferenceContentChunk({ descriptor: await inspect(_profileId, source, _signal),
+      reference_request_digest, content_digest: createHash('sha256').update('').digest('hex'),
+      offset, total_bytes: 0, chunk_base64url: '' })
+  }
   const authority = new HostControlAuthority({
     identity,
     host,
     profilePersistenceGeneration: () => 1,
     now: clock.now,
+    ...(captureEnabled ? { captureCollaborationReferenceSelection: (profileId: string,
+      selection: HostCollaborationReferenceSelection, signal: AbortSignal) => capture(profileId, selection, signal) } : {}),
+    ...(contentEnabled ? { readCollaborationReferenceContent: (profileId: string,
+      target: HostCollaborationReferenceContentTarget, signal: AbortSignal) => readContent(profileId, target, signal) } : {}),
+    ...(referenceEnabled ? { readCollaborationReferenceGrant: (
+      profileId: string, target: HostCollaborationSourceTarget, requestDigest: string, signal: AbortSignal,
+    ) =>
+      reference(profileId, target, requestDigest, signal) as Promise<HostCollaborationReferenceGrant> } : {}),
     ...(rootPlanningSupported ? {
       inspectRootPlanningAttempt: (...args: Parameters<typeof inspectPlanning>) => inspectPlanning(...args),
     } : {}),
@@ -168,6 +196,7 @@ async function fixture(
     identity,
     authority,
     keys,
+    setContent: (reader: typeof readContent) => { readContent = reader },
     challenge,
     input,
     time,
@@ -181,8 +210,10 @@ async function fixture(
       inspect = callback
     },
     setRead:(callback:typeof read)=>{read=callback},
+    setReference:(callback:typeof reference)=>{reference=callback},
     setAnalysis:(callback:typeof analysis)=>{analysis=callback},
     setDelivery: (callback: typeof delivery) => { delivery = callback },
+    setCapture: (callback: typeof capture) => { capture = callback },
   }
 }
 function replyFixture(f: Awaited<ReturnType<typeof fixture>>, answer = '😀'.repeat(32768)) {
@@ -648,6 +679,375 @@ it.each(['analysis', 'delivery'] as const)('refuses %s certification after a Pro
   expect(replacement).not.toBe(f.profile.profileId)
 })
 
+async function referenceFixture(enabled = true, referenceEnabled = false, captureEnabled = false, contentEnabled = false) {
+  return fixture(false, false, false, false, false, false, false, false, enabled, false, referenceEnabled, captureEnabled, contentEnabled)
+}
+const referenceInput = (f: Awaited<ReturnType<typeof fixture>>) => ({ ...f.input,
+  challenge: { ...f.challenge, reference_request_digest: 'b'.repeat(64) as never } })
+
+it('requires a current Account and its separate Profile reference grant before signing any transfer proof', async () => {
+  const f = await referenceFixture(true, true), input = referenceInput(f)
+  let reads = 0
+  f.setReference(async (profileId, target, requestDigest) => {
+    reads++; expect(profileId).toBe(f.profile.profileId)
+    return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest }
+  })
+  await expect(f.client.attestReferenceAuthority(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(reads).toBe(0)
+  await f.grant()
+  const result = await f.client.attestReferenceAuthority(input)
+  expect(result.challenge).toEqual(input.challenge)
+  expect(verify(null, encodeHostReferenceAuthorityPayload(result), f.keys.publicKey, Buffer.from(result.signature, 'base64url'))).toBe(true)
+  const { reference_request_digest: _digest, ...source } = result.challenge
+  expect(verify(null, encodeHostSourceAuthorityPayload({ ...result, challenge: source }), f.keys.publicKey, Buffer.from(result.signature, 'base64url'))).toBe(false)
+  expect(reads).toBe(1)
+})
+it('Source support alone never advertises reference authority or grants a transfer signature', async () => {
+  const f = await referenceFixture(), before = f.seen.length
+  await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen).toHaveLength(before)
+  const noSource = await referenceFixture(false, true)
+  await expect(noSource.client.attestReferenceAuthority(referenceInput(noSource))).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+it('refuses changed Source coordinates or reference request digests returned by the Profile', async () => {
+  const f = await referenceFixture(true, true)
+  await f.grant()
+  for (const change of [{ session_id: 'foreign' as never }, { source_revision: '2' }, { snapshot_digest: 'c'.repeat(64) },
+    { reference_request_digest: 'c'.repeat(64) }]) {
+    f.setReference(async (_profile, target, requestDigest) => ({ ...target, snapshot_digest: 'a'.repeat(64),
+      reference_request_digest: requestDigest, ...change }))
+    await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'profile_mismatch' })
+  }
+})
+it('does not certify a grant after revoke, expiry or cancellation during the Profile read', async () => {
+  for (const mode of ['revoke', 'expire', 'cancel'] as const) {
+    const f = await referenceFixture(true, true), cancellation = new AbortController()
+    await f.grant()
+    f.setReference(async (_profile, target, requestDigest) => {
+      if (mode === 'revoke') f.host.revokeOwner(f.ownerId)
+      if (mode === 'expire') f.time.value = 2000
+      if (mode === 'cancel') cancellation.abort()
+      return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest }
+    })
+    await expect(f.client.attestReferenceAuthority({ ...referenceInput(f), signal: cancellation.signal })).rejects.toThrow()
+  }
+})
+it('refuses altered peer signatures, mismatched environments and post-reply connection loss', async () => {
+  const f = await referenceFixture(true, true), input = referenceInput(f)
+  await f.grant()
+  await expect(f.client.attestReferenceAuthority({ ...input, authorityEnvironmentId: randomUUID() })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(f.client.attestReferenceAuthority({ ...input, signal: AbortSignal.abort() })).rejects.toThrow()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.reference_authority'
+    ? { ...frame, result: { ...frame.result, signature: 'A'.repeat(86) as never } } : frame)
+  await expect(f.client.attestReferenceAuthority(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  f.alter((frame) => { f.client.close(); return frame })
+  await expect(f.client.attestReferenceAuthority(input)).rejects.toThrow()
+})
+
+it('rechecks Source visibility after the asynchronous reference grant read before signing', async () => {
+  const f = await referenceFixture(true, true)
+  await f.grant()
+  f.setReference(async (_profile, target, requestDigest) => {
+    f.setInspect(async (_id, coordinates) => ({ ...coordinates, snapshot_digest: 'c'.repeat(64) }))
+    return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest }
+  })
+  await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'profile_mismatch' })
+})
+
+it('the Host refuses a raw reference request when no committed reference grant reader is installed', async () => {
+  const f = await referenceFixture()
+  await f.grant()
+  await f.client.attestSourceAuthority(f.input)
+  const original = f.seen.at(-1)
+  if (original?.type !== 'request' || original.method !== 'profile.source_authority') throw Error('missing source request')
+  const request = decodeHostControlFrame(JSON.stringify({ ...original, method: 'profile.reference_authority',
+    params: { ...original.params, jti: randomUUID(), challenge: referenceInput(f).challenge } }) + '\n')
+  const result = await f.session.handleRequest(request)
+  expect(result.type === 'error' && result.error.code).toBe('upgrade_required')
+})
+it('refuses a stale Source before reading any committed reference grant', async () => {
+  const f = await referenceFixture(true, true)
+  await f.grant()
+  let reads = 0
+  f.setReference(async (_id, target, requestDigest) => { reads++; return { ...target, snapshot_digest: 'a'.repeat(64), reference_request_digest: requestDigest } })
+  f.setInspect(async (_id, target) => ({ ...target, snapshot_digest: 'c'.repeat(64) }))
+  await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'profile_mismatch' })
+  expect(reads).toBe(0)
+})
+it('refuses a Source response substituted for the requested reference response', async () => {
+  const f = await referenceFixture(true, true)
+  await f.grant()
+  f.alter((frame) => {
+    if (frame.type !== 'result' || frame.method !== 'profile.reference_authority') return frame
+    const { reference_request_digest: _digest, ...source } = frame.result.challenge
+    return { ...frame, method: 'profile.source_authority', result: { ...frame.result, challenge: source } }
+  })
+  await expect(f.client.attestReferenceAuthority(referenceInput(f))).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+function referenceSelection(f: Awaited<ReturnType<typeof fixture>>) {
+  return parseHostCollaborationReferenceSelection({
+    source: { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id,
+      source_message_id: f.challenge.source_message_id, revision: f.challenge.source_revision },
+    reference_request_id: 'reference-1', source_kind: 'message', source_locator: 'message-0', source_version: '1',
+    range: { unit: 'whole' }, recipient_mention_ids: ['mention-1'],
+    source_evidence_spans: [{ source_message_id: f.challenge.source_message_id, source_revision: '1', start: 0, end: 10 }],
+  })
+}
+function captureResponse(selection: HostCollaborationReferenceSelection) {
+  const s = selection.source, range = selection.range.unit === 'whole'
+    ? { unit: 'utf16', start: 0, end: 10 } : selection.range.unit === 'quote'
+      ? { unit: 'utf16', start: 0, end: selection.range.text.length } : selection.range
+  return { descriptor: { workspace_id: s.workspace_id, session_id: s.session_id,
+    source_message_id: s.source_message_id, source_revision: s.revision, snapshot_digest: 'a'.repeat(64) },
+  request: { ...selection, source: { ...s, message_digest: 'a'.repeat(64) }, range,
+    mime_type: 'text/plain', content_digest: 'b'.repeat(64), byte_length: range.end - range.start },
+  reference_request_digest: 'c'.repeat(64) }
+}
+function captureInput(f: Awaited<ReturnType<typeof fixture>>) {
+  return { ...f.input, accountIssuer: f.account.issuer, accountSubject: f.account.subject, selection: referenceSelection(f) }
+}
+it('captures computed reference metadata only in the token-verified Account Profile and rechecks its Source', async () => {
+  const f = await referenceFixture(true, false, true), calls: unknown[] = []
+  f.setCapture(async (profileId, selection, signal) => {
+    expect(signal.aborted).toBe(false); calls.push({ profileId, selection }); return captureResponse(selection)
+  })
+  await expect(f.client.captureCollaborationReferenceSelection(captureInput(f))).rejects.toThrow()
+  expect(calls).toEqual([])
+  await f.grant()
+  expect(parseHostCollaborationReferenceCapture(captureResponse(referenceSelection(f)))).toEqual(captureResponse(referenceSelection(f)))
+  const result = await f.client.captureCollaborationReferenceSelection(captureInput(f))
+  expect(result).toEqual(captureResponse(referenceSelection(f)))
+  expect(calls).toEqual([{ profileId: f.profile.profileId, selection: referenceSelection(f) }])
+  expect(JSON.stringify(result)).not.toContain('content_base64')
+  expect(f.seen.some(frame => frame.type === 'request' && frame.method === 'profile.collaboration_analysis')).toBe(false)
+})
+for (const mode of ['changed-source', 'wrong-descriptor', 'wrong-snapshot-digest', 'revoked-account', 'expired', 'disconnected', 'cancelled'] as const) {
+  it(`withholds reference capture metadata after ${mode}`, async () => {
+    const f = await referenceFixture(true, false, true), cancel = new AbortController()
+    await f.grant()
+    f.setCapture(async (_profileId, selection) => {
+      const result = captureResponse(selection)
+      if (mode === 'changed-source') f.setInspect(async (_id, target) => ({ ...target, snapshot_digest: 'b'.repeat(64) }))
+      if (mode === 'wrong-descriptor') result.descriptor.session_id = 'another'
+      if (mode === 'wrong-snapshot-digest') result.descriptor.snapshot_digest = 'b'.repeat(64)
+      if (mode === 'revoked-account') f.host.revokeOwner(f.ownerId)
+      if (mode === 'expired') f.time.value = 400000
+      if (mode === 'disconnected') f.client.close()
+      if (mode === 'cancelled') cancel.abort()
+      return result
+    })
+    await expect(f.client.captureCollaborationReferenceSelection({ ...captureInput(f), signal: cancel.signal })).rejects.toThrow()
+  })
+}
+it('does not invoke a capture provider for a mismatched Source or a missing inspector', async () => {
+  const wrong = await referenceFixture(true, false, true), missing = await referenceFixture(false, false, true)
+  for (const f of [wrong, missing]) {
+    await f.grant(); let calls = 0
+    f.setCapture(async (_id, selection) => { calls++; return captureResponse(selection) })
+    f.setInspect(async (_id, target) => ({ ...target, source_message_id: 'other', snapshot_digest: 'a'.repeat(64) }))
+    await expect(f.client.captureCollaborationReferenceSelection(captureInput(f))).rejects.toThrow()
+    expect(calls).toBe(0)
+  }
+})
+it('requires the capture capability and validates the response coordinates on the client', async () => {
+  const old = await referenceFixture(), current = await referenceFixture(true, false, true)
+  await expect(old.client.captureCollaborationReferenceSelection(captureInput(old))).rejects.toThrow('upgrade_required')
+  await current.grant()
+  current.alter(frame => frame.type === 'result' && frame.method === 'profile.reference_capture'
+    ? { ...frame, result: { ...frame.result, descriptor: parseHostCollaborationSourceDescriptor({ ...frame.result.descriptor, session_id: 'other' }) } } : frame)
+  await expect(current.client.captureCollaborationReferenceSelection(captureInput(current))).rejects.toThrow()
+})
+
+for (const kind of ['message', 'file'] as const) {
+  it(`transports actual Native ${kind} producer metadata without its selected bytes or model authority`, async () => {
+    const f = await referenceFixture(true, false, true), input = captureInput(f)
+    const original = '@Guide · 项目 请引用前面那条内容', target = f.challenge
+    const body = { workspace_id: target.workspace_id, session_id: target.session_id,
+      source_message_id: target.source_message_id, source_revision: '1', original_message: original,
+      active_mentions: [{ mention_id: 'mention-1', source_span: { source_message_id: target.source_message_id,
+        source_revision: '1', start: 0, end: '@Guide · 项目'.length },
+      display_snapshot: { agent_name: 'Guide', project_name: '项目' },
+      binding: { kind: 'resolved', target: { project_id: '212', agent_id: 'guide' }, capability_snapshot: 'a'.repeat(64) } }],
+      model_snapshot: { provider: 'fixture', model: 'fixture', configuration_generation: '1', adapter_fingerprint: 'b'.repeat(64) } }
+    const snapshot = parseCollaborationSourceSnapshot({ ...body,
+      host_journal_commit: { journal_id: 'fixture-journal', commit_version: '1', content_digest: collaborationJournalDigest(body) } })
+    const payload = kind === 'message' ? Buffer.from('\ufeff范围😀\r\n仅限本项目') : Buffer.from([0, 255, 128, 1])
+    f.setInspect(async () => describeCollaborationSource(snapshot))
+    f.setCapture(async (_profile, selection, signal) => {
+      const record = await captureCollaborationReferenceSelectionContent(selection, snapshot, async () => ({
+        source_kind: kind, source_locator: selection.source_locator, source_version: selection.source_version,
+        mime_type: kind === 'message' ? 'text/plain' : 'application/octet-stream',
+        chunks: (async function* () { yield payload })(),
+      }), signal)
+      return describeCollaborationReference(record)
+    })
+    await f.grant()
+    const result = await f.client.captureCollaborationReferenceSelection({ ...input,
+      selection: parseHostCollaborationReferenceSelection({ ...input.selection, source_kind: kind }) })
+    const checked = parseCollaborationReferenceMetadata(result)
+    expect(checked.request.content_digest).toBe(createHash('sha256').update(payload).digest('hex'))
+    expect(checked.request.byte_length).toBe(payload.byteLength)
+    expect(checked.request.range.unit).toBe(kind === 'message' ? 'utf16' : 'byte')
+    expect(checked.reference_request_digest).toBe(collaborationJournalDigest(checked.request))
+    expect(checked.descriptor).toEqual(describeCollaborationSource(snapshot))
+    expect(Object.keys(result)).toEqual(['descriptor', 'request', 'reference_request_digest'])
+  })
+}
+
+for (const mode of ['missing-capture', 'missing-inspector'] as const) {
+  it(`the Host refuses a raw reference capture with ${mode}`, async () => {
+    const f = await referenceFixture(mode === 'missing-capture', false, mode === 'missing-inspector')
+    await f.grant()
+    const hello = f.seen.find(frame => frame.type === 'request' && frame.method === 'host.inspect')
+    if (!hello || hello.type !== 'request' || hello.method !== 'host.inspect') throw Error('missing handshake')
+    const request = decodeHostControlFrame(JSON.stringify({ version: 1, type: 'request', request_id: randomUUID(),
+      method: 'profile.reference_capture', params: {
+        client_instance_id: hello.params.client_instance_id, host_instance_id: f.identity.hostInstanceId,
+        process_nonce: f.identity.processNonce, jti: randomUUID(), issued_at: f.time.value, expires_at: f.time.value + 1000,
+        authority_environment_id: f.account.authorityEnvironmentId, account_binding_handle: f.account.accountBindingHandle,
+        authority_binding_version: f.account.authorityBindingVersion, account_issuer: f.account.issuer,
+        account_subject: f.account.subject, selection: referenceSelection(f),
+      } }) + '\n')
+    const result = await f.session.handleRequest(request)
+    expect(result.type).toBe('error')
+    if (result.type !== 'error') throw Error('missing refusal')
+    expect(result.error.code).toBe('upgrade_required')
+  })
+}
+for (const mode of ['changed-peer', 'wrong-method', 'wrong-source'] as const) {
+  it(`the client refuses computed capture metadata after ${mode}`, async () => {
+    const f = await referenceFixture(true, false, true)
+    await f.grant()
+    f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.reference_capture') return frame
+      if (mode === 'changed-peer') Object.defineProperty(f.client.inspection, 'process_nonce', { value: 'B'.repeat(43), configurable: true })
+      if (mode === 'wrong-method') return { ...frame, method: 'profile.source_snapshot' } as never
+      if (mode === 'wrong-source') return { ...frame, result: parseHostCollaborationReferenceCapture(captureResponse(
+        parseHostCollaborationReferenceSelection({ ...referenceSelection(f), source: { ...referenceSelection(f).source, session_id: 'another' } }))) }
+      return frame
+    })
+    await expect(f.client.captureCollaborationReferenceSelection(captureInput(f))).rejects.toThrow()
+  })
+}
+
+function referenceChunk(f: Awaited<ReturnType<typeof fixture>>, bytes: Uint8Array, offset = 0) {
+  const c = f.challenge
+  return parseHostCollaborationReferenceContentChunk({ descriptor: { workspace_id: c.workspace_id, session_id: c.session_id,
+    source_message_id: c.source_message_id, source_revision: c.source_revision, snapshot_digest: c.snapshot_digest },
+  reference_request_digest: 'b'.repeat(64), content_digest: createHash('sha256').update(bytes).digest('hex'),
+  offset, total_bytes: bytes.byteLength, chunk_base64url: Buffer.from(bytes).subarray(offset, offset + 32768).toString('base64url') })
+}
+function referenceContentInput(f: Awaited<ReturnType<typeof fixture>>, bytes = new Uint8Array()) {
+  const { selection: _selection, ...account } = captureInput(f), chunk = referenceChunk(f, bytes)
+  return { ...account, ...parseHostCollaborationReferenceGrant({ ...chunk.descriptor,
+    reference_request_digest: chunk.reference_request_digest }), contentDigest: chunk.content_digest, byteLength: bytes.byteLength }
+}
+for (const kind of ['empty', 'unicode', 'binary', 'maximum'] as const) {
+  it(`assembles exact ${kind} reference bytes through authenticated bounded chunks with complete integrity`, async () => {
+    const f = await referenceFixture(true, false, false, true)
+    const bytes = kind === 'empty' ? new Uint8Array() : kind === 'unicode' ? Buffer.from('\ufeff😀\r\n'.repeat(6000))
+      : Uint8Array.from({ length: kind === 'maximum' ? 1024 * 1024 : 32769 }, (_, i) => i % 256)
+    const offsets: number[] = []
+    f.setContent(async (profileId, query) => {
+      expect(profileId).toBe(f.profile.profileId); offsets.push(query.offset)
+      return referenceChunk(f, bytes, query.offset)
+    })
+    await f.grant()
+    const result = await f.client.readCollaborationReferenceContent(referenceContentInput(f, bytes))
+    expect(Buffer.from(result)).toEqual(Buffer.from(bytes))
+    expect(offsets).toEqual(Array.from({ length: Math.max(1, Math.ceil(bytes.byteLength / 32768)) }, (_, i) => i * 32768))
+    const frames = f.seen.filter(frame => frame.type === 'request' && frame.method === 'profile.reference_content')
+    expect(frames).toHaveLength(offsets.length)
+    expect(frames.every(frame => Buffer.byteLength(encodeHostControlFrame(frame)) < 65536)).toBe(true)
+    expect(f.seen.some(frame => frame.type === 'request' && frame.method === 'profile.collaboration_analysis')).toBe(false)
+  })
+}
+for (const mode of ['revoked', 'expired', 'cancelled', 'disconnected', 'source-changed', 'wrong-digest', 'wrong-offset', 'wrong-source'] as const) {
+  it(`withholds selected reference bytes after ${mode}`, async () => {
+    const f = await referenceFixture(true, false, false, true), controller = new AbortController(), bytes = Buffer.from('selected')
+    f.setContent(async () => {
+      const chunk = referenceChunk(f, bytes)
+      if (mode === 'revoked') f.host.revokeOwner(f.ownerId)
+      if (mode === 'expired') f.time.value = 400000
+      if (mode === 'cancelled') controller.abort()
+      if (mode === 'disconnected') f.client.close()
+      if (mode === 'source-changed')
+        f.setInspect(async (_profileId, target) => ({ ...target, snapshot_digest: 'c'.repeat(64) }))
+      if (mode === 'wrong-digest') return { ...chunk, reference_request_digest: 'c'.repeat(64) } as never
+      if (mode === 'wrong-offset') return referenceChunk(f, bytes, 1)
+      if (mode === 'wrong-source') return { ...chunk, descriptor: parseHostCollaborationSourceDescriptor({ ...chunk.descriptor, session_id: 'other' }) }
+      return chunk
+    })
+    await f.grant()
+    await expect(f.client.readCollaborationReferenceContent({ ...referenceContentInput(f, bytes),
+      signal: controller.signal })).rejects.toThrow()
+  })
+}
+it('requires the content capability and validates full content integrity and captured metadata before use', async () => {
+  const old = await referenceFixture(), f = await referenceFixture(true, false, false, true), bytes = Buffer.from('selected')
+  await expect(old.client.readCollaborationReferenceContent(referenceContentInput(old))).rejects.toThrow('upgrade_required')
+  await f.grant()
+  f.setContent(async () => ({ ...referenceChunk(f, bytes), chunk_base64url: Buffer.from('tampered').toString('base64url') }))
+  await expect(f.client.readCollaborationReferenceContent(referenceContentInput(f, bytes))).rejects.toThrow()
+  for (const byteLength of [-1, 0.5, 1048577])
+    await expect(f.client.readCollaborationReferenceContent({ ...referenceContentInput(f), byteLength })).rejects.toThrow('invalid_input')
+})
+
+for (const mode of ['missing-reader', 'missing-inspector'] as const) {
+  it(`the Host refuses a direct reference content read with ${mode}`, async () => {
+    const f = await referenceFixture(mode === 'missing-reader', false, false, mode === 'missing-inspector')
+    await f.grant()
+    const hello = f.seen.find(frame => frame.type === 'request' && frame.method === 'host.inspect')
+    if (!hello || hello.type !== 'request' || hello.method !== 'host.inspect') throw Error('missing handshake')
+    const input = referenceContentInput(f)
+    const request = decodeHostControlFrame(JSON.stringify({ version: 1, type: 'request', request_id: randomUUID(),
+      method: 'profile.reference_content', params: {
+        client_instance_id: hello.params.client_instance_id, host_instance_id: f.identity.hostInstanceId,
+        process_nonce: f.identity.processNonce, jti: randomUUID(), issued_at: f.time.value, expires_at: f.time.value + 1000,
+        authority_environment_id: f.account.authorityEnvironmentId, account_binding_handle: f.account.accountBindingHandle,
+        authority_binding_version: f.account.authorityBindingVersion, account_issuer: f.account.issuer,
+        account_subject: f.account.subject, offset: 0, workspace_id: input.workspace_id, session_id: input.session_id,
+        source_message_id: input.source_message_id, source_revision: input.source_revision,
+        reference_request_digest: input.reference_request_digest,
+      } }) + '\n')
+    const result = await f.session.handleRequest(request)
+    expect(result.type).toBe('error')
+    if (result.type !== 'error') throw Error('missing refusal')
+    expect(result.error.code).toBe('upgrade_required')
+  })
+}
+it('does not read reference bytes when the initial Source inspection disagrees', async () => {
+  const f = await referenceFixture(true, false, false, true)
+  await f.grant(); let reads = 0
+  f.setContent(async () => { reads++; return referenceChunk(f, new Uint8Array()) })
+  f.setInspect(async (_profileId, target) => ({ ...target, source_message_id: 'other', snapshot_digest: 'a'.repeat(64) }))
+  await expect(f.client.readCollaborationReferenceContent(referenceContentInput(f))).rejects.toThrow()
+  expect(reads).toBe(0)
+})
+for (const mode of ['peer', 'method', 'descriptor', 'digest', 'length', 'offset', 'content-digest'] as const) {
+  it(`the client withholds reference bytes after post-transport ${mode} changes`, async () => {
+    const f = await referenceFixture(true, false, false, true), bytes = Buffer.from('selected')
+    f.setContent(async (_profileId, query) => referenceChunk(f, bytes, query.offset))
+    await f.grant()
+    f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.reference_content') return frame
+      if (mode === 'peer') Object.defineProperty(f.client.inspection, 'process_nonce', { value: 'B'.repeat(43), configurable: true })
+      if (mode === 'method') return { ...frame, method: 'profile.source_snapshot' } as never
+      if (mode === 'descriptor') return { ...frame, result: { ...frame.result,
+        descriptor: parseHostCollaborationSourceDescriptor({ ...frame.result.descriptor, snapshot_digest: 'c'.repeat(64) }) } }
+      if (mode === 'digest') return { ...frame, result: parseHostCollaborationReferenceContentChunk({ ...frame.result,
+        reference_request_digest: 'c'.repeat(64) }) }
+      if (mode === 'content-digest') return { ...frame, result: parseHostCollaborationReferenceContentChunk({ ...frame.result,
+        content_digest: 'c'.repeat(64) }) }
+      if (mode === 'length') return { ...frame, result: { ...referenceChunk(f, Buffer.from('different length')),
+        content_digest: frame.result.content_digest } }
+      if (mode === 'offset') return { ...frame, result: referenceChunk(f, bytes, 1) }
+      return frame
+    })
+    await expect(f.client.readCollaborationReferenceContent(referenceContentInput(f, bytes))).rejects.toThrow()
+  })
+}
 it('REQ-20261004-0008 signs only a matching durable root under the current Account and verifies the root domain', async () => {
   const f = await fixture()
   const challenge = parseHostRootAuthorityChallenge({ schema_version: 1, source_challenge: f.challenge,
