@@ -96,7 +96,7 @@ For a displayed reply whose task is in the Main-owned preview, the result dock o
 
 In the original Session’s Trajectory tab, Slark collaboration history reads the Main-recovered root and displays its Trace ID, revision, root state and ordered cloud audit events. Opening history never admits execution or consumes a result. Terminal execution records can expand persisted runtime observations, including tool and file operations; provider internals remain explicitly unobservable. Root completion, execution completion, delivery and consumption retain separate labels. Reloading restores original Sources and rereads authorized history; workspace, Account or Connection changes discard cached records. A denied read removes the affected Source’s cloud details. History is paged, bounded and marked partial because audit coverage cannot certify every provider or continuation step.
 
-An original collaboration Source keeps the Conversation shell active even before ordinary chat starts, so its Trajectory tab remains reachable. The model releases this activity when its Source history is cleared or the plugin is disposed.
+The mounted composer observes the original Session's Source model even before ordinary chat starts or the collaboration sidebar opens. An original collaboration Source keeps the Conversation shell active, so its Trajectory tab remains reachable. Chat and Trajectory share this model. The model releases this activity when its Source history is cleared or the plugin is disposed.
 
 The [collaboration trajectory decision](../../../.agents/notes/implemented/feature/2026-10-07-slark-collaboration-trajectory.md) describes readonly history and external shell activity.
 

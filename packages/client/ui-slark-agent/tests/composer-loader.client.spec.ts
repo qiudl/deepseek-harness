@@ -26,6 +26,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import { createElement, useSyncExternalStore } from 'react'
 import { fireEvent, render, within } from '@testing-library/react'
 import { ProjectScopePanel } from '../src/client/ProjectScopeDock.tsx'
+import { CollaborationActivity } from '../src/client/CollaborationTrajectory.tsx'
 import { panelRuntime, dockTranslate } from './fixture-state.client.ts'
 import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
@@ -1678,22 +1679,33 @@ it('keeps the scoped draft when its Host disappears before submission', async ()
   expect(f.sink).not.toHaveBeenCalled()
 })
 
-it('YAML-loaded trajectory and chat timeline share the original Source model and unload their registrations', async () => {
+it('YAML-loaded composer discovers original Sources before opening history and shares them with chat and trajectory', async () => {
   const f = await bench(true)
+  const activity = f.ctx.slots.entries('conversation.input.dock').find(e => e.options.id === 'slark-collaboration-activity')
   const dock = f.ctx.slots.entries('conversation.chat.timeline')[0]
   const trace = f.ctx.slots.entries('conversation.trajectory.external').find(e => e.options.id === 'slark-collaboration-trace')
   expect(trace).toBeDefined()
-  const a = Reflect.apply(dock!.inject!, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
-  const b = Reflect.apply(trace!.inject!, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
-  expect(b.hooks.slarkResults).toBe(a.hooks.slarkResults)
-  expect(typeof b.traceAction).toBe('function')
+  const a = Reflect.apply(activity!.inject!, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  const model = a.hooks.slarkResults
+  const view = render(createElement(CollaborationActivity, { ...a,
+    useSlarkResults: select => select(useSyncExternalStore(model.subscribe, model.getSnapshot)),
+  }))
+  expect(view.container.childElementCount).toBe(0)
+  await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalled() })
+  expect(model.getSnapshot().groups).toEqual([])
+  expect(f.ctx.uiConversation.binding(SessionId('session-1')).snapshot.getSnapshot().activeTargets.has('trajectory')).toBe(false)
   await f.pick('', '请检查登录问题'); f.composer.submit()
-  await vi.waitFor(() => { expect(f.originals).toHaveLength(1) })
-  await b.hooks.slarkResults.refresh()
-  expect(b.hooks.slarkResults.getSnapshot().groups[0]?.original.original_message).toContain('请检查登录问题')
+  await vi.waitFor(() => { expect(model.getSnapshot().groups[0]?.original.original_message).toContain('请检查登录问题') })
+  const b = Reflect.apply(trace!.inject!, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  const c = Reflect.apply(dock!.inject!, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  expect(b.hooks.slarkResults).toBe(a.hooks.slarkResults)
+  expect(c.hooks.slarkResults).toBe(a.hooks.slarkResults)
+  expect(typeof b.traceAction).toBe('function')
   expect(f.ctx.uiConversation.binding(SessionId('session-1')).snapshot.getSnapshot().activeTargets.has('trajectory')).toBe(true)
   const slots = f.ctx.slots
+  view.unmount()
   await f.ctx.fiber.dispose()
+  expect(slots.entries('conversation.input.dock')).toEqual([])
   expect(slots.entries('conversation.trajectory.external')).toEqual([])
   expect(b.hooks.slarkResults.getSnapshot().groups).toEqual([])
 })
@@ -1806,7 +1818,8 @@ it('opens one real sidebar page from the YAML launcher and removes its type and 
   expect(guide.icon).toBeDefined()
   expect(guide.title()).toBe('Slark 协同')
   expect(guide.description()).toContain('@Agent')
-  expect(f.ctx.slots.entries('conversation.input.dock').map(item => item.options.id)).toEqual(['slark-project-scope'])
+  expect(f.ctx.slots.entries('conversation.input.dock').map(item => item.options.id))
+    .toEqual(['slark-project-scope', 'slark-collaboration-activity'])
   expect(f.ctx.slots.entries('slark.collaboration.history')).toHaveLength(1)
   const panel = f.ctx.slots.entries('sidebar.right.pane.tab').find(item => item.options.key === definition?.id)
   if (!panel?.inject) throw Error('missing collaboration page')

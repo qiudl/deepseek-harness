@@ -347,7 +347,7 @@ it('reads original-root collaboration history from the built Trajectory tab with
     const sessionId: unknown = Reflect.get(request, 'sessionId')
     if (typeof sessionId !== 'string') throw Error('session missing')
     return { ok: true, value: { items: [{ source: { workspace_id: workspace, session_id: sessionId,
-      source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64), original_message: 'Check the recorded file operation' }] } }
+      source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64), original_message: 'Check the recorded file operation', timeline_position: null }] } }
   })
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')

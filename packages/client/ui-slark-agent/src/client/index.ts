@@ -28,7 +28,7 @@ import type { CollaborationDialogueBridge } from './collaboration-dialogue.ts'
 import { CollaborationResultsModel } from './collaboration-results.ts'
 import type { CollaborationResultsBridge } from './collaboration-results.ts'
 import { CollaborationResultsDock } from './CollaborationResultsDock.tsx'
-import { CollaborationTrajectory } from './CollaborationTrajectory.tsx'
+import { CollaborationActivity, CollaborationTrajectory } from './CollaborationTrajectory.tsx'
 import { CollaborationTimeline } from './CollaborationTimeline.tsx'
 import type { CollaborationResultsInjected } from './CollaborationResultsDock.tsx'
 
@@ -148,7 +148,7 @@ export function apply(ctx: ClientContext): void {
       inject: sessionId => ({ sessionId }),
     }, AgentTaskDock)
   })
-  ctx.inject(['remote.session', 'connection', 'workspaces', 'uiConversation', 'chatTimeline'], (resultsCtx) => {
+  ctx.inject(['remote', 'remote.session', 'connection', 'workspaces', 'uiConversation', 'chatTimeline'], (resultsCtx) => {
     if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable ||
       !(window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable || window.__DSH_DESKTOP_HOST__.collaborationPlanningAvailable)) return
     const connection = resultsCtx.get('connection') as ConnectionHandle
@@ -240,6 +240,10 @@ export function apply(ctx: ClientContext): void {
       }
       return entry
     }
+    resultsCtx.slots.inject('conversation.input.dock', () => resultsCtx.slots.register({
+      name: 'conversation.input.dock', id: 'slark-collaboration-activity', order: 25,
+      inject: sessionId => entryFor(sessionId).timelineBindings,
+    }, CollaborationActivity))
     resultsCtx.slots.inject('slark.collaboration.history', () => resultsCtx.slots.register({
       name: 'slark.collaboration.history', locale: NS,
       inject: sessionId => entryFor(sessionId).bindings,

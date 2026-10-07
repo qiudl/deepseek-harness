@@ -96,7 +96,7 @@ Agent 提及依赖当前账号的 Slark Desktop 桥报告可调用。没有该�
 
 在原始 Session 的轨迹标签页中，Slark 协作历史读取 Main 恢复的根任务，展示 Trace ID、修订号、根任务状态和有序云端审计事件。打开历史不会提交执行，也不会消费结果。执行终态记录可展开持久化的运行观察，包括工具和文件操作；Provider 内部过程明确标记为不可观测。根任务完成、执行完成、投递和消费分别显示。重新加载后恢复原始 Source 并重新授权读取历史；工作空间、Account 或 Connection 变化会清除缓存，读取被拒绝时清除对应 Source 的云端明细。历史采用有界分页并标记为部分轨迹，因为审计覆盖不能证明全部 Provider 或续接步骤。
 
-原始协作 Source 会在普通聊天开始前保持 Conversation 界面可见，使轨迹标签页可以访问。Source 历史被清除或插件释放时，模型会释放这项活动。
+输入框挂载期间会观察原始 Session 的 Source 模型，即使普通聊天尚未开始、协作侧栏尚未打开。原始协作 Source 保持 Conversation 界面可见，使轨迹标签页可以访问。Chat 和轨迹共用这个模型。Source 历史被清除或插件释放时，模型会释放这项活动。
 
 [协作轨迹决策](../../../.agents/notes/implemented/feature/2026-10-07-slark-collaboration-trajectory.zh.md)说明只读历史与外部界面活动。
 
