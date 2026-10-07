@@ -144,7 +144,10 @@ Active-Turn highlighting is approximate: `readVisibleTurn` binary-searches the c
 
 -----
 
+Independent history registers validated JSON record identities and positions through `ctx.chatTimeline`. Chat retains ordinary Node, group and pending-input rendering, and renders independent records through `conversation.chat.timeline`; its `recordId: null` occurrence hosts readonly paging and legacy-history notices. A record inside a group exposes that group’s members without changing Session data. Registrations publish late additions and removal; their source subscriptions stop when the Chat view has no readers.
+
 <a id="model-experience"></a>
+
 ## Model Experience
 
 None, as this package renders logged conversation state in the browser and registers nothing model-facing.

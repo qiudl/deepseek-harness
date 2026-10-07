@@ -40,6 +40,8 @@ kind: "package-reference"
 
 `profile.remote_ui_read` 将启动、资源、Session 和五种精确的启动元数据读取绑定到同一有效视图租约。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
 
+`session/collaborationSources` 的远程 UI 请求还支持使用精确的 `snapshotDigest` 替代 `cursor`。摘要必须为 64 位小写十六进制字符串，同时携带两个字段时拒绝。所属 Session 的读取在现有控制帧预算内返回完整原消息。
+
 `profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
 
 `profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
@@ -156,7 +158,11 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 
 `profile.collaboration_analysis` 只携带绑定 Account 的准备/派发命令及不可执行的准备描述或原始 JSON 输出。它不接受调用方归属摘要，将编码后的 Source 输入和解码后的输出各限制在32 KiB，验证规范 base64url、UTF-8 和对象 JSON，控制帧限制不变。派发输出另携带安装签名，绑定已验证 Account、当前 Host、原派发 grant 及已保存原始 JSON 摘要。Unix 客户端核验签名和未变输出；服务仍须分别核对当前 Source、attempt 和目标权限。
 
-`profile.collaboration_analysis` 另支持携带有界私有输入的 `capture_reply` 和 `prepare_clarification`。补充捕获返回 `reply_source`，仅包含 captured/recovered Source 描述符；完整输入准备返回 `prepared`。命令与结果字段及操作对应的结果类别均严格核验，帧和 JSON 预算不变。补充捕获不授予模型派发资格。
+`profile.collaboration_analysis` 另支持携带有界私有输入的 `profile.source_analysis_recovery` 单独启用 `read_source_output`，只接受普通 Source 的精确坐标。`source_output` 响应包含原描述符，并明确报告输出缺失，或返回历史已消费派发记录、原始输出摘要及有界 base64url JSON。已保存响应携带安装签名回执；客户端必须按当前 Account 和 Host 身份验证。坐标、派发、字节或回执字段变化均拒绝。历史租约过期只允许读取证据；云端尝试和受理校验仍独立执行。
+
+`profile.source_live_resume` 独立启用 `resume_source`，输入为原始有界 Source 内容。响应必须包含相同 Source 坐标的 prepared 元数据。调用方仍须取得当前云端派发许可；命令不携带模型或调用方提供的绑定身份。
+
+`capture_reply` 和 `prepare_clarification`。补充捕获返回 `reply_source`，仅包含 captured/recovered Source 描述符；完整输入准备返回 `prepared`。命令与结果字段及操作对应的结果类别均严格核验，帧和 JSON 预算不变。补充捕获不授予模型派发资格。
 
 
 `profile.root_authority` 使用独立的 `dsh-collaboration-root-authority/v1` 签名域。挑战包含完整 Source 挑战，以及 namespace、根任务/trace ID、原始命令 ID 与业务 payload 摘要。Host 在签名前从 Account 已授权的 Profile journal 读取匹配元数据，并在读取后再次检查授权和有效期。仅有 Source 签名不能授权根。新签发证明可以改变传输 nonce、请求 ID 与 Host epoch，原业务绑定保持不变。固定 UTF-8 元组由与 Slark 共用的 `tests/fixtures/root-authority-v1.json` 锁定。云端消费者仍须在根受理事务中独立持久化并消费挑战、重算业务摘要及重新核验当前 grant。
@@ -165,7 +171,7 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 
 `profile.root_analysis` 能力允许在既有分析方法上使用 `prepare_root`。输入只包含 namespace、续接策略和原 Source 输入；`root_prepared` 回复将 prepared 或 recovered 元数据绑定到已持久化根描述。仅含 Source 的回复或不同 Source 描述都会被拒绝。派发仍绑定原存活尝试，恢复出的根元数据不能创建新调用。
 
-`profile.root_analysis_recovery` 单独启用 `read_root_output`。响应绑定原根、已消费的派发元数据与保存的 JSON 摘要，或明确报告输出缺失。历史租约到期不会删除证据，也不会授予派发权限。输出解码后仍限制为 32 KiB，完整控制帧维持 64 KiB 上限；不返回提示词或可执行 handle。
+`profile.root_analysis_recovery` 单独启用 `read_root_output`。响应绑定原根、已消费的派发元数据与保存的 JSON 摘要，或明确报告输出缺失。已保存响应携带安装签名回执；客户端必须按当前 Account 和 Host 身份验证。历史租约到期不会删除证据，也不会授予派发权限。输出解码后仍限制为 32 KiB，完整控制帧维持 64 KiB 上限；不返回提示词或可执行 handle。
 
 独立能力 `profile.root_lookup` 允许 `recover_root` 携带原 namespace、策略和 Source 输入。响应必须为包含不可执行 `recovered` 元数据的 `root_prepared`；不能回退到 `prepare_root` 或返回存活尝试。
 

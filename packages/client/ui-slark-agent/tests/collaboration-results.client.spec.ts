@@ -33,7 +33,7 @@ it('keeps the aggregate view within its budget when loading additional replies',
   expect(f.model.getSnapshot().groups[1]?.replies).toHaveLength(5)
   f.model.dispose()
 })
-function fixture() {
+function fixture(timeline = false) {
   let grouped = true, remoteGeneration: unknown = 1
   const listeners = new Set<() => void>(), changed = () => { listeners.forEach((fn) => { fn() }) }
   const workspaces: WorkspaceSource = { getSnapshot: () => workspaceSnapshot(workspace_id, 'session', grouped),
@@ -43,12 +43,53 @@ function fixture() {
   const reads = vi.fn<ConstructorParameters<typeof CollaborationResultsModel>[3]>(async () => ({ ok: true, value: { items: [original] } }))
   const deliveries = vi.fn<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>(async () => ({ ok: true, value: { deliveries: [reply] } }))
   let bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true, collaborationDeliveries: deliveries }
-  const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge)
+  const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge, 'session', undefined, timeline)
   onTestFinished(() => { model.dispose() })
   return { model, reads, bridge, deliveries, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
     quietReset: () => { remoteGeneration = 2 },
     move: () => { grouped = false; changed() }, reset: () => { remoteGeneration = 2; changed() } }
 }
+it('rejects a changed local order even when the ordinary sequence and Source identity remain the same', async () => {
+  const f = fixture(true), placed = { ...original, timeline_position: { after_sequence: 7, local_order: '1' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [placed] } })
+  await f.model.refresh()
+  f.reads.mockResolvedValue({ ok: true, value: { items: [{ ...placed, timeline_position: { after_sequence: 7, local_order: '2' } }] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toEqual({ phase: 'error', groups: [] })
+})
+
+it('retains verified positions and refuses missing opt-in metadata, malformed records and position substitution', async () => {
+  const f = fixture(true), placed = { ...original, timeline_position: { after_sequence: 7, local_order: '1' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [placed] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot().groups[0]?.original.timeline_position).toEqual(placed.timeline_position)
+  f.reads.mockResolvedValue({ ok: true, value: { items: [{ ...placed, timeline_position: { after_sequence: 8, local_order: '1' } }] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+  for (const timeline_position of [undefined, {}, { after_sequence: -1, local_order: '1' },
+    { after_sequence: Number.MAX_SAFE_INTEGER + 1, local_order: '1' }, { after_sequence: '7', local_order: '1' },
+    { after_sequence: 7, local_order: '0' }, { after_sequence: 7, local_order: '9223372036854775808' },
+    { after_sequence: 7, local_order: '1', model: 'private' }]) {
+    f.reads.mockResolvedValue({ ok: true, value: { items: [{ ...original, timeline_position }] } } as never)
+    await f.model.refresh()
+    expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+  }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+  f.reads.mockResolvedValue({ ok: true, value: { items: [{ ...original, timeline_position: null }] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot().groups[0]?.original.timeline_position).toBeNull()
+})
+
+it('refuses two different original records assigned the same independent display order across pages', async () => {
+  const f = fixture(true), first = { ...original, timeline_position: { after_sequence: 7, local_order: '1' } }
+  const second = { ...first, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'second' } }
+  f.reads.mockImplementation(async cursor => ({ ok: true, value: cursor ? { items: [second] }
+    : { items: [first], next_cursor: first.snapshot_digest } }))
+  await f.model.refresh(); await f.model.loadSources()
+  expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+})
 it('reconstructs original messages and results using readonly coordinates, with separate execution and delivery state', async () => {
   const f = fixture()
   await f.model.refresh()

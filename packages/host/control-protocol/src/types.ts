@@ -1,6 +1,6 @@
 import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
 import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
-import type { HostRootAnalysisOutput } from './root-analysis-output.ts'
+import type { HostSavedAnalysisFields, HostRootAnalysisOutput } from './root-analysis-output.ts'
 import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJournalCommand, HostRootJournalMetadata, HostRootAnalysisInput, HostRootSubmissionTarget } from './root-authority.ts'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
@@ -589,6 +589,9 @@ export interface ProfileSourceSnapshotResult extends Omit<ProfileWorkspaceModelS
   readonly method: 'profile.source_snapshot'
   readonly result: Readonly<{ descriptor:HostCollaborationSourceDescriptor;offset:number;total_bytes:number;chunk_base64url:string }>
 }
+/** Original Source output evidence; syntax does not grant dispatch or task admission. */
+export type HostSourceAnalysisOutput = Readonly<{ state: 'missing'; descriptor: Readonly<HostCollaborationSourceDescriptor> }>
+  | Readonly<{ state: 'saved'; descriptor: Readonly<HostCollaborationSourceDescriptor> } & HostSavedAnalysisFields>
 /** Parent commands retain no caller-selected model or Account binding digest. */
 export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'root_execution_journal'; operation: HostRemoteSessionJson }>
@@ -596,12 +599,14 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'read_root_attempt'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'prepare_root_attempt'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'dispatch_root_attempt'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
+  | Readonly<{ action: 'read_source_output'; target: HostCollaborationSourceTarget }>
   | Readonly<{ action: 'read_root_output'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'prepare_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'recover_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'reconcile_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'resume_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'prepare'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'resume_source'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'capture_reply'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'prepare_clarification'; input: HostRemoteSessionJson }>
   | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
@@ -610,6 +615,7 @@ export type HostCollaborationAnalysisResult =
   | Readonly<{ kind: 'root_execution_journal' | 'root_feedback'; record: HostRemoteSessionJson }>
   | Readonly<{ kind: 'root_attempt_evidence'; evidence: HostRootPlanningEvidence }>
   | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>
+  | Readonly<{ kind: 'source_output'; evidence: HostSourceAnalysisOutput }>
   | Readonly<{ kind: 'root_output'; evidence: HostRootAnalysisOutput }>
   | Readonly<{ kind: 'root_prepared'; preparation: HostRemoteSessionJson }>
   | Readonly<{ kind: 'prepared'; preparation: HostRemoteSessionJson }>

@@ -121,6 +121,8 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 ## 协同 Source 与 journal
 
+发布新 Source 前，`captureCollaborationSource` 会在 Profile 的单文件 `collaboration_timeline_v2` 领域记录首次观察到的普通事件序号及独立展示顺序。记录只包含 Source 坐标和输入摘要，不包含消息正文、模型元数据或 Session 事件。即使 Source 发布失败，重试也保留首次位置；恢复的旧 Source 不会获得虚构的位置。位置本身不授予展示或执行权限。Profile 在关闭时排空已接受的写入；存储损坏或写入确认不确定时，需要关闭并重新打开才能复用。普通 Session 和现有 Source 格式保持不变。
+
 `openCollaborationAnalysisJournal(facility)` 拥有独立的单文件 `collaboration_analysis_v2` 领域。`createCollaborationAnalysisWriter(journal, claim)` 提供 Source 分析所需的 persist 回调：先提交完整、无信号 manifest 的规范 JSON，再向当前可信协调器申请派发资格，匹配的资格记录持久化后才返回。`CollaborationAnalysisJournalRecord` 保留原始请求 ID、完整 Source digest 与输入 manifest digest；`CollaborationAnalysisDispatchGrant` 绑定 plan/revision/attempt/fence 和租约。重复请求、取消、过期资格和写入确认丢失都会阻止派发。恢复只能枚举冻结的输入与资格记录，不恢复可执行调用。Profile 在已接受写入排空后关闭 `CollaborationAnalysisJournal`。回调中的协调器权限以及真实聊天/传输装配仍由调用方负责。
 
 分析仅使用含原文和显式 mention 元数据的一条 user 消息及分析提示词，工具为空，不携带普通历史。每个 Profile 最多允许两个尚未清理的调用，等待上限 30 秒；取消后仍不响应的操作保留并发位置直到清理完成。输入采用保守的 16 KiB UTF-8 请求预算，输出限制为提供方 8192 token 和累计流文本 32 KiB；超限拒绝，不截断。纯中间件回复、工具输出、非成功终止结果及非法 JSON 均拒绝。这里不执行模型修复、重试或重启后的可执行恢复；云端 attempt 租约、候选受理及实际聊天调用方仍由协调器负责。
@@ -141,15 +143,19 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 `session.collaborationSources({ sessionId, cursor? })` 只读原始 Source journal，按新到旧返回当前 Session 的完整原消息、原坐标与快照摘要。每页最多 8 条及 256 KiB JSON，cursor 是上一页最后一条快照摘要；新 Source 不改变已读取分页的位置。归属变化、归档、取消与非法 cursor 均拒绝，不准备模型、不激活 Agent，也不追加普通 Session 事件。
 
+`session.collaborationSources({ sessionId, snapshotDigest })` 精确定位一条已有的不可变原消息，包括已路由到普通讨论的消息。精确摘要与分页 cursor 互斥；原消息不存在或无权读取时拒绝。该只读操作返回一条完整记录且无后续游标，保留相同的归属及取消检查。
+
 `analyzeClarification` 使用捕获补充消息时准备的调用，校验独立冻结的原始与补充 Source、选定待澄清项、相关此前回复、已冻结任务 ID 及原始 mention 顺序。Source 解析要求合法 Unicode；每个待澄清项的 mention 列表非空，证据跨度不得拆开代理对。完整 prompt-version-2 manifest 提交前后，均从当前 Profile 重读全部 Source 并检查模型选择与归属。原消息与补充消息保持同一 provider、model、推理配置及 adapter 注册；准备序号可以不同。两种分析方法共用一个调用，不能执行两次。恢复只读任一 manifest 版本，不重写或恢复调用；第二版派发另绑定原计划及修订号。
 
 <a id="model-experience"></a>
 
 `captureCollaborationReferenceSelection` 从已授权的定位与版本、接收 mention、Source 证据及整段、明确范围或原文引用选择，生成完整不可变请求。原文引用必须是 16 KiB 内非空、格式正确的 Unicode，并在文本内容中唯一出现；Profile 读取完整不可变内容并确定 UTF-16 范围，缺失或重复引用需先澄清。所属 Profile 从实际消息或附件计算 MIME、UTF-8/二进制字节、摘要和确定范围，拒绝调用方正文、路径和摘要覆盖。整段内容仍受 1 MiB 上限及当前 Source 接收对象约束。`describeCollaborationReference` 只返回冻结的描述符和请求元数据，`parseCollaborationReferenceMetadata` 在消息边界验证这些字段。这些方法不负责自然语言引用定位或分享授权。
 
-`captureCollaborationReference` 接收已经独立确认授权的选择，只从原始 Source 所属会话读取不可变消息或已登记附件身份。独立的 `collaboration_reference_v2` 领域保存有界的原始字节、定位与版本、接收对象、Source 证据及完整请求摘要，不修改已发行的 Session 或 Source 格式。`readCollaborationReferenceGrant` 重新读取当前成员关系与实际内容后，只返回描述符授权；摘要不能创建选择。调用方取消会结束自身等待，Profile 退出仍等待其拥有的读取和迟到的 journal 打开操作完成。元数据解析不能确认用户分享意图，可信协调器必须在捕获前确认授权。
+`captureCollaborationReference` 接收已经独立确认授权的选择，只从原始 Source 所属会话读取不可变消息或已登记附件身份。独立的 `collaboration_reference_v2` 领域保存有界的原始字节、定位与版本、接收对象、Source 证据及完整请求摘要，不修改已发行的 Session 或 Source 格式。Journal 对每条 Source 最多保留 80 项选择及 1 MiB 正文，整体最多 10240 条记录；相同内容重放不额外占用配额，超限不会移除或改写已有内容。云端协调器仍独立限制每项任务最多八个引用。`readCollaborationReferenceGrant` 重新读取当前成员关系与实际内容后，只返回描述符授权；摘要不能创建选择。调用方取消会结束自身等待，Profile 退出仍等待其拥有的读取和迟到的 journal 打开操作完成。元数据解析不能确认用户分享意图，可信协调器必须在捕获前确认授权。
 
 `readCollaborationReferenceContent` 在检查当前成员关系、原始 Source 和实际选中字节后，仅返回已经独立捕获的不可变记录，不能凭传入摘要创建选择。记录最多 1 MiB，空内容有效；取消和 Profile 退出沿用授权核验的读取排空机制。该方法仅供 Host 使用，没有 Remote 端点，也不授予云端传递权限。
+
+`session.collaborationSources` 请求可用 `includeTimeline: true` 读取每条原消息不可变的 `timeline_position`。旧记录返回 `null`；省略该选项时保留原有响应字段。读取会校验已捕获输入的摘要，不追加普通 Session 事件、不准备模型，也不会为旧历史补造位置。
 
 ## 模型体验
 
@@ -157,7 +163,7 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 #### 模型看到什么
 
-Host 专用分析发送下方固定提示词及一条 user 消息，包含 `original_message`、原消息坐标和显式 `active_mentions`。它不包含普通历史或工具；普通 Session 命令仍由 Agent 所有。澄清分析发送原始请求、选定待澄清问题、按顺序关联的补充消息及原始 mention 顺序。其独立固定提示词保留全部限制，禁止更改已受理分工，并按原始顺序解析前者/后者。模型输入不包含 Account、计划及修订元数据、补充 Source 凭证和已受理任务 ID；完整私有 manifest 保留核验所需信息。请求与输出预算保持一致。
+Host 专用分析使用下方固定基础策略和一条 user 消息，包含原消息坐标、`original_message` 与显式 `active_mentions`。澄清包含选定待澄清问题、有序关联回复和原始 mention 顺序，保留限制及已受理分工。普通捕获在版本 3 中增加同会话 `reference_catalogue`，澄清使用版本 4。目录在后续消息到来前捕获，最多 40 项、4 KiB，包含定位与版本、作者、消息及附件的绝对顺序、文件基本名与字节数，不包含历史正文、推理、合成上下文、路径、Account/计划元数据、回复凭证或已受理任务 ID。对象缺失或同名时须澄清。明确分享使用 `reference_candidates`、`selection.unit`（`whole`、`quote`、`utf16`、`byte`）及从 `reference-0` 开始的任务引用序号；运行器拒绝目录以外的身份。内容和接收对象授权仍须独立核验。完整目录和请求在派发前提交，不包含工具，也不启动普通 Agent 回合。历史版本 1/2 原样读取；根重规划保留其独立原提示词。
 
 ##### 分析策略
 
@@ -167,7 +173,7 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 
 #### Token 影响
 
-每次调用包含完整提示词与 Source JSON；请求预算为 16 KiB UTF-8，提供方输出最多 8192 token，累计流文本最多 32 KiB。超限拒绝，不截断。
+每次调用包含完整提示词、Source JSON 与所提供目录；请求预算为 16 KiB UTF-8，提供方输出最多 8192 token，累计流文本最多 32 KiB。超限拒绝，不截断。
 
 #### KV Cache 影响
 

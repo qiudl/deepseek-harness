@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import type { ChatTimelineRecord } from '../src/client/timeline.ts'
 import type { ProcessGroupData } from '../src/client/contract/process-groups.ts'
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
 import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
@@ -269,6 +270,7 @@ function makeHarness(
     ...(turnEnds === undefined ? {} : { turnEnds }),
     ...(turnUsages === undefined ? {} : { turnUsages }),
   }
+  const timeline = createSnapshotStore<readonly ChatTimelineRecord[]>([])
   const session = makeSessionSource({ ...sessionInit, ...sessionOverrides })
   const useTestSession = bindSnapshotSelector(session.source)
   const chatSource = makeChatSource(chatSlice, initialChat ?? chatSnapshot)
@@ -320,13 +322,15 @@ function makeHarness(
     opts?.fallback ?? null) as React.ComponentProps<typeof CommandNodeView>['renderSlot']
   const renderTurnTailSlot = (() => null) as
     React.ComponentProps<typeof TurnTailNodeView>['renderSlot']
+  let timelineRenderer: ((recordId: string | null) => React.ReactNode) | undefined
   let nodeSlotOverride: React.ComponentProps<typeof ChatNodeSeat>['renderSlot'] | undefined
   const renderNodeSlot = ((key: string, owner: object, opts?: {
     fallback?: React.ReactNode
     hookContext?: unknown
   }) => {
-    if (nodeSlotOverride !== undefined) return nodeSlotOverride(key as never, owner as never, opts as never)
+    if (key === 'conversation.chat.timeline') return timelineRenderer?.((owner as { recordId: string | null }).recordId) ?? null
     if (key !== 'conversation.chat.node') return opts?.fallback ?? null
+    if (nodeSlotOverride !== undefined) return nodeSlotOverride(key as never, owner as never, opts as never)
     const nodeOwner = owner as RoutedChatNodeOwner
     const { turnData, disclosureReset } = opts?.hookContext as ChatNodeHookContext
     const useTurnData: UseChatNodeTurnData = dataKey => useTurnDataValue(turnData, dataKey)
@@ -438,6 +442,7 @@ function makeHarness(
     },
     useStore: bindSnapshotSelector(chat),
     actions: chat.actions,
+    useTimeline: bindSnapshotSelector(timeline),
     usePresentation: bindSnapshotSelector(derivePresentationPolicy(transcriptView)),
     renderSlot,
     SessionProvider: SessionProviderStub,
@@ -476,6 +481,8 @@ function makeHarness(
     session.set(sessionUpdate)
   }
   return {
+    setTimeline: (records: readonly ChatTimelineRecord[]) => { timeline.set(records) },
+    setTimelineRenderer: (renderer: (recordId: string | null) => React.ReactNode) => { timelineRenderer = renderer },
     set, setSession: session.set, setChat: chatSource.set, ChatView, props,
     openFile, openSkill, loadOlder, loadThrough, openView,
     setOutline: (value: unknown) => { outlineValue = value },
@@ -655,6 +662,26 @@ describe('ChatView', () => {
     expect(view.getByText('included')).toBeTruthy()
     expect(view.queryByText('omitted')).toBeNull()
     expect(snapshot.nodes.get(omitted)).toBeDefined()
+  })
+
+  it('inserts independent record slots among ordinary rows and keeps row DOM and group controls stable', () => {
+    const snapshot = chatSnapshotFixture({ nodes: [user(1, 'before'), user(3, 'after')] })
+    const h = makeHarness({}, {}, snapshot)
+    h.setTimelineRenderer(id => id === null ? null : <article data-testid="independent-row">{id}</article>)
+    h.setTimeline([{ recordId: 'first-source', afterSequence: 1, localOrder: '1' }])
+    const view = render(<h.ChatView {...h.props} />)
+    const before = view.getByText('before'), after = view.getByText('after'), independent = view.getByTestId('independent-row')
+    expect(before.compareDocumentPosition(independent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(independent.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    act(() => { h.setTimeline([{ recordId: 'first-source', afterSequence: 1, localOrder: '1' },
+      { recordId: 'second-source', afterSequence: 3, localOrder: '2' }]) })
+    expect(view.getByText('before')).toBe(before)
+    expect(view.getByText('after')).toBe(after)
+    expect(view.getAllByTestId('independent-row')[0]).toBe(independent)
+    expect(snapshot.order).toHaveLength(2)
+    act(() => { h.setTimeline([]) })
+    expect(view.queryByTestId('independent-row')).toBeNull()
+    expect(view.getByText('before')).toBe(before)
   })
 
   it('keeps grouped Node instances mounted across presentation modes and group data updates', () => {

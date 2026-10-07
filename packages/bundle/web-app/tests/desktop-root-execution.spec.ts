@@ -49,5 +49,13 @@ it('refuses missing private owners and closed lifetimes before calling Session o
   await expect(partial.rootFeedback({ action: 'consumer_read' }, new AbortController().signal)).rejects.toThrow('consumption_unavailable')
   await expect(partial.rootFeedback(null, new AbortController().signal)).rejects.toThrow('invalid operation')
   expect(feedback).toHaveBeenCalledTimes(1)
+  const consumption = vi.fn(async (): Promise<never> => { throw Error('consumer refused') })
+  const installed = new DesktopCollaborationAnalysis(noModel, noModel, new AbortController().signal,
+    undefined, undefined, undefined, undefined, feedback, consumption)
+  onTestFinished(() => installed.close())
+  const operation = { action: 'consumer_start' }
+  await expect(installed.rootFeedback(operation, new AbortController().signal)).rejects.toThrow('consumer refused')
+  expect(consumption).toHaveBeenCalledWith(operation, expect.any(AbortSignal))
+  expect(feedback).toHaveBeenCalledTimes(1)
   expect(noModel).not.toHaveBeenCalled()
 })

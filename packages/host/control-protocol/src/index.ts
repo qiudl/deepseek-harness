@@ -5,6 +5,7 @@
  */
 
 export {
+  parseHostSourceAnalysisOutput, matchHostSourceAnalysisOutput,
   parseHostCollaborationSourceTarget, parseHostCollaborationSourceDescriptor,
   parseHostCollaborationSourceSnapshot,
   parseHostCollaborationSourceSnapshotChunk,
@@ -51,7 +52,7 @@ export type {
   ProfileModelClaimRecoveryInventoryRequest, ProfileModelClaimRecoveryInventoryResult,
   ProfileModelClaimRestoreRequest, ProfileModelClaimRestoreResult,
   ProfileModelClaimRetryRequest, ProfileModelClaimRetryResult,
-  HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult,
+  HostSourceAnalysisOutput, HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult,
   ProfileCollaborationAnalysisRequest, ProfileCollaborationAnalysisResult,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor,
   HostCollaborationSourceSnapshot, ProfileSourceSnapshotRequest, ProfileSourceSnapshotResult,

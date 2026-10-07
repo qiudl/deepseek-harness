@@ -33,8 +33,8 @@
   en: ccd6fc264b51e44b
   zh: 3265c68477a89ec9
 /deepseek-ai-dsh-web-app/understand-the-implementation:
-  en: 31747201f70e013c
-  zh: 122a2611db8d0433
+  en: 8f24a30db06b94eb
+  zh: fc55db9a89f74e10
 /deepseek-ai-dsh-web-app/understand-the-implementation/patch-semantics:
   en: f0078127aa8dd273
   zh: c954c137599b486f
@@ -51,7 +51,7 @@
   en: 34767bb4c0471622
   zh: e6d76e7c7a0b9ce8
 /deepseek-ai-dsh-web-app/further-exploration:
-  en: ef3ad07517a8d1bd
+  en: 68bc37b7c57da49e
   zh: 74bde2bd8644f508
 /deepseek-ai-dsh-web-app/further-exploration/remote-workspace-directories:
   en: 804610ff0f553589
@@ -76,4 +76,4 @@
   zh: b3da20b2ed23915e
 /deepseek-ai-dsh-web-app/known-limitations-and-deferred-work/dev-note:
   en: 94de28396b1c3a66
-  zh: adb946c89240b396
+  zh: 091a0a78931795ef

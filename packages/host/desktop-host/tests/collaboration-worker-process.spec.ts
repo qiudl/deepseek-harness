@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarget,
+  parseHostRemoteSessionJson,
   parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionTarget, parseHostRootJournalCommand, parseHostRootJournalMetadata, parseHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
@@ -26,6 +27,12 @@ const snapshot = { descriptor, snapshot_json: JSON.stringify({ ...target, origin
   active_mentions: [], model_snapshot: { provider: 'deepseek', model: 'chat' },
   host_journal_commit: { journal_id: 'source-journal', commit_version: '1', content_digest: 'b'.repeat(64) },
 }) }
+const sourceOutputText = JSON.stringify({ text: '\u0000'.repeat(5459) + 'abc' })
+const sourceOutput = { state: 'saved', descriptor,
+  dispatch: { attempt_request_id: '30000000-0000-4000-8000-000000000003', plan_id: 'plan', attempt_id: 'attempt',
+    expected_plan_revision: '1', attempt_fence: '1', input_manifest_digest: 'b'.repeat(64), source_digest: descriptor.snapshot_digest,
+    lease_expires_at: '2026-10-01T00:00:00.000Z', dispatch_granted: true },
+  output_digest: createHash('sha256').update(sourceOutputText).digest('hex'), json_base64url: Buffer.from(sourceOutputText).toString('base64url') }
 const command = { action: 'prepare', input: { source_message_id: target.source_message_id } }
 const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace', projection: {
   delivery_id: 'delivery', invocation_id: 'invocation', plan_id: 'plan', task_id: 'task', task_revision: '1',
@@ -91,6 +98,7 @@ async function harness(selectionRedirect?: string) {
           : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
+          : input.action === 'read_source_output' ? { value: ${JSON.stringify(sourceOutput)} }
           : url.pathname.endsWith('analysis') ? { value: input }
           : { delivery_id: input.projection.delivery_id }
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value)); return
@@ -331,4 +339,12 @@ it('authenticates root journal and planning inspection and rejects stopped-worke
     () => inspectRootPlanningAttempt(rootTarget, planning.attempt_request_id, 'a'.repeat(64), signal)])
     await expect(run()).rejects.toMatchObject({ code: 'unavailable' })
   await h.worker.done
+})
+
+it('reads the full 32 KiB saved Source output through its private worker without widening generic JSON strings', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  expect(Buffer.byteLength(sourceOutputText)).toBe(32768)
+  expect(() => parseHostRemoteSessionJson(sourceOutput)).toThrow()
+  expect(await h.collaborationAnalysis({ action: 'read_source_output', target: { ...target } }, signal)).toEqual(sourceOutput)
+  expect(signal.aborted).toBe(false)
 })

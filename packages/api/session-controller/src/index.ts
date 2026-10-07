@@ -17,6 +17,7 @@ import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
+import { createCollaborationReferenceCatalogue } from './collaboration-reference-catalogue.ts'
 import { CollaborationAnalysisRunner } from './collaboration-analysis.ts'
 import { hasCollaborationDiscussion } from './collaboration-discussion.ts'
 import type { CollaborationAnalysisManifest, CollaborationAnalysisResult } from './collaboration-analysis.ts'
@@ -29,8 +30,11 @@ import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { openCollaborationRootJournal, parseCollaborationRootLookup, parseCollaborationRootCaptureInput, parseCollaborationRootTarget, parseCollaborationRootAdmission } from './collaboration-root-journal.ts'
 import type { CollaborationRootJournal, CollaborationRootCaptureInput, CollaborationRootSubmission, CollaborationRootDescriptor, CollaborationRootAdmission } from './collaboration-root-journal.ts'
-import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates, describeCollaborationSource } from './collaboration-source-journal.ts'
+import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates,
+  describeCollaborationSource, collaborationJournalDigest } from './collaboration-source-journal.ts'
 import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot, CollaborationSourceCoordinates } from './collaboration-source-journal.ts'
+import { openCollaborationTimelineJournal } from './collaboration-timeline-journal.ts'
+import type { CollaborationTimelineJournal } from './collaboration-timeline-journal.ts'
 import { captureCollaborationReferenceContent, openCollaborationReferenceJournal,
   parseCollaborationReferenceRequest, parseCollaborationReferenceSelection, captureCollaborationReferenceSelectionContent } from './collaboration-reference-journal.ts'
 import type { CollaborationReferenceJournal, CollaborationReferenceRecord, CollaborationReferenceRequest } from './collaboration-reference-journal.ts'
@@ -213,6 +217,7 @@ export class SessionController extends TypertRemoteService {
   private collaborationRootExecutionJournal?: Promise<CollaborationRootExecutionJournal>
   private collaborationRootJournal?: Promise<CollaborationRootJournal>
   private collaborationJournal?: Promise<CollaborationSourceJournal>
+  private collaborationTimelineJournal?: Promise<CollaborationTimelineJournal>
   private collaborationReferenceJournal?: Promise<CollaborationReferenceJournal>
   private readonly collaborationReferenceOperations = new Set<Promise<unknown>>()
   private readonly collaborationRootTransportTraces = new WeakMap<CollaborationSourceSnapshot, string>()
@@ -252,6 +257,8 @@ export class SessionController extends TypertRemoteService {
       await this.collaborationCaptureTail
       const journal = await this.collaborationJournal?.catch(() => undefined)
       await journal?.close()
+      const timeline = await this.collaborationTimelineJournal?.catch(() => undefined)
+      await timeline?.close()
       const executions = await this.collaborationRootExecutionJournal?.catch(() => undefined)
       await executions?.close()
       const roots = await this.collaborationRootJournal?.catch(() => undefined)
@@ -557,12 +564,26 @@ export class SessionController extends TypertRemoteService {
         }
       }
       await checkSelection()
+      const inspected = await waitForRead(this.inspect(sessionId, ownedSignal))
+      const catalogue = createCollaborationReferenceCatalogue(inspected.events, captured.source_message_id)
+      await checkSelection()
+      if (this.collaborationTimelineJournal === undefined) {
+        const facility = this.ctx.get('storageDomain')
+        if (facility === undefined) throw Error('collaboration_source_journal_unavailable')
+        this.collaborationTimelineJournal = openCollaborationTimelineJournal(facility)
+      }
+      const timeline = await waitForRead(this.collaborationTimelineJournal)
+      await checkSelection()
+      await timeline.record(captured, inspected.events.at(-1)?.seq ?? null, ownedSignal)
+      await checkSelection()
       const snapshot = await journal.capture({ ...captured, model_snapshot: prepared.prepared.snapshot }, ownedSignal)
       await checkSelection()
       ownedSignal.throwIfAborted()
       return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared,
-        analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
+        analyze: async (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
+          cancellation: AbortSignal) => {
           const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
+          await inspectCurrent()
           return this.collaborationAnalysis.run(snapshot, prepared.prepared, async (manifest, signal) => {
             await inspectCurrent()
             signal.throwIfAborted()
@@ -570,7 +591,7 @@ export class SessionController extends TypertRemoteService {
             signal.throwIfAborted()
             await inspectCurrent()
             signal.throwIfAborted()
-          }, analysisSignal, this.collaborationRootTransportTraces.get(snapshot))
+          }, analysisSignal, this.collaborationRootTransportTraces.get(snapshot), catalogue)
         },
         analyzeClarification: async (input: CollaborationClarificationInput,
           persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
@@ -597,7 +618,7 @@ export class SessionController extends TypertRemoteService {
             signal.throwIfAborted()
             await verifySources()
             signal.throwIfAborted()
-          }, analysisSignal)
+          }, analysisSignal, catalogue)
         },
       })
     })
@@ -1206,7 +1227,7 @@ export class SessionController extends TypertRemoteService {
 
   /**
    * Read original collaboration messages for the Client's Session result area without preparing a model.
-   * @param request - Session identity and a prior page's immutable snapshot digest; authority fields reject.
+   * @param request - Session identity and either a page cursor or one exact immutable snapshot digest; authority fields reject.
    * @param signal - Caller cancellation, combined with Profile disposal and serialized Source writes.
    * @returns At most eight complete messages within 256 KiB; no executable calls or cloud authorization.
    * @throws On malformed input, unknown cursor, corrupt storage, cancellation or changed original membership.
@@ -1214,7 +1235,7 @@ export class SessionController extends TypertRemoteService {
   @Remote('collaborationSources')
   async collaborationSources(request: SessionCollaborationSourcesRequest, signal: AbortSignal): Promise<SessionCollaborationSourcesValue> {
     if (!validCollaborationSourcesRequest(request)) throw Error('collaboration_source_query_invalid')
-    const sessionId = SessionId(request.sessionId), cursor = request.cursor
+    const sessionId = SessionId(request.sessionId), cursor = request.cursor, snapshotDigest = request.snapshotDigest
     const ownedSignal = AbortSignal.any([signal, this.collaborationLifetime.signal])
     ownedSignal.throwIfAborted()
     const wait = <T>(read: Promise<T>) => waitForCollaborationSourceRead(read, ownedSignal)
@@ -1231,18 +1252,39 @@ export class SessionController extends TypertRemoteService {
         .map(snapshot => ({ snapshot, descriptor: describeCollaborationSource(snapshot) }))
         .reverse()
       if (cursor !== undefined && !entries.some(entry => entry.descriptor.snapshot_digest === cursor)) throw Error('collaboration_source_cursor_invalid')
+      if (snapshotDigest !== undefined && !entries.some(entry => entry.descriptor.snapshot_digest === snapshotDigest)) {
+        throw Error('collaboration_source_locator_unavailable')
+      }
       // Immutable cursor lookup keeps older pages stable when a new Source is appended.
-      const history = entries.length ? (await wait(this.inspect(sessionId, ownedSignal))).events : []
+      const history = entries.length && snapshotDigest === undefined ? (await wait(this.inspect(sessionId, ownedSignal))).events : []
       ownedSignal.throwIfAborted()
-      const remaining = (cursor === undefined ? entries
-        : entries.slice(entries.findIndex(entry => entry.descriptor.snapshot_digest === cursor) + 1)
-      ).filter(entry => !hasCollaborationDiscussion(history, entry.snapshot))
+      const remaining = (snapshotDigest !== undefined ? entries.filter(entry => entry.descriptor.snapshot_digest === snapshotDigest)
+        : cursor === undefined ? entries
+          : entries.slice(entries.findIndex(entry => entry.descriptor.snapshot_digest === cursor) + 1)
+      ).filter(entry => snapshotDigest !== undefined || !hasCollaborationDiscussion(history, entry.snapshot))
       const items: SessionCollaborationSourceItem[] = []
       const checks: (() => Promise<void>)[] = []
+      let timeline: CollaborationTimelineJournal | undefined
+      if (request.includeTimeline && remaining.length) {
+        if (this.collaborationTimelineJournal === undefined) {
+          const facility = this.ctx.get('storageDomain')
+          if (facility === undefined) throw Error('collaboration_source_journal_unavailable')
+          this.collaborationTimelineJournal = openCollaborationTimelineJournal(facility)
+        }
+        timeline = await wait(this.collaborationTimelineJournal)
+      }
       let bytes = 256
       for (const { snapshot, descriptor } of remaining) {
         const { snapshot_digest, ...source } = descriptor
-        const item = Object.freeze({ source: Object.freeze(source), snapshot_digest, original_message: snapshot.original_message })
+        const placement = timeline?.read(source)
+        if (placement) {
+          const { model_snapshot: _model, host_journal_commit: _commit, ...input } = snapshot
+          if (placement.input_digest !== collaborationJournalDigest(input)) throw Error('collaboration_timeline_input_conflict')
+        }
+        const item = Object.freeze({ source: Object.freeze(source), snapshot_digest, original_message: snapshot.original_message,
+          ...(request.includeTimeline ? { timeline_position: placement ? Object.freeze({
+            after_sequence: placement.after_sequence, local_order: placement.local_order,
+          }) : null } : {}) })
         const size = Buffer.byteLength(JSON.stringify(item), 'utf8') + 1
         if (items.length === 8 || bytes + size > 256 * 1024) break
         const workspaceId = WorkspaceId(snapshot.workspace_id)
@@ -1545,10 +1587,13 @@ export class SessionController extends TypertRemoteService {
 function validCollaborationSourcesRequest(value: unknown): value is SessionCollaborationSourcesRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
-  return Object.keys(row).every(key => key === 'sessionId' || key === 'cursor')
+  return Object.keys(row).every(key => key === 'sessionId' || key === 'cursor' || key === 'snapshotDigest' || key === 'includeTimeline')
     && typeof row.sessionId === 'string' && /^[!-~]{1,256}$/u.test(row.sessionId)
     && !/[/\\]/u.test(row.sessionId) && row.sessionId !== '.' && row.sessionId !== '..'
     && (row.cursor === undefined || (typeof row.cursor === 'string' && /^[0-9a-f]{64}$/u.test(row.cursor)))
+    && (row.snapshotDigest === undefined || (typeof row.snapshotDigest === 'string' && /^[0-9a-f]{64}$/u.test(row.snapshotDigest)))
+    && (!Object.hasOwn(row, 'includeTimeline') || row.includeTimeline === true)
+    && !(Object.hasOwn(row, 'cursor') && Object.hasOwn(row, 'snapshotDigest'))
 }
 
 export { buildModelCatalog }

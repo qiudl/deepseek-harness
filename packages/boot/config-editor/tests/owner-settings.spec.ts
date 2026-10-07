@@ -1,3 +1,4 @@
+import { withOwnerSettingsFileFixture } from './owner-settings-file-fixture.ts'
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,11 +11,6 @@ import {
   readOwnerSettings, replaceOwnerSettingsSection, updateOwnerSettingsValues,
 } from '../src/owner-settings.ts'
 
-vi.mock('node:fs', async (importOriginal) => {
-  const original = await importOriginal<typeof import('node:fs')>()
-  return { ...original, readFileSync: vi.fn(original.readFileSync) }
-})
-
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'owner-settings-'))
   const path = join(dir, 'settings.yaml')
@@ -25,6 +21,58 @@ function fixture() {
 
 // Windows has no POSIX UID/mode checks; this owner-file mode is used by the macOS embedding.
 const nativeIt = it.skipIf(process.platform === 'win32')
+
+it('validates owner metadata and document formats independently of host permission semantics', () => {
+  const { dir, path } = fixture()
+  const getter = Object.getOwnPropertyDescriptor(process, 'getuid')
+  const read = (metadata?: { uid?: number; mode?: number }) =>
+    withOwnerSettingsFileFixture(path, () => readOwnerSettings(path), metadata)
+  expect(read().sections).toEqual({ first: { count: 4 } })
+  expect(() => read({ uid: 1 })).toThrow('Unsafe')
+  expect(() => read({ mode: 0o100644 })).toThrow('Unsafe')
+  expect(() => read({ mode: 0o040600 })).toThrow('Unsafe')
+  const alias = join(dir, 'shared')
+  linkSync(path, alias)
+  expect(() => read()).toThrow('Unsafe')
+  rmSync(alias)
+  truncateSync(path, 16 * 1024 * 1024 + 1)
+  expect(() => read()).toThrow('Unsafe')
+  for (const text of ['first: [', 'first: {}\nfirst: {}', '[]', 'first: 4']) {
+    writeFileSync(path, text)
+    expect(() => read()).toThrow()
+  }
+  writeFileSync(path, '')
+  expect(read().sections).toEqual({})
+  expect(Object.getOwnPropertyDescriptor(process, 'getuid')).toEqual(getter)
+})
+
+it('closes and restores fixture authority when the document changes during reading', async () => {
+  const { path } = fixture()
+  const getter = Object.getOwnPropertyDescriptor(process, 'getuid')
+  const { readFileSync: read } = await vi.importActual<typeof import('node:fs')>('node:fs')
+  vi.mocked(fs.readFileSync).mockImplementationOnce((...args: Parameters<typeof read>) => {
+    const text = Reflect.apply(read, fs, args)
+    writeFileSync(path, 'first:\n  count: 123456\n')
+    return text
+  })
+  expect(() => withOwnerSettingsFileFixture(path, () => readOwnerSettings(path))).toThrow('changed during reading')
+  expect(Object.getOwnPropertyDescriptor(process, 'getuid')).toEqual(getter)
+  expect(withOwnerSettingsFileFixture(path, () => readOwnerSettings(path)).sections).toEqual({ first: { count: 123456 } })
+})
+
+it('limits fixture metadata to one file and closes a leaked descriptor before reporting it', () => {
+  const { dir, path } = fixture()
+  const getter = Object.getOwnPropertyDescriptor(process, 'getuid')
+  const unrelated = join(dir, 'unrelated')
+  writeFileSync(unrelated, 'first: {}\n', { mode: 0o644 })
+  expect(() => withOwnerSettingsFileFixture(path, () => readOwnerSettings(unrelated))).toThrow('Unsafe')
+  let leaked = -1
+  expect(() => { withOwnerSettingsFileFixture(path, () => { leaked = fs.openSync(path, 'r') }) })
+    .toThrow('left a file descriptor open')
+  expect(() => fs.fstatSync(leaked)).toThrow()
+  expect(Object.getOwnPropertyDescriptor(process, 'getuid')).toEqual(getter)
+  expect(withOwnerSettingsFileFixture(path, () => readOwnerSettings(path)).sections).toEqual({ first: { count: 4 } })
+})
 
 nativeIt('rejects a settings file modified between the descriptor reads', async () => {
   const { path } = fixture()
