@@ -1589,6 +1589,8 @@ it('YAML-loaded trajectory reads displayed audit and execution evidence without 
   if (!bindings.traceAction || !bindings.traceEvidenceAction) throw Error('missing readonly trajectory commands')
   await bindings.hooks.slarkResults.refresh()
   await bindings.traceEvidenceAction(original.snapshot_digest, 'settlement')
+  if (!bindings.consumptionAction) throw Error('missing guarded consumption command')
+  await bindings.consumptionAction(original.snapshot_digest, 'unapproved-delivery', false)
   expect(read).not.toHaveBeenCalled()
   await bindings.traceAction(original.snapshot_digest)
   expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.trace?.page?.root.root_trace_id).toBe(rootTraceId)
