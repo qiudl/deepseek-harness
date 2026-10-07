@@ -104,6 +104,48 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('preserves the captured Source and display position when its Profile storage owner disappears before a positioned read', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const first = await h.controller.captureCollaborationSource(h.source(), signal)
+    const sourceBytes = await readFile(h.sourceFile)
+    const timelinePath = join(h.root, 'state', 'collaboration_timeline_v2.json')
+    const timelineBytes = await readFile(timelinePath)
+    await h.dispose()
+    const next = await harness(h.root, h.cwd, 'owners')
+    const legacy = await next.controller.collaborationSources({ sessionId: next.sessionId }, signal)
+    expect(legacy.items[0]?.snapshot_digest).toBe(describeCollaborationSource(first.snapshot).snapshot_digest)
+    next.removeDomain!()
+    await expect(next.controller.collaborationSources({ sessionId: next.sessionId, includeTimeline: true }, signal))
+      .rejects.toThrow('collaboration_source_journal_unavailable')
+    await next.dispose()
+    expect(await readFile(h.sourceFile)).toEqual(sourceBytes)
+    expect(await readFile(timelinePath)).toEqual(timelineBytes)
+    expect(next.prepare).not.toHaveBeenCalled()
+    expect(next.stream).not.toHaveBeenCalled()
+    expect(next.resume).not.toHaveBeenCalled()
+  })
+
+  it('preserves damaged timeline bytes and ordinary Source reads while disposing the failed reader without model work', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const first = await h.controller.captureCollaborationSource(h.source(), signal)
+    const sourceBytes = await readFile(h.sourceFile)
+    await h.dispose()
+    const timelinePath = join(h.root, 'state', 'collaboration_timeline_v2.json')
+    const damaged = '{"schema_version":"unknown"}'
+    await writeFile(timelinePath, damaged)
+    const next = await harness(h.root, h.cwd)
+    await expect(next.controller.collaborationSources({ sessionId: next.sessionId, includeTimeline: true }, signal))
+      .rejects.toThrow()
+    const legacy = await next.controller.collaborationSources({ sessionId: next.sessionId }, signal)
+    expect(legacy.items[0]?.snapshot_digest).toBe(describeCollaborationSource(first.snapshot).snapshot_digest)
+    await expect(next.dispose()).resolves.toBeUndefined()
+    expect(await readFile(timelinePath, 'utf8')).toBe(damaged)
+    expect(await readFile(h.sourceFile)).toEqual(sourceBytes)
+    expect(next.prepare).not.toHaveBeenCalled()
+    expect(next.stream).not.toHaveBeenCalled()
+    expect(next.resume).not.toHaveBeenCalled()
+  })
+
   it('returns verified display positions only for opt-in reads, without model preparation or writes', async () => {
     const h = await harness(), signal = new AbortController().signal
     const first = await h.controller.captureCollaborationSource(h.source(), signal)
