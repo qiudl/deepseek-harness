@@ -1,3 +1,4 @@
+import { exactReceiptFields, canonicalReceiptJson } from './collaboration-receipt-fields.js'
 /** REQ-20261004-0008: a first durable reply is independent of consumption and completion. */
 import type { Branded } from '@deepseek-ai/dsh-brand'
 type HostCollaborationObservationId = Branded<'HostCollaborationObservationId'>
@@ -26,25 +27,7 @@ const authorityKeys = [
   'commit',
   'signature',
 ]
-function exact(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (
-    !value ||
-    typeof value !== 'object' ||
-    (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) ||
-    Object.getOwnPropertySymbols(value).length
-  )
-    throw Error('invalid_continuation_receipt')
-  const fields = Object.getOwnPropertyDescriptors(value)
-  if (
-    Object.keys(fields).length !== keys.length ||
-    keys.some((k) => {
-      const field = fields[k]
-      return !field?.enumerable || !('value' in field)
-    })
-  )
-    throw Error('invalid_continuation_receipt')
-  return Object.fromEntries(keys.map(k => [k, fields[k]?.value]))
-}
+const exact = (value: unknown, keys: readonly string[]) => exactReceiptFields(value, keys, 'invalid_continuation_receipt')
 function text(value: unknown, pattern: RegExp): string {
   if (typeof value !== 'string' || pattern.exec(value)?.[0] !== value) throw Error('invalid_continuation_receipt')
   return value
@@ -70,26 +53,11 @@ export function parseHostCollaborationContinuationReceipt(value: unknown): HostC
     observation_id: uuid(commit.observation_id) as HostCollaborationObservationId, observation_kind: 'assistant_message_committed' as const, assistant_event_seq,
     session_prefix: Object.freeze({ event_count, log_digest: text(prefix.log_digest, /^[a-f0-9]{64}$/u) }) }) })
 }
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']'
-  if (value !== null && typeof value === 'object') {
-    const row = value as Record<string, unknown>
-    return (
-      '{' +
-      Object.keys(row)
-        .sort()
-        .map(k => JSON.stringify(k) + ':' + canonical(row[k]))
-        .join(',') +
-      '}'
-    )
-  }
-  return JSON.stringify(value)
-}
 /** Encode the independent observation signature domain, excluding the signature itself.
  * @param value - Exact current-Host receipt.
  * @returns Canonical bytes binding both original consumption and subsequent reply evidence.
  */
 export function encodeHostCollaborationContinuationReceiptPayload(value: HostCollaborationContinuationReceipt): Uint8Array {
   const { signature: _signature, ...payload } = parseHostCollaborationContinuationReceipt(value)
-  return new TextEncoder().encode(canonical(['dsh-collaboration-continuation-observation-v1', payload]))
+  return new TextEncoder().encode(canonicalReceiptJson(['dsh-collaboration-continuation-observation-v1', payload]))
 }
