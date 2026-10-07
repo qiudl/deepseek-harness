@@ -1,5 +1,6 @@
 import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto'
 import { HostControlAuthority } from '../../../host/desktop-host/src/unix-transport.ts'
+import { registryFileFixture } from '../../../host/desktop-host/tests/registry-file-fixture.ts'
 import { UnixHostClient, DesktopHost, ProfileRegistry } from '@deepseek-ai/dsh-slark-desktop-host'
 import { decodeHostControlFrame, encodeHostControlFrame, parseHostRootPlanningAttemptAuthorityChallenge } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootAnalysisOutput, parseHostRootSubmissionTarget, parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
@@ -639,7 +640,9 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     const sourceBytes = await readFile(sourcePath)
     const rootPath = join(directory, 'state', 'collaboration_root_submission_v1.json'), rootBytes = await readFile(rootPath)
     const signal = new AbortController().signal, privateToken = 'B'.repeat(43)
-    const registry = new ProfileRegistry({ root: join(directory, 'authority'), deviceIndexKey: Buffer.alloc(32, 7), clock: { now: Date.now } })
+    // Host account storage is instance-local; Source and planning journals remain real files.
+    const registry = new ProfileRegistry({ root: join(directory, 'authority'), deviceIndexKey: Buffer.alloc(32, 7), clock: { now: Date.now },
+      ...registryFileFixture() })
     const account = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:loader', authorityBindingVersion: 1,
       issuer: 'https://accounts.example.test', subject: randomUUID(), keyHandle: 'keychain:loader',
       unlockMaterial: Buffer.alloc(32, 9).toString('base64url') }
