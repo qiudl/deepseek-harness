@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { installSessionReadTestServices, testSessionPersistence } from '../../../api/session-controller/tests/test-remote.ts'
+import { registryFileFixture } from '../../../host/desktop-host/tests/registry-file-fixture.ts'
 import * as WebApp from '../src/index.ts'
 
 class FixtureAdapter extends LlmAdapter {
@@ -550,7 +551,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       expect(await Promise.all(originalFiles.map(name => readFile(join(directory, 'state', name))))).toEqual(originalBytes)
       expect(providerRequests).toBe(1)
       const registry = new ProfileRegistry({ root: join(directory, 'source-authority'), deviceIndexKey: Buffer.alloc(32, 7),
-        clock: { now: Date.now } })
+        clock: { now: Date.now }, ...registryFileFixture() })
       const account = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:source-loader', authorityBindingVersion: 1,
         issuer: 'https://accounts.example.test', subject: randomUUID(), keyHandle: 'keychain:source-loader',
         unlockMaterial: Buffer.alloc(32, 9).toString('base64url') }
@@ -726,7 +727,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     const sourceBytes = await readFile(sourcePath)
     const rootPath = join(directory, 'state', 'collaboration_root_submission_v1.json'), rootBytes = await readFile(rootPath)
     const signal = new AbortController().signal, privateToken = 'B'.repeat(43)
-    const registry = new ProfileRegistry({ root: join(directory, 'authority'), deviceIndexKey: Buffer.alloc(32, 7), clock: { now: Date.now } })
+    const registry = new ProfileRegistry({ root: join(directory, 'authority'), deviceIndexKey: Buffer.alloc(32, 7), clock: { now: Date.now }, ...registryFileFixture() })
     const account = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:loader', authorityBindingVersion: 1,
       issuer: 'https://accounts.example.test', subject: randomUUID(), keyHandle: 'keychain:loader',
       unlockMaterial: Buffer.alloc(32, 9).toString('base64url') }
