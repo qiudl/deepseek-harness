@@ -26,7 +26,7 @@ it.skipIf(mode === 'record')('replays a recorded Session beside its readonly col
       const request = route.request().postDataJSON() as { rpcId: string }
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ type: 'server-response', rpcId: request.rpcId,
         result: { ok: true, value: { items: [{ source: { workspace_id: workspace.id, session_id: id, source_message_id: 'original', source_revision: '1' },
-          snapshot_digest: 'a'.repeat(64), original_message: 'Verify the recorded file operation' }] } } }) })
+          snapshot_digest: 'a'.repeat(64), original_message: 'Verify the recorded file operation', timeline_position: null }] } } }) })
     })
     await page.route('**/api/session/prompt', async (route) => { prompts++; await route.abort() })
     await page.addInitScript(() => {
