@@ -23,6 +23,7 @@
     "src/archived-session-gate.ts",
     "src/skill-catalog.ts",
     "src/collaboration-source-journal.ts",
+    "src/collaboration-timeline-journal.ts",
     "src/collaboration-reference-journal.ts",
     "src/collaboration-reference-content-source.ts",
     "src/collaboration-reference-catalogue.ts",

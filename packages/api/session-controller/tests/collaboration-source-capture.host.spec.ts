@@ -104,6 +104,88 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('records the original display position before Source publication and leaves ordinary history unchanged', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const events = JSON.stringify(h.events)
+    const first = await h.controller.captureCollaborationSource(h.source(), signal)
+    const path = join(h.root, 'state', 'collaboration_timeline_v2.json')
+    const bytes = await readFile(path, 'utf8')
+    const stored = JSON.parse(bytes) as {
+      tables: { placements: Record<string, { after_sequence: number; local_order: string; input_digest: string }> }
+    }
+    expect(Object.values(stored.tables.placements)).toEqual([expect.objectContaining({
+      after_sequence: 0, local_order: '1', input_digest: collaborationJournalDigest(h.source()),
+    })])
+    expect(bytes).not.toContain(first.snapshot.original_message)
+    expect(JSON.stringify(h.events)).toBe(events)
+    h.events.push({ type: 'model/selection', seq: SessionSeq(1), time: 2, data: { provider: 'fixture', model: 'later' } })
+    expect((await h.controller.captureCollaborationSource(h.source(), signal)).kind).toBe('recovered')
+    expect(await readFile(path, 'utf8')).toBe(bytes)
+    expect(h.prepare).toHaveBeenCalledTimes(1)
+    expect(h.resume).not.toHaveBeenCalled(); expect(h.stream).not.toHaveBeenCalled()
+  })
+
+  it('does not invent a present-day position for an original captured by an older runtime', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const first = await h.controller.captureCollaborationSource(h.source(), signal)
+    await h.dispose()
+    const path = join(h.root, 'state', 'collaboration_timeline_v2.json')
+    await rm(path)
+    const next = await harness(h.root, h.cwd)
+    const recovered = await next.controller.captureCollaborationSource(next.source(), signal)
+    expect(recovered).toEqual({ kind: 'recovered', snapshot: first.snapshot })
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(next.prepare).not.toHaveBeenCalled()
+  })
+
+  it('retains the first display position across failed Source publication and a later retry', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const open = h.backend.kv.open.bind(h.backend.kv)
+    h.backend.kv.open = async (descriptor) => {
+      const unit = await open(descriptor), put = unit.putRecord.bind(unit)
+      unit.putRecord = async (table, key, value) => {
+        if (table === 'sources') throw Error('Source publication unavailable')
+        await put(table, key, value)
+      }
+      return unit
+    }
+    await expect(h.controller.captureCollaborationSource(h.source(), signal)).rejects.toThrow('Source publication unavailable')
+    await expect(readFile(h.sourceFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    const path = join(h.root, 'state', 'collaboration_timeline_v2.json'), first = await readFile(path, 'utf8')
+    await h.dispose()
+    const next = await harness(h.root, h.cwd)
+    next.events.push({ type: 'model/selection', seq: SessionSeq(1), time: 2, data: { provider: 'fixture', model: 'later' } })
+    expect((await next.controller.captureCollaborationSource(next.source(), signal)).kind).toBe('captured')
+    expect(await readFile(path, 'utf8')).toBe(first)
+    expect(next.resume).not.toHaveBeenCalled(); expect(next.stream).not.toHaveBeenCalled()
+  })
+
+  it('refuses lost storage ownership before recording a new display position', async () => {
+    const h = await harness(undefined, undefined, 'owners')
+    h.adapter.prepare = async () => { h.removeDomain!() }
+    await expect(h.controller.captureCollaborationSource(h.source(), new AbortController().signal))
+      .rejects.toThrow('collaboration_source_journal_unavailable')
+    await expect(readFile(h.sourceFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(h.root, 'state', 'collaboration_timeline_v2.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('does not publish or expose a Source after workspace ownership is lost during the display write', async () => {
+    const h = await harness(), open = h.backend.kv.open.bind(h.backend.kv)
+    h.backend.kv.open = async (descriptor) => {
+      const unit = await open(descriptor), put = unit.putRecord.bind(unit)
+      unit.putRecord = async (table, key, value) => {
+        await put(table, key, value)
+        if (table === 'placements') await h.workspace.detachSession(h.sessionId)
+      }
+      return unit
+    }
+    await expect(h.controller.captureCollaborationSource(h.source(), new AbortController().signal))
+      .rejects.toThrow('collaboration_session_workspace_mismatch')
+    await expect(readFile(h.sourceFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await h.controller.collaborationSources({ sessionId: h.sessionId }, new AbortController().signal)).items).toEqual([])
+    expect(h.resume).not.toHaveBeenCalled(); expect(h.stream).not.toHaveBeenCalled()
+  })
+
   it('Source locator reads one older immutable original without paging, preparing or writing', async () => {
     const h = await harness(), signal = new AbortController().signal
     let digest = ''

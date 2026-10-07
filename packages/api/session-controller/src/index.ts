@@ -31,6 +31,8 @@ import { openCollaborationRootJournal, parseCollaborationRootLookup, parseCollab
 import type { CollaborationRootJournal, CollaborationRootCaptureInput, CollaborationRootSubmission, CollaborationRootDescriptor, CollaborationRootAdmission } from './collaboration-root-journal.ts'
 import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates, describeCollaborationSource } from './collaboration-source-journal.ts'
 import type { CollaborationSourceJournal, CollaborationSourceInput, CollaborationSourceSnapshot, CollaborationSourceCoordinates } from './collaboration-source-journal.ts'
+import { openCollaborationTimelineJournal } from './collaboration-timeline-journal.ts'
+import type { CollaborationTimelineJournal } from './collaboration-timeline-journal.ts'
 import { captureCollaborationReferenceContent, openCollaborationReferenceJournal,
   parseCollaborationReferenceRequest, parseCollaborationReferenceSelection, captureCollaborationReferenceSelectionContent } from './collaboration-reference-journal.ts'
 import type { CollaborationReferenceJournal, CollaborationReferenceRecord, CollaborationReferenceRequest } from './collaboration-reference-journal.ts'
@@ -213,6 +215,7 @@ export class SessionController extends TypertRemoteService {
   private collaborationRootExecutionJournal?: Promise<CollaborationRootExecutionJournal>
   private collaborationRootJournal?: Promise<CollaborationRootJournal>
   private collaborationJournal?: Promise<CollaborationSourceJournal>
+  private collaborationTimelineJournal?: Promise<CollaborationTimelineJournal>
   private collaborationReferenceJournal?: Promise<CollaborationReferenceJournal>
   private readonly collaborationReferenceOperations = new Set<Promise<unknown>>()
   private readonly collaborationRootTransportTraces = new WeakMap<CollaborationSourceSnapshot, string>()
@@ -251,6 +254,8 @@ export class SessionController extends TypertRemoteService {
       await this.collaborationCaptureTail
       const journal = await this.collaborationJournal?.catch(() => undefined)
       await journal?.close()
+      const timeline = await this.collaborationTimelineJournal?.catch(() => undefined)
+      await timeline?.close()
       const executions = await this.collaborationRootExecutionJournal?.catch(() => undefined)
       await executions?.close()
       const roots = await this.collaborationRootJournal?.catch(() => undefined)
@@ -556,6 +561,15 @@ export class SessionController extends TypertRemoteService {
       await checkSelection()
       const inspected = await waitForRead(this.inspect(sessionId, ownedSignal))
       const catalogue = createCollaborationReferenceCatalogue(inspected.events, captured.source_message_id)
+      await checkSelection()
+      if (this.collaborationTimelineJournal === undefined) {
+        const facility = this.ctx.get('storageDomain')
+        if (facility === undefined) throw Error('collaboration_source_journal_unavailable')
+        this.collaborationTimelineJournal = openCollaborationTimelineJournal(facility)
+      }
+      const timeline = await waitForRead(this.collaborationTimelineJournal)
+      await checkSelection()
+      await timeline.record(captured, inspected.events.at(-1)?.seq ?? null, ownedSignal)
       await checkSelection()
       const snapshot = await journal.capture({ ...captured, model_snapshot: prepared.prepared.snapshot }, ownedSignal)
       await checkSelection()
