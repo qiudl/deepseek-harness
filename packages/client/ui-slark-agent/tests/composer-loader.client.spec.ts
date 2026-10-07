@@ -1427,6 +1427,44 @@ it.each(['accepted', 'bad-trace', 'extra-private', 'missing-root', 'changed-sour
     expect(composer.snapshot.draft).toBe(draft); expect(sink).not.toHaveBeenCalled()
   })
 
+it('YAML-loaded trajectory reads displayed audit and execution evidence without submitting work', async () => {
+  const f = await bench(true), bridge = window.__DSH_DESKTOP_HOST__
+  if (!bridge) throw Error('missing Desktop fixture')
+  bridge.collaborationPlanningAvailable = true
+  const root = { root_task_id: rootTaskId, root_trace_id: rootTraceId, task_revision: '1', state_version: '1',
+    state: 'active', intent_state: 'active' }
+  const event = { event_id: 'settlement', root_seq: 1, task_revision: 1, type: 'execution_observed', phase: 'execution_succeeded',
+    occurred_at: '2026-10-07T00:00:00.000Z', recorded_at: '2026-10-07T00:00:00.000Z',
+    trace_context: { root_task_id: rootTaskId, root_trace_id: rootTraceId, task_revision: 1 } }
+  const read = vi.fn<NonNullable<typeof bridge.collaborationRootExecution>>(async (request) => {
+    if (request.action !== 'trace') throw Error('history cannot execute work')
+    return { ok: true, value: { root, events: [event], next_after_seq: null, coverage: 'partial',
+      ...(request.cursor.evidence ? { execution: { event_id: 'settlement', attempt_id: 'attempt', state: 'succeeded',
+        digest: 'a'.repeat(64), events: [{ sequence: 1, observedAt: 0, type: 'file.completed', success: true }],
+        next_after_sequence: null, provider_visibility: 'boundary_only' } } : {}) } }
+  })
+  bridge.collaborationRootExecution = read
+  const original = { source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'first', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide 原始任务' }
+  f.originals.push(original)
+  const entry = f.ctx.slots.entries('conversation.trajectory.external').find(e => e.options.id === 'slark-collaboration-trace')
+  if (!entry?.inject) throw Error('missing trajectory registration')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  if (!bindings.traceAction || !bindings.traceEvidenceAction) throw Error('missing readonly trajectory commands')
+  await bindings.hooks.slarkResults.refresh()
+  await bindings.traceEvidenceAction(original.snapshot_digest, 'settlement')
+  expect(read).not.toHaveBeenCalled()
+  await bindings.traceAction(original.snapshot_digest)
+  expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.trace?.page?.root.root_trace_id).toBe(rootTraceId)
+  await bindings.traceEvidenceAction(original.snapshot_digest, 'settlement')
+  expect(read.mock.calls.map(([request]) => request)).toEqual([
+    { action: 'trace', source: original.source, cursor: { after_seq: 0, limit: 20 } },
+    { action: 'trace', source: original.source, cursor: { after_seq: 0, limit: 20, evidence: { event_id: 'settlement', after_sequence: 0 } } },
+  ])
+  expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.trace?.execution?.page?.events)
+    .toEqual([{ sequence: 1, observedAt: 0, type: 'file.completed', success: true }])
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+})
 it.each([false,true])('retained root drafts use recovery after root rollout closes, legacy execution=%s',async(legacy)=>{
   const { composer,pick,submit,sink,invoke }=await bench(true)
   const host=window.__DSH_DESKTOP_HOST__!
