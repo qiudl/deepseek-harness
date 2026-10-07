@@ -176,7 +176,9 @@ it('counts a located old original within the bounded workspace history capacity'
     if (sessionId !== 'second') return { ok: true, value: { items: [] } }
     const start = cursor ? items.findIndex(item => item.snapshot_digest === cursor) + 1 : 0
     const page = items.slice(start, start + 8)
-    return { ok: true, value: { items: page, ...(start + 8 < items.length ? { next_cursor: page.at(-1)?.snapshot_digest } : {}) } }
+    return { ok: true, value: { items: page,
+      ...(start + 8 < items.length ? { next_cursor: (page.at(-1) as SessionCollaborationSourceItem).snapshot_digest } : {}),
+    } }
   })
   f.target.revealOriginal(older)
   await f.target.refresh()
