@@ -1,15 +1,20 @@
 /** Existing Host generations remain the mutable source for settings and migration export. */
+import { withOwnerSettingsFileFixture } from '../../../boot/config-editor/tests/owner-settings-file-fixture.ts'
 import { readFileSync, statSync, writeFileSync } from 'node:fs'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
 import z from '@deepseek-ai/schemastery'
 import { join } from 'node:path'
 import { configurationFixture } from './configuration-fixture.ts'
 
-// The embedded settings file uses POSIX owner permissions; Windows retains its separately pinned runtime.
-const nativeIt = it.skipIf(process.platform === 'win32')
+// Loader/settings protocols run on every host; native POSIX ownership has its own file suite.
+vi.mock('../../../boot/config-editor/src/owner-settings.ts', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../../boot/config-editor/src/owner-settings.ts')>()
+  return { ...original, readOwnerSettings: (path: string) =>
+    withOwnerSettingsFileFixture(path, () => original.readOwnerSettings(path)) }
+})
 
-nativeIt('loads owner defaults when the consumer precedes the configuration editor', async () => {
+it('loads owner defaults when the consumer precedes the configuration editor', async () => {
   const { ctx, start } = await configurationFixture({ editorLast: true, hmr: false, ownerSettings: {
     'default-model': { provider: 'test', model: 'owner' },
   } })
@@ -19,7 +24,7 @@ nativeIt('loads owner defaults when the consumer precedes the configuration edit
   expect(restarted.agentDefaultModel.currentSelection()).toEqual({ provider: 'test', model: 'owner' })
 })
 
-nativeIt('refreshes an active consumer when the owner editor is reactivated', async () => {
+it('refreshes an active consumer when the owner editor is reactivated', async () => {
   const { ctx, ownerSettingsPath } = await configurationFixture({ ownerSettings: {
     'default-model': { provider: 'test', model: 'owner' },
   } })
@@ -32,7 +37,7 @@ nativeIt('refreshes an active consumer when the owner editor is reactivated', as
   expect(ctx.agentDefaultModel.currentSelection()).toEqual({ provider: 'test', model: 'restored' })
 })
 
-nativeIt('does not restart disabled or failed consumers while restoring owner settings', async () => {
+it('does not restart disabled or failed consumers while restoring owner settings', async () => {
   const { ctx, ownerSettingsPath } = await configurationFixture({ editorLast: true, disabledProbe: true,
     ownerSettings: { first: { count: 5 }, disabled: { count: 6 } },
     apply: async () => {
@@ -46,14 +51,14 @@ nativeIt('does not restart disabled or failed consumers while restoring owner se
   expect(parse(readFileSync(ownerSettingsPath, 'utf8'))).toEqual({ first: { count: 5 }, disabled: { count: 6 } })
 })
 
-nativeIt('refuses a relative owner settings path at activation', async () => {
+it('refuses a relative owner settings path at activation', async () => {
   const { ctx } = await configurationFixture({ ownerSettings: {}, ownerSettingsConfigPath: 'relative.yaml', hmr: false })
   expect(ctx.get('configEditor')).toBeUndefined()
   expect(ctx.get('settings')).toBeUndefined()
   expect(ctx.logger.buffer.some(row => row.args.some(value => value instanceof Error && value.message.includes('must be absolute')))).toBe(true)
 })
 
-nativeIt('leaves another home settings document untouched when the Host selected an owner generation', async () => {
+it('leaves another home settings document untouched when the Host selected an owner generation', async () => {
   const { ctx, home, start } = await configurationFixture({ ownerSettings: {
     'default-model': { provider: 'test', model: 'owner' },
   } })
@@ -66,7 +71,7 @@ nativeIt('leaves another home settings document untouched when the Host selected
   expect(readFileSync(sourcePath, 'utf8')).toBe(source)
 })
 
-nativeIt('loads released owner settings, edits the live consumer, and retains changes at restart without renaming the source', async () => {
+it('loads released owner settings, edits the live consumer, and retains changes at restart without renaming the source', async () => {
   const { ctx, start, ownerSettingsPath, profile } = await configurationFixture({ ownerSettings: {
     'default-model': { provider: 'test', model: 'legacy' },
     first: { count: 4, token: 'fixture-private', list: [{ name: 'preset', token: 'preset-private' }] },
@@ -88,14 +93,14 @@ nativeIt('loads released owner settings, edits the live consumer, and retains ch
     'uninstalled-plugin': { retained: true },
   })
   expect(readFileSync(profile.patchPath, 'utf8')).toBe(patch)
-  expect(statSync(ownerSettingsPath).mode & 0o777).toBe(0o600)
+  if (process.platform !== 'win32') expect(statSync(ownerSettingsPath).mode & 0o777).toBe(0o600)
   await ctx.fiber.dispose()
   const restored = await start()
   expect(restored.agentDefaultModel.currentSelection()).toEqual({ provider: 'test', model: 'edited' })
   expect(restored.settings.describe().find(row => row.ns === 'first')!.value).toMatchObject({ count: 4, list: [{ name: 'edited-preset' }] })
 })
 
-nativeIt('rejects invalid owner edits without changing the source or live settings', async () => {
+it('rejects invalid owner edits without changing the source or live settings', async () => {
   const { ctx, ownerSettingsPath } = await configurationFixture({ ownerSettings: { first: { count: 5 } } })
   const before = readFileSync(ownerSettingsPath, 'utf8')
   await expect(ctx.settings.update('first', { count: 0 })).rejects.toThrow()
@@ -103,7 +108,7 @@ nativeIt('rejects invalid owner edits without changing the source or live settin
   expect(ctx.settings.describe().find(row => row.ns === 'first')!.value).toMatchObject({ count: 5 })
 })
 
-nativeIt('refuses stale revisions after another owner-file edit', async () => {
+it('refuses stale revisions after another owner-file edit', async () => {
   const { ctx } = await configurationFixture({ ownerSettings: { first: { count: 5 } } })
   const revision = ctx.settings.describe().find(row => row.ns === 'first')!.revision
   const results = await Promise.allSettled([
@@ -115,7 +120,7 @@ nativeIt('refuses stale revisions after another owner-file edit', async () => {
   expect(ctx.settings.describe().find(row => row.ns === 'first')!.revision).toBeGreaterThan(revision)
 })
 
-nativeIt('restores the owner document and live consumer if a plugin rejects the applied update', async () => {
+it('restores the owner document and live consumer if a plugin rejects the applied update', async () => {
   const { ctx, ownerSettingsPath } = await configurationFixture({ ownerSettings: { first: { count: 5 } },
     apply: (probe) => {
       probe.on('internal/update', (config, _noSave, next) => {
@@ -131,7 +136,7 @@ nativeIt('restores the owner document and live consumer if a plugin rejects the 
   expect(ctx.settings.describe().find(row => row.ns === 'first')!.value).toMatchObject({ count: 5 })
 })
 
-nativeIt('retains ordinary stored fields without allowing them to redirect plugin configuration', async () => {
+it('retains ordinary stored fields without allowing them to redirect plugin configuration', async () => {
   const { ctx, ownerSettingsPath } = await configurationFixture({ ownerSettings: {
     first: { path: '/another-profile', count: 5, unavailable: 'retained' },
   }, schema: z.object({ path: z.string().default('/host-owned'), count: z.number().min(1).default(2).volatile() }) })
@@ -144,7 +149,7 @@ nativeIt('retains ordinary stored fields without allowing them to redirect plugi
   expect(readFileSync(ownerSettingsPath, 'utf8')).toBe(before)
 })
 
-nativeIt('resets owner overrides without pinning inherited configuration expressions', async () => {
+it('resets owner overrides without pinning inherited configuration expressions', async () => {
   const { ctx, start, profile, ownerSettingsPath } = await configurationFixture({ ownerSettings: { first: { count: 8 } } })
   await ctx.fiber.dispose()
   writeFileSync(profile.patchPath, '- id: first\n  config:\n    ordinary: !!js "\'inherited-expression\'"\n    count: 3\n')
@@ -160,7 +165,7 @@ nativeIt('resets owner overrides without pinning inherited configuration express
   expect((first.fiber!.config as { ordinary: string }).ordinary).toBe('inherited-expression')
 })
 
-nativeIt('applies owner settings when a layer clears the inherited config', async () => {
+it('applies owner settings when a layer clears the inherited config', async () => {
   const { ctx, profile } = await configurationFixture({ ownerSettings: { first: { count: 5 } },
     schema: z.object({ count: z.number().min(1).default(2).volatile() }),
   })
@@ -169,7 +174,7 @@ nativeIt('applies owner settings when a layer clears the inherited config', asyn
   expect(ctx.settings.describe().find(row => row.ns === 'first')!.value).toEqual({ count: 6 })
 })
 
-nativeIt('refuses to write after the edit callback disposes its configuration owner', async () => {
+it('refuses to write after the edit callback disposes its configuration owner', async () => {
   const { ctx, ownerSettingsPath } = await configurationFixture({ ownerSettings: { first: { count: 5 } } })
   const before = readFileSync(ownerSettingsPath, 'utf8')
   const entry = ctx.configEditor.entries().find(row => row.options.id === 'first')!
