@@ -81,6 +81,8 @@ dsh --profile web --no-open --port 8080
 
 隔离的 Desktop Profile worker 提供 `DSH_PROFILE_MODEL_TOKEN` 时，本包还提供仅供 Host 使用的本机文本请求。它读取 Profile 当前默认模型，并用该 Profile 的凭据服务处理一条用户消息，不启用工具，也不创建 Session。私有令牌不返回浏览器；请求最多 8 KiB，回答最多 16 KiB，执行最多 60 秒。另一条使用令牌认证的本机路由通过 Profile 现有的 Session Remote 方法执行有界 Desktop Session 命令；浏览器 Cookie 不能授权此路由。会话历史只投影 Web 可见的消息、工具和回合字段，并按 Host 控制帧预算返回近期且顺序不变的记录后缀；内部、更早或过大的记录会被省略。第三条仅供 Host 使用的路由由 `DSH_PROFILE_REMOTE_UI_TOKEN` 启用，通过现有 Gateway 接受精确的 Session 和启动读取，请求与响应均有上限。启动读取包括脱敏设置、预设清单、无源码的插件清单、无密钥值的凭据状态和权限选项；凭据引用有数量及格式校验。`dynamicCordisRunner/syncInspectManifest` 会修改 Host 状态，因此仍被拒绝。启动读取只返回当前结构化注入项，不提供任意 URL 内容；浏览器父页面仍须在执行远程脚本前认证并校验资源字节。同一私有令牌还保护独立的 `session/follow`、`workspace/follow` 或 `$events` NDJSON 路由；单条事件上限为 512 KiB，Host HTTP 读取端断开时会取消 Gateway 迭代器。浏览器 Cookie 不能授权这两条远程 UI 路由。这些只是内部构件，不是浏览器公共 API 或完整远程传输；事件流与写操作仍需单独的 Host 租约授权桥接。 `session/collaborationSources` 读取所属 Session 的已有 journal，不准备模型或提交任务。远程控制读取每页返回一条完整原消息，JSON 最多60 KiB，以其不可变快照摘要继续分页；单条更大的消息被拒绝，不截断正文。Session Controller 为本地 Client 保留普通的每页八条消息、256 KiB 列表。
 
+远程 `session/collaborationSources` 精确读取使用 `snapshotDigest` 替代 `cursor`，要求恰好一条匹配的原消息且无后续游标。摘要不符、定位与分页混用，以及单条消息超出预算时均拒绝；定位保留现有 Gateway 鉴权。
+
 Desktop 远端 Session 路由启用时，选定 Profile 为每个 Session 保留一份控制权证明。未受控制的 Session 接受本地浏览器写入时会隐式认领；远端控制者通过显式认领和比较交换接管。Profile 对支持的每次修改及审批答复核对远端证明，在 Gateway 检查本地浏览器写入和事件答复，并持有已获准的写入直到执行结束。控制权在未续期 30 秒后过期，Profile 重启也会使旧证明失效。daemon 和 Slark Server 必须交换 Profile 证明，远端浏览器才能使用这些命令。
 
 远端客户端持有当前 Session 控制权时，Desktop 浏览器会在会话标题栏显示接管入口。用户点击后，浏览器重新读取 Profile 当前 epoch，请用户确认，再通过已认证的浏览器 Gateway 提交比较交换接管。用户随后重新发送保留的草稿。Desktop 远端 Session 路由未启用时不显示此入口。

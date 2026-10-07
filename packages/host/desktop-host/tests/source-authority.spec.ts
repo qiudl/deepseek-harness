@@ -487,6 +487,17 @@ it('refuses a Source digest or coordinate mismatch from the private worker', asy
 function analysisGrant(f:Awaited<ReturnType<typeof fixture>>) {
   return { attempt_request_id:f.challenge.request_id,plan_id:'plan',expected_plan_revision:'1',attempt_id:'attempt',attempt_fence:'1',source_digest:f.challenge.snapshot_digest,input_manifest_digest:'b'.repeat(64),lease_expires_at:new Date(20000).toISOString(),dispatch_granted:true }
 }
+it('the Host refuses Source resume even when its peer incorrectly advertises support', async () => {
+  const f = await fixture(false, false, false, false, false, false, false, false, true)
+  await f.grant()
+  const analysis = vi.fn(async () => ({}))
+  f.setAnalysis(analysis)
+  Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, 'profile.source_live_resume'])
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'resume_source', input: {} } }))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.some(frame => frame.type === 'request' && frame.method === 'profile.collaboration_analysis')).toBe(true)
+  expect(analysis).not.toHaveBeenCalled()
+})
 it.each(['live', 'old', 'wrong_kind', 'revoked', 'cancelled'] as const)(
   'Source live resume uses a separate capability and Host-derived Account identity: %s', async (mode) => {
     const f = await fixture(false, false, false, false, false, false, false, false, true, false, false, false, false, false, mode !== 'old')

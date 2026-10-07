@@ -6,6 +6,8 @@ import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
@@ -129,23 +131,36 @@ export function apply(ctx: ClientContext): void {
     const models = new Map<string, { model: CollaborationResultsModel; bindings: CollaborationResultsInjected }>()
     resultsCtx.effect(() => () => { models.forEach(({ model }) => { model.dispose() }); models.clear() },
       'ui-slark-agent: workspace results')
+    const entryFor = (sessionId: SessionId): { model: CollaborationResultsModel; bindings: CollaborationResultsInjected } => {
+      if (resultsCtx.fiber.uid === null) throw Error('collaboration_view_closed')
+      let entry = models.get(sessionId)
+      if (!entry) {
+        const model = new CollaborationResultsModel(sessionId, resultsCtx.workspaces.list, connection.generation,
+          (cursor, signal, sourceSessionId) => resultsCtx.remote.session.collaborationSources({
+            sessionId: sourceSessionId, ...(cursor ? { cursor } : {}),
+          }, signal), () => window.__DSH_DESKTOP_HOST__, 'workspace',
+          (original, signal) => resultsCtx.remote.session.collaborationSources({
+            sessionId: SessionId(original.source.session_id), snapshotDigest: original.snapshot_digest,
+          }, signal))
+        entry = { model, bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
+          locateOriginal: digest => model.locateOriginal(digest, (original) => {
+            const navigation = resultsCtx.get('uiWorkspace')
+            if (!navigation) throw Error('source_navigation_unavailable')
+            const target = entryFor(SessionId(original.source.session_id))
+            if (!target.model.revealOriginal(original)) throw Error('source_navigation_unavailable')
+            navigation.openSession(SessionId(original.source.session_id))
+            void target.model.refresh()
+          }),
+          consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
+          executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
+          loadReplies: digest => model.loadReplies(digest) } }
+        models.set(sessionId, entry)
+      }
+      return entry
+    }
     resultsCtx.slots.inject('conversation.input.dock', () => resultsCtx.slots.register({
       name: 'conversation.input.dock', id: 'slark-collaboration-results', order: 25, locale: NS,
-      inject: (sessionId) => {
-        let entry = models.get(sessionId)
-        if (!entry) {
-          const model = new CollaborationResultsModel(sessionId, resultsCtx.workspaces.list, connection.generation,
-            (cursor, signal, sourceSessionId) => resultsCtx.remote.session.collaborationSources({
-              sessionId: sourceSessionId, ...(cursor ? { cursor } : {}),
-            }, signal), () => window.__DSH_DESKTOP_HOST__, 'workspace')
-          entry = { model, bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
-            consumptionAction: (digest, deliveryId, reconcile) => model.consumptionAction(digest, deliveryId, reconcile),
-            executionAction: (digest, taskId, reconcile) => model.executionAction(digest, taskId, reconcile),
-            loadReplies: digest => model.loadReplies(digest) } }
-          models.set(sessionId, entry)
-        }
-        return entry.bindings
-      },
+      inject: sessionId => entryFor(sessionId).bindings,
     }, CollaborationResultsDock))
   })
   const t = ctx.locale.bind(NS)

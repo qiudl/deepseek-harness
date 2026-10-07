@@ -46,16 +46,22 @@ export class DesktopRemoteUiExecutor {
     if (endpoint === 'session/collaborationSources') {
       const request = payload.args.request
       if (Object.keys(payload.args).length !== 1 || !record(request)
-        || Object.keys(request).some(key => key !== 'sessionId' && key !== 'cursor')
+        || Object.keys(request).some(key => key !== 'sessionId' && key !== 'cursor' && key !== 'snapshotDigest')
         || typeof request.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(request.sessionId)
         || /[/\\]/u.test(request.sessionId) || request.sessionId === '.' || request.sessionId === '..'
-        || (request.cursor !== undefined && (typeof request.cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(request.cursor)))) {
+        || (request.cursor !== undefined && (typeof request.cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(request.cursor)))
+        || (request.snapshotDigest !== undefined
+          && (typeof request.snapshotDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(request.snapshotDigest)))
+        || (Object.hasOwn(request, 'cursor') && Object.hasOwn(request, 'snapshotDigest'))) {
         throw new Error('desktop remote UI: invalid payload')
       }
       const page: unknown = await this.gateway.invoke({ namespace: 'session', method: 'collaborationSources', args: payload.args, signal })
       if (!record(page) || !Array.isArray(page.items) || page.items.length > 8
         || Object.keys(page).some(key => key !== 'items' && key !== 'next_cursor')
         || (page.next_cursor !== undefined && (typeof page.next_cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(page.next_cursor)))) {
+        throw new Error('desktop remote UI: invalid Source page')
+      }
+      if (request.snapshotDigest !== undefined && (page.items.length !== 1 || page.next_cursor !== undefined)) {
         throw new Error('desktop remote UI: invalid Source page')
       }
       if (!page.items.length) {
@@ -65,6 +71,7 @@ export class DesktopRemoteUiExecutor {
       const first: unknown = page.items[0]
       if (!record(first) || Object.keys(first).sort().join(',') !== 'original_message,snapshot_digest,source'
         || typeof first.snapshot_digest !== 'string' || !/^[0-9a-f]{64}$/u.test(first.snapshot_digest)
+        || (request.snapshotDigest !== undefined && first.snapshot_digest !== request.snapshotDigest)
         || !record(first.source) || Object.keys(first.source).sort().join(',') !== 'session_id,source_message_id,source_revision,workspace_id'
         || first.source.session_id !== request.sessionId || typeof first.original_message !== 'string'
         || Buffer.from(first.original_message, 'utf8').toString('utf8') !== first.original_message) {

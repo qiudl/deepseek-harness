@@ -104,6 +104,38 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('Source locator reads one older immutable original without paging, preparing or writing', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    let digest = ''
+    for (let i = 0; i < 9; i++) {
+      const input = h.source(), id = `message-${i}`
+      input.source_message_id = id
+      input.active_mentions[0]!.source_span.source_message_id = id
+      const capture = await h.controller.captureCollaborationSource(input, signal)
+      if (i === 0) digest = describeCollaborationSource(capture.snapshot).snapshot_digest
+    }
+    const file = await readFile(h.sourceFile), calls = h.prepare.mock.calls.length
+    expect((await h.controller.collaborationSources({ sessionId: h.sessionId }, signal)).items)
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ snapshot_digest: digest })]))
+    const result = await h.controller.collaborationSources({ sessionId: h.sessionId, snapshotDigest: digest }, signal)
+    expect(result).toEqual({ items: [{ source: { workspace_id: h.workspace.id, session_id: h.sessionId,
+      source_message_id: 'message-0', source_revision: '1' }, snapshot_digest: digest, original_message: h.source().original_message }] })
+    expect(await readFile(h.sourceFile)).toEqual(file)
+    expect(h.prepare).toHaveBeenCalledTimes(calls)
+    expect(h.stream).not.toHaveBeenCalled(); expect(h.resume).not.toHaveBeenCalled()
+    for (const request of [
+      { sessionId: h.sessionId, snapshotDigest: digest, cursor: digest },
+      { sessionId: h.sessionId, snapshotDigest: 'bad' },
+      { sessionId: h.sessionId, snapshotDigest: digest, namespace_id: 'foreign' },
+      { sessionId: SessionId('another-session'), snapshotDigest: digest },
+      { sessionId: h.sessionId, snapshotDigest: 'f'.repeat(64) },
+    ]) await expect(h.controller.collaborationSources(request as never, signal)).rejects.toThrow()
+    await h.workspace.detachSession(h.sessionId)
+    await expect(h.controller.collaborationSources({ sessionId: h.sessionId, snapshotDigest: digest }, signal))
+      .rejects.toThrow('collaboration_session_workspace_mismatch')
+    expect(await readFile(h.sourceFile)).toEqual(file)
+  })
+
   it('logs same-Session reference identities before analysis without exposing historical text or private paths', async () => {
     const h = await harness(), signal = new AbortController().signal
     const previous = createUserMessage({ content: [{ type: 'text', text: 'private historical content' }], source: { kind: 'user' } })

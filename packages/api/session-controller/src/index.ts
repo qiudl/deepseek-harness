@@ -1191,7 +1191,7 @@ export class SessionController extends TypertRemoteService {
 
   /**
    * Read original collaboration messages for the Client's Session result area without preparing a model.
-   * @param request - Session identity and a prior page's immutable snapshot digest; authority fields reject.
+   * @param request - Session identity and either a page cursor or one exact immutable snapshot digest; authority fields reject.
    * @param signal - Caller cancellation, combined with Profile disposal and serialized Source writes.
    * @returns At most eight complete messages within 256 KiB; no executable calls or cloud authorization.
    * @throws On malformed input, unknown cursor, corrupt storage, cancellation or changed original membership.
@@ -1199,7 +1199,7 @@ export class SessionController extends TypertRemoteService {
   @Remote('collaborationSources')
   async collaborationSources(request: SessionCollaborationSourcesRequest, signal: AbortSignal): Promise<SessionCollaborationSourcesValue> {
     if (!validCollaborationSourcesRequest(request)) throw Error('collaboration_source_query_invalid')
-    const sessionId = SessionId(request.sessionId), cursor = request.cursor
+    const sessionId = SessionId(request.sessionId), cursor = request.cursor, snapshotDigest = request.snapshotDigest
     const ownedSignal = AbortSignal.any([signal, this.collaborationLifetime.signal])
     ownedSignal.throwIfAborted()
     const wait = <T>(read: Promise<T>) => waitForCollaborationSourceRead(read, ownedSignal)
@@ -1216,12 +1216,16 @@ export class SessionController extends TypertRemoteService {
         .map(snapshot => ({ snapshot, descriptor: describeCollaborationSource(snapshot) }))
         .reverse()
       if (cursor !== undefined && !entries.some(entry => entry.descriptor.snapshot_digest === cursor)) throw Error('collaboration_source_cursor_invalid')
+      if (snapshotDigest !== undefined && !entries.some(entry => entry.descriptor.snapshot_digest === snapshotDigest)) {
+        throw Error('collaboration_source_locator_unavailable')
+      }
       // Immutable cursor lookup keeps older pages stable when a new Source is appended.
-      const history = entries.length ? (await wait(this.inspect(sessionId, ownedSignal))).events : []
+      const history = entries.length && snapshotDigest === undefined ? (await wait(this.inspect(sessionId, ownedSignal))).events : []
       ownedSignal.throwIfAborted()
-      const remaining = (cursor === undefined ? entries
-        : entries.slice(entries.findIndex(entry => entry.descriptor.snapshot_digest === cursor) + 1)
-      ).filter(entry => !hasCollaborationDiscussion(history, entry.snapshot))
+      const remaining = (snapshotDigest !== undefined ? entries.filter(entry => entry.descriptor.snapshot_digest === snapshotDigest)
+        : cursor === undefined ? entries
+          : entries.slice(entries.findIndex(entry => entry.descriptor.snapshot_digest === cursor) + 1)
+      ).filter(entry => snapshotDigest !== undefined || !hasCollaborationDiscussion(history, entry.snapshot))
       const items: SessionCollaborationSourceItem[] = []
       const checks: (() => Promise<void>)[] = []
       let bytes = 256
@@ -1530,10 +1534,12 @@ export class SessionController extends TypertRemoteService {
 function validCollaborationSourcesRequest(value: unknown): value is SessionCollaborationSourcesRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
-  return Object.keys(row).every(key => key === 'sessionId' || key === 'cursor')
+  return Object.keys(row).every(key => key === 'sessionId' || key === 'cursor' || key === 'snapshotDigest')
     && typeof row.sessionId === 'string' && /^[!-~]{1,256}$/u.test(row.sessionId)
     && !/[/\\]/u.test(row.sessionId) && row.sessionId !== '.' && row.sessionId !== '..'
     && (row.cursor === undefined || (typeof row.cursor === 'string' && /^[0-9a-f]{64}$/u.test(row.cursor)))
+    && (row.snapshotDigest === undefined || (typeof row.snapshotDigest === 'string' && /^[0-9a-f]{64}$/u.test(row.snapshotDigest)))
+    && !(Object.hasOwn(row, 'cursor') && Object.hasOwn(row, 'snapshotDigest'))
 }
 
 export { buildModelCatalog }

@@ -1512,10 +1512,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       const sourceArgs = args as Record<string, unknown>
       exactKeys(sourceArgs, ['request'])
       const request = record(sourceArgs.request)
-      exactKeys(request, Object.hasOwn(request, 'cursor') ? ['sessionId', 'cursor'] : ['sessionId'])
+      exactKeys(request, Object.hasOwn(request, 'snapshotDigest') ? ['sessionId', 'snapshotDigest']
+        : Object.hasOwn(request, 'cursor') ? ['sessionId', 'cursor'] : ['sessionId'])
       if (typeof request.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(request.sessionId)
         || /[/\\]/u.test(request.sessionId) || request.sessionId === '.' || request.sessionId === '..'
-        || (Object.hasOwn(request, 'cursor') && (typeof request.cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(request.cursor)))) reject()
+        || (Object.hasOwn(request, 'cursor') && (typeof request.cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(request.cursor)))
+        || (Object.hasOwn(request, 'snapshotDigest')
+          && (typeof request.snapshotDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(request.snapshotDigest)))) reject()
     }
     if (params.endpoint === 'credentials/describe') {
       const credentialArgs = args as Record<string, unknown>

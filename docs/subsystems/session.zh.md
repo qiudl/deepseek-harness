@@ -975,7 +975,7 @@ async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise
 
 /**
  * Read original collaboration messages for the Client's Session result area without preparing a model.
- * @param request - Session identity and a prior page's immutable snapshot digest; authority fields reject.
+ * @param request - Session identity and either a page cursor or one exact immutable snapshot digest; authority fields reject.
  * @param signal - Caller cancellation, combined with Profile disposal and serialized Source writes.
  * @returns At most eight complete messages within 256 KiB; no executable calls or cloud authorization.
  * @throws On malformed input, unknown cursor, corrupt storage, cancellation or changed original membership.

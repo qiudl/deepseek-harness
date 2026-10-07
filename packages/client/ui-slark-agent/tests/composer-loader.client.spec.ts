@@ -40,7 +40,7 @@ const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id
 type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST__']>['invokeEnterpriseAgent']>>[0]
 
 async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration,
-  executionAvailable = collaboration) {
+  executionAvailable = collaboration, navigationAvailable = true) {
   vi.stubGlobal('crypto', webcrypto)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
   const ctx = new Context(), id = SessionId('session-1')
@@ -71,18 +71,20 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   const invoke = vi.fn(async (_input: InvokeInput) => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
   const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
-  const workspace = { id: workspaceId, archived: false, siblings: [] as SessionId[] }
+  const workspace = { id: workspaceId, archived: false, siblings: [] as SessionId[], onSubscribe: () => {} }
   ctx.provide('workspaces', { list: {
     getSnapshot: () => ({ phase: 'ready', state: 'idle', error: null,
       archivedSessionIds: workspace.archived ? [id] : [],
       items: [{ workspaceId: workspace.id, sessionIds: [id, ...workspace.siblings] }] }),
-    subscribe: () => () => undefined,
+    subscribe: () => { workspace.onSubscribe(); return () => undefined },
   } } as never)
   const originals: { source: { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
     snapshot_digest: string
     original_message: string }[] = []
   const sourceReads = vi.fn<typeof ctx.remote.session.collaborationSources>(async input => ({ ok: true,
-    value: { items: originals.filter(item => item.source.session_id === input.sessionId) } }))
+    value: { items: originals.filter(item => item.source.session_id === input.sessionId
+      && (input.snapshotDigest === undefined || item.snapshot_digest === input.snapshotDigest)) } }))
+  const openSession = vi.fn<(sessionId: SessionId) => void>()
   if (servicesAvailable) {
     const namespace = { collaborationSources: sourceReads }
     if (remoteAvailable) {
@@ -90,6 +92,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
       ctx.provide('remote.session', namespace as never)
     }
     ctx.provide('connection', { generation: { getSnapshot: () => 1, subscribe: () => () => {} } } as never)
+    if (navigationAvailable) ctx.provide('uiWorkspace', { openSession } as never)
   }
   const submit = vi.fn(async (input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse> => {
     originals.push({ source: { workspace_id: input.workspace_id, session_id: input.session_id,
@@ -190,7 +193,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
   return { ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf, scopeDirectory, workspace, sourceReads,
-    deliveries, pending, clarify, originals, closeSession: () => scope.fiber.dispose() }
+    deliveries, pending, clarify, originals, openSession, closeSession: () => scope.fiber.dispose() }
 }
 
 type PickedScopedReference = {
@@ -1197,6 +1200,57 @@ it('loads sibling collaboration history through the YAML-registered workspace re
   await f.ctx.fiber.dispose()
   await model.refresh()
   expect(f.sourceReads).toHaveBeenCalledTimes(3)
+})
+
+it('navigates from a YAML-registered record to its verified original Session without sending another task', async () => {
+  const f = await bench(true)
+  f.workspace.siblings.push(SessionId('session-2'))
+  const original = { source: { workspace_id: f.workspace.id, session_id: 'session-2', source_message_id: 'older', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 原始任务' }
+  f.originals.push(original)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  if (!entry?.inject) throw Error('missing results registration')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  await bindings.hooks.slarkResults.refresh()
+  await bindings.locateOriginal?.(original.snapshot_digest)
+  expect(f.openSession).toHaveBeenCalledWith(SessionId('session-2'))
+  expect(f.sourceReads).toHaveBeenCalledWith({ sessionId: SessionId('session-2'), snapshotDigest: original.snapshot_digest }, expect.any(AbortSignal))
+  const target = Reflect.apply(entry.inject, undefined, [SessionId('session-2')]) as CollaborationResultsInjected
+  await vi.waitFor(() => { expect(target.hooks.slarkResults.getSnapshot().phase).toBe('ready') })
+  expect(target.hooks.slarkResults.getSnapshot().focus?.snapshotDigest).toBe(original.snapshot_digest)
+  expect(target.hooks.slarkResults.getSnapshot().groups[0]?.original).toEqual(original)
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['missing-navigation', 'membership-change'] as const)('explains an unavailable Source navigation without submitting work: %s', async (mode) => {
+  const f = await bench(true, true, true, true, mode !== 'missing-navigation')
+  f.workspace.siblings = [SessionId('session-2')]
+  const original = { source: { workspace_id: f.workspace.id, session_id: 'session-2', source_message_id: 'original', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide original' }
+  f.originals.push(original)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  if (!entry?.inject) throw Error('missing results registration')
+  const value = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  await value.hooks.slarkResults.refresh()
+  if (mode === 'membership-change') f.workspace.onSubscribe = () => { f.workspace.siblings = [] }
+  await value.locateOriginal?.(original.snapshot_digest)
+  expect(f.openSession).not.toHaveBeenCalled()
+  if (mode === 'missing-navigation') expect(value.hooks.slarkResults.getSnapshot().location?.status).toBe('unavailable')
+  else expect(value.hooks.slarkResults.getSnapshot().groups).toEqual([])
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('Source locator cannot recreate a registered result model after its owning YAML plugin is disposed', async () => {
+  const f = await bench(true)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  if (!entry?.inject) throw Error('missing results registration')
+  const value = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing loaded Slark source')
+  await plugin.fiber.dispose()
+  await value.locateOriginal?.('a'.repeat(64))
+  expect(() => { Reflect.apply(entry.inject!, undefined, [SessionId('session-1')]) }).toThrow('collaboration_view_closed')
+  expect(f.sourceReads).not.toHaveBeenCalled(); expect(f.openSession).not.toHaveBeenCalled()
 })
 
 it('refuses plain reply discovery without the current Session Remote service', async () => {

@@ -200,6 +200,15 @@ describe('Profile remote UI read wire commands', () => {
     }
   })
 
+  it('Source locator admits one immutable snapshot digest and refuses mixed cursor or authority fields', () => {
+    const request = { sessionId: 'session-1', snapshotDigest: 'a'.repeat(64) }
+    const frame = readFrame('session/collaborationSources', { args: { request } })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    for (const invalid of [{ ...request, cursor: request.snapshotDigest }, { ...request, snapshotDigest: 'bad' },
+      { ...request, workspace_id: 'foreign' }, { ...request, profile: 'foreign' }]) {
+      expect(() => decode(readFrame('session/collaborationSources', { args: { request: invalid } }))).toThrow()
+    }
+  })
   it('rejects extra selectors, unsafe JSON, and overlarge results', () => {
     expect(() => decode(readFrame('session/list', { args: {}, profile_root: '/tmp/other' }))).toThrow()
     expect(() => decode(readFrame('session/list', { args: null }))).toThrow()

@@ -307,10 +307,11 @@ export interface SessionListValue {
   readonly items: readonly SessionSummary[]
 }
 
-/** Read original collaboration messages for one Session; the cursor is a prior snapshot digest. */
+/** Read original collaboration messages for one Session; exact lookup and pagination are mutually exclusive. */
 export interface SessionCollaborationSourcesRequest {
   readonly sessionId: SessionId
   readonly cursor?: string
+  readonly snapshotDigest?: string
 }
 
 /** Original user text and immutable coordinates; no model configuration, journal grants or cloud proof. */

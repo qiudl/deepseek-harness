@@ -472,6 +472,27 @@ it('REQ-20260930-0004: remote original Source feed pages one complete message in
   await expect(executor.execute('session/collaborationSources',{ args:{ request } },signal)).rejects.toThrow('result too large')
 })
 
+it('Source locator forwards exact lookup and refuses a cursor or unrelated first item', async () => {
+  const signal = new AbortController().signal
+  const item = { source: { workspace_id: '11111111-1111-4111-8111-111111111111', session_id: 'session-1',
+    source_message_id: 'message-1', source_revision: '1' },
+  snapshot_digest: 'a'.repeat(64), original_message: '@Guide · Project original' }
+  const invoke = vi.fn<() => Promise<unknown>>(async () => ({ items: [item] }))
+  const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+  const args = { request: { sessionId: 'session-1', snapshotDigest: item.snapshot_digest } }
+  await expect(executor.execute('session/collaborationSources', { args }, signal)).resolves.toEqual({ items: [item] })
+  expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'collaborationSources', args, signal })
+  for (const request of [{ ...args.request, cursor: item.snapshot_digest }, { ...args.request, snapshotDigest: 'bad' },
+    { ...args.request, workspace_id: 'foreign' }]) {
+    await expect(executor.execute('session/collaborationSources', { args: { request } }, signal)).rejects.toThrow('invalid payload')
+  }
+  for (const page of [{ items: [item], next_cursor: item.snapshot_digest }, { items: [item, item] },
+    { items: [{ ...item, snapshot_digest: 'b'.repeat(64) }] }]) {
+    invoke.mockResolvedValue(page)
+    await expect(executor.execute('session/collaborationSources', { args }, signal)).rejects.toThrow('invalid Source page')
+  }
+})
+
 it('REQ-20260930-0004: an exhausted original Source feed has no continuation cursor', async () => {
   const invoke = vi.fn<() => Promise<unknown>>(async () => ({ items: [] }))
   const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])

@@ -2040,7 +2040,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       {
         signature: '@Remote(\'collaborationSources\') async collaborationSources(request: SessionCollaborationSourcesRequest, signal: AbortSignal): Promise<SessionCollaborationSourcesValue>',
         description: 'Read original collaboration messages for the Client\'s Session result area without preparing a model.',
-        parameters: [{ name: 'request', description: 'Session identity and a prior page\'s immutable snapshot digest; authority fields reject.' }, { name: 'signal', description: 'Caller cancellation, combined with Profile disposal and serialized Source writes.' }],
+        parameters: [{ name: 'request', description: 'Session identity and either a page cursor or one exact immutable snapshot digest; authority fields reject.' }, { name: 'signal', description: 'Caller cancellation, combined with Profile disposal and serialized Source writes.' }],
         returns: 'At most eight complete messages within 256 KiB; no executable calls or cloud authorization.',
         throws: ['On malformed input, unknown cursor, corrupt storage, cancellation or changed original membership.'],
       },
@@ -6742,7 +6742,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionCollaborationSourcesRequest',
-    declaration: 'export interface SessionCollaborationSourcesRequest {\n    readonly sessionId: SessionId;\n    readonly cursor?: string;\n}',
+    declaration: 'export interface SessionCollaborationSourcesRequest {\n    readonly sessionId: SessionId;\n    readonly cursor?: string;\n    readonly snapshotDigest?: string;\n}',
   },
   {
     name: 'SessionCollaborationSourcesValue',
