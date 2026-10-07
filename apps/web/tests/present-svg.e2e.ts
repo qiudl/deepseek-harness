@@ -50,7 +50,19 @@ describe('web e2e: requested SVG is explicitly delivered', () => {
     })
     tripwire = watchConsole(page)
     page.on('console', (message) => {
-      if (message.text().startsWith('[connection]')) connectionDiagnostics.push(message.text())
+      if (/^\[(connection|socket-diagnostic)\]/u.test(message.text())) connectionDiagnostics.push(message.text())
+    })
+    await page.addInitScript(() => {
+      const OriginalWebSocket = globalThis.WebSocket
+      globalThis.WebSocket = class extends OriginalWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols)
+          this.addEventListener('close', (event) => {
+            console.info('[socket-diagnostic] ' + JSON.stringify({ code: event.code,
+              reason: event.reason, wasClean: event.wasClean }))
+          })
+        }
+      }
     })
     page.on('websocket', (socket) => {
       const openedAt = Date.now()
