@@ -1,4 +1,9 @@
+import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
+import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
+import type { HostRootAnalysisOutput } from './root-analysis-output.ts'
+import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJournalCommand, HostRootJournalMetadata, HostRootAnalysisInput, HostRootSubmissionTarget } from './root-authority.ts'
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
 
 /** Current on-wire Host control protocol version. */
 export type HostControlProtocolVersion = 1
@@ -433,6 +438,324 @@ export interface ProfileViewActivateResult {
     readonly expires_at: number
     readonly bootstrap_cookie: { readonly name: string; readonly value: string }
   }
+}
+
+/** Registry identities requested through the authenticated Host connection. */
+export interface HostWorkspaceModelSelectionTarget {
+  readonly workspace_id: Branded<'WorkspaceId'>
+  readonly session_id: Branded<'SessionId'>
+}
+
+/** Read-only effective choice; it is not an executable configuration snapshot or Source proof. */
+export interface HostWorkspaceModelSelection extends HostWorkspaceModelSelectionTarget {
+  readonly provider: string
+  readonly model: string
+  readonly reasoning_effort?: string
+}
+
+/** Inspect a Session only in the Profile selected by a verified Account binding. */
+export interface ProfileWorkspaceModelSelectionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_model_selection'
+  readonly params: HostAuthorizedParams & HostWorkspaceModelSelectionTarget & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+  }
+}
+
+/** Minimal selection fields; no message, path, provider configuration, or worker token. */
+export interface ProfileWorkspaceModelSelectionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_model_selection'
+  readonly result: HostWorkspaceModelSelection
+}
+
+/** Server challenge bound to one collaboration registration operation and Account. */
+export interface HostCollaborationRegistrationChallenge {
+  readonly registration_request_id: Branded<'CollaborationRegistrationRequestId'>
+  readonly challenge_id: Branded<'CollaborationRegistrationChallengeId'>
+  readonly challenge_nonce: HostControlNonce
+  readonly expires_at: number
+  readonly audience: string
+  readonly environment_id: HostAuthorityEnvironmentId
+  readonly account_issuer: string
+  readonly account_subject: Branded<'AccountSubject'>
+}
+
+/** Installation signature over the challenge and current Host process; grants no Source authority. */
+export interface HostCollaborationRegistrationAssertion {
+  readonly schema_version: 2
+  readonly challenge: HostCollaborationRegistrationChallenge
+  readonly installation_id: InstallationId
+  readonly installation_public_key: HostControlPublicKey
+  readonly host_instance_id: HostInstanceId
+  readonly process_nonce: HostControlNonce
+  readonly signature: HostControlSignature
+}
+
+/** Sign only after this connection has verified the challenged Account and binding. */
+export interface ProfileCollaborationRegistrationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_registration'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostCollaborationRegistrationChallenge
+  }
+}
+
+/** Exact signed registration assertion without paths, vault handles or credentials. */
+export interface ProfileCollaborationRegistrationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_registration'
+  readonly result: HostCollaborationRegistrationAssertion
+}
+
+/** Server nonce bound to Account and one registry workspace/ordinary Session. */
+export interface HostWorkspaceAuthorityChallenge extends HostWorkspaceModelSelectionTarget {
+  readonly request_id: HostControlRequestId
+  readonly challenge_nonce: HostControlNonce
+  readonly expires_at: number
+  readonly audience: string
+  readonly environment_id: HostAuthorityEnvironmentId
+  readonly account_issuer: string
+  readonly account_subject: Branded<'AccountSubject'>
+}
+/** Installation signature for registry ownership only; no Source/journal/model dispatch grant. */
+export interface HostWorkspaceAuthorityAssertion {
+  readonly schema_version: 1
+  readonly challenge: HostWorkspaceAuthorityChallenge
+  readonly installation_id: InstallationId
+  readonly installation_public_key: HostControlPublicKey
+  readonly host_instance_id: HostInstanceId
+  readonly process_nonce: HostControlNonce
+  readonly signature: HostControlSignature
+}
+/** Account-verified, Main-only workspace ownership read and signature. */
+export interface ProfileWorkspaceAuthorityRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_authority'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostWorkspaceAuthorityChallenge
+  }
+}
+/** Signed workspace/Session ownership without model choice or message content. */
+export interface ProfileWorkspaceAuthorityResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_authority'
+  readonly result: HostWorkspaceAuthorityAssertion
+}
+
+/** Persistent Source identity within one Profile; no caller model or journal metadata. */
+export interface HostCollaborationSourceTarget extends HostWorkspaceModelSelectionTarget {
+  readonly source_message_id: string
+  readonly source_revision: string
+}
+/** Profile journal observation; the digest covers the complete committed Source snapshot. */
+export interface HostCollaborationSourceDescriptor extends HostCollaborationSourceTarget {
+  readonly snapshot_digest: string
+}
+/** Main-only bounded journal JSON. Consumers must validate the complete Source schema and digest before admission. */
+export interface HostCollaborationSourceSnapshot {
+  readonly descriptor: HostCollaborationSourceDescriptor
+  readonly snapshot_json: string
+}
+/** Read original Source content through this connection's verified Account; never accepts content overrides. */
+export interface ProfileSourceSnapshotRequest extends Omit<ProfileWorkspaceModelSelectionRequest, 'method' | 'params'> {
+  readonly method: 'profile.source_snapshot'
+  readonly params: ProfileWorkspaceModelSelectionRequest['params'] & HostCollaborationSourceTarget & {
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly offset: number
+  }
+}
+/** Original Source payload without prepared calls, provider configuration, or unlock material. */
+export interface ProfileSourceSnapshotResult extends Omit<ProfileWorkspaceModelSelectionResult, 'method' | 'result'> {
+  readonly method: 'profile.source_snapshot'
+  readonly result: Readonly<{ descriptor:HostCollaborationSourceDescriptor;offset:number;total_bytes:number;chunk_base64url:string }>
+}
+/** Parent commands retain no caller-selected model or Account binding digest. */
+export type HostCollaborationAnalysisCommand =
+  | Readonly<{ action: 'root_execution_journal'; operation: HostRemoteSessionJson }>
+  | Readonly<{ action: 'root_feedback'; operation: HostRemoteSessionJson }>
+  | Readonly<{ action: 'read_root_attempt'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'prepare_root_attempt'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'dispatch_root_attempt'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
+  | Readonly<{ action: 'read_root_output'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'prepare_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'recover_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'reconcile_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'resume_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'prepare'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'capture_reply'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'prepare_clarification'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
+/** Original analysis JSON uses base64url to stay within the existing frame limit after escaping. */
+export type HostCollaborationAnalysisResult =
+  | Readonly<{ kind: 'root_execution_journal' | 'root_feedback'; record: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'root_attempt_evidence'; evidence: HostRootPlanningEvidence }>
+  | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>
+  | Readonly<{ kind: 'root_output'; evidence: HostRootAnalysisOutput }>
+  | Readonly<{ kind: 'root_prepared'; preparation: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'prepared'; preparation: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'reply_source'; capture: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'output'; json_base64url: string; analysis_receipt?: HostCollaborationAnalysisReceipt }>
+/** Main-only analysis in this connection's token-verified Account Profile. */
+export interface ProfileCollaborationAnalysisRequest extends Omit<ProfileSourceSnapshotRequest, 'method' | 'params'> {
+  readonly method: 'profile.collaboration_analysis'
+  readonly params: Omit<ProfileSourceSnapshotRequest['params'], 'offset' | keyof HostCollaborationSourceTarget> & {
+    readonly command: HostCollaborationAnalysisCommand
+  }
+}
+/** Durable preparation or saved original output; neither grants task admission. */
+export interface ProfileCollaborationAnalysisResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.collaboration_analysis'
+  readonly result: HostCollaborationAnalysisResult
+}
+/** Main-only full reply upload into the currently authorized Account Profile. */
+export interface ProfileCollaborationDeliveryRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.collaboration_delivery'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & {
+    readonly command: HostCollaborationDeliveryChunk
+  }
+}
+/** Sequential progress or installation-signed durable commit, without the answer. */
+export interface ProfileCollaborationDeliveryResult extends Omit<ProfileCollaborationAnalysisResult, 'method' | 'result'> {
+  readonly method: 'profile.collaboration_delivery'
+  readonly result: HostCollaborationDeliveryResult
+}
+/** Server nonce bound to one Source and current registered Host epoch. */
+export interface HostSourceAuthorityChallenge extends HostWorkspaceAuthorityChallenge, HostCollaborationSourceDescriptor {
+  readonly host_epoch: string
+}
+/** Installation signature for committed Source contents; no target execution grant. */
+export interface HostSourceAuthorityAssertion extends Omit<HostWorkspaceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostSourceAuthorityChallenge
+}
+/** Account-verified root observation; the signer must read the original journal binding. */
+export interface ProfileRootAuthorityRequest extends Omit<ProfileSourceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.root_authority'
+  readonly params: Omit<ProfileSourceAuthorityRequest['params'], 'challenge'> & { readonly challenge: HostRootAuthorityChallenge }
+}
+/** Signature in the dedicated root domain, retaining the original source/root/command. */
+export interface ProfileRootAuthorityResult extends Omit<ProfileSourceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.root_authority'
+  readonly result: HostRootAuthorityAssertion
+}
+/** Account-verified, Main-only persistent Source observation and signature. */
+export interface ProfileSourceAuthorityRequest extends Omit<ProfileWorkspaceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.source_authority'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostSourceAuthorityChallenge
+  }
+}
+/** Signed Source coordinates and full snapshot digest, without message content. */
+export interface ProfileSourceAuthorityResult extends Omit<ProfileWorkspaceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.source_authority'
+  readonly result: HostSourceAuthorityAssertion
+}
+
+/** Profile-owned committed transfer grant; coordinates or digests supplied by Desktop grant no access. */
+export interface HostCollaborationReferenceGrant extends HostCollaborationSourceDescriptor {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Exact private lookup of an independently committed Source-bound reference selection. */
+export interface HostCollaborationReferenceTarget extends HostCollaborationSourceTarget {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Correlates one independently authorized reference selection. */
+export type HostCollaborationReferenceRequestId = Branded<'HostCollaborationReferenceRequestId'>
+/** One addressed recipient in the original Source. */
+export type HostCollaborationMentionId = Branded<'HostCollaborationMentionId'>
+/** Locator selection without caller bytes, paths, media type or computed digests. */
+export type HostCollaborationReferenceSelection = Readonly<{
+  source: Readonly<{ workspace_id: string; session_id: string; source_message_id: string; revision: string }>
+  reference_request_id: HostCollaborationReferenceRequestId
+  source_kind: 'message' | 'file'
+  source_locator: string
+  source_version: string
+  range: Readonly<{ unit: 'whole' }> | Readonly<{ unit: 'quote'; text: string }>
+    | Readonly<{ unit: 'utf16' | 'byte'; start: number; end: number }>
+  recipient_mention_ids: readonly HostCollaborationMentionId[]
+  source_evidence_spans: readonly Readonly<{ source_message_id: string; source_revision: string; start: number; end: number }>[]
+}>
+/** Computed Profile metadata; consumers still validate the full request and user sharing intent. */
+export type HostCollaborationReferenceCapture = Readonly<{
+  descriptor: HostCollaborationSourceDescriptor
+  request: HostRemoteSessionJson
+  reference_request_digest: HostControlSha256
+}>
+/** Parent-only capture in this connection's current token-verified Account Profile. */
+export interface ProfileReferenceCaptureRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_capture'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & {
+    readonly selection: HostCollaborationReferenceSelection
+  }
+}
+/** Selection metadata without selected bytes or a reference transfer assertion. */
+export interface ProfileReferenceCaptureResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_capture'
+  readonly result: HostCollaborationReferenceCapture
+}
+/** Original Source and committed reference identity, with a byte offset for bounded reads. */
+export interface HostCollaborationReferenceContentTarget extends HostCollaborationReferenceTarget {
+  readonly offset: number
+}
+/** One exact reference byte chunk; consumers verify the complete content hash before use. */
+export interface HostCollaborationReferenceContentChunk {
+  readonly descriptor: HostCollaborationSourceDescriptor
+  readonly reference_request_digest: HostControlSha256
+  readonly content_digest: HostControlSha256
+  readonly offset: number
+  readonly total_bytes: number
+  readonly chunk_base64url: string
+}
+/** Parent-only byte read using the current token-verified Account and separate Reference capability. */
+export interface ProfileReferenceContentRequest extends Omit<ProfileSourceSnapshotRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_content'
+  readonly params: ProfileSourceSnapshotRequest['params'] & { readonly reference_request_digest: HostControlSha256 }
+}
+/** Bounded reference bytes; this response does not authorize cloud sharing or recipient task admission. */
+export interface ProfileReferenceContentResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_content'
+  readonly result: HostCollaborationReferenceContentChunk
+}
+/** Server nonce binds the original Source and the complete immutable reference reservation request. */
+export interface HostReferenceAuthorityChallenge extends HostSourceAuthorityChallenge {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Installation signature over a separate Profile transfer grant; no target execution authority. */
+export interface HostReferenceAuthorityAssertion extends Omit<HostSourceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostReferenceAuthorityChallenge
+}
+/** Main-only transfer attestation requires current Account access and a separate committed Profile grant. */
+export interface ProfileReferenceAuthorityRequest extends Omit<ProfileSourceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_authority'
+  readonly params: Omit<ProfileSourceAuthorityRequest['params'], 'challenge'> & {
+    readonly challenge: HostReferenceAuthorityChallenge
+  }
+}
+/** Signed reference reservation digest without content, filesystem paths or credentials. */
+export interface ProfileReferenceAuthorityResult extends Omit<ProfileSourceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_authority'
+  readonly result: HostReferenceAuthorityAssertion
 }
 
 /** One bounded text request authorized by this connection's verified Account grant. */
@@ -1007,7 +1330,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog'
+    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog'
     readonly payload: { readonly args: HostRemoteSessionJson }
@@ -1303,6 +1626,32 @@ export type HostControlFrame =
   | ProfileRecoveryStatusResult
   | ProfileViewActivateRequest
   | ProfileViewActivateResult
+  | ProfileWorkspaceModelSelectionRequest
+  | ProfileWorkspaceModelSelectionResult
+  | ProfileCollaborationRegistrationRequest
+  | ProfileCollaborationRegistrationResult
+  | ProfileWorkspaceAuthorityRequest
+  | ProfileWorkspaceAuthorityResult
+  | ProfileRootJournalRequest
+  | ProfileRootJournalResult
+  | ProfileRootPlanningAttemptAuthorityRequest
+  | ProfileRootPlanningAttemptAuthorityResult
+  | ProfileRootAuthorityRequest
+  | ProfileRootAuthorityResult
+  | ProfileSourceAuthorityRequest
+  | ProfileSourceAuthorityResult
+  | ProfileReferenceAuthorityRequest
+  | ProfileReferenceAuthorityResult
+  | ProfileReferenceCaptureRequest
+  | ProfileReferenceCaptureResult
+  | ProfileReferenceContentRequest
+  | ProfileReferenceContentResult
+  | ProfileCollaborationAnalysisRequest
+  | ProfileCollaborationAnalysisResult
+  | ProfileCollaborationDeliveryRequest
+  | ProfileCollaborationDeliveryResult
+  | ProfileSourceSnapshotRequest
+  | ProfileSourceSnapshotResult
   | ProfileModelTextRequest
   | ProfileModelTextResult
   | ProfileLeaseCloseRequest
@@ -1326,3 +1675,51 @@ export type HostControlFrame =
   | MigrationExportInventoryResult
   | MigrationExistingSourceInventoryRequest
   | MigrationExistingSourceInventoryResult
+
+/** Installation signature binding one saved analysis output; it grants no task authority. */
+export type HostCollaborationAnalysisReceipt = Readonly<{
+  schema_version: 1
+  authority_environment_id: string
+  account_binding_handle: string
+  authority_binding_version: number
+  account_issuer: string
+  account_subject: string
+  installation_id: string
+  installation_public_key: string
+  host_instance_id: string
+  process_nonce: string
+  dispatch: Readonly<{
+    attempt_request_id: string
+    plan_id: string
+    expected_plan_revision: string
+    attempt_id: string
+    attempt_fence: string
+    input_manifest_digest: string
+    source_digest: string
+    lease_expires_at: string
+    dispatch_granted: true
+  }>
+  output_digest: string
+  signature: string
+}>
+/** Account-authorized private root journal read or acknowledgement. */
+export interface ProfileRootJournalRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.root_journal'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & { readonly command: HostRootJournalCommand }
+}
+/** Bounded metadata; complete Source bytes use profile.source_snapshot. */
+export interface ProfileRootJournalResult extends Omit<ProfileRootAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.root_journal'
+  readonly result: HostRootJournalMetadata
+}
+
+/** Authenticated current-Account request for one persisted fresh planning attempt. */
+export interface ProfileRootPlanningAttemptAuthorityRequest extends Omit<ProfileRootAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.root_planning_attempt_authority'
+  readonly params: Omit<ProfileRootAuthorityRequest['params'], 'challenge'> & { readonly challenge: HostRootPlanningAttemptAuthorityChallenge }
+}
+/** Fresh attempt proof, never an execution or dispatch grant. */
+export interface ProfileRootPlanningAttemptAuthorityResult extends Omit<ProfileRootAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.root_planning_attempt_authority'
+  readonly result: HostRootPlanningAttemptAuthorityAssertion
+}

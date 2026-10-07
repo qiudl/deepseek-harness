@@ -23,6 +23,7 @@ kind: "package-reference"
 - [已知限制与延后工作](#known-limitations-and-deferred-work)
 
 <a id="wire-contract"></a>
+
 ## 线协议约定
 
 - 每帧恰好一个 UTF-8 JSON 对象和一个结尾 LF；拒绝 CRLF、多行、重复或乱序键、未知字段、非规范数字和尾随数据。
@@ -37,7 +38,7 @@ kind: "package-reference"
 
 `profile.remote_session.control_lease` capability 增加精确的 `control.status`、`control.acquire`、`control.renew` 和 `control.release` 命令。选定 Profile 签发进程 generation 和按 Session 递增的 epoch；每次远端 Session 修改及审批答复都携带该证明。Profile 在调用业务代码前拒绝过期或缺失的证明，已获准的写入执行期间不允许接管。Profile 重启会更换 generation，使旧证明失效。
 
-`profile.remote_ui_read` 将启动、资源、Session 和五种精确的启动元数据读取绑定到同一有效视图租约。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。
+`profile.remote_ui_read` 将启动、资源、Session 和五种精确的启动元数据读取绑定到同一有效视图租约。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
 
 `profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
 
@@ -50,7 +51,16 @@ kind: "package-reference"
 `profile.model_claim_recovery_inventory` 使用同一证明，但不要求候选项 ID。它最多返回 128 条属于已验证账号的脱敏回执，覆盖未完成认领和 Profile 标记尚未清除的操作。查询不启动 worker，也不授权新认领。
 
 <a id="challenge-authentication"></a>
+
 ## 挑战认证
+
+`profile.workspace_model_selection` 接受已验证的 Account 绑定、工作区注册表 UUID 和 Session id。精确响应包含这些身份、provider/model（各最多 256 UTF-8 字节），以及可选 reasoning effort（最多 128 字节）。调用方指定的模型、Profile 路径和额外响应字段均被拒绝。结果只是只读选择，不是可执行适配器快照或 Source 凭据；Host 必须发布已安装执行器的能力才可调用。
+
+`profile.collaboration_registration` 在核验同一连接的 Account 绑定后，签署服务器登记请求/challenge ID、规范 nonce、有效期、HTTPS audience、environment UUID 和 Account issuer/subject。证明包含安装 UUID/公钥及当前 Host instance/process nonce。Ed25519 签名正文是 UTF-8 域 `dsh-collaboration-host-registration/v2`、NUL 与固定顺序 JSON 元组，不包含签名本身。解析器冻结精确字段并拒绝凭据。挑战须仍有效，且在五分钟内过期。服务器须另行信任安装公钥、持久保存并消费挑战、提交登记回执；此签名不授权 Source 或任务。
+
+`profile.workspace_authority` 仅在授权 Profile 读取器确认归属后，签署服务器 nonce、Account/environment 及注册表工作区/Session 目标。读取后再次核验 Account 授权和五分钟有效期。独立签名域 `dsh-collaboration-workspace-authority/v1` 绑定完整目标及当前安装/进程，登记签名不能替代。此证明仅说明读取时的归属，不证明 Source 内容、journal 持久性或 prepared 模型配置。服务器必须认证其挑战，并在重新核验当前 Host/Account 的同一事务中消费。
+
+`profile.source_snapshot` 在已验证的 Account 绑定下私有读取已有 Source，接受精确工作区/Session/消息/版本，另带 issuer/subject 与字节偏移。每次响应包含原描述符、偏移、总字节数（最多 1 MiB）及规范 base64url 分块；分块恰为剩余字节数与 32 KiB 中的较小值。现有 64 KiB 单帧上限保持不变。客户端限制全程 15 秒，跨块固定当前 peer 与描述符，完成严格 UTF-8 解码后校验含八字段的不透明 Source 封装。消费者校验嵌套内容；云端 seal 与 Native 签名验证完整摘要。读取不准备模型或返回可执行调用。
 
 `profile.model_text` 接受同一 Host 连接上已验证的 Account 绑定，以及一条最多 8 KiB 的非空文本；它不会打开或改变可见 Profile 的视图租约。成功结果包含所选提供方、模型和最多 16 KiB 的回答；拒绝结果只包含分类错误码，其中 `cancelled` 与 `timeout` 分别表示取消与超时。该方法不传输 API Key、工具请求、Session id 或提供方原始错误。
 
@@ -59,7 +69,20 @@ kind: "package-reference"
 响应里的公钥本身不构成信任。Desktop Broker 必须将其与已认证安装记录匹配，并独立比对对端可执行文件的代码签名摘要后才接受签名。迁移流程只能依据其显式同意和校验策略建立该记录；普通连接绝不能静默信任新密钥。
 
 <a id="api"></a>
+
+`profile.source_authority` 接受精确服务器挑战，包含 Account/environment、原始 Source 坐标、完整快照摘要与已登记 Host epoch。专用 UTF-8 签名正文由 `dsh-collaboration-source-authority/v1`、NUL 和固定顺序 JSON 元组组成。授权 Profile 必须确认匹配的持久 journal 记录后才能签名；归属或登记签名不能替代。响应不含消息、凭据或可执行调用。云端必须在核验当前 Account/Host 的同一事务中认证并消费 nonce 和快照；签名不授予目标执行权限。
+
+`profile.reference_authority` 另将 `reference_request_digest` 绑定到独立的 Profile 传递授权。签名字节为 `dsh-collaboration-reference-authority/v1`、NUL 和 JSON `[1, sourceSigningPayload, referenceRequestDigest]`；其中 Source 签名正文保留为精确 UTF-8 字符串。Source、工作区或登记签名不能授权引用传递。Profile 授权读取器必须独立返回已提交的 Source 描述符与完整预登记请求摘要；此操作不暴露正文或文件路径。
+
+`profile.reference_capture` 在当前令牌已验证的 Account 下接受最多 32 KiB、绑定 Source 的定位、全部或范围选择，或最多 16 KiB 的非空 Unicode 原文引用、接收对象和用户证据。它规范化私有 Profile 字段顺序，返回最多 32 KiB 的计算描述符、请求和摘要元数据，不含选中字节。父协调器须在捕获前独立确认明确分享意图，并在收到结果后校验完整请求；捕获不授予内容传递或任务受理权限。
+
+`profile.reference_content` 仅接受当前 Account 下的原始 Source、已提交引用请求摘要和字节偏移。每次响应包含一致的 Source 描述符、请求与内容摘要、总长度和最多 32 KiB 的精确规范分块。总内容最多 1 MiB，零字节有效；客户端拼接后核验完整内容。引用字节不扩大 64 KiB 帧预算，也不确认分享或任务受理授权。
+
+`parseHostCollaborationReferenceTarget` 校验私有 worker 查询，其中只有原始 Source 坐标及完整引用请求摘要，不能提供所选字节、快照摘要或授权。`parseHostCollaborationReferenceGrant` 独立校验返回的已提交描述符及请求摘要。
+
 ## API
+
+`profile.collaboration_delivery` 通过顺序上传的规范 base64url 分块传输完整终态答复，每块解码后最多 16 KiB，完整封装最多 1 MiB，答复最多 128 KiB UTF-8。普通 JSON 与 64 KiB 单帧上限保持不变。最终回执不包含答复，使用规范键排序 JSON 签名域 `dsh-collaboration-delivery-receipt-v1`，绑定已验证的 Account、当前安装/进程和原 Profile 提交记录。解析或签名本身均不授予云端确认或执行权威。
 
 | 导出 | 职责 |
 |---|---|
@@ -70,6 +93,7 @@ kind: "package-reference"
 | `HOST_CONTROL_MAX_FRAME_BYTES` | 传输共享缓冲上限。 |
 
 <a id="dev-note"></a>
+
 ## 开发备注
 
 <details>
@@ -80,6 +104,7 @@ kind: "package-reference"
 </details>
 
 <a id="model-experience"></a>
+
 ## 运行时不变量
 
 不发布运行时不变量伴随插件：编解码器在输入边界验证完整的消息值结构。
@@ -97,6 +122,7 @@ kind: "package-reference"
 无直接失效；协议不会贡献模型上下文。
 
 <a id="known-limitations-and-deferred-work"></a>
+
 ## 已知限制与延后工作
 
 - 远程 Session 创建可携带不透明的工作区和会话 ID，由选定 Profile 验证工作区，并按原生 cwd 和 writer 检查幂等复用会话。会话身份复用要求 `profile.remote_session.session_reuse` 能力。传输命令不接受调用方指定的路径。
@@ -125,3 +151,36 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 结果未知的 Skill 删除回执可通过 `skill_restore` 返回有界的 flat/bundle 条目 ID；未知 MCP 回执则可声明 `mcp_restore: true`。插件启停回执可通过 `plugin_restore` 返回有界 npm 包名。全部恢复能力字段互斥，不支持或已恢复时省略。`restored_by` 将历史未知回执关联到成功恢复 UUID，与任一恢复能力字段互斥。恢复回执用 `restores_operation` 指向原操作，两个关联字段均不得指向回执自身。可选字段在 `skill_source` 之后按 `skill_restore`、`mcp_restore`、`plugin_restore`、`restored_by`、`restores_operation` 排序，不传输私有检查点摘要或文件路径。
 
 未知包操作回执可通过 `plugin_complete` 返回闭合的 `action`、`package_name` 和可选 `spec` 字段。动作限定为 install/update/remove；安装和更新要求有界来源，卸载省略来源。该能力与恢复能力及成功解决关联字段互斥。继续执行使用独立的 `completed_by` 和 `completes_operation` UUID，拒绝指向自身及与对应恢复关联字段混用。回执规范顺序在 `plugin_restore` 后加入 `plugin_complete`，随后为 `restored_by`、`restores_operation`、`completed_by` 和 `completes_operation`。意图阶段、原依赖摘要和无关状态摘要保留在 Host 私有记录中。
+
+`parseHostRemoteSessionJson` 向私有 worker 消费者提供现有 Host JSON 限制。它复制已解析数据，拒绝非有限数字、不安全键、过深或过多节点及超限字符串；不授予操作权限。
+
+`profile.collaboration_analysis` 只携带绑定 Account 的准备/派发命令及不可执行的准备描述或原始 JSON 输出。它不接受调用方归属摘要，将编码后的 Source 输入和解码后的输出各限制在32 KiB，验证规范 base64url、UTF-8 和对象 JSON，控制帧限制不变。派发输出另携带安装签名，绑定已验证 Account、当前 Host、原派发 grant 及已保存原始 JSON 摘要。Unix 客户端核验签名和未变输出；服务仍须分别核对当前 Source、attempt 和目标权限。
+
+`profile.collaboration_analysis` 另支持携带有界私有输入的 `capture_reply` 和 `prepare_clarification`。补充捕获返回 `reply_source`，仅包含 captured/recovered Source 描述符；完整输入准备返回 `prepared`。命令与结果字段及操作对应的结果类别均严格核验，帧和 JSON 预算不变。补充捕获不授予模型派发资格。
+
+
+`profile.root_authority` 使用独立的 `dsh-collaboration-root-authority/v1` 签名域。挑战包含完整 Source 挑战，以及 namespace、根任务/trace ID、原始命令 ID 与业务 payload 摘要。Host 在签名前从 Account 已授权的 Profile journal 读取匹配元数据，并在读取后再次检查授权和有效期。仅有 Source 签名不能授权根。新签发证明可以改变传输 nonce、请求 ID 与 Host epoch，原业务绑定保持不变。固定 UTF-8 元组由与 Slark 共用的 `tests/fixtures/root-authority-v1.json` 锁定。云端消费者仍须在根受理事务中独立持久化并消费挑战、重算业务摘要及重新核验当前 grant。
+
+`profile.root_journal` 仅接受已有 namespace/command 和原始 Source 坐标上的 `read` 或 `accept`。回复只包含有界元数据，Source 正文通过 `profile.source_snapshot` 传输。accept 回复必须包含原根的完整原始受理回执。解析器校验字段与身份，Host 检查当前 Account 授权；已记录回执不授予执行权限。
+
+`profile.root_analysis` 能力允许在既有分析方法上使用 `prepare_root`。输入只包含 namespace、续接策略和原 Source 输入；`root_prepared` 回复将 prepared 或 recovered 元数据绑定到已持久化根描述。仅含 Source 的回复或不同 Source 描述都会被拒绝。派发仍绑定原存活尝试，恢复出的根元数据不能创建新调用。
+
+`profile.root_analysis_recovery` 单独启用 `read_root_output`。响应绑定原根、已消费的派发元数据与保存的 JSON 摘要，或明确报告输出缺失。历史租约到期不会删除证据，也不会授予派发权限。输出解码后仍限制为 32 KiB，完整控制帧维持 64 KiB 上限；不返回提示词或可执行 handle。
+
+独立能力 `profile.root_lookup` 允许 `recover_root` 携带原 namespace、策略和 Source 输入。响应必须为包含不可执行 `recovered` 元数据的 `root_prepared`；不能回退到 `prepare_root` 或返回存活尝试。
+
+`profile.root_pending_lookup` 独立允许 `reconcile_root` 查询 admitted 或 pending 根。其输入与不可执行的 recovered 响应均与 `recover_root` 相同，不授予受理、准备或派发权限。
+
+`profile.root_live_resume` 独立允许 `resume_root`，根输入必须匹配原始准备。响应必须包含同一根的 prepared 元数据；调用模型前仍须取得当前云端派发许可。
+
+`profile.root_planning_attempt_authority` 将新规划请求、前驱、预期计划版本、完整输入摘要和实际模型身份绑定到原 root/trace 与当前 Source 挑战。独立签名域不能复用根受理或 Source 签名。精确解析器复制并冻结元数据；固定 UTF-8 元组和 Ed25519 夹具与 Slark 共用。`matchHostRootPlanningAttemptDescriptor` 比对私有持久元数据与挑战；解析和签名不确认云端 nonce 消费、前驱可替代性或派发权限。
+
+`profile.root_planning_attempt` 单独声明通过 `profile.collaboration_analysis` 提供新准备和派发。`prepare_root_attempt` 只接受原根查询，返回包含有界持久元数据的 `root_attempt_prepared`；调用方不能覆盖模型、前驱或归属。`dispatch_root_attempt` 携带新请求 ID 和父协调方已认证的 grant。私有检查使用 worker analysis token，不是 Main 命令。描述符解析器匹配根坐标及可选尝试身份，不建立生命周期或云端权限。
+
+`read_root_attempt` 要求 `profile.root_planning_attempt_recovery`，仅返回原根元数据、最新尝试、已消费授权及可选的已保存输出。解析器绑定原 Source、trace、模型和 manifest，核验输出摘要，并保留已过期的派发事实。这些证据不授予新派发或租期延长。
+
+`profile.root_execution_journal` 启用私有 analysis 传输上的 `root_execution_journal` 命令。请求操作及响应记录是最大 8 KiB 的独立 JSON，调用方不能提供 Account 绑定摘要。Profile 校验操作字段及持久化 root/task 身份，Main 校验记录摘要和已认证的云端回执。null 读取结果仅表示本地没有命令，不证明云端未受理，也不授予执行权限。
+
+独立的 `profile.root_feedback` 能力允许在同一私有分析传输中传递有界的 `root_feedback` 操作与观察记录。Account 绑定仍由父进程负责。观察记录区分持久入队、已接纳的 Session 上下文及已观察到的助手续跑；其中不含结果文本或签名，不能独立认证云端消费。
+
+消费回执采用独立的 `dsh-collaboration-consumption-receipt-v1` 签名域。提交将原根 trace、执行命令、消费尝试和逻辑步骤绑定到实际 Session 事件坐标、首次持久化前缀及本地 journal 提交。投递签名不能替代消费证据。这些编解码器仅确立语法，不授予权限。

@@ -1,5 +1,6 @@
 /** Isolated static-page carrier for a Slark parent that has authenticated Host assets. */
 import { WorkerTunnel, type TunnelEndpoint } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
+import { installRemoteCollaboration } from './remote-collaboration.ts'
 
 const schema = 'dsh-remote-frame/v1'
 const expectedOrigin: unknown = import.meta.env.VITE_DSH_REMOTE_PARENT_ORIGIN
@@ -66,6 +67,7 @@ void tunnel.catch(() => {})
   async ready() {
     const carrier = await tunnel
     const payload = await carrier.bootPayload()
+    await installRemoteCollaboration(carrier.fetch)
     return {
       injections: payload.injections,
       transport: {

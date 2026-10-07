@@ -15,8 +15,8 @@
   en: 1fdf707322fb6996
   zh: 0204f7e9d4aa3cce
 /session-controller/use-this-package:
-  en: b1a66e01de414924
-  zh: 7c01f66b94b01ff9
+  en: 10fd3018b1ef52d8
+  zh: d79140c5f3b315a9
 /session-controller/client-references:
   en: 41bdda1ac32df558
   zh: aa5d0e325924066b
@@ -24,17 +24,32 @@
   en: 266ab2b1e2fec542
   zh: b3450ae28a1e0baf
 /session-controller/configuration:
-  en: 5c4c4224074e38a8
-  zh: e0b0edac65c88ff4
+  en: e8d8ac2eec5c149a
+  zh: fd5c00e4f2b6a0b7
+/session-controller/collaboration-sources-and-journals:
+  en: 6a4b33723d4a4da6
+  zh: d9bc3ac70b66b824
 /session-controller/model-experience:
-  en: 30b917bf822bb4df
-  zh: b0b023b5b526c317
-/session-controller/model-experience/kv-cache-effect:
-  en: 22fc0c9dbedd3bb6
-  zh: fad040ca55fd0e0a
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/session-controller/model-experience/source-analysis-system-prompt:
+  en: 31bc2658e3ac212e
+  zh: c3613cbdf067a328
+/session-controller/model-experience/source-analysis-system-prompt/what-the-model-sees:
+  en: 0f7118b6ad12b79b
+  zh: 2b2979e02d8d6718
+/session-controller/model-experience/source-analysis-system-prompt/what-the-model-sees/analysis-policy:
+  en: 63b20277f7ed3474
+  zh: 71e421d9005f7954
+/session-controller/model-experience/source-analysis-system-prompt/token-effect:
+  en: e56cc598dbac0b16
+  zh: a4b4613b71cd2beb
+/session-controller/model-experience/source-analysis-system-prompt/kv-cache-effect:
+  en: 8a460b133ff8b19b
+  zh: 6e1270958ce0ca66
 /session-controller/known-limitations-and-deferred-work:
-  en: e896bfcaf38b4f6c
-  zh: 55a4eba838f166de
+  en: 45b557f453fe926d
+  zh: 9a40ad3aecfe7d95
 /session-controller/known-limitations-and-deferred-work/dev-note:
-  en: 68e0dfe4588c5b88
-  zh: db51b435611bded1
+  en: 0a748b895c5ddc7e
+  zh: 73e577aa079ad2fe

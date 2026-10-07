@@ -220,6 +220,9 @@ describe.skipIf(MODE === 'record')('web e2e: first-run DeepSeek credential setup
     await settings.getByRole('group', { name: '输入类型 1' }).getByRole('checkbox', { name: '图片' }).uncheck()
     await settings.getByRole('button', { name: '保存', exact: true }).click()
     await settings.getByLabel('模型 ID 1').waitFor({ state: 'detached', timeout: 15_000 })
+    // Saving announces completion after the refreshed provider directory arrives.
+    // Reopening before that acknowledgement can put the old save notice into the new draft.
+    await settings.getByRole('status').filter({ hasText: /^已保存 DeepSeek \(deepseek-official\)。$/ }).waitFor()
     const savedDefaults = await readFile(join(scaffold.harnessHome, 'profiles', 'scaffold', 'cordis.patch.yml'), 'utf8')
     expect(savedDefaults).toContain('id: deepseek-flash')
     expect(savedDefaults).toContain('inputModalities:')

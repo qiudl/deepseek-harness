@@ -1112,3 +1112,12 @@ describe('coverage tails (branch duals)', () => {
     expect(b.svc.binding(sid('s1'))).toBe(reference.binding)
   })
 })
+
+it('derives discussion retry identity through the injected sessions service without opening a Session', async ({ bench }) => {
+  const b = bench(), source = { workspace_id: '38c7c5cb-38fc-466f-9d92-89cc49f84051',
+    session_id: 'session', source_message_id: 'message', source_revision: '1' }
+  const first = b.svc.discussionRequestId(source)
+  expect(b.svc.discussionRequestId(structuredClone(source))).toBe(first)
+  expect(b.svc.discussionRequestId({ ...source, source_revision: '2' })).not.toBe(first)
+  expect(b.svc.binding(sid('session'))).toBeUndefined()
+})

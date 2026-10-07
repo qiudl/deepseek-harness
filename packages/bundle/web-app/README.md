@@ -28,6 +28,7 @@ Run `dsh --profile web` to open an interactive browser GUI with chat, model and 
 -----
 
 <a id="use-this-package"></a>
+
 ## Use this package
 
 Start the GUI, open your browser, and start talking to the agent. The flags fine-tune the invocation.
@@ -73,15 +74,18 @@ Each browser session selects a shipped preset (`standard` by default). The Agent
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## Understand the implementation
 
-When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the bundle also serves one Host-only local text request. It snapshots the Profile's current default model and uses its credential service for a single user message without tools or a Session. The private token is never returned to the browser; requests are limited to 8 KiB, answers to 16 KiB, and execution to 60 seconds. A separate token-authenticated local route executes bounded Desktop Session commands through the Profile's existing Session Remote methods; browser cookies cannot authorize it. Session history projects only Web-visible message, tool, and turn fields and returns a recent ordered suffix within the Host control-frame budget; internal, older, or oversized records are omitted. A third Host-only route, enabled by `DSH_PROFILE_REMOTE_UI_TOKEN`, accepts exact Session and startup reads through the existing Gateway, with bounded request and response bodies. Startup reads include redacted settings, preset rosters, source-free Plugin inventory, credential status without values, and permission options; credential references are bounded and validated. `dynamicCordisRunner/syncInspectManifest` remains denied because it changes Host state. The boot read returns current structured startup rows, not arbitrary URL content; the browser parent must still authenticate and check resource bytes before executing remote scripts. The same private token also protects a separate `session/follow`, `workspace/follow`, or `$events` NDJSON route; it limits each event to 512 KiB and cancels the Gateway iterator when its Host HTTP reader disconnects. Browser cookies cannot authorize either remote UI route. These are internal building blocks, not a public browser API or a complete remote UI transport; the event stream and writes still require a separately authorized Host lease bridge.
+`DSH_PROFILE_WORKSPACE_MODEL_TOKEN` enables `/internal/desktop-workspace-model-selection` only inside an isolated Profile worker. The endpoint accepts a 2 KiB registry workspace/Session target and delegates to the Host-only Session Controller reader without activating an Agent or dispatching a model. Browser cookies cannot authorize it. Failures omit exception details; responses are noncacheable and contain only validated selection fields. This read does not provide a Source proof or prepared configuration snapshot.
+
+When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the bundle also serves one Host-only local text request. It snapshots the Profile's current default model and uses its credential service for a single user message without tools or a Session. The private token is never returned to the browser; requests are limited to 8 KiB, answers to 16 KiB, and execution to 60 seconds. A separate token-authenticated local route executes bounded Desktop Session commands through the Profile's existing Session Remote methods; browser cookies cannot authorize it. Session history projects only Web-visible message, tool, and turn fields and returns a recent ordered suffix within the Host control-frame budget; internal, older, or oversized records are omitted. A third Host-only route, enabled by `DSH_PROFILE_REMOTE_UI_TOKEN`, accepts exact Session and startup reads through the existing Gateway, with bounded request and response bodies. Startup reads include redacted settings, preset rosters, source-free Plugin inventory, credential status without values, and permission options; credential references are bounded and validated. `dynamicCordisRunner/syncInspectManifest` remains denied because it changes Host state. The boot read returns current structured startup rows, not arbitrary URL content; the browser parent must still authenticate and check resource bytes before executing remote scripts. The same private token also protects a separate `session/follow`, `workspace/follow`, or `$events` NDJSON route; it limits each event to 512 KiB and cancels the Gateway iterator when its Host HTTP reader disconnects. Browser cookies cannot authorize either remote UI route. These are internal building blocks, not a public browser API or a complete remote UI transport; the event stream and writes still require a separately authorized Host lease bridge. `session/collaborationSources` reads the existing owning Session journal without model preparation or task submission. Remote control reads return one complete original message within 60 KiB of JSON, using its immutable snapshot digest for the next page; larger individual messages are refused without truncation. Session Controller retains its ordinary eight-message, 256 KiB feed for local clients.
 
 When the Desktop remote Session route is active, its Profile keeps one control claim per Session. Browser Session writes implicitly claim local control while the Session is unclaimed; a remote controller uses explicit acquire and compare-and-swap takeover. The Profile checks remote claims on every supported mutation and approval reply, checks local browser writes and event replies at the Gateway, and holds admitted writes until they settle. Control claims expire after 30 seconds without renewal and are invalid after Profile restart. The daemon and Slark Server must exchange the Profile claim before the remote browser can use these commands.
 
 When a remote client owns the current Session, the Desktop browser shows a takeover action in the Session header. It reads the current Profile epoch again, asks the user to confirm, and submits a compare-and-swap takeover through the authenticated browser Gateway. The user then resends the retained draft. The action is absent without the Desktop remote Session route.
 
-Remote `session.create` forwards only an optional Workspace ID to the selected Profile. The Profile resolves that ID against its own registry; caller-supplied paths do not cross the Host command protocol. Native approval results use the pending `$events` generation and must match its Session ID. An event stream rejects a second ready frame or a client ID already held by a live stream; closing the stream clears its pending approvals.
+Remote `session.create` forwards optional Workspace and Session IDs to the selected Profile. The Profile resolves these IDs through its registry and native Session controller; caller-supplied paths do not cross the Host command protocol. A native `session/writer-held` refusal returns a bounded `sessionCreateFailure` value for the remote UI's existing blank-session fallback. Native approval results use the pending `$events` generation and must match its Session ID. An event stream rejects a second ready frame or a client ID already held by a live stream; closing the stream clears its pending approvals.
 
 <details>
 <summary>Implementation internals — click to expand</summary>
@@ -123,6 +127,7 @@ No invariant companion is published because every contribution — the frontend-
 -----
 
 <a id="further-exploration"></a>
+
 ## Further Exploration
 
 Read these pages when you want to go deeper into the shared core, the browser reload pipeline, or the built frontend.
@@ -136,6 +141,24 @@ Read these pages when you want to go deeper into the shared core, the browser re
 -----
 
 <a id="model-experience"></a>
+
+`DSH_PROFILE_SOURCE_TOKEN` enables `/internal/desktop-collaboration-source` in the isolated Profile worker. Its private POST accepts at most 2 KiB of exact original Source coordinates and returns a validated descriptor of the existing journal entry. It rejects browser-cookie access, caller model/commit fields, missing Sources and lost Session membership. Replies are noncacheable, sanitized and contain no message content or executable call; signing belongs to the parent Native Host.
+
+The same private token additionally enables `/internal/desktop-collaboration-source-snapshot`. Exact coordinates resolve the existing owning Profile journal snapshot, with strict nested metadata and content-digest validation. The reply is a descriptor plus original Source JSON, without credentials or an executable handle. Browser cookies cannot authorize this route; missing membership, malformed journals and read failures return sanitized refusals. The parent consumes the complete bounded response and transfers it through fixed control-protocol chunks.
+
+`DSH_PROFILE_ANALYSIS_TOKEN` separately enables `/internal/desktop-collaboration-analysis` for the Parent Host. `prepare` captures the Profile-owned Source and persists the full analysis input, then waits for a cloud grant without calling the model. `dispatch` resumes that same one-shot call only under its original binding digest and durably saves output before replying. Two pending operations and a 30-second lifetime bound preparation and execution; cancellation, disposal, expired grants and repeats refuse continuation. Browser cookies and Source-read tokens cannot authorize it. This private route grants no task admission and does not expose executable recovery or a Renderer API.
+
+`capture_reply` first persists a mention-free reply Source and retains its process-local call without analysis. After the coordinator commits that reply against the selected pending items, `prepare_clarification` verifies the complete original/reply input with the owning Profile and persists a new manifest before waiting for its matching plan/revision grant. The original Source descriptor remains the analysis identity. Duplicate captures return passive recovery; concurrent preparations, binding changes, expiry and disposal cannot reconstruct or resend the call. These operations share the same two-operation and 30-second limits.
+
+`DSH_PROFILE_DELIVERY_TOKEN` independently enables `/internal/desktop-collaboration-delivery` for the parent Host. It accepts at most 1 MiB of exact readable delivery JSON and delegates original Source and membership checks to the owning Session Controller. It returns a noncacheable first-commit descriptor only after saving the complete reply; the answer is not echoed. Browser cookies, Source-read tokens, caller-supplied commits and restricted projections cannot authorize a save. Cancellation, write failure and post-commit ownership loss withhold a successful receipt without deleting saved data. This route does not sign a cloud acknowledgement or append a chat event.
+
+
+A separate `DSH_PROFILE_REFERENCE_TOKEN` enables `/internal/desktop-collaboration-reference-capture`. The parent sends at most 32 KiB of already authorized locator/range/recipient selection. A literal quote is accepted only when the Profile returns its resolved UTF-16 range and exact computed quote byte length and digest. Session Controller independently derives and persists the full request from actual content; the response contains at most 32 KiB of computed metadata and no content bytes. Source-read tokens and browser cookies cannot capture references. The trusted parent must establish explicit user sharing intent before calling; natural-language resolution and cloud transfer remain separate.
+
+The same independent Reference token protects `/internal/desktop-collaboration-reference-content`. Its private query contains only original Source coordinates, the committed full reference request digest and a byte offset, within 2 KiB. The Profile rechecks current membership and selected content for every response. Responses contain exact chunks of at most 32 KiB, support empty content and remain noncacheable; Source tokens and browser cookies grant no access. Cloud transfer and task attachment remain coordinator-owned.
+
+The same Source token protects `/internal/desktop-collaboration-reference-grant`. Its private 2 KiB query contains only original Source coordinates and a full reference request digest. The owning Session Controller requires a separately committed selection and independently rechecks its current message or attachment bytes. The sanitized, noncacheable response contains only the Source descriptor and matching digest; browser cookies, caller paths and content cannot authorize it.
+
 ### Remote workspace directories
 
 The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
@@ -156,6 +179,7 @@ One source line and one prompt paragraph per session plus two managed-environmen
 
 Source and Web sections follow first-party reusable instructions. Different checkout paths or local ports leave that preceding prefix unchanged when tools and configuration match; provider cache reuse is not guaranteed.
 
+
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>
@@ -171,9 +195,9 @@ These limits tell you what to expect in unusual setups — a source checkout, SS
 - **Binding all network interfaces is not supported** — `--host 0.0.0.0` is rejected at startup for safety; use the default loopback host.
 - **Desktop control groups local browser windows** — the Profile currently treats local browser windows as one Desktop owner. Its claim covers Session Remote mutations and forwarded approval replies; terminal input, file upload, and settings writes have separate owners and are outside this claim.
 
-- Desktop remote Session creation forwards Workspace and Session identities to the native Session controller. A native `session/writer-held` refusal is returned as a bounded `sessionCreateFailure` value so the remote UI can apply its existing blank-session fallback.
 
 <a id="dev-note"></a>
+
 ### Dev Note
 
 <details>
@@ -184,3 +208,28 @@ None.
 </details>
 
 The Web composition includes the account Remote controller and Account settings section.
+
+
+The private `/internal/desktop-collaboration-root` endpoint reuses the parent-only Source capability to read durable root metadata through `inspectCollaborationRoot`. It accepts exact namespace, command and original source coordinates, rejects browser cookies and mismatched replies, and returns no source text or executable handle. Route disposal removes the handler.
+
+The private `/internal/desktop-root-journal` endpoint requires `DSH_PROFILE_ANALYSIS_TOKEN`, accepts at most 2 KiB of exact read/accept JSON, and returns root metadata without Source content. Browser cookies and `DSH_PROFILE_SOURCE_TOKEN` grant no access. Session Controller validates membership and persists the exact original receipt before success; neither operation captures a new Source or prepares a model.
+
+`prepare_root` uses `captureCollaborationRoot` and retains its first analysis call in the same two-stage owner. The root is persisted before preparation is acknowledged. Responses contain the original root descriptor alongside prepared or recovered Source metadata; recovery never contains an executable attempt. The existing binding, timeout, cancellation and one-dispatch rules also apply to root preparation. Neither root registration nor a saved planning candidate grants task execution.
+
+`read_root_output` reads an admitted root through current Session/Workspace membership, then joins the saved output to its original durable dispatch record. It rechecks root membership after reading. Missing output is explicit; ambiguous records, changed roots, cancellation and disposal reject. Reopening the journal preserves the original output and grant without preparing or calling a model. Cloud consumers must independently enforce the original lease and fence before committing a candidate.
+
+`recover_root` reads an existing admitted root by namespace and Source coordinates. The original text, mentions and continuation policy must match. It never captures a Source, prepares a model, writes a root or creates dispatch state. Pending or absent roots, changed input, cancellation and lost membership reject; a missing local admission receipt requires separate reconciliation.
+
+`reconcile_root` also reads pending roots for Main to retrieve the original cloud receipt. It applies the same Source, policy and membership checks and never admits the root or prepares a model.
+
+`resume_root` requires an admitted root and the original live preparation under the same Account/Host binding. A reconnect may take over through the Parent-derived Account/Profile/Host-process identity, invalidating the old connection’s dispatch ownership. It returns the same attempt and manifest only while dispatch is unused; it does not prepare a new model call or extend the 30-second deadline. Process restart, timeout, membership loss and a consumed dispatch reject.
+
+The analysis-token endpoint owns `prepare_root_attempt`, `inspect_root_attempt` and `dispatch_root_attempt`. `DesktopRootPlanning` derives the predecessor from the old analysis journal or the current fresh-attempt chain and refuses known dispatch or a still-live original preparation. It retains at most two pending roots for 30 seconds; same-connection retries keep their identity and deadline. It publishes metadata only after complete input persistence and rechecks membership, current journal state and the parent-derived Account/Profile/Host/connection binding before attestation or dispatch. Worker restart creates no executable recovery handle: another unused preparation gets a new attempt and retains its predecessor. Output commits beside the consumed grant, and disposal awaits pending work and journal writes. Cloud eligibility and grant authentication remain parent responsibilities.
+
+The analysis-token `read_root_attempt` operation reads the latest durable attempt and verified saved output after owner restart without model preparation. It checks original-root membership before and after storage reads and discards results after cancellation or owner closure. Expired grants remain visible as consumed history; only a separate current cloud grant can authorize dispatch.
+
+The analysis-token `root_execution_journal` operation delegates exact read/prepare/accept requests to the owning Session Controller. It retains Profile lifetime cancellation, rejects browser-only authorization and unknown fields, and publishes only the durable record or an explicit null read. It performs no model preparation or cloud dispatch.
+
+The analysis-token `root_feedback` operation delegates private read/enqueue commands to Session Controller and retains cancellation and exact-field validation. Responses contain bounded persisted observations without result content. Browser cookies cannot authorize consumption, and the operation does not activate a model.
+
+The same private `root_feedback` carrier also routes `consumer_prepare`, `consumer_start` and `consumer_read` to the durable consumer owner. Only a first current grant may wake the original Agent; the start request retains its cancellation lifetime through Agent settlement. Historical reads never restore a wake handle. Browser result controls send only a retained preview, task and delivery identity through authenticated Desktop Main.

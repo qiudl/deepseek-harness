@@ -650,6 +650,26 @@ export class DesktopHost {
   }
 
   /**
+   * Authorize the exact challenged Account using this connection's token-verified binding.
+   * @param input - Current binding, connection owner and expected Account identity.
+   * @returns Nothing; mismatched identity or a revoked/unverified grant throws.
+   */
+  authorizeCollaborationRegistration(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly ownerId: string
+    readonly issuer: string
+    readonly subject: string
+  }): void {
+    const profileId = this.authorizeAccountModelText(input)
+    const profile = this.options.registry.resolveProfile(profileId)
+    if (!profile || !this.options.registry.matchesAccountIdentity(profile, input)) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
+  }
+
+  /**
    * Recheck a token, current binding and Main-vault proof when a pending claim prevents worker startup.
    * This grants no view lease and must only be used with a durable same-Profile claim receipt.
    * @param input - Fresh Account token, current binding, and matching Main-vault unlock proof.

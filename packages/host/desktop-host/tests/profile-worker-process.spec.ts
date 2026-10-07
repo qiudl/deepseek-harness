@@ -355,6 +355,13 @@ describe('profile worker child process', () => {
 })
 
 describe('dsh web Profile worker', () => {
+  it('refuses caller overrides of the private collaboration delivery token before launching a worker', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+    await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_DELIVERY_TOKEN: 'C'.repeat(43) } }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+  })
   it('rejects relative launch paths and non-ready or oversized child output', async () => {
     expect(() => new DshWebProfileWorkerFactory({
       nodeExecutablePath: 'node', dshEntrypointPath: process.execPath,
@@ -614,6 +621,19 @@ describe('dsh web Profile worker', () => {
       let assetReads = 0
       const server = createServer(async (request, response) => {
         const url = new URL(request.url, 'http://127.0.0.1')
+        if (url.pathname === '/internal/desktop-workspace-model-selection') {
+          if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_WORKSPACE_MODEL_TOKEN) {
+            response.writeHead(403).end()
+            return
+          }
+          const chunks = []
+          for await (const chunk of request) chunks.push(chunk)
+          const target = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+          response.writeHead(200, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ ...target, provider: 'deepseek', model: 'chat',
+              ...(target.session_id === 'bad' ? { api_key: 'private' } : {}) }))
+          return
+        }
         if (url.pathname === '/internal/desktop-model-text') {
           if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_MODEL_TOKEN) {
             response.writeHead(403).end()
@@ -731,6 +751,13 @@ describe('dsh web Profile worker', () => {
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-model-text`, { method: 'POST' })).status).toBe(403)
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-session`, { method: 'POST' })).status).toBe(403)
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-ui`, { method: 'POST' })).status).toBe(403)
+    expect((await fetch(`${worker.viewOrigin}/internal/desktop-workspace-model-selection`, { method: 'POST' })).status).toBe(403)
+    const target = { workspace_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session' as never }
+    await expect(worker.inspectWorkspaceModelSelection?.(target, new AbortController().signal)).resolves.toEqual({
+      ...target, provider: 'deepseek', model: 'chat',
+    })
+    await expect(worker.inspectWorkspaceModelSelection?.({ ...target, session_id: 'bad' as never }, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
     expect((await fetch(`${worker.viewOrigin}/internal/desktop-remote-ui-stream`, { method: 'POST' })).status).toBe(403)
     await expect(worker.generateText?.('question', new AbortController().signal)).resolves.toEqual({
       provider: 'deepseek', model: 'chat', text: 'answer',
@@ -788,6 +815,8 @@ describe('dsh web Profile worker', () => {
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
     })
     await expect(factory.create({ ...spec(root), env: { DSH_HOME: '/tmp/attacker' } }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_WORKSPACE_MODEL_TOKEN: 'attacker' } }))
       .rejects.toMatchObject({ code: 'invalid_input' })
     await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_REMOTE_UI_TOKEN: 'attacker' } }))
       .rejects.toMatchObject({ code: 'invalid_input' })

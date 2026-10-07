@@ -545,11 +545,6 @@
   "packages/client/ui-conversation/tests/input-bar.client.spec.tsx": {
     "3d6baa466085a8e208e654db87a20b761bbf0bb85ae7bb39895aa64c6440ea37": 1
   },
-  "packages/client/ui-conversation/tests/input-reference-submit.client.spec.ts": {
-    "64660ebb9dad7817ede2fd74d80876cae6e57ff62af05f81f6d6cfeee0e297f0": 1,
-    "7a3d6939ca4a1f674a75b7e2be17463224b7dc484c53f3ed7cb0b929db8c64e2": 1,
-    "b585faf89fdafeabd09ae294be5f31a6bf0e96247068506f61861a045d1c8d44": 1
-  },
   "packages/client/ui-conversation/tests/service-orchestration.client.spec.ts": {
     "910b6d005a8e354f7fd58ae7498f66746a88f8ba0145b61b7d462ac33d4531cf": 1,
     "e1afcf3bd21c4348c25c31b75c3d96e12710fc3bb3165da6a77a48731cb7e737": 1

@@ -328,6 +328,7 @@ export class SessionCommandController {
 
   /**
    * Reject empty content, then admit one prompt after Agent and attachment validation.
+   * An existing request's committed inbox insertion remains accepted after claim or cancellation.
    * @param request - Session identity, prompt content, source metadata, and delivery mode.
    * @returns acknowledgement that the Agent accepted the prompt.
    */
@@ -383,6 +384,8 @@ export class SessionCommandController {
             { sessionId: agent.id },
           )
         }
+        // Another retry can commit while attachment admission is awaiting I/O.
+        if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
         using binding = this.ctx.fileUploads.bindPrompt(agent, admission.receiptIds, request.requestId)
         if (request.mode === 'steer') agent.steer(message)
         else agent.followup(message)
@@ -630,9 +633,10 @@ function hasPromptRequest(agent: Agent, requestId: SessionRequestId): boolean {
   if (agent.inbox.nextTurn.some(matches) || agent.inbox.nextStep.some(matches)) return true
   // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
   return agent.session.snapshotEvents().some((event) => {
-    if (event.type !== 'user/message') return false
-    const source = event.data.source
-    return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
+    if (event.type === 'user/message') return matches(event.data)
+    // Inbox insertion commits acceptance before a turn claims the message. Removal,
+    // cancellation, or a lost reply cannot make that original request unaccepted.
+    return event.type === 'agent/inbox/spliced' && event.data.inserted.some(matches)
   })
 }
 function imageBlockIn(

@@ -509,6 +509,8 @@ export interface ToolHistory {
 
 /** A single model request, fully assembled. */
 export interface GenerateOptions {
+  /** W3C transport correlation from the owning operation; grants no execution authority. */
+  traceparent?: string
   /** Registered provider route selecting the adapter instance. */
   provider: string
   model: string
@@ -549,5 +551,5 @@ export interface GenerateOptions {
    * map the purpose to model-hidden transport metadata or purpose-specific
    * generation policy. Ordinary conversation requests leave it unset.
    */
-  purpose?: 'compaction' | 'session-title'
+  purpose?: 'compaction' | 'session-title' | 'collaboration-analysis'
 }

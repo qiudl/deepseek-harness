@@ -15,6 +15,7 @@ import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, resolveProfiles } from '../src/config.ts'
+import * as PiModels from '../src/models.ts'
 import { memoryAuth } from './auth-double.ts'
 import { assemble } from './assemble.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
@@ -111,6 +112,61 @@ describe('PiAiAdapter provider routing', () => {
     expect(chunks.length).toBeGreaterThan(0)
     expect(first.requests).toHaveLength(1)
     expect(second.requests).toHaveLength(0)
+  })
+
+  it('captures a DeepSeek explicit credential without native auth lookups after preparation', async () => {
+    const first = await mockServer([{ events: textEvents }]), second = await mockServer([])
+    let providers = { deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: first.url } }
+    let key = 'snapshot-first-key', reads = 0
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['deepseek'], new PiAiAdapter({ profiles: () => resolveProfiles(providers), resolveApiKey: () => { reads++; return Promise.resolve(key) }, auth: memoryAuth() }))
+    try {
+      const prepared = await ctx.llm.prepareSnapshot({ provider: 'deepseek', model: 'deepseek-v4-flash' }, new AbortController().signal)
+      expect(reads).toBe(1)
+      expect(first.requests).toHaveLength(0)
+      providers = { deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: second.url } }; key = 'snapshot-second-key'
+      for await (const _chunk of prepared.stream({ ...prepared.config, messages: [] })) { /* consume */ }
+      expect(reads).toBe(1)
+      expect(first.headers[0]?.authorization).toBe('Bearer snapshot-first-key')
+      expect(second.requests).toHaveLength(0)
+      expect(JSON.stringify(prepared.snapshot)).not.toContain('snapshot-first-key')
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('refuses a complete snapshot when pi-ai would need ambient or native auth', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['deepseek'], new PiAiAdapter({ profiles: () => resolveProfiles({ deepseek: {} }), resolveApiKey: () => Promise.resolve(undefined), auth: memoryAuth() }))
+    try {
+      await expect(ctx.llm.prepareSnapshot({ provider: 'deepseek', model: 'deepseek-v4-flash' }, new AbortController().signal)).rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('denies snapshot capture for routes outside the audited explicit-credential protocol', async () => {
+    const adapter = adapterOf({ gateway: {
+      api: 'openai-completions', baseURL: 'https://gateway.example.test/v1', models: [{ id: 'custom' }],
+    } })
+    await expect(adapter.prepareSnapshot('gateway', 'custom', new AbortController().signal))
+      .rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
+  })
+
+  it('refuses an SDK collection that resolves a model without its owning provider', async () => {
+    const create = PiModels.createModels, restore: Array<() => void> = []
+    const collection = vi.spyOn(PiModels, 'createModels').mockImplementation((options) => {
+      const models = create(options)
+      const read = vi.spyOn(models, 'getProvider').mockReturnValue(undefined)
+      restore.push(() => { read.mockRestore() })
+      return models
+    })
+    try {
+      const adapter = adapterOf({ deepseek: {} })
+      await expect(adapter.prepareSnapshot('deepseek', 'deepseek-v4-flash', new AbortController().signal))
+        .rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
+    } finally {
+      restore.forEach((dispose) => { dispose() })
+      collection.mockRestore()
+    }
   })
 
   it('merges profile headers with Harness attribution winning', async () => {

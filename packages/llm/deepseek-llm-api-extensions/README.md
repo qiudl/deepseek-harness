@@ -21,6 +21,7 @@ Provider-specific registry for additive top-level fields on official DeepSeek LL
 -----
 
 <a id="service"></a>
+
 ## Service
 
 - `register(field, provider)` reserves one field for the calling fiber. Duplicate or malformed names fail synchronously; disposing the registration releases it for a later provider.
@@ -31,7 +32,10 @@ Each provider sees the exact serialized Messages body, the request `AbortSignal`
 
 The registry owns addition and lifecycle, not field semantics. `@deepseek-ai/dsh-session-log-deepseek` owns `dsh_session_log`; `@deepseek-ai/dsh-plugin-package-inventory-deepseek` owns `dsh_plugin_packages`. The provider-neutral LLM seam and `llm-pi-ai` do not consume this registry.
 
+Request purpose also identifies `collaboration-analysis`. Its consumer rejects non-empty prepared fields before HTTP; providers cannot add tools or context to Source analysis.
+
 <a id="model-experience"></a>
+
 ## Model Experience
 
 Indirectly, through `@deepseek-ai/dsh-llm-deepseek`, which sends registered fields outside the model's `messages`, system prompt, and tool schemas.
@@ -47,8 +51,8 @@ None; registry fields are model-hidden provider metadata and do not alter the se
 - **Official DeepSeek requests only** — the registry intentionally has no provider-neutral routing or pi-ai adapter integration.
 - **No field ordering contract** — JSON object member order follows registration preparation but receivers address fields by name.
 
-
 <a id="dev-note"></a>
+
 ### Dev Note
 
 <details>

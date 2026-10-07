@@ -58,6 +58,10 @@ target package 通过 declaration merge 扩展 snapshot 与 Location data map，
 
 已认领的命令在仅删除参数和末尾分隔空格时保留身份与高亮，改动命令名才会释放认领。所有命令和语言使用相同规则，包括 `/goal`、`/目标`、`/plan` 和 `/计划`。输入法组合输入期间，命令提示和普通占位文字持续隐藏，直到编辑器提交最终文字且对应输入为空时才重新显示。
 
+含结构化引用的草稿即使以普通文字开头，也会进入 Enter 裁决。来源通过触发流水线选择是否处理句中引用。绑定整条草稿的认领可声明 `retainOnFailure: false`：失败时保留编辑器内容并返回普通模式，让下一次发送重新读取修改后的草稿。其他命令保持原有的失败认领保留规则。
+
+输入外壳会裁决结构化引用；只有当前触发控制器明确请求时，才裁决普通文字。普通文字参与沿用命令和引用发送的同一个冻结尝试、取消、草稿保留和首个拥有者分发过程。没有参与来源时，普通消息保持立即发送路径。
+
 工作区选择使用 `uiWorkspace.openWorkspace` 准备目标并提交导航。草稿文字和附件仅在该请求仍为当前请求时，通过它的同步准备回调搬移；后续导航或所有者释放会保留原草稿。
 
 本包占据 root 作用域 `main` 中的 `conversation` key。其 `main.conversation` 外壳将常驻的 `conversation.header` 放在可选 Session 的 `conversation.content` Component Factory 外。未选中 Session 时，头部仍承载根作用域导航；标题、操作和 View 标签保留在严格 Session 子组件中。Factory 拥有共享正文与 Composer，通过其标准 Hook 读取当前 Session，并公开 strict-Session `views` 与 root-scoped `widthControls` 两个局部位置。默认 adapter 渲染现有 `conversation.session` entry，主 occurrence 选择宽度拖拽条；嵌入式 occurrence 可以替换 `views`、省略拖拽条，且不渲染主 Header。共享正文与 Composer 注册 queue dock 和 Todo dock。Todo dock 在 composer 上方使用共享面板 elevation；其中的行分别以共享 idle、ongoing 与 done 标记表示待处理、进行中与已完成。`ctx.uiSession.provide()` 从同一个 Session binding 物化 Conversation 与 input source，并将 `inputActions` 作为稳定标准 prop 提供。
@@ -170,3 +174,5 @@ selector 必须是 owner currency 的纯函数。非 null 返回值作为 `match
 </details>
 
 **运行时不变式：** 不发布伴生入口。Conversation Definition、target builder 与 View 已由其所属注册表和 Slot ledger 校验。
+
+外部活动的所有者可通过 `ConversationBinding.retainActivity(target)` 保持 Session 界面可见，并在当前授权历史为空或所有者释放时撤销保留。这允许在普通聊天轮次出现前查看外部工作，不会修改 Session 的空白状态或追加模型可见事件。

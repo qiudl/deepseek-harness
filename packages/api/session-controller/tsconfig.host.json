@@ -21,37 +21,111 @@
     "src/media-references.ts",
     "src/model-selection-projection.ts",
     "src/archived-session-gate.ts",
-    "src/skill-catalog.ts"
+    "src/skill-catalog.ts",
+    "src/collaboration-source-journal.ts",
+    "src/collaboration-reference-journal.ts",
+    "src/collaboration-reference-content-source.ts",
+    "src/collaboration-analysis.ts",
+    "src/collaboration-clarification-input.ts",
+    "src/collaboration-analysis-journal.ts",
+    "src/collaboration-delivery-journal.ts",
+    "src/collaboration-discussion.ts",
+    "src/collaboration-root-journal.ts",
+    "src/collaboration-root-execution-journal.ts",
+    "src/collaboration-root-planning-journal.ts",
+    "src/collaboration-feedback.ts",
+    "src/collaboration-consumption-journal.ts"
   ],
   "references": [
-    { "path": "../../../vendor/cordis" },
-    { "path": "../../../vendor/schemastery" },
-    { "path": "../../core/agent" },
-    { "path": "../../core/agent-default-model" },
-    { "path": "../../core/scope" },
-    { "path": "../../core/session" },
-    { "path": "../../context/file-reference" },
-    { "path": "../../attachment/attachment" },
-    { "path": "../../client/file-upload/tsconfig.host.json" },
-    { "path": "../../client/connection/tsconfig.host.json" },
-    { "path": "../../interaction/permission-presets" },
-    { "path": "../../jobs/jobs" },
-    { "path": "../../fs/fs" },
-    { "path": "../../llm/llm" },
-    { "path": "../../util/deque" },
-    { "path": "../../util/native-command" },
-    { "path": "../../preset/agent-preset-registry" },
-    { "path": "../../session/session-persistence" },
-    { "path": "../../session/session-projection" },
-    { "path": "../../session/session-projection-cache" },
-    { "path": "../../session/session-title" },
-    { "path": "../../session-query/session-query" },
-    { "path": "../../skill/skill" },
-    { "path": "../../subagent/subagent" },
-    { "path": "../../util/time" },
-    { "path": "../../util/values" },
-    { "path": "../../typert/protocol" },
-    { "path": "../../typert/registry" },
-    { "path": "../../workspace/workspace" }
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../core/agent"
+    },
+    {
+      "path": "../../core/agent-default-model"
+    },
+    {
+      "path": "../../core/scope"
+    },
+    {
+      "path": "../../core/session"
+    },
+    {
+      "path": "../../context/file-reference"
+    },
+    {
+      "path": "../../attachment/attachment"
+    },
+    {
+      "path": "../../client/file-upload/tsconfig.host.json"
+    },
+    {
+      "path": "../../client/connection/tsconfig.host.json"
+    },
+    {
+      "path": "../../interaction/permission-presets"
+    },
+    {
+      "path": "../../jobs/jobs"
+    },
+    {
+      "path": "../../fs/fs"
+    },
+    {
+      "path": "../../llm/llm"
+    },
+    {
+      "path": "../../util/deque"
+    },
+    {
+      "path": "../../util/native-command"
+    },
+    {
+      "path": "../../preset/agent-preset-registry"
+    },
+    {
+      "path": "../../session/session-persistence"
+    },
+    {
+      "path": "../../session/session-projection"
+    },
+    {
+      "path": "../../session/session-projection-cache"
+    },
+    {
+      "path": "../../session/session-title"
+    },
+    {
+      "path": "../../session-query/session-query"
+    },
+    {
+      "path": "../../skill/skill"
+    },
+    {
+      "path": "../../subagent/subagent"
+    },
+    {
+      "path": "../../util/time"
+    },
+    {
+      "path": "../../util/values"
+    },
+    {
+      "path": "../../typert/protocol"
+    },
+    {
+      "path": "../../typert/registry"
+    },
+    {
+      "path": "../../workspace/workspace"
+    },
+    {
+      "path": "../../storage/storage-domain"
+    }
   ]
 }

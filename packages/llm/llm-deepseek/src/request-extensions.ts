@@ -27,6 +27,9 @@ export async function prepareRequestExtensions(
   } catch (error) {
     throw new LlmError('DeepSeek request extension preparation failed', 'REQUEST_EXTENSION', { cause: error })
   }
+  if (options.purpose === 'collaboration-analysis' && Object.keys(extensions.fields).length > 0) {
+    throw new LlmError('Source analysis cannot carry provider request extensions', 'REQUEST_EXTENSION')
+  }
   const fields = Object.keys(extensions.fields)
   for (const field of fields) {
     if (Object.hasOwn(body, field)) {

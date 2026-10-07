@@ -1,3 +1,4 @@
+import { handleDesktopRootJournalRequest } from './desktop-collaboration-source.ts'
 /**
  * @deepseek-ai/dsh-web-app — the browser-surface bundle's runtime glue plugin
  * plus the bundle patch (`cordis.patch.yml`, declared by the `dsh.bundle.patch`
@@ -28,6 +29,17 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
+import { describeCollaborationReference } from '@deepseek-ai/dsh-api-session-controller'
+import type {} from '@deepseek-ai/dsh-api-session-controller'
+import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationReferenceGrantRequest, handleDesktopCollaborationReferenceCaptureRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationReferenceContentRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationRootRequest } from './desktop-collaboration-source.ts'
+import { handleDesktopCollaborationDeliveryRequest } from './desktop-collaboration-delivery.ts'
+import { openCollaborationRootPlanningJournal } from '@deepseek-ai/dsh-api-session-controller'
+import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from './desktop-collaboration-analysis.ts'
+import { openCollaborationAnalysisJournal } from '@deepseek-ai/dsh-api-session-controller'
+import { handleDesktopWorkspaceModelSelectionRequest } from './desktop-workspace-model-selection.ts'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
 import { DesktopSessionControl } from './desktop-session-control.ts'
@@ -243,6 +255,117 @@ export function apply(ctx: Context, config: Config): void {
             selection: () => modelCtx.agentDefaultModel.currentSelection(),
             stream: options => modelCtx.llm.stream(options),
           })),
+      }))
+    })
+  }
+  const analysisToken = process.env.DSH_PROFILE_ANALYSIS_TOKEN
+  if (analysisToken && /^[A-Za-z0-9_-]{43}$/u.test(analysisToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-root-journal',
+        handler: (req, res) => handleDesktopRootJournalRequest(req, res, analysisToken, (command, signal) =>
+          command.action === 'read' ? sessionCtx.sessionController.readCollaborationRoot(command.target, signal)
+            : sessionCtx.sessionController.acceptCollaborationRoot(command.target, command.receipt, signal)),
+      }))
+      const lifetime = new AbortController()
+      const owner = new DesktopCollaborationAnalysis(
+        (input, signal) => sessionCtx.sessionController.captureCollaborationSource(input, signal),
+        async () => {
+          const facility = sessionCtx.get('storageDomain')
+          if (!facility) throw Error('collaboration_analysis_journal_unavailable')
+          return openCollaborationAnalysisJournal(facility)
+        }, lifetime.signal,
+        (input, signal) => sessionCtx.sessionController.captureCollaborationRoot(input, signal),
+        (target, signal) => sessionCtx.sessionController.readCollaborationRoot(target, signal),
+        { prepare: (target, predecessor, signal) =>
+          sessionCtx.sessionController.prepareCollaborationRootPlanning(target, predecessor, signal),
+        open: async () => {
+          const facility = sessionCtx.get('storageDomain')
+          if (!facility) throw Error('collaboration_root_planning_journal_unavailable')
+          return openCollaborationRootPlanningJournal(facility)
+        } },
+        (input, signal) => sessionCtx.sessionController.collaborationRootExecution(input, signal),
+        (input, signal) => sessionCtx.sessionController.collaborationRootFeedback(input, signal),
+        (input, signal) => sessionCtx.sessionController.collaborationRootConsumption(input, signal),
+      )
+      sessionCtx.effect(() => () => { lifetime.abort(); return owner.close() }, 'web-app: private analysis lifetime')
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-analysis',
+        handler: (req, res) => handleDesktopCollaborationAnalysisRequest(req, res, analysisToken, owner),
+      }))
+    })
+  }
+  const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
+  if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-root',
+        handler: (req, res) => handleDesktopCollaborationRootRequest(req, res, sourceToken,
+          (target, signal) => sessionCtx.sessionController.inspectCollaborationRoot(target, signal)),
+      }))
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-source',
+        handler: (req, res) => handleDesktopCollaborationSourceRequest(req, res, sourceToken,
+          (target, signal) => sessionCtx.sessionController.inspectCollaborationSource(target, signal)),
+      }))
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind:'exact',path:'/internal/desktop-collaboration-source-snapshot',
+        handler:(req,res)=>handleDesktopCollaborationSourceSnapshotRequest(req,res,sourceToken,
+          (target,signal)=>sessionCtx.sessionController.readCollaborationSourceSnapshot(target,signal)),
+      }))
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-reference-grant',
+        handler: (req, res) => handleDesktopCollaborationReferenceGrantRequest(req, res, sourceToken,
+          (query, signal) => {
+            const { reference_request_digest, ...target } = query
+            return sessionCtx.sessionController.readCollaborationReferenceGrant(target, reference_request_digest, signal)
+          }),
+      }))
+    })
+  }
+  const referenceToken = process.env.DSH_PROFILE_REFERENCE_TOKEN
+  if (referenceToken && /^[A-Za-z0-9_-]{43}$/u.test(referenceToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-reference-content',
+        handler: (req, res) => handleDesktopCollaborationReferenceContentRequest(req, res, referenceToken,
+          (query, signal) => {
+            const { offset: _offset, reference_request_digest, ...target } = query
+            return sessionCtx.sessionController.readCollaborationReferenceContent(target, reference_request_digest, signal)
+          }),
+      }))
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-reference-capture',
+        handler: (req, res) => handleDesktopCollaborationReferenceCaptureRequest(req, res, referenceToken,
+          async (selection, signal) => {
+            const record = await sessionCtx.sessionController.captureCollaborationReferenceSelection(selection, signal)
+            return describeCollaborationReference(record)
+          }),
+      }))
+    })
+  }
+  const deliveryToken = process.env.DSH_PROFILE_DELIVERY_TOKEN
+  if (deliveryToken && /^[A-Za-z0-9_-]{43}$/u.test(deliveryToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-delivery',
+        handler: (req, res) => handleDesktopCollaborationDeliveryRequest(req, res, deliveryToken,
+          (value, signal) => sessionCtx.sessionController.receiveCollaborationDelivery(value, signal)),
+      }))
+    })
+  }
+  const workspaceModelToken = process.env.DSH_PROFILE_WORKSPACE_MODEL_TOKEN
+  if (workspaceModelToken && /^[A-Za-z0-9_-]{43}$/u.test(workspaceModelToken)) {
+    ctx.inject(['sessionController'], (sessionCtx) => {
+      sessionCtx.effect(() => sessionCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-workspace-model-selection',
+        handler: (req, res) => handleDesktopWorkspaceModelSelectionRequest(req, res, workspaceModelToken,
+          async (target, signal) => {
+            const result = await sessionCtx.sessionController.inspectWorkspaceModelSelection(target.session_id, target.workspace_id, signal)
+            return { workspace_id: result.workspaceId, session_id: result.sessionId,
+              provider: result.selection.provider, model: result.selection.model,
+              ...result.selection.reasoningEffort === undefined ? {} : { reasoning_effort: result.selection.reasoningEffort } }
+          }),
       }))
     })
   }

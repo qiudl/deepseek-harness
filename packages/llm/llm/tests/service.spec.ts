@@ -343,6 +343,7 @@ describe('LlmRuntime', () => {
       expect(projected, fixture.name).toMatchObject({ type: 'text' })
       if (projected?.type !== 'text') throw new Error(`expected projected text for ${fixture.name}`)
       expect(projected.text, fixture.name).toContain(fixture.expected)
+      expect(ctx.llm.fileRequestText(attachment), fixture.name).toBe(projected.text)
       if (fixture.fs !== undefined) {
         expect(projected.text, fixture.name).toContain('include this saved path in the delegation prompt')
       }
@@ -1317,8 +1318,10 @@ describe('LlmRuntime', () => {
       content: [{ type: 'text', text: 'old response' }],
       source: { kind: 'model', provider: 'historical', model: 'old-model', replayState: { private: 'state' } },
     })
+    const plain = createMessage({ role: 'assistant', content: [{ type: 'text', text: 'portable response' }],
+      source: { kind: 'model', provider: 'historical', model: 'old-model' } })
     for await (const _chunk of ctx.llm.stream({
-      provider: 'target', model: 'new-model', messages: [assistant, input],
+      provider: 'target', model: 'new-model', messages: [assistant, input, plain],
     })) { /* drain */ }
     expect(target.lastOptions?.messages[1]).toBe(input)
     expect(target.lastOptions?.messages[1]).toEqual({ role: 'user', content: [{ type: 'text', text: 'summarize' }] })
@@ -1326,6 +1329,7 @@ describe('LlmRuntime', () => {
       ...assistant, source: { kind: 'model', provider: 'historical', model: 'old-model' },
     })
     expect(assistant.source.replayState).toEqual({ private: 'state' })
+    expect(target.lastOptions?.messages[2]).toBe(plain)
   })
 
   it('keeps replay state when historical and target providers belong to the same adapter instance', async () => {

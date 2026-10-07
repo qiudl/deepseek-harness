@@ -7,6 +7,9 @@ kind: "package-reference"
 
 [English](README.md) | 中文
 
+
+`prepareSnapshot()` 在返回一次性 LLM 调用前捕获当前连接和已解析的认证。后续凭据或设置变化只影响后续调用；准备好的流保留已捕获的认证请求头和请求错误分类器。协同分析在发送请求前拒绝 provider 请求扩展。
+
 ## 概述
 
 提供共享的 DeepSeek Messages 传输、请求配置和模型能力。组合 [API key](../llm-deepseek-api-key/README.zh.md) 或[账号](../llm-deepseek-account/README.zh.md)插件以提供鉴权、模型发现与 provider 注册。有效的设置更改在后续请求生效，进行中的请求保留原配置。本包可与 [pi-ai 适配器](../llm-pi-ai/README.zh.md)并用。
@@ -217,3 +220,5 @@ loop 保留的响应块会追加到下一个请求，并保留其更早的可复
 **运行时不变式：** 不发布伴生入口。本包没有独立事件序列或可变数据关系，相关约定在所属 seam 强制执行。
 
 `deepseek-official` 仅使用配置的 API Key 引用；`deepseek-account` 仅在账号提供方允许的推理来源使用已保存的 DSH 授权。两条路由共享 Messages 传输，模型与文件设置独立配置。账号凭证缺失或不适用于目标时拒绝请求并提示登录；两条路由均不回退到另一凭证。Chat 和 Files 请求拒绝重定向。账号提供方根据运行中 Agent 已记录的请求上下文负责退登取消，包括工具执行阶段；传输层接收现有请求的中止信号。
+
+当所属操作提供 `GenerateOptions.traceparent` 时，Messages HTTP 请求保留经过校验的 W3C trace，并覆盖大小写不敏感的静态 trace 请求头。认证与模型输入保持原语义。

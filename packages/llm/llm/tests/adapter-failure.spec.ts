@@ -60,6 +60,15 @@ describe('adapter failure normalization', () => {
     expect(normalizeLlmFailure(accessorBacked)).toEqual({ message: 'provider failed', code: 'UNKNOWN' })
   })
 
+  it('retains a valid SDK image-offload count and refuses unsafe or empty counts', () => {
+    const failure = { message: 'image quota exceeded', code: 'IMAGE_QUOTA', offloadImages: 2 }
+    expect(normalizeLlmFailure(Object.assign(new Error('provider failed'), { code: failure.code, failure }))).toEqual(failure)
+    for (const offloadImages of [0, -1, 1.5, Infinity]) {
+      const thrown = Object.assign(new Error('provider failed'), { code: failure.code, failure: { ...failure, offloadImages } })
+      expect(normalizeLlmFailure(thrown)).toEqual({ message: 'provider failed', code: 'UNKNOWN' })
+    }
+  })
+
   it('falls back when an Error message accessor throws', () => {
     const error = new Error('provider failed')
     Object.defineProperty(error, 'message', { get() { throw new Error('message getter failed') } })

@@ -51,6 +51,12 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
 
+`profile.workspace_model_selection` 从当前连接已验证令牌的 Account 绑定解出 Profile，并在读取后重新校验。监管器丢弃已销毁或替换 worker 的响应。macOS 和 Windows 启动组合安装读取器；旧 Host 不发布此能力。独立随机 worker 令牌授权私有 HTTP 入口，完整响应在流式读取时有上限。请求拒绝重定向，只使用已核验的监听端。15 秒期限覆盖请求和完整响应读取；读取结束后再次检查取消状态，才接纳结果。结果不授权 Source 登记、规划或任务执行。
+
+`profile.workspace_authority` 使用同一授权读取器签发安装级归属证明，不打开视图、不追加 Session 事件、不发送模型请求。客户端核验准确挑战、当前安装/进程、有效期和签名。未安装读取器时不发布此能力。服务器的 nonce、消费及 Source 校验仍须独立完成，见[协议](../control-protocol/README.zh.md#challenge-authentication)。
+
+`profile.collaboration_registration` 使用当前连接已验证的 Account grant 和安装私钥，将服务器挑战与当前 Host 进程一起签名。客户端按已核验的安装身份验证签名，检查全部挑战/进程字段及有效期，返回冻结证明。Unix 与 Windows 共用这套 authority/client 方法。它不启动 worker、不打开视图租约、不修改 Profile/Session 数据。Slark 私有 Host broker 持有独立连接并负责取消；服务器挑战持久层、公钥登记及操作对账不属于该方法。
+
 仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
 
 Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
@@ -106,7 +112,21 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 <a id="model-experience"></a>
 ## 运行时不变量
 
+`profile.collaboration_delivery` 在首个分块捕获当前授权 Account worker，并在每个分块及持久写入后重新核验 worker 和 Account。Host 跨连接最多保留四个上传和 4 MiB，30 秒后使上传过期，并在取消中的写入结束前保留资源额度。它仅签署与原 Profile 持久提交匹配的描述符；重连后的重试恢复 Profile 的首次提交。客户端核验签名、Account、进程、完整不可变正文摘要和分块偏移。Unix 与 Windows 启动仅在安装私有接收器后发布此 capability；云端确认仍是独立操作。
+
 不发布运行时不变量伴随插件：文件与消息提交点验证自身状态，租约与崩溃行为由集成测试覆盖。
+
+Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 句柄生成并保留独立的 `DSH_PROFILE_REFERENCE_TOKEN`。选择 JSON 和返回元数据各不超过 32 KiB，请求 15 秒后超时，拒绝已停止 worker、重定向与取消。句柄返回不含内容字节的不可信 JSON。父 Host 必须先将计算元数据与已授权选择比对，才能传递；该句柄不确认分享意图，也不新增 Host 控制协议命令。
+
+`profile.source_authority` 从当前连接已验证的 Account 解析 Profile，经监管器与独立随机 worker 令牌读取持久 Source 描述符。macOS 和 Windows 启动组合安装该读取器。读取器缺失时不发布能力；worker 替换、坐标或摘要不符、挑战过期及 Account 授权变化都会拒绝签名。客户端核验精确挑战、固定的安装/进程及 Source 签名。此操作不捕获消息或准备模型；云端消费和聊天分发仍须单独接入。
+
+`profile.reference_authority` 仅在持久 Source 读取器与 `readCollaborationReferenceGrant` 同时安装时发布。Host 要求当前令牌验证的 Account，将独立 Profile 授权与请求的 Source 和完整引用预登记摘要比对，再于签名前重新读取 Source。撤权、过期、取消或 Profile/Source 观察变化均拒绝签名。客户端核验精确挑战和固定安装进程的签名；Source 签名不能替代引用授权。
+
+`profile.reference_capture` 解析当前 Account 的 Profile，在调用独立令牌保护的 worker 捕获前读取其 Source。捕获后和返回元数据前再次核验 Account、Profile 与完整 Source 摘要。客户端将操作限制为 18 秒并固定已检查的 peer；监管器代际替换、销毁、过期、取消或归属丢失均不返回成功结果。macOS 与 Windows 共用的启动读取器安装此操作。Main 仍须独立确认分享意图并校验计算请求，再进行单独的引用签名或传递。
+
+`profile.reference_content` 使用当前 Account Profile 及独立的 Reference worker 能力。每个分块重新核验实际选中内容、Account 归属、worker 世代和已提交 Source。客户端固定原始 Account 及捕获的描述符、请求和内容元数据，检查每个偏移与长度，并在 18 秒操作时限内核验完整 SHA-256 后返回精确字节；支持空内容。云端传递和接收任务访问仍须独立授权。
+
+`profile.source_snapshot` 使用同一当前 Account 与 Profile worker 读取器私有传输 journal 原始内容。worker bearer 路由校验完整持久 Source；监管器拒绝已销毁或被替换的 worker。固定 32 KiB 字节分块保留现有控制帧预算，客户端在有界读取内跨块核验坐标、描述符和长度一致性、完整 UTF-8、取消及已检查的 peer。返回原文与脱敏模型/提交元数据，不含凭据，不准备模型或恢复调用。macOS 与 Windows 启动组合安装读取器；真实聊天捕获和派发仍须单独接入。
 
 ### 远端工作区目录
 
@@ -122,6 +142,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延后工作
+
+当前启动组合把引用授权读取转发给原始且仍有效的 Profile worker。授权要求独立提交的选择，并重新核验消息或附件字节。自然语言选择的生产者和云端内容上传尚未接通；嵌入方必须先补齐这些消费端，才能启用引用传递。
 
 - **扩展支持由执行器决定** — `profile.extensions` 通过有效窗口租约接受清单、准备、提交、状态和取消请求。插件执行要求配置随包 pnpm 产物。Windows 启动组合支持显式启用的 MCP，Windows 插件及 Skill 执行器仍不可用。嵌入应用必须启用并固定此组合的版本，用户才能获得该能力。技能清单使用 `transport: markdown` 和有长度限制、由文件名生成的标识。安装或恢复配置导致 worker 重启后，Desktop 必须重新打开同一 Profile 视图。打包运行时固定版本、完整 Profile 迁移保留、杀进程恢复和未知回执核对，仍需在发布前单独完成端到端验证。
 
@@ -141,6 +163,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 
 <a id="dev-note"></a>
 ### 开发备注
+
+协议权威测试在所有平台使用实例独立的 JSON 注册表钩子。POSIX 与 Windows 存储套件负责文件系统权限检查。内置归档存储测试依赖 POSIX UID 和权限位；Windows 私有文件、命名管道、ACL 与原生 PowerShell 套件仍为必需检查。
 
 <details>
 <summary>维护者的工作上下文——点击展开</summary>
@@ -183,3 +207,43 @@ MCP 操作先以排他创建方式持久保存私有备份，再记录检查点�
 继续执行保留无关依赖声明、组合包顺序、策略文件及覆盖配置，仅接受目标缺失、目标匹配原依赖摘要或目标匹配精确请求引用。无关变更使准备失败，命令结束后还会再次核验。命令中断可能合法改变依赖解析，因此部分锁文件变更不纳入无关状态摘要；确认和提交仍绑定完整当前锁文件修订。安装和更新使用原固定来源重新执行 add，并禁用生命周期脚本。卸载时若依赖仍存在则重新执行 remove；依赖已缺失时，用固定 CLI 命令 `plugin --profile web install --no-frozen-lockfile --ignore-scripts` 按当前清单修复依赖树，随后 Host 仅清理原目标的残留组合包登记和独立启停覆盖。必须通过运行时确认和最终修订稳定性核验。再次中断仍保持未知，需要再次显式确认。
 
 成功继续执行使用 `completes_operation` 和 `completed_by`，与恢复关联字段区分。原操作及相关中断继续操作保留未知历史结果，仅由关联的成功回执解除这一组操作的写入阻塞。继续执行要求有效的 Profile 授权租约和完整意图证据。不猜测缺少意图的旧记录，也不保证修复无法建立租约的 Profile、损坏清单、不可用包来源或插件外部副作用。
+
+Web worker 工厂另生成随机 `DSH_PROFILE_ANALYSIS_TOKEN`，禁止调用方环境覆盖，并将其保留在视图租约之外。仅供父 Host 使用的 `collaborationAnalysis` 句柄向私有 worker 发送有界 prepare/dispatch JSON，拒绝已停止的 worker 和重定向，并校验完整有界 UTF-8 响应。父 Host 必须派生原 Account/Host 归属摘要并保持权限有效；句柄本身不授予云端资格，也不安装聊天入口。
+
+Web worker 工厂另生成并保留 `DSH_PROFILE_DELIVERY_TOKEN`，供仅父 Host 可用的 `receiveCollaborationDelivery` 句柄使用。完整投递 JSON 上限为 1 MiB；所属 Profile 校验其结构，返回最多 8 KiB 的不可信本地提交 JSON，不回传答案。已停止的 worker、重定向、取消和非法响应均拒绝。该能力保留在视图租约之外。父 Host 必须认证账户命名空间与可读云端投影；该私有 HTTP 句柄不授予签名云端确认，也不提供控制协议上传。大回复需要在现有控制帧上限内进行已认证的分块传输。
+
+
+Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。worker 保存输出后，Host 签署原始 JSON 摘要、派发 grant 及当前 Account/安装/进程身份。保存失败或权限变化不会返回签名结果。取消关闭原操作；签名将已保存输出绑定到原派发及当前 Account 和 Host，不建立任务语义或 Agent 执行权限。
+
+相同的当前 Account/Profile 校验覆盖 `capture_reply` 与 `prepare_clarification`。补充捕获、完整输入准备和派发全过程保留 Host 派生的归属摘要；客户端核验各操作对应的不可执行描述或准备结果类别。客户端仅在派发时接纳输出，并将其签名凭据与该派发核对。这两项操作不改变视图租约，不授予云端权限，也不受理任务。
+
+Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。取消关闭原操作；该方法不校验任务，也不受理 Agent 执行。
+
+
+`attestRootAuthority` 仅在对端声明能力时请求 `profile.root_authority`。授权服务解析当前已验证的 Account Profile，通过 worker 监管器读取原始根描述符，比对所有根、来源、命令和摘要字段，并在签名前再次检查 Account grant。客户端核验精确挑战、当前安装/进程、有效期及专用根签名。两种启动组合均安装读取器；worker 替换、根缺失、坐标不符、授权撤销或取消都会拒绝签名。worker 根元数据使用私有 Source 读取令牌，不进入浏览器 view lease。这只证明根绑定已持久提交，不提交根、不授予执行权限，也不确认云端受理。
+
+根日志操作保留认证后的 Account 绑定与 Host 身份，在访问 worker 前后检查授权，并丢弃已替换 worker 的回复。worker 通过私有分析/写入 token 访问 `/internal/desktop-root-journal`，Source 只读 token 不能确认受理。回执响应丢失后仍须对账，即使原回执可能已经保存。
+
+支持根分析的 worker 显式公布 `profile.root_analysis`。根准备使用当前 Account 授权的 Profile，并与派发保留同一 Host 绑定；客户端在发送新命令前拒绝旧端。Unix 和 Windows 启动接入同一种根分析 worker owner。旧 Source 分析保持独立，根准备不会回退到旧流程。
+
+读取已保存输出要求独立的 `profile.root_analysis_recovery` 能力。访问 worker 前后均检查当前 Account/Profile 授权，并使用私有分析 token。旧 worker 拒绝该命令；保存的派发元数据不会触发第二次模型调用。
+
+`rootLookupSupported` 独立于准备能力公布 `profile.root_lookup`。`recover_root` 复用当前 Account/Profile 校验及私有 worker token，但只接受 recovered 元数据；旧端在查询前拒绝。
+
+`rootPendingLookupSupported` 独立公布 `profile.root_pending_lookup`，用于 `reconcile_root`；只有通过当前 Account/Profile 授权的 recovered 元数据可返回。
+
+`rootLiveResumeSupported` 为当前 worker 公布 `profile.root_live_resume`。Parent 根据 Account 授权版本、Profile 与 Host 进程派生续接身份，仅排除 socket owner。当前 Account/Profile 校验通过后，worker 交接才替换派发 owner；worker 重启后无法借此重建可执行调用。
+
+`attestRootPlanningAttemptAuthority` 要求对端单独声明能力。授权服务仅在安装 `inspectRootPlanningAttempt` 时声明此能力。私有读取器必须核验当前 Profile 归属、存活的模型准备及已持久化且当前未使用的尝试；记录缺失、被替代、已派发、过期或写入状态不确定时拒绝。授权服务只传入原 Source/root 查询坐标与尝试 ID，比对返回的全部输入、模型、前驱和根字段，并在读取后重新检查 Account 授权。客户端验证精确挑战、当前对端、有效期及专用签名。证明不授予模型派发或任务执行权限。
+
+两种启动组合都通过 worker 监管器与 analysis-token HTTP 客户端安装新尝试读取器。签名观察与准备使用相同的父 Host 推导 Account/Profile/Host/连接摘要；其他连接不能为该存活准备签名或派发。监管器在 worker 替换、销毁或取消后拒绝返回结果。准备和派发要求独立的 `profile.root_planning_attempt` 能力，签名观察还要求专用读取器。这些操作不创建云端替换事务，也不授予任务执行权限。
+
+`profile.root_planning_attempt_recovery` 开放只读的 `read_root_attempt` 命令。客户端在发送前检查能力；Host 解析当前令牌验证过的 Account Profile，并在私有 worker 读取前后检查授权。响应绑定所查询的原根和 Source，包括派发过期后的记录，但仅作为事实证据。
+
+单独声明的 `profile.root_execution_journal` 能力仅通过当前已认证 Account Profile 转发有界的具体执行日志操作。Host 派生连接绑定，并在 worker 响应后重新校验归属。客户端和授权端均拒绝缺少该能力的请求。worker 使用私有 analysis token；日志读写不派发模型、不授予新的执行权限，也不确认 Session 已消费结果。
+
+只有配置私有 Profile 接收器时才宣告 `profile.root_feedback`。客户端和授权端均检查该能力，并在每次有界反馈响应后重新校验 Account 归属。父进程仍负责当前云端结果访问权和显式消费意图；传输成功不等同于带签名的云端消费确认。
+
+对于 `root_feedback` 返回的持久消费证据，Host 在签发独立消费回执前核对原 namespace、delivery 和 Source 坐标。签名使用当前 Account、installation 与进程元数据，并在 worker 回复后再次检查当前 Profile 权限。回执不包含答案文本，也不授予新的续跑权限。
+
+macOS 和 Windows 通过共同的 worker 操作绑定根 journal、Source 检查和规划 attempt 检查；各权限协议继续使用独立的签名载荷。

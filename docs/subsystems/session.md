@@ -797,6 +797,188 @@ resolveAgent(sessionId: SessionId): Promise<ApiSessionAgentResult>
 inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspection>
 
 /**
+ * Capture workspace membership and the next model choice for a trusted Host caller.
+ * Does not resume an Agent, append events, or invoke a provider. This Host-only
+ * read supplies neither account authentication nor an executable adapter snapshot.
+ * @param sessionId - ordinary Session identity registered under the workspace.
+ * @param workspaceId - registry UUID; filesystem paths are not identities.
+ * @param signal - optional cancellation, checked before and after asynchronous reads.
+ * @returns an immutable minimal selection captured after membership revalidation.
+ * @throws when the workspace is absent, ownership changes, or the caller cancels.
+ */
+async inspectWorkspaceModelSelection( sessionId: SessionId, workspaceId: WorkspaceId, signal?: AbortSignal, ): Promise<WorkspaceModelSelection>
+
+/**
+ * Prepare the source Session's next model under this Profile's registry. Recheck
+ * workspace/session ownership and selection after credential preparation. The
+ * returned call is process-local and one-shot; this does not issue Source authority,
+ * resume an Agent, append events, or send a model request. No Remote method is exposed.
+ * @param sessionId - ordinary Session registered under this workspace.
+ * @param workspaceId - WorkspaceRegistry UUID.
+ * @param signal - owning Host operation's cancellation, retained through dispatch.
+ * @returns workspace/session identities and the captured executable model call with an 8192-token output cap.
+ * @throws on ownership/selection change, unsupported capture, preparation failure or cancellation.
+ */
+async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal, ): Promise<Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; prepared: PreparedLlmSnapshotCall }>>
+
+/**
+ * Capture user content under this Profile's registry and actual prepared model.
+ * Persist before returning the process-local call. Duplicate/restarted input returns
+ * only its original snapshot, never a new executable handle or a model request. First capture
+ * exposes Host-only analyze and analyzeClarification sharing one one-shot call. The caller
+ * durably commits the full manifest before dispatch; clarification rereads all original/reply Sources.
+ * The Profile bounds calls and rechecks original membership before and after that commit.
+ * This Host-only queued operation has no Remote endpoint and grants no cloud authority.
+ * @param input - exact Source coordinates, raw text and trusted classified mentions; no model or commit fields.
+ * @param signal - caller cancellation, combined with the owning Profile lifetime through dispatch.
+ * @returns first durable capture with its one-shot call, or original non-executable recovery.
+ * @throws on invalid input, unavailable journal, changed ownership/selection, conflict or cancellation.
+ */
+async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise< | Readonly<{ kind: 'captured' snapshot: CollaborationSourceSnapshot prepared: PreparedLlmSnapshotCall analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> analyzeClarification: (input: CollaborationClarificationInput, persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }> | Readonly<{ kind: 'recovered'; snapshot: CollaborationSourceSnapshot }> >
+
+/**
+ * Persist a new logical root before exposing its prepared analysis call. This opt-in Host API
+ * does not classify continuations, authenticate namespaces/grants or submit to the cloud.
+ * The source journal may commit first; failure leaves an inert source, never a published partial root.
+ * @param value - Original source and current Host-authorized namespace/policy; root IDs are generated locally.
+ * @param signal - Cancellation combined with Profile disposal; accepted writes drain on disposal.
+ * @returns Original source and atomic source/root/outbox aggregate; recovered input has no executable call.
+ */
+async captureCollaborationRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture>
+
+/** Prepare a fresh one-shot analysis using an admitted root's original model and current credentials.
+ * The original Source remains immutable. Membership is rechecked after preparation and around input/grant persistence.
+ * This Host-only method has no Remote endpoint and grants no cloud authority.
+ * @param value - Original namespace, command and Source lookup; no model overrides.
+ * @param predecessor - Local journal reference selected by the private owner; cloud eligibility remains separate.
+ * @param signal - Operation cancellation retained through the prepared call.
+ * @returns original admitted root and private one-shot analysis closure, never a recovered executable handle.
+ */
+async prepareCollaborationRootPlanning(value: unknown, predecessor: CollaborationPlanningPredecessor, signal: AbortSignal): Promise<CollaborationRootPlanningPreparation>
+
+/**
+ * Read root signing metadata from the committed aggregate under current Profile membership.
+ * @param value - Exact namespace, original command and Source coordinates; root overrides reject.
+ * @param signal - Parent cancellation combined with Profile disposal.
+ * @returns Frozen original binding without Source content, model preparation or signing authority.
+ */
+async inspectCollaborationRoot(value: unknown, signal: AbortSignal): Promise<CollaborationRootDescriptor>
+
+/**
+ * Read the committed root aggregate without model preparation or activation.
+ * @param value - Namespace and original Source coordinates, optionally with the original command; supplied by the authenticated parent.
+ * @param signal - Request cancellation combined with Profile disposal.
+ * @returns Immutable pending or admitted record; changed membership and unknown roots reject.
+ */
+async readCollaborationRoot(value: unknown, signal: AbortSignal): Promise<CollaborationRootSubmission>
+
+/**
+ * Durably retain the original cloud admission receipt after parent Host authentication.
+ * @param value - Original namespace, command and Source coordinates.
+ * @param receipt - Cloud receipt verified by the parent; this method validates identity, not cloud authority.
+ * @param signal - Cancellation before write; accepted writes drain, but cancellation may hide the acknowledgment.
+ * @returns Committed admitted record; uncertainty requires rereading the original root, never recapture.
+ */
+async acceptCollaborationRoot(value: unknown, receipt: unknown, signal: AbortSignal): Promise<CollaborationRootSubmission>
+
+/**
+ * Retain exact concrete execution confirmations in this Profile before Main sends them to the cloud.
+ * This private operation has no Remote endpoint and supplies no cloud authorization or model activity.
+ * @param value - Exact read/prepare/accept operation with original root lookup and frozen task references.
+ * @param signal - Caller cancellation combined with Profile disposal; accepted writes drain.
+ * @returns Durable command/receipt, or null for a missing read. Current membership is checked around storage.
+ */
+async collaborationRootExecution(value: unknown, signal: AbortSignal): Promise<CollaborationExecutionRecord | null>
+
+/**
+ * Read durable original-Session consumption evidence or queue an explicitly authorized result once.
+ * The parent authenticates current cloud result/continuation authority; root admission alone is insufficient.
+ * Enqueue requires an attached idle Agent, an empty inbox and the exact observed Session prefix. It never wakes a model.
+ * @param value - Private read/enqueue command with original root, frozen task and immutable delivery lookup.
+ * @param signal - Parent lifetime combined with Profile disposal; accepted Session writes drain through flush.
+ * @returns Persisted enqueue/consumption evidence. Removed or claimed messages are never automatically reinserted.
+ */
+async collaborationRootFeedback(value: unknown, signal: AbortSignal): Promise<CollaborationFeedbackObservation>
+
+/** Execute a private durable consumer command under authenticated Main's current authority.
+ * @param value - Consumer read/prepare/start, original root and exact delivery; start requires a fresh cloud grant.
+ * @param signal - Current parent and Profile lifetime; recovery never restores live wake permission.
+ * @returns Durable record and observation; only first start may wake the attached original Agent.
+ */
+async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionResult>
+
+/**
+ * Read one durable Source from the owning Profile without model preparation or Agent activation.
+ * @param target - Exact original Source identity; caller metadata is rejected.
+ * @param signal - Caller cancellation combined with Profile disposal.
+ * @returns Frozen identity and digest of the full original snapshot; missing records or changed membership reject.
+ */
+async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise< CollaborationSourceCoordinates & { readonly snapshot_digest: string } >
+
+/**
+ * Read the original committed content for the authenticated parent Host without model preparation.
+ * @param target - Exact Source identity; content, model and commit overrides are rejected.
+ * @param signal - Caller cancellation combined with Profile disposal.
+ * @returns Original frozen journal snapshot after current Session and Workspace ownership checks; no executable handle.
+ */
+async readCollaborationSourceSnapshot(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise<CollaborationSourceSnapshot>
+
+/**
+ * Freeze an independently authorized selection from this original Source's own Session.
+ * The trusted coordinator establishes explicit user sharing intent before calling; metadata parsing alone does not.
+ * @param value - Exact retained request without credentials, caller content, paths or renewable proofs.
+ * @param signal - Parent operation cancellation, combined with current Profile disposal.
+ * @returns immutable content after independent message/attachment reads, durable save and ownership revalidation.
+ */
+async captureCollaborationReference(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord>
+
+/**
+ * Derive a reservation request from independently authorized message/file selection and actual Profile content.
+ * The trusted coordinator establishes explicit sharing intent before this Host-only operation; no Remote endpoint is provided.
+ * @param value - Exact Source coordinates, locator/version, explicit range/whole choice, recipients and evidence.
+ * @param signal - Parent cancellation, combined with current Profile disposal and owned read drainage.
+ * @returns persisted immutable request and selected bytes with Profile-computed MIME, range, length and digests.
+ */
+async captureCollaborationReferenceSelection(value: unknown, signal: AbortSignal): Promise<CollaborationReferenceRecord>
+
+/**
+ * Read a separately committed reference selection and revalidate its original content before attestation.
+ * @param target - Exact original Source coordinates, without caller-supplied content or commit fields.
+ * @param requestDigest - Full immutable reference request digest; no record is created from this value.
+ * @param signal - Current Parent operation cancellation, combined with Profile disposal.
+ * @returns Source-bound grant only while the current Source, locator, version and selected bytes still match.
+ */
+async readCollaborationReferenceGrant(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise< CollaborationReferenceRecord['descriptor'] & { readonly reference_request_digest: string } >
+
+/**
+ * Read bytes only from a separately captured reference after rechecking current ownership and actual content.
+ * @param target - Original Source coordinates; this operation cannot capture a new selection.
+ * @param requestDigest - Full committed reservation digest, including its recipients and evidence.
+ * @param signal - Parent cancellation, combined with Profile disposal and owned read drainage.
+ * @returns Immutable bounded record while Source, locator, version and selected bytes still match; no cloud transfer grant.
+ */
+async readCollaborationReferenceContent(target: CollaborationSourceCoordinates, requestDigest: string, signal: AbortSignal): Promise<CollaborationReferenceRecord>
+
+/**
+ * Save a readable cloud reply in the owning Profile without appending model-visible Session events.
+ * The authenticated parent must establish namespace/target cloud authority. This operation checks
+ * current local ownership and the original Source; it grants no cloud delivery acknowledgment.
+ * @param value - Exact private delivery input; caller-supplied local commits are rejected.
+ * @param signal - Parent cancellation, combined with Profile disposal.
+ * @returns Original immutable reply after durable save and ownership revalidation; duplicates share its commit.
+ */
+async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise<CollaborationDeliveryRecord>
+
+/**
+ * Read original collaboration messages for the Client's Session result area without preparing a model.
+ * @param request - Session identity and a prior page's immutable snapshot digest; authority fields reject.
+ * @param signal - Caller cancellation, combined with Profile disposal and serialized Source writes.
+ * @returns At most eight complete messages within 256 KiB; no executable calls or cloud authorization.
+ * @throws On malformed input, unknown cursor, corrupt storage, cancellation or changed original membership.
+ */
+@Remote('collaborationSources') async collaborationSources(request: SessionCollaborationSourcesRequest, signal: AbortSignal): Promise<SessionCollaborationSourcesValue>
+
+/**
  * Read all visible Session rows without resuming an Agent.
  * @param _request - reserved empty list request.
  * @param signal - cancellation for persistence reads.
@@ -947,7 +1129,7 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote({ mode: 'stream' }) control(signal: AbortSignal): AsyncIterable<SessionControlFrame>
 ```
 
-Types: [SessionId](core.md) · [SessionInspection](persistence.md) · [SessionSearchRequest](session-query.md)
+Types: [PreparedLlmSnapshotCall](llm-streaming.md) · [SessionId](core.md) · [SessionInspection](persistence.md) · [SessionSearchRequest](session-query.md) · [WorkspaceId](workspace.md)
 
 Source: [`packages/api/session-controller/src/index.ts`](../../packages/api/session-controller/src/index.ts)
 

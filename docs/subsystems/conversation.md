@@ -27,6 +27,8 @@ Each Session keeps a monotonic set of active targets. Creating or reading a targ
 
 The shell owns View selection and resolves the registered preferred View or Chat fallback before rendering when a binding is created or selected as current, and after View-roster changes. The assembler receives only the resolved target id and does not select Chat or another default target. A third-party View participates through the same selection and activation operations. A View Definition may expose `toolCallFocus(callId)`; the shell supplies Inspect only for a visible target that declares this capability, and the target maps the call id to its own focus identity.
 
+`ConversationBinding.retainActivity(target)` keeps the shell active for activity held outside the Session event window. Each call returns an independent, idempotent release. Retained targets contribute to `activeTargets` without constructing event nodes, model input or synthetic turns; disposing the Session binding removes all such contributions.
+
 <a id="group-definitions"></a>
 ## Group Definitions
 

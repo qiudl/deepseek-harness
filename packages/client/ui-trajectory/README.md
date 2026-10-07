@@ -11,6 +11,7 @@ English | [中文](README.zh.md)
 
 The Trajectory tab lets you inspect agent activity as a turn-aware ledger and interactive timing overview. It groups User, Assistant, Tool, nested Subtool, and compaction records, marks turn and step boundaries, and opens a record inspector for token usage, duration, input, output, timing, images, and attachment summaries. Long histories open at the current tail, load older pages on demand, and render only visible rows. During streaming, the view follows the tail until you scroll upward, and in-flight records show a start marker without inventing elapsed time.
 
+
 ## Table of Contents
 
 - [Use this package](#use-this-package)
@@ -26,6 +27,8 @@ The Trajectory tab lets you inspect agent activity as a turn-aware ledger and in
 ## Use this package
 
 Open the Trajectory tab in the conversation's view ring to inspect agent activity as an event ledger and timeline. The ledger covers records with an explicit loading row until the initial tail is positioned; while an older prefix remains unloaded, a first-row control loads one earlier page on click and shows the shared ongoing loader while that page is pending.
+
+The `conversation.trajectory.external` Session slot hosts independently authorized activity from external systems above the local ledger. Each contributing plugin owns its reads, paging and labels; external records do not become Session model messages or alter local turn timing.
 
 ### Inspecting records
 

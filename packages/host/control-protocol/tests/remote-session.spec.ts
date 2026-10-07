@@ -189,6 +189,17 @@ describe('Profile remote UI read wire commands', () => {
     }
   })
 
+  it('REQ-20260930-0004: admits only original Session feed coordinates and immutable digest cursor', () => {
+    for (const request of [{ sessionId:'session-1' },{ sessionId:'session-1',cursor:'a'.repeat(64) }]) {
+      const value = readFrame('session/collaborationSources',{ args:{ request } })
+      expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
+    }
+    for (const args of [{},{ request:{ sessionId:'../other' } },{ request:{ sessionId:'session-1',cursor:'bad' } },
+      { request:{ sessionId:'session-1',profile:'other' } },{ request:{ sessionId:'session-1' },token:'other' }]) {
+      expect(() => decode(readFrame('session/collaborationSources',{ args }))).toThrow()
+    }
+  })
+
   it('rejects extra selectors, unsafe JSON, and overlarge results', () => {
     expect(() => decode(readFrame('session/list', { args: {}, profile_root: '/tmp/other' }))).toThrow()
     expect(() => decode(readFrame('session/list', { args: null }))).toThrow()

@@ -15,6 +15,7 @@ import {
   SessionPersistenceNotFoundError,
   SessionPersistenceRevision,
   SessionReadOnlyError,
+  type SessionPersistence,
   type SessionAccess,
   type SessionHandle,
   type SessionHandleReadOptions,
@@ -176,19 +177,17 @@ function testReadHandle(
 export function testSessionPersistence(
   _ctx: Context,
   persistence: LegacyTestPersistence,
-): Record<string, unknown> {
+): Omit<LegacyTestPersistence, 'list' | 'stat' | 'open'> & Pick<SessionPersistence, 'list' | 'stat' | 'open'> {
   const listHeaders = async (signal?: AbortSignal): Promise<readonly SessionHeader[]> =>
     await persistence.list?.(signal) ?? []
-  const adapted: Record<string, unknown> = {
+  const adapted: Omit<LegacyTestPersistence, 'list' | 'stat' | 'open'> & Pick<SessionPersistence, 'list' | 'stat' | 'open'> = {
     ...persistence,
     list: async (options?: SessionPersistenceListOptions) =>
       (await listHeaders(options?.signal)).map(header => ({
         header,
         revision: SessionPersistenceRevision(`test:${header.id}:list`),
       })),
-  }
-  if (persistence.stat === undefined) {
-    adapted.stat = async (
+    stat: persistence.stat ?? (async (
       sessionId: SessionId,
       options?: SessionPersistenceStatOptions,
     ): Promise<SessionPersistenceSnapshot | undefined> => {
@@ -197,10 +196,8 @@ export function testSessionPersistence(
       return header === undefined
         ? undefined
         : { header, revision: SessionPersistenceRevision(`test:${sessionId}:stat`) }
-    }
-  }
-  if (persistence.open === undefined) {
-    adapted.open = async (
+    }),
+    open: persistence.open ?? (async (
       sessionId: SessionId,
       access: SessionAccess,
       options?: SessionPersistenceOpenOptions,
@@ -212,7 +209,7 @@ export function testSessionPersistence(
       const inspection = await persistence.inspect?.(sessionId, options?.signal)
       if (inspection === undefined) throw new SessionPersistenceNotFoundError(sessionId)
       return testReadHandle(sessionId, inspection)
-    }
+    }),
   }
   return adapted
 }

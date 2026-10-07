@@ -1,3 +1,4 @@
+import { requestTraceHeaders } from '@deepseek-ai/dsh-llm'
 /** Direct Messages transport with one cancellable lifecycle per model request. */
 
 import { attributionHeaders, LlmAdapter, LlmError } from '@deepseek-ai/dsh-llm'
@@ -5,7 +6,7 @@ import type { GenerateOptions, ImageAttachmentAccessResolver, PreparedAdapterCal
 import type { DeepSeekLlmApiJson } from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { modelInfo } from './model-info.ts'
-import type { DeepSeekAdapterOptions, DeepSeekConnectionOptions as Connection } from './types.ts'
+import type { DeepSeekAdapterOptions, DeepSeekConnectionOptions as Connection, DeepSeekRequestAuth } from './types.ts'
 import { DeepSeekFileStore } from './file-store.ts'
 import { MESSAGES_FILES_BETA, MESSAGES_TOOL_CHANGES_BETA, messagesApiRoot } from './messages-api.ts'
 import { FileResolutionFailure, RequestFiles } from './request-files.ts'
@@ -44,15 +45,24 @@ export class DeepSeekAdapter<C extends Connection = Connection> extends LlmAdapt
     const connection = this.dependencies.options()
     return Promise.resolve({ model: modelInfo(connection, provider, model), stream: options => this.generate(options, connection) })
   }
+  override async prepareSnapshot(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    signal?.throwIfAborted()
+    const connection = this.dependencies.options()
+    const info = modelInfo(connection, provider, model)
+    const resolved = await this.dependencies.resolveAuth(connection)
+    signal?.throwIfAborted()
+    const auth = { ...resolved, headers: Object.freeze({ ...resolved.headers }) }
+    return { model: info, stream: options => this.generate(options, connection, auth) }
+  }
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     return this.generate(options, this.dependencies.options())
   }
 
-  private async * generate(options: GenerateOptions, connection: C): AsyncGenerator<StreamChunk> {
+  private async * generate(options: GenerateOptions, connection: C, capturedAuth?: DeepSeekRequestAuth): AsyncGenerator<StreamChunk> {
     const consumer = new AbortController()
     const signal = options.signal === undefined ? consumer.signal : AbortSignal.any([consumer.signal, options.signal])
     using watchdog = idleWatchdog(signal, connection.streamIdleTimeoutMs, 'MESSAGES_IDLE')
-    const iterator = this.request(options, connection, watchdog.signal, () => { watchdog.pulse() })
+    const iterator = this.request(options, connection, watchdog.signal, () => { watchdog.pulse() }, capturedAuth)
     try {
       while (true) {
         const next = await watchdog.next(iterator)
@@ -73,13 +83,13 @@ export class DeepSeekAdapter<C extends Connection = Connection> extends LlmAdapt
   }
 
   private async * request(
-    options: GenerateOptions, connection: C, signal: AbortSignal, activity: () => void,
+    options: GenerateOptions, connection: C, signal: AbortSignal, activity: () => void, capturedAuth?: DeepSeekRequestAuth,
   ): AsyncGenerator<StreamChunk> {
     signal.throwIfAborted()
     const { messages, versions } = await prepareImages(
       options.messages, connection, options.model, this.dependencies.resolveAttachments?.(), this.imageAccess, signal,
     )
-    const auth = await this.dependencies.resolveAuth(connection)
+    const auth = capturedAuth ?? await this.dependencies.resolveAuth(connection)
     try {
       const files = new RequestFiles(this.files, {
         baseURL: connection.baseURL, headers: auth.headers,
@@ -122,7 +132,7 @@ export class DeepSeekAdapter<C extends Connection = Connection> extends LlmAdapt
           headers: {
             ...attributionHeaders(),
             'content-type': 'application/json', 'accept': 'text/event-stream',
-            ...auth.headers,
+            ...requestTraceHeaders(auth.headers, options.traceparent),
             'anthropic-version': '2023-06-01',
             ...betas.length === 0 ? {} : { 'anthropic-beta': betas.join(',') },
             'x-deepseek-harness-user-id': this.dependencies.resolveUserId(),

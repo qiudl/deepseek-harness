@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
+import { parseHostCollaborationSourceTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
 import type { Config } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
@@ -177,6 +178,21 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const generateText = vi.fn(async (text: string, _signal: AbortSignal) => ({
     provider: 'deepseek', model: 'deepseek-chat', text: `answer: ${text}`,
   }))
+  const sourceTarget = parseHostCollaborationSourceTarget({ workspace_id: randomUUID(), session_id: 'original',
+    source_message_id: 'message', source_revision: '1' })
+  const sourceDescriptor = { ...sourceTarget, snapshot_digest: 'a'.repeat(64) }
+  const sourceSnapshot = { descriptor: sourceDescriptor, snapshot_json: JSON.stringify({ ...sourceTarget,
+    original_message: '@Guide · Project repair', active_mentions: [], model_snapshot: { provider: 'deepseek', model: 'chat' },
+    host_journal_commit: { journal_id: 'journal', commit_version: '1', content_digest: 'b'.repeat(64) },
+  }) }
+  const inspectWorkspaceModelSelection = vi.fn<NonNullable<ProfileWorkerHandle['inspectWorkspaceModelSelection']>>(
+    async target => ({ ...target, provider: 'deepseek', model: 'chat' }))
+  const inspectCollaborationSource = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationSource']>>(
+    async () => sourceDescriptor)
+  const readCollaborationSourceSnapshot = vi.fn<NonNullable<ProfileWorkerHandle['readCollaborationSourceSnapshot']>>(
+    async () => sourceSnapshot)
+  const collaborationAnalysis = vi.fn<NonNullable<ProfileWorkerHandle['collaborationAnalysis']>>(async command => command)
+  const receiveCollaborationDelivery = vi.fn<NonNullable<ProfileWorkerHandle['receiveCollaborationDelivery']>>(async () => null)
   const serverStart = vi.fn(async () => undefined)
   const serverClose = vi.fn(async () => undefined)
   const server = {
@@ -203,6 +219,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       generation: workerSpecs.length,
       bootstrapCookie: { name: 'fixture', value: 'private' },
       generateText,
+      inspectWorkspaceModelSelection, inspectCollaborationSource, readCollaborationSourceSnapshot,
+      collaborationAnalysis, receiveCollaborationDelivery,
       closeNotifications: () => { workerEvents.push(`notifications:${spec.profileId}`) },
       abort: () => { workerEvents.push(`abort:${spec.profileId}`); rejectDone?.(new Error('worker exit failed')) },
       done,
@@ -241,6 +259,27 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(serverOptions.generateModelText?.(profile.profileId, 'question', new AbortController().signal))
     .resolves.toEqual({ provider: 'deepseek', model: 'deepseek-chat', text: 'answer: question' })
   expect(generateText).toHaveBeenCalledWith('question', expect.any(AbortSignal))
+  const collaborationSignal = new AbortController().signal
+  const selectionTarget = { workspace_id: sourceTarget.workspace_id, session_id: sourceTarget.session_id }
+  await expect(serverOptions.inspectWorkspaceModelSelection?.(profile.profileId, selectionTarget, collaborationSignal))
+    .resolves.toEqual({ ...selectionTarget, provider: 'deepseek', model: 'chat' })
+  expect(inspectWorkspaceModelSelection).toHaveBeenCalledWith(selectionTarget, collaborationSignal)
+  await expect(serverOptions.inspectCollaborationSource?.(profile.profileId, sourceTarget, collaborationSignal))
+    .resolves.toEqual(sourceDescriptor)
+  expect(inspectCollaborationSource).toHaveBeenCalledWith(sourceTarget, collaborationSignal)
+  await expect(serverOptions.readCollaborationSourceSnapshot?.(profile.profileId, sourceTarget, collaborationSignal))
+    .resolves.toEqual(sourceSnapshot)
+  expect(readCollaborationSourceSnapshot).toHaveBeenCalledWith(sourceTarget, collaborationSignal)
+  const analysisCommand = { action: 'prepare', input: { source_message_id: sourceTarget.source_message_id } }
+  await expect(serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, collaborationSignal))
+    .resolves.toEqual(analysisCommand)
+  expect(collaborationAnalysis).toHaveBeenCalledWith(analysisCommand, collaborationSignal)
+  const deliveryReceiver = serverOptions.collaborationDeliveryReceiver?.(profile.profileId)
+  if (!deliveryReceiver) throw new Error('missing original delivery receiver')
+  expect(() => { deliveryReceiver.assertCurrent() }).not.toThrow()
+  await expect(serverOptions.inspectCollaborationSource?.(randomUUID(), sourceTarget, collaborationSignal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  expect(inspectCollaborationSource).toHaveBeenCalledOnce()
   await expect(serverOptions.remoteSession?.(profile.profileId, {
     operation: 'session.list', command_id: randomUUID() as never,
   }, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })

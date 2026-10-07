@@ -1,5 +1,11 @@
+import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootJournalCommand, HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceGrant, HostControlSha256,
+  HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 /** Stable profile id that reveals no account or environment identifier. */
 export type PersonProfileId = Branded<'PersonProfileId'>
@@ -105,6 +111,56 @@ export interface ProfileWorkerHandle {
     readonly model: string
     readonly text: string
   }>
+  /** Host-only Session choice inspection; no source proof or executable configuration. */
+  readonly inspectWorkspaceModelSelection?: (
+    target: HostWorkspaceModelSelectionTarget,
+    signal: AbortSignal,
+  ) => Promise<HostWorkspaceModelSelection>
+  /**
+   * Private Parent analysis command; this handle grants no Account/cloud authority.
+   * @param command - Prepare/dispatch JSON with the original binding digest; caller keeps Account/peer current.
+   * @param signal - Current Parent cancellation; the private token never enters a view lease.
+   * @returns a bounded non-executable preparation or untrusted model JSON saved before acknowledgement.
+   */
+  readonly collaborationAnalysis?:(command:HostRemoteSessionJson,signal:AbortSignal)=>Promise<HostRemoteSessionJson>
+  /**
+   * Save a complete reply through the selected worker's private write capability.
+   * @param command - Readable cloud projection and coordinator-authenticated account namespace.
+   * @param signal - Parent cancellation; the worker token stays outside view leases.
+   * @returns Bounded untrusted local commit JSON, without an answer echo or cloud authorization.
+   */
+  readonly receiveCollaborationDelivery?: (command: HostCollaborationDeliveryCapsule, signal: AbortSignal) => Promise<HostRemoteSessionJson>
+  /** Host-only root binding read; private token never enters a view lease. */
+  readonly rootJournal?: (command: HostRootJournalCommand, signal: AbortSignal) => Promise<HostRootJournalMetadata>
+  /** Host-only root metadata; no view lease access. */
+  /** Current unused attempt from this worker's live owner and original parent binding. */
+  readonly inspectRootPlanningAttempt?: (target: HostRootSubmissionTarget, attemptId: HostControlRequestId,
+    binding: string, signal: AbortSignal) => Promise<HostRootPlanningAttemptDescriptor>
+  readonly inspectCollaborationRoot?: (target: HostRootSubmissionTarget, signal: AbortSignal) => Promise<HostRootSubmissionDescriptor>
+  /** Host-only committed Source read; no message content or worker token enters a view lease. */
+  readonly inspectCollaborationSource?: (
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+  ) => Promise<HostCollaborationSourceDescriptor>
+  /** Independent committed selection lookup; a supplied digest never creates or authorizes a grant. */
+  readonly readCollaborationReferenceGrant?: (
+    target: HostCollaborationSourceTarget, requestDigest: HostControlSha256, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceGrant>
+  /**
+   * Capture an already authorized selection through the independent private Reference capability.
+   * Returns bounded untrusted metadata; the parent must validate it before cloud use, and it grants no transfer authority.
+   */
+  readonly captureCollaborationReferenceSelection?: (
+    selection: HostRemoteSessionJson, signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
+  /** Current Source-bound selected bytes through the independent Reference token, never a view lease. */
+  readonly readCollaborationReferenceContent?: (
+    target: HostCollaborationReferenceContentTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceContentChunk>
+  /** Original journal content for Main cloud admission; never carried by a view lease. */
+  readonly readCollaborationSourceSnapshot?: (
+    target: HostCollaborationSourceTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationSourceSnapshot>
   /** Host-only closed Session command; no worker token enters a view lease. */
   readonly remoteSession?: (
     command: HostRemoteSessionCommand,

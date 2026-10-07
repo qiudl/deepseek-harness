@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 const tunnel = vi.hoisted(() => ({
   bootPayload: vi.fn(async () => ({ injections: [] })),
-  fetch: vi.fn(),
+  fetch: vi.fn(async () => new Response(null, { status: 403 })),
   open: vi.fn(),
   loadBundle: vi.fn(),
   constructed: vi.fn(),
@@ -19,6 +19,8 @@ vi.mock('@deepseek-ai/dsh-experimental-webworker-runtime/client', () => ({
 }))
 
 afterEach(() => {
+  window.dispatchEvent(new Event('pagehide'))
+  Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__')
   Object.defineProperty(window, 'parent', { configurable: true, value: window })
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
@@ -36,6 +38,9 @@ it('refuses a remote page without a configured trusted parent', async () => {
 })
 
 it('accepts one nonce-bound port only from the configured parent origin', async () => {
+  tunnel.fetch.mockImplementation(async () => new Response(JSON.stringify({
+    schema: 'dsh-remote-collaboration/v1', methods: ['workspace'],
+  })))
   vi.stubEnv('VITE_DSH_REMOTE_PARENT_ORIGIN', 'https://staging.ai.pipexerp.com')
   const parent = { postMessage: vi.fn<(message: { nonce: string }, origin: string) => void>() }
   Object.defineProperty(window, 'parent', { configurable: true, value: parent })
@@ -57,10 +62,17 @@ it('accepts one nonce-bound port only from the configured parent origin', async 
   send(parent, 'https://evil.example', ready.nonce)
   send(parent, origin, 'wrong-nonce')
   expect(port.start).not.toHaveBeenCalled()
+  expect(Reflect.get(window, '__DSH_DESKTOP_HOST__')).toBeUndefined()
   send(parent, origin, ready.nonce)
   const boot = (globalThis as { dshRemoteBoot?: { ready(): Promise<unknown> } }).dshRemoteBoot
   expect(boot).toBeDefined()
   await expect(boot!.ready()).resolves.toMatchObject({ injections: [], transport: { fetch: tunnel.fetch } })
+  expect(Reflect.get(window, '__DSH_DESKTOP_HOST__')).toMatchObject({
+    collaborationScopeAvailable: true, collaborationExecutionAvailable: false,
+  })
+  const host: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
+  if (host === null || typeof host !== 'object') throw Error('expected the installed Host bridge')
+  expect(Reflect.get(host, 'collaborationWorkspace')).toBeTypeOf('function')
   expect(port.start).toHaveBeenCalledOnce()
   expect(tunnel.constructed).toHaveBeenCalledOnce()
 })

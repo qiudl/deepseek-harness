@@ -1,0 +1,9 @@
+parent-execution=true
+original=@Guide · Product check login; @Tester · Engineering test the redirect
+target=product/guide
+target=engineering/tester
+shared-original-source=true
+distinct-mention-ids=2
+original-submissions=1
+ordinary-model-prompts=0
+draft=empty

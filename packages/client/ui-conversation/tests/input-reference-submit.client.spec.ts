@@ -17,6 +17,22 @@ const commandAttachments = {
   unsupportedNotice: (token: string) => `${token.trim()} attachments-unsupported`,
 }
 
+function inputTriggerFixture(overrides: Partial<InputTriggerController>): InputTriggerController {
+  return {
+    launcher: { getSnapshot: () => null, subscribe: () => () => {} },
+    lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
+    track: vi.fn(),
+    arbitrate: () => 'pass',
+    onSpace: () => false,
+    serializeReference: () => Promise.reject(new Error('unexpected reference serialization')),
+    adjudicatesPlainText: () => false,
+    adjudicate: async () => undefined,
+    openReference: () => false,
+    toggleSource: () => {},
+    ...overrides,
+  }
+}
+
 function chip(shell: SessionInputShell): void {
   shell.setDraft('@res')
   const accepted = shell.insertReference({
@@ -81,11 +97,13 @@ describe('reference submission', () => {
     ) => Promise<SubmitOutcome>>()
       .mockResolvedValueOnce({ kind: 'error', text: 'snapshot unavailable' })
       .mockResolvedValueOnce({ kind: 'success' })
-    const inputTriggers = {
+    const inputTriggers = inputTriggerFixture({
+      adjudicatesPlainText: () => false,
+      adjudicate: async () => undefined,
       serializeReference,
       track: vi.fn(),
       lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
-    } as unknown as InputTriggerController
+    })
     const shell = new SessionInputShell({
       actx: {} as Context,
       inputTriggers: () => inputTriggers,
@@ -99,11 +117,9 @@ describe('reference submission', () => {
     })
 
     shell.submit('queue')
-    // Optimistic commit: the composer clears at enter and stays unlocked
-    // while the detached flight runs.
-    expect(shell.snapshot.phase).toBe('plain')
-    expect(shell.snapshot.draft).toBe('')
+    // An @ source may claim the line; an ordinary reference settles to the sink.
     await vi.waitFor(() => {
+      expect(sink).toHaveBeenCalledTimes(1)
       expect(shell.snapshot.draft).toBe(`${mention} `)
     })
     expect(sink).toHaveBeenNthCalledWith(1, mention, [], 'queue', expect.any(AbortSignal))
@@ -117,7 +133,6 @@ describe('reference submission', () => {
     })
 
     shell.submit('queue')
-    expect(shell.snapshot.draft).toBe('')
     await vi.waitFor(() => {
       expect(sink).toHaveBeenNthCalledWith(2, mention, [], 'queue', expect.any(AbortSignal))
     })
@@ -127,11 +142,13 @@ describe('reference submission', () => {
 
   it('blocks submission and retains the chip when its owner cannot serialize it', async () => {
     const sink = vi.fn()
-    const inputTriggers = {
+    const inputTriggers = inputTriggerFixture({
+      adjudicatesPlainText: () => false,
+      adjudicate: async () => undefined,
       serializeReference: () => Promise.reject(new Error('reference codec unavailable')),
       track: vi.fn(),
       lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
-    } as unknown as InputTriggerController
+    })
     const shell = new SessionInputShell({
       actx: {} as Context,
       inputTriggers: () => inputTriggers,
@@ -142,6 +159,7 @@ describe('reference submission', () => {
     shell.submit()
     // The serializer rejection restores the optimistic commit with its chip.
     await vi.waitFor(() => {
+      expect(shell.notices.getSnapshot()).toMatchObject({ level: 'error' })
       expect(shell.snapshot.draft).toBe(`${mention} `)
     })
     expect(sink).not.toHaveBeenCalled()
@@ -276,7 +294,7 @@ describe('submit transaction hardening', () => {
     const lexicon = { getSnapshot: () => new Map(), subscribe: () => () => {} }
     const shell = new SessionInputShell({
       actx: {} as Context,
-      inputTriggers: () => ({ track, lexicon } as unknown as InputTriggerController),
+      inputTriggers: () => inputTriggerFixture({ track, lexicon, adjudicatesPlainText: () => false }),
       defaultSink: vi.fn(),
       commandAttachments,
     })
@@ -335,6 +353,7 @@ it.each(['handled', 'claim', 'message'] as const)('counts only a message after a
     lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
     track: () => {}, arbitrate: () => 'pass', onSpace: () => false,
     serializeReference: async () => '', openReference: () => false, toggleSource: () => {},
+    adjudicatesPlainText: () => false,
     adjudicate: () => pending.promise,
   }
   const shell = new SessionInputShell({ actx: {} as Context, inputTriggers: () => inputTriggers,
@@ -372,6 +391,7 @@ it('retains occurrence time and Session facts across arbitration and independent
       lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
       track: () => {}, arbitrate: () => 'pass', onSpace: () => false,
       serializeReference: async () => '', openReference: () => false, toggleSource: () => {},
+      adjudicatesPlainText: () => false,
       adjudicate: () => pending.promise,
     }),
     defaultSink: sink,

@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-10-03-slark-workspace-project-scope.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-10-03-slark-workspace-project-scope.md
+/agent-note-slark-workspace-project-scope:
+  en: 4c163bd94ee71a42
+  zh: dc95ad0aec24a895
+/agent-note-slark-workspace-project-scope/problem:
+  en: aaff664a48194838
+  zh: a8c82272465e5b41
+/agent-note-slark-workspace-project-scope/decision:
+  en: c36ceb86729f8450
+  zh: 6f3abb246e5fc338
+/agent-note-slark-workspace-project-scope/consequences:
+  en: 3b40315de9d618db
+  zh: d5021a96aee35265
+/agent-note-slark-workspace-project-scope/alternatives-considered:
+  en: 88a5e52ceb0b6b3d
+  zh: 90ff3cb23691b23a
+/agent-note-slark-workspace-project-scope/testing:
+  en: 34775ac5daec0344
+  zh: 6ab4b5273ec3f591

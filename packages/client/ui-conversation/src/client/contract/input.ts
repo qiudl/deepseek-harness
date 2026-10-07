@@ -42,6 +42,8 @@ export interface CommandClaim {
   readonly token: string
   readonly hint?: string
   readonly attachments?: boolean
+  /** Set false for a draft-bound claim that must be adjudicated again after a failed submission. */
+  readonly retainOnFailure?: false
   /**
    * Submit the claimed command.
    * @param args - command text after the claimed token.
@@ -112,6 +114,8 @@ export interface InputTriggerController {
   onSpace(): boolean
   /** @param source - reference source. @param ref - source-local id. @param signal - submit cancellation. @returns model text. */
   serializeReference(source: string, ref: string, signal: AbortSignal): Promise<string>
+  /** @returns whether a current source explicitly requests arbitration of plain text. */
+  adjudicatesPlainText(): boolean
   /** @param line - trimmed draft. @param signal - submit cancellation. @param envelope - attachment count. @returns winning result. */
   adjudicate(
     line: string,
@@ -297,8 +301,8 @@ export type InputEvent =
   | { readonly type: 'draft-changed'; readonly draft: string }
   /** The editor applied a claim-token replacement: enter claimed. */
   | { readonly type: 'claim'; readonly claim: CommandClaim }
-  /** Enter submission with the current clipboard projection. */
-  | { readonly type: 'enter'; readonly mode: InputSubmitMode; readonly draft: string; readonly submission?: MessageSubmission }
+  /** Enter submission; reference or plain-text sources can explicitly request adjudication. */
+  | { readonly type: 'enter'; readonly mode: InputSubmitMode; readonly draft: string; readonly adjudicateSources?: true; readonly submission?: MessageSubmission }
   | { readonly type: 'adjudicated'; readonly attempt: SubmitAttempt; readonly outcome: PickOutcome }
   | { readonly type: 'adjudication-failed'; readonly attempt: SubmitAttempt; readonly message: string }
   /** Settlement carries the live clipboard projection for suffix-retention and claim re-entry decisions. */

@@ -58,6 +58,10 @@ The composer registers the File command action and owns its label, availability,
 
 Claimed commands retain their identity and highlight when only their arguments and trailing separator are deleted; editing the command name releases the claim. The same rules apply to every command and locale, including `/goal`, `/目标`, `/plan`, and `/计划`. Command hints and ordinary placeholders remain hidden throughout IME composition and reappear only after the editor commits the final text and the corresponding input is empty.
 
+Drafts containing structured references pass through Enter adjudication even when ordinary text precedes the reference. Sources opt in to handling non-leading references through the trigger pipeline. A draft-bound claim may declare `retainOnFailure: false`; failure preserves the editor contents and returns to plain mode so the next send reads the edited draft again. Other command claims keep their existing failure-retention rules.
+
+The input shell arbitrates structured references and plain text only when the current trigger controller explicitly requests it. Plain-text participation uses the same frozen submit attempt, cancellation, draft retention and first-owner dispatch as command and reference sends. With no participating source, ordinary messages keep their immediate send path.
+
 Workspace selection uses `uiWorkspace.openWorkspace` to prepare the target and commit navigation. Draft text and attachments move in its synchronous preparation callback only while that request is current; later navigation or owner disposal leaves the original draft intact.
 
 The package occupies the root-scoped `main` key `conversation`. Its `main.conversation` shell keeps the resident `conversation.header` outside the optional-Session `conversation.content` Component Factory. The header hosts root-scoped navigation without a selected Session; titles, actions, and View tabs remain in its strict Session child. The Factory owns the shared body and Composer, reads the current Session through its standard Hook, and exposes strict-Session `views` plus root-scoped `widthControls` local positions. Its default adapter renders the existing `conversation.session` entry, while the main occurrence selects the width handles; an embedded occurrence can replace `views` and omit those handles without rendering the main Header. The shared body and Composer register the queue and Todo docks. The Todo dock uses the shared panel elevation above the composer; its rows use the shared idle, ongoing, and done markers for pending, in-progress, and completed items. `ctx.uiSession.provide()` materializes the Conversation and input sources from the same Session binding and supplies `inputActions` as a stable standard prop.
@@ -170,3 +174,5 @@ None.
 </details>
 
 **Runtime invariant:** No companion is published. Conversation Definitions, target builders, and Views are already validated by their owning registries and the Slot ledger.
+
+External activity owners can retain a Session's shell through `ConversationBinding.retainActivity(target)` and release it when their current authorized history becomes empty or their owner is disposed. This permits views of external work before an ordinary chat turn exists; it does not change Session blank state or append model-visible events.

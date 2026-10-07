@@ -1,0 +1,34 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/client/ui-slark-agent/README.md
+/:
+  en: d694868c6972bc1b
+  zh: c06ea29ac76aad16
+/deepseek-ai-dsh-client-ui-slark-agent:
+  en: 9ef3b818775395d6
+  zh: c2dfa24f22766ef4
+/deepseek-ai-dsh-client-ui-slark-agent/summary:
+  en: 38314c552623659a
+  zh: 58314ac7200f1221
+/deepseek-ai-dsh-client-ui-slark-agent/table-of-contents:
+  en: 76368b6b1da79c80
+  zh: 132b14c08ea3e5bc
+/deepseek-ai-dsh-client-ui-slark-agent/use-this-package:
+  en: 0d6ea8d5bebf31de
+  zh: 19c4894e289b9363
+/deepseek-ai-dsh-client-ui-slark-agent/understand-the-implementation:
+  en: e79303ee919d3047
+  zh: b63e811a37b74f70
+/deepseek-ai-dsh-client-ui-slark-agent/model-experience:
+  en: 257a7082f6f3985f
+  zh: 3b60351db047a576
+/deepseek-ai-dsh-client-ui-slark-agent/model-experience/kv-cache-effect:
+  en: 629f8bbeb0421f8e
+  zh: c7ae7f67052ce921
+/deepseek-ai-dsh-client-ui-slark-agent/known-limitations-and-deferred-work:
+  en: 94f48db2e2c913d9
+  zh: 36a91658b8c1d547
+/deepseek-ai-dsh-client-ui-slark-agent/known-limitations-and-deferred-work/dev-note:
+  en: f6451ac13a46d33f
+  zh: 7faed6d81110e759

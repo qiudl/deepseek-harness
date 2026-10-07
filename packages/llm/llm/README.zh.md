@@ -23,6 +23,7 @@ kind: "package-reference"
 -----
 
 <a id="use-this-package"></a>
+
 ## 使用本包
 
 `listModels` 描述目录驱动界面提供的模型。核心解析与流式调用仍可接受未列出的 ID。GUI 的模型选择与提交要求模型出现在目录中；供 GUI 使用的适配器必须实现 `listModels`，公布其可用模型。基类实现返回空列表，因此不向 GUI 提供模型。
@@ -58,6 +59,8 @@ for await (const chunk of ctx.llm.stream({
 
 挂载成功后，`ctx.llm.listProviders()` 会按注册顺序报告已注册路由。
 
+`prepareSnapshot(config, signal)` 准备一次性调用，适配器已捕获连接及解析后的凭据。它在异步工作前复制 config，并将所属操作的取消信号保留到发送。冻结的公开 `snapshot` 包含 provider、model、可选有效推理强度、十进制准备代次及 SHA-256 注册指纹，不含凭据。每次成功准备都会取得不同代次，即使设置相同。指纹标识运行时注册，路由替换或重启后变化，不证明软件身份，也不对配置密钥计算摘要。不支持完整捕获的适配器以 `PREPARED_SNAPSHOT_UNSUPPORTED` 拒绝；普通 `prepareCall()` 保留现有行为。准备句柄仅在当前进程有效，重启后不能从公开元数据重建。
+
 `GenerateOptions.messages` 接受持久 `Message` 值和仅供请求使用的 `RequestUserInput` 值。仅供请求使用的输入包含 user-role 内容，不含 `id` 或 `source`；Session 写入和 Agent 投递仍然要求持久消息。调用方必须在流结束前保持辅助输入不变。会记录完整请求的调用方（例如会话标题生成）必须使用持久消息。
 
 ### 你可以做什么
@@ -76,6 +79,7 @@ for await (const chunk of ctx.llm.stream({
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## 理解实现
 
 <details>
@@ -124,6 +128,7 @@ for await (const chunk of ctx.llm.stream({
 -----
 
 <a id="further-exploration"></a>
+
 ## 进一步探索
 
 当包级约定不够用时阅读以下页面。它们从共享类型逐步进入具体适配器、重试执行器与计量服务。
@@ -138,7 +143,10 @@ for await (const chunk of ctx.llm.stream({
 
 -----
 
+Prepared `stream(options, assertRequest?)` 在中间件及请求投影之后、捕获的适配器发送之前执行可选 Host 断言。受约束请求保留原取消信号，并在验证后深度冻结。重复末端 continuation 不能再次发送同一个已准备调用；断言失败成为终止错误。中间件直接替换整个流时不会运行该断言，因此受约束调用方必须拒绝没有断言执行证据的输出。
+
 <a id="model-experience"></a>
+
 ## 模型体验
 
 没有直接影响，因为 LLM 服务不添加内容；适配器决定何时添加本包导出的共享图片描述符与逐图片占位符。
@@ -151,7 +159,6 @@ for await (const chunk of ctx.llm.stream({
 
 <a id="known-limitations-and-deferred-work"></a>
 
-
 这些限制说明本服务在哪里停止、由其他包或未来工作接续。它们是当前包约束，不是任务积压。
 
 - **本服务不提供重试执行、缓存或速率限制**——提供方注册会存储重试策略，但一次流仍是一次提供方尝试；`@deepseek-ai/dsh-llm-retry` 在持久 agent 步骤边界上执行该策略。
@@ -162,6 +169,7 @@ for await (const chunk of ctx.llm.stream({
 - **工具更新需要会话历史** — `GenerateOptions.tools` 包含当前有效定义。`toolHistory` 提供 `Session.toolHistory()` 派生的初始声明及已解析历史定义的添加记录。适配器分发时，`projectToolUpdates` 构造延迟声明，并在 `in-history` 模式保留已移除定义；`addition-only` 省略已移除定义和移除消息。不支持更新的路由接收有效工具，不携带 developer 消息或 `deferLoading`。缺少历史或请求前缀遗漏已记录更新时，回退为当前声明且不发送 developer 消息。 显式延迟加载的初始工具在首个保留的添加块出现前保持延迟状态；声明延迟加载工具不会使其激活。
 
 <a id="dev-note"></a>
+
 ### 开发备注
 
 <details>
@@ -176,3 +184,5 @@ for await (const chunk of ctx.llm.stream({
 - `llm/adapters-updated` 事件按设计不携带载荷；消费方重新读取注册表，而不是在事件中接收新拓扑。
 
 </details>
+
+`bindRequestTrace` 将已持久化的 W3C 传输关联绑定到不可变中间件请求。最终适配器边界将关联复制到 `GenerateOptions.traceparent`，不修改冻结请求或模型可见消息。`requestTraceHeaders` 校验 trace，并移除大小写不敏感的部署请求头冲突。关联信息不具有授权含义。

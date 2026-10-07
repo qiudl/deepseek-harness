@@ -1,3 +1,4 @@
+import { rootWorkerOperations } from './root-worker-operations.ts'
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
 import { win32 } from 'node:path'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
@@ -39,7 +40,7 @@ import {
   type WindowsVaultNativeModulePin,
 } from './windows-pinned-vault-native.ts'
 import { loadWindowsWorkerIoCancellation } from './windows-worker-io-cancellation.ts'
-import { ProfileWorkerSupervisor } from './worker-supervisor.ts'
+import { ProfileWorkerSupervisor, collaborationWorkerReaders } from './worker-supervisor.ts'
 
 const PUBLIC_KEY = /^[A-Za-z0-9_-]{43}$/u
 const SHA256 = /^[0-9a-f]{64}$/u
@@ -419,6 +420,15 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
+        ...collaborationWorkerReaders(workers),
+        rootAnalysisSupported: true,
+        rootAnalysisRecoverySupported: true,
+        rootLookupSupported: true,
+        rootPendingLookupSupported: true,
+        rootLiveResumeSupported: true,
+        collaborationAnalysis: (profileId, command, signal) => workers.collaborationAnalysis(profileId, command, signal),
+        ...rootWorkerOperations(workers),
+        collaborationDeliveryReceiver: profileId => workers.collaborationDeliveryReceiver(profileId),
         remoteSession,
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
         remoteUiStream: (profileId, endpoint, payload, signal) => workers.remoteUiStream(profileId, endpoint, payload, signal),

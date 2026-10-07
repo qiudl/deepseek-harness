@@ -1,9 +1,20 @@
+import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationReferenceGrant, parseHostCollaborationReferenceContentChunk,
+  parseHostCollaborationReferenceContentTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceTarget, HostControlSha256 } from '@deepseek-ai/dsh-host-control-protocol'
 import { createHash, randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
-import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRemoteSessionJson, parseHostWorkspaceModelSelection, parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
@@ -14,7 +25,9 @@ const REMOTE_UI_ASSET_CHUNK_BYTES = 24 * 1024
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
-  'DSH_PROFILE_MODEL_TOKEN',
+  'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
+  'DSH_PROFILE_ANALYSIS_TOKEN', 'DSH_PROFILE_REFERENCE_TOKEN',
+  'DSH_PROFILE_DELIVERY_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
   'DSH_SLARK_EMBEDDED',
@@ -128,6 +141,11 @@ export class DshWebProfileWorkerFactory {
   async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
+    const sourceToken = randomBytes(32).toString('base64url')
+    const referenceToken = randomBytes(32).toString('base64url')
+    const analysisToken = randomBytes(32).toString('base64url')
+    const deliveryToken = randomBytes(32).toString('base64url')
+    const workspaceModelToken = randomBytes(32).toString('base64url')
     const modelToken = randomBytes(32).toString('base64url')
     const remoteSessionToken = randomBytes(32).toString('base64url')
     const remoteUiToken = randomBytes(32).toString('base64url')
@@ -142,6 +160,11 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
         DSH_PROFILE_MODEL_TOKEN: modelToken,
+        DSH_PROFILE_WORKSPACE_MODEL_TOKEN: workspaceModelToken,
+        DSH_PROFILE_SOURCE_TOKEN: sourceToken,
+        DSH_PROFILE_REFERENCE_TOKEN: referenceToken,
+        DSH_PROFILE_ANALYSIS_TOKEN: analysisToken,
+        DSH_PROFILE_DELIVERY_TOKEN: deliveryToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
         DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
         DSH_SLARK_EMBEDDED: '1',
@@ -151,7 +174,7 @@ export class DshWebProfileWorkerFactory {
     const activated = await this.waitForOrigin(child)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
-      modelToken, remoteSessionToken, remoteUiToken)
+      modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, sourceToken, analysisToken, deliveryToken, referenceToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -210,6 +233,11 @@ export class DshWebProfileWorkerFactory {
     modelToken: string,
     remoteSessionToken: string,
     remoteUiToken: string,
+    workspaceModelToken: string,
+    sourceToken: string,
+    analysisToken: string,
+    deliveryToken: string,
+    referenceToken: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -259,6 +287,41 @@ export class DshWebProfileWorkerFactory {
         }
         return { provider: value.provider, model: value.model, text: value.text }
       },
+      readCollaborationSourceSnapshot: (target, signal) => this.readCollaborationSourceSnapshot(
+        viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
+      ),
+      collaborationAnalysis: (command, signal) => this.collaborationAnalysis(
+        viewOrigin, analysisToken, command, signal, () => requestedStop || settled,
+      ),
+      receiveCollaborationDelivery: (command, signal) => this.receiveCollaborationDelivery(
+        viewOrigin, deliveryToken, command, signal, () => requestedStop || settled,
+      ),
+      inspectRootPlanningAttempt: (target, attemptId, binding, signal) => this.inspectRootPlanningAttempt(
+        viewOrigin, analysisToken, target, attemptId, binding, signal, () => requestedStop || settled,
+      ),
+      rootJournal: (command, signal) => this.rootJournal(viewOrigin, analysisToken, command, signal, () => requestedStop || settled),
+      inspectCollaborationRoot: (target, signal) => this.inspectCollaborationRoot(
+        viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
+      ),
+      inspectCollaborationSource: (target, signal) => this.inspectCollaborationSource(
+        viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
+      ),
+      captureCollaborationReferenceSelection: (selection, signal) => this.captureReferenceSelection(
+        viewOrigin, referenceToken, selection, signal, () => requestedStop || settled,
+      ),
+      readCollaborationReferenceContent: (target, signal) => this.readReferenceContent(
+        viewOrigin, referenceToken, target, signal, () => requestedStop || settled,
+      ),
+      readCollaborationReferenceGrant: async (target, requestDigest: HostControlSha256, signal) => {
+        const query: HostCollaborationReferenceTarget = { ...target, reference_request_digest: requestDigest }
+        const result = await this.readSource(viewOrigin, sourceToken, query, signal, () => requestedStop || settled,
+          '/internal/desktop-collaboration-reference-grant', 8192, parseHostCollaborationReferenceGrant, value => value)
+        if (result.reference_request_digest !== requestDigest) throw new HostAuthorityError('profile_mismatch')
+        return result
+      },
+      inspectWorkspaceModelSelection: (target, signal) => this.inspectWorkspaceModelSelection(
+        viewOrigin, workspaceModelToken, target, signal, () => requestedStop || settled,
+      ),
       remoteSession: (command, signal) => this.remoteSession(
         viewOrigin, remoteSessionToken, command, signal, () => requestedStop || settled,
       ),
@@ -278,6 +341,240 @@ export class DshWebProfileWorkerFactory {
         void done.finally(() => { clearTimeout(timer) })
       },
       done,
+    }
+  }
+
+  private async inspectWorkspaceModelSelection(
+    viewOrigin: string,
+    token: string,
+    target: HostWorkspaceModelSelectionTarget,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostWorkspaceModelSelection> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    const response = await fetch(`${viewOrigin}/internal/desktop-workspace-model-selection`, {
+      method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 8192, (bytes) => {
+      const result = parseHostWorkspaceModelSelection(JSON.parse(bytes.toString('utf8')))
+      if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
+        throw new HostAuthorityError('profile_mismatch')
+      }
+      return result
+    }, 'await')
+  }
+
+  private async collaborationAnalysis(
+    origin: string,
+    token: string,
+    command: HostRemoteSessionJson,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostRemoteSessionJson> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(35000)])
+    active.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const body = JSON.stringify(parseHostRemoteSessionJson(command))
+    if (Buffer.byteLength(body, 'utf8') > 1024 * 1024) throw new HostAuthorityError('invalid_input')
+    const response = await fetch(`${origin}/internal/desktop-collaboration-analysis`, {
+      method: 'POST',
+      redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body,
+      signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 128 * 1024, (bytes) => {
+      const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        Object.keys(parsed).length !== 1 ||
+        !Object.hasOwn(parsed, 'value')
+      )
+        throw new HostAuthorityError('unavailable')
+      return parseHostRemoteSessionJson((parsed as { value: unknown }).value)
+    }, 'detach')
+  }
+
+  private async receiveCollaborationDelivery(
+    origin: string,
+    token: string,
+    command: HostCollaborationDeliveryCapsule,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostRemoteSessionJson> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    active.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    // The Profile validates the full delivery schema. Control JSON's 32 KiB string cap excludes replies.
+    const body = JSON.stringify(command)
+    if (Buffer.byteLength(body, 'utf8') > 1024 * 1024) throw new HostAuthorityError('invalid_input')
+    const response = await fetch(`${origin}/internal/desktop-collaboration-delivery`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body, signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 8192,
+      bytes => parseHostRemoteSessionJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))),
+      'detach')
+  }
+
+  private async captureReferenceSelection(origin: string, token: string, selection: HostRemoteSessionJson,
+    signal: AbortSignal, stopped: () => boolean): Promise<HostRemoteSessionJson> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15000)])
+    active.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const body = JSON.stringify(parseHostRemoteSessionJson(selection))
+    if (Buffer.byteLength(body) > 32768) throw new HostAuthorityError('invalid_input')
+    const response = await fetch(`${origin}/internal/desktop-collaboration-reference-capture`, {
+      method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body, signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 32768,
+      bytes => parseHostRemoteSessionJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))), 'detach')
+  }
+
+  private async readReferenceContent(origin: string, token: string, target: HostCollaborationReferenceContentTarget,
+    signal: AbortSignal, stopped: () => boolean): Promise<HostCollaborationReferenceContentChunk> {
+    const query = parseHostCollaborationReferenceContentTarget(target)
+    const result = await this.readSource(origin, token, query, signal, stopped,
+      '/internal/desktop-collaboration-reference-content', 49152, parseHostCollaborationReferenceContentChunk, chunk => chunk.descriptor)
+    if (result.offset !== query.offset || result.reference_request_digest !== query.reference_request_digest)
+      throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  private async inspectRootPlanningAttempt(origin: string, token: string, target: HostRootSubmissionTarget,
+    attemptId: HostControlRequestId, binding: string, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostRootPlanningAttemptDescriptor> {
+    const result = await this.collaborationAnalysis(origin, token, { action: 'inspect_root_attempt', target: { ...target },
+      attempt_request_id: attemptId, binding_key: binding }, signal, stopped)
+    return matchHostRootPlanningAttemptTarget(result, target, attemptId)
+  }
+
+  private async rootJournal(
+    origin: string, token: string, input: HostRootJournalCommand, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostRootJournalMetadata> {
+    const command = parseHostRootJournalCommand(input)
+    return this.readSource(origin, token, command.target, signal, stopped, '/internal/desktop-root-journal', 8192,
+      value => matchHostRootJournalMetadata(value, command), value => value.source_descriptor, command)
+  }
+
+  private async inspectCollaborationRoot(
+    viewOrigin: string, token: string, target: HostRootSubmissionTarget, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostRootSubmissionDescriptor> {
+    return this.readSource(viewOrigin, token, target, signal, stopped, '/internal/desktop-collaboration-root', 8192, (value) => {
+      const result = parseHostRootSubmissionDescriptor(value)
+      if (result.namespace_id !== target.namespace_id || result.command_id !== target.command_id) throw new HostAuthorityError('profile_mismatch')
+      return result
+    }, result => result.source_descriptor)
+  }
+
+  private async inspectCollaborationSource(
+    viewOrigin: string,
+    token: string,
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostCollaborationSourceDescriptor> {
+    return this.readSource(viewOrigin,token,target,signal,stopped,'/internal/desktop-collaboration-source',8192,parseHostCollaborationSourceDescriptor,result=>result)
+  }
+
+  private readCollaborationSourceSnapshot(
+    viewOrigin: string,
+    token: string,
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostCollaborationSourceSnapshot> {
+    return this.readSource(
+      viewOrigin,
+      token,
+      target,
+      signal,
+      stopped,
+      '/internal/desktop-collaboration-source-snapshot',
+      2 * 1024 * 1024,
+      parseHostCollaborationSourceSnapshot,
+      result => result.descriptor,
+    )
+  }
+
+  private async readSource<T>(
+    viewOrigin: string,
+    token: string,
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+    stopped: () => boolean,
+    path: string,
+    maxBytes: number,
+    parse: (value: unknown) => T,
+    coordinates: (value: T) => HostCollaborationSourceTarget,
+    body: unknown = target,
+  ): Promise<T> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    active.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const response = await fetch(`${viewOrigin}${path}`, {
+      method: 'POST',
+      redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, maxBytes, (bytes) => {
+      const result = parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)))
+      const selected = coordinates(result)
+      if (
+        selected.workspace_id !== target.workspace_id ||
+        selected.session_id !== target.session_id ||
+        selected.source_message_id !== target.source_message_id ||
+        selected.source_revision !== target.source_revision
+      ) {
+        throw new HostAuthorityError('profile_mismatch')
+      }
+      return result
+    }, 'detach')
+  }
+
+  /** Retain each read's deadline, owner cancellation, byte budget and reader teardown policy. */
+  private async readPrivateResponse<T>(
+    response: Response,
+    active: AbortSignal,
+    ownerSignal: AbortSignal,
+    stopped: () => boolean,
+    maxBytes: number,
+    parse: (bytes: Buffer) => T,
+    cancellation: 'await' | 'detach',
+  ): Promise<T> {
+    if (!response.ok || !response.body) {
+      await response.body?.cancel()
+      throw new HostAuthorityError('unavailable')
+    }
+    const reader = response.body.getReader()
+    try {
+      const chunks: Uint8Array[] = []
+      let bytes = 0
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        if ((bytes += chunk.value.byteLength) > maxBytes) throw new HostAuthorityError('unavailable')
+        chunks.push(chunk.value)
+      }
+      active.throwIfAborted()
+      if (stopped()) throw new HostAuthorityError('unavailable')
+      return parse(Buffer.concat(chunks))
+    } catch (error) {
+      if (error instanceof HostAuthorityError || ownerSignal.aborted) throw error
+      throw new HostAuthorityError('unavailable')
+    } finally {
+      if (cancellation === 'await') await reader.cancel()
+      else void reader.cancel().catch(() => undefined)
+      reader.releaseLock()
     }
   }
 

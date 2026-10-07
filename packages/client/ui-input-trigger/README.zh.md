@@ -35,6 +35,10 @@ kind: "package-reference"
 
 -----
 
+Enter 钩子默认只在去除首尾空白后的草稿以其触发符开头时参与。来源可声明 `matchEnterPosition: 'anywhere'`，检查句中其他位置的结构化引用，但仍须自行判断是否拥有该提交。注册顺序和首个有效结果优先的规则保持不变。输入框会为含结构化引用的草稿请求裁决，普通文字保持立即默认发送路径。
+
+非开头 Enter 来源还可提供 `matchEnterPlainText(session)`，明确请求普通文字裁决。控制器在输入框冻结发送尝试前同步读取此回调；未提供或返回 false 时，普通消息仍立即发送。返回 true 时运行既有的有序 Enter 钩子，首个非 undefined 结果优先。来源必须对不属于自己的消息返回 undefined；控制器或来源释放后不再参与，无需第二套输入链路。
+
 <a id="understand-the-implementation"></a>
 ## 理解实现
 

@@ -200,6 +200,28 @@ describe('llm-deepseek real dynamic composition', () => {
     expect(serverB.headers[0]?.['x-api-key']).toBe('rotated-key')
   })
 
+  it('freezes a complete preparation across real Loader settings and credential publication', async () => {
+    vi.stubEnv('DEEPSEEK_API_KEY', '')
+    const first = await mockServer([{ kind: 'sse', events: textEvents }])
+    const second = await mockServer([{ kind: 'sse', events: textEvents }])
+    const { ctx, settingsPath, credentialsPath } = await loadComposition({ withDynamic: true, baseURL: first.url })
+    const call = await ctx.llm.prepareSnapshot({ provider: 'deepseek-official', model: 'deepseek-v4-flash' }, new AbortController().signal)
+    expect(first.requests).toHaveLength(0)
+    await writeFile(settingsPath, JSON.stringify([{ id: NS, config: { baseURL: second.url } }]))
+    await writeFile(credentialsPath, 'version: 1\nrefs:\n  DEEPSEEK_API_KEY: rotated-key\n', { mode: 0o600 })
+    await vi.waitFor(async () => {
+      expect((ctx.settings.describe().find(row => row.ns === NS)!.value as { baseURL?: string }).baseURL).toBe(second.url)
+      expect(await ctx.get('credentials')!.resolve(KEY_REF)).toEqual({ value: 'rotated-key', source: 'file' })
+    }, { timeout: 5000 })
+    for await (const _chunk of call.stream({ ...call.config, messages: [] })) { /* consume */ }
+    expect(first.headers[0]?.['x-api-key']).toBe('boot-key')
+    expect(second.requests).toHaveLength(0)
+    const next = await ctx.llm.prepareSnapshot({ provider: 'deepseek-official', model: 'deepseek-v4-flash' }, new AbortController().signal)
+    expect(next.snapshot.configuration_generation).not.toBe(call.snapshot.configuration_generation)
+    for await (const _chunk of next.stream({ ...next.config, messages: [] })) { /* consume */ }
+    expect(second.headers[0]?.['x-api-key']).toBe('rotated-key')
+  })
+
   it('keeps a stored key writable and rotatable across a real restart', async () => {
     // No ambient DEEPSEEK_API_KEY: the shipped surfaces do not hoist
     // the credentials document into process.env, so a stored key must stay file-sourced.

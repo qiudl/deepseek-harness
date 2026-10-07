@@ -23,6 +23,7 @@ Use `@deepseek-ai/dsh-llm` to stream model calls through configured provider ada
 -----
 
 <a id="use-this-package"></a>
+
 ## Use this package
 
 `listModels` describes models offered by catalog-driven interfaces. Core resolution and streaming can still accept unlisted ids. The GUI requires catalog membership for selection and submission; adapters intended for GUI use must implement `listModels` and advertise their available models. The base implementation returns an empty list and therefore offers no GUI models.
@@ -58,6 +59,8 @@ for await (const chunk of ctx.llm.stream({
 
 After a successful mount, `ctx.llm.listProviders()` reports the registered routes in registration order.
 
+`prepareSnapshot(config, signal)` prepares a one-shot call whose adapter has already captured its connection and resolved credential. It copies config before asynchronous work and retains the owning cancellation signal through dispatch. The frozen public `snapshot` contains provider, model, optional effective reasoning effort, a decimal preparation generation, and a SHA-256 registration fingerprint; it contains no credential. Each successful preparation gets a distinct generation, even for equal settings. The fingerprint identifies a runtime registration, changes on route replacement or restart, and does not attest software or hash configuration secrets. Adapters without complete capture reject with `PREPARED_SNAPSHOT_UNSUPPORTED`; ordinary `prepareCall()` keeps its existing behavior. Prepared handles are process-local and cannot be reconstructed from public metadata after a restart.
+
 `GenerateOptions.messages` accepts durable `Message` values and request-only `RequestUserInput` values. Request-only inputs carry user-role content with no `id` or `source`; Session writes and Agent delivery still require durable messages. Callers keep auxiliary inputs unchanged until the stream settles. A caller that records its exact request, such as session-title generation, must use durable messages.
 
 ### What you can do
@@ -76,6 +79,7 @@ Every stream ends in exactly one terminal `finish` chunk: `{ kind: 'error', fail
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## Understand the implementation
 
 <details>
@@ -124,6 +128,7 @@ File detection reads current content, including tool-role result content, on eve
 -----
 
 <a id="further-exploration"></a>
+
 ## Further Exploration
 
 Read these pages when the package-level contract is not enough. They move from the shared types to the concrete adapters, the retry executor, and the measurement service.
@@ -138,7 +143,10 @@ Read these pages when the package-level contract is not enough. They move from t
 
 -----
 
+Prepared `stream(options, assertRequest?)` runs the optional Host assertion after middleware and request projection, before the captured adapter sends. A guarded request retains its original cancellation signal and is deep-frozen after validation. Repeated terminal continuations cannot dispatch the same prepared adapter call again; an assertion failure becomes a terminal error. A middleware-supplied replacement stream never runs this assertion, so guarded consumers must reject output without observing it.
+
 <a id="model-experience"></a>
+
 ## Model Experience
 
 None, as the LLM service adds no content; adapters choose when to add the shared image descriptors and per-image placeholders exported by this package.
@@ -151,7 +159,6 @@ Reasoning-effort materialization preserves the assembled request prefix. Image i
 
 <a id="known-limitations-and-deferred-work"></a>
 
-
 These limits define where this service stops and other packages or future work begin. They are current package constraints, not a task backlog.
 
 - **No retry execution, caching, or rate limiting ships in this service** — provider registration stores the retry policy, but a stream remains a single provider attempt; `@deepseek-ai/dsh-llm-retry` executes the policy at durable agent-step boundaries.
@@ -162,6 +169,7 @@ These limits define where this service stops and other packages or future work b
 - **Tool updates require session history** — `GenerateOptions.tools` contains active definitions. `toolHistory` supplies the initial declarations and historically resolved additions from `Session.toolHistory()`. At adapter dispatch, `projectToolUpdates` constructs deferred declarations and retains removed definitions for `in-history`; `addition-only` omits removed definitions and removal messages. Unsupported routes receive active tools without developer messages or `deferLoading`. Missing history or a request prefix omitting recorded updates falls back to current declarations without developer messages. Explicitly deferred baseline tools remain deferred until their first retained addition block; declaring a deferred tool does not activate it.
 
 <a id="dev-note"></a>
+
 ### Dev Note
 
 <details>
@@ -176,3 +184,5 @@ This Dev Note is non-authoritative working context: open questions and undecided
 - The `llm/adapters-updated` event is payload-free by design; consumers re-read the registries instead of receiving the new topology in the event.
 
 </details>
+
+`bindRequestTrace` associates persisted W3C transport correlation with an immutable middleware request. The final adapter boundary copies that correlation into `GenerateOptions.traceparent` without mutating the frozen request or model-visible messages. `requestTraceHeaders` validates the trace and removes case-insensitive deployment-header collisions. Correlation carries no authorization.

@@ -89,6 +89,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 
   interface SlotMap {
+    /** Readonly external execution histories associated with the current Session. */
+    'conversation.trajectory.external': { kind: 'list'; scope: 'session'; owner: {} }
     /**
      * Renderer for one group of durable record images in the Trajectory
      * ledger. The owner supplies image references, an authorized loader, and

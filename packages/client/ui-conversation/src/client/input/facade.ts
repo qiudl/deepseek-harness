@@ -335,7 +335,9 @@ export class SessionInputShell implements SessionInput {
       this.notify('error', this.deps.commandAttachments.unsupportedNotice(before.claim?.token ?? before.draft))
       return
     }
-    this.dispatchRun({ type: 'enter', mode, draft: this.projection.clipboardText, submission })
+    this.dispatchRun({ type: 'enter', mode, draft: this.projection.clipboardText, submission,
+      ...(this.projection.occurrences.length > 0 || this.deps.inputTriggers?.()?.adjudicatesPlainText()
+        ? { adjudicateSources: true as const } : {}) })
     const phase = this.snapshot.phase
     if (phase === 'adjudicating' || phase === 'submitting') {
       this.deps.popup?.()?.dismiss()

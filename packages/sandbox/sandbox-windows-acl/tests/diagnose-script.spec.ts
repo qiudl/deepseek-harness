@@ -114,6 +114,38 @@ function normalized(path: string, lines: readonly string[]): string[] {
   })
 }
 
+function inheritedAllowOrder(sddl: string): string {
+  const start = sddl.indexOf('D:'), end = sddl.indexOf('S:', start)
+  if (start < 0) return sddl
+  const stop = end < 0 ? sddl.length : end
+  // Tree propagation can reorder adjacent inherited simple allows; no deny or explicit rule moves.
+  const dacl = sddl.slice(start, stop).replace(/(?:\(A;[A-Z]*ID[A-Z]*;[^;()]+;;;[^;()]+\))+/gu,
+    run => [...run.matchAll(/\(A;[A-Z]*ID[A-Z]*;[^;()]+;;;[^;()]+\)/gu)].map(match => match[0]).sort().join(''))
+  return sddl.slice(0, start) + dacl + sddl.slice(stop)
+}
+
+describe('inherited allow ordering during tree restore', () => {
+  const system = '(A;OICIID;FA;;;SY)', packageRule = `(A;OICIID;0x1200a9;;;${PACKAGE_SID})`
+  it('accepts reordering of adjacent inherited allow rules only', () => {
+    expect(inheritedAllowOrder(`O:BAD:AI${system}${packageRule}`))
+      .toBe(inheritedAllowOrder(`O:BAD:AI${packageRule}${system}`))
+  })
+  it('retains owner, mask, flags, explicit order and deny positions', () => {
+    const base = `O:BAD:AI${system}${packageRule}`
+    for (const changed of [base.replace('O:BA', 'O:SY'), base.replace('0x1200a9', 'FA'),
+      base.replace('OICIID', 'CIID'), base.replace(PACKAGE_SID, CAPABILITY_SID)])
+      expect(inheritedAllowOrder(changed)).not.toBe(inheritedAllowOrder(base))
+    const deny = '(D;OICIID;WD;;;WD)', explicit = '(A;OICI;FA;;;BA)'
+    for (const separator of [deny, explicit])
+      expect(inheritedAllowOrder(`D:${system}${separator}${packageRule}`))
+        .not.toBe(inheritedAllowOrder(`D:${packageRule}${separator}${system}`))
+    expect(inheritedAllowOrder('(A;;FA;;;SY)(A;;FA;;;BA)'))
+      .not.toBe(inheritedAllowOrder('(A;;FA;;;BA)(A;;FA;;;SY)'))
+    expect(inheritedAllowOrder(`${base}S:(AU;SA;FA;;;WD)`))
+      .not.toBe(inheritedAllowOrder(`${base}S:(AU;FA;FA;;;WD)`))
+  })
+})
+
 describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl script', { timeout }, () => {
   let scratch!: string
   let outDir!: string
@@ -123,6 +155,36 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
     const dir = join(scratch, name)
     mkdirSync(dir, { recursive: true })
     return dir
+  }
+
+  function modifyOnly(path: string): void {
+    const literal = path.replaceAll("'", "''")
+    pwsh(`
+$ErrorActionPreference = 'Stop'
+$acl = Get-Acl -LiteralPath '${literal}'
+$owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($rule in $acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier])) {
+  $acl.RemoveAccessRuleSpecific($rule)
+}
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+  [System.Security.Principal.SecurityIdentifier]::new('${meSid}'),
+  [System.Security.AccessControl.FileSystemRights]::Modify,
+  [System.Security.AccessControl.AccessControlType]::Allow)
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath '${literal}' -AclObject $acl
+$actual = Get-Acl -LiteralPath '${literal}'
+$rules = @($actual.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+if (-not $actual.AreAccessRulesProtected -or $rules.Count -ne 1 -or
+    $rules[0].IdentityReference.Value -ne '${meSid}' -or $rules[0].IsInherited -or
+    $rules[0].AccessControlType -ne $rule.AccessControlType -or
+    $rules[0].FileSystemRights -ne $rule.FileSystemRights -or
+    $rules[0].InheritanceFlags -ne $rule.InheritanceFlags -or
+    $rules[0].PropagationFlags -ne $rule.PropagationFlags -or
+    $actual.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $owner) {
+  throw 'Modify-only fixture DACL or owner differs from the requested setup'
+}
+`)
   }
 
   function stamp(path: string, sid: string, type: 'grant' | 'deny' = 'grant'): void {
@@ -272,7 +334,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
 
   it('grants full control for a Modify-only DACL without changing the owner', () => {
     const target = makeDir('missing-write-owner')
-    pwsh(`icacls '${target}' /inheritance:r /grant:r "*${meSid}:(M)" | Out-Null`)
+    modifyOnly(target)
     const ownerBefore = ownerOf(target)
 
     const diagnosis = runScript(['-Path', target])
@@ -306,7 +368,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
     const outside = makeDir(`outside-${repairSwitch}`)
     const target = join(outside, 'target')
     mkdirSync(target)
-    icacls(target, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+    modifyOnly(target)
     stamp(target, PACKAGE_SID)
     const before = sddlOf(target)
     const link = join(allowed, 'link')
@@ -327,7 +389,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
   it.each(['-Fix', '-GrantFullControl'])('restores the original DACL with the rollback emitted by %s', (repairSwitch) => {
     const target = makeDir(`rollback-${repairSwitch}'s-directory`)
     icacls(target, '/setintegritylevel', 'L')
-    if (repairSwitch === '-GrantFullControl') icacls(target, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+    if (repairSwitch === '-GrantFullControl') modifyOnly(target)
     else icacls(target, '/grant', `*${PACKAGE_SID}:(OI)(CI)(RX)`)
     icacls(target, '/grant', `*${CAPABILITY_SID}:(OI)(CI)(RX)`)
     const before = sddlOf(target)
@@ -345,7 +407,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
 
   it('repairs a directory whose full-control ACE only applies to children', () => {
     const target = makeDir('inherit-only-full-control')
-    icacls(target, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+    modifyOnly(target)
     icacls(target, '/grant', `*${meSid}:(OI)(CI)(IO)(F)`)
     const diagnosis = runScript(['-Path', target])
     expect(diagnosis.output, diagnosis.output).toContain('VERDICT=PRECONDITION')
@@ -358,7 +420,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
     const target = makeDir('restore-guards')
     const other = makeDir('restore-other')
     const backups = makeDir('restore-backups')
-    icacls(target, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+    modifyOnly(target)
     const repair = runScript(['-Path', target, '-AllowRoot', scratch, '-Out', backups, '-GrantFullControl'])
     expect(repair.code, repair.output).toBe(0)
     const record = join(backups, readdirSync(backups).find(file => file.endsWith('.json'))!)
@@ -422,7 +484,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
 
   it('reports backup errors and no ACL write when the output path is a file', () => {
     const target = makeDir('backup-failure')
-    icacls(target, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+    modifyOnly(target)
     const outputFile = join(scratch, 'not-a-directory')
     writeFileSync(outputFile, 'Existing contents')
     const before = sddlOf(target)
@@ -456,7 +518,7 @@ exit $LASTEXITCODE
 
   it.each([false, true])('restores after a failed verification read and reports whether recovery was observed (recovery read fails: %s)', (recoveryReadFails) => {
     const target = makeDir(`post-write-read-failure-${recoveryReadFails}`)
-    icacls(target, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+    modifyOnly(target)
     const before = sddlOf(target)
     const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`
     const wrapper = join(scratch, 'fail-verification.ps1')
@@ -528,7 +590,7 @@ exit $LASTEXITCODE
 
   it('grants missing rights before removing a package ACE when both problems are present', () => {
     const target = makeDir('both')
-    icacls(target, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+    modifyOnly(target)
     stamp(target, PACKAGE_SID)
     const ownerBefore = ownerOf(target)
     const diagnosis = runScript(['-Path', target])
@@ -580,7 +642,7 @@ exit $LASTEXITCODE
     icacls(parent, '/grant', `*${PACKAGE_SID}:(OI)(CI)(RX)`)
     if (explicitChild) icacls(child, '/grant', '*S-1-15-2-4-3-2-1:(OI)(CI)(RX)')
     const paths = [parent, child, leaf]
-    const before = paths.map(sddlOf)
+    const before = paths.map(sddlOf).map(inheritedAllowOrder)
     // The fixture's owner is the host token's default owner, which is not the invoking user on an
     // elevated runner; the repair must preserve whatever owner the fixture has.
     const ownersBefore = paths.map(ownerOf)
@@ -596,7 +658,7 @@ exit $LASTEXITCODE
     expect(paths.map(ownerOf)).toEqual(ownersBefore)
     const commands = entries.at(-1)!.details.rollbackCommands as string[]
     for (const command of commands) expect(runPowerShell(['-Command', command]).code).toBe(0)
-    expect(paths.map(sddlOf)).toEqual(before)
+    expect(paths.map(sddlOf).map(inheritedAllowOrder)).toEqual(before)
   })
 
   it('refuses an inherited source outside AllowRoot before touching an in-root explicit entry', () => {
@@ -622,7 +684,7 @@ exit $LASTEXITCODE
     icacls(parent, '/grant', `*${PACKAGE_SID}:(OI)(CI)(RX)`)
     icacls(child, '/grant', '*S-1-15-2-4-3-2-1:(OI)(CI)(RX)')
     const paths = [parent, child, leaf]
-    const before = paths.map(sddlOf)
+    const before = paths.map(sddlOf).map(inheritedAllowOrder)
     const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`
     const wrapper = join(scratch, 'fail-inherited-verification.ps1')
     writeFileSync(wrapper, `
@@ -642,13 +704,13 @@ exit $LASTEXITCODE
     expect(run.code, run.output).toBe(2)
     expect(reports(run).filter(entry => entry.kind === 'verification' && entry.operation === 'restore').map(entry => entry.path)).toEqual([child, parent])
     expect(reports(run).at(-1)).toMatchObject({ details: { rollback: 'verified', nextAction: 'stop' } })
-    expect(paths.map(sddlOf)).toEqual(before)
+    expect(paths.map(sddlOf).map(inheritedAllowOrder)).toEqual(before)
   })
 
   it.each(['-Fix', '-GrantFullControl', '-Restore'])('rejects equivalent spellings of AllowRoot through %s', (mode) => {
     const target = makeDir(`root-spellings-${mode}`)
     const backups = makeDir(`root-backups-${mode}`)
-    icacls(target, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+    modifyOnly(target)
     let record: string | undefined
     if (mode === '-Restore') {
       const grant = runScript(['-Path', target, '-AllowRoot', scratch, '-Out', backups, '-GrantFullControl'])
@@ -678,23 +740,26 @@ exit $LASTEXITCODE
       `$env:${key} = ${quote(root)}; & ${quote(script)} -Path ${quote(path)} -AllowRoot ${quote(root)} -Out ${quote(outDir)} ${mode}; exit $LASTEXITCODE`,
     ])
     for (const path of [managed, child]) {
-      icacls(path, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+      modifyOnly(path)
       const before = sddlOf(path)
       const grant = run(path, '-GrantFullControl')
       expect(grant.code, grant.output).toBe(2)
       expect(grant.output).toContain('managed application directory')
       expect(sddlOf(path)).toBe(before)
     }
+    stamp(child, PACKAGE_SID)
+    const beforeFix = sddlOf(child)
     const fix = run(child, '-Fix')
     expect(fix.code, fix.output).toBe(2)
     expect(fix.output).toContain('managed application directory')
     expect(aclLines(child).join('\n')).toContain(PACKAGE_SID)
+    expect(sddlOf(child)).toBe(beforeFix)
   })
 
   it('rolls back earlier paths too when a later grant fails in the same invocation', () => {
     const first = makeDir('multi-grant-first')
     const second = makeDir('multi-grant-second')
-    icacls(first, '/inheritance:r', '/grant:r', `*${meSid}:(M)`)
+    modifyOnly(first)
     icacls(second, '/deny', `*${meSid}:(WO)`)
     const before = [sddlOf(first), sddlOf(second)]
     try {

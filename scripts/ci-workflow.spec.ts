@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
+import { ciWorkerEnvironment, gatesForMode } from './run-gates.ts'
 
 function evaluateRunsOn(selector: unknown, context: Record<string, unknown>): unknown {
   if (typeof selector !== 'string') throw new TypeError('Runner selector must be a string')
@@ -14,6 +15,95 @@ const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{
 const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
+  it('builds coverage gates from the standard Windows fork workflow environment', () => {
+    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'windows-coverage')
+    if (!isRecord(job.env)) throw new TypeError('Windows coverage must define its environment')
+    const configured: Record<string, string> = {}
+    for (const key of ['DSH_COVERAGE_MAX_WORKERS', 'DSH_COVERAGE_PARTITIONS', 'DSH_GATE_CONCURRENCY']) {
+      const value: unknown = evaluateRunsOn(job.env[key], {
+        vars: { DSH_CI_FAILOVER_WINDOWS: 'github' },
+        github: { repository: 'qiudl/deepseek-harness', event: { pull_request: { user: { login: 'contributor' } } } },
+      })
+      if (typeof value !== 'string') throw new TypeError(`Invalid Windows coverage setting ${key}`)
+      configured[key] = value
+    }
+    const effective: Record<string, string> = {
+      ...configured,
+      ...ciWorkerEnvironment('ci-coverage', configured, 4),
+      npm_execpath: '/private/pnpm.cjs',
+    }
+    const previous = new Map(Object.keys(effective).map(key => [key, process.env[key]]))
+    try {
+      Object.assign(process.env, effective)
+      const gates = gatesForMode('ci-coverage')
+      expect(gates.map(gate => gate.id)).toEqual(['native-system', 'coverage', 'coverage-exempt-heavy'])
+      for (const id of ['coverage', 'coverage-exempt-heavy']) {
+        const gate = gates.find(gate => gate.id === id)
+        expect(gate?.args).toContain('--maxWorkers=1')
+        expect(gate?.needs).toEqual(['native-system'])
+      }
+      expect(gates.find(gate => gate.id === 'coverage')?.args).toContain('--coverage')
+      expect(effective.DSH_COVERAGE_PARTITIONS).toBe('')
+    } finally {
+      for (const [key, value] of previous) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key)
+        else process.env[key] = value
+      }
+    }
+  })
+
+  it.each(['windows-build', 'windows-coverage', 'windows-native-tests'])(
+    '%s honors the Slark fork Windows GitHub runner choice', (name) => {
+      const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), name)
+      const evaluate = (repository: string, mode: string, author = 'contributor') => evaluateRunsOn(job['runs-on'], {
+        vars: { DSH_CI_FAILOVER_WINDOWS: mode },
+        github: { repository, event: { pull_request: { user: { login: author } } } },
+        fromJSON: (value: string) => {
+          const parsed: unknown = JSON.parse(value)
+          return parsed
+        },
+      })
+      expect(evaluate('qiudl/deepseek-harness', 'github')).toBe('windows-2025')
+      expect(evaluate('qiudl/deepseek-harness', 'github', 'dependabot[bot]')).toBe('windows-2025')
+      for (const repository of ['deepseek-ai/deepseek-harness', 'another/fork']) {
+        expect(evaluate(repository, 'github')).toBe('dsh-windows-2025-16core')
+      }
+      expect(evaluate('qiudl/deepseek-harness', '')).toBe('dsh-windows-2025-16core')
+      expect(evaluate('qiudl/deepseek-harness', 'selfhosted')).toEqual(['self-hosted', 'dsh-win-ci', 'windows'])
+      expect(evaluate('qiudl/deepseek-harness', 'selfhosted', 'dependabot[bot]')).toBe('dsh-windows-2025-16core')
+      expect(evaluate('qiudl/deepseek-harness', 'blacksmith')).toBe(
+        name === 'windows-native-tests' ? 'blacksmith-2vcpu-windows-2025' : 'blacksmith-16vcpu-windows-2025',
+      )
+    },
+  )
+
+  it('bounds only explicitly selected standard Windows fork coverage', () => {
+    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'windows-coverage')
+    if (!isRecord(job.env)) throw new TypeError('Windows coverage must define its execution budgets')
+    const environment = job.env
+    const budgets = (repository: string, mode: string, author = 'contributor') => Object.fromEntries(
+      ['DSH_COVERAGE_MAX_WORKERS', 'DSH_COVERAGE_PARTITIONS', 'DSH_GATE_CONCURRENCY'].map(key => [key,
+        evaluateRunsOn(environment[key], {
+          vars: { DSH_CI_FAILOVER_WINDOWS: mode },
+          github: { repository, event: { pull_request: { user: { login: author } } } },
+        }),
+      ]),
+    )
+    const standard = { DSH_COVERAGE_MAX_WORKERS: '2', DSH_COVERAGE_PARTITIONS: '', DSH_GATE_CONCURRENCY: '2' }
+    const shared = { DSH_COVERAGE_MAX_WORKERS: '6', DSH_COVERAGE_PARTITIONS: '4', DSH_GATE_CONCURRENCY: '3' }
+    const defaults = { DSH_COVERAGE_MAX_WORKERS: '', DSH_COVERAGE_PARTITIONS: '', DSH_GATE_CONCURRENCY: '' }
+    expect(budgets('qiudl/deepseek-harness', 'github')).toEqual(standard)
+    expect(budgets('qiudl/deepseek-harness', 'github', 'dependabot[bot]')).toEqual(standard)
+    expect(budgets('qiudl/deepseek-harness', 'selfhosted')).toEqual(shared)
+    expect(budgets('qiudl/deepseek-harness', 'selfhosted', 'dependabot[bot]')).toEqual(defaults)
+    for (const repository of ['deepseek-ai/deepseek-harness', 'another/fork']) {
+      expect(budgets(repository, 'github')).toEqual(defaults)
+    }
+    expect(budgets('qiudl/deepseek-harness', '')).toEqual(defaults)
+    expect(budgets('qiudl/deepseek-harness', 'blacksmith')).toEqual(defaults)
+    expect(job.env.DSH_COVERAGE_TEST_TIMEOUT_MS).toBe('90000')
+  })
+
   it.each(['node-24', 'node-24-coverage', 'node-24-consumers'])(
     '%s uses available GitHub runners for the Slark fork without changing upstream defaults', (name) => {
       const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), name)
@@ -245,7 +335,10 @@ describe('CI workflow', () => {
     }
 
     expect(windowsCoverage.name).toBe('windows node 24 / coverage')
-    expect(windowsCoverage.env).toMatchObject({ DSH_COVERAGE_PARTITIONS: "${{ vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '4' || '' }}" })
+    expect(evaluateRunsOn(isRecord(windowsCoverage.env) ? windowsCoverage.env.DSH_COVERAGE_PARTITIONS : undefined, {
+      vars: { DSH_CI_FAILOVER_WINDOWS: 'selfhosted' },
+      github: { repository: 'qiudl/deepseek-harness', event: { pull_request: { user: { login: 'contributor' } } } },
+    })).toBe('4')
     const coverageSteps = windowsCoverage.steps as unknown[]
     const coverageCommands = coverageSteps.filter((step): step is Record<string, unknown> & { run: string } => (
       isRecord(step) && typeof step.run === 'string'
@@ -271,6 +364,32 @@ describe('CI workflow', () => {
     expect(nativeTestCommand).toContain('--testTimeout 90000')
     expect(nativeTestCommand).toContain('tool-pwsh/tests/loader.spec.ts')
     expect(nativeTestCommand).toContain('workflow-ptc.spec.ts')
+
+    const aclFixtures = nativeTestCommands.find(step => step.name === 'Run Windows ACL fixture regressions')
+    expect(aclFixtures?.shell).toBe('pwsh')
+    expect(aclFixtures?.run).toContain('packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts')
+    expect(aclFixtures?.run).toContain('packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts')
+    const aclRun = aclFixtures?.run
+    if (typeof aclRun !== 'string') throw new TypeError('Windows ACL fixture command is required')
+    const filter = aclRun.match(/-t '([^']+)'/)?.[1]
+    if (!filter) throw new TypeError('Windows ACL fixture command must name its regression filter')
+    expect(aclRun).toContain(`$_.fullName -match '${filter}'`)
+    const pattern = new RegExp(filter)
+    const selected = [
+      'packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts',
+      'packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts',
+    ].flatMap(file => [...readFileSync(resolve(root, file), 'utf8').matchAll(/\bit\('([^']+)'/g)]
+      .flatMap(match => match[1] !== undefined && pattern.test(match[1]) ? [match[1]] : []))
+    expect(selected.sort()).toEqual([
+      'a FullControl open inside a granted root still works for files (the deny inherits to containers only)',
+      'grants full control for a Modify-only DACL without changing the owner',
+      'repairs a directory whose full-control ACE only applies to children',
+    ])
+    expect(aclFixtures?.run).toContain('--reporter=json --outputFile=$reportPath')
+    expect(aclFixtures?.run).toContain('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }')
+    expect(aclFixtures?.run).toContain('$targets.Count -ne 3')
+    expect(aclFixtures?.run).toContain("$_.status -ne 'passed'")
+    expect(aclFixtures?.['continue-on-error']).not.toBe(true)
 
     expect(workflow.jobs['windows-observational']).toBeUndefined()
     expect(windowsBuild['continue-on-error']).not.toBe(true)

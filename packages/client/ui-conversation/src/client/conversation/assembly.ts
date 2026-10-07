@@ -38,6 +38,11 @@ export interface ConversationBinding {
    * @param target - registered or subsequently registered Conversation target.
    */
   activate(target: string): void
+  /** Keep the shell visible for externally persisted activity without appending Session events.
+   * @param target - Conversation view showing the activity.
+   * @returns An idempotent release; independent owners retain independent activity.
+   */
+  retainActivity(target: string): () => void
   /**
    * Resolve one target-owned snapshot source.
    * The first subscriber activates the target unless shell selection already
@@ -55,6 +60,7 @@ class BoundConversation implements ConversationBinding {
   readonly openTurn: SnapshotStore<number | undefined>
   private readonly viewStore: ConversationViewSnapshotStore
   private readonly targetSources = new Map<string, ObservableSnapshot<unknown>>()
+  private readonly retainedActivity = new Map<symbol, string>()
   private revision = -1
   private frame: number | undefined
   private disposeFeed: () => void = () => {}
@@ -96,11 +102,21 @@ class BoundConversation implements ConversationBinding {
     this.openTurn.set(this.assembler.openTurn())
   }
 
+  retainActivity(target: string): () => void {
+    const token = Symbol(target)
+    this.retainedActivity.set(token, target)
+    this.snapshot.set(this.currentSnapshot())
+    return () => {
+      if (this.retainedActivity.delete(token)) this.snapshot.set(this.currentSnapshot())
+    }
+  }
+
   rebuild(): void { this.publish(this.assembler.rebuildRegistry()) }
 
   dispose(): void {
     this.cancelFrame()
     this.disposeFeed()
+    this.retainedActivity.clear()
   }
 
   private replace(window: SessionEventWindow): void {
@@ -171,7 +187,7 @@ class BoundConversation implements ConversationBinding {
   private currentSnapshot(): ConversationSnapshot {
     return {
       views: this.viewStore,
-      activeTargets: this.assembler.activityTargets(),
+      activeTargets: new Set([...this.assembler.activityTargets(), ...this.retainedActivity.values()]),
     }
   }
 }

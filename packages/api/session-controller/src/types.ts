@@ -103,6 +103,13 @@ export interface ModelSelection {
   readonly reasoningEffort?: string
 }
 
+/** Host-inspected workspace ownership and next model choice; not an authorization token. */
+export interface WorkspaceModelSelection {
+  readonly workspaceId: WorkspaceId
+  readonly sessionId: SessionId
+  readonly selection: ModelSelection
+}
+
 /** Host fold state for durable model selection. */
 export interface ModelSelectionProjectionState {
   /** Selection consumed by the latest recorded model request. */
@@ -298,6 +305,30 @@ export interface SessionListRequest {
 /** Session list response value. */
 export interface SessionListValue {
   readonly items: readonly SessionSummary[]
+}
+
+/** Read original collaboration messages for one Session; the cursor is a prior snapshot digest. */
+export interface SessionCollaborationSourcesRequest {
+  readonly sessionId: SessionId
+  readonly cursor?: string
+}
+
+/** Original user text and immutable coordinates; no model configuration, journal grants or cloud proof. */
+export interface SessionCollaborationSourceItem {
+  readonly source: {
+    readonly workspace_id: string
+    readonly session_id: string
+    readonly source_message_id: string
+    readonly source_revision: string
+  }
+  readonly snapshot_digest: string
+  readonly original_message: string
+}
+
+/** At most eight complete messages and 256 KiB of encoded JSON; another page never truncates text. */
+export interface SessionCollaborationSourcesValue {
+  readonly items: readonly SessionCollaborationSourceItem[]
+  readonly next_cursor?: string
 }
 
 /** Session search request. */

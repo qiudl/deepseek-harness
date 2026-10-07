@@ -1,3 +1,4 @@
+import { rootWorkerOperations } from './root-worker-operations.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync,
@@ -65,7 +66,7 @@ import {
   type UnixHostServerOptions,
   type UnixPeerAttestor,
 } from './unix-transport.ts'
-import { ProfileWorkerSupervisor } from './worker-supervisor.ts'
+import { ProfileWorkerSupervisor, collaborationWorkerReaders } from './worker-supervisor.ts'
 import {
   startWindowsDesktopHostApplicationFromPrivateFiles,
   type WindowsDesktopHostApplication,
@@ -727,6 +728,15 @@ export async function startDesktopHostApplication(
       },
       host,
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
+      ...collaborationWorkerReaders(workers),
+      ...rootWorkerOperations(workers),
+      rootAnalysisSupported: true,
+      rootAnalysisRecoverySupported: true,
+      rootLookupSupported: true,
+      rootPendingLookupSupported: true,
+      rootLiveResumeSupported: true,
+      collaborationAnalysis: (profileId, command, signal) => workers.collaborationAnalysis(profileId, command, signal),
+      collaborationDeliveryReceiver: profileId => workers.collaborationDeliveryReceiver(profileId),
       remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({
         authority: commandAuthority, workers, profileId, command, signal,
       }),

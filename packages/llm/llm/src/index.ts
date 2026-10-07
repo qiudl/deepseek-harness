@@ -1,3 +1,4 @@
+import { boundRequestTrace } from './trace-headers.ts'
 /**
  * LLM service: adapter registry with a waterfall-interceptable streaming call
  * API. Exports the `LlmRuntime` default, the abstract `LlmAdapter` for
@@ -9,6 +10,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
+import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import type {
   GenerateOptions,
   RequestMessage,
@@ -30,7 +33,7 @@ import type {
 import { freezeMessage } from './message.ts'
 import { resolveRetryPolicy } from './retry-policy.ts'
 import type { ResolvedRetryPolicy } from './retry-policy.ts'
-import type { ProviderRequestId } from './brand.ts'
+import type { LlmAdapterFingerprint, LlmConfigurationGeneration, ProviderRequestId } from './brand.ts'
 import { callConfigEquals } from './call-config.ts'
 import type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
 import { HarnessError, INVALID_CREDENTIAL_CODE } from './error.ts'
@@ -186,9 +189,22 @@ export interface PreparedLlmCall {
    * preparation. The request's call-config fields must match {@link config};
    * reuse or mismatch fails with `INVALID_PREPARED_CALL`.
    * @param options - fully assembled request carrying the prepared config.
+   * @param assertRequest - optional Host assertion over the final adapter request; throws prevent dispatch.
    * @returns the chunk stream, including the `llm/stream` waterfall.
    */
-  stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+  stream(options: GenerateOptions, assertRequest?: (options: GenerateOptions) => void): AsyncIterable<StreamChunk>
+}
+
+/** One-shot call with its connection and credential already captured by the adapter. */
+export interface PreparedLlmSnapshotCall extends PreparedLlmCall {
+  /** Non-secret identity of this exact preparation; not a Host authentication proof. */
+  readonly snapshot: Readonly<{
+    provider: string
+    model: string
+    reasoning_effort?: LlmCallConfig['reasoningEffort']
+    configuration_generation: LlmConfigurationGeneration
+    adapter_fingerprint: LlmAdapterFingerprint
+  }>
 }
 
 /** One adapter-owned model-resolution generation bound to its eventual stream call. */
@@ -283,6 +299,19 @@ export abstract class LlmAdapter {
   }
 
   /**
+   * Capture connection settings and the resolved credential before returning a call.
+   * The default rejects; implementations must never fall back to dynamic credentials.
+   * @param _provider - registered provider route.
+   * @param _model - exact model id.
+   * @param _signal - preparation cancellation; captured streams honor their request signal.
+   * @returns metadata and dispatch bound to the captured configuration and credential.
+   * @throws PREPARED_SNAPSHOT_UNSUPPORTED when this adapter cannot capture those facts.
+   */
+  prepareSnapshot(_provider: string, _model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    return Promise.reject(new LlmError('adapter cannot capture a complete prepared snapshot', 'PREPARED_SNAPSHOT_UNSUPPORTED'))
+  }
+
+  /**
    * Stream one model call as raw chunks. The only required method.
    * @param options - the fully-assembled request; implementations must honor `options.signal`.
    * @returns the chunk stream, obeying the adapter contract documented on `StreamChunk`.
@@ -341,6 +370,7 @@ export interface DirectoryRegistrationHandle {
  */
 export class LlmRuntime extends TypertRemoteService {
   private adapters = new Map<string, AdapterRegistration>()
+  private snapshotGeneration = 0n
   private directory = new Map<string, LlmConfigurableProvider>()
   private discoveries = new Map<
     string,
@@ -448,6 +478,7 @@ export class LlmRuntime extends TypertRemoteService {
         adapter,
         provider: { id: info.id, name: info.name },
         retryPolicy,
+        fingerprintNonce: randomUUID(),
       })
     }
     return registrations
@@ -936,6 +967,70 @@ export class LlmRuntime extends TypertRemoteService {
   async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall> {
     const registration = this.registration(config.provider)
     const adapterCall = await registration.adapter.prepareCall(config.provider, config.model, signal)
+    return this.finishPreparedCall(config, registration, adapterCall)
+  }
+
+  /**
+   * Prepare an executable configuration without sending a model request. The adapter
+   * captures its connection and credential; ordinary prepareCall remains unchanged.
+   * Each successful preparation receives a distinct decimal generation. Its fingerprint
+   * identifies the captured registration, not configuration contents or signed software.
+   * Neither identity survives as an executable handle across process restart.
+   * @param config - provider/model route and request controls, copied before any await.
+   * @param signal - owning operation's cancellation, retained through eventual dispatch.
+   * @returns frozen public metadata and a registration-bound, one-shot stream handle.
+   * @throws on unsupported capture, invalid config, preparation failure, or cancellation.
+   */
+  async prepareSnapshot(config: LlmCallConfig, signal: AbortSignal): Promise<PreparedLlmSnapshotCall> {
+    signal.throwIfAborted()
+    const captured = deepFreeze(structuredClone(config))
+    const registration = this.registration(captured.provider)
+    const pending = registration.adapter.prepareSnapshot(captured.provider, captured.model, signal)
+    const adapterCall = await this.awaitSnapshot(pending, signal)
+    const prepared = this.finishPreparedCall(captured, registration, adapterCall)
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(registration.fingerprintNonce))
+    signal.throwIfAborted()
+    if (this.snapshotGeneration === 9223372036854775807n) {
+      throw new LlmError('configuration preparation generation exhausted', 'INVALID_PREPARED_CALL')
+    }
+    const snapshot = Object.freeze({
+      provider: prepared.config.provider,
+      model: prepared.config.model,
+      ...prepared.config.reasoningEffort === undefined ? {} : { reasoning_effort: prepared.config.reasoningEffort },
+      configuration_generation: brandString<LlmConfigurationGeneration>(String(++this.snapshotGeneration)),
+      adapter_fingerprint: brandString<LlmAdapterFingerprint>(Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('')),
+    })
+    return Object.freeze({
+      ...prepared,
+      snapshot,
+      stream: (options: GenerateOptions, assertRequest?: (options: GenerateOptions) => void) => {
+        signal.throwIfAborted()
+        return prepared.stream({
+          ...options, signal: options.signal === undefined ? signal : AbortSignal.any([signal, options.signal]),
+        }, assertRequest)
+      },
+    })
+  }
+
+  /** Cancellation stops waiting and contains late adapter failures without retaining a listener. */
+  private awaitSnapshot(pending: Promise<PreparedAdapterCall>, signal: AbortSignal): Promise<PreparedAdapterCall> {
+    return new Promise((resolve, reject) => {
+      const clear = () => { signal.removeEventListener('abort', abort) }
+      const abort = () => {
+        clear()
+        const reason: unknown = signal.reason
+        reject(reason instanceof Error ? reason : new DOMException('configuration snapshot preparation aborted', 'AbortError'))
+      }
+      signal.addEventListener('abort', abort, { once: true })
+      pending.then((value) => { clear(); resolve(value) }, (error: unknown) => {
+        clear()
+        reject(error instanceof Error ? error : new LlmError('configuration snapshot preparation failed', 'INVALID_PREPARED_CALL', { cause: error }))
+      })
+      if (signal.aborted) abort()
+    })
+  }
+
+  private finishPreparedCall(config: LlmCallConfig, registration: AdapterRegistration, adapterCall: PreparedAdapterCall): PreparedLlmCall {
     const modelInfo = this.normalizeModelInfo(registration, config.model, adapterCall.model)
     const resolved = this.resolveCallWithInfo(config, modelInfo)
     const resolvedConfig = deepFreeze(structuredClone(resolved.config))
@@ -951,6 +1046,7 @@ export class LlmRuntime extends TypertRemoteService {
         : {},
     })
     let dispatched = false
+    let adapterDispatched = false
     return Object.freeze({
       config: resolvedConfig,
       retryPolicy: registration.retryPolicy,
@@ -961,7 +1057,7 @@ export class LlmRuntime extends TypertRemoteService {
         : { inputModalities: Object.freeze([...modelInfo.inputModalities]) },
       ...modelInfo.systemPromptUpdate === undefined ? {} : { systemPromptUpdate: modelInfo.systemPromptUpdate },
       ...modelInfo.toolUpdate === undefined ? {} : { toolUpdate: modelInfo.toolUpdate },
-      stream: (options: GenerateOptions): AsyncIterable<StreamChunk> => {
+      stream: (options: GenerateOptions, assertRequest?: (options: GenerateOptions) => void): AsyncIterable<StreamChunk> => {
         if (dispatched) {
           throw new LlmError('a prepared LLM call can only be dispatched once', 'INVALID_PREPARED_CALL')
         }
@@ -972,11 +1068,21 @@ export class LlmRuntime extends TypertRemoteService {
           )
         }
         dispatched = true
+        const capturedSignal = options.signal
         return this.streamWithRegistration(options, {
           registration,
           config: resolvedConfig,
           modelInfo,
-          dispatch: options => adapterCall.stream(options),
+          dispatch: (options) => {
+            if (adapterDispatched) throw new LlmError('prepared adapter call already dispatched', 'INVALID_PREPARED_CALL')
+            adapterDispatched = true
+            if (assertRequest !== undefined && options.signal !== capturedSignal) {
+              throw new LlmError('prepared request cancellation changed', 'INVALID_PREPARED_CALL')
+            }
+            assertRequest?.(options)
+            if (assertRequest !== undefined) deepFreeze(options)
+            return adapterCall.stream(options)
+          },
         })
       },
     })
@@ -1084,6 +1190,8 @@ export class LlmRuntime extends TypertRemoteService {
         }
         if (Object.isFrozen(resolvedOptions)) deepFreeze(projectedOptions)
       }
+      const traceparent = boundRequestTrace(options)
+      if (traceparent !== undefined) projectedOptions = { ...projectedOptions, traceparent }
       const stream = dispatch(this.forAdapter(projectedOptions, adapter))
       iterator = stream[Symbol.asyncIterator]()
     } catch (error: unknown) {
@@ -1164,6 +1272,7 @@ interface AdapterRegistration {
   readonly adapter: LlmAdapter
   readonly provider: LlmProviderInfo
   readonly retryPolicy: ResolvedRetryPolicy
+  readonly fingerprintNonce: string
 }
 
 interface PreparedDispatch {
@@ -1174,3 +1283,5 @@ interface PreparedDispatch {
 }
 
 export default LlmRuntime
+
+export { requestTraceHeaders, bindRequestTrace } from './trace-headers.ts'

@@ -77,7 +77,7 @@ export class SubmitMachine {
     switch (ev.type) {
       case 'draft-changed': return this.onDraftChanged(ev.draft)
       case 'claim': return this.onClaim(ev.claim)
-      case 'enter': return this.onEnter(ev.mode, ev.draft, ev.submission)
+      case 'enter': return this.onEnter(ev.mode, ev.draft, ev.submission, ev.adjudicateSources)
       case 'adjudicated': return this.onAdjudicated(ev.attempt, ev.outcome)
       case 'adjudication-failed': return this.onAdjudicationFailed(ev.attempt, ev.message)
       case 'submit-settled': return this.onSubmitSettled(ev)
@@ -142,7 +142,9 @@ export class SubmitMachine {
     ]
   }
 
-  private onEnter(mode: InputSubmitMode, draft: string, submission?: MessageSubmission): readonly InputEffect[] {
+  private onEnter(
+    mode: InputSubmitMode, draft: string, submission?: MessageSubmission, adjudicateSources?: true,
+  ): readonly InputEffect[] {
     if (this.phase === 'adjudicating' || this.phase === 'submitting') return []
     if (this.phase === 'claimed' && this.claim !== undefined) {
       const attempt = this.beginAttempt(mode, draft, submission)
@@ -151,7 +153,7 @@ export class SubmitMachine {
     }
     const trimmed = draft.trim()
     if (trimmed === '') return []
-    if (trimmed.startsWith('/')) {
+    if (adjudicateSources || trimmed.startsWith('/') || trimmed.startsWith('@')) {
       const attempt = this.beginAttempt(mode, draft, submission)
       this.phase = 'adjudicating'
       return [{ type: 'adjudicate', attempt, draft }]
@@ -205,7 +207,7 @@ export class SubmitMachine {
     }
     const text = ev.message ?? ev.outcome?.text
     if (ev.draft === flight.attempt.draftSnapshot
-      && this.claim !== undefined && retainsClaim(ev.draft, this.claim.token)) {
+      && this.claim !== undefined && this.claim.retainOnFailure !== false && retainsClaim(ev.draft, this.claim.token)) {
       this.phase = 'claimed'
       return text === undefined ? [] : [{ type: 'notice', level: 'error', text }]
     }

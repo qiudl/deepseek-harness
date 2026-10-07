@@ -1,4 +1,10 @@
+import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
+import { parseHostRootPlanningEvidence } from './root-planning-evidence.ts'
+import { parseHostRootPlanningAttemptDescriptor, parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
+import { parseHostRootAnalysisOutput } from './root-analysis-output.ts'
+import { parseHostRootSubmissionTarget, parseHostRootAnalysisInput, parseHostRootSubmissionDescriptor, parseHostRootAuthorityChallenge, parseHostRootAuthorityAssertion, parseHostRootJournalCommand, parseHostRootJournalMetadata } from './root-authority.ts'
 import type {
+  ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
   HostRemoteSessionCommand, HostRemoteSessionControlProof, HostRemoteSessionJson,
@@ -39,6 +45,26 @@ import type {
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
+  HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
+  HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult,
+  ProfileCollaborationAnalysisRequest, ProfileCollaborationAnalysisResult,
+  HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
+  ProfileSourceAuthorityRequest, ProfileSourceAuthorityResult,
+  HostCollaborationReferenceGrant, HostCollaborationReferenceTarget, HostReferenceAuthorityChallenge, HostReferenceAuthorityAssertion,
+  ProfileReferenceAuthorityRequest, ProfileReferenceAuthorityResult,
+  HostCollaborationReferenceSelection, HostCollaborationReferenceCapture,
+  HostCollaborationReferenceRequestId, HostCollaborationMentionId,
+  ProfileReferenceCaptureRequest, ProfileReferenceCaptureResult,
+  HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk,
+  ProfileReferenceContentRequest, ProfileReferenceContentResult,
+  ProfileRootPlanningAttemptAuthorityRequest, ProfileRootPlanningAttemptAuthorityResult,
+  ProfileRootJournalRequest, ProfileRootJournalResult,
+  ProfileRootAuthorityRequest, ProfileRootAuthorityResult,
+  HostCollaborationSourceSnapshot, ProfileSourceSnapshotRequest, ProfileSourceSnapshotResult,
+  HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
+  ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
+  HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
+  ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -86,6 +112,7 @@ import type {
   MigrationImportAbortRequest,
   MigrationImportAbortResult,
 } from './types.ts'
+import { parseHostCollaborationDeliveryChunk, parseHostCollaborationDeliveryResult } from './collaboration-delivery.ts'
 
 /** Maximum UTF-8 bytes in one JSON object, excluding its terminating LF. */
 export const HOST_CONTROL_MAX_FRAME_BYTES = 64 * 1024
@@ -413,6 +440,23 @@ function extensionKind(value: unknown): HostExtensionKind {
   if (value !== 'plugin' && value !== 'mcp' && value !== 'skill') reject()
   return value
 }
+function collaborationAccountParams(params: Record<string, unknown>) {
+  return {
+    ...authorized(params),
+    authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+    account_binding_handle: opaqueHandle(params.account_binding_handle),
+    authority_binding_version: generation(params.authority_binding_version),
+    account_issuer: accountIssuer(params.account_issuer),
+    account_subject: uuid(params.account_subject),
+  }
+}
+function accountChallengeParams(params: Record<string, unknown>) {
+  return {
+    ...authorized(params),
+    account_binding_handle: opaqueHandle(params.account_binding_handle),
+    authority_binding_version: generation(params.authority_binding_version),
+  }
+}
 function extensionCommand(value: unknown): HostExtensionCommand {
   const command = record(value)
   if (command.action === 'inventory') {
@@ -557,6 +601,13 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   return reject()
 }
 
+/**
+ * Detach bounded private-worker JSON using the same limits as Host Session results.
+ * @param value - Parsed worker JSON; nonfinite values and unsafe property names reject.
+ * @returns a detached JSON value with bounded depth, node count and strings.
+ */
+export function parseHostRemoteSessionJson(value:unknown):HostRemoteSessionJson{return remoteSessionJson(value)}
+
 function remoteSessionJson(value: unknown, depth = 0, count = { value: 0 }): HostRemoteSessionJson {
   count.value += 1
   if (count.value > 1_024 || depth > 8) reject()
@@ -694,12 +745,644 @@ function extensionResponse(result: Record<string, unknown>): HostExtensionRespon
   }
 }
 
+function selectionIdentity(value: unknown, maximumBytes: number): string {
+  if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value, 'utf8') > maximumBytes) reject()
+  return value
+}
+
+/**
+ * Validate the complete worker HTTP target using the control wire's identity rules.
+ * @param value - Untrusted parsed JSON.
+ * @returns Detached registry identities; extra fields, paths and oversized IDs throw.
+ */
+export function parseHostWorkspaceModelSelectionTarget(value: unknown): HostWorkspaceModelSelectionTarget {
+  const target = record(value)
+  exactKeys(target, ['workspace_id', 'session_id'])
+  return {
+    workspace_id: uuid(target.workspace_id) as HostWorkspaceModelSelectionTarget['workspace_id'],
+    session_id: selectionIdentity(target.session_id, 256) as HostWorkspaceModelSelectionTarget['session_id'],
+  }
+}
+
+/**
+ * Validate a minimum worker selection response; secrets and configuration are rejected.
+ * @param value - Untrusted parsed JSON.
+ * @returns Detached selection fields bounded in UTF-8 bytes; invalid results throw.
+ */
+export function parseHostWorkspaceModelSelection(value: unknown): HostWorkspaceModelSelection {
+  const result = record(value)
+  exactKeys(result, ['workspace_id', 'session_id', 'provider', 'model',
+    ...Object.hasOwn(result, 'reasoning_effort') ? ['reasoning_effort'] : []])
+  return {
+    ...parseHostWorkspaceModelSelectionTarget({ workspace_id: result.workspace_id, session_id: result.session_id }),
+    provider: selectionIdentity(result.provider, 256), model: selectionIdentity(result.model, 256),
+    ...Object.hasOwn(result, 'reasoning_effort') ? { reasoning_effort: selectionIdentity(result.reasoning_effort, 128) } : {},
+  }
+}
+
+/**
+ * Read an exact server challenge without evaluating accessors.
+ * @param value - Registration operation, audience, expiry and challenged Account.
+ * @returns Detached, frozen challenge; the server must still persist and consume it.
+ */
+export function parseHostCollaborationRegistrationChallenge(value: unknown): HostCollaborationRegistrationChallenge {
+  const challenge = registrationRecord(value)
+  exactKeys(challenge, ['registration_request_id', 'challenge_id', 'challenge_nonce', 'expires_at',
+    'audience', 'environment_id', 'account_issuer', 'account_subject'])
+  const audience = accountIssuer(challenge.audience)
+  return Object.freeze({
+    registration_request_id: uuid(challenge.registration_request_id) as HostCollaborationRegistrationChallenge['registration_request_id'],
+    challenge_id: uuid(challenge.challenge_id) as HostCollaborationRegistrationChallenge['challenge_id'],
+    challenge_nonce: nonce(challenge.challenge_nonce), expires_at: generation(challenge.expires_at), audience,
+    environment_id: uuid(challenge.environment_id) as HostAuthorityEnvironmentId,
+    account_issuer: accountIssuer(challenge.account_issuer),
+    account_subject: uuid(challenge.account_subject) as HostCollaborationRegistrationChallenge['account_subject'],
+  })
+}
+
+function registrationRecord(value: unknown): Record<string, unknown> {
+  const result = record(value)
+  if (Object.getPrototypeOf(result) !== Object.prototype || Object.getOwnPropertySymbols(result).length) reject()
+  if (Object.values(Object.getOwnPropertyDescriptors(result)).some(descriptor => !descriptor.enumerable || !('value' in descriptor))) reject()
+  return result
+}
+
+/**
+ * Read the signed installation/process fields; this validates fields, not signature trust.
+ * @param value - Host registration assertion received over an authenticated carrier.
+ * @returns Detached, deeply frozen assertion without vault or credential fields.
+ */
+export function parseHostCollaborationRegistrationAssertion(value: unknown): HostCollaborationRegistrationAssertion {
+  const result = registrationRecord(value)
+  exactKeys(result, ['schema_version', 'challenge', 'installation_id', 'installation_public_key',
+    'host_instance_id', 'process_nonce', 'signature'])
+  if (result.schema_version !== 2) reject()
+  const installation_id = uuid(result.installation_id) as InstallationId
+  const host_instance_id = uuid(result.host_instance_id) as HostInstanceId
+  if (installation_id === (host_instance_id as string)) reject()
+  return Object.freeze({ schema_version: 2,
+    challenge: parseHostCollaborationRegistrationChallenge(result.challenge),
+    installation_id, installation_public_key: publicKey(result.installation_public_key),
+    host_instance_id, process_nonce: nonce(result.process_nonce), signature: signature(result.signature),
+  })
+}
+
+/**
+ * Encode the fixed-order UTF-8 registration tuple with a distinct signing domain.
+ * @param value - Exact assertion; its signature is excluded from the signed bytes.
+ * @returns Bytes for Ed25519 signing/verification; no I/O or trust decision.
+ */
+export function encodeHostCollaborationRegistrationSignaturePayload(value: HostCollaborationRegistrationAssertion): Buffer {
+  const result = parseHostCollaborationRegistrationAssertion(value), challenge = result.challenge
+  return Buffer.from(`dsh-collaboration-host-registration/v2\0${JSON.stringify([
+    result.schema_version, challenge.registration_request_id, challenge.challenge_id, challenge.challenge_nonce,
+    challenge.expires_at, challenge.audience, challenge.environment_id, challenge.account_issuer, challenge.account_subject,
+    result.installation_id, result.installation_public_key, result.host_instance_id, result.process_nonce,
+  ])}`, 'utf8')
+}
+
+/**
+ * Validate a detached server nonce and registry target; issuance is verified by the server.
+ * @param value - Untrusted JSON.
+ * @returns Frozen challenge with no path or caller-selected ownership fields.
+ */
+export function parseHostWorkspaceAuthorityChallenge(value: unknown): HostWorkspaceAuthorityChallenge {
+  const c = registrationRecord(value)
+  exactKeys(c, [
+    'request_id',
+    'challenge_nonce',
+    'expires_at',
+    'audience',
+    'environment_id',
+    'account_issuer',
+    'account_subject',
+    'workspace_id',
+    'session_id',
+  ])
+  if (typeof c.session_id !== 'string' || !c.session_id.isWellFormed()) reject()
+  const account = parseHostCollaborationRegistrationChallenge({
+    registration_request_id: c.request_id,
+    challenge_id: c.request_id,
+    challenge_nonce: c.challenge_nonce,
+    expires_at: c.expires_at,
+    audience: c.audience,
+    environment_id: c.environment_id,
+    account_issuer: c.account_issuer,
+    account_subject: c.account_subject,
+  })
+  return Object.freeze({
+    request_id: uuid(c.request_id) as HostControlRequestId,
+    challenge_nonce: account.challenge_nonce,
+    expires_at: account.expires_at,
+    audience: account.audience,
+    environment_id: account.environment_id,
+    account_issuer: account.account_issuer,
+    account_subject: account.account_subject,
+    ...parseHostWorkspaceModelSelectionTarget({ workspace_id: c.workspace_id, session_id: c.session_id }),
+  })
+}
+/**
+ * Validate signed fields without trusting their installation or nonce.
+ * @param value - Untrusted assertion.
+ * @returns Frozen assertion; cryptographic verification remains separate.
+ */
+export function parseHostWorkspaceAuthorityAssertion(value: unknown): HostWorkspaceAuthorityAssertion {
+  const r = registrationRecord(value)
+  exactKeys(r, [
+    'schema_version',
+    'challenge',
+    'installation_id',
+    'installation_public_key',
+    'host_instance_id',
+    'process_nonce',
+    'signature',
+  ])
+  if (r.schema_version !== 1) reject()
+  const c = parseHostWorkspaceAuthorityChallenge(r.challenge)
+  const identity = parseHostCollaborationRegistrationAssertion({
+    ...r,
+    schema_version: 2,
+    challenge: {
+      registration_request_id: c.request_id,
+      challenge_id: c.request_id,
+      challenge_nonce: c.challenge_nonce,
+      expires_at: c.expires_at,
+      audience: c.audience,
+      environment_id: c.environment_id,
+      account_issuer: c.account_issuer,
+      account_subject: c.account_subject,
+    },
+  })
+  return Object.freeze({ ...identity, schema_version: 1, challenge: c })
+}
+/**
+ * Encode a separate workspace signing domain; registration signatures cannot authorize workspaces.
+ * @param value - Exact assertion; signature excluded.
+ * @returns Fixed-order UTF-8 bytes for Ed25519.
+ */
+export function encodeHostWorkspaceAuthorityPayload(value: HostWorkspaceAuthorityAssertion): Buffer {
+  const r = parseHostWorkspaceAuthorityAssertion(value),
+    c = r.challenge
+  return Buffer.from(
+    `dsh-collaboration-workspace-authority/v1\0${JSON.stringify([
+      1,
+      c.request_id,
+      c.challenge_nonce,
+      c.expires_at,
+      c.audience,
+      c.environment_id,
+      c.account_issuer,
+      c.account_subject,
+      c.workspace_id,
+      c.session_id,
+      r.installation_id,
+      r.installation_public_key,
+      r.host_instance_id,
+      r.process_nonce,
+    ])}`,
+    'utf8',
+  )
+}
+const SOURCE_TARGET_KEYS = ['workspace_id', 'session_id', 'source_message_id', 'source_revision'] as const
+function sourceVersion(value: unknown): string {
+  if (typeof value !== 'string' || !/^[1-9][0-9]{0,18}$/.test(value) || BigInt(value) > 9223372036854775807n) reject()
+  return value
+}
+function sourceTargetFields(r: Record<string, unknown>): HostCollaborationSourceTarget {
+  const base = parseHostWorkspaceModelSelectionTarget({ workspace_id: r.workspace_id, session_id: r.session_id })
+  for (const value of [base.session_id, r.source_message_id]) {
+    if (typeof value !== 'string' || value.length > 256 || !/^[!-~]+$/.test(value) || /[/\\]/.test(value) || value === '.' || value === '..') reject()
+  }
+  return Object.freeze({ ...base, source_message_id: r.source_message_id as string, source_revision: sourceVersion(r.source_revision) })
+}
+/**
+ * Validate exact persistent Source coordinates without accepting content or credentials.
+ * @param value - Private worker request.
+ * @returns Frozen target; journal ownership remains the reader's responsibility.
+ */
+export function parseHostCollaborationSourceTarget(value: unknown): HostCollaborationSourceTarget {
+  const r = registrationRecord(value)
+  exactKeys(r, SOURCE_TARGET_KEYS)
+  return sourceTargetFields(r)
+}
+/**
+ * Validate one private Profile journal observation.
+ * @param value - Complete descriptor returned by the worker.
+ * @returns Frozen coordinates and complete snapshot digest, without granting authority.
+ */
+export function parseHostCollaborationSourceDescriptor(value: unknown): HostCollaborationSourceDescriptor {
+  const r = registrationRecord(value)
+  exactKeys(r, [...SOURCE_TARGET_KEYS, 'snapshot_digest'])
+  if (typeof r.snapshot_digest !== 'string' || !/^[0-9a-f]{64}$/.test(r.snapshot_digest)) reject()
+  return Object.freeze({ ...sourceTargetFields(r), snapshot_digest: r.snapshot_digest })
+}
+/**
+ * Validate a bounded private Source transfer and its exact original coordinates.
+ * @param value - Complete worker or Host reply; nested Source semantics remain the receiving consumer's responsibility.
+ * @returns Frozen descriptor and opaque JSON; no authority or executable call.
+ */
+export function parseHostCollaborationSourceSnapshot(value: unknown): HostCollaborationSourceSnapshot {
+  const r = registrationRecord(value)
+  exactKeys(r, ['descriptor', 'snapshot_json'])
+  const descriptor = parseHostCollaborationSourceDescriptor(r.descriptor)
+  if (typeof r.snapshot_json !== 'string' || Buffer.byteLength(r.snapshot_json, 'utf8') > 1024 * 1024)
+    reject()
+  let body: Record<string, unknown>
+  try {
+    body = registrationRecord(JSON.parse(r.snapshot_json))
+  } catch {
+    reject()
+  }
+  exactKeys(body, [
+    ...SOURCE_TARGET_KEYS,
+    'original_message',
+    'active_mentions',
+    'model_snapshot',
+    'host_journal_commit',
+  ])
+  const target = sourceTargetFields(body)
+  if (SOURCE_TARGET_KEYS.some(key => target[key] !== descriptor[key])) reject()
+  return Object.freeze({ descriptor, snapshot_json: r.snapshot_json })
+}
+/**
+ * Validate one fixed-size byte range without increasing the existing control frame budget.
+ * @param value - Complete private Source chunk reply.
+ * @returns Frozen descriptor, byte range and canonical base64url chunk; no Source authority.
+ */
+export function parseHostCollaborationSourceSnapshotChunk(
+  value: unknown,
+): ProfileSourceSnapshotResult['result'] {
+  const r = registrationRecord(value)
+  exactKeys(r, ['descriptor', 'offset', 'total_bytes', 'chunk_base64url'])
+  const descriptor = parseHostCollaborationSourceDescriptor(r.descriptor)
+  if (
+    !Number.isSafeInteger(r.offset) ||
+    (r.offset as number) < 0 ||
+    !Number.isSafeInteger(r.total_bytes) ||
+    (r.total_bytes as number) < 1 ||
+    (r.total_bytes as number) > 1024 * 1024 ||
+    typeof r.chunk_base64url !== 'string' ||
+    !/^[A-Za-z0-9_-]+$/.test(r.chunk_base64url) ||
+    r.chunk_base64url.length > 43691
+  )
+    reject()
+  const bytes = Buffer.from(r.chunk_base64url, 'base64url')
+  if (
+    bytes.toString('base64url') !== r.chunk_base64url ||
+    bytes.byteLength < 1 ||
+    bytes.byteLength > 32768 ||
+    (r.offset as number) + bytes.byteLength > (r.total_bytes as number) ||
+    bytes.byteLength !== Math.min(32768, (r.total_bytes as number) - (r.offset as number))
+  )
+    reject()
+  return Object.freeze({
+    descriptor,
+    offset: r.offset as number,
+    total_bytes: r.total_bytes as number,
+    chunk_base64url: r.chunk_base64url,
+  })
+}
+/**
+ * Validate a server Source nonce; its expiry and authenticity are checked by consumers.
+ * @param value - Untrusted exact challenge.
+ * @returns Detached frozen Account, Source, digest and Host epoch fields.
+ */
+export function parseHostSourceAuthorityChallenge(value: unknown): HostSourceAuthorityChallenge {
+  const r = registrationRecord(value)
+  exactKeys(r, ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
+    'account_issuer', 'account_subject', ...SOURCE_TARGET_KEYS, 'snapshot_digest', 'host_epoch'])
+  const base = parseHostWorkspaceAuthorityChallenge(Object.fromEntries(['request_id', 'challenge_nonce', 'expires_at',
+    'audience', 'environment_id', 'account_issuer', 'account_subject', 'workspace_id', 'session_id'].map(key => [key, r[key]])))
+  const descriptor = parseHostCollaborationSourceDescriptor(Object.fromEntries([...SOURCE_TARGET_KEYS, 'snapshot_digest'].map(key => [key, r[key]])))
+  return Object.freeze({ ...base, ...descriptor, host_epoch: sourceVersion(r.host_epoch) })
+}
+/**
+ * Validate signed Source fields without trusting their installation or nonce.
+ * @param value - Untrusted assertion.
+ * @returns Frozen assertion; cryptographic verification remains separate.
+ */
+export function parseHostSourceAuthorityAssertion(value: unknown): HostSourceAuthorityAssertion {
+  const r = registrationRecord(value)
+  exactKeys(r, ['schema_version', 'challenge', 'installation_id', 'installation_public_key', 'host_instance_id', 'process_nonce', 'signature'])
+  const c = parseHostSourceAuthorityChallenge(r.challenge)
+  const base = parseHostWorkspaceAuthorityAssertion({ ...r, challenge: Object.fromEntries(['request_id', 'challenge_nonce',
+    'expires_at', 'audience', 'environment_id', 'account_issuer', 'account_subject', 'workspace_id', 'session_id'].map(key => [key, c[key as keyof typeof c]])) })
+  return Object.freeze({ ...base, challenge: c })
+}
+/**
+ * Encode a distinct Source signing domain that cannot be replaced by membership signatures.
+ * @param value - Exact assertion; signature excluded.
+ * @returns Fixed-order UTF-8 bytes for Ed25519.
+ */
+export function encodeHostSourceAuthorityPayload(value: HostSourceAuthorityAssertion): Buffer {
+  const r = parseHostSourceAuthorityAssertion(value), c = r.challenge
+  return Buffer.from(`dsh-collaboration-source-authority/v1\0${JSON.stringify([
+    1, c.request_id, c.challenge_nonce, c.expires_at, c.audience, c.environment_id, c.account_issuer, c.account_subject,
+    c.workspace_id, c.session_id, c.source_message_id, c.source_revision, c.snapshot_digest, c.host_epoch,
+    r.installation_id, r.installation_public_key, r.host_instance_id, r.process_nonce,
+  ])}`, 'utf8')
+}
+/**
+ * Validate a private Profile reference lookup without supplying content or a grant.
+ * @param value - Exact original Source coordinates and full reservation digest.
+ * @returns Detached frozen query; only the owning Profile can read a separately committed selection.
+ */
+export function parseHostCollaborationReferenceTarget(value: unknown): HostCollaborationReferenceTarget {
+  const r = registrationRecord(value)
+  exactKeys(r, [...SOURCE_TARGET_KEYS, 'reference_request_digest'])
+  return Object.freeze({ ...sourceTargetFields(r), reference_request_digest: digest(r.reference_request_digest) })
+}
+
+function referenceIdentifier(value: unknown): string {
+  if (typeof value !== 'string' || !/^[!-~]{1,256}$/u.test(value) || /[/\\]/u.test(value)
+    || value === '.' || value === '..') reject()
+  return value
+}
+function referenceOffset(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) reject()
+  return value
+}
+function referenceKeys(value: Record<string, unknown>, keys: readonly string[]): void {
+  if (Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) reject()
+}
+/**
+ * Parse an original reference lookup without caller content or computed metadata.
+ * @param value - Source coordinates, full reservation digest and a byte offset.
+ * @returns Detached target with an offset below the fixed 1 MiB content budget.
+ */
+export function parseHostCollaborationReferenceContentTarget(value: unknown): HostCollaborationReferenceContentTarget {
+  const r = registrationRecord(value)
+  referenceKeys(r, [...SOURCE_TARGET_KEYS, 'reference_request_digest', 'offset'])
+  const offset = referenceOffset(r.offset)
+  if (offset >= 1024 * 1024) reject()
+  return Object.freeze({ ...sourceTargetFields(r), reference_request_digest: digest(r.reference_request_digest), offset })
+}
+/**
+ * Bound one reference response, including its exact canonical byte chunk.
+ * @param value - Original Profile descriptor, digests, total length, offset and bytes.
+ * @returns Detached chunk; callers verify the complete content hash after assembly.
+ */
+export function parseHostCollaborationReferenceContentChunk(value: unknown): HostCollaborationReferenceContentChunk {
+  const r = registrationRecord(value)
+  referenceKeys(r, ['descriptor', 'reference_request_digest', 'content_digest', 'offset', 'total_bytes', 'chunk_base64url'])
+  const descriptor = parseHostCollaborationSourceDescriptor(r.descriptor)
+  const offset = referenceOffset(r.offset), total = referenceOffset(r.total_bytes)
+  if (total > 1024 * 1024 || offset > total || (total > 0 && offset === total)
+    || typeof r.chunk_base64url !== 'string' || !/^[A-Za-z0-9_-]*$/u.test(r.chunk_base64url)
+    || r.chunk_base64url.length > 43691) reject()
+  const bytes = Buffer.from(r.chunk_base64url, 'base64url')
+  if (bytes.toString('base64url') !== r.chunk_base64url || bytes.byteLength !== Math.min(32768, total - offset)) reject()
+  return Object.freeze({ descriptor, reference_request_digest: digest(r.reference_request_digest),
+    content_digest: digest(r.content_digest), offset, total_bytes: total, chunk_base64url: r.chunk_base64url })
+}
+/**
+ * Parse a private locator selection without computed metadata or content overrides.
+ * @param value - Source coordinates, range, recipients and original evidence spans.
+ * @returns detached frozen fields; parsing establishes no user sharing intent.
+ */
+export function parseHostCollaborationReferenceSelection(value: unknown): HostCollaborationReferenceSelection {
+  const r = registrationRecord(value)
+  referenceKeys(r, ['source', 'reference_request_id', 'source_kind', 'source_locator', 'source_version',
+    'range', 'recipient_mention_ids', 'source_evidence_spans'])
+  const s = registrationRecord(r.source)
+  referenceKeys(s, ['workspace_id', 'session_id', 'source_message_id', 'revision'])
+  const source = sourceTargetFields({ ...s, source_revision: s.revision })
+  if (r.source_kind !== 'message' && r.source_kind !== 'file') reject()
+  const raw = registrationRecord(r.range)
+  let range: HostCollaborationReferenceSelection['range']
+  if (raw.unit === 'whole') { referenceKeys(raw, ['unit']); range = Object.freeze({ unit: 'whole' }) }
+  else if (raw.unit === 'quote') {
+    referenceKeys(raw, ['unit', 'text'])
+    if (typeof raw.text !== 'string' || !raw.text.length || !raw.text.isWellFormed() || Buffer.byteLength(raw.text) > 16384) reject()
+    range = Object.freeze({ unit: 'quote', text: raw.text })
+  }
+  else {
+    referenceKeys(raw, ['unit', 'start', 'end'])
+    if (raw.unit !== 'utf16' && raw.unit !== 'byte') reject()
+    const start = referenceOffset(raw.start), end = referenceOffset(raw.end)
+    if (end < start || end - start > 1024 * 1024) reject()
+    range = Object.freeze({ unit: raw.unit, start, end })
+  }
+  if (!Array.isArray(r.recipient_mention_ids) || r.recipient_mention_ids.length < 1 || r.recipient_mention_ids.length > 10
+    || !Array.isArray(r.source_evidence_spans) || r.source_evidence_spans.length < 1 || r.source_evidence_spans.length > 64) reject()
+  const recipients = Array.from(r.recipient_mention_ids, v => referenceIdentifier(v) as HostCollaborationMentionId)
+  if (new Set(recipients).size !== recipients.length) reject()
+  const spans = Array.from(r.source_evidence_spans, (value) => {
+    const span = registrationRecord(value)
+    referenceKeys(span, ['source_message_id', 'source_revision', 'start', 'end'])
+    const start = referenceOffset(span.start), end = referenceOffset(span.end)
+    if (start >= end) reject()
+    return Object.freeze({ source_message_id: referenceIdentifier(span.source_message_id),
+      source_revision: sourceVersion(span.source_revision), start, end })
+  })
+  const result: HostCollaborationReferenceSelection = { source: Object.freeze({
+    workspace_id: source.workspace_id, session_id: source.session_id,
+    source_message_id: source.source_message_id, revision: source.source_revision }),
+  reference_request_id: referenceIdentifier(r.reference_request_id) as HostCollaborationReferenceRequestId,
+  source_kind: r.source_kind, source_locator: referenceIdentifier(r.source_locator), source_version: sourceVersion(r.source_version),
+  range, recipient_mention_ids: Object.freeze(recipients), source_evidence_spans: Object.freeze(spans) }
+  if (Buffer.byteLength(JSON.stringify(result)) > 32768) reject()
+  return Object.freeze(result)
+}
+/**
+ * Bound computed capture metadata without accepting content bytes or transfer authority.
+ * @param value - Original Profile response; the full request remains untrusted to its coordinator.
+ * @returns descriptor, opaque request and digest; consumers validate the request against their authorized selection.
+ */
+export function parseHostCollaborationReferenceCapture(value: unknown): HostCollaborationReferenceCapture {
+  const r = registrationRecord(value)
+  referenceKeys(r, ['descriptor', 'request', 'reference_request_digest'])
+  const request = registrationRecord(r.request)
+  referenceKeys(request, ['source', 'reference_request_id', 'source_kind', 'source_locator', 'source_version', 'range',
+    'mime_type', 'content_digest', 'byte_length', 'recipient_mention_ids', 'source_evidence_spans'])
+  const s = registrationRecord(request.source)
+  referenceKeys(s, ['workspace_id', 'session_id', 'source_message_id', 'revision', 'message_digest'])
+  digest(s.message_digest)
+  const { message_digest: _messageDigest, ...source } = s
+  const selected = parseHostCollaborationReferenceSelection({ source, reference_request_id: request.reference_request_id,
+    source_kind: request.source_kind, source_locator: request.source_locator, source_version: request.source_version,
+    range: request.range, recipient_mention_ids: request.recipient_mention_ids, source_evidence_spans: request.source_evidence_spans })
+  if (selected.range.unit === 'whole' || selected.range.unit === 'quote' || typeof request.mime_type !== 'string' || request.mime_type.length > 128
+    || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+(?:;[\x20-\x7e]+)?$/u.test(request.mime_type)) reject()
+  digest(request.content_digest)
+  const length = referenceOffset(request.byte_length), extent = selected.range.end - selected.range.start
+  if (length > 1024 * 1024 || (selected.range.unit === 'byte' ? extent !== length : extent > length || length > extent * 3)) reject()
+  const descriptor = parseHostCollaborationSourceDescriptor(r.descriptor)
+  if (descriptor.workspace_id !== selected.source.workspace_id || descriptor.session_id !== selected.source.session_id
+    || descriptor.source_message_id !== selected.source.source_message_id
+    || descriptor.source_revision !== selected.source.revision) reject()
+  const result = { descriptor,
+    request: parseHostRemoteSessionJson(request), reference_request_digest: digest(r.reference_request_digest) }
+  if (Buffer.byteLength(JSON.stringify(result)) > 32768) reject()
+  return Object.freeze(result)
+}
+
+/**
+ * Validate a separate Profile grant without trusting Desktop-supplied coordinates.
+ * @param value - Exact committed Source descriptor and full reservation digest.
+ * @returns Detached frozen grant; its owning Profile must separately authorize its read.
+ */
+export function parseHostCollaborationReferenceGrant(value: unknown): HostCollaborationReferenceGrant {
+  const r = registrationRecord(value)
+  exactKeys(r, [...SOURCE_TARGET_KEYS, 'snapshot_digest', 'reference_request_digest'])
+  const { reference_request_digest, ...source } = r
+  return Object.freeze({ ...parseHostCollaborationSourceDescriptor(source), reference_request_digest: digest(reference_request_digest) })
+}
+/**
+ * Validate a reference nonce without granting read or transfer access.
+ * @param value - Source challenge plus a canonical full reservation digest.
+ * @returns Frozen Source, Account, Host epoch and reference request fields.
+ */
+export function parseHostReferenceAuthorityChallenge(value: unknown): HostReferenceAuthorityChallenge {
+  const r = registrationRecord(value)
+  const { reference_request_digest, ...source } = r
+  return Object.freeze({ ...parseHostSourceAuthorityChallenge(source), reference_request_digest: digest(reference_request_digest) })
+}
+/**
+ * Validate signed reference fields without trusting their installation or nonce.
+ * @param value - Exact detached assertion, without content or credential fields.
+ * @returns Frozen assertion; consumers verify the current installed key and separate transfer grant.
+ */
+export function parseHostReferenceAuthorityAssertion(value: unknown): HostReferenceAuthorityAssertion {
+  const r = registrationRecord(value), challenge = parseHostReferenceAuthorityChallenge(r.challenge)
+  const { reference_request_digest: _digest, ...source } = challenge
+  return Object.freeze({ ...parseHostSourceAuthorityAssertion({ ...r, challenge: source }), challenge })
+}
+/**
+ * Encode the Slark reference signing domain, distinct from Source membership signatures.
+ * @param value - Exact assertion; the signature is excluded from the signed bytes.
+ * @returns Fixed-order UTF-8 bytes binding Source and the complete reservation digest.
+ */
+export function encodeHostReferenceAuthorityPayload(value: HostReferenceAuthorityAssertion): Buffer {
+  const r = parseHostReferenceAuthorityAssertion(value)
+  const { reference_request_digest, ...source } = r.challenge
+  return Buffer.from('dsh-collaboration-reference-authority/v1\0' + JSON.stringify([
+    1, encodeHostSourceAuthorityPayload({ ...r, challenge: source }).toString('utf8'), reference_request_digest,
+  ]), 'utf8')
+}
+/**
+ * Parse detached Parent commands without granting Source or Account authority.
+ * @param value - Exact prepare/dispatch command; encoded input is limited to 32 KiB.
+ * @returns validated command; invalid keys, identifiers or JSON budgets throw.
+ */
+export function parseHostCollaborationAnalysisCommand(value: unknown): HostCollaborationAnalysisCommand {
+  const row = registrationRecord(value)
+  if ((row.action === 'root_execution_journal' || row.action === 'root_feedback')) {
+    exactKeys(row, ['action', 'operation'])
+    const operation = remoteSessionJson(row.operation)
+    if (Buffer.byteLength(JSON.stringify(operation), 'utf8') > 8192) reject()
+    return { action: row.action, operation }
+  }
+  if (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') {
+    exactKeys(row, ['action', 'target'])
+    return { action: row.action, target: parseHostRootSubmissionTarget(row.target) }
+  }
+  if (row.action === 'read_root_output') {
+    exactKeys(row, ['action','target'])
+    return { action: 'read_root_output', target: parseHostRootSubmissionTarget(row.target) }
+  }
+  if (row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root') {
+    exactKeys(row, ['action', 'input'])
+    return { action: row.action, input: parseHostRootAnalysisInput(row.input) }
+  }
+  if (row.action === 'prepare' || row.action === 'capture_reply' || row.action === 'prepare_clarification') {
+    exactKeys(row, ['action', 'input'])
+    const input = remoteSessionJson(row.input)
+    if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 32768) reject()
+    return { action: row.action, input }
+  }
+  if (row.action === 'dispatch' || row.action === 'dispatch_root_attempt') {
+    exactKeys(row, ['action', 'attempt_request_id', 'grant'])
+    return { action: row.action, attempt_request_id: uuid(row.attempt_request_id) as HostControlRequestId,
+      grant: remoteSessionJson(row.grant) }
+  }
+  return reject()
+}
+/**
+ * Validate durable preparation metadata or a complete original JSON output.
+ * @param value - Private Profile result; decoded output is bounded to 32 KiB and valid UTF-8.
+ * @returns detached preparation or canonical base64url output; malformed data throws.
+ */
+export function parseHostCollaborationAnalysisResult(value: unknown): HostCollaborationAnalysisResult {
+  const row = registrationRecord(value)
+  if (row.kind === 'reply_source') {
+    exactKeys(row, ['kind', 'capture'])
+    const capture = registrationRecord(row.capture)
+    exactKeys(capture, ['kind', 'descriptor'])
+    if (capture.kind !== 'captured' && capture.kind !== 'recovered') reject()
+    const descriptor = parseHostCollaborationSourceDescriptor(capture.descriptor)
+    return { kind: 'reply_source', capture: remoteSessionJson({ kind: capture.kind, descriptor }) }
+  }
+  if ((row.kind === 'root_execution_journal' || row.kind === 'root_feedback')) {
+    exactKeys(row, ['kind', 'record'])
+    const record = remoteSessionJson(row.record)
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > 8192) reject()
+    return { kind: row.kind, record }
+  }
+  if (row.kind === 'root_attempt_evidence') {
+    exactKeys(row, ['kind', 'evidence'])
+    return { kind: row.kind, evidence: parseHostRootPlanningEvidence(row.evidence) }
+  }
+  if (row.kind === 'root_attempt_prepared') {
+    exactKeys(row, ['kind', 'preparation'])
+    return { kind: row.kind, preparation: parseHostRootPlanningAttemptDescriptor(row.preparation) }
+  }
+  if (row.kind === 'root_output') {
+    exactKeys(row, ['kind','evidence'])
+    return { kind: 'root_output', evidence: parseHostRootAnalysisOutput(row.evidence) }
+  }
+  if (row.kind === 'root_prepared') {
+    exactKeys(row, ['kind', 'preparation'])
+    const p = registrationRecord(row.preparation)
+    const root = parseHostRootSubmissionDescriptor(p.root)
+    const { root: _root, ...base } = p
+    parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: base })
+    const descriptor = parseHostCollaborationSourceDescriptor(base.descriptor)
+    if (JSON.stringify(descriptor) !== JSON.stringify(root.source_descriptor)) reject()
+    return { kind: 'root_prepared', preparation: remoteSessionJson({ ...base, root }) }
+  }
+  if (row.kind === 'prepared') {
+    exactKeys(row, ['kind', 'preparation'])
+    const preparation = registrationRecord(row.preparation)
+    const descriptor = parseHostCollaborationSourceDescriptor(preparation.descriptor)
+    if (preparation.kind === 'recovered') {
+      exactKeys(preparation, ['kind', 'descriptor'])
+      return { kind: 'prepared', preparation: remoteSessionJson({ kind: 'recovered', descriptor }) }
+    }
+    exactKeys(preparation, ['kind', 'descriptor', 'attempt_request_id', 'input_manifest_digest', 'source_digest'])
+    if (preparation.kind !== 'prepared' || preparation.source_digest !== descriptor.snapshot_digest) reject()
+    return { kind: 'prepared', preparation: remoteSessionJson({ kind: 'prepared', descriptor,
+      attempt_request_id: uuid(preparation.attempt_request_id),
+      input_manifest_digest: digest(preparation.input_manifest_digest), source_digest: descriptor.snapshot_digest }) }
+  }
+  const attested = Object.hasOwn(row, 'analysis_receipt')
+  exactKeys(row, ['kind', 'json_base64url', ...(attested ? ['analysis_receipt'] : [])])
+  if (row.kind !== 'output' || typeof row.json_base64url !== 'string' || row.json_base64url.length > 43691 || !/^[A-Za-z0-9_-]+$/u.test(row.json_base64url)) reject()
+  const bytes = Buffer.from(row.json_base64url, 'base64url')
+  if (bytes.byteLength > 32768 || bytes.toString('base64url') !== row.json_base64url) reject()
+  try { registrationRecord(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))) } catch { reject() }
+  return { kind: 'output', json_base64url: row.json_base64url, ...(attested ? { analysis_receipt: parseHostCollaborationAnalysisReceipt(row.analysis_receipt) } : {}) }
+}
+
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileModelTextRequest | ProfileLeaseCloseRequest | ProfileExtensionsRequest
+  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
+  | ProfileWorkspaceAuthorityRequest
+  | ProfileSourceAuthorityRequest
+  | ProfileReferenceAuthorityRequest
+  | ProfileReferenceCaptureRequest
+  | ProfileReferenceContentRequest
+  | ProfileCollaborationAnalysisRequest
+  | ProfileSourceSnapshotRequest
+  | ProfileRootJournalRequest
+  | ProfileRootPlanningAttemptAuthorityRequest
+  | ProfileRootAuthorityRequest
+  | ProfileCollaborationDeliveryRequest
+  | ProfileModelTextRequest
+  | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileRemoteSessionRequest
   | ProfileRemoteUiReadRequest
   | ProfileRemoteUiStreamRequest
@@ -780,7 +1463,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
     if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
-      && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'settings/describe'
+      && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
+      && params.endpoint !== 'settings/describe'
       && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
       && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog') reject()
     const payload = record(params.payload)
@@ -791,6 +1475,15 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     if ((params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
       || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog')
       && Object.keys(args).length !== 0) reject()
+    if (params.endpoint === 'session/collaborationSources') {
+      const sourceArgs = args as Record<string, unknown>
+      exactKeys(sourceArgs, ['request'])
+      const request = record(sourceArgs.request)
+      exactKeys(request, Object.hasOwn(request, 'cursor') ? ['sessionId', 'cursor'] : ['sessionId'])
+      if (typeof request.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(request.sessionId)
+        || /[/\\]/u.test(request.sessionId) || request.sessionId === '.' || request.sessionId === '..'
+        || (Object.hasOwn(request, 'cursor') && (typeof request.cursor !== 'string' || !/^[0-9a-f]{64}$/u.test(request.cursor)))) reject()
+    }
     if (params.endpoint === 'credentials/describe') {
       const credentialArgs = args as Record<string, unknown>
       exactKeys(credentialArgs, ['refs'])
@@ -1018,6 +1711,122 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       },
     }
   }
+  if (frame.method === 'profile.workspace_model_selection') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
+      'account_binding_handle', 'authority_binding_version', 'workspace_id', 'session_id'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params),
+      authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+      account_binding_handle: opaqueHandle(params.account_binding_handle),
+      authority_binding_version: generation(params.authority_binding_version),
+      ...parseHostWorkspaceModelSelectionTarget({ workspace_id: params.workspace_id, session_id: params.session_id }),
+    } }
+  }
+  if (frame.method === 'profile.collaboration_delivery') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      command: parseHostCollaborationDeliveryChunk(params.command),
+    } }
+  }
+  if (frame.method === 'profile.root_journal') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      command: parseHostRootJournalCommand(params.command),
+    } } satisfies ProfileRootJournalRequest
+  }
+  if (frame.method === 'profile.collaboration_analysis') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      command: parseHostCollaborationAnalysisCommand(params.command),
+    } } satisfies ProfileCollaborationAnalysisRequest
+  }
+  if (frame.method === 'profile.reference_capture') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'selection'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), selection: parseHostCollaborationReferenceSelection(params.selection),
+    } }
+  }
+  if (frame.method === 'profile.reference_content') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
+      'account_issuer', 'account_subject', 'offset', ...SOURCE_TARGET_KEYS, 'reference_request_digest'])
+    const target = parseHostCollaborationReferenceContentTarget(Object.fromEntries(
+      [...SOURCE_TARGET_KEYS, 'reference_request_digest', 'offset'].map(key => [key, params[key]])))
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...collaborationAccountParams(params), offset: target.offset, ...sourceTargetFields({ ...target }),
+        reference_request_digest: target.reference_request_digest } }
+  }
+  if (frame.method === 'profile.source_snapshot') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle', 'authority_binding_version', 'account_issuer', 'account_subject', 'offset', ...SOURCE_TARGET_KEYS])
+    if (!Number.isSafeInteger(params.offset) || (params.offset as number) < 0 || (params.offset as number) >= 1024 * 1024) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      offset: params.offset as number,
+      ...sourceTargetFields(params),
+    } }
+  }
+  if (frame.method === 'profile.workspace_authority') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return {
+      version: 1,
+      type: 'request',
+      request_id: requestId,
+      method: frame.method,
+      params: {
+        ...accountChallengeParams(params),
+        challenge: parseHostWorkspaceAuthorityChallenge(params.challenge),
+      },
+    }
+  }
+  if (frame.method === 'profile.root_planning_attempt_authority') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return {
+      version: 1,
+      type: 'request',
+      request_id: requestId,
+      method: frame.method,
+      params: {
+        ...accountChallengeParams(params),
+        challenge: parseHostRootPlanningAttemptAuthorityChallenge(params.challenge),
+      },
+    }
+  }
+  if (frame.method === 'profile.root_authority') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return {
+      version: 1,
+      type: 'request',
+      request_id: requestId,
+      method: frame.method,
+      params: {
+        ...accountChallengeParams(params),
+        challenge: parseHostRootAuthorityChallenge(params.challenge),
+      },
+    }
+  }
+  if (frame.method === 'profile.source_authority' || frame.method === 'profile.reference_authority') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return {
+      version: 1,
+      type: 'request',
+      request_id: requestId,
+      method: frame.method,
+      params: {
+        ...accountChallengeParams(params),
+        challenge: frame.method === 'profile.reference_authority'
+          ? parseHostReferenceAuthorityChallenge(params.challenge) : parseHostSourceAuthorityChallenge(params.challenge),
+      },
+    } as ProfileSourceAuthorityRequest | ProfileReferenceAuthorityRequest
+  }
+  if (frame.method === 'profile.collaboration_registration') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...accountChallengeParams(params),
+      challenge: parseHostCollaborationRegistrationChallenge(params.challenge),
+    } }
+  }
   if (frame.method === 'profile.model_text') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
       'account_binding_handle', 'authority_binding_version', 'text'])
@@ -1056,7 +1865,19 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileModelTextResult | ProfileLeaseCloseResult | ProfileExtensionsResult
+  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
+  | ProfileWorkspaceAuthorityResult
+  | ProfileSourceAuthorityResult
+  | ProfileReferenceAuthorityResult
+  | ProfileReferenceCaptureResult
+  | ProfileReferenceContentResult
+  | ProfileRootJournalResult
+  | ProfileRootPlanningAttemptAuthorityResult
+  | ProfileRootAuthorityResult
+  | ProfileCollaborationAnalysisResult | ProfileSourceSnapshotResult
+  | ProfileCollaborationDeliveryResult
+  | ProfileModelTextResult
+  | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileRemoteSessionResult
   | ProfileRemoteUiReadResult
   | ProfileRemoteUiStreamResult
@@ -1291,6 +2112,48 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['closed'])
     if (result.closed !== true) reject()
     return { version: 1, type: 'result', request_id, method: 'profile.lease_close', result: { closed: true } }
+  }
+  if (frame.method === 'profile.workspace_model_selection') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostWorkspaceModelSelection(result) }
+  }
+  if (frame.method === 'profile.workspace_authority') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostWorkspaceAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.root_journal') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostRootJournalMetadata(result) }
+  }
+  if (frame.method === 'profile.root_planning_attempt_authority') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostRootPlanningAttemptAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.root_authority') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostRootAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.source_authority') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostSourceAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.reference_authority') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostReferenceAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.reference_capture') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationReferenceCapture(result) }
+  }
+  if (frame.method === 'profile.reference_content') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostCollaborationReferenceContentChunk(result) }
+  }
+  if (frame.method === 'profile.collaboration_analysis') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationAnalysisResult(result) }
+  }
+  if (frame.method === 'profile.source_snapshot') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationSourceSnapshotChunk(result) }
+  }
+  if (frame.method === 'profile.collaboration_delivery') {
+    return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostCollaborationDeliveryResult(result) }
+  }
+  if (frame.method === 'profile.collaboration_registration') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostCollaborationRegistrationAssertion(result) }
   }
   if (frame.method === 'profile.model_text') {
     if (result.state === 'rejected') {

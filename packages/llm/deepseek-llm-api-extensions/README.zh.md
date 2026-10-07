@@ -21,6 +21,7 @@ kind: "package-reference"
 -----
 
 <a id="service"></a>
+
 ## 服务
 
 - `register(field, provider)` 为调用 fiber 保留一个字段。重复或格式错误的名称会同步失败；dispose（资源释放）该注册后，后续提供方可以再次认领。
@@ -31,7 +32,10 @@ kind: "package-reference"
 
 注册表拥有字段添加与生命周期，不拥有字段语义。`@deepseek-ai/dsh-session-log-deepseek` 拥有 `dsh_session_log`；`@deepseek-ai/dsh-plugin-package-inventory-deepseek` 拥有 `dsh_plugin_packages`。提供方无关的 LLM seam 与 `llm-pi-ai` 都不消费该注册表。
 
+请求用途还标识 `collaboration-analysis`。其消费者会在 HTTP 发送前拒绝非空已准备字段；提供方不能向 Source 分析加入工具或上下文。
+
 <a id="model-experience"></a>
+
 ## 模型体验
 
 通过 `@deepseek-ai/dsh-llm-deepseek` 间接生效；该包在模型的 `messages`、系统提示词与工具 schema 之外发送已注册字段。
@@ -47,8 +51,8 @@ kind: "package-reference"
 - **仅限 DeepSeek 官方请求**——该注册表刻意不提供提供方无关的路由，也不集成 pi-ai 适配器。
 - **不约定字段顺序**——JSON 对象成员顺序取决于注册准备顺序，但接收方按名称寻址字段。
 
-
 <a id="dev-note"></a>
+
 ### 开发备注
 
 <details>

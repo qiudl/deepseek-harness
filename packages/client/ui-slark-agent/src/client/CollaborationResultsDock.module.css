@@ -1,0 +1,17 @@
+.panel {
+  flex-shrink: 0;
+  padding: 12px;
+  border-radius: var(--dsw-radius-md);
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-panel);
+}
+.records { max-height: 240px; overflow: auto; }
+.message { margin-top: 12px; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.reply { display: grid; gap: 6px; margin-top: 12px; }
+.panel small { color: var(--dsw-alias-label-secondary); }
+.traceEvents { padding-inline-start: 24px; }
+.traceEvents li { margin-block: 8px; overflow-wrap: anywhere; }
+.traceDetails { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; }
+.traceDetails dd { margin: 0; overflow-wrap: anywhere; }

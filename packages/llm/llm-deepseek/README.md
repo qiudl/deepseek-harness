@@ -7,6 +7,9 @@ kind: "package-reference"
 
 English | [中文](README.zh.md)
 
+
+`prepareSnapshot()` captures the current connection and resolved authentication before returning a one-shot LLM call. Later credential or settings changes affect subsequent calls; the prepared stream retains its captured authentication headers and request-error classifier. Collaboration analysis rejects provider request extensions before sending a request.
+
 ## Summary
 
 Provide the shared DeepSeek Messages transport, request configuration, and model capabilities. Compose [API-key](../llm-deepseek-api-key/README.md) or [account](../llm-deepseek-account/README.md) plugins for authentication, model discovery, and provider registration. Valid settings changes affect subsequent calls while in-flight calls retain their configuration. This package can run beside the [pi-ai adapter](../llm-pi-ai/README.md).
@@ -217,3 +220,5 @@ None.
 **Runtime invariant:** No companion is published. This package exposes no independent event sequence or mutable data relation beyond contracts enforced at its owning seam.
 
 `deepseek-official` uses only its configured API-key reference; `deepseek-account` uses only the stored DSH grant for the account provider’s allowed inference origin. Both routes share the Messages transport with independently configured model and file settings. Missing or ineligible account credentials reject the request with a sign-in prompt; neither route falls back to the other. Chat and Files requests reject redirects. The account provider owns sign-out cancellation using running Agents’ logged request contexts, including tool execution; the transport receives the existing request abort signal.
+
+When an owning operation supplies `GenerateOptions.traceparent`, the Messages HTTP request preserves that validated W3C trace and overrides any case-insensitive static trace header. Authentication and model input are unchanged.

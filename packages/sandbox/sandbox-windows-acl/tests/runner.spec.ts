@@ -540,10 +540,20 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     writeFileSync(join(granted, 'file.txt'), 'x')
     writeFileSync(join(child, 'deep.txt'), 'x')
     const grant = AclWriteGrant.create(workspaceWriteSid(granted))
-    grant.add(granted, true)
     try {
+      grant.add(granted, true)
+      // An explicit FullControl allow precedes an inherited deny; this case owns inheritance.
+      const reset = spawnSync('icacls', [child, '/reset'], { encoding: 'utf8', timeout: 60_000 })
+      expect(reset.status, `stderr: ${reset.stderr}`).toBe(0)
       const probe = `
-$ErrorActionPreference='SilentlyContinue'
+$ErrorActionPreference='Stop'
+$rules = @((Get-Acl -LiteralPath '${child}').GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+if (@($rules | Where-Object { -not $_.IsInherited }).Count -ne 0 -or
+    @($rules | Where-Object {
+      $_.IsInherited -and $_.IdentityReference.Value -eq 'S-1-1-0' -and
+      $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny -and
+      ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles)
+    }).Count -ne 1) { throw 'Directory fixture must inherit the ambient-delete deny without explicit allows' }
 Add-Type -Namespace P -Name F -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode, EntryPoint="CreateFileW")]
 public static extern IntPtr CreateFileW(string n, uint a, uint s, IntPtr sa, uint d, uint f, IntPtr t);
@@ -564,8 +574,8 @@ TryOpen 'DIRECTORY' '${child}'
       expect(result.stdout).toContain('NESTED-FILE: OK')
       expect(result.stdout).toContain('DIRECTORY: DENIED')
     } finally {
-      grant.dispose()
-      rmSync(granted, { recursive: true, force: true })
+      try { grant.dispose() }
+      finally { rmSync(granted, { recursive: true, force: true }) }
     }
   }, 60_000)
 
