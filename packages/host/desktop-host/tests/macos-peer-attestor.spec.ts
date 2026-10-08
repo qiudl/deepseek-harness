@@ -154,6 +154,86 @@ describe('macOS Unix peer attestation', () => {
     await expect(attest({ _handle: { fd: 9 } } as never)).resolves.toMatchObject({ uid })
   })
 
+  it.each(['success', 'failure', 'changed'] as const)('coalesces overlapping bundle verification, preserves %s checks, and verifies again afterward', async (outcome) => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-peer-shared-'))
+    const path = join(root, 'Slark.app', 'Contents', 'MacOS', 'Slark')
+    mkdirSync(join(root, 'Slark.app', 'Contents', 'MacOS'), { recursive: true })
+    writeFileSync(path, 'signed app executable fixture', { mode: 0o700 })
+    const uid = process.getuid?.() ?? 501
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    let signatures = 0
+    let peers = 0
+    let firstBatch = true
+    const attest = createMacOSPeerAttestor({
+      allowedTeamIdentifiers: new Set(['TEAM123']),
+      bindings: {
+        peerIdentity: () => { peers++; return { uid, pid: 42 } },
+        executablePath: () => path,
+        verifyCodeSignature: async () => {
+          signatures++
+          if (firstBatch) {
+            await held
+            if (outcome === 'failure') throw new Error('signature rejected')
+            if (outcome === 'changed') writeFileSync(path, 'changed app executable fixture')
+          }
+          return 'TEAM123'
+        },
+      },
+    })
+    const results = Promise.allSettled([9, 10, 11].map(fd => attest({ _handle: { fd } } as never)))
+    onTestFinished(async () => {
+      release()
+      await results
+      rmSync(root, { recursive: true, force: true })
+    })
+    // All peer/path promises settle before this event-loop barrier; signature work remains held.
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    expect(peers).toBe(3)
+    expect(signatures).toBe(1)
+    release()
+    const settled = await results
+    expect(settled.map(result => result.status)).toEqual(Array(3).fill(outcome === 'success' ? 'fulfilled' : 'rejected'))
+    firstBatch = false
+    await expect(attest({ _handle: { fd: 12 } } as never)).resolves.toMatchObject({ uid })
+    expect(signatures).toBe(2)
+  })
+
+  it('does not share signature verification across different executable snapshots', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-peer-version-'))
+    const path = join(root, 'Slark.app', 'Contents', 'MacOS', 'Slark')
+    mkdirSync(join(root, 'Slark.app', 'Contents', 'MacOS'), { recursive: true })
+    writeFileSync(path, 'original executable', { mode: 0o700 })
+    const uid = process.getuid?.() ?? 501
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    let signatures = 0
+    const attest = createMacOSPeerAttestor({
+      allowedTeamIdentifiers: new Set(['TEAM123']),
+      bindings: {
+        peerIdentity: () => ({ uid, pid: 42 }),
+        executablePath: () => path,
+        verifyCodeSignature: async () => { signatures++; await held; return 'TEAM123' },
+      },
+    })
+    const first = Promise.allSettled([attest({ _handle: { fd: 9 } } as never)])
+    let second = first
+    onTestFinished(async () => {
+      release()
+      await Promise.all([first, second])
+      rmSync(root, { recursive: true, force: true })
+    })
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    expect(signatures).toBe(1)
+    writeFileSync(path, 'replacement executable')
+    second = Promise.allSettled([attest({ _handle: { fd: 10 } } as never)])
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    expect(signatures).toBe(2)
+    release()
+    expect((await first)[0]?.status).toBe('rejected')
+    expect((await second)[0]?.status).toBe('fulfilled')
+  })
+
   it('rejects a bundled app executable changed while its bundle signature is verified', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-peer-bundle-race-'))
     const executablePath = join(root, 'Slark.app', 'Contents', 'MacOS', 'Slark')
