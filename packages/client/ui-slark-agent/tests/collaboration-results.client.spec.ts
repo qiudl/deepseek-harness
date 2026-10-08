@@ -537,6 +537,95 @@ it('allows a new explicit confirmation only after the original command is known 
   expect(f.model.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('recorded')
 })
 
+const expiredPreview = { ok: false, errorCode: 'collaboration_execution_preview_expired', reconciliationRequired: false }
+it.each([false, true])('renews an expired Main preview once without changing consumption reconcile=%s', async (reconcile) => {
+  const f = await executableFixture()
+  f.command.mockResolvedValueOnce(expiredPreview)
+    .mockResolvedValueOnce({ ...f.preview, previewId: 'fresh', executionEnabled: !reconcile })
+    .mockResolvedValueOnce({ ok: true, rootTraceId: f.preview.rootTraceId, status: 'context_applied', consumptionAcknowledged: true, continuationObserved: true })
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery', reconcile)
+  expect(f.command.mock.calls.slice(-3).map(([request]) => request)).toEqual([
+    { action: reconcile ? 'consumption-status' : 'consume', previewId: 'preview', taskId: 'task', deliveryId: 'delivery' },
+    { action: 'preview', source },
+    { action: reconcile ? 'consumption-status' : 'consume', previewId: 'fresh', taskId: 'task', deliveryId: 'delivery' },
+  ])
+  expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('continued')
+})
+
+it.each([null, { ...expiredPreview, reconciliationRequired: true }, { ...expiredPreview, errorCode: 'unavailable' },
+  { ok: false, errorCode: expiredPreview.errorCode }, { ok: false }, { ok: true }])('never renews an uncertain consumption response %j', async (response) => {
+  const f = await executableFixture(), before = f.command.mock.calls.length
+  f.command.mockResolvedValue(response)
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command).toHaveBeenCalledTimes(before + 1)
+  expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('uncertain')
+})
+
+it.each(['trace', 'task-id', 'question', 'agent', 'project', 'length', 'disabled', 'invalid'] as const)(
+  'does not consume after preview renewal changes %s', async (change) => {
+    const f = await executableFixture(), task = { ...f.preview.tasks[0]! }
+    const refreshed = { ...f.preview, previewId: 'fresh', tasks: [task] }
+    if (change === 'trace') refreshed.rootTraceId = 'c'.repeat(32)
+    if (change === 'task-id') task.taskId = 'different'
+    if (change === 'question') task.question = 'Different work'
+    if (change === 'agent') task.agentName = 'Different Agent'
+    if (change === 'project') task.projectName = 'Different project'
+    if (change === 'length') refreshed.tasks.push({ ...task, taskId: 'second' })
+    if (change === 'disabled') refreshed.executionEnabled = false
+    f.command.mockResolvedValueOnce(expiredPreview).mockResolvedValueOnce(change === 'invalid' ? null : refreshed)
+    const before = f.command.mock.calls.length
+    await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+    expect(f.command).toHaveBeenCalledTimes(before + 2)
+    expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('uncertain')
+  },
+)
+
+it('does not loop when the refreshed preview also expires', async () => {
+  const f = await executableFixture(), before = f.command.mock.calls.length
+  f.command.mockResolvedValueOnce(expiredPreview).mockResolvedValueOnce(f.preview).mockResolvedValueOnce(expiredPreview)
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command).toHaveBeenCalledTimes(before + 3)
+  expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('uncertain')
+})
+
+it.each(['preview', 'consumption'] as const)('discards expired-preview recovery after ownership changes during %s', async (phase) => {
+  const f = await executableFixture()
+  f.command.mockResolvedValueOnce(expiredPreview)
+  if (phase === 'consumption') f.command.mockResolvedValueOnce(f.preview)
+  f.command.mockImplementationOnce(async () => { f.reset(); return f.preview })
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command.mock.calls.slice(1).map(([request]) => request.action)).toEqual(
+    phase === 'preview' ? ['consume', 'preview'] : ['consume', 'preview', 'consume'])
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+it('preserves unknown execution and consumption outcomes through readonly preview refresh', async () => {
+  const f = await executableFixture()
+  f.command.mockResolvedValue({ ok: false })
+  await f.model.executionAction(original.snapshot_digest, 'task')
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  f.command.mockResolvedValue({ ...f.preview, previewId: 'fresh' })
+  await f.model.executionAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]?.execution).toMatchObject({ previewId: 'fresh', outcomes: { task: 'uncertain' }, consumptions: { delivery: 'uncertain' } })
+  const before = f.command.mock.calls.length
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command).toHaveBeenCalledTimes(before)
+})
+
+it.each(['preview', 'confirm', 'consume'] as const)('serializes competing actions while %s is pending', async (action) => {
+  const f = await executableFixture(), held = Promise.withResolvers<unknown>(), entered = Promise.withResolvers<undefined>()
+  f.command.mockImplementationOnce(() => { entered.resolve(undefined); return held.promise })
+  const pending = action === 'consume' ? f.model.consumptionAction(original.snapshot_digest, 'delivery')
+    : f.model.executionAction(original.snapshot_digest, action === 'confirm' ? 'task' : undefined)
+  onTestFinished(async () => { held.resolve({ ok: false }); f.model.dispose(); await pending })
+  await entered.promise
+  const before = f.command.mock.calls.length
+  await f.model.executionAction(original.snapshot_digest)
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery', true)
+  expect(f.command).toHaveBeenCalledTimes(before)
+  held.resolve({ ok: false }); await pending
+})
+
 it('reads original-root trajectory without preview or execution and restores requested pages on refresh', async () => {
   const f = fixture()
   Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)

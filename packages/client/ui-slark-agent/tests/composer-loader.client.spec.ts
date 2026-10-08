@@ -1497,7 +1497,7 @@ it.each(['missing','rejected','bad-receipt'] as const)('closed-root recovery ret
   expect(submit).not.toHaveBeenCalled();expect(sink).not.toHaveBeenCalled()
 })
 
-it('routes explicit task confirmation through the YAML-loaded original Session binding', async () => {
+it('routes task confirmation and expired-preview consumption through the YAML-loaded original Session binding', async () => {
   const f = await bench(true)
   const bridge = window.__DSH_DESKTOP_HOST__
   if (!bridge) throw Error('missing Desktop fixture')
@@ -1522,13 +1522,27 @@ it('routes explicit task confirmation through the YAML-loaded original Session b
   await bindings.executionAction(original.snapshot_digest,'task')
   expect(execution).toHaveBeenLastCalledWith({ action:'confirm',previewId:'main-preview',taskId:'task' })
   expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('recorded')
+  const deliveries = f.deliveries.getMockImplementation()!
+  f.deliveries.mockImplementation(async (input) => {
+    const result = await deliveries(input)
+    return { ...result, value: { deliveries: result.value.deliveries.map(reply => ({ ...reply, task_id: 'task' })) } }
+  })
+  await bindings.hooks.slarkResults.refresh()
+  execution.mockResolvedValueOnce({ ok: false, errorCode: 'collaboration_execution_preview_expired', reconciliationRequired: false })
+    .mockResolvedValueOnce({ ok: true, previewId: 'fresh-preview', rootTraceId: 'b'.repeat(32), executionEnabled: true,
+      tasks: [{ taskId: 'task', question: 'Do the displayed work', agentName: 'Guide', projectName: 'Project' }] })
+    .mockResolvedValueOnce({ ok: true, rootTraceId: 'b'.repeat(32), consumptionAcknowledged: true, status: 'context_applied', continuationObserved: true })
+  await bindings.consumptionAction?.(original.snapshot_digest, 'delivery-v2')
+  expect(execution.mock.calls.slice(-3).map(([request]) => request.action)).toEqual(['consume', 'preview', 'consume'])
+  expect(execution).toHaveBeenLastCalledWith({ action: 'consume', previewId: 'fresh-preview', taskId: 'task', deliveryId: 'delivery-v2' })
+  expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.execution).toMatchObject({ outcomes: { task: 'recorded' }, consumptions: { 'delivery-v2': 'continued' } })
   expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
   const plugin=[...f.ctx.loader.entries()].find(item=>item.options.name==='composer-test:source')
   if(!plugin?.fiber) throw Error('missing loaded source')
   await plugin.fiber.dispose()
   await bindings.executionAction(original.snapshot_digest,'task')
   await bindings.consumptionAction?.(original.snapshot_digest,'delivery')
-  expect(execution).toHaveBeenCalledTimes(2)
+  expect(execution).toHaveBeenCalledTimes(5)
 })
 
 it('keeps the scoped draft when its Host disappears before submission', async () => {

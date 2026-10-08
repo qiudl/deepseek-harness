@@ -71,6 +71,29 @@ const bytes = (value: unknown): number => new TextEncoder().encode(JSON.stringif
 const array = (value: unknown): boolean => Array.isArray(value)
 const safeText = (value: unknown, max: number): value is string => typeof value === 'string'
   && !/\p{Surrogate}/u.test(value) && new TextEncoder().encode(value).length <= max
+function executionPreview(result: unknown, previous: CollaborationExecutionView): CollaborationExecutionView & { previewId: string } {
+  if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true
+    || !('rootTraceId' in result) || typeof result.rootTraceId !== 'string' || !/^(?!0{32}$)[a-f0-9]{32}$/u.test(result.rootTraceId)
+    || !('previewId' in result) || !safeText(result.previewId, 128) || !result.previewId
+    || !('executionEnabled' in result) || typeof result.executionEnabled !== 'boolean'
+    || !('tasks' in result) || !Array.isArray(result.tasks) || !result.tasks.length || result.tasks.length > 10
+    || bytes(result) > 800 * 1024) throw Error('invalid_preview')
+  const seen = new Set<string>()
+  const tasks = result.tasks.map((value: unknown) => {
+    if (!value || typeof value !== 'object') throw Error('invalid_task')
+    const row = value as Record<string, unknown>
+    if (!safeText(row.taskId, 256) || !row.taskId || seen.has(row.taskId) || !safeText(row.question, 32 * 1024)
+      || !safeText(row.agentName, 512) || !safeText(row.projectName, 512)) throw Error('invalid_task')
+    seen.add(row.taskId)
+    return { taskId: row.taskId, question: row.question, agentName: row.agentName, projectName: row.projectName }
+  })
+  if (previous.rootTraceId !== undefined && (previous.rootTraceId !== result.rootTraceId
+    || previous.tasks?.length !== tasks.length || previous.tasks.some(old => !tasks.some(task =>
+    task.taskId === old.taskId && task.question === old.question
+    && task.agentName === old.agentName && task.projectName === old.projectName))))
+    throw Error('preview_changed')
+  return { ...previous, phase: 'ready', previewId: result.previewId, rootTraceId: result.rootTraceId, enabled: result.executionEnabled, tasks }
+}
 function wait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const abort = () => { reject(new DOMException('Cancelled', 'AbortError')) }
@@ -469,7 +492,8 @@ export class CollaborationResultsModel {
     const original = this.state.groups.find(group => group.original.snapshot_digest === digest)?.original
     const bridge = this.boundBridge, previous = this.executions.get(digest)
     if (this.closed || !this.workspaceId || !original || !bridge?.collaborationPlanningAvailable || !bridge.collaborationRootExecution
-      || previous?.phase === 'loading' || Object.values(previous?.outcomes ?? {}).includes('sending')) return
+      || previous?.phase === 'loading' || Object.values(previous?.outcomes ?? {}).includes('sending')
+      || Object.values(previous?.consumptions ?? {}).includes('sending')) return
     let request: Parameters<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>[0]
     if (taskId === undefined) request = { action: 'preview', source: original.source }
     else {
@@ -486,52 +510,54 @@ export class CollaborationResultsModel {
       if (!this.current(generation)) return
       if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) throw Error('unavailable')
       if (taskId === undefined) {
-        if (!('rootTraceId' in result) || typeof result.rootTraceId !== 'string' || !/^(?!0{32}$)[a-f0-9]{32}$/u.test(result.rootTraceId)
-          || !('previewId' in result) || !safeText(result.previewId, 128) || !result.previewId
-          || !('executionEnabled' in result) || typeof result.executionEnabled !== 'boolean'
-          || !('tasks' in result) || !Array.isArray(result.tasks) || !result.tasks.length || result.tasks.length > 10
-          || bytes(result) > 800 * 1024) throw Error('invalid_preview')
-        const seen = new Set<string>()
-        const tasks = result.tasks.map((value: unknown) => {
-          if (!value || typeof value !== 'object') throw Error('invalid_task')
-          const row = value as Record<string, unknown>
-          if (!safeText(row.taskId, 256) || !row.taskId || seen.has(row.taskId) || !safeText(row.question, 32 * 1024)
-            || !safeText(row.agentName, 512) || !safeText(row.projectName, 512)) throw Error('invalid_task')
-          seen.add(row.taskId)
-          return { taskId: row.taskId, question: row.question, agentName: row.agentName, projectName: row.projectName }
-        })
-        this.executions.set(digest, { phase: 'ready', previewId: result.previewId, rootTraceId: result.rootTraceId, enabled: result.executionEnabled, tasks })
+        this.executions.set(digest, executionPreview(result, prior))
       } else {
         if (!('status' in result) || (result.status !== 'recorded' && result.status !== 'not_admitted')) throw Error('invalid_outcome')
         this.executions.set(digest, { ...prior, outcomes: { ...prior.outcomes, [taskId]: result.status } })
       }
     } catch {
       if (!this.current(generation)) return
-      this.executions.set(digest, taskId === undefined ? { phase: 'error' }
+      this.executions.set(digest, taskId === undefined ? { ...prior, phase: 'error', enabled: false }
         : { ...prior, outcomes: { ...prior.outcomes, [taskId]: 'uncertain' } })
     }
     this.publish(this.state)
   }
   /** Consume one displayed reply under Main's retained original task; reconciliation never requests a fresh grant.
+   * A Main-confirmed expired preview permits one readonly refresh and the same action; uncertain operations are never replayed.
    * @param digest - Original message digest displayed in this Session.
    * @param deliveryId - Immutable result identity, resolved to its task from the current readable projection.
    * @param reconcile - Read historical evidence only after an uncertain outcome.
    */
   async consumptionAction(digest: string, deliveryId: string, reconcile = false): Promise<void> {
     this.bind()
-    const group = this.state.groups.find(g => g.original.snapshot_digest === digest), prior = this.executions.get(digest)
+    const group = this.state.groups.find(g => g.original.snapshot_digest === digest)
+    let prior = this.executions.get(digest)
     const reply = group?.replies.find(r => r.delivery_id === deliveryId), bridge = this.boundBridge
-    if (this.closed || !this.workspaceId || !bridge?.collaborationRootExecution || !bridge.collaborationPlanningAvailable
-      || !prior?.previewId || !reply?.task_id || reply.delivery_state === 'restricted'
+    if (this.closed || !this.workspaceId || !group || !bridge?.collaborationRootExecution || !bridge.collaborationPlanningAvailable
+      || !prior?.previewId || prior.phase === 'loading' || !reply?.task_id || reply.delivery_state === 'restricted'
       || !prior.tasks?.some(t => t.taskId === reply.task_id) || Object.values(prior.consumptions ?? {}).includes('sending')
+      || Object.values(prior.outcomes ?? {}).includes('sending')
       || (!reconcile && (!prior.enabled || prior.consumptions?.[deliveryId] !== undefined))) return
     const generation = this.generation
     this.executions.set(digest, { ...prior, consumptions: { ...prior.consumptions, [deliveryId]: 'sending' } })
     this.publish(this.state)
     try {
-      const value = await wait(bridge.collaborationRootExecution({ action:reconcile?'consumption-status':'consume',
+      let value = await wait(bridge.collaborationRootExecution({ action:reconcile?'consumption-status':'consume',
         previewId:prior.previewId,taskId:reply.task_id,deliveryId }),AbortSignal.timeout(35000))
       if (!this.current(generation)) return
+      if (value && typeof value === 'object' && 'ok' in value && value.ok === false
+        && 'errorCode' in value && value.errorCode === 'collaboration_execution_preview_expired'
+        && 'reconciliationRequired' in value && value.reconciliationRequired === false) {
+        const refreshed = await wait(bridge.collaborationRootExecution({ action: 'preview', source: group.original.source }), AbortSignal.timeout(35000))
+        if (!this.current(generation)) return
+        const renewed = executionPreview(refreshed, prior)
+        prior = renewed
+        if (!reconcile && !prior.enabled) throw Error('execution_disabled')
+        this.executions.set(digest, { ...prior, consumptions: { ...prior.consumptions, [deliveryId]: 'sending' } })
+        value = await wait(bridge.collaborationRootExecution({ action: reconcile ? 'consumption-status' : 'consume',
+          previewId: renewed.previewId, taskId: reply.task_id, deliveryId }), AbortSignal.timeout(35000))
+        if (!this.current(generation)) return
+      }
       if (!value || typeof value !== 'object' || !('ok' in value) || value.ok !== true || !('rootTraceId' in value)
         || value.rootTraceId !== prior.rootTraceId || !('consumptionAcknowledged' in value) || value.consumptionAcknowledged !== true
         || !('status' in value) || value.status !== 'context_applied' || !('continuationObserved' in value) || typeof value.continuationObserved !== 'boolean') throw Error('unavailable')
