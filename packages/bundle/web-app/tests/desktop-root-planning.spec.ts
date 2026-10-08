@@ -318,7 +318,7 @@ it('allows a fresh attempt to finish after a late grant without renewing that gr
     const d = await owner.prepare(h.target, binding, h.signal)
     await vi.advanceTimersByTimeAsync(29000)
     const grant = dispatchGrant(d), work = owner.dispatch(d.attempt_request_id, binding, grant, h.signal)
-    const outcome = work.then(value => ({ value }), error => ({ error }))
+    const outcome = work.then(value => ({ value }), (error: unknown) => ({ error }))
     await entered.promise
     await vi.advanceTimersByTimeAsync(5000)
     finish.resolve(undefined)

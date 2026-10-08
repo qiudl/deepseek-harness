@@ -697,7 +697,7 @@ it('lets a late valid grant finish before its own lease expires', async () => {
     const p = receipt(await h.owner.prepare(input(), binding, signal()))
     await vi.advanceTimersByTimeAsync(29000)
     const work = h.owner.dispatch(p.attempt_request_id, binding, permission(p), signal())
-    const outcome = work.then(value => ({ value }), error => ({ error }))
+    const outcome = work.then(value => ({ value }), (error: unknown) => ({ error }))
     await entered.promise
     await vi.advanceTimersByTimeAsync(5000)
     finish.resolve(undefined)

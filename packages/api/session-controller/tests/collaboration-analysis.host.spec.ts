@@ -366,7 +366,7 @@ it('allows a bounded provider call after a delayed durable dispatch grant', asyn
       yield { type: 'finish', reason: { kind: 'stop' } }
     }
     const c = await h.prepare(), work = h.runner.run(c.source, c.prepared, async () => granted.promise, new AbortController().signal)
-    const outcome = work.then(value => ({ value }), error => ({ error }))
+    const outcome = work.then(value => ({ value }), (error: unknown) => ({ error }))
     await vi.advanceTimersByTimeAsync(29000)
     expect(h.adapter.requests).toHaveLength(0)
     granted.resolve(undefined); await entered.promise
