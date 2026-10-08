@@ -705,10 +705,107 @@ it.each(['reset', 'dispose'] as const)('discards queued execution evidence after
   await vi.waitFor(() => { expect(f.deliveries).toHaveBeenCalledTimes(2) })
   const evidence = f.model.traceEvidenceAction(original.snapshot_digest, 'event-1')
   expect(f.model.getSnapshot().groups[0]?.trace?.execution?.phase).toBe('loading')
+  // The current Source's background history read starts independently of its held results.
+  expect(trace).toHaveBeenCalledTimes(2)
   if (ending === 'reset') f.reset()
   else f.model.dispose()
   hold.resolve({ ok: true, value: { deliveries: [reply] } })
   await Promise.all([refresh, evidence])
-  expect(trace).toHaveBeenCalledTimes(1)
+  expect(trace).toHaveBeenCalledTimes(2)
   expect(f.model.getSnapshot().groups.every(g => g.trace === undefined)).toBe(true)
+})
+
+it('refreshes each original Source with its own deadline while reading its trace independently of result latency', async () => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort(new DOMException('Timed out', 'TimeoutError')) }, ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.clearAllTimers(); vi.useRealTimers() })
+  const f = fixture(), originals = [original, ...['b', 'c'].map(id => ({ ...original,
+    snapshot_digest: id.repeat(64), source: { ...source, source_message_id: id } }))]
+  f.reads.mockResolvedValue({ ok: true, value: { items: originals } })
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const delay = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms) })
+  let slow = false
+  f.bridge.collaborationDeliveries = async (request) => {
+    if (slow) await delay(12_000)
+    const found = originals.find(item => item.source.source_message_id === request.source.source_message_id)!
+    return { ok: true, value: { deliveries: [{ ...reply, source_locator: found.source, source_snapshot_digest: found.snapshot_digest }] } }
+  }
+  f.bridge.collaborationPending = async (request) => {
+    if (slow) await delay(12_000)
+    return { ok: true, value: { source: request.source, plan: null, frozen_task_count: 0, pending_items: [] } }
+  }
+  f.bridge.collaborationRootExecution = async () => { if (slow) await delay(18_000); return auditPage() }
+  await f.model.refresh()
+  for (const item of originals) await f.model.traceAction(item.snapshot_digest)
+  slow = true
+  const refresh = f.model.refresh()
+  onTestFinished(async () => { f.model.dispose(); await refresh })
+  await vi.advanceTimersByTimeAsync(100_000)
+  await refresh
+  expect(f.model.getSnapshot().groups.map(group => ({ phase: group.phase, pendingUnavailable: group.pendingUnavailable,
+    trace: group.trace?.phase, events: group.trace?.page?.events.length }))).toEqual(originals.map(() => ({
+    phase: 'ready', pendingUnavailable: undefined, trace: 'ready', events: 1,
+  })))
+})
+
+it.each(['finish', 'reset', 'dispose', 'dispose-on-notification'] as const)('services a queued trace before older Sources and handles %s', async (ending) => {
+  const f = fixture(), older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, older] } })
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  await f.model.refresh()
+  const order: string[] = [], entered = Promise.withResolvers<undefined>(), held = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementation(async (request) => {
+    order.push(request.source.source_message_id)
+    if (request.source.source_message_id === 'message') { entered.resolve(undefined); await held.promise }
+    return { ok: true, value: { deliveries: [] } }
+  })
+  f.bridge.collaborationRootExecution = async () => {
+    order.push('trace')
+    if (ending === 'reset') f.reset()
+    if (ending === 'dispose') f.model.dispose()
+    return auditPage()
+  }
+  const refresh = f.model.refresh()
+  onTestFinished(async () => { held.resolve(undefined); f.model.dispose(); await refresh })
+  await entered.promise
+  if (ending === 'dispose-on-notification') {
+    const stop = f.model.subscribe(() => {
+      if (f.model.getSnapshot().groups[0]?.trace?.phase === 'ready') queueMicrotask(() => { f.model.dispose() })
+    })
+    onTestFinished(stop)
+  }
+  const trace = f.model.traceAction(original.snapshot_digest)
+  held.resolve(undefined)
+  await Promise.all([refresh, trace])
+  expect(order).toEqual(ending === 'finish' ? ['message', 'trace', 'older'] : ['message', 'trace'])
+  if (ending === 'finish') expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe('ready')
+  else expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+it.each([32_000, 41_000])('bounds a history read at the Desktop response deadline for a %i ms response', async (elapsed) => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort() }, ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.clearAllTimers(); vi.useRealTimers() })
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  f.bridge.collaborationRootExecution = async () => {
+    await new Promise<void>((resolve) => { setTimeout(resolve, elapsed) })
+    return auditPage()
+  }
+  await f.model.refresh()
+  const read = f.model.traceAction(original.snapshot_digest)
+  onTestFinished(async () => { f.model.dispose(); await read })
+  await vi.advanceTimersByTimeAsync(42_000)
+  await read
+  expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe(elapsed < 40_000 ? 'ready' : 'error')
+  if (elapsed > 40_000) expect(f.model.getSnapshot().groups[0]?.trace?.page).toBeUndefined()
 })

@@ -232,9 +232,9 @@ export class CollaborationResultsModel {
     const cursor = more ? this.state.nextCursor : undefined
     if (more && cursor === undefined) return
     this.pending = true; this.again = false
+    let ownsQuery = true
     const generation = this.generation, controller = new AbortController()
     this.controller = controller
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
     this.publish({ ...this.state, phase: 'loading' })
     try {
       const oldGroups = this.state.groups
@@ -243,20 +243,37 @@ export class CollaborationResultsModel {
       const groups: CollaborationResultGroup[] = [...prior]
       let nextCursor = cursor, pages = 0
       do {
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
         const read = await wait(this.readSources(nextCursor, signal), signal)
         if (!this.current(generation)) return
         if (!read.ok) throw Error('source_unavailable')
         const page = this.sourcePage(read.value, nextCursor)
         if (page.items.some(item => known.has(item.snapshot_digest)) || groups.length + page.items.length > 128) throw Error('invalid_source_cursor')
         for (const original of page.items) {
+          if (this.readWaiters.length) {
+            // Resume this refresh after the explicit reads already waiting, before another poll.
+            const resume = this.acquireTraceQuery(generation)
+            ownsQuery = false
+            this.finishQuery()
+            if (!await resume) return
+            ownsQuery = true
+            if (!this.current(generation)) return
+            this.controller = controller
+          }
           known.add(original.snapshot_digest)
           const previous = oldGroups.find(item => item.original.snapshot_digest === original.snapshot_digest)?.replies ?? []
-          let group = await this.results(original, signal, generation, undefined, [], previous)
-          for (let i = 1; i < (this.replyPages.get(original.snapshot_digest) ?? 1) && group.nextCursor; i++) {
-            group = await this.results(original, signal, generation, group.nextCursor, group.replies, previous)
-          }
+          const sourceSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)])
           const tracePages = this.tracePages.get(original.snapshot_digest)
-          if (tracePages !== undefined) await this.traceRead(original, signal, generation, tracePages)
+          const [group] = await Promise.all([
+            (async () => {
+              let result = await this.results(original, sourceSignal, generation, undefined, [], previous)
+              for (let i = 1; i < (this.replyPages.get(original.snapshot_digest) ?? 1) && result.nextCursor; i++) {
+                result = await this.results(original, sourceSignal, generation, result.nextCursor, result.replies, previous)
+              }
+              return result
+            })(),
+            tracePages === undefined ? undefined : this.traceRead(original, sourceSignal, generation, tracePages),
+          ])
           groups.push(group)
           if (!this.current(generation)) return
         }
@@ -268,7 +285,7 @@ export class CollaborationResultsModel {
     } catch {
       if (this.current(generation)) this.publish({ phase: 'error', groups: [] })
     } finally {
-      this.finishQuery()
+      if (ownsQuery) this.finishQuery()
     }
   }
   private finishQuery(): void {
@@ -388,7 +405,7 @@ export class CollaborationResultsModel {
       this.controller = controller
       const pages = this.tracePages.get(digest) ?? 1
       this.tracePages.set(digest, pages)
-      await this.traceRead(original, AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),
+      await this.traceRead(original, AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)]),
         generation, pages, more ? old?.page : undefined)
       if (this.current(generation)) this.publish(this.state)
     } finally { this.traceQueries.delete(digest); if (acquired) this.finishQuery() }
@@ -420,7 +437,7 @@ export class CollaborationResultsModel {
       this.controller = controller
       const value = await wait(bridge.collaborationRootExecution({ action: 'trace', source: group.original.source,
         cursor: { after_seq: 0, limit: 20, evidence: { event_id: eventId, after_sequence: after } } }),
-      AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]))
+      AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)]))
       if (!this.current(generation)) return
       readCollaborationTracePage(value, 0, prior.page)
       const next = readCollaborationExecutionEvidence(value, eventId, after, previous)
