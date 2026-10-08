@@ -82,6 +82,30 @@ it.each(['workspace-removal', 'dispose'] as const)('stops older reads when an in
   expect(f.model.getSnapshot().groups).toEqual([])
 })
 
+it('keeps an empty history unavailable when its publication removes the Session from the workspace', async () => {
+  const f = fixture()
+  let pageReturned = false
+  f.reads.mockImplementation(async () => {
+    pageReturned = true
+    return { ok: true, value: { items: [] } }
+  })
+  const published: string[] = []
+  const stop = f.model.subscribe(() => {
+    published.push(f.model.getSnapshot().phase)
+    if (pageReturned && f.model.getSnapshot().phase === 'loading') {
+      pageReturned = false
+      f.move()
+    }
+  })
+  onTestFinished(stop)
+  await f.model.refresh()
+  expect(f.reads).toHaveBeenCalledTimes(1)
+  expect(published).toContain('loading')
+  expect(published).not.toContain('ready')
+  expect(f.deliveries).not.toHaveBeenCalled()
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
 it('shows fresh originals before slow history reads finish', async () => {
   const f = fixture(), second = { ...original, source: { ...source, source_message_id: 'second' },
     snapshot_digest: 'b'.repeat(64) }
