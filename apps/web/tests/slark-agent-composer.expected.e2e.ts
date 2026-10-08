@@ -19,12 +19,16 @@ it('clicking Send in root mode dispatches the frozen task and displays its reply
   vi.stubGlobal('crypto', webcrypto)
   const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051', trace = 'b'.repeat(32)
   type Source = { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
-  let original: { source: Source; snapshot_digest: string; original_message: string } | undefined
+  let original: { source: Source
+    snapshot_digest: string
+    original_message: string
+    timeline_position: { after_sequence: null; local_order: string } } | undefined
   let dispatched = false
   const submit = vi.fn(async (input: Source & { original_message: string }) => {
     const source = { workspace_id: input.workspace_id, session_id: input.session_id,
       source_message_id: input.source_message_id, source_revision: input.source_revision }
-    original = { source, snapshot_digest: 'a'.repeat(64), original_message: input.original_message }
+    original = { source, snapshot_digest: 'a'.repeat(64), original_message: input.original_message,
+      timeline_position: { after_sequence: null, local_order: '1' } }
     return { ok: true, value: { source, submission_state: 'planning_recorded',
       root_task_id: 'bfb432fd-a2a2-4cbd-b1dc-4648c8944081', root_trace_id: trace } }
   })
@@ -415,7 +419,8 @@ it('reads original-root collaboration history from the built Trajectory tab with
     const sessionId: unknown = Reflect.get(request, 'sessionId')
     if (typeof sessionId !== 'string') throw Error('session missing')
     return { ok: true, value: { items: [{ source: { workspace_id: workspace, session_id: sessionId,
-      source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64), original_message: 'Check the recorded file operation' }] } }
+      source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64), original_message: 'Check the recorded file operation',
+    timeline_position: { after_sequence: null, local_order: '1' } }] } }
   })
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
