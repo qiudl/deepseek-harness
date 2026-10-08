@@ -515,6 +515,28 @@ it('refuses revoked or changed Profile analysis replies and propagates transport
   })
   await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) }, signal: controller.signal })).rejects.toThrow()
 })
+it.each([18_000, 29_000])('returns committed analysis after %i ms within the bounded request authority', async (elapsed) => {
+  const f = await fixture(); await f.grant()
+  f.setAnalysis(async () => { f.time.value += elapsed; return { jsonText: '{}' } })
+  const result = await f.client.collaborationAnalysis({ ...f.account, command: {
+    action: 'dispatch', attempt_request_id: f.challenge.request_id,
+    grant: { ...analysisGrant(f), lease_expires_at: new Date(31_000).toISOString() },
+  } })
+  expect(result.kind).toBe('output')
+  if (result.kind === 'output') expect(result.analysis_receipt?.output_digest).toBe(createHash('sha256').update('{}').digest('hex'))
+})
+it.each(['expired', 'revoked'] as const)('refuses a slow analysis result when its authority is %s', async (failure) => {
+  const f = await fixture(); await f.grant()
+  f.setAnalysis(async () => {
+    f.time.value += failure === 'expired' ? 30_000 : 18_000
+    if (failure === 'revoked') f.host.revokeOwner(f.ownerId)
+    return { jsonText: '{}' }
+  })
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: {
+    action: 'dispatch', attempt_request_id: f.challenge.request_id,
+    grant: { ...analysisGrant(f), lease_expires_at: new Date(31_000).toISOString() },
+  } })).rejects.toThrow()
+})
 it('keeps large escaped original output below the Host frame byte budget', async () => {
   const f = await fixture()
   await f.grant()

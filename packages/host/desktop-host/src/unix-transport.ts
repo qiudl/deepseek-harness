@@ -2899,7 +2899,7 @@ export class UnixHostClient {
     if (command.action === 'prepare_root' && !this.inspection.capabilities.includes('profile.root_analysis' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     const request: ProfileCollaborationAnalysisRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_analysis', params: {
-        ...this.collaborationAccountRequestParams(input), command,
+        ...this.collaborationAccountRequestParams(input, 30_000), command,
       } }
     const frame = await this.callCurrentPeer(request, active)
     const result = parseHostCollaborationAnalysisResult(frame.result)
@@ -3900,8 +3900,8 @@ export class UnixHostClient {
     authorityBindingVersion: number
     issuer: string
     subject: string
-  }) {
-    return { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+  }, lifetimeMs = 15_000) {
+    return { ...this.auth(lifetimeMs), authority_environment_id: input.authorityEnvironmentId as never,
       account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
       account_issuer: input.issuer, account_subject: input.subject }
   }
@@ -3933,7 +3933,7 @@ export class UnixHostClient {
       && result.process_nonce === this.inspection.process_nonce
   }
 
-  private auth(): Pick<
+  private auth(lifetimeMs = 15_000): Pick<
     ProfileStatusRequest['params'],
     'client_instance_id' | 'host_instance_id' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'
   > {
@@ -3944,7 +3944,7 @@ export class UnixHostClient {
       process_nonce: this.state.processNonce,
       jti: randomUUID() as HostControlJti,
       issued_at: issuedAt,
-      expires_at: issuedAt + 15_000,
+      expires_at: issuedAt + lifetimeMs,
     }
   }
 
