@@ -26,16 +26,25 @@ it.skipIf(mode === 'record')('replays a recorded Session beside its readonly col
       const request = route.request().postDataJSON() as { rpcId: string }
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ type: 'server-response', rpcId: request.rpcId,
         result: { ok: true, value: { items: [{ source: { workspace_id: workspace.id, session_id: id, source_message_id: 'original', source_revision: '1' },
-          snapshot_digest: 'a'.repeat(64), original_message: 'Verify the recorded file operation' }] } } }) })
+          snapshot_digest: 'a'.repeat(64), original_message: 'Verify the recorded file operation' },
+        { source: { workspace_id: workspace.id, session_id: id, source_message_id: 'older', source_revision: '1' },
+          snapshot_digest: 'c'.repeat(64), original_message: 'An older collaboration message' }] } } }) })
     })
     await page.route('**/api/session/prompt', async (route) => { prompts++; await route.abort() })
     await page.addInitScript(() => {
       const root = { root_task_id: 'root', root_trace_id: 'b'.repeat(32), task_revision: '2', state_version: '3', state: 'active', intent_state: 'active' }
+      let olderReleased = false
       Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true, collaborationPlanningAvailable: true,
         collaborationExecutionAvailable: false,
         collaborationWorkspace: async ({ workspace_id }: { workspace_id: string }) => ({ ok: true,
           value: { workspace_id, version: '1', selected_project_ids: [] } }),
-        collaborationDeliveries: async () => ({ ok: true, value: { deliveries: [] } }),
+        collaborationDeliveries: async ({ source }: { source: { source_message_id: string } }) => {
+          if (source.source_message_id === 'older' && !olderReleased) await new Promise<void>((resolve) => {
+            window.addEventListener('trajectory-older-release', () => { olderReleased = true; resolve() }, { once: true })
+            Reflect.set(window, '__trajectoryOlderWaiting', true)
+          })
+          return { ok: true, value: { deliveries: [] } }
+        },
         collaborationRootExecution: async ({ action }: { action: string }) => {
           if (action !== 'trace') throw Error('browsing cannot execute work')
           return { ok: true, value: { root, coverage: 'partial', next_after_seq: null,
@@ -56,7 +65,12 @@ it.skipIf(mode === 'record')('replays a recorded Session beside its readonly col
       await page.locator(`[data-row-key="session:${id}"]`).click()
       await page.getByRole('tab', { name: 'Trajectory', exact: true }).click()
       const panel = page.getByTestId('slark-collaboration-trajectory')
-      await panel.getByTestId('slark-trace-load').click()
+      await page.waitForFunction(() => Reflect.get(window, '__trajectoryOlderWaiting') === true)
+      await panel.getByText('Verify the recorded file operation', { exact: true }).waitFor()
+      expect(await panel.locator('article').count()).toBe(1)
+      await page.evaluate(() => { window.dispatchEvent(new Event('trajectory-older-release')) })
+      await panel.getByText('An older collaboration message', { exact: true }).waitFor()
+      await panel.getByTestId('slark-trace-load').first().click()
       await panel.getByText('b'.repeat(32), { exact: true }).waitFor()
       await panel.locator('summary').click()
       expect(await panel.textContent()).toContain('Original task in progress')

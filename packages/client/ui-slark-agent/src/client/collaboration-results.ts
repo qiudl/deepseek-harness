@@ -276,10 +276,13 @@ export class CollaborationResultsModel {
           ])
           groups.push(group)
           if (!this.current(generation)) return
+          const visible = [...groups, ...oldGroups.filter(item => !known.has(item.original.snapshot_digest))]
+          if (bytes(visible) > 16 * 1024 * 1024) throw Error('result_view_budget')
+          this.publish({ ...this.state, phase: 'loading', groups: visible })
+          if (!this.current(generation)) return
         }
         nextCursor = page.next_cursor; pages++
       } while (!more && nextCursor !== undefined && pages < this.sourcePages)
-      if (bytes(groups) > 16 * 1024 * 1024) throw Error('result_view_budget')
       if (more) this.sourcePages++
       this.publish({ phase: 'ready', groups, ...(nextCursor ? { nextCursor } : {}) })
     } catch {

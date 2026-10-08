@@ -15,6 +15,71 @@ const reply = { delivery_id: 'delivery', invocation_id: 'invocation', delivery_s
 const { answer: _answer, ...replyWithoutAnswer } = reply
 type DeliveryRequest = Parameters<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>[0]
 
+it.each([false, true])('publishes a verified result before an older Source finishes, with prior history=%s', async (loaded) => {
+  const f = fixture(), older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, older] } })
+  f.deliveries.mockImplementation(async request => ({ ok: true, value: { deliveries: request.source.source_message_id === 'older'
+    ? [] : [reply] } }))
+  if (loaded) await f.model.refresh()
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementation(async (request) => {
+    if (request.source.source_message_id === 'older') { entered.resolve(undefined); return held.promise }
+    return { ok: true, value: { deliveries: [{ ...reply, answer: 'Updated verified result' }] } }
+  })
+  const refresh = f.model.refresh()
+  onTestFinished(async () => { held.resolve({ ok: true, value: { deliveries: [] } }); f.model.dispose(); await refresh })
+  await entered.promise
+  const intermediate = f.model.getSnapshot()
+  expect(intermediate.phase).toBe('loading')
+  expect(intermediate.groups[0]?.replies[0]?.answer).toBe('Updated verified result')
+  expect(intermediate.groups).toHaveLength(loaded ? 2 : 1)
+  held.resolve({ ok: true, value: { deliveries: [] } })
+  await refresh
+  expect(f.model.getSnapshot().phase).toBe('ready')
+  expect(f.model.getSnapshot().groups).toHaveLength(2)
+  expect(intermediate.groups).toHaveLength(loaded ? 2 : 1)
+})
+
+it('removes a denied result while the next original message is still loading', async () => {
+  const f = fixture(), older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, older] } })
+  f.deliveries.mockImplementation(async request => ({ ok: true, value: { deliveries: request.source.source_message_id === 'older' ? [] : [reply] } }))
+  await f.model.refresh()
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementation(async (request) => {
+    if (request.source.source_message_id === 'older') { entered.resolve(undefined); return held.promise }
+    return { ok: false, errorCode: 'denied' }
+  })
+  const refresh = f.model.refresh()
+  onTestFinished(async () => { held.resolve({ ok: true, value: { deliveries: [] } }); f.model.dispose(); await refresh })
+  await entered.promise
+  expect(f.model.getSnapshot().groups[0]?.replies).toEqual([])
+  expect(f.model.getSnapshot().groups[0]?.phase).toBe('error')
+  f.reset()
+  expect(f.model.getSnapshot().groups).toEqual([])
+  held.resolve({ ok: true, value: { deliveries: [] } })
+  await refresh
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+it.each(['workspace-removal', 'dispose'] as const)('stops older reads when an incremental notification triggers %s', async (ending) => {
+  const f = fixture(), older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, older] } })
+  let interrupted = false
+  const stop = f.model.subscribe(() => {
+    if (interrupted || f.model.getSnapshot().phase !== 'loading' || !f.model.getSnapshot().groups.length) return
+    interrupted = true
+    if (ending === 'workspace-removal') f.move()
+    else f.model.dispose()
+  })
+  onTestFinished(stop)
+  await vi.waitFor(() => { expect(interrupted).toBe(true) })
+  expect(f.deliveries).toHaveBeenCalledTimes(1)
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
 it('keeps the aggregate view within its budget when loading additional replies', async () => {
   const f = fixture(), second = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'second' } }
   f.reads.mockResolvedValue({ ok: true, value: { items: [original, second] } })
