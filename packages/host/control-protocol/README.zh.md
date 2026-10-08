@@ -42,7 +42,7 @@ kind: "package-reference"
 
 `session/collaborationSources` 的远程 UI 请求还支持使用精确的 `snapshotDigest` 替代 `cursor`。摘要必须为 64 位小写十六进制字符串，同时携带两个字段时拒绝。所属 Session 的读取在现有控制帧预算内返回完整原消息。
 
-`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
+`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。`turnWindow` 保留原生历史分页：`minMessages` 必须为正安全整数且不超过 `maxMessages`（省略时为 50），`minTurns` 必须为正安全整数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
 
 `profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
 

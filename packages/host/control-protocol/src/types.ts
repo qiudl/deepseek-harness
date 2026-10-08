@@ -1368,6 +1368,7 @@ export type ProfileRemoteUiStreamCommand =
         }
       readonly maxMessages?: number
       readonly assistantStream?: true
+      readonly turnWindow?: { readonly minMessages: number; readonly minTurns: number }
     } } }
   }
   | { readonly action: 'open'
