@@ -146,7 +146,7 @@ export function apply(ctx: ClientContext): void {
       inject: sessionId => ({ sessionId }),
     }, AgentTaskDock)
   })
-  ctx.inject(['remote.session', 'connection', 'workspaces', 'uiConversation', 'chatTimeline'], (resultsCtx) => {
+  ctx.inject(['remote', 'remote.session', 'connection', 'workspaces', 'uiConversation', 'chatTimeline'], (resultsCtx) => {
     if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable ||
       !window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable) return
     const connection = resultsCtx.get('connection') as ConnectionHandle

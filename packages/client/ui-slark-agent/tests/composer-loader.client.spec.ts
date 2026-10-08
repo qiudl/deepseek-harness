@@ -46,7 +46,7 @@ const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id
 type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST__']>['invokeEnterpriseAgent']>>[0]
 
 async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration,
-  executionAvailable = collaboration, navigationAvailable = true) {
+  executionAvailable = collaboration, navigationAvailable = true, pluginRemote = false) {
   vi.stubGlobal('crypto', webcrypto)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
   const ctx = new Context(), id = SessionId('session-1')
@@ -129,8 +129,15 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   if (servicesAvailable) {
     const namespace = { collaborationSources: sourceReads }
     if (remoteAvailable) {
-      ctx.provide('remote', { session: namespace } as never)
-      ctx.provide('remote.session', namespace as never)
+      if (pluginRemote) {
+        await ctx.plugin({ name: 'composer-test-remote-owner', apply(owner: Context) {
+          owner.provide('remote', { session: namespace } as never)
+          owner.provide('remote.session', namespace as never)
+        } })
+      } else {
+        ctx.provide('remote', { session: namespace } as never)
+        ctx.provide('remote.session', namespace as never)
+      }
     }
     ctx.provide('connection', { generation: { getSnapshot: () => 1, subscribe: () => () => {} } } as never)
     if (navigationAvailable) ctx.provide('uiWorkspace', { openSession } as never)
@@ -1186,6 +1193,22 @@ it('uses the YAML-registered project panel commands and disposes its cached Sess
   await bindings.refreshScope(); await bindings.applyScope(['other'])
   expect(f.scopeDirectory).toHaveBeenCalledTimes(before)
   expect(model.getSnapshot().scope).toBeNull()
+})
+
+it('reads collaboration history through a plugin-owned Remote with strict Cordis injection', async () => {
+  const f = await bench(true, true, true, true, true, true)
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
+  if (!entry?.inject) throw Error('missing results registration')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  const model = bindings.hooks.slarkResults
+  await model.refresh()
+  expect(f.sourceReads).toHaveBeenCalledOnce()
+  expect(model.getSnapshot().phase).toBe('ready')
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing loaded Slark source')
+  await plugin.fiber.dispose()
+  await model.refresh()
+  expect(f.sourceReads).toHaveBeenCalledOnce()
 })
 
 it('uses YAML-registered result paging commands and retains their model only for the original Session', async () => {
