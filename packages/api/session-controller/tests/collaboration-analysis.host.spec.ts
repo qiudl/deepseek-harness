@@ -45,6 +45,23 @@ async function harness() {
 }
 const persist = () => vi.fn(async (_manifest: import('../src/collaboration-analysis.ts').CollaborationAnalysisManifest, _signal: AbortSignal) => {})
 
+it.each([false, true])('records the actual complete original UTF-16 range before dispatch (catalogue=%s)', async (withCatalogue) => {
+  const h = await harness()
+  try {
+    const c = await h.prepare(), commit = persist()
+    const source = { ...c.source, original_message: '@Guide  请生成😀；不要读取文件。\r\n' }
+    const catalogue: CollaborationReferenceCatalogue = { source_position: 1, total_messages: 0, omitted_entries: false, entries: [] }
+    await h.runner.run(source, c.prepared, commit, new AbortController().signal, undefined, withCatalogue ? catalogue : undefined)
+    const system = commit.mock.calls[0]![0].request.system!
+    const hint = system.slice(system.indexOf(' The complete original_message evidence span'))
+    await expect(hint + '\n').toMatchFileSnapshot('./expected/collaboration-analysis.original-range.expected.txt')
+    expect(source.original_message.length).toBe(23)
+    expect(h.adapter.requests[0]!.system).toBe(system)
+    expect(system).toContain('This literal rule never changes discussion, a negated assignment or ambiguity into delegation.')
+    expect(h.adapter.requests).toHaveLength(1)
+  } finally { await h.close() }
+})
+
 it.each(['\n', '\r\n'])('returns the unchanged JSON body of one complete json fence (%j)', async (newline) => {
   const h = await harness()
   try {

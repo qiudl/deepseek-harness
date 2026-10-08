@@ -129,6 +129,8 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 运行器接受原始 JSON 对象，或完整的单个外层 Markdown `json` 围栏，并原样保留围栏内 JSON 文本。前后说明文字、多段代码块、其他围栏标签、截断 JSON、数组及标量值均拒绝。流预算包含围栏；引用验证和候选受理规则保持不变。输出 journal 与回执对去除外层围栏后返回的 JSON 文本计算摘要；原始 Source 与输入 manifest 保持不变。
 
+分析提示词提供已冻结原消息的完整 UTF-16 证据范围，供模型复制。包含该范围的完整请求在派发前提交。补充回复与选定引用仍使用各自的范围；模型输出仍须独立验证。
+
 `inspectCollaborationSource(target, signal)` 通过所属 Profile 的注册表与 journal 读取原始持久 Source，仅返回原坐标及完整 RFC 8785 快照的 SHA-256，摘要包含首次 journal 提交标识。记录不存在、归属丢失、附加元数据、取消和 Profile 销毁都会拒绝。读取与已接受的捕获串行执行，不准备模型或恢复调用；延迟打开的 journal 由 Profile 持有至销毁。私有 worker HTTP 读取器调用这一仅供 Host 使用的方法。
 
 `readCollaborationSourceSnapshot(target, signal)` 使用相同 Profile 归属、串行 journal 读取与取消检查，返回独立冻结的原始快照。`inspectCollaborationSource` 从该读取结果生成描述符。私有 worker 通过 `parseCollaborationSourceSnapshot` 校验 journal 内容；不新增 Remote 导出、模型准备、Session 事件或可执行调用恢复。

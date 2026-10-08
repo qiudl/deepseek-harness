@@ -127,8 +127,10 @@ export class CollaborationAnalysisRunner {
     const analysisMessage = clarification ? JSON.parse(clarificationAnalysisMessage(clarification)) as Record<string, unknown> : original
     const visible = catalogue === undefined ? analysisMessage : { ...analysisMessage, reference_catalogue: catalogue }
     const basePrompt = clarification ? clarificationPrompt : prompt
+    const system = (catalogue === undefined ? basePrompt : referencePrompt(basePrompt))
+      + ` The complete original_message evidence span has UTF-16 start 0 and end ${source.original_message.length}. Copy these exact offsets when using the complete original message; they do not apply to clarification replies or selected reference content.`
     const request = deepFreeze({ ...prepared.config, ...(traceparent === undefined ? {} : { traceparent }), purpose: 'collaboration-analysis' as const, tools: [],
-      system: catalogue === undefined ? basePrompt : referencePrompt(basePrompt),
+      system,
       messages: [createMessage({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: JSON.stringify(visible) }] })],
     })
     // UTF-8 bytes conservatively bound text-token input, with room for message framing.
