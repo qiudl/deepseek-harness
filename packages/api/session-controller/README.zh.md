@@ -133,7 +133,9 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 `openCollaborationDeliveryJournal(facility)` 串行处理已接受的写入，最多保留 4096 条回复，序列化键与记录正文共计不超过 16 MiB，不淘汰已有记录。内容冲突、受限投影、非法摘要，以及损坏或未知版本的持久数据均拒绝且不修复。写入结果不确定时，句柄拒绝后续操作，必须关闭并重开；恢复返回首次提交，不执行任务。Profile 管理迟到的 journal 打开，并在销毁时排空已接受的写入。本地提交不证明云端已投递；签名、确认和聊天展示由协调器负责。
 
-`CollaborationAnalysisJournal.saveOutput` 另将完整、不可信的模型 JSON 写入独立的单文件 `collaboration_analysis_output_v2` 领域，再向父 Host 返回分析成功。结果绑定原已消耗尝试、Source/输入摘要及原文输出摘要，不能替换已有文本。`outputs()` 仅供读取冻结记录进行对账。非法 JSON、超限结果、损坏关联和写入确认丢失都会拒绝使用，同时保留文件。打开和关闭 journal 管理两个领域；已有输入、Source 与 Session 格式保持独立。
+`CollaborationAnalysisJournal.saveOutput` 另将完整、不可信的模型 JSON 写入独立的单文件 `collaboration_analysis_output_v2` 领域，再向父 Host 返回分析成功。结果绑定原已消耗尝试、Source/输入摘要及原文输出摘要，不能替换已有文本。`outputs()` 仅供读取冻结记录进行对账。非法 JSON、超限结果、损坏关联和写入确认丢失都会拒绝使用，同时保留文件。打开和关闭 journal 管理输入、输出与失败领域；已有输入、Source 与 Session 格式保持独立。
+
+`recordFailure` 和 `failures()` 将本地分析失败保存在独立的 `collaboration_analysis_failure_v1` 与 `collaboration_root_planning_failure_v1` 领域。每条不可变观察绑定已消费派发的摘要、尝试、输入、Source 与原 trace（无追踪的旧分析为 null），并保留固定原因和观察时间，不保存原始错误或模型文本。已持久化的成功输出优先；消费派发前的失败不产生记录。写入确认丢失要求重新打开失败领域；损坏或冲突证据拒绝使用，且不改写已有 journal。失败记录不代表 provider 未执行、云端已终结或获准重试。
 
 `openCollaborationRootPlanningJournal(facility)` 为新规划尝试管理独立、单文件布局的 `collaboration_root_planning_v1` 领域。每条记录保留原已受理的根、trace、Source 和回执，以及前驱引用、新请求身份、实际准备的模型元数据与完整请求。必须保持原 provider、model 和有效推理设置；generation 与 adapter 注册身份不能冒充原准备。请求包含隔离的分析提示词和一条用户消息，不带工具、采样覆盖或可执行元数据。输入连同消息封装最多 16 KiB，完整记录输入最多 1 MiB，最多保留 256 次尝试。此 journal 不打开或迁移已有 Source、根、分析和 Session 文件。
 

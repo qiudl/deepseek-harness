@@ -130,6 +130,9 @@ export class DesktopRootPlanning {
         if (!p.record) throw Error('collaboration_root_planning_missing')
         await journal.saveOutput(p.record, result.jsonText, owned)
         return result
+      }).catch(async (error: unknown) => {
+        if (p.record) await journal.recordFailure(p.record, error)
+        throw error
       })
       await p.result
     })().catch((error: unknown) => { p.ready.reject(error); throw error }).finally(() => {
