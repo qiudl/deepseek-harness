@@ -25,6 +25,7 @@ import { createScopedCollaborationSource, scopedCollaborationClipboard } from '.
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from './collaboration-source.ts'
 import type { CollaborationDialogueBridge } from './collaboration-dialogue.ts'
 import { CollaborationResultsModel } from './collaboration-results.ts'
+import { shareCollaborationReads } from './collaboration-read-bridge.ts'
 import type { CollaborationResultsBridge } from './collaboration-results.ts'
 import { CollaborationResultsDock } from './CollaborationResultsDock.tsx'
 import { CollaborationTimeline } from './CollaborationTimeline.tsx'
@@ -149,6 +150,7 @@ export function apply(ctx: ClientContext): void {
     if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable ||
       !window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable) return
     const connection = resultsCtx.get('connection') as ConnectionHandle
+    const readBridge = shareCollaborationReads(() => window.__DSH_DESKTOP_HOST__, connection.generation)
     const models = new Map<string, ResultsEntry>()
     resultsCtx.effect(() => () => {
       models.forEach(({ release }) => { release() })
@@ -170,7 +172,7 @@ export function apply(ctx: ClientContext): void {
           sessionId, resultsCtx.workspaces.list, connection.generation,
           (cursor, signal, sourceSessionId) => resultsCtx.remote.session.collaborationSources({
             sessionId: sourceSessionId, includeTimeline: true, ...(cursor ? { cursor } : {}),
-          }, signal), () => window.__DSH_DESKTOP_HOST__, history,
+          }, signal), readBridge, history,
           (original, signal) => resultsCtx.remote.session.collaborationSources({
             sessionId: SessionId(original.source.session_id), snapshotDigest: original.snapshot_digest, includeTimeline: true,
           }, signal), true)

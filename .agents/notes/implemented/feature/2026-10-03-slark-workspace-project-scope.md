@@ -22,6 +22,8 @@ The v2 result area enumerates committed original messages through Native paging,
 
 Plain-text clarification enters the existing trigger pipeline only through an explicit live source opt-in. The Client recovers pending questions from the Profile’s persisted Source feed and Main’s current plan; it never selects the latest request when several remain. The deterministic passive reply identity excludes plan revision, preventing a reload from minting a different Source for the same text and pending items. Main distinguishes a verified committed clarification from task admission, and the Client checks both original and reply coordinates before consuming a recorded reply. A newer plan alone cannot establish that this reply committed.
 
+Chat and sidebar models share only identical in-flight delivery and planning reads under the same bridge and Connection identity. Completion or failure removes the shared response; another refresh starts a fresh authorized read. Closing one consumer does not cancel another consumer's observation. Commands remain independent, and no completed result or signature is cached.
+
 ## Alternatives considered
 
 Filtering the old assignment list while retaining legacy invocation would let cached chips or another renderer call bypass the new project restriction. The scope mode therefore uses its own current-authority directory and submission path.

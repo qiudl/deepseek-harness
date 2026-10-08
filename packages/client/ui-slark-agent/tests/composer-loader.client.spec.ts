@@ -1199,6 +1199,43 @@ it('uses the YAML-registered project panel commands and disposes its cached Sess
   expect(model.getSnapshot().scope).toBeNull()
 })
 
+it.each([false, true])('shares pending readonly requests between the YAML-mounted chat and sidebar without caching replies (close chat %s)', async (closeChat) => {
+  const f = await bench(true), id = SessionId('session-1')
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: id,
+    source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64),
+  original_message: '@Guide · Project original' })
+  const chat = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  const sidebar = f.ctx.slots.entries('slark.collaboration.history')[0]
+  if (!chat?.inject || !sidebar?.inject) throw Error('missing readonly history registration')
+  const timeline = (Reflect.apply(chat.inject, undefined, [id]) as CollaborationResultsInjected).hooks.slarkResults
+  const history = (Reflect.apply(sidebar.inject, undefined, [id]) as CollaborationResultsInjected).hooks.slarkResults
+  const delivery = f.deliveries.getMockImplementation(), pending = f.pending.getMockImplementation()
+  if (!delivery || !pending) throw Error('missing readonly bridge fixture')
+  const deliveryGate = Promise.withResolvers<undefined>(), pendingGate = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementation(async (request) => { await deliveryGate.promise; return delivery(request) })
+  f.pending.mockImplementation(async (request) => { await pendingGate.promise; return pending(request) })
+  const reads = [timeline.refresh(), history.refresh()]
+  try {
+    await vi.waitFor(() => { expect(f.deliveries.mock.calls.length).toBeGreaterThan(0) })
+    if (closeChat) timeline.dispose()
+    deliveryGate.resolve(undefined)
+    await vi.waitFor(() => { expect(f.pending.mock.calls.length).toBeGreaterThan(0) })
+    pendingGate.resolve(undefined)
+    await Promise.all(reads)
+    expect(f.deliveries).toHaveBeenCalledOnce()
+    expect(f.pending).toHaveBeenCalledOnce()
+    expect(timeline.getSnapshot().groups[0]?.replies[0]?.answer).toBe(closeChat ? undefined : 'fixture reply')
+    expect(history.getSnapshot().groups[0]?.replies[0]?.answer).toBe('fixture reply')
+    await history.refresh()
+    expect(f.deliveries).toHaveBeenCalledTimes(2)
+    expect(f.pending).toHaveBeenCalledTimes(2)
+    expect(f.submit).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  } finally {
+    deliveryGate.resolve(undefined); pendingGate.resolve(undefined)
+    await Promise.allSettled(reads)
+  }
+})
+
 it('reads collaboration history through a plugin-owned Remote with strict Cordis injection', async () => {
   const f = await bench(true, true, true, true, true, true)
   const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
