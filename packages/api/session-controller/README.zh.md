@@ -127,6 +127,8 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 分析仅使用含原文和显式 mention 元数据的一条 user 消息及分析提示词，工具为空，不携带普通历史。每个 Profile 最多允许两个尚未清理的调用，等待上限 30 秒；取消后仍不响应的操作保留并发位置直到清理完成。输入采用保守的 16 KiB UTF-8 请求预算，输出限制为提供方 8192 token 和累计流文本 32 KiB；超限拒绝，不截断。纯中间件回复、工具输出、非成功终止结果及非法 JSON 均拒绝。这里不执行模型修复、重试或重启后的可执行恢复；云端 attempt 租约、候选受理及实际聊天调用方仍由协调器负责。
 
+运行器接受原始 JSON 对象，或完整的单个外层 Markdown `json` 围栏，并原样保留围栏内 JSON 文本。前后说明文字、多段代码块、其他围栏标签、截断 JSON、数组及标量值均拒绝。流预算包含围栏；引用验证和候选受理规则保持不变。输出 journal 与回执对去除外层围栏后返回的 JSON 文本计算摘要；原始 Source 与输入 manifest 保持不变。
+
 `inspectCollaborationSource(target, signal)` 通过所属 Profile 的注册表与 journal 读取原始持久 Source，仅返回原坐标及完整 RFC 8785 快照的 SHA-256，摘要包含首次 journal 提交标识。记录不存在、归属丢失、附加元数据、取消和 Profile 销毁都会拒绝。读取与已接受的捕获串行执行，不准备模型或恢复调用；延迟打开的 journal 由 Profile 持有至销毁。私有 worker HTTP 读取器调用这一仅供 Host 使用的方法。
 
 `readCollaborationSourceSnapshot(target, signal)` 使用相同 Profile 归属、串行 journal 读取与取消检查，返回独立冻结的原始快照。`inspectCollaborationSource` 从该读取结果生成描述符。私有 worker 通过 `parseCollaborationSourceSnapshot` 校验 journal 内容；不新增 Remote 导出、模型准备、Session 事件或可执行调用恢复。
