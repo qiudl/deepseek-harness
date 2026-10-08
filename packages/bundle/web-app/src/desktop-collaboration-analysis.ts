@@ -275,6 +275,10 @@ export class DesktopCollaborationAnalysis {
         owned.throwIfAborted()
         return result
       })
+      .catch(async (error: unknown) => {
+        if (p.record) await journal.recordFailure(p.record, error)
+        throw error
+      })
       .finally(() => {
         p.controller.abort(Error('collaboration_analysis_finished'))
         clearTimeout(p.timer)
@@ -429,10 +433,12 @@ export class DesktopCollaborationAnalysis {
    */
   close(): Promise<void> {
     this.closing ??= Promise.resolve().then(async () => {
-      for (const p of this.pending) {
+      const entries = [...this.pending]
+      for (const p of entries) {
         p.controller.abort(Error('collaboration_analysis_closed'))
         clearTimeout(p.timer)
       }
+      await Promise.allSettled(entries.map(p => Promise.resolve(p.result)))
       await this.rootPlanning?.close()
       await (await this.journal)?.close()
     })

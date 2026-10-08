@@ -222,6 +222,8 @@ Web 组合包含账号 Remote 控制器和账号设置页面。
 
 `resume_root` 要求根已 admitted，且原始准备仍在相同 Account/Host 绑定下存活。重连可通过 Parent 派生的 Account/Profile/Host 进程身份交接，旧连接随即失去派发权。仅在派发尚未使用时返回相同 attempt 与 manifest；不准备新的模型调用，不延长30秒期限。进程重启、超时、归属丢失或派发已消费时拒绝。
 
+原始分析与恢复分析 owner 会等待脱敏失败记录持久化，再结束失败的模型操作。销毁时取消工作，等待操作结算后才关闭 journal。持久失败记录仍是绑定原已消费尝试与 trace 的本地只读观察，不改变私有 HTTP 响应、云端状态、Session 日志或重放资格。
+
 analysis token 端点管理 `prepare_root_attempt`、`inspect_root_attempt` 和 `dispatch_root_attempt`。`DesktopRootPlanning` 从旧分析 journal 或当前新尝试链确定前驱；已知派发记录或仍存活的原准备会阻止新准备。最多保留两个待处理根，准备和执行分别限时 30 秒；同连接重试保持身份和截止时间。完整输入持久化后才发布元数据，签名观察与派发前重新核验归属、当前 journal 状态，以及父 Host 推导的 Account/Profile/Host/连接绑定。worker 重启不恢复可执行句柄：重新准备未使用输入会产生新尝试，并保留前驱关系。输出保存在已消费 grant 旁，销毁等待进行中工作和 journal 写入结束。云端可替代性和 grant 认证仍由父协调方负责。
 
 analysis-token 的 `read_root_attempt` 操作在 owner 重建后读取最新持久尝试及校验过的已保存输出，不准备模型。它在存储读取前后检查原根归属，取消或 owner 关闭后丢弃结果。过期授权仍作为已消费历史可见；派发必须另有当前云端授权。

@@ -157,6 +157,20 @@ function permission(value: ReturnType<typeof receipt>) {
   const { attempt_request_id, input_manifest_digest, source_digest } = value
   return grant({ attempt_request_id, input_manifest_digest, source_digest })
 }
+it('persists an analysis failure before closing without a second dispatch or leaking the error', async () => {
+  const secret = 'provider-private-details'
+  const h = await harness(undefined, async () => { throw Error(secret) })
+  const p = receipt(await h.owner.prepare(input(), binding, signal()))
+  await expect(h.owner.dispatch(p.attempt_request_id, binding, permission(p), signal())).rejects.toThrow(secret)
+  await h.owner.close()
+  const reopened = await openCollaborationAnalysisJournal(h.facility)
+  const rows = [...reopened.failures()]
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ reason: 'unclassified', input_manifest_digest: p.input_manifest_digest })
+  expect(JSON.stringify(rows)).not.toContain(secret)
+  expect(h.calls()).toBe(1)
+  await reopened.close()
+})
 it('prepare commits complete input without a model call; dispatch commits grant and runs once', async () => {
   const h = await harness(),
     p = receipt(await h.owner.prepare(input(), binding, signal()))
@@ -705,4 +719,25 @@ it('lets a late valid grant finish before its own lease expires', async () => {
     expect(h.calls()).toBe(1)
     await expect(h.owner.dispatch(p.attempt_request_id, binding, permission(p), signal())).rejects.toThrow()
   } finally { finish.resolve(undefined); vi.useRealTimers() }
+})
+
+
+it('drains the cancelled model operation and its failure journal before close resolves', async () => {
+  const entered = Promise.withResolvers<undefined>(), finish = Promise.withResolvers<undefined>()
+  const h = await harness(undefined, async () => { entered.resolve(undefined); await finish.promise })
+  onTestFinished(() => { finish.resolve(undefined) })
+  const prepared = receipt(await h.owner.prepare(input(), binding, signal()))
+  const dispatched = h.owner.dispatch(prepared.attempt_request_id, binding, permission(prepared), signal())
+  const result = expect(dispatched).rejects.toThrow('collaboration_analysis_closed')
+  await entered.promise
+  let closed = false
+  const closing = h.owner.close().then(() => { closed = true })
+  await Promise.resolve(); await Promise.resolve()
+  expect(closed).toBe(false)
+  finish.resolve(undefined)
+  await closing; await result
+  const reopened = await openCollaborationAnalysisJournal(h.facility)
+  expect([...reopened.failures()]).toMatchObject([{ reason: 'cancelled', input_manifest_digest: prepared.input_manifest_digest }])
+  expect(h.calls()).toBe(1)
+  await reopened.close()
 })
