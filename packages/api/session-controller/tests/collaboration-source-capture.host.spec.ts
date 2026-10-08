@@ -104,6 +104,121 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('keeps a source-only Session visible and unavailable for blank reuse before any model turn', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const added: Array<{ sessionId: string; blank: boolean }> = []
+    h.ctx.on('api-session/added', (summary) => { added.push(summary) })
+    try {
+      const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd, createdAt: 1 } })
+      session.append('model/selection', { provider: 'fixture', model: 'selected' })
+      expect((await h.controller.list({}, signal)).items.find(row => row.sessionId === h.sessionId)?.blank).toBe(true)
+      await h.controller.captureCollaborationSource(h.source(), signal)
+      expect((await h.controller.list({}, signal)).items.find(row => row.sessionId === h.sessionId)?.blank).toBe(false)
+      expect(added.filter(row => row.sessionId === h.sessionId).at(-1)?.blank).toBe(false)
+      expect(h.events.some(event => event.type === 'turn/start')).toBe(false)
+      expect(h.stream).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
+  it('restores source-only Session visibility from the journal without resuming or rewriting history', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    await h.controller.captureCollaborationSource(h.source(), signal)
+    const saved = await readFile(h.sourceFile, 'utf8'), history = JSON.stringify(h.events)
+    await h.dispose()
+    const next = await harness(h.root, h.cwd)
+    try {
+      next.ctx.sessions.create(next.sessionId, { meta: { cwd: next.cwd, createdAt: 1 } })
+      expect((await next.controller.list({}, signal)).items.find(row => row.sessionId === next.sessionId)?.blank).toBe(false)
+      expect(await readFile(next.sourceFile, 'utf8')).toBe(saved)
+      expect(JSON.stringify(next.events)).toBe(history)
+      expect(next.prepare).not.toHaveBeenCalled()
+      expect(next.stream).not.toHaveBeenCalled()
+      expect(next.resume).not.toHaveBeenCalled()
+    } finally { await next.dispose() }
+  })
+
+  it('refuses an unknown blank classification when the durable source journal is corrupt', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd, createdAt: 1 } })
+    await writeFile(h.sourceFile, '{bad source journal')
+    try {
+      await expect(h.controller.list({}, signal)).rejects.toThrow()
+      expect(await readFile(h.sourceFile, 'utf8')).toBe('{bad source journal')
+      expect(h.stream).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
+  it('publishes nonblank only after the Source commit and leaves other empty Sessions reusable', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd, createdAt: 1 } })
+    const other = h.ctx.sessions.create(SessionId('empty-neighbor'), { meta: { cwd: h.cwd } })
+    await h.workspace.attachSession(other.id)
+    const added: Array<{ sessionId: string; blank: boolean }> = []
+    h.ctx.on('api-session/added', (summary) => { added.push(summary) })
+    const open = h.backend.kv.open.bind(h.backend.kv)
+    h.backend.kv.open = async (descriptor) => {
+      const unit = await open(descriptor)
+      if (descriptor.name !== 'collaboration_source_v2') return unit
+      const put = unit.putRecord.bind(unit)
+      unit.putRecord = async (...args) => {
+        expect(added.some(row => !row.blank)).toBe(false)
+        await put(...args)
+      }
+      return unit
+    }
+    try {
+      await h.controller.captureCollaborationSource(h.source(), signal)
+      const rows = (await h.controller.list({}, signal)).items
+      expect(rows.find(row => row.sessionId === h.sessionId)?.blank).toBe(false)
+      expect(rows.find(row => row.sessionId === other.id)?.blank).toBe(true)
+      expect(added.filter(row => row.sessionId === h.sessionId).at(-1)?.blank).toBe(false)
+      expect(h.stream).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
+  it('does not return a Session archived while its source journal is opening', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd, createdAt: 1 } })
+    const open = h.backend.kv.open.bind(h.backend.kv)
+    h.backend.kv.open = async (descriptor) => {
+      if (descriptor.name === 'collaboration_source_v2') await h.ctx.workspaceRegistry.archiveSession(h.sessionId)
+      return open(descriptor)
+    }
+    try {
+      expect((await h.controller.list({}, signal)).items.some(row => row.sessionId === h.sessionId)).toBe(false)
+      expect(h.stream).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
+  it.each(['detach', 'archive'] as const)('retains Source evidence without publishing a stale row after %s during commit', async (mode) => {
+    const h = await harness(), signal = new AbortController().signal
+    h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd, createdAt: 1 } })
+    const added: Array<{ blank: boolean }> = []
+    h.ctx.on('api-session/added', (summary) => { added.push(summary) })
+    const open = h.backend.kv.open.bind(h.backend.kv)
+    h.backend.kv.open = async (descriptor) => {
+      const unit = await open(descriptor)
+      if (descriptor.name !== 'collaboration_source_v2') return unit
+      const put = unit.putRecord.bind(unit)
+      unit.putRecord = async (...args) => {
+        await put(...args)
+        if (mode === 'detach') await h.workspace.detachSession(h.sessionId)
+        else await h.ctx.workspaceRegistry.archiveSession(h.sessionId)
+      }
+      return unit
+    }
+    try {
+      await expect(h.controller.captureCollaborationSource(h.source(), signal)).rejects.toThrow()
+      expect(added.some(row => !row.blank)).toBe(false)
+      const saved = await readFile(h.sourceFile, 'utf8')
+      const row = (await h.controller.list({}, signal)).items.find(item => item.sessionId === h.sessionId)
+      if (mode === 'detach') expect(row?.blank).toBe(true)
+      else expect(row).toBeUndefined()
+      expect(await readFile(h.sourceFile, 'utf8')).toBe(saved)
+      expect(h.stream).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
   it.each(['', '\ufeff仅引用这条😀\r\n'])('reads only separately captured reference bytes while its original Source and content remain current (%j)', async (text) => {
     const h = await harness(), signal = new AbortController().signal
     try {

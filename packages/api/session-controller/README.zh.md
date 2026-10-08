@@ -40,7 +40,7 @@ Client 列表行和驻留 Session 使用当前 `sessionListMetadata` 投影纠�
 
 `prepareWorkspaceModelSnapshot(sessionId, workspaceId, signal)` 使用该来源选择准备完整 [LLM 快照](../../llm/llm/README.zh.md)，随后重验归属与选择。准备期间发生变化会被拒绝，返回工作区/会话身份与当前进程的一次性调用。这个仅供 Host 使用的方法采用提供服务的 Profile 上下文，不暴露 Remote 入口，不激活 Agent，不写 Session 事件，准备阶段不发送模型请求。调用方负责取消、Source 认证及 journal；元数据不是授权证明。
 
-可信 Profile 协调器可以从本 Host 包导入 `openCollaborationSourceJournal`，传入自己配置的 `storageDomain` form。独立的 `collaboration_source_v2` 领域在规划前保存 Source 原文、已分类的 mention 及 prepared 模型元数据。`capture` 在持久化后返回脱离输入且深度冻结的快照；相同重试返回原条目 UUID 和首次提交版本，相同工作区/会话/消息/revision 下内容变化则拒绝。该领域不追加普通 Session 事件，也不发送模型请求。只有 Session 历史包含以 Source 派生的讨论请求 ID 提交的完整原文时，`collaborationSources` 才隐藏该原消息；领取或取消不改变接受结果，隐藏条目仍可作为分页游标。
+可信 Profile 协调器可以从本 Host 包导入 `openCollaborationSourceJournal`，传入自己配置的 `storageDomain` form。独立的 `collaboration_source_v2` 领域在规划前保存 Source 原文、已分类的 mention 及 prepared 模型元数据。`capture` 在持久化后返回脱离输入且深度冻结的快照；相同重试返回原条目 UUID 和首次提交版本，相同工作区/会话/消息/revision 下内容变化则拒绝。该领域不追加普通 Session 事件，也不发送模型请求。 Source 提交后，即使模型轮次尚未开始，其当前工作区的 Session 在列表响应和实时列表通知中也会标记为非空。Profile 重开后从原日志恢复此判断，不重写 Session 事件或派发任务；有待判断的空会话且日志不可读时拒绝列表请求，避免把无法确定的会话当作空会话复用。只有 Session 历史包含以 Source 派生的讨论请求 ID 提交的完整原文时，`collaborationSources` 才隐藏该原消息；领取或取消不改变接受结果，隐藏条目仍可作为分页游标。
 
 journal 最多保留 128 条尚未路由的 Source，不会为了接收新来源而淘汰原记录。写入确认失败后，调用方必须关闭并重新打开 journal，按原身份核对结果。损坏数据、未知持久版本、被改动的内容摘要和不匹配的记录键会令打开失败，同时保留原有字节。调用方必须在捕获前校验 Account 和工作区归属、分类主动 mention，并提供实际 prepared 元数据；journal 不认证这些事实。
 

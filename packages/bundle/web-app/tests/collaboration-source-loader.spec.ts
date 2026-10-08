@@ -179,7 +179,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
   ctx.llm.registerAdapter(['fixture'], adapter)
   const workspace = await ctx.workspaceRegistry.create(cwd), sessionId = SessionId('source-session')
   await workspace.attachSession(sessionId)
-  const session = ctx.sessions.create(sessionId, { meta: { cwd } })
+  const session = ctx.sessions.create(sessionId, { meta: { cwd, createdAt: header.createdAt } })
   session.append('model/selection', { provider: 'fixture', model: 'selected' })
   const referenceText = '\ufeff范围说明😀\r\n只读分析，不修改文件'
   const referenceMessage = createUserMessage({ content: [{ type: 'text', text: referenceText }], source: { kind: 'user' } })
@@ -200,6 +200,10 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       headers: { authorization, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
+  if (mode === 'source-only') {
+    expect((await ctx.sessionController.list({}, new AbortController().signal)).items
+      .find(item => item.sessionId === header.id)?.blank).toBe(true)
+  }
   const preparation =
     (mode === 'analysis-profile' || mode === 'root-analysis')
       ? ((await factory['collaborationAnalysis'](
@@ -228,6 +232,12 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
         ? await ctx.sessionController.captureCollaborationRoot({ source, namespace_id: 'n2_' + 'a'.repeat(64),
           objective_ref: 'objective-1', task_grant_ref: 'grant-1', continuation_policy: 'display_only' }, new AbortController().signal)
         : await ctx.sessionController.captureCollaborationSource(source, new AbortController().signal)
+  if (mode === 'source-only') {
+    expect((await ctx.sessionController.list({}, new AbortController().signal)).items
+      .find(item => item.sessionId === header.id)?.blank).toBe(false)
+    expect(session.seq).toBe(seq)
+    expect(providerRequests).toBe(0)
+  }
   if ('submission' in first) {
     const submission = parseCollaborationRootSubmission(first.submission)
     expect(submission.state).toBe('pending')

@@ -538,6 +538,7 @@ export class SessionController extends TypertRemoteService {
       const previous = journal.read(captured)
       if (previous !== undefined) {
         const snapshot = await journal.capture({ ...captured, model_snapshot: previous.model_snapshot }, ownedSignal)
+        this.publishCollaborationSession(snapshot)
         await inspectCurrent()
         ownedSignal.throwIfAborted()
         return Object.freeze({ kind: 'recovered' as const, snapshot })
@@ -558,6 +559,7 @@ export class SessionController extends TypertRemoteService {
       }
       await checkSelection()
       const snapshot = await journal.capture({ ...captured, model_snapshot: prepared.prepared.snapshot }, ownedSignal)
+      this.publishCollaborationSession(snapshot)
       await checkSelection()
       ownedSignal.throwIfAborted()
       return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared,
@@ -1273,7 +1275,31 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('list')
   async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue> {
-    return { items: await this.listState.list(signal) }
+    const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    const items = await this.listState.list(owned)
+    if (!items.some(item => item.blank)) return { items }
+    const facility = this.ctx.get('storageDomain')
+    if (facility === undefined) return { items }
+    this.collaborationJournal ??= openCollaborationSourceJournal(facility)
+    const journal = await waitForCollaborationSourceRead(this.collaborationJournal, owned)
+    owned.throwIfAborted()
+    const occupied = new Set<SessionId>()
+    for (const source of journal.sources()) {
+      const sessionId = SessionId(source.session_id)
+      if (this.ctx.workspaceRegistry.get(WorkspaceId(source.workspace_id))?.sessionIds.includes(sessionId)) {
+        occupied.add(sessionId)
+      }
+    }
+    const archived = new Set(this.ctx.workspaceRegistry.archivedSessionIds)
+    return { items: items.filter(item => !archived.has(item.sessionId))
+      .map(item => item.blank && occupied.has(item.sessionId) ? { ...item, blank: false } : item) }
+  }
+
+  private publishCollaborationSession(source: CollaborationSourceSnapshot): void {
+    const sessionId = SessionId(source.session_id), session = this.ctx.sessions.get(sessionId)
+    if (session === undefined || !this.ctx.workspaceRegistry.get(WorkspaceId(source.workspace_id))?.sessionIds.includes(sessionId)
+      || this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId)) return
+    this.ctx.emit('api-session/added', { ...this.listState.summaryFor(session), blank: false })
   }
 
   /**
