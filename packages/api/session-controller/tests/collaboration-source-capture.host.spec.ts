@@ -104,6 +104,68 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('keeps a Source-only Session nonblank through list refresh and Profile restart without starting a turn', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd, createdAt: 1, isSeeded: false } })
+    session.append('model/selection', { provider: 'fixture', model: 'selected' })
+    expect((await h.controller.list({}, signal)).items.find(row => row.sessionId === h.sessionId)?.blank).toBe(true)
+    const rows: boolean[] = []
+    h.ctx.on('api-session/added', (row) => { if (row.sessionId === h.sessionId) rows.push(row.blank) })
+    const captured = await h.controller.captureCollaborationSource(h.source(), signal)
+    expect(rows).toContain(false)
+    const first = (await h.controller.list({}, signal)).items.find(row => row.sessionId === h.sessionId)
+    expect({ blank: first?.blank, sessionProjectionBlank: first?.projections?.values.sessionListMetadata?.blank,
+      ordinarySessionSequence: session.seq }).toMatchInlineSnapshot(`
+        {
+          "blank": false,
+          "ordinarySessionSequence": 1,
+          "sessionProjectionBlank": true,
+        }
+      `)
+    expect(h.stream).not.toHaveBeenCalled()
+    const bytes = await readFile(h.sourceFile)
+    await h.dispose()
+    const next = await harness(h.root, h.cwd)
+    expect((await next.controller.list({}, signal)).items.find(row => row.sessionId === next.sessionId)?.blank).toBe(false)
+    expect(next.ctx.sessions.get(next.sessionId)).toBeUndefined()
+    next.ctx.sessions.create(next.sessionId, { meta: { cwd: next.cwd, createdAt: 1, isSeeded: false } })
+      .append('model/selection', { provider: 'fixture', model: 'selected' })
+    expect((await next.controller.list({}, signal)).items.find(row => row.sessionId === next.sessionId)?.blank).toBe(false)
+    const { workspace_id, session_id, source_message_id, source_revision } = captured.snapshot
+    expect(await next.controller.readCollaborationSourceSnapshot(
+      { workspace_id, session_id, source_message_id, source_revision }, signal,
+    )).toEqual(captured.snapshot)
+    expect(await readFile(next.sourceFile)).toEqual(bytes)
+    expect(next.prepare).not.toHaveBeenCalled()
+    expect(next.resume).not.toHaveBeenCalled()
+    expect(next.stream).not.toHaveBeenCalled()
+    await next.dispose()
+  })
+
+  it('keeps a Session blank when only a timeline position survives failed Source publication', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd, createdAt: 1, isSeeded: false } })
+      .append('model/selection', { provider: 'fixture', model: 'selected' })
+    const open = h.backend.kv.open.bind(h.backend.kv)
+    h.backend.kv.open = async (descriptor) => {
+      const unit = await open(descriptor), put = unit.putRecord.bind(unit)
+      unit.putRecord = async (...args) => {
+        if (descriptor.name === 'collaboration_source_v2') throw Error('Source publication unavailable')
+        return put(...args)
+      }
+      return unit
+    }
+    await expect(h.controller.captureCollaborationSource(h.source(), signal)).rejects.toThrow('Source publication unavailable')
+    await expect(h.controller.list({}, signal)).rejects.toThrow('collaboration_source_journal_recovery_required')
+    expect(h.stream).not.toHaveBeenCalled()
+    await h.dispose()
+    const next = await harness(h.root, h.cwd)
+    next.ctx.sessions.create(next.sessionId, { meta: { cwd: next.cwd, createdAt: 1, isSeeded: false } })
+      .append('model/selection', { provider: 'fixture', model: 'selected' })
+    expect((await next.controller.list({}, signal)).items.find(row => row.sessionId === next.sessionId)?.blank).toBe(true)
+    await next.dispose()
+  })
+
   it('preserves the captured Source and display position when its Profile storage owner disappears before a positioned read', async () => {
     const h = await harness(), signal = new AbortController().signal
     const first = await h.controller.captureCollaborationSource(h.source(), signal)

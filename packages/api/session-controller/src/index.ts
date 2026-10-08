@@ -541,6 +541,7 @@ export class SessionController extends TypertRemoteService {
       const previous = journal.read(captured)
       if (previous !== undefined) {
         const snapshot = await journal.capture({ ...captured, model_snapshot: previous.model_snapshot }, ownedSignal)
+        this.publishCollaborationSourcePresence(snapshot)
         await inspectCurrent()
         ownedSignal.throwIfAborted()
         return Object.freeze({ kind: 'recovered' as const, snapshot })
@@ -573,6 +574,7 @@ export class SessionController extends TypertRemoteService {
       await timeline.record(captured, inspected.events.at(-1)?.seq ?? null, ownedSignal)
       await checkSelection()
       const snapshot = await journal.capture({ ...captured, model_snapshot: prepared.prepared.snapshot }, ownedSignal)
+      this.publishCollaborationSourcePresence(snapshot)
       await checkSelection()
       ownedSignal.throwIfAborted()
       return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared,
@@ -620,6 +622,13 @@ export class SessionController extends TypertRemoteService {
     })
     this.collaborationCaptureTail = operation.then(() => {}, () => {})
     return operation
+  }
+
+  private publishCollaborationSourcePresence(snapshot: CollaborationSourceSnapshot): void {
+    const sessionId = SessionId(snapshot.session_id)
+    this.listState.recordCollaborationSource(sessionId)
+    const session = this.ctx.sessions.get(sessionId)
+    if (session !== undefined) this.ctx.emit('api-session/added', this.listState.summaryFor(session))
   }
 
   /**
@@ -1294,7 +1303,16 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('list')
   async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue> {
-    return { items: await this.listState.list(signal) }
+    const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    owned.throwIfAborted()
+    const facility = this.ctx.get('storageDomain')
+    if (facility !== undefined) {
+      this.collaborationJournal ??= openCollaborationSourceJournal(facility)
+      const journal = await waitForCollaborationSourceRead(this.collaborationJournal, owned)
+      owned.throwIfAborted()
+      for (const source of journal.sources()) this.listState.recordCollaborationSource(SessionId(source.session_id))
+    }
+    return { items: await this.listState.list(owned) }
   }
 
   /**

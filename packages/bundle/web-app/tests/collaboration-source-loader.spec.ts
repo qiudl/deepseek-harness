@@ -177,7 +177,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
   ctx.llm.registerAdapter(['fixture'], adapter)
   const workspace = await ctx.workspaceRegistry.create(cwd), sessionId = SessionId('source-session')
   await workspace.attachSession(sessionId)
-  const session = ctx.sessions.create(sessionId, { meta: { cwd } })
+  const session = ctx.sessions.create(sessionId, { meta: { cwd, createdAt: header.createdAt, isSeeded: header.isSeeded } })
   session.append('model/selection', { provider: 'fixture', model: 'selected' })
   const referenceText = '\ufeff范围说明😀\r\n只读分析，不修改文件'
   const referenceMessage = createUserMessage({ content: [{ type: 'text', text: referenceText }], source: { kind: 'user' } })
@@ -286,6 +286,13 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
   }
 
   const result = await factory['inspectCollaborationSource'](origin, token, target, new AbortController().signal, () => false)
+  if (mode === 'source-only') {
+    const row = (await ctx.sessionController.list({}, new AbortController().signal)).items.find(item => item.sessionId === sessionId)
+    expect(row?.blank).toBe(false)
+    expect(row?.projections?.values.sessionListMetadata?.blank).toBe(true)
+    expect(session.seq).toBe(1)
+    expect(stream).not.toHaveBeenCalled()
+  }
   expect(result).toEqual(await ctx.sessionController.inspectCollaborationSource(target, new AbortController().signal))
   const full=await factory['readCollaborationSourceSnapshot'](origin,token,target,new AbortController().signal,()=>false)
   expect(full.descriptor).toEqual(result);expect(JSON.parse(full.snapshot_json)).toEqual(first.snapshot)
