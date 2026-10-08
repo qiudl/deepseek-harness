@@ -411,6 +411,7 @@ export class DesktopCollaborationAnalysis {
     if (this.closing || !p || !p.result || p.started || p.binding !== binding || p.controller.signal.aborted)
       throw Error('collaboration_analysis_preparation_unavailable')
     p.started = true
+    p.timer.refresh()
     const cancel = () => {
       p.controller.abort(signal.reason)
     }

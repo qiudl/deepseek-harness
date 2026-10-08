@@ -211,6 +211,7 @@ export class DesktopRootPlanning {
     await this.inspect(p.target, attemptId, binding, signal)
     if (p.started) throw Error('collaboration_root_planning_dispatch_used')
     p.started = true
+    p.timer.refresh()
     const abort = () =>{  p.controller.abort(signal.reason) }
     signal.addEventListener('abort', abort, { once: true })
     try { signal.throwIfAborted(); p.grant.resolve(grant); return await wait(p.result, signal) }

@@ -308,3 +308,22 @@ it('refuses durable attempt evidence when the current root receipt differs from 
   await expect(h.make().readEvidence(h.target, h.signal)).rejects.toThrow('root_changed')
   expect(h.adapter.requests).toBe(0)
 })
+
+it('allows a fresh attempt to finish after a late grant without renewing that grant', async () => {
+  const h = await harness(), owner = h.make(), binding = 'a'.repeat(64)
+  const entered = Promise.withResolvers<undefined>(), finish = Promise.withResolvers<undefined>()
+  h.adapter.before = async () => { entered.resolve(undefined); await finish.promise }
+  vi.useFakeTimers()
+  try {
+    const d = await owner.prepare(h.target, binding, h.signal)
+    await vi.advanceTimersByTimeAsync(29000)
+    const grant = dispatchGrant(d), work = owner.dispatch(d.attempt_request_id, binding, grant, h.signal)
+    const outcome = work.then(value => ({ value }), error => ({ error }))
+    await entered.promise
+    await vi.advanceTimersByTimeAsync(5000)
+    finish.resolve(undefined)
+    expect(await outcome).toEqual({ value: { jsonText: '{}' } })
+    expect((await owner.readEvidence(h.target, h.signal)).attempt?.dispatch).toEqual(grant)
+    expect(h.adapter.requests).toBe(1)
+  } finally { finish.resolve(undefined); vi.useRealTimers() }
+})

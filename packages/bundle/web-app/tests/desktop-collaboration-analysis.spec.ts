@@ -41,7 +41,7 @@ const input = (id = 'message') => ({
     },
   ],
 })
-async function harness(journalOpenFailure?: Error) {
+async function harness(journalOpenFailure?: Error, beforeOutput = async (_signal: AbortSignal) => {}) {
   const root = await mkdtemp(join(tmpdir(), 'req0004-profile-analysis-')),
     ctx = new Context(),
     lifetime = new AbortController()
@@ -114,6 +114,8 @@ async function harness(journalOpenFailure?: Error) {
         )
         cancel.throwIfAborted()
         calls++
+        await beforeOutput(cancel)
+        cancel.throwIfAborted()
         return { jsonText: '{"intent":"discuss"}' }
       },
     }
@@ -685,4 +687,22 @@ it('returns unavailable over private HTTP when the Profile has no planning owner
   expect(response.status).toBe(422)
   expect(await response.json()).toEqual({ error: 'unavailable' })
   expect(h.calls()).toBe(0)
+})
+
+it('lets a late valid grant finish before its own lease expires', async () => {
+  const entered = Promise.withResolvers<undefined>(), finish = Promise.withResolvers<undefined>()
+  const h = await harness(undefined, async () => { entered.resolve(undefined); await finish.promise })
+  vi.useFakeTimers()
+  try {
+    const p = receipt(await h.owner.prepare(input(), binding, signal()))
+    await vi.advanceTimersByTimeAsync(29000)
+    const work = h.owner.dispatch(p.attempt_request_id, binding, permission(p), signal())
+    const outcome = work.then(value => ({ value }), error => ({ error }))
+    await entered.promise
+    await vi.advanceTimersByTimeAsync(5000)
+    finish.resolve(undefined)
+    expect(await outcome).toEqual({ value: { jsonText: '{"intent":"discuss"}' } })
+    expect(h.calls()).toBe(1)
+    await expect(h.owner.dispatch(p.attempt_request_id, binding, permission(p), signal())).rejects.toThrow()
+  } finally { finish.resolve(undefined); vi.useRealTimers() }
 })

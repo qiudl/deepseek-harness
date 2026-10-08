@@ -354,3 +354,25 @@ it('rejects malformed root correlation before persisting or requesting a model',
     expect(h.adapter.requests).toHaveLength(0)
   } finally { await h.close() }
 })
+
+it('allows a bounded provider call after a delayed durable dispatch grant', async () => {
+  const h = await harness(), granted = Promise.withResolvers<undefined>()
+  const entered = Promise.withResolvers<undefined>(), finished = Promise.withResolvers<undefined>()
+  vi.useFakeTimers()
+  try {
+    h.adapter.response = async function* () {
+      entered.resolve(undefined); await finished.promise
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: '{}' } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const c = await h.prepare(), work = h.runner.run(c.source, c.prepared, async () => granted.promise, new AbortController().signal)
+    const outcome = work.then(value => ({ value }), error => ({ error }))
+    await vi.advanceTimersByTimeAsync(29000)
+    expect(h.adapter.requests).toHaveLength(0)
+    granted.resolve(undefined); await entered.promise
+    await vi.advanceTimersByTimeAsync(5000)
+    finished.resolve(undefined)
+    expect(await outcome).toEqual({ value: { jsonText: '{}' } })
+    expect(h.adapter.requests).toHaveLength(1)
+  } finally { granted.resolve(undefined); finished.resolve(undefined); vi.useRealTimers(); await h.close() }
+})
