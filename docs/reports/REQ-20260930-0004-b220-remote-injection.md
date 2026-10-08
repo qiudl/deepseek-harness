@@ -1,6 +1,8 @@
 # REQ-20260930-0004 B220 — Collaboration history Remote dependency
 
-ai-proj project 212 / Requirement 5845 / Task 23070; approved requirement and self-review recorded before product edits. Native baseline 2ec39000f2f369a9dbfaf7a75f945238ac7920e9.
+English | [中文](REQ-20260930-0004-b220-remote-injection.zh.md)
+
+ai-proj project 212 / Requirement 5845 / Task 23070; approved requirement and self-review recorded before product edits. The work note records the exact Native baseline.
 
 Boston's real history view repeatedly threw `cannot get property "remote" without inject` when evaluating `resultsCtx.remote.session.collaborationSources`. Normal browser RPC reads of the same two owned Sessions returned HTTP 200 and empty source lists. This evidence identifies a missing Client dependency, rather than storage corruption.
 
