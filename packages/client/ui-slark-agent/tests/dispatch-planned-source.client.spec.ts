@@ -73,16 +73,16 @@ it.each(['preview-rejected', 'confirm-rejected', 'before-preview', 'after-previe
 
 it.each(['preview', 'confirm'] as const)('settles cancellation while %s is unresolved without late execution', async (stage) => {
   const controller = new AbortController()
-  let release: ((value: unknown) => void) | undefined
+  const releases: Array<(value: unknown) => void> = []
   const execute = vi.fn<Execute>(async request => request.action === stage
-    ? new Promise((resolve) => { release = resolve }) : preview())
+    ? new Promise((resolve) => { releases.push(resolve) }) : preview())
   const active = dispatchPlannedSource(execute, source, trace, controller.signal, () => true)
-  onTestFinished(async () => { release?.({ ok: true, status: 'recorded' }); await active })
-  await vi.waitFor(() => { expect(release).toBeDefined() })
+  onTestFinished(async () => { for (const release of releases) release({ ok: true, status: 'recorded' }); await active })
+  await vi.waitFor(() => { expect(releases.length).toBeGreaterThan(0) })
   controller.abort()
   expect(await active).toBe('uncertain')
   const calls = execute.mock.calls.length
-  release?.(preview())
+  for (const release of releases) release(preview())
   await Promise.resolve()
   expect(execute).toHaveBeenCalledTimes(calls)
 })
@@ -97,6 +97,14 @@ it('settles a peer that synchronously cancels before returning its promise', asy
   const controller = new AbortController()
   const execute = vi.fn<Execute>(async () => { controller.abort(); return preview() })
   expect(await dispatchPlannedSource(execute, source, trace, controller.signal, () => true)).toBe('uncertain')
+  expect(execute).toHaveBeenCalledTimes(1)
+})
+
+it('observes a peer rejection after synchronous cancellation', async () => {
+  const controller = new AbortController()
+  const execute = vi.fn<Execute>(async () => { controller.abort(); throw Error('offline') })
+  expect(await dispatchPlannedSource(execute, source, trace, controller.signal, () => true)).toBe('uncertain')
+  await new Promise(resolve => setImmediate(resolve))
   expect(execute).toHaveBeenCalledTimes(1)
 })
 

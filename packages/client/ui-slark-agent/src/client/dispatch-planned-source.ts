@@ -10,9 +10,9 @@ const identifier = (value: unknown): value is string => typeof value === 'string
 function wait(promise: Promise<unknown>, signal: AbortSignal): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const abort = () => { reject(new DOMException('Cancelled', 'AbortError')) }
+    promise.then(resolve, reject).finally(() => { signal.removeEventListener('abort', abort) })
     if (signal.aborted) { abort(); return }
     signal.addEventListener('abort', abort, { once: true })
-    promise.then(resolve, reject).finally(() => { signal.removeEventListener('abort', abort) })
   })
 }
 
