@@ -221,6 +221,8 @@ export class CollaborationResultsModel {
   }
   private async sourceRead(cursor: string | undefined, signal: AbortSignal, generation: number,
     cursors: Map<string, SourceCursor>): Promise<SessionCollaborationSourcesValue> {
+    signal = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+    signal.throwIfAborted()
     if (this.history === 'session') {
       const read = await wait(this.readSources(cursor, signal, this.sessionId), signal)
       if (!this.current(generation)) throw Error('obsolete')
@@ -249,6 +251,8 @@ export class CollaborationResultsModel {
     return { items: [] }
   }
   private async lookupOriginal(original: SessionCollaborationSourceItem, signal: AbortSignal): Promise<SessionCollaborationSourceItem> {
+    signal = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+    signal.throwIfAborted()
     const read = await wait((this.readOriginal as ReadOriginal)(original, signal), signal)
     signal.throwIfAborted()
     if (!read.ok || read.value.items.length !== 1 || read.value.next_cursor !== undefined) throw Error('source_unavailable')
@@ -308,7 +312,10 @@ export class CollaborationResultsModel {
   private async results(original: SessionCollaborationSourceItem, signal: AbortSignal, generation: number,
     cursor?: string, prior: readonly ScopedCollaborationReply[] = [],
     previous: readonly ScopedCollaborationReply[] = []): Promise<CollaborationResultGroup> {
+    // Main gives delivery and planning their own thirty-second authenticated reads.
+    signal = AbortSignal.any([signal, AbortSignal.timeout(60_000)])
     try {
+      signal.throwIfAborted()
       const host = this.boundBridge as ReadableResultsBridge
       const result = await wait(host.collaborationDeliveries({ source: original.source, limit: 50,
         ...(cursor ? { after_delivery_id: cursor } : {}) }), signal)
@@ -357,7 +364,10 @@ export class CollaborationResultsModel {
     this.pending = true; this.again = false
     const generation = this.generation, controller = new AbortController()
     this.controller = controller
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
+    // Budget eight originals per Native page, two workers, retained reply pages and a located original.
+    const extraReplyPages = [...this.replyPages.values()].reduce((sum, pages) => sum + pages - 1, 0)
+    const queryBudget = 30_000 * (this.sourcePages + 1) + 60_000 * (4 * this.sourcePages + extraReplyPages + 1)
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(queryBudget)])
     this.publish({ ...this.state, phase: 'loading' })
     try {
       const oldGroups = this.state.groups
@@ -381,16 +391,24 @@ export class CollaborationResultsModel {
           throw Error('invalid_source_cursor')
         })
         if (groups.length + items.length > 128) throw Error('invalid_source_cursor')
-        for (const original of items) {
-          known.add(original.snapshot_digest)
-          const previous = oldGroups.find(item => item.original.snapshot_digest === original.snapshot_digest)?.replies ?? []
-          let group = await this.results(original, signal, generation, undefined, [], previous)
-          for (let i = 1; i < (this.replyPages.get(original.snapshot_digest) ?? 1) && group.nextCursor; i++) {
-            group = await this.results(original, signal, generation, group.nextCursor, group.replies, previous)
+        items.forEach((original) => { known.add(original.snapshot_digest) })
+        const pageGroups: CollaborationResultGroup[] = Array(items.length)
+        const originals = items.entries()
+        const readGroups = async (): Promise<void> => {
+          for (const [index, original] of originals) {
+            signal.throwIfAborted()
+            const previous = oldGroups.find(item => item.original.snapshot_digest === original.snapshot_digest)?.replies ?? []
+            let group = await this.results(original, signal, generation, undefined, [], previous)
+            for (let i = 1; i < (this.replyPages.get(original.snapshot_digest) ?? 1) && group.nextCursor; i++) {
+              group = await this.results(original, signal, generation, group.nextCursor, group.replies, previous)
+            }
+            pageGroups[index] = group
+            if (!this.readCurrent(generation, controller)) return
           }
-          groups.push(group)
-          if (!this.readCurrent(generation, controller)) return
         }
+        await Promise.all(Array.from({ length: Math.min(2, items.length) }, readGroups))
+        if (!this.readCurrent(generation, controller)) return
+        groups.push(...pageGroups)
         nextCursor = page.next_cursor; pages++
       } while (!more && nextCursor !== undefined && pages < this.sourcePages)
       const located = this.locatedOriginal
@@ -449,7 +467,7 @@ export class CollaborationResultsModel {
     this.controller = controller
     this.publish({ ...this.state, phase: 'loading' })
     try {
-      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)])
       let next = await this.results(group.original, signal, generation, group.nextCursor, group.replies)
       if (this.readCurrent(generation, controller)) {
         if (bytes(this.state.groups.map(item =>

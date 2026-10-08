@@ -15,6 +15,119 @@ const reply = { delivery_id: 'delivery', invocation_id: 'invocation', delivery_s
 const { answer: _answer, ...replyWithoutAnswer } = reply
 type DeliveryRequest = Parameters<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>[0]
 
+it('restores all original replies when separate authorized reads exceed thirty seconds in total', async () => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort(new DOMException('Read timed out', 'TimeoutError')) }, ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.useRealTimers() })
+  const f = fixture()
+  const originals = Array.from({ length: 4 }, (_, i) => ({ ...original,
+    source: { ...source, source_message_id: `message-${i}` }, snapshot_digest: String(i + 1).repeat(64) }))
+  f.reads.mockResolvedValue({ ok: true, value: { items: originals } })
+  f.bridge.collaborationDeliveries = async (request) => {
+    await new Promise(resolve => setTimeout(resolve, 18_000))
+    const item = originals.find(item => item.source.source_message_id === request.source.source_message_id)!
+    return { ok: true, value: { deliveries: [{ ...reply, source_locator: item.source,
+      source_snapshot_digest: item.snapshot_digest, answer: item.source.source_message_id }] } }
+  }
+  f.bridge.collaborationPending = async (request) => {
+    await new Promise(resolve => setTimeout(resolve, 6_000))
+    return { ok: true, value: { source: request.source, plan: null, frozen_task_count: 0, pending_items: [] } }
+  }
+  try {
+    const read = f.model.refresh()
+    await vi.advanceTimersByTimeAsync(100_000)
+    await read
+    expect(f.model.getSnapshot().groups.map(group => group.replies[0]?.answer))
+      .toEqual(originals.map(item => item.source.source_message_id))
+    expect(f.model.getSnapshot().groups.every(group => group.phase === 'ready')).toBe(true)
+  } finally { f.model.dispose(); timeout.mockRestore(); vi.useRealTimers() }
+})
+
+it('loads a reply page when delivery and planning each finish within their own read window', async () => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort(new DOMException('Read timed out', 'TimeoutError')) }, ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.useRealTimers() })
+  const f = fixture()
+  f.bridge.collaborationDeliveries = async (request) => {
+    await new Promise(resolve => setTimeout(resolve, 20_000))
+    return { ok: true, value: { deliveries: [{ ...reply, delivery_id: request.after_delivery_id ? 'delivery2' : 'delivery' }],
+      ...(request.after_delivery_id ? {} : { next_cursor: 'delivery' }) } }
+  }
+  f.bridge.collaborationPending = async (request) => {
+    await new Promise(resolve => setTimeout(resolve, 15_000))
+    return { ok: true, value: { source: request.source, plan: null, frozen_task_count: 0, pending_items: [] } }
+  }
+  try {
+    const refresh = f.model.refresh()
+    await vi.advanceTimersByTimeAsync(36_000); await refresh
+    const page = f.model.loadReplies(original.snapshot_digest)
+    await vi.advanceTimersByTimeAsync(36_000); await page
+    expect(f.model.getSnapshot().groups[0]?.replies.map(item => item.delivery_id)).toEqual(['delivery', 'delivery2'])
+    expect(f.model.getSnapshot().groups[0]).not.toHaveProperty('pendingUnavailable')
+  } finally { f.model.dispose(); timeout.mockRestore(); vi.useRealTimers() }
+})
+
+it('limits concurrent original reads while an unavailable original does not erase another reply', async () => {
+  const f = fixture(), originals = Array.from({ length: 4 }, (_, i) => ({ ...original,
+    source: { ...source, source_message_id: `message-${i}` }, snapshot_digest: String(i + 1).repeat(64) }))
+  f.reads.mockResolvedValue({ ok: true, value: { items: originals } })
+  const releases: Array<() => void> = []
+  let active = 0, maximum = 0
+  f.bridge.collaborationDeliveries = async (request) => {
+    active++; maximum = Math.max(maximum, active)
+    await new Promise<void>((resolve) => { releases.push(resolve) })
+    active--
+    const item = originals.find(item => item.source.source_message_id === request.source.source_message_id)!
+    return item === originals[0] ? { ok: false, errorCode: 'unavailable' }
+      : { ok: true, value: { deliveries: [{ ...reply, source_locator: item.source, source_snapshot_digest: item.snapshot_digest }] } }
+  }
+  try {
+    const read = f.model.refresh()
+    await vi.waitFor(() => { expect(releases).toHaveLength(2) })
+    releases.splice(0).forEach((release) => { release() })
+    await vi.waitFor(() => { expect(releases).toHaveLength(2) })
+    releases.splice(0).forEach((release) => { release() })
+    await read
+    expect(maximum).toBe(2)
+    expect(f.model.getSnapshot().groups[0]).toMatchObject({ phase: 'error', replies: [] })
+    expect(f.model.getSnapshot().groups.slice(1).every(group => group.replies.length === 1)).toBe(true)
+  } finally { releases.forEach((release) => { release() }); f.model.dispose() }
+})
+
+it('stops opening further original reads when the complete query window expires', async () => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort(new DOMException('Read timed out', 'TimeoutError')) }, ms > 60_000 ? 1 : ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.useRealTimers() })
+  const f = fixture(), releases: Array<() => void> = []
+  f.reads.mockResolvedValue({ ok: true, value: { items: Array.from({ length: 4 }, (_, i) => ({ ...original,
+    source: { ...source, source_message_id: `message-${i}` }, snapshot_digest: String(i + 1).repeat(64) })) } })
+  const deliveries = vi.fn(async () => {
+    await new Promise<void>((resolve) => { releases.push(resolve) })
+    return { ok: true as const, value: { deliveries: [reply] } }
+  })
+  f.bridge.collaborationDeliveries = deliveries
+  try {
+    const read = f.model.refresh()
+    await vi.advanceTimersByTimeAsync(2)
+    releases.splice(0).forEach((release) => { release() })
+    await read
+    expect(deliveries).toHaveBeenCalledTimes(2)
+    expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+  } finally { releases.forEach((release) => { release() }); f.model.dispose(); timeout.mockRestore(); vi.useRealTimers() }
+})
+
 it('keeps the aggregate view within its budget when loading additional replies', async () => {
   const f = fixture(), second = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'second' } }
   f.reads.mockResolvedValue({ ok: true, value: { items: [original, second] } })

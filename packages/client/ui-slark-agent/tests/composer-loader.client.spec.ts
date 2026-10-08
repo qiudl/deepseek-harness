@@ -1895,6 +1895,58 @@ it('rebinds collaboration activity and readonly history when the same Session re
   expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
 })
 
+it('restores old and multi-target replies through the YAML registrant without dispatching another task', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const originals = ['new', 'old'].map((message, index) => ({
+    source: { workspace_id: f.workspace.id, session_id: id, source_message_id: message, source_revision: '1' },
+    snapshot_digest: String(index + 1).repeat(64), original_message: `@Guide · Project ${message}`,
+    timeline_position: { after_sequence: null, local_order: String(2 - index) },
+  }))
+  f.sourceReads.mockResolvedValue({ ok: true, value: { items: originals } })
+  const projections = originals.map(original => ({ ok: true, value: {
+    deliveries: (original === originals[0] ? ['A', 'B'] : ['old']).map(target => ({
+      delivery_id: `${original.source.source_message_id}-${target}`, invocation_id: `invocation-${target}`,
+      delivery_state: 'delivered', delivery_state_version: '2', source_locator: original.source,
+      source_snapshot_digest: original.snapshot_digest, execution_state: 'succeeded', invocation_state_version: '3',
+      target_display_snapshot: { agent_name: 'Guide', project_name: target }, answer: `answer-${target}`,
+    })),
+  } }))
+  const releases: Array<() => void> = []
+  f.deliveries.mockImplementation(async (input) => {
+    await new Promise<void>((resolve) => { releases.push(resolve) })
+    return projections[originals.findIndex(item => item.source.source_message_id === input.source.source_message_id)]!
+  })
+  const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  if (!entry?.inject) throw Error('missing timeline registration')
+  const bindings = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+  const model = bindings.hooks.slarkResults, read = model.refresh()
+  onTestFinished(async () => { releases.forEach((release) => { release() }); await read })
+  await vi.waitFor(() => { expect(releases).toHaveLength(2) })
+  releases.splice(0).forEach((release) => { release() })
+  await read
+  expect(model.getSnapshot().groups.map(group => group.original.source.source_message_id)).toEqual(['new', 'old'])
+  expect(model.getSnapshot().groups.flatMap(group => group.replies.map(reply => reply.answer)))
+    .toEqual(['answer-A', 'answer-B', 'answer-old'])
+  // Later automatic reads retain the same immutable reply identities and require no new submission.
+  f.deliveries.mockImplementation(async input =>
+    projections[originals.findIndex(item => item.source.source_message_id === input.source.source_message_id)]!)
+  const props: Parameters<typeof CollaborationTimeline>[0] = {
+    ...dockRuntime(id), recordId: null, t: dockTranslate,
+    useSlarkResults: selector => selector(useSyncExternalStore(model.subscribe, model.getSnapshot)),
+    loadSources: () => bindings.loadSources(), loadReplies: digest => bindings.loadReplies(digest),
+    executionAction: (digest, taskId, reconcile) => bindings.executionAction(digest, taskId, reconcile),
+  }
+  const view = render(createElement('div', undefined, ...originals.map(original =>
+    createElement(CollaborationTimeline, { ...props, key: original.snapshot_digest, recordId: original.snapshot_digest }))))
+  onTestFinished(() => { view.unmount() })
+  expect(view.container.querySelectorAll('[data-testid=slark-timeline-original]')).toHaveLength(2)
+  expect(view.container.querySelectorAll('[data-testid=slark-timeline-reply]')).toHaveLength(3)
+  expect(view.container.textContent).toMatch(/Guide · A.*answer-A.*Guide · B.*answer-B.*answer-old/s)
+  await expect(`${view.container.textContent}\n`).toMatchFileSnapshot(join(process.cwd(),
+    'packages/client/ui-slark-agent/tests/expected/history-recovery.expected.txt'))
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
 it.each(['source', 'empty', 'read-error'] as const)('loads %s collaboration history from the blank Conversation composer before mounting Chat or the sidebar', async (mode) => {
   const f = await bench(true), id = SessionId('session-1')
   const original = { source: { workspace_id: f.workspace.id, session_id: id, source_message_id: 'original', source_revision: '1' },
