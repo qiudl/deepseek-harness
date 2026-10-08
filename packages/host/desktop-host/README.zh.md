@@ -226,7 +226,11 @@ Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后
 
 支持根分析的 worker 显式公布 `profile.root_analysis`。根准备使用当前 Account 授权的 Profile，并与派发保留同一 Host 绑定；客户端在发送新命令前拒绝旧端。Unix 和 Windows 启动接入同一种根分析 worker owner。旧 Source 分析保持独立，根准备不会回退到旧流程。
 
-读取已保存输出要求独立的 `profile.root_analysis_recovery` 能力。访问 worker 前后均检查当前 Account/Profile 授权，并使用私有分析 token。旧 worker 拒绝该命令；保存的派发元数据不会触发第二次模型调用。
+`sourceAnalysisRecoverySupported` 单独声明 `profile.source_analysis_recovery`。`read_source_output` 使用私有分析令牌，只访问当前 Account 所属 Profile，读取后重新检查权限。Host 验证原 Source、已消费派发记录及保存输出摘要，再按当前 Account 和安装/进程身份签名。客户端拒绝未签名的已保存响应，并核验精确字节及当前 Host。worker 使用专用有界输出读取器，让解码后 32 KiB 的 JSON 在 base64 编码后仍可完整传递；通用 JSON 字符串限制不变。输出缺失不授予调用，过期的已保存派发记录不授予当前云端权限。
+
+`sourceLiveResumeSupported` 独立声明 `profile.source_live_resume`。Host 为普通 Source 的 prepare 与 resume 派生稳定的 Account/Profile/安装/进程摘要，派发权仍绑定当前连接。访问 worker 前后均检查授权与能力。交接成功保留原 attempt 和期限，并使旧连接失去派发权；不支持的 worker 在访问前拒绝。
+
+读取已保存输出要求独立的 `profile.root_analysis_recovery` 能力。访问 worker 前后均检查当前 Account/Profile 授权，并使用私有分析 token。Host 按当前 Account 和安装/进程身份签署匹配的原派发记录及保存输出摘要。客户端必须取得该回执，并核验原始字节和当前 Host 身份。旧 worker 拒绝该命令；保存的派发元数据不会触发第二次模型调用。
 
 `rootLookupSupported` 独立于准备能力公布 `profile.root_lookup`。`recover_root` 复用当前 Account/Profile 校验及私有 worker token，但只接受 recovered 元数据；旧端在查询前拒绝。
 

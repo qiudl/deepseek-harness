@@ -74,6 +74,8 @@ export function truncateUnicodeCodePoints(value: string, maximum: number): strin
 
 /** Owns list projection registration, bounded cold summaries, and authorized search. */
 export class ApiSessionList {
+  private readonly collaborationSessionIds = new Set<SessionId>()
+
   /** @param ctx - Host context carrying Session, query, persistence, and projection services. */
   constructor(private readonly ctx: Context) {
     ctx.sessionProjections.register<'sessionListMetadata', SessionListMetadata>({
@@ -100,6 +102,14 @@ export class ApiSessionList {
   }
 
   /**
+   * Retain nonblank identity from a committed Profile Source without changing Session projections.
+   * @param sessionId - Session named by the immutable Source journal record.
+   */
+  recordCollaborationSource(sessionId: SessionId): void {
+    this.collaborationSessionIds.add(sessionId)
+  }
+
+  /**
    * Build one current attached-Session summary.
    * @param session - attached Session to summarize.
    * @returns current list metadata and available projections.
@@ -112,7 +122,7 @@ export class ApiSessionList {
       updatedAt: updatedAt(session.header, metadata),
       agentAvailable: this.ctx.agents.get(session.id)?.session === session,
       running: this.ctx.agents.get(session.id)?.status === 'running',
-      blank: metadata?.blank ?? session.seq === 0,
+      blank: !this.collaborationSessionIds.has(session.id) && (metadata?.blank ?? session.seq === 0),
       ...listFields(session.header),
       ...(projections === undefined ? {} : { projections }),
     }
@@ -154,7 +164,7 @@ export class ApiSessionList {
       agentAvailable: false,
       running: false,
       // A large, metadata-less, or inaccessible cache miss remains unknown and visible.
-      blank: metadata?.blank ?? false,
+      blank: !this.collaborationSessionIds.has(header.id) && (metadata?.blank ?? false),
       ...listFields(header),
       ...(projections === undefined ? {} : { projections }),
     }

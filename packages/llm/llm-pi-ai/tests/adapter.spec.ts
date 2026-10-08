@@ -134,6 +134,43 @@ describe('PiAiAdapter provider routing', () => {
     } finally { await ctx.fiber.dispose() }
   })
 
+  it('freezes a custom OpenAI-compatible provider, model, and explicit credential before dispatch', async () => {
+    const first = await mockServer([{ events: textEvents }])
+    const second = await mockServer([])
+    let providers: Record<string, LlmPiAi.PiAiProviderProfile> = {
+      req0004glm: {
+        api: 'openai-completions', baseURL: first.url, apiKeyEnv: 'PI_TEST_KEY',
+        headers: { 'x-snapshot': 'first' }, models: [{ id: 'GLM-5.2', contextWindow: 4096 }],
+      },
+    }
+    let key = 'custom-first-key', reads = 0
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['req0004glm'], new PiAiAdapter({
+      profiles: () => resolveProfiles(providers),
+      resolveApiKey: () => { reads++; return Promise.resolve(key) },
+      auth: memoryAuth(),
+    }))
+    try {
+      const prepared = await ctx.llm.prepareSnapshot({ provider: 'req0004glm', model: 'GLM-5.2' }, new AbortController().signal)
+      expect(reads).toBe(1)
+      expect(first.requests).toHaveLength(0)
+      providers = { req0004glm: {
+        api: 'openai-completions', baseURL: second.url, apiKeyEnv: 'PI_TEST_KEY',
+        headers: { 'x-snapshot': 'second' }, models: [{ id: 'GLM-5.2', contextWindow: 8192 }],
+      } }
+      key = 'custom-second-key'
+      expect(prepared.context).toMatchObject({ contextWindow: 4096 })
+      for await (const _chunk of prepared.stream({ ...prepared.config, messages: [] })) { /* consume */ }
+      expect(reads).toBe(1)
+      expect(first.paths).toEqual(['/chat/completions'])
+      expect(first.requests[0]).toMatchObject({ model: 'GLM-5.2' })
+      expect(first.headers[0]).toMatchObject({ authorization: 'Bearer custom-first-key', 'x-snapshot': 'first' })
+      expect(second.requests).toHaveLength(0)
+      expect(JSON.stringify(prepared.snapshot)).not.toContain('custom-first-key')
+    } finally { await ctx.fiber.dispose() }
+  })
+
   it('refuses a complete snapshot when pi-ai would need ambient or native auth', async () => {
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
@@ -145,10 +182,34 @@ describe('PiAiAdapter provider routing', () => {
 
   it('denies snapshot capture for routes outside the audited explicit-credential protocol', async () => {
     const adapter = adapterOf({ gateway: {
-      api: 'openai-completions', baseURL: 'https://gateway.example.test/v1', models: [{ id: 'custom' }],
+      api: 'anthropic-messages', baseURL: 'https://gateway.example.test/v1', models: [{ id: 'custom' }],
     } })
     await expect(adapter.prepareSnapshot('gateway', 'custom', new AbortController().signal))
       .rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
+  })
+
+  it('refuses custom snapshots without an explicit key and honors cancellation around key resolution', async () => {
+    const providers: Record<string, LlmPiAi.PiAiProviderProfile> = {
+      gateway: { api: 'openai-completions', baseURL: 'https://gateway.example.test/v1', models: [{ id: 'custom' }] },
+    }
+    for (const key of [undefined, '', '   ']) {
+      const adapter = new PiAiAdapter({
+        profiles: () => resolveProfiles(providers), resolveApiKey: () => Promise.resolve(key), auth: memoryAuth(),
+      })
+      await expect(adapter.prepareSnapshot('gateway', 'custom', new AbortController().signal))
+        .rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
+    }
+    const controller = new AbortController()
+    const resolveApiKey = vi.fn(() => {
+      controller.abort(new Error('cancelled while resolving'))
+      return Promise.resolve('explicit-key')
+    })
+    const adapter = new PiAiAdapter({ profiles: () => resolveProfiles(providers), resolveApiKey, auth: memoryAuth() })
+    await expect(adapter.prepareSnapshot('gateway', 'custom', controller.signal)).rejects.toThrow('cancelled while resolving')
+    expect(resolveApiKey).toHaveBeenCalledTimes(1)
+    resolveApiKey.mockClear()
+    await expect(adapter.prepareSnapshot('gateway', 'custom', controller.signal)).rejects.toThrow('cancelled while resolving')
+    expect(resolveApiKey).not.toHaveBeenCalled()
   })
 
   it('refuses an SDK collection that resolves a model without its owning provider', async () => {

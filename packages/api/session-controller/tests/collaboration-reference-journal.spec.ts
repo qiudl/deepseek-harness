@@ -230,15 +230,42 @@ it('requires reopen after an uncertain durable write and recovers the exact firs
   expect(await next.capture(record, signal)).toEqual(record)
   await next.close()
 })
-it('refuses a ninth selection for the same immutable Source without evicting committed content', async () => {
+it('retains eighty Source selections and refuses an eighty-first without evicting content', async () => {
   const f = await fixture(), signal = new AbortController().signal
   const journal = await openCollaborationReferenceJournal(f.facility)
-  for (let index = 0; index < 9; index++) {
+  const records: referenceCapture.CollaborationReferenceRecord[] = []
+  for (let index = 0; index < 80; index++) {
     const record = await captureCollaborationReferenceContent({ ...f.request(), reference_request_id: `ref-${index}` },
       f.source, async () => f.content(), signal)
-    if (index < 8) await journal.capture(record, signal)
-    else await expect(journal.capture(record, signal)).rejects.toThrow('collaboration_reference_capacity_reached')
+    records.push(await journal.capture(record, signal))
   }
+  const path = join(f.root, 'collaboration_reference_v2.json'), bytes = await readFile(path)
+  const overflow = await captureCollaborationReferenceContent({ ...f.request(), reference_request_id: 'ref-80' },
+    f.source, async () => f.content(), signal)
+  await expect(journal.capture(overflow, signal)).rejects.toThrow('collaboration_reference_capacity_reached')
+  expect(await journal.capture(records[0]!, signal)).toEqual(records[0])
+  expect(await readFile(path)).toEqual(bytes)
+  await journal.close()
+  const reopened = await openCollaborationReferenceJournal(f.facility)
+  expect(reopened.read(f.source, records[79]!.reference_request_digest)).toEqual(records[79])
+  expect(await reopened.capture(records[0]!, signal)).toEqual(records[0])
+  expect(await readFile(path)).toEqual(bytes)
+  await reopened.close()
+})
+it('accepts exactly one MiB across references but refuses an extra byte without rewriting or charging a replay', async () => {
+  const f = await fixture(), signal = new AbortController().signal
+  const journal = await openCollaborationReferenceJournal(f.facility)
+  const capture = async (reference_request_id: string, text: string) => captureCollaborationReferenceContent({
+    ...f.request(), reference_request_id, range: { unit: 'utf16', start: 0, end: text.length },
+    byte_length: Buffer.byteLength(text), content_digest: sha(text),
+  }, f.source, async () => f.content(text), signal)
+  const first = await capture('half-1', 'a'.repeat(512 * 1024))
+  await journal.capture(first, signal)
+  await journal.capture(await capture('half-2', 'b'.repeat(512 * 1024)), signal)
+  const path = join(f.root, 'collaboration_reference_v2.json'), bytes = await readFile(path)
+  await expect(journal.capture(await capture('overflow', 'c'), signal)).rejects.toThrow('collaboration_reference_capacity_reached')
+  expect(await journal.capture(first, signal)).toEqual(first)
+  expect(await readFile(path)).toEqual(bytes)
   await journal.close()
 })
 

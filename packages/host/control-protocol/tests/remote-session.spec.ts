@@ -200,6 +200,29 @@ describe('Profile remote UI read wire commands', () => {
     }
   })
 
+  it('Source locator admits one immutable snapshot digest and refuses mixed cursor or authority fields', () => {
+    const request = { sessionId: 'session-1', snapshotDigest: 'a'.repeat(64) }
+    const frame = readFrame('session/collaborationSources', { args: { request } })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    for (const invalid of [{ ...request, cursor: request.snapshotDigest }, { ...request, snapshotDigest: 'bad' },
+      { ...request, workspace_id: 'foreign' }, { ...request, profile: 'foreign' }]) {
+      expect(() => decode(readFrame('session/collaborationSources', { args: { request: invalid } }))).toThrow()
+    }
+  })
+  it('carries explicit display-position opt-in without accepting caller positions or disabling it silently', () => {
+    for (const selector of [{}, { cursor: 'a'.repeat(64) }, { snapshotDigest: 'b'.repeat(64) }]) {
+      const request = { sessionId: 'session-1', ...selector, includeTimeline: true }
+      const frame = readFrame('session/collaborationSources', { args: { request } })
+      expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    }
+    for (const includeTimeline of [false, null, 1, 'true']) {
+      expect(() => decode(readFrame('session/collaborationSources', { args: { request: { sessionId: 'session-1', includeTimeline } } })))
+        .toThrow()
+    }
+    expect(() => decode(readFrame('session/collaborationSources', { args: {
+      request: { sessionId: 'session-1', includeTimeline: true, after_sequence: 1 },
+    } }))).toThrow()
+  })
   it('rejects extra selectors, unsafe JSON, and overlarge results', () => {
     expect(() => decode(readFrame('session/list', { args: {}, profile_root: '/tmp/other' }))).toThrow()
     expect(() => decode(readFrame('session/list', { args: null }))).toThrow()
@@ -225,7 +248,7 @@ describe('Profile remote UI stream wire commands', () => {
       { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: '$events', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
-        address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 100, assistantStream: true,
+        address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 500, assistantStream: true, turnWindow: { minMessages: 50, minTurns: 2 },
       } } } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: 'session-1' },
@@ -242,6 +265,17 @@ describe('Profile remote UI stream wire commands', () => {
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
     }
     for (const command of [
+      ...[null, [], {}, { minMessages: 50 }, { minMessages: 0, minTurns: 2 },
+        { minMessages: 501, minTurns: 2 }, { minMessages: 50, minTurns: 0 },
+        { minMessages: 50, minTurns: 1.5 }, { minMessages: 50, minTurns: Number.MAX_SAFE_INTEGER + 1 },
+        { minMessages: 50, minTurns: 2, path: '/tmp' }].map(turnWindow => ({
+        action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+          address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 500, turnWindow,
+        } } },
+      })),
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' }, turnWindow: { minMessages: 51, minTurns: 2 },
+      } } } },
       { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: { path: '/tmp' } } },
       { action: 'open', stream_id, endpoint: '$events', payload: { args: { all: true } } },
       { action: 'open', stream_id, endpoint: 'asset/read', payload: { args: {} } },

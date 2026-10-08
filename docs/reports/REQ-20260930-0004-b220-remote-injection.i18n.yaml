@@ -1,0 +1,7 @@
+# Bilingual-pair consistency record for REQ-20260930-0004-b220-remote-injection.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/reports/REQ-20260930-0004-b220-remote-injection.md
+/req-20260930-0004-b220-collaboration-history-remote-dependency:
+  en: 5405391103e1e2f3
+  zh: 51b058579303958b

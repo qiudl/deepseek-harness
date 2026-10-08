@@ -1004,9 +1004,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     methods: [
       {
         signature: 'registerAgentResolver(resolve: AgentResolver): () => void',
-        description: 'Register the ordinary-Session resolver used when a raw upload addresses a cold Session.',
+        description: 'Register the ordinary-Session resolver used when a raw upload addresses a cold Session. Only one registration may be active; the owning plugin must dispose it before reloading.',
         parameters: [{ name: 'resolve', description: 'resolver that returns the exact live Agent or throws a Remote error.' }],
-        returns: 'disposer removing this resolver.',
+        returns: 'idempotent disposer removing only this registration, never its replacement.',
+        throws: ['when another resolver registration is active.'],
       },
       {
         signature: '@Remote(\'upload\') upload(agent: Agent, request: EncodedFileUploadRequest, signal: AbortSignal): Promise<FileUploadValue>',
@@ -2040,7 +2041,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       {
         signature: '@Remote(\'collaborationSources\') async collaborationSources(request: SessionCollaborationSourcesRequest, signal: AbortSignal): Promise<SessionCollaborationSourcesValue>',
         description: 'Read original collaboration messages for the Client\'s Session result area without preparing a model.',
-        parameters: [{ name: 'request', description: 'Session identity and a prior page\'s immutable snapshot digest; authority fields reject.' }, { name: 'signal', description: 'Caller cancellation, combined with Profile disposal and serialized Source writes.' }],
+        parameters: [{ name: 'request', description: 'Session identity and either a page cursor or one exact immutable snapshot digest; authority fields reject.' }, { name: 'signal', description: 'Caller cancellation, combined with Profile disposal and serialized Source writes.' }],
         returns: 'At most eight complete messages within 256 KiB; no executable calls or cloud authorization.',
         throws: ['On malformed input, unknown cursor, corrupt storage, cancellation or changed original membership.'],
       },
@@ -4850,7 +4851,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CollaborationAnalysisManifest',
-    declaration: 'export type CollaborationAnalysisManifest = Readonly<{\n    source: CollaborationSourceSnapshot;\n    request: Omit<GenerateOptions, \'signal\'>;\n} & ({\n    prompt_version: \'1\';\n} | {\n    prompt_version: \'2\';\n    clarification: CollaborationClarificationInput;\n})>;',
+    declaration: 'export type CollaborationAnalysisManifest = Readonly<{\n    source: CollaborationSourceSnapshot;\n    request: Omit<GenerateOptions, \'signal\'>;\n} & ({\n    prompt_version: \'1\';\n} | {\n    prompt_version: \'2\';\n    clarification: CollaborationClarificationInput;\n} | {\n    prompt_version: \'3\';\n    reference_catalogue: CollaborationReferenceCatalogue;\n} | {\n    prompt_version: \'4\';\n    clarification: CollaborationClarificationInput;\n    reference_catalogue: CollaborationReferenceCatalogue;\n})>;',
   },
   {
     name: 'CollaborationAnalysisResult',
@@ -4883,6 +4884,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CollaborationPlanningPredecessor',
     declaration: 'export type CollaborationPlanningPredecessor = Readonly<z.infer<typeof predecessorSchema>> | null;',
+  },
+  {
+    name: 'CollaborationReferenceCatalogue',
+    declaration: 'export type CollaborationReferenceCatalogue = Readonly<z.infer<typeof schema>>;',
   },
   {
     name: 'CollaborationReferenceRecord',
@@ -6734,15 +6739,19 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionCollaborationSourceItem',
-    declaration: 'export interface SessionCollaborationSourceItem {\n    readonly source: {\n        readonly workspace_id: string;\n        readonly session_id: string;\n        readonly source_message_id: string;\n        readonly source_revision: string;\n    };\n    readonly snapshot_digest: string;\n    readonly original_message: string;\n}',
+    declaration: 'export interface SessionCollaborationSourceItem {\n    readonly source: {\n        readonly workspace_id: string;\n        readonly session_id: string;\n        readonly source_message_id: string;\n        readonly source_revision: string;\n    };\n    readonly snapshot_digest: string;\n    readonly original_message: string;\n    readonly timeline_position?: SessionCollaborationTimelinePosition | null;\n}',
   },
   {
     name: 'SessionCollaborationSourcesRequest',
-    declaration: 'export interface SessionCollaborationSourcesRequest {\n    readonly sessionId: SessionId;\n    readonly cursor?: string;\n}',
+    declaration: 'export interface SessionCollaborationSourcesRequest {\n    readonly sessionId: SessionId;\n    readonly cursor?: string;\n    readonly snapshotDigest?: string;\n    readonly includeTimeline?: true;\n}',
   },
   {
     name: 'SessionCollaborationSourcesValue',
     declaration: 'export interface SessionCollaborationSourcesValue {\n    readonly items: readonly SessionCollaborationSourceItem[];\n    readonly next_cursor?: string;\n}',
+  },
+  {
+    name: 'SessionCollaborationTimelinePosition',
+    declaration: 'export interface SessionCollaborationTimelinePosition {\n    readonly after_sequence: number | null;\n    readonly local_order: string;\n}',
   },
   {
     name: 'SessionControlBaseline',

@@ -43,7 +43,8 @@ export const zh = {
   'scope.executorPending': '项目范围可以设置，Agent 目录目前仅供查看；新版任务发送尚未接通。',
   'scope.readOnly': '仅供查看',
   'scope.mentionReady': '可 @ 发送',
-  'scope.chatReady': '在聊天中 @ 下方 Agent，即可用自然语言提交任务。',
+  'scope.chatReady': '点击下方 Agent 插入 @，或在聊天中输入 @，再用自然语言描述任务。',
+  'scope.insertUnavailable': '未能插入该 Agent。请刷新协同目录，并确认输入框可编辑；原草稿已保留。',
 
   'section.agents': 'Slark 企业 Agent',
   'section.scopedAgents': 'Slark Agent',
@@ -69,6 +70,10 @@ export const zh = {
   'task.failed': '未完成',
   'task.readUnavailable': '当前无法读取协同结果，稍后将自动重试。',
   'task.collaborationHistory': 'Slark 协同记录',
+  'task.unpositionedHistory': '未记录聊天位置的早期协同消息',
+  'task.workspaceHistory': '工作区 Slark 协同记录',
+  'task.viewOriginal': '查看原消息',
+  'task.sourceUnavailable': '暂时无法定位原消息，请确认会话仍可访问后再试。',
   'task.awaitingResult': '此消息暂无协同结果。',
   'task.planningQueued': '等待识别任务',
   'task.planning': '正在识别任务',
@@ -80,6 +85,7 @@ export const zh = {
   'task.indeterminate': '执行结果尚未确认。',
   'task.moreResults': '查看更多结果',
   'task.moreMessages': '查看更早的消息',
+  'task.moreWorkspaceMessages': '查看更多协同记录',
 } satisfies Record<string, string>
 
 /** English copy. */
@@ -122,7 +128,8 @@ export const en = {
   'scope.executorPending': 'Project scope can be saved. The Agent directory is currently read-only; the new task submission is not connected yet.',
   'scope.readOnly': 'Read-only',
   'scope.mentionReady': 'Available for @ tasks',
-  'scope.chatReady': 'Mention an Agent below in chat and describe the task in natural language.',
+  'scope.chatReady': 'Click an Agent below to insert @, or type @ in chat, then describe the task in natural language.',
+  'scope.insertUnavailable': 'The Agent could not be inserted. Refresh the directory and check that the composer is editable. Your draft is retained.',
 
   'section.agents': 'Slark enterprise Agents',
   'section.scopedAgents': 'Slark Agents',
@@ -148,6 +155,10 @@ export const en = {
   'task.failed': 'Not completed',
   'task.readUnavailable': 'Collaboration results cannot be read right now. A fresh read will be attempted automatically.',
   'task.collaborationHistory': 'Slark collaboration history',
+  'task.unpositionedHistory': 'Earlier collaboration messages without a recorded chat position',
+  'task.workspaceHistory': 'Workspace Slark collaboration history',
+  'task.viewOriginal': 'View original message',
+  'task.sourceUnavailable': 'The original message cannot be located. Check that the Session is still accessible before retrying.',
   'task.awaitingResult': 'No collaboration results for this message.',
   'task.planningQueued': 'Waiting to interpret the task.',
   'task.planning': 'Interpreting the task.',
@@ -159,6 +170,7 @@ export const en = {
   'task.indeterminate': 'Execution outcome is not confirmed.',
   'task.moreResults': 'View more results',
   'task.moreMessages': 'View earlier messages',
+  'task.moreWorkspaceMessages': 'View more collaboration records',
 } satisfies Record<keyof typeof zh, string>
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
