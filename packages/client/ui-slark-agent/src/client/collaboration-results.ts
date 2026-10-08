@@ -392,7 +392,7 @@ export class CollaborationResultsModel {
         })
         if (groups.length + items.length > 128) throw Error('invalid_source_cursor')
         items.forEach((original) => { known.add(original.snapshot_digest) })
-        const pageGroups: CollaborationResultGroup[] = Array(items.length)
+        const pageGroups = Array<CollaborationResultGroup>(items.length)
         const originals = items.entries()
         const readGroups = async (): Promise<void> => {
           for (const [index, original] of originals) {
