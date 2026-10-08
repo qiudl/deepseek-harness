@@ -1911,9 +1911,9 @@ it.each(['source', 'empty', 'read-error'] as const)('loads %s collaboration hist
   for (const entry of f.ctx.slots.entries('conversation.input.dock')) {
     if (entry.inject) Reflect.apply(entry.inject, undefined, [id])
     if (entry.options.id === 'slark-collaboration-activity') {
-      const view = render(createElement(entry.component, dockRuntime(id)))
-      expect(view.container.textContent).toBe('')
-      onTestFinished(() => { view.unmount() })
+      const component = entry.component
+      if (typeof component !== 'function') throw Error('missing collaboration activity component')
+      expect(Reflect.apply(component, undefined, [dockRuntime(id)])).toBeNull()
     }
   }
   await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalled() })
