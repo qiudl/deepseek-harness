@@ -50,13 +50,13 @@ it('shows unavailable history without retaining cloud identifiers and supports u
   view.rerender(<CollaborationTrajectory {...props({ ...s, groups: [unloaded] })} />)
   expect(screen.getByText(zh['trace.load'])).toBeTruthy()
 })
-it('omits unavailable features and empty Sources, and blocks reads while loading', () => {
+it('omits unavailable features and empty Sources, and blocks duplicate reads while that trace loads', () => {
   const s = snapshot()
   const view = render(<CollaborationTrajectory {...props({ ...s, executionAvailable: false })} />)
   expect(view.container.childElementCount).toBe(0)
   view.rerender(<CollaborationTrajectory {...props({ ...s, groups: [] })} />)
   expect(view.container.childElementCount).toBe(0)
-  view.rerender(<CollaborationTrajectory {...props({ ...s, phase: 'loading' })} />)
+  view.rerender(<CollaborationTrajectory {...props({ ...s, groups: s.groups.map(g => ({ ...g, trace: { ...g.trace, phase: 'loading' } })) })} />)
   expect(screen.getAllByRole('button').every(button => button.hasAttribute('disabled'))).toBe(true)
 })
 
@@ -104,4 +104,17 @@ it('shows committed original reply while keeping root progress partial and activ
   expect(view.container.textContent).toContain(zh['trace.assistantCommitted'])
   expect(screen.getByText(zh['trace.partial'])).toBeTruthy()
   expect(screen.queryByText(zh['trace.rootSucceeded'])).toBeNull()
+})
+
+it('keeps manual trajectory reads available during background result refresh', () => {
+  const state = snapshot()
+  const p = props({ ...state, phase: 'loading' })
+  render(<CollaborationTrajectory {...p} />)
+  for (const id of ['slark-trace-load', 'slark-trace-more', 'slark-trace-execution']) {
+    const button = screen.getByTestId(id)
+    expect(button.hasAttribute('disabled')).toBe(false)
+    fireEvent.click(button)
+  }
+  expect(p.traceAction).toHaveBeenCalledTimes(2)
+  expect(p.traceEvidenceAction).toHaveBeenCalledTimes(1)
 })

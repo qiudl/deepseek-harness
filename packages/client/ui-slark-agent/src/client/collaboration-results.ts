@@ -93,6 +93,8 @@ export class CollaborationResultsModel {
   private boundBridge: CollaborationResultsBridge | undefined
   private controller: AbortController | undefined
   private pending = false
+  private readonly traceQueries = new Set<string>()
+  private readonly readWaiters: (() => boolean)[] = []
   private sourcePages = 1
   private replyPages = new Map<string, number>()
   private again = false
@@ -272,7 +274,20 @@ export class CollaborationResultsModel {
   private finishQuery(): void {
     this.pending = false
     this.controller = undefined
+    while (this.readWaiters.length) { if (this.readWaiters.shift()?.()) return }
     if (this.again && !this.closed) { this.again = false; void this.refresh() }
+  }
+  private acquireTraceQuery(generation: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const acquire = () => {
+        if (!this.current(generation)) { resolve(false); return false }
+        this.pending = true
+        resolve(true)
+        return true
+      }
+      if (this.pending) this.readWaiters.push(acquire)
+      else acquire()
+    })
   }
   /**
    * Refresh the original messages and all user-loaded result pages.
@@ -351,7 +366,8 @@ export class CollaborationResultsModel {
       if (this.current(generation)) this.traces.set(digest, { phase: 'error' })
     }
   }
-  /** Read or page cloud audits for one original Source; no preview, admission or consumption.
+  /** Read or page cloud audits for one original Source; queued reads precede automatic refresh.
+   * No preview, admission or consumption; obsolete queued reads are discarded.
    * @param digest - Original message selected in this Session.
    * @param more - Append the next immutable audit page instead of refreshing loaded pages.
    * @returns Completion of the bounded read, discarding obsolete generations.
@@ -359,20 +375,23 @@ export class CollaborationResultsModel {
   async traceAction(digest: string, more = false): Promise<void> {
     this.bind()
     const original = this.state.groups.find(group => group.original.snapshot_digest === digest)?.original
-    if (this.closed || this.pending || !this.workspaceId || !original) return
+    if (this.closed || this.traceQueries.has(digest) || !this.workspaceId || !original) return
     const old = this.traces.get(digest)
     if (more && old?.page?.next_after_seq == null) return
-    this.pending = true
-    const generation = this.generation, controller = new AbortController()
-    this.controller = controller
-    const pages = this.tracePages.get(digest) ?? 1
-    this.tracePages.set(digest, pages)
+    const generation = this.generation
+    this.traceQueries.add(digest)
     this.traces.set(digest, { ...old, phase: 'loading' }); this.publish(this.state)
+    const acquired = await this.acquireTraceQuery(generation)
     try {
+      if (!acquired || !this.current(generation)) return
+      const controller = new AbortController()
+      this.controller = controller
+      const pages = this.tracePages.get(digest) ?? 1
+      this.tracePages.set(digest, pages)
       await this.traceRead(original, AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),
         generation, pages, more ? old?.page : undefined)
       if (this.current(generation)) this.publish(this.state)
-    } finally { this.finishQuery() }
+    } finally { this.traceQueries.delete(digest); if (acquired) this.finishQuery() }
   }
   /** Read immutable runtime observations for a displayed settlement; browsing cannot launch tools.
    * @param digest - Original Source message digest.
@@ -384,17 +403,21 @@ export class CollaborationResultsModel {
     this.bind()
     const group = this.state.groups.find(g => g.original.snapshot_digest === digest), prior = this.traces.get(digest)
     const bridge = this.boundBridge
-    if (this.closed || this.pending || !this.workspaceId || !bridge?.collaborationRootExecution || !bridge.collaborationPlanningAvailable
+    if (this.closed || this.traceQueries.has(digest) || !this.workspaceId
+      || !bridge?.collaborationRootExecution || !bridge.collaborationPlanningAvailable
       || !group || !prior?.page?.events.some(e => e.event_id === eventId)) return
     const previous = prior.execution?.eventId === eventId ? prior.execution.page : undefined
     const after = more ? previous?.next_after_sequence : 0
     if (after === undefined || after === null) return
-    this.pending = true
-    const generation = this.generation, controller = new AbortController()
-    this.controller = controller
+    const generation = this.generation
+    this.traceQueries.add(digest)
     this.traces.set(digest, { ...prior, execution: { eventId, phase: 'loading', ...(previous ? { page: previous } : {}) } })
     this.publish(this.state)
+    const acquired = await this.acquireTraceQuery(generation)
     try {
+      if (!acquired || !this.current(generation)) return
+      const controller = new AbortController()
+      this.controller = controller
       const value = await wait(bridge.collaborationRootExecution({ action: 'trace', source: group.original.source,
         cursor: { after_seq: 0, limit: 20, evidence: { event_id: eventId, after_sequence: after } } }),
       AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]))
@@ -410,7 +433,8 @@ export class CollaborationResultsModel {
       this.traces.set(digest, { phase: 'error' })
     } finally {
       if (this.current(generation)) this.publish(this.state)
-      this.finishQuery()
+      this.traceQueries.delete(digest)
+      if (acquired) this.finishQuery()
     }
   }
   /**

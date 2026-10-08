@@ -74,6 +74,19 @@ describe('DeepSeek plugin package inventory', () => {
     expect(disabledFields.fields).not.toHaveProperty('dsh_plugin_packages')
   })
 
+  it('omits plugin metadata for isolated collaboration analysis while keeping ordinary diagnostics', async () => {
+    const { ctx, root } = await harness()
+    const plugin = await packagePlugin(root, 'ordinary', { name: 'ordinary', version: '1.0.0' })
+    await ctx.loader.create({ name: plugin })
+    const analysis = await ctx.deepseekLlmApiExtensions.prepare({
+      body: { messages: [] }, signal: SIGNAL, purpose: 'collaboration-analysis',
+    })
+    expect(analysis.fields).toEqual({})
+    await analysis.accept()
+    const ordinary = await ctx.deepseekLlmApiExtensions.prepare({ body: { messages: [] }, signal: SIGNAL })
+    expect(ordinary.fields.dsh_plugin_packages?.packages).toEqual([{ name: 'ordinary', version: '1.0.0' }])
+  })
+
   it('reports active package versions once, retains parallel versions, and excludes inactive or loose entries', async () => {
     const { ctx, root } = await harness()
     const oneA = await packagePlugin(root, 'one-a', { name: 'one', version: '1.0.0' })

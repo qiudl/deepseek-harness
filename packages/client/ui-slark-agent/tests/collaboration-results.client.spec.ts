@@ -637,3 +637,57 @@ it('bounds combined cloud history across separate original Sources', async () =>
   expect(snapshot.groups.some(g => g.trace?.phase === 'ready')).toBe(true)
   expect(new TextEncoder().encode(JSON.stringify(snapshot.groups.map(g => g.trace))).length).toBeLessThan(16 * 1024 * 1024)
 })
+
+// REQ-20261004-0008: real network latency must not discard explicit trajectory reads.
+it.each(['finish', 'reset', 'dispose'] as const)('queues a trace behind a pending refresh and handles %s', async (ending) => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const root = { root_task_id: 'root', root_trace_id: 'b'.repeat(32), task_revision: '1', state_version: '1', state: 'active', intent_state: 'active' }
+  const trace = vi.fn(async () => ({ ok: true, value: { root, events: [], next_after_seq: null, coverage: 'partial' } }))
+  f.bridge.collaborationRootExecution = trace
+  await f.model.refresh()
+  const hold = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  f.deliveries.mockImplementationOnce(() => hold.promise)
+  const refresh = f.model.refresh()
+  await vi.waitFor(() => { expect(f.deliveries).toHaveBeenCalledTimes(2) })
+  const selected = f.model.traceAction(original.snapshot_digest)
+  const duplicate = f.model.traceAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe('loading')
+  expect(trace).not.toHaveBeenCalled()
+  if (ending === 'reset') f.reset()
+  if (ending === 'dispose') f.model.dispose()
+  hold.resolve({ ok: true, value: { deliveries: [reply] } })
+  await Promise.all([refresh, selected, duplicate])
+  expect(trace).toHaveBeenCalledTimes(ending === 'finish' ? 1 : 0)
+  if (ending === 'finish') expect(f.model.getSnapshot().groups[0]?.trace?.page?.root.root_trace_id).toBe(root.root_trace_id)
+  else expect(f.model.getSnapshot().groups.every(g => g.trace === undefined)).toBe(true)
+})
+
+it('runs queued execution evidence before a requested background refresh and coalesces clicks', async () => {
+  const f = fixture(), order: string[] = []
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  f.bridge.collaborationRootExecution = async (request) => {
+    if (request.action !== 'trace') throw Error('readonly test')
+    const page = auditPage()
+    if (!request.cursor.evidence) return page
+    order.push('evidence')
+    return { ...page, value: { ...page.value, execution: { event_id: 'event-1', attempt_id: 'attempt',
+      state: 'succeeded', digest: 'a'.repeat(64), provider_visibility: 'boundary_only', next_after_sequence: null,
+      events: [{ sequence: 1, observedAt: 0, type: 'tool.completed', success: true }] } } }
+  }
+  await f.model.refresh()
+  await f.model.traceAction(original.snapshot_digest)
+  const hold = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  f.deliveries.mockImplementationOnce(() => hold.promise)
+  const refresh = f.model.refresh()
+  await vi.waitFor(() => { expect(f.deliveries).toHaveBeenCalledTimes(2) })
+  f.deliveries.mockImplementation(async () => { order.push('refresh'); return { ok: true, value: { deliveries: [reply] } } })
+  const evidence = f.model.traceEvidenceAction(original.snapshot_digest, 'event-1')
+  const duplicate = f.model.traceEvidenceAction(original.snapshot_digest, 'event-1')
+  expect(f.model.getSnapshot().groups[0]?.trace?.execution?.phase).toBe('loading')
+  await f.model.refresh()
+  hold.resolve({ ok: true, value: { deliveries: [reply] } })
+  await Promise.all([refresh, evidence, duplicate])
+  await vi.waitFor(() => { expect(order).toEqual(['evidence', 'refresh']) })
+  expect(f.model.getSnapshot().groups[0]?.trace?.execution?.page?.events).toHaveLength(1)
+})

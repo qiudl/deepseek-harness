@@ -6,6 +6,8 @@ import { decodeHostControlFrame, encodeHostControlFrame, parseHostRootPlanningAt
 import { parseHostRootAnalysisOutput, parseHostRootSubmissionTarget, parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 /** REQ-20260930-0004: Loader-mounted Source capture, real JSON journal and private HTTP. */
 import { Context } from '@deepseek-ai/cordis'
+import DeepSeekLlmApiExtensions from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
+import * as PluginInventory from '@deepseek-ai/dsh-plugin-package-inventory-deepseek'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest, parseCollaborationClarificationInput, parseCollaborationReferenceMetadata, parseCollaborationRootSubmission } from '@deepseek-ai/dsh-api-session-controller'
@@ -84,6 +86,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
   const plugins = {
     storage: Storage, sessions: SessionStore, agents: AgentRegistry, llm: LlmRuntime, workspace: WorkspaceRegistry,
     controller: SessionController, web: WebApp,
+    extensions: DeepSeekLlmApiExtensions, inventory: PluginInventory,
     domain: { name: 'source-test-domain', inject: ['storage'], apply(domainCtx: Context) {
       backend = new JsonStorageBackend(join(directory, 'state'))
       domainCtx.storage.backend.register('json', backend)
@@ -144,6 +147,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       prompt_version: string
       request: { system: string; messages: { content: { text: string }[] }[] }
     }
+    expect(wire).not.toHaveProperty('dsh_plugin_packages')
     expect(wire.model).toBe('selected'); expect(wire.max_tokens).toBe(8192)
     expect(wire.tools ?? []).toEqual([])
     expect(wire.system).toBe(manifest.request.system)
@@ -167,9 +171,9 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     options: () => resolveAdapterOptions({ baseURL: origin, models: [{ id: 'selected' }] }),
     resolveAuth: async () => ({ headers: { 'x-api-key': 'fixture-source-key' } }), resolveUserId: () => '00000000-0000-4000-8000-000000000001' as AnonymousUserId,
     // Malformed external extension JSON must not introduce tools into the logged Source analysis request.
-    prepareExtensions: async () => ({ fields: mode === 'analysis-extension'
-      ? { tools: [{ type: 'function', function: { name: 'injected_tool', description: '', parameters: {} } }] } as never
-      : {}, accept: async () => {} }),
+    prepareExtensions: async request => mode === 'analysis-extension'
+      ? { fields: { tools: [{ type: 'function', function: { name: 'injected_tool', description: '', parameters: {} } }] } as never, accept: async () => {} }
+      : ctx.deepseekLlmApiExtensions.prepare(request),
   })
   const prepared = vi.spyOn(adapter, 'prepareSnapshot'), stream = vi.spyOn(adapter, 'stream')
   ctx.llm.registerAdapter(['fixture'], adapter)

@@ -28,7 +28,7 @@ Complete active Loader-backed plugin package inventory for official DeepSeek LLM
 |---|---:|---|
 | `enabled` | `true` | Register the `dsh_plugin_packages` contribution. Set it to `false` to omit package metadata. |
 
-Shipped profiles use the default, so every official DeepSeek request carries the package inventory when preparation succeeds.
+Shipped profiles use the default. Official DeepSeek requests carry the package inventory when preparation succeeds, except isolated `collaboration-analysis` requests, which omit it before inventory collection.
 
 <a id="collection"></a>
 ## Collection
