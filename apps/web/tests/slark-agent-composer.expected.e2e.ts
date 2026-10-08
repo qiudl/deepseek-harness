@@ -358,7 +358,8 @@ it('asks a natural question in the built composer and accepts a plain clarificat
   remote.mock.unary('session/collaborationSources', () => ({ ok: true, value: { items: original ? [{
     source: { workspace_id: original.workspace_id, session_id: original.session_id,
       source_message_id: original.source_message_id, source_revision: original.source_revision },
-    snapshot_digest: 'a'.repeat(64), original_message: original.original_message }] : [] } }))
+    snapshot_digest: 'a'.repeat(64), original_message: original.original_message,
+    timeline_position: { after_sequence: null, local_order: '1' } }] : [] } }))
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
@@ -375,6 +376,7 @@ it('asks a natural question in the built composer and accepts a plain clarificat
   fireEvent.keyDown(input, { key: 'Enter' })
   const question = await screen.findByText('Guide · Product Which login problem should I check?', { exact: true }, { timeout: 10_000 })
   await waitFor(() => { expect(input.textContent).toBe('') })
+  await screen.findByText(original?.original_message ?? '', { exact: true })
   const observations = [`question=${question.textContent}`, `original=${original?.original_message}`]
   fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'Please check the redirect to the home page.' } })
   await waitFor(() => { expect(input.textContent).toBe('Please check the redirect to the home page.') })

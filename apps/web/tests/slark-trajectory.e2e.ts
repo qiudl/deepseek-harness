@@ -43,9 +43,11 @@ it.skipIf(mode === 'record')('replays a recorded Session beside its readonly col
       const request = route.request().postDataJSON() as { rpcId: string }
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ type: 'server-response', rpcId: request.rpcId,
         result: { ok: true, value: { items: [{ source: { workspace_id: workspace.id, session_id: id, source_message_id: 'original', source_revision: '1' },
-          snapshot_digest: 'a'.repeat(64), original_message: 'Verify the recorded file operation' },
+          snapshot_digest: 'a'.repeat(64), original_message: 'Verify the recorded file operation',
+          timeline_position: { after_sequence: null, local_order: '2' } },
         { source: { workspace_id: workspace.id, session_id: id, source_message_id: 'older', source_revision: '1' },
-          snapshot_digest: 'c'.repeat(64), original_message: 'An older collaboration message' }] } } }) })
+          snapshot_digest: 'c'.repeat(64), original_message: 'An older collaboration message',
+          timeline_position: { after_sequence: null, local_order: '1' } }] } } }) })
     })
     await page.route('**/api/session/prompt', async (route) => { prompts++; await route.abort() })
     await page.addInitScript(() => {
@@ -84,7 +86,8 @@ it.skipIf(mode === 'record')('replays a recorded Session beside its readonly col
       const panel = page.getByTestId('slark-collaboration-trajectory')
       await page.waitForFunction(() => Reflect.get(window, '__trajectoryOlderWaiting') === true)
       await panel.getByText('Verify the recorded file operation', { exact: true }).waitFor()
-      expect(await panel.locator('article').count()).toBe(1)
+      expect(await panel.locator('article').count()).toBe(2)
+      await panel.getByText('An older collaboration message', { exact: true }).waitFor()
       await page.evaluate(() => { window.dispatchEvent(new Event('trajectory-older-release')) })
       await panel.getByText('An older collaboration message', { exact: true }).waitFor()
       await panel.getByTestId('slark-trace-load').first().click()
