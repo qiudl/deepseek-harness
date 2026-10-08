@@ -47,7 +47,7 @@ it('restores all original replies when separate authorized reads exceed thirty s
   } finally { f.model.dispose(); timeout.mockRestore(); vi.useRealTimers() }
 })
 
-it('loads a reply page when delivery and planning each finish within their own read window', async () => {
+it.each([20_000, 80_000])('loads a reply page when delivery takes %s ms and planning stays in its read window', async (deliveryMs) => {
   vi.useFakeTimers()
   const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
     const controller = new AbortController()
@@ -57,7 +57,7 @@ it('loads a reply page when delivery and planning each finish within their own r
   onTestFinished(() => { timeout.mockRestore(); vi.useRealTimers() })
   const f = fixture()
   f.bridge.collaborationDeliveries = async (request) => {
-    await new Promise(resolve => setTimeout(resolve, 20_000))
+    await new Promise(resolve => setTimeout(resolve, deliveryMs))
     return { ok: true, value: { deliveries: [{ ...reply, delivery_id: request.after_delivery_id ? 'delivery2' : 'delivery' }],
       ...(request.after_delivery_id ? {} : { next_cursor: 'delivery' }) } }
   }
@@ -67,9 +67,9 @@ it('loads a reply page when delivery and planning each finish within their own r
   }
   try {
     const refresh = f.model.refresh()
-    await vi.advanceTimersByTimeAsync(36_000); await refresh
+    await vi.advanceTimersByTimeAsync(deliveryMs + 16_000); await refresh
     const page = f.model.loadReplies(original.snapshot_digest)
-    await vi.advanceTimersByTimeAsync(36_000); await page
+    await vi.advanceTimersByTimeAsync(deliveryMs + 16_000); await page
     expect(f.model.getSnapshot().groups[0]?.replies.map(item => item.delivery_id)).toEqual(['delivery', 'delivery2'])
     expect(f.model.getSnapshot().groups[0]).not.toHaveProperty('pendingUnavailable')
   } finally { f.model.dispose(); timeout.mockRestore(); vi.useRealTimers() }
@@ -106,7 +106,7 @@ it('stops opening further original reads when the complete query window expires'
   vi.useFakeTimers()
   const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
     const controller = new AbortController()
-    setTimeout(() => { controller.abort(new DOMException('Read timed out', 'TimeoutError')) }, ms > 60_000 ? 1 : ms)
+    setTimeout(() => { controller.abort(new DOMException('Read timed out', 'TimeoutError')) }, ms > 180_000 ? 1 : ms)
     return controller.signal
   })
   onTestFinished(() => { timeout.mockRestore(); vi.useRealTimers() })

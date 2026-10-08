@@ -6,6 +6,7 @@ import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionCollaborationSourceItem, SessionCollaborationSourcesValue } from '@deepseek-ai/dsh-api-session-controller/types'
 
 type Source = SessionCollaborationSourceItem['source']
+const RESULT_READ_WINDOW_MS = 180_000
 /** Main's readable result projection; transport delivery and execution have separate states. */
 export interface ScopedCollaborationReply {
   readonly delivery_id: string
@@ -312,8 +313,8 @@ export class CollaborationResultsModel {
   private async results(original: SessionCollaborationSourceItem, signal: AbortSignal, generation: number,
     cursor?: string, prior: readonly ScopedCollaborationReply[] = [],
     previous: readonly ScopedCollaborationReply[] = []): Promise<CollaborationResultGroup> {
-    // Main gives delivery and planning their own thirty-second authenticated reads.
-    signal = AbortSignal.any([signal, AbortSignal.timeout(60_000)])
+    // Allow Main's two-minute delivery chain and its separate planning read.
+    signal = AbortSignal.any([signal, AbortSignal.timeout(RESULT_READ_WINDOW_MS)])
     try {
       signal.throwIfAborted()
       const host = this.boundBridge as ReadableResultsBridge
@@ -366,7 +367,7 @@ export class CollaborationResultsModel {
     this.controller = controller
     // Budget eight originals per Native page, two workers, retained reply pages and a located original.
     const extraReplyPages = [...this.replyPages.values()].reduce((sum, pages) => sum + pages - 1, 0)
-    const queryBudget = 30_000 * (this.sourcePages + 1) + 60_000 * (4 * this.sourcePages + extraReplyPages + 1)
+    const queryBudget = 30_000 * (this.sourcePages + 1) + RESULT_READ_WINDOW_MS * (4 * this.sourcePages + extraReplyPages + 1)
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(queryBudget)])
     this.publish({ ...this.state, phase: 'loading' })
     try {
@@ -467,7 +468,7 @@ export class CollaborationResultsModel {
     this.controller = controller
     this.publish({ ...this.state, phase: 'loading' })
     try {
-      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)])
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(RESULT_READ_WINDOW_MS)])
       let next = await this.results(group.original, signal, generation, group.nextCursor, group.replies)
       if (this.readCurrent(generation, controller)) {
         if (bytes(this.state.groups.map(item =>
