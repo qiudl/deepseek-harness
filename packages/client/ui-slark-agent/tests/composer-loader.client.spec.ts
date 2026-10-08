@@ -26,7 +26,8 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import { createElement, useSyncExternalStore } from 'react'
 import { fireEvent, render, within } from '@testing-library/react'
 import { ProjectScopePanel } from '../src/client/ProjectScopeDock.tsx'
-import { panelRuntime, dockTranslate } from './fixture-state.client.ts'
+import { panelRuntime, dockRuntime, dockTranslate } from './fixture-state.client.ts'
+import { CollaborationTimeline } from '../src/client/CollaborationTimeline.tsx'
 import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
 import { createScopedCollaborationSource, scopedCollaborationClipboard } from '../src/client/collaboration-source.ts'
@@ -111,12 +112,15 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   const invoke = vi.fn(async (_input: InvokeInput) => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
   const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
-  const workspace = { id: workspaceId, archived: false, siblings: [] as SessionId[], onSubscribe: () => {} }
+  const workspace = { id: workspaceId, archived: false, siblings: [] as SessionId[], subscribers: 0, onSubscribe: () => {} }
   ctx.provide('workspaces', { list: {
     getSnapshot: () => ({ phase: 'ready', state: 'idle', error: null,
       archivedSessionIds: workspace.archived ? [id] : [],
       items: [{ workspaceId: workspace.id, sessionIds: [id, ...workspace.siblings] }] }),
-    subscribe: () => { workspace.onSubscribe(); return () => undefined },
+    subscribe: () => {
+      workspace.subscribers++; workspace.onSubscribe()
+      return () => { workspace.subscribers-- }
+    },
   } } as never)
   const originals: { source: { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
     snapshot_digest: string
@@ -1771,7 +1775,9 @@ it('opens one real sidebar page from the YAML launcher and removes its type and 
   expect(guide.icon).toBeDefined()
   expect(guide.title()).toBe('Slark 协同')
   expect(guide.description()).toContain('@Agent')
-  expect(f.ctx.slots.entries('conversation.input.dock').map(item => item.options.id)).toEqual(['slark-project-scope'])
+  expect(f.ctx.slots.entries('conversation.input.dock').map(item => item.options.id)).toEqual([
+    'slark-collaboration-activity', 'slark-project-scope',
+  ])
   expect(f.ctx.slots.entries('slark.collaboration.history')).toHaveLength(1)
   const panel = f.ctx.slots.entries('sidebar.right.pane.tab').find(item => item.options.key === definition?.id)
   if (!panel?.inject) throw Error('missing collaboration page')
@@ -1887,4 +1893,96 @@ it('rebinds collaboration activity and readonly history when the same Session re
   await after.hooks.slarkResults.refresh()
   expect(f.sourceReads).toHaveBeenCalledOnce()
   expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+})
+
+it.each(['source', 'empty', 'read-error'] as const)('loads %s collaboration history from the blank Conversation composer before mounting Chat or the sidebar', async (mode) => {
+  const f = await bench(true), id = SessionId('session-1')
+  const original = { source: { workspace_id: f.workspace.id, session_id: id, source_message_id: 'original', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · Project original',
+    timeline_position: { after_sequence: null, local_order: '1' } }
+  f.sourceReads.mockImplementation(async () => {
+    if (mode === 'read-error') throw Error('history unavailable')
+    return { ok: true, value: { items: mode === 'source' ? [original] : [] } }
+  })
+  const conversation = f.ctx.uiConversation.binding(id)
+  const off = conversation.snapshot.subscribe(() => {})
+  onTestFinished(off)
+  // A blank Conversation mounts its composer but refuses the Chat view until an independent activity is observed.
+  for (const entry of f.ctx.slots.entries('conversation.input.dock')) {
+    if (entry.inject) Reflect.apply(entry.inject, undefined, [id])
+    if (entry.options.id === 'slark-collaboration-activity') {
+      const view = render(createElement(entry.component, dockRuntime(id)))
+      expect(view.container.textContent).toBe('')
+      onTestFinished(() => { view.unmount() })
+    }
+  }
+  await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalled() })
+  await vi.waitFor(() => {
+    expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(mode !== 'empty')
+  })
+  const records = f.chatTimeline.source(id)
+  const offRecords = records.subscribe(() => {})
+  onTestFinished(offRecords)
+  expect(records.getSnapshot()).toEqual(mode === 'source'
+    ? [{ recordId: original.snapshot_digest, afterSequence: null, localOrder: '1' }] : [])
+  if (mode === 'source') {
+    const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+    if (!entry?.inject) throw Error('missing timeline registration')
+    const bindings = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+    const model = bindings.hooks.slarkResults
+    const props: Parameters<typeof CollaborationTimeline>[0] = {
+      ...dockRuntime(id), recordId: original.snapshot_digest, t: dockTranslate,
+      useSlarkResults: selector => selector(useSyncExternalStore(model.subscribe, model.getSnapshot)),
+      loadSources: () => bindings.loadSources(), loadReplies: digest => bindings.loadReplies(digest),
+      executionAction: (digest, taskId, reconcile) => bindings.executionAction(digest, taskId, reconcile),
+    }
+    const view = render(createElement(CollaborationTimeline, props))
+    onTestFinished(() => { view.unmount() })
+    await expect(`${view.container.textContent}\n`).toMatchFileSnapshot(join(process.cwd(),
+      'packages/client/ui-slark-agent/tests/expected/blank-conversation-collaboration.expected.txt'))
+  }
+  expect(f.ctx.sessions.binding(id)!.eventSource.getSnapshot().entries).toEqual([])
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing Slark plugin')
+  await plugin.fiber.dispose()
+  expect(records.getSnapshot()).toEqual([])
+  expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(false)
+})
+
+it('releases composer-initialized history observers when its Session Controller closes without another view mount', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const originalObservers = f.workspace.subscribers
+  const conversation = f.ctx.uiConversation.binding(id)
+  const off = conversation.snapshot.subscribe(() => {})
+  onTestFinished(off)
+  for (const entry of f.ctx.slots.entries('conversation.input.dock')) {
+    if (entry.inject) Reflect.apply(entry.inject, undefined, [id])
+  }
+  await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalled() })
+  expect(f.workspace.subscribers).toBe(originalObservers + 3)
+  await f.closeSession()
+  expect(f.workspace.subscribers).toBe(0)
+  expect(f.chatTimeline.source(id).getSnapshot()).toEqual([])
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+})
+
+it('refuses history for absent or closed Session Controllers and replaces a retained previous Controller without keeping its observers', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  if (!entry?.inject) throw Error('missing timeline registration')
+  const inject = entry.inject
+  expect(() => { Reflect.apply(inject, undefined, [SessionId('absent')]) }).toThrow('collaboration_view_closed')
+  const before = Reflect.apply(inject, undefined, [id]) as CollaborationResultsInjected
+  const closePrevious = await f.rebind(true)
+  const after = Reflect.apply(inject, undefined, [id]) as CollaborationResultsInjected
+  expect(after.hooks.slarkResults).not.toBe(before.hooks.slarkResults)
+  expect(f.workspace.subscribers).toBe(2)
+  await closePrevious()
+  expect(f.workspace.subscribers).toBe(2)
+  await before.hooks.slarkResults.refresh()
+  expect(f.sourceReads).not.toHaveBeenCalled()
+  await f.ctx.sessions.binding(id)!.ctx.fiber.dispose()
+  expect(f.workspace.subscribers).toBe(0)
+  expect(() => { Reflect.apply(inject, undefined, [id]) }).toThrow('collaboration_view_closed')
 })

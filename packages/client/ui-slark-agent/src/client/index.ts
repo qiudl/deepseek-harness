@@ -110,8 +110,7 @@ type ResultsEntry = {
   bindings: CollaborationResultsInjected
   timelineModel: CollaborationResultsModel
   timelineBindings: CollaborationResultsInjected
-  stopActivity: () => void
-  stopTimeline: () => void
+  release: () => void
 }
 
 function isAgentReference(item: Record<string, unknown>): item is Record<string, unknown> & AgentReference {
@@ -152,19 +151,18 @@ export function apply(ctx: ClientContext): void {
     const connection = resultsCtx.get('connection') as ConnectionHandle
     const models = new Map<string, ResultsEntry>()
     resultsCtx.effect(() => () => {
-      models.forEach(({ model, timelineModel, stopActivity, stopTimeline }) => {
-        stopTimeline(); stopActivity(); timelineModel.dispose(); model.dispose()
-      })
+      models.forEach(({ release }) => { release() })
       models.clear()
     },
     'ui-slark-agent: workspace results')
     const entryFor = (sessionId: SessionId): ResultsEntry => {
       if (resultsCtx.fiber.uid === null) throw Error('collaboration_view_closed')
-      const owner = resultsCtx.uiConversation.binding(sessionId)
+      const source = resultsCtx.sessions.binding(sessionId)
+      if (!source || source.ctx.fiber.uid === null) throw Error('collaboration_view_closed')
+      const owner = resultsCtx.uiConversation.binding(source)
       let entry = models.get(sessionId)
       if (entry && entry.owner !== owner) {
-        entry.stopTimeline(); entry.stopActivity(); entry.timelineModel.dispose(); entry.model.dispose()
-        models.delete(sessionId)
+        entry.release()
         entry = undefined
       }
       if (!entry) {
@@ -178,7 +176,10 @@ export function apply(ctx: ClientContext): void {
           }, signal), true)
         const model = createModel('workspace'), timelineModel = createModel('session')
         const stopActivity = owner.registerActivity('slark-collaboration', {
-          getSnapshot: () => timelineModel.getSnapshot().groups.length > 0,
+          getSnapshot: () => {
+            const snapshot = timelineModel.getSnapshot()
+            return snapshot.groups.length > 0 || snapshot.phase === 'error'
+          },
           subscribe: listener => timelineModel.subscribe(listener),
         })
         let previous: ReturnType<typeof timelineModel.getSnapshot> | undefined
@@ -201,7 +202,11 @@ export function apply(ctx: ClientContext): void {
           },
           subscribe: listener => timelineModel.subscribe(listener),
         })
-        entry = { owner, model, timelineModel, stopActivity, stopTimeline,
+        const releaseEffect = source.ctx.effect(() => () => {
+          models.delete(sessionId)
+          stopTimeline(); stopActivity(); timelineModel.dispose(); model.dispose()
+        }, 'ui-slark-agent: Session result projections')
+        entry = { owner, model, timelineModel, release: () => { void releaseEffect() },
           timelineBindings: { hooks: { slarkResults: timelineModel }, loadSources: () => timelineModel.loadSources(),
             loadReplies: digest => timelineModel.loadReplies(digest),
             executionAction: (digest, taskId, reconcile) => timelineModel.executionAction(digest, taskId, reconcile) },
@@ -229,6 +234,14 @@ export function apply(ctx: ClientContext): void {
       }
       return entry
     }
+    resultsCtx.slots.inject('conversation.input.dock', () => resultsCtx.slots.register({
+      name: 'conversation.input.dock', id: 'slark-collaboration-activity',
+      inject: (sessionId) => {
+        // Blank Conversations mount the composer before Chat; its activity must discover independent history first.
+        entryFor(sessionId)
+        return {}
+      },
+    }, () => null))
     resultsCtx.slots.inject('slark.collaboration.history', () => resultsCtx.slots.register({
       name: 'slark.collaboration.history', locale: NS,
       inject: sessionId => entryFor(sessionId).bindings,
