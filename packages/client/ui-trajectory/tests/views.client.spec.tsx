@@ -282,6 +282,7 @@ async function bench(snapshot = historySnapshot(NODES)) {
     openTurn: createSnapshotStore<number | undefined>(undefined),
     activate: () => {},
     retainActivity: () => () => {},
+    registerActivity: () => { throw Error('unexpected independent activity in trajectory fixture') },
     target: target => targetSources[target],
   }
   vi.spyOn(uiConversation, 'binding').mockReturnValue(binding)

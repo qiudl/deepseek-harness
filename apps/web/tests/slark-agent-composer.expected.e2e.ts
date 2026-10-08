@@ -15,6 +15,78 @@ const EXPECTED = join(process.cwd(), 'apps/web/tests/expected/slark-agent-compos
 installAssembledBootEnv()
 afterEach(() => { window.dispatchEvent(new Event('pagehide')); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
 
+it('clicking Send in root mode dispatches the frozen task and displays its reply without a panel action', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051', trace = 'b'.repeat(32)
+  type Source = { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
+  let original: { source: Source
+    snapshot_digest: string
+    original_message: string
+    timeline_position: { after_sequence: null; local_order: string } } | undefined
+  let dispatched = false
+  const submit = vi.fn(async (input: Source & { original_message: string }) => {
+    const source = { workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision }
+    original = { source, snapshot_digest: 'a'.repeat(64), original_message: input.original_message,
+      timeline_position: { after_sequence: null, local_order: '1' } }
+    return { ok: true, value: { source, submission_state: 'planning_recorded',
+      root_task_id: 'bfb432fd-a2a2-4cbd-b1dc-4648c8944081', root_trace_id: trace } }
+  })
+  const execute = vi.fn(async (request: { action: string; source?: Source; previewId?: string; taskId?: string }) => {
+    if (request.action === 'preview') {
+      expect(request.source).toEqual(original?.source)
+      return { ok: true, rootTraceId: trace, previewId: 'preview', executionEnabled: true,
+        tasks: [{ taskId: 'task', question: 'check login', agentName: 'Guide', projectName: 'Product' }] }
+    }
+    expect(request).toEqual({ action: 'confirm', previewId: 'preview', taskId: 'task' })
+    dispatched = true
+    return { ok: true, status: 'recorded' }
+  })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {
+    collaborationScopeAvailable: true, collaborationPlanningAvailable: true, collaborationExecutionAvailable: false,
+    collaborationSubmit: submit, collaborationRootExecution: execute,
+    collaborationPending: async ({ source }: { source: Source }) => ({ ok: true,
+      value: { source, plan: null, pending_items: [], frozen_task_count: 1 } }),
+    collaborationDeliveries: async ({ source }: { source: Source }) => ({ ok: true, value: { deliveries: dispatched ? [{
+      delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1',
+      source_locator: source, source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded', invocation_state_version: '2',
+      target_display_snapshot: { agent_name: 'Guide', project_name: 'Product' }, answer: 'Login checked.' }] : [] } }),
+    collaborationWorkspace: async ({ workspace_id, operation }: WorkspaceRequest) => operation.kind === 'get'
+      ? { ok: true, value: { workspace_id, version: '1', selected_project_ids: ['product'] } }
+      : { ok: true, value: { items: [{ project_id: 'product', project_name: 'Product', agent_id: 'guide', agent_name: 'Guide',
+        available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' }], next_cursor: null, scope_version: '1' } },
+  })
+  const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'], remote: { workspaceId: workspace } })
+  remote.mock.unary('fileReferences/list', { ok: true, value: [] })
+  remote.mock.unary('sessionReferenceResolver/candidates', { ok: true, value: [] })
+  remote.mock.unary('session/collaborationSources', () => ({ ok: true, value: { items: original ? [original] : [] } }))
+  const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
+  const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
+  if (!start) throw Error('fixture Workspace action missing')
+  fireEvent.click(start)
+  const input = await waitFor(() => {
+    const element = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
+    if (!element) throw Error('composer missing')
+    return element
+  }, { timeout: 10_000 })
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => '@Gui' } })
+  fireEvent.mouseDown(await screen.findByRole('option', { name: /Guide · Product/ }, { timeout: 10_000 }))
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'check login' } })
+  const send = await screen.findByRole('button', { name: 'Send message' })
+  expect(send.hasAttribute('disabled')).toBe(false)
+  fireEvent.click(send)
+  await waitFor(() => { expect(input.textContent).toBe('') }, { timeout: 10_000 })
+  await screen.findByText(`Tasks dispatched. Trace ID: ${trace}`)
+  await screen.findByText('Login checked.', {}, { timeout: 10_000 })
+  expect(submit).toHaveBeenCalledTimes(1)
+  expect(execute.mock.calls.map(([request]) => request.action)).toEqual(['preview', 'confirm'])
+  expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
+  await expect([`original=${original?.original_message}`, 'planning-receipts=1', 'execution=preview,confirm',
+    `notice=Tasks dispatched. Trace ID: ${trace}`, 'reply=Login checked.', 'ordinary-model-prompts=0', 'draft=empty',
+  ].join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
+    'apps/web/tests/expected/slark-agent-composer/root-send.expected.txt'))
+})
+
 it('sends two scoped Agents from the built composer as one original message without opening a task form', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
@@ -35,6 +107,9 @@ it('sends two scoped Agents from the built composer as one original message with
   const workspaceCall = async ({ workspace_id, operation }: WorkspaceRequest) => {
     if (operation.kind === 'get') return { ok: true,
       value: { workspace_id, version: '1', selected_project_ids: ['product', 'engineering'] } }
+    if (operation.kind === 'projects') return { ok: true, value: { items: [
+      { project_id: 'product', project_name: 'Product' }, { project_id: 'engineering', project_name: 'Engineering' },
+    ], next_cursor: null } }
     return { ok: true, value: { items: [
       { project_id: 'product', project_name: 'Product', agent_id: 'guide', agent_name: 'Guide',
         available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
@@ -66,8 +141,19 @@ it('sends two scoped Agents from the built composer as one original message with
     if (!element) throw Error('composer missing')
     return element
   }, { timeout: 10_000 })
-  fireEvent.paste(input, { clipboardData: { items: [], getData: () => '@Gui' } })
-  fireEvent.mouseDown(await screen.findByRole('option', { name: /Guide · Product/ }, { timeout: 10_000 }))
+  const launcher = await screen.findByTestId('slark-scope-toggle')
+  expect(screen.queryByTestId('slark-scope-panel')).toBeNull()
+  fireEvent.click(launcher); fireEvent.click(launcher)
+  const panel = await screen.findByRole('region', { name: 'Slark collaboration' })
+  expect(screen.getAllByTestId('slark-scope-panel')).toHaveLength(1)
+  expect(panel.querySelector('[data-composer-input]')).toBeNull()
+  await waitFor(() => {
+    expect(within(panel).getByTestId<HTMLButtonElement>('slark-scope-mention-product-guide').disabled).toBe(false)
+  })
+  fireEvent.click(within(panel).getByTestId('slark-scope-mention-product-guide'))
+  await waitFor(() => { expect(input.textContent).toBe('@Guide · Product '); expect(document.activeElement).toBe(input) })
+  expect(submit).not.toHaveBeenCalled()
+  expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
   fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'check login; @Tes' } })
   fireEvent.mouseDown(await screen.findByRole('option', { name: /Tester · Engineering/ }, { timeout: 10_000 }))
   fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'test the redirect' } })
@@ -94,6 +180,7 @@ it('sends two scoped Agents from the built composer as one original message with
   if (host === null || typeof host !== 'object') throw Error('missing execution consumer')
   await expect([`parent-execution=${String(Reflect.get(host, 'collaborationExecutionAvailable'))}`, `original=${sent.original_message}`,
     ...sent.active_mentions.map(mention => `target=${mention.binding.target.project_id}/${mention.binding.target.agent_id}`),
+    'first-mention=directory-click', 'directory-click-submissions=0',
     'shared-original-source=true', 'distinct-mention-ids=2', 'original-submissions=1', 'ordinary-model-prompts=0', 'draft=empty',
   ].join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
     'apps/web/tests/expected/slark-agent-composer/multiple-agents.expected.txt'))
@@ -198,8 +285,9 @@ it('saves multiple Slark spaces in the built collaboration area and never invoke
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
   fireEvent.click(start)
-  const panel = await screen.findByRole('region', { name: 'Slark collaboration' }, { timeout: 10_000 })
-  fireEvent.click(within(panel).getByTestId('slark-scope-toggle'))
+  const launcher = await screen.findByTestId('slark-scope-toggle')
+  fireEvent.click(launcher)
+  let panel = await screen.findByRole('region', { name: 'Slark collaboration' }, { timeout: 10_000 })
   fireEvent.click(await within(panel).findByRole('checkbox', { name: 'Product' }))
   fireEvent.click(within(panel).getByRole<HTMLInputElement>('checkbox', { name: 'Engineering' }))
   fireEvent.click(within(panel).getByTestId('slark-scope-apply'))
@@ -212,8 +300,12 @@ it('saves multiple Slark spaces in the built collaboration area and never invoke
   ]
   fireEvent.click(within(panel).getByTestId('slark-scope-clear'))
   fireEvent.click(within(panel).getByTestId('slark-scope-cancel'))
-  fireEvent.click(within(panel).getByTestId('slark-scope-toggle'))
-  expect((within(panel).getByRole<HTMLInputElement>('checkbox', { name: 'Product' })).checked).toBe(true)
+  await waitFor(() => { expect(screen.queryByTestId('slark-scope-panel')).toBeNull() })
+  fireEvent.click(launcher)
+  panel = await screen.findByRole('region', { name: 'Slark collaboration' })
+  await waitFor(() => {
+    expect(within(panel).getByRole<HTMLInputElement>('checkbox', { name: 'Product' }).checked).toBe(true)
+  })
   expect(bridge.mock.calls.filter(([x]) => x.operation.kind === 'apply')).toHaveLength(1)
   observations.push(`cancel-retains=${selected.join(',')}`)
   const input = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
@@ -266,7 +358,8 @@ it('asks a natural question in the built composer and accepts a plain clarificat
   remote.mock.unary('session/collaborationSources', () => ({ ok: true, value: { items: original ? [{
     source: { workspace_id: original.workspace_id, session_id: original.session_id,
       source_message_id: original.source_message_id, source_revision: original.source_revision },
-    snapshot_digest: 'a'.repeat(64), original_message: original.original_message }] : [] } }))
+    snapshot_digest: 'a'.repeat(64), original_message: original.original_message,
+    timeline_position: { after_sequence: null, local_order: '1' } }] : [] } }))
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
@@ -283,6 +376,7 @@ it('asks a natural question in the built composer and accepts a plain clarificat
   fireEvent.keyDown(input, { key: 'Enter' })
   const question = await screen.findByText('Guide · Product Which login problem should I check?', { exact: true }, { timeout: 10_000 })
   await waitFor(() => { expect(input.textContent).toBe('') })
+  await screen.findByText(original?.original_message ?? '', { exact: true })
   const observations = [`question=${question.textContent}`, `original=${original?.original_message}`]
   fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'Please check the redirect to the home page.' } })
   await waitFor(() => { expect(input.textContent).toBe('Please check the redirect to the home page.') })
@@ -327,7 +421,8 @@ it('reads original-root collaboration history from the built Trajectory tab with
     const sessionId: unknown = Reflect.get(request, 'sessionId')
     if (typeof sessionId !== 'string') throw Error('session missing')
     return { ok: true, value: { items: [{ source: { workspace_id: workspace, session_id: sessionId,
-      source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64), original_message: 'Check the recorded file operation' }] } }
+      source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64), original_message: 'Check the recorded file operation',
+    timeline_position: { after_sequence: null, local_order: '1' } }] } }
   })
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')

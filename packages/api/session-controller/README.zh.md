@@ -32,9 +32,11 @@ kind: "package-reference"
 
 Client journal 在发布 follow 快照、live entry 或历史页之前验证当前 Session 事件 envelope。它复用浏览器安全的 Session validator，检查必需的 surface marker、精确的 replacement endpoint、更早且唯一的 source seq、内嵌 Assistant 提供方元数据、request header 可选字段的省略规则以及工具错误一致性。无效 record 直接失败，不删除字段或归一化；范围成员与来源存在性仍由 Host 的持久日志检查。
 
-每个 endpoint 都声明自己的激活策略。列表只读取持久化 header 与 projection cache row，绝不调用逐 Session stat 或打开冷 Session body。当前格式 cache identity 可以提供全部列表 hint；生命周期匹配的 predecessor cache 只能提供版本兼容的 title，作为可能过时的展示事实，绝不能作为权威 fold seed。搜索、附件、历史页、日志跟随、skill 发现和工作区路径打开可以在不激活 Agent 的情况下检查 persistence；`canOpenWorkspacePath()` 无需指定 Session 即可报告原生打开能力。取消要求 live 状态；queue 变更、模型、重命名、prompt 和文件引用操作可以解析或恢复普通 Session。提示词会在解析 Agent 或追加 Session 事件前，拒绝既没有非空白文本也没有附件的 content；queue edit 只接受非空文本 content。prompt 准入从注入的 [`fileUploads`](../../client/file-upload/README.zh.md) Host 服务取得不透明凭证，在把完整有序内容列表交给 `ctx.attachments` 前解析每个属于同一 Agent 的凭证。`requestId` 已随 inbox 插入或 user message 提交时，prompt 重试直接返回原来的接受结果，不会重复插入消息；消息被领取或取消后，该接受结果仍然有效。并发重试在附件准入完成后、插入消息前再次检查接受结果。只有 create 与 fork 会直接创建新 Agent。该服务把同一套感知 preset 的恢复策略和 subagent ownership fence 同时用于自身方法，以及其他 Remote namespace 使用的 Typert Agent 与 Session lookup。Queue 变更只有一个狭窄例外：当前 projection identity 为 continuable 且来自自身非 seed suffix 的在线 child，可以在两个 inbox 目标上使用普通 Edit、Remove 与 QueueDock Steer action。One-shot、缺失、未知、损坏、仅含 seed identity 或冷 child 继续被拒绝，且不会恢复。skill 目录优先使用已有 live Agent，否则使用所记录 preset 的常驻 scope，因此列表查询绝不会启动 Agent。经过鉴权的文件交付路由通过 `workspaceDesktop()` 获取提供服务的 Host 名称和文件管理器行为。`openWorkspacePath({ path, action: "reveal" })` 将文件管理器导航委托给原生适配器；省略 `action` 时按文件类型关联打开，包括 HTML 和 SVG。两种操作都要求当前文件系统将请求的 Host 路径映射到同一个规范进程路径；无法映射的远端路径会在执行原生命令之前被拒绝。 `session.projections` 通过一次 live-preferred Session observation 读取完整基线，不激活 Agent。Session 不存在时返回 null，并可提供任意已注册的 projection key。Client 通过 `projectionsBySession` 暴露共享值和显式读取状态，由领域选择自身的 key。Session 列表摘要携带 `agentAvailable`，通过已有摘要与状态事件更新，与持久化 projection 相互独立。初始读取与实时 projection 帧使用相同的序号排序规则。
+每个 endpoint 都声明自己的激活策略。列表只读取持久化 header、projection cache row 和 Profile 协同 Source journal，绝不调用逐 Session stat 或打开冷 Session body。当前格式 cache identity 可以提供全部列表 hint；生命周期匹配的 predecessor cache 只能提供版本兼容的 title，作为可能过时的展示事实，绝不能作为权威 fold seed。搜索、附件、历史页、日志跟随、skill 发现和工作区路径打开可以在不激活 Agent 的情况下检查 persistence；`canOpenWorkspacePath()` 无需指定 Session 即可报告原生打开能力。取消要求 live 状态；queue 变更、模型、重命名、prompt 和文件引用操作可以解析或恢复普通 Session。提示词会在解析 Agent 或追加 Session 事件前，拒绝既没有非空白文本也没有附件的 content；queue edit 只接受非空文本 content。prompt 准入从注入的 [`fileUploads`](../../client/file-upload/README.zh.md) Host 服务取得不透明凭证，在把完整有序内容列表交给 `ctx.attachments` 前解析每个属于同一 Agent 的凭证。`requestId` 已随 inbox 插入或 user message 提交时，prompt 重试直接返回原来的接受结果，不会重复插入消息；消息被领取或取消后，该接受结果仍然有效。并发重试在附件准入完成后、插入消息前再次检查接受结果。只有 create 与 fork 会直接创建新 Agent。该服务把同一套感知 preset 的恢复策略和 subagent ownership fence 同时用于自身方法，以及其他 Remote namespace 使用的 Typert Agent 与 Session lookup。Queue 变更只有一个狭窄例外：当前 projection identity 为 continuable 且来自自身非 seed suffix 的在线 child，可以在两个 inbox 目标上使用普通 Edit、Remove 与 QueueDock Steer action。One-shot、缺失、未知、损坏、仅含 seed identity 或冷 child 继续被拒绝，且不会恢复。skill 目录优先使用已有 live Agent，否则使用所记录 preset 的常驻 scope，因此列表查询绝不会启动 Agent。经过鉴权的文件交付路由通过 `workspaceDesktop()` 获取提供服务的 Host 名称和文件管理器行为。`openWorkspacePath({ path, action: "reveal" })` 将文件管理器导航委托给原生适配器；省略 `action` 时按文件类型关联打开，包括 HTML 和 SVG。两种操作都要求当前文件系统将请求的 Host 路径映射到同一个规范进程路径；无法映射的远端路径会在执行原生命令之前被拒绝。 `session.projections` 通过一次 live-preferred Session observation 读取完整基线，不激活 Agent。Session 不存在时返回 null，并可提供任意已注册的 projection key。Client 通过 `projectionsBySession` 暴露共享值和显式读取状态，由领域选择自身的 key。Session 列表摘要携带 `agentAvailable`，通过已有摘要与状态事件更新，与持久化 projection 相互独立。初始读取与实时 projection 帧使用相同的序号排序规则。
 
 Client 列表行和驻留 Session 使用当前 `sessionListMetadata` 投影纠正过期的空白会话提示；最近活动时间取摘要时间戳与投影中最后一次用户提示词时间的较晚值。当 SessionManager 在列表行到达前创建实例时，会使用已保留的该 Session 元数据对账空白状态。因此，即使旧列表响应仍将已有对话标为空白，新会话操作也不会复用已经打开过的对话。
+
+已提交的协同 Source 会使所属 Session 的摘要标为非空，即使没有普通对话 Turn。Source 捕获在 journal 提交后发布已连接 Session 的更新摘要；列表读取从 Profile journal 恢复这一身份。Source 发布失败或仅有 timeline 位置都不会建立非空身份。Session 投影值及序列水位仍只由普通 Session log 派生。
 
 可信 Host 调用方可以用 `inspectWorkspaceModelSelection(sessionId, workspaceId, signal?)` 读取不可变的 `WorkspaceModelSelection`：注册表中的 `workspaceId`、`sessionId`，以及只含 provider、model 和可选 reasoning effort 的 `selection`。读取会在异步操作后重新检查注册表成员关系、规范化 cwd 和归档状态；工作区不存在、子 Agent、归属变化或取消均会拒绝。冷读取取得只读句柄；已附着会话读取当前选择状态。两条路径都不会激活 Agent、追加事件或调用 provider。该方法没有 Client Remote 路由，也不提供账户认证或可执行适配器快照。 此 Host 读取绑定到提供服务的 Profile 上下文，调用方的 Cordis 作用域不能替换其注册表。
 
@@ -121,9 +123,15 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 ## 协同 Source 与 journal
 
+发布新 Source 前，`captureCollaborationSource` 会在 Profile 的单文件 `collaboration_timeline_v2` 领域记录首次观察到的普通事件序号及独立展示顺序。记录只包含 Source 坐标和输入摘要，不包含消息正文、模型元数据或 Session 事件。即使 Source 发布失败，重试也保留首次位置；恢复的旧 Source 不会获得虚构的位置。位置本身不授予展示或执行权限。Profile 在关闭时排空已接受的写入；存储损坏或写入确认不确定时，需要关闭并重新打开才能复用。普通 Session 和现有 Source 格式保持不变。
+
 `openCollaborationAnalysisJournal(facility)` 拥有独立的单文件 `collaboration_analysis_v2` 领域。`createCollaborationAnalysisWriter(journal, claim)` 提供 Source 分析所需的 persist 回调：先提交完整、无信号 manifest 的规范 JSON，再向当前可信协调器申请派发资格，匹配的资格记录持久化后才返回。`CollaborationAnalysisJournalRecord` 保留原始请求 ID、完整 Source digest 与输入 manifest digest；`CollaborationAnalysisDispatchGrant` 绑定 plan/revision/attempt/fence 和租约。重复请求、取消、过期资格和写入确认丢失都会阻止派发。恢复只能枚举冻结的输入与资格记录，不恢复可执行调用。Profile 在已接受写入排空后关闭 `CollaborationAnalysisJournal`。回调中的协调器权限以及真实聊天/传输装配仍由调用方负责。
 
 分析仅使用含原文和显式 mention 元数据的一条 user 消息及分析提示词，工具为空，不携带普通历史。每个 Profile 最多允许两个尚未清理的调用，持久化准备及获取许可最多等待 30 秒，随后提供方调用另有 30 秒上限；取消后仍不响应的操作保留并发位置直到清理完成。输入采用保守的 16 KiB UTF-8 请求预算，输出限制为提供方 8192 token 和累计流文本 32 KiB；超限拒绝，不截断。纯中间件回复、工具输出、非成功终止结果及非法 JSON 均拒绝。这里不执行模型修复、重试或重启后的可执行恢复；云端 attempt 租约、候选受理及实际聊天调用方仍由协调器负责。
+
+运行器接受原始 JSON 对象，或完整的单个外层 Markdown `json` 围栏，并原样保留围栏内 JSON 文本。前后说明文字、多段代码块、其他围栏标签、截断 JSON、数组及标量值均拒绝。流预算包含围栏；引用验证和候选受理规则保持不变。输出 journal 与回执对去除外层围栏后返回的 JSON 文本计算摘要；原始 Source 与输入 manifest 保持不变。
+
+分析提示词提供已冻结原消息的完整 UTF-16 证据范围，供模型复制。包含该范围的完整请求在派发前提交。补充回复与选定引用仍使用各自的范围；模型输出仍须独立验证。
 
 `inspectCollaborationSource(target, signal)` 通过所属 Profile 的注册表与 journal 读取原始持久 Source，仅返回原坐标及完整 RFC 8785 快照的 SHA-256，摘要包含首次 journal 提交标识。记录不存在、归属丢失、附加元数据、取消和 Profile 销毁都会拒绝。读取与已接受的捕获串行执行，不准备模型或恢复调用；延迟打开的 journal 由 Profile 持有至销毁。私有 worker HTTP 读取器调用这一仅供 Host 使用的方法。
 
@@ -143,15 +151,19 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 `session.collaborationSources({ sessionId, cursor? })` 只读原始 Source journal，按新到旧返回当前 Session 的完整原消息、原坐标与快照摘要。每页最多 8 条及 256 KiB JSON，cursor 是上一页最后一条快照摘要；新 Source 不改变已读取分页的位置。归属变化、归档、取消与非法 cursor 均拒绝，不准备模型、不激活 Agent，也不追加普通 Session 事件。
 
+`session.collaborationSources({ sessionId, snapshotDigest })` 精确定位一条已有的不可变原消息，包括已路由到普通讨论的消息。精确摘要与分页 cursor 互斥；原消息不存在或无权读取时拒绝。该只读操作返回一条完整记录且无后续游标，保留相同的归属及取消检查。
+
 `analyzeClarification` 使用捕获补充消息时准备的调用，校验独立冻结的原始与补充 Source、选定待澄清项、相关此前回复、已冻结任务 ID 及原始 mention 顺序。Source 解析要求合法 Unicode；每个待澄清项的 mention 列表非空，证据跨度不得拆开代理对。完整 prompt-version-2 manifest 提交前后，均从当前 Profile 重读全部 Source 并检查模型选择与归属。原消息与补充消息保持同一 provider、model、推理配置及 adapter 注册；准备序号可以不同。两种分析方法共用一个调用，不能执行两次。恢复只读任一 manifest 版本，不重写或恢复调用；第二版派发另绑定原计划及修订号。
 
 <a id="model-experience"></a>
 
 `captureCollaborationReferenceSelection` 从已授权的定位与版本、接收 mention、Source 证据及整段、明确范围或原文引用选择，生成完整不可变请求。原文引用必须是 16 KiB 内非空、格式正确的 Unicode，并在文本内容中唯一出现；Profile 读取完整不可变内容并确定 UTF-16 范围，缺失或重复引用需先澄清。所属 Profile 从实际消息或附件计算 MIME、UTF-8/二进制字节、摘要和确定范围，拒绝调用方正文、路径和摘要覆盖。整段内容仍受 1 MiB 上限及当前 Source 接收对象约束。`describeCollaborationReference` 只返回冻结的描述符和请求元数据，`parseCollaborationReferenceMetadata` 在消息边界验证这些字段。这些方法不负责自然语言引用定位或分享授权。
 
-`captureCollaborationReference` 接收已经独立确认授权的选择，只从原始 Source 所属会话读取不可变消息或已登记附件身份。独立的 `collaboration_reference_v2` 领域保存有界的原始字节、定位与版本、接收对象、Source 证据及完整请求摘要，不修改已发行的 Session 或 Source 格式。`readCollaborationReferenceGrant` 重新读取当前成员关系与实际内容后，只返回描述符授权；摘要不能创建选择。调用方取消会结束自身等待，Profile 退出仍等待其拥有的读取和迟到的 journal 打开操作完成。元数据解析不能确认用户分享意图，可信协调器必须在捕获前确认授权。
+`captureCollaborationReference` 接收已经独立确认授权的选择，只从原始 Source 所属会话读取不可变消息或已登记附件身份。独立的 `collaboration_reference_v2` 领域保存有界的原始字节、定位与版本、接收对象、Source 证据及完整请求摘要，不修改已发行的 Session 或 Source 格式。Journal 对每条 Source 最多保留 80 项选择及 1 MiB 正文，整体最多 10240 条记录；相同内容重放不额外占用配额，超限不会移除或改写已有内容。云端协调器仍独立限制每项任务最多八个引用。`readCollaborationReferenceGrant` 重新读取当前成员关系与实际内容后，只返回描述符授权；摘要不能创建选择。调用方取消会结束自身等待，Profile 退出仍等待其拥有的读取和迟到的 journal 打开操作完成。元数据解析不能确认用户分享意图，可信协调器必须在捕获前确认授权。
 
 `readCollaborationReferenceContent` 在检查当前成员关系、原始 Source 和实际选中字节后，仅返回已经独立捕获的不可变记录，不能凭传入摘要创建选择。记录最多 1 MiB，空内容有效；取消和 Profile 退出沿用授权核验的读取排空机制。该方法仅供 Host 使用，没有 Remote 端点，也不授予云端传递权限。
+
+`session.collaborationSources` 请求可用 `includeTimeline: true` 读取每条原消息不可变的 `timeline_position`。旧记录返回 `null`；省略该选项时保留原有响应字段。读取会校验已捕获输入的摘要，不追加普通 Session 事件、不准备模型，也不会为旧历史补造位置。
 
 ## 模型体验
 
@@ -159,7 +171,7 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 #### 模型看到什么
 
-Host 专用分析发送下方固定提示词及一条 user 消息，包含 `original_message`、原消息坐标和显式 `active_mentions`。它不包含普通历史或工具；普通 Session 命令仍由 Agent 所有。澄清分析发送原始请求、选定待澄清问题、按顺序关联的补充消息及原始 mention 顺序。其独立固定提示词保留全部限制，禁止更改已受理分工，并按原始顺序解析前者/后者。模型输入不包含 Account、计划及修订元数据、补充 Source 凭证和已受理任务 ID；完整私有 manifest 保留核验所需信息。请求与输出预算保持一致。
+Host 专用分析使用下方固定基础策略和一条 user 消息，包含原消息坐标、`original_message` 与显式 `active_mentions`。澄清包含选定待澄清问题、有序关联回复和原始 mention 顺序，保留限制及已受理分工。普通捕获在版本 3 中增加同会话 `reference_catalogue`，澄清使用版本 4。目录在后续消息到来前捕获，最多 40 项、4 KiB，包含定位与版本、作者、消息及附件的绝对顺序、文件基本名与字节数，不包含历史正文、推理、合成上下文、路径、Account/计划元数据、回复凭证或已受理任务 ID。对象缺失或同名时须澄清。明确分享使用 `reference_candidates`、`selection.unit`（`whole`、`quote`、`utf16`、`byte`）及从 `reference-0` 开始的任务引用序号；运行器拒绝目录以外的身份。内容和接收对象授权仍须独立核验。完整目录和请求在派发前提交，不包含工具，也不启动普通 Agent 回合。历史版本 1/2 原样读取；根重规划保留其独立原提示词。
 
 ##### 分析策略
 
@@ -169,7 +181,7 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 
 #### Token 影响
 
-每次调用包含完整提示词与 Source JSON；请求预算为 16 KiB UTF-8，提供方输出最多 8192 token，累计流文本最多 32 KiB。超限拒绝，不截断。
+每次调用包含完整提示词、Source JSON 与所提供目录；请求预算为 16 KiB UTF-8，提供方输出最多 8192 token，累计流文本最多 32 KiB。超限拒绝，不截断。
 
 #### KV Cache 影响
 

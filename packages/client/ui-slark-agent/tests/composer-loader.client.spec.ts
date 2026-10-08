@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
+import { UiConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { ChatTimelineRegistry } from '@deepseek-ai/dsh-client-ui-chat/src/client/timeline.ts'
 import { collaborationDiscussionRequestId } from '@deepseek-ai/dsh-api-session-controller/src/collaboration-discussion.ts'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 /** REQ-20260930-0004: YAML-loaded source through the real editor, trigger controller and submit machine. */
 import { Context } from '@deepseek-ai/cordis'
+import { SidebarRightTabRegistry } from '@deepseek-ai/dsh-client-ui-sidebar-right/src/client/tab-registry.ts'
+import { createSidebarRightController } from '@deepseek-ai/dsh-client-ui-sidebar-right/src/client/service.ts'
+import { createSidebarRightStore } from '@deepseek-ai/dsh-client-ui-sidebar-right/src/client/stores.ts'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import { createScope, scopeOf } from '@deepseek-ai/dsh-api-session-controller/client'
+import { createScope, scopeOf, MutableSessionEventSource } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -18,6 +23,11 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
+import { createElement, useSyncExternalStore } from 'react'
+import { fireEvent, render, within } from '@testing-library/react'
+import { ProjectScopePanel } from '../src/client/ProjectScopeDock.tsx'
+import { panelRuntime, dockRuntime, dockTranslate } from './fixture-state.client.ts'
+import { CollaborationTimeline } from '../src/client/CollaborationTimeline.tsx'
 import * as SlarkSource from '../src/client/index.ts'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from '../src/client/collaboration-source.ts'
 import { createScopedCollaborationSource, scopedCollaborationClipboard } from '../src/client/collaboration-source.ts'
@@ -28,6 +38,7 @@ import { CollaborationResultsModel } from '../src/client/collaboration-results.t
 import { ProjectScopeModel } from '../src/client/project-scope.ts'
 import type { CollaborationResultsInjected } from '../src/client/CollaborationResultsDock.tsx'
 import type { ProjectScopeInjected } from '../src/client/ProjectScopeDock.tsx'
+import type { ScopeLauncherInjected } from '../src/client/ProjectScopeDock.tsx'
 
 const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id: 'agent-1',
   enterprise_id: 'enterprise-1', enterprise_name: 'Company', project_name: '项目空间',
@@ -36,13 +47,26 @@ const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id
 type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST__']>['invokeEnterpriseAgent']>>[0]
 
 async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration,
-  executionAvailable = collaboration) {
+  executionAvailable = collaboration, navigationAvailable = true, pluginRemote = false) {
   vi.stubGlobal('crypto', webcrypto)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
   const ctx = new Context(), id = SessionId('session-1')
   const prompt = vi.fn<SessionFace['prompt']>(async () => ({ ok: true, value: { accepted: true } }))
   const scope = createScope(ctx, id), session = { sessionId: id, prompt }
-  const binding = { sessionId: id, session, ctx: scope.ctx }
+  let binding = { sessionId: id, session, ctx: scope.ctx, eventSource: new MutableSessionEventSource() }
+  const otherBindings = new Map<SessionId, typeof binding>()
+  const releaseLocator = vi.fn()
+  const materialize = (key: SessionId) => {
+    if (key === id) return binding
+    let other = otherBindings.get(key)
+    if (!other) {
+      other = { sessionId: key, session: { sessionId: key, prompt }, ctx: createScope(ctx, key).ctx,
+        eventSource: new MutableSessionEventSource() }
+      otherBindings.set(key, other)
+    }
+    return other
+  }
+
   const sessionOf = vi.fn((c: Context) => c === scope.ctx ? session : undefined)
   const mounted: { composer?: SessionInputShell } = {}
   onTestFinished(async () => {
@@ -54,39 +78,73 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   })
   // Session RPC and Desktop transport peers are fixtures; client owners below load through YAML.
   ctx.provide('sessions', {
+    retain: (key: SessionId) => {
+      const owned = materialize(key)
+      return { sessionId: key, binding: owned, release: releaseLocator }
+    },
     discussionRequestId: collaborationDiscussionRequestId,
     scope: (key: SessionId) => key === id && scope.fiber.uid !== null ? scope.ctx : undefined,
     scopeOf: (c: Context) => scopeOf(c),
     sessionOf,
-    binding: (key: SessionId) => key === id ? binding : undefined,
+    binding: (key: SessionId) => key === id ? binding : otherBindings.get(key),
   } as never)
+  const sidebarTabs = new SidebarRightTabRegistry(ctx)
+  sidebarTabs.register({ id: 'fixture/guide', kind: 'guide', title: () => 'Guide' })
+  const { controller: sidebar, adopt } = createSidebarRightController(sidebarTabs, () => {})
+  const sidebarStore = createSidebarRightStore(() => ({ kind: 'guide', title: 'Guide' })).create()
+  const releaseSidebar = adopt(id, sidebarStore)
+  const publishSidebar = () => sidebar.bind({ sessionId: id, actions: sidebarStore.actions,
+    surfaces: sidebarStore.getSnapshot().bySession, canSplitPane: () => true,
+    closeWithFocus: (_pane, close) => { close() }, openWithFocus: (open) => { open() } })
+  let unbindSidebar = publishSidebar()
+  const stopSidebar = sidebarStore.subscribe(() => { unbindSidebar(); unbindSidebar = publishSidebar() })
+  ctx.provide('sidebarRightTabs', sidebarTabs)
+  ctx.provide('sidebarRight', sidebar)
+  ctx.effect(() => () => { stopSidebar(); unbindSidebar(); releaseSidebar(); sidebar.tabDomain.dispose() })
+  new UiConversation(ctx, ctx.sessions)
+  const chatTimeline = new ChatTimelineRegistry()
+  ctx.provide('chatTimeline', chatTimeline)
+  ctx.effect(() => () => { chatTimeline.dispose() })
   ctx.provide('conversation', { input: { for: () => {
     if (!mounted.composer) throw Error('composer not mounted')
     return mounted.composer
   } } } as never)
-  const releaseActivity = vi.fn(), retainActivity = vi.fn(() => releaseActivity)
-  ctx.provide('uiConversation', { binding: () => ({ retainActivity }) } as never)
   const invoke = vi.fn(async (_input: InvokeInput) => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
   const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
-  const workspace = { id: workspaceId, archived: false }
+  const workspace = { id: workspaceId, archived: false, siblings: [] as SessionId[], subscribers: 0, onSubscribe: () => {} }
   ctx.provide('workspaces', { list: {
     getSnapshot: () => ({ phase: 'ready', state: 'idle', error: null,
       archivedSessionIds: workspace.archived ? [id] : [],
-      items: [{ workspaceId: workspace.id, sessionIds: [id] }] }),
-    subscribe: () => () => undefined,
+      items: [{ workspaceId: workspace.id, sessionIds: [id, ...workspace.siblings] }] }),
+    subscribe: () => {
+      workspace.subscribers++; workspace.onSubscribe()
+      return () => { workspace.subscribers-- }
+    },
   } } as never)
   const originals: { source: { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
     snapshot_digest: string
     original_message: string }[] = []
-  const sourceReads = vi.fn<typeof ctx.remote.session.collaborationSources>(async () => ({ ok: true, value: { items: originals } }))
+  const sourceReads = vi.fn<typeof ctx.remote.session.collaborationSources>(async input => ({ ok: true,
+    value: { items: originals.filter(item => item.source.session_id === input.sessionId
+      && (input.snapshotDigest === undefined || item.snapshot_digest === input.snapshotDigest))
+      .map(item => ({ ...item, ...(input.includeTimeline ? { timeline_position: null } : {}) })) } }))
+  const openSession = vi.fn((key: SessionId): void => { materialize(key) })
   if (servicesAvailable) {
     const namespace = { collaborationSources: sourceReads }
     if (remoteAvailable) {
-      ctx.provide('remote', { session: namespace } as never)
-      ctx.provide('remote.session', namespace as never)
+      if (pluginRemote) {
+        await ctx.plugin({ name: 'composer-test-remote-owner', apply(owner: Context) {
+          owner.provide('remote', { session: namespace } as never)
+          owner.provide('remote.session', namespace as never)
+        } })
+      } else {
+        ctx.provide('remote', { session: namespace } as never)
+        ctx.provide('remote.session', namespace as never)
+      }
     }
     ctx.provide('connection', { generation: { getSnapshot: () => 1, subscribe: () => () => {} } } as never)
+    if (navigationAvailable) ctx.provide('uiWorkspace', { openSession } as never)
   }
   const submit = vi.fn(async (input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse> => {
     originals.push({ source: { workspace_id: input.workspace_id, session_id: input.session_id,
@@ -141,6 +199,9 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
         'conversation.input.overlay': { kind: 'list', scope: 'session' },
         'conversation.input.dock': { kind: 'list', scope: 'session' },
         'conversation.trajectory.external': { kind: 'list', scope: 'session' },
+        'conversation.chat.timeline': { kind: 'single', scope: 'session' },
+        'sidebar.right.pane.tab': { kind: 'keyed', scope: 'session' },
+        'sidebar.right.pane.tab.title': { kind: 'keyed', scope: 'session' },
       } } as never, () => null)
     } },
     triggers: Triggers, source: SlarkSource,
@@ -187,9 +248,14 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     const end = prefix.length + 2
     if (suffix) expect(composer.insertText(suffix, { start: end, end, draftRev: composer.snapshot.draftRev })).toBe(true)
   }
-  return { ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf, scopeDirectory, workspace, sourceReads,
-    retainActivity, releaseActivity,
-    deliveries, pending, clarify, originals, closeSession: () => scope.fiber.dispose() }
+  return { rebind: async (keepPrevious = false) => {
+    const previous = binding
+    if (!keepPrevious) await previous.ctx.fiber.dispose()
+    binding = { ...binding, ctx: createScope(ctx, id).ctx, eventSource: new MutableSessionEventSource() }
+    return () => previous.ctx.fiber.dispose()
+  }, releaseLocator, chatTimeline, ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf,
+  scopeDirectory, workspace, sourceReads,
+  deliveries, pending, clarify, originals, openSession, closeSession: () => scope.fiber.dispose() }
 }
 
 type PickedScopedReference = {
@@ -224,9 +290,8 @@ async function appendScoped(f: Awaited<ReturnType<typeof bench>>, index: number,
 
 it('YAML-loaded result registration receives the real composer admission event and reads its original coordinates', async () => {
   const f = await bench(true)
-  const entries = f.ctx.slots.entries('conversation.input.dock')
-  expect(entries.some(entry => entry.options.id === 'slark-agent-tasks')).toBe(false)
-  const entry = entries.find(entry => entry.options.id === 'slark-collaboration-results')
+  expect(f.ctx.slots.entries('conversation.input.dock').some(entry => entry.options.id === 'slark-agent-tasks')).toBe(false)
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
   expect(entry).toBeDefined()
   const bindings: unknown = Reflect.apply(entry!.inject!, undefined, ['session-1'])
   if (!bindings || typeof bindings !== 'object' || !('hooks' in bindings) ||
@@ -1135,9 +1200,62 @@ it('uses the YAML-registered project panel commands and disposes its cached Sess
   expect(model.getSnapshot().scope).toBeNull()
 })
 
+it.each([false, true])('shares pending readonly requests between the YAML-mounted chat and sidebar without caching replies (close chat %s)', async (closeChat) => {
+  const f = await bench(true), id = SessionId('session-1')
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: id,
+    source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64),
+  original_message: '@Guide · Project original' })
+  const chat = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  const sidebar = f.ctx.slots.entries('slark.collaboration.history')[0]
+  if (!chat?.inject || !sidebar?.inject) throw Error('missing readonly history registration')
+  const timeline = (Reflect.apply(chat.inject, undefined, [id]) as CollaborationResultsInjected).hooks.slarkResults
+  const history = (Reflect.apply(sidebar.inject, undefined, [id]) as CollaborationResultsInjected).hooks.slarkResults
+  const delivery = f.deliveries.getMockImplementation(), pending = f.pending.getMockImplementation()
+  if (!delivery || !pending) throw Error('missing readonly bridge fixture')
+  const deliveryGate = Promise.withResolvers<undefined>(), pendingGate = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementation(async (request) => { await deliveryGate.promise; return delivery(request) })
+  f.pending.mockImplementation(async (request) => { await pendingGate.promise; return pending(request) })
+  const reads = [timeline.refresh(), history.refresh()]
+  try {
+    await vi.waitFor(() => { expect(f.deliveries.mock.calls.length).toBeGreaterThan(0) })
+    if (closeChat) timeline.dispose()
+    deliveryGate.resolve(undefined)
+    await vi.waitFor(() => { expect(f.pending.mock.calls.length).toBeGreaterThan(0) })
+    pendingGate.resolve(undefined)
+    await Promise.all(reads)
+    expect(f.deliveries).toHaveBeenCalledOnce()
+    expect(f.pending).toHaveBeenCalledOnce()
+    expect(timeline.getSnapshot().groups[0]?.replies[0]?.answer).toBe(closeChat ? undefined : 'fixture reply')
+    expect(history.getSnapshot().groups[0]?.replies[0]?.answer).toBe('fixture reply')
+    await history.refresh()
+    expect(f.deliveries).toHaveBeenCalledTimes(2)
+    expect(f.pending).toHaveBeenCalledTimes(2)
+    expect(f.submit).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  } finally {
+    deliveryGate.resolve(undefined); pendingGate.resolve(undefined)
+    await Promise.allSettled(reads)
+  }
+})
+
+it('reads collaboration history through a plugin-owned Remote with strict Cordis injection', async () => {
+  const f = await bench(true, true, true, true, true, true)
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
+  if (!entry?.inject) throw Error('missing results registration')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  const model = bindings.hooks.slarkResults
+  await model.refresh()
+  expect(f.sourceReads).toHaveBeenCalledOnce()
+  expect(model.getSnapshot().phase).toBe('ready')
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing loaded Slark source')
+  await plugin.fiber.dispose()
+  await model.refresh()
+  expect(f.sourceReads).toHaveBeenCalledOnce()
+})
+
 it('uses YAML-registered result paging commands and retains their model only for the original Session', async () => {
   const f = await bench(true)
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-collaboration-results')
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
   if (!entry?.inject) throw Error('missing results registration')
   const value: unknown = Reflect.apply(entry.inject, undefined, [SessionId('session-1')])
   if (!value || typeof value !== 'object' || !('hooks' in value) || !value.hooks || typeof value.hooks !== 'object'
@@ -1147,7 +1265,7 @@ it('uses YAML-registered result paging commands and retains their model only for
   const bindings = value as CollaborationResultsInjected, model = bindings.hooks.slarkResults
   expect(Reflect.apply(entry.inject, undefined, [SessionId('session-1')])).toBe(bindings)
   const first = { source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'first', source_revision: '1' },
-    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 第一个任务' }
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 第一个任务', timeline_position: null }
   const second = { ...first, source: { ...first.source, source_message_id: 'second' }, snapshot_digest: 'b'.repeat(64) }
   f.sourceReads.mockImplementation(async input => ({ ok: true, value: input.cursor ? { items: [second] }
     : { items: [first], next_cursor: first.snapshot_digest } }))
@@ -1163,13 +1281,94 @@ it('uses YAML-registered result paging commands and retains their model only for
   await model.refresh(); await bindings.loadSources(); await bindings.loadReplies(first.snapshot_digest)
   expect(model.getSnapshot().groups).toHaveLength(2)
   expect(model.getSnapshot().groups[0]?.replies.map(item => item.delivery_id)).toEqual(['delivery-v2', 'second-reply'])
-  expect(f.sourceReads).toHaveBeenLastCalledWith({ sessionId: SessionId('session-1'), cursor: first.snapshot_digest }, expect.any(AbortSignal))
+  expect(f.sourceReads).toHaveBeenLastCalledWith({ sessionId: SessionId('session-1'), cursor: first.snapshot_digest, includeTimeline: true }, expect.any(AbortSignal))
   expect(f.deliveries).toHaveBeenLastCalledWith({ source: first.source, limit: 50, after_delivery_id: 'delivery-v2' })
   const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
   if (!plugin?.fiber) throw Error('missing loaded Slark source')
   await plugin.fiber.dispose()
   expect(model.getSnapshot().groups).toEqual([])
   expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('loads sibling collaboration history through the YAML-registered workspace reader without submitting work', async () => {
+  const f = await bench(true)
+  f.workspace.siblings.push(SessionId('session-2'))
+  f.originals.push({ source: { workspace_id: f.workspace.id, session_id: 'session-2', source_message_id: 'sibling', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 其他会话的任务' })
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
+  if (!entry?.inject) throw Error('missing results registration')
+  const value: unknown = Reflect.apply(entry.inject, undefined, [SessionId('session-1')])
+  if (!value || typeof value !== 'object' || !('hooks' in value) || !value.hooks || typeof value.hooks !== 'object'
+    || !('slarkResults' in value.hooks) || !(value.hooks.slarkResults instanceof CollaborationResultsModel))
+    throw Error('invalid registered results model')
+  const model = value.hooks.slarkResults
+  await model.refresh()
+  expect(model.getSnapshot()).toMatchObject({ workspaceHistory: true, phase: 'ready',
+    groups: [{ original: f.originals[0], replies: [{ answer: 'fixture reply' }] }] })
+  expect(f.sourceReads.mock.calls.map(([input]) => input.sessionId)).toEqual(['session-1', 'session-2'])
+  expect(f.deliveries).toHaveBeenCalledWith({ source: f.originals[0]!.source, limit: 50 })
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  f.workspace.siblings.length = 0
+  await model.refresh()
+  expect(model.getSnapshot().groups).toEqual([])
+  await f.ctx.fiber.dispose()
+  await model.refresh()
+  expect(f.sourceReads).toHaveBeenCalledTimes(3)
+})
+
+it('navigates from a YAML-registered record to its verified original Session without sending another task', async () => {
+  const f = await bench(true)
+  f.workspace.siblings.push(SessionId('session-2'))
+  const original = { source: { workspace_id: f.workspace.id, session_id: 'session-2', source_message_id: 'older', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · 项目空间 原始任务' }
+  f.originals.push(original)
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
+  if (!entry?.inject) throw Error('missing results registration')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  await bindings.hooks.slarkResults.refresh()
+  await bindings.locateOriginal?.(original.snapshot_digest)
+  expect(f.openSession).toHaveBeenCalledWith(SessionId('session-2'))
+  expect(f.releaseLocator).toHaveBeenCalledOnce()
+  expect(f.sourceReads).toHaveBeenCalledWith({ sessionId: SessionId('session-2'), snapshotDigest: original.snapshot_digest, includeTimeline: true }, expect.any(AbortSignal))
+  const target = Reflect.apply(entry.inject, undefined, [SessionId('session-2')]) as CollaborationResultsInjected
+  await vi.waitFor(() => { expect(target.hooks.slarkResults.getSnapshot().phase).toBe('ready') })
+  expect(target.hooks.slarkResults.getSnapshot().focus?.snapshotDigest).toBe(original.snapshot_digest)
+  expect(target.hooks.slarkResults.getSnapshot().groups[0]?.original).toEqual({ ...original, timeline_position: null })
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.clarify).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['missing-navigation', 'membership-change'] as const)('explains an unavailable Source navigation without submitting work: %s', async (mode) => {
+  const f = await bench(true, true, true, true, mode !== 'missing-navigation')
+  f.workspace.siblings = [SessionId('session-2')]
+  const original = { source: { workspace_id: f.workspace.id, session_id: 'session-2', source_message_id: 'original', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide original' }
+  f.originals.push(original)
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
+  if (!entry?.inject) throw Error('missing results registration')
+  const value = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  await value.hooks.slarkResults.refresh()
+  if (mode === 'membership-change') f.workspace.onSubscribe = () => { f.workspace.siblings = [] }
+  await value.locateOriginal?.(original.snapshot_digest)
+  expect(f.openSession).not.toHaveBeenCalled()
+  if (mode === 'missing-navigation') expect(value.hooks.slarkResults.getSnapshot().location?.status).toBe('unavailable')
+  else {
+    expect(value.hooks.slarkResults.getSnapshot().groups).toEqual([])
+    expect(f.releaseLocator).toHaveBeenCalledOnce()
+  }
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('Source locator cannot recreate a registered result model after its owning YAML plugin is disposed', async () => {
+  const f = await bench(true)
+  const entry = f.ctx.slots.entries('slark.collaboration.history')[0]
+  if (!entry?.inject) throw Error('missing results registration')
+  const value = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing loaded Slark source')
+  await plugin.fiber.dispose()
+  await value.locateOriginal?.('a'.repeat(64))
+  expect(() => { Reflect.apply(entry.inject!, undefined, [SessionId('session-1')]) }).toThrow('collaboration_view_closed')
+  expect(f.sourceReads).not.toHaveBeenCalled(); expect(f.openSession).not.toHaveBeenCalled()
 })
 
 it('refuses plain reply discovery without the current Session Remote service', async () => {
@@ -1383,7 +1582,7 @@ it('cancels the Session feed read of a passive reply without querying Main or co
 })
 
 const rootTaskId = 'bfb432fd-a2a2-4cbd-b1dc-4648c8944081', rootTraceId = 'a'.repeat(32)
-it('shows saved planning with its trace, without emitting execution admission', async () => {
+it('shows saved planning and refreshes original history when automatic execution is unavailable', async () => {
   const { composer, pick, submit, sink, invoke } = await bench(true)
   const host = window.__DSH_DESKTOP_HOST__!
   Reflect.set(host, 'collaborationPlanningAvailable', true)
@@ -1399,8 +1598,60 @@ it('shows saved planning with its trace, without emitting execution admission', 
   composer.submit()
   await vi.waitFor(() => { expect(composer.snapshot.draft).toBe('') })
   expect(composer.notices.getSnapshot()?.text).toBe(`规划已保存，尚未开始执行。追踪编号：${rootTraceId}`)
-  expect(admitted).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled()
+  expect(admitted).toHaveBeenCalledTimes(1); expect(sink).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled()
 })
+it('ordinary root-planning send dispatches its authorized frozen task without a panel action', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__!
+  host.collaborationPlanningAvailable = true
+  host.collaborationExecutionAvailable = false
+  const execute = vi.fn<NonNullable<typeof host.collaborationRootExecution>>(async request =>
+    request.action === 'preview' ? { ok: true, rootTraceId, previewId: rootTaskId, executionEnabled: true,
+      tasks: [{ taskId: rootTaskId, question: '请检查登录问题', agentName: agent.name, projectName: agent.project_name }] }
+      : { ok: true, status: 'recorded' })
+  host.collaborationRootExecution = execute
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision },
+  submission_state: 'planning_recorded', root_task_id: rootTaskId, root_trace_id: rootTraceId } }))
+  await f.pick('', '请检查登录问题')
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  const sent = f.submit.mock.calls[0]![0]
+  expect(execute.mock.calls.map(([request]) => request)).toEqual([
+    { action: 'preview', source: { workspace_id: sent.workspace_id, session_id: sent.session_id,
+      source_message_id: sent.source_message_id, source_revision: sent.source_revision } },
+    { action: 'confirm', previewId: rootTaskId, taskId: rootTaskId },
+  ])
+  expect(f.composer.notices.getSnapshot()?.text).toBe(`任务已派发。追踪编号：${rootTraceId}`)
+  expect(f.submit).toHaveBeenCalledTimes(1)
+  expect(f.sink).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled()
+})
+
+it.each(['disabled', 'rejected', 'changed-bridge'] as const)('root dispatch reports %s without retaining a resendable draft', async (mode) => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__!
+  host.collaborationPlanningAvailable = true
+  host.collaborationExecutionAvailable = false
+  const execute = vi.fn<NonNullable<typeof host.collaborationRootExecution>>(async (request) => {
+    if (mode === 'changed-bridge') Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+    return request.action === 'preview' ? { ok: true, rootTraceId, previewId: rootTaskId, executionEnabled: mode !== 'disabled',
+      tasks: [{ taskId: rootTaskId }] } : { ok: false }
+  })
+  host.collaborationRootExecution = execute
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision },
+  submission_state: 'planning_recorded', root_task_id: rootTaskId, root_trace_id: rootTraceId } }))
+  await f.pick('', '请检查登录问题')
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.composer.notices.getSnapshot()?.text).toBe(mode === 'disabled'
+    ? `规划已保存，任务尚未全部派发。追踪编号：${rootTraceId}`
+    : `规划已保存，派发结果待核对。请勿重复发送。追踪编号：${rootTraceId}`)
+  expect(execute).toHaveBeenCalledTimes(mode === 'rejected' ? 2 : 1)
+  expect(f.submit).toHaveBeenCalledTimes(1)
+  expect(f.sink).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled()
+})
+
 it.each(['accepted', 'bad-trace', 'extra-private', 'missing-root', 'changed-source', 'missing-value', 'null-value'] as const)(
   'root planning refuses %s replies and retains the original draft', async (change) => {
     const { composer, pick, submit, sink } = await bench(true)
@@ -1427,44 +1678,47 @@ it.each(['accepted', 'bad-trace', 'extra-private', 'missing-root', 'changed-sour
     expect(composer.snapshot.draft).toBe(draft); expect(sink).not.toHaveBeenCalled()
   })
 
-it('YAML-loaded trajectory reads displayed audit and execution evidence without submitting work', async () => {
-  const f = await bench(true), bridge = window.__DSH_DESKTOP_HOST__
-  if (!bridge) throw Error('missing Desktop fixture')
-  bridge.collaborationPlanningAvailable = true
-  const root = { root_task_id: rootTaskId, root_trace_id: rootTraceId, task_revision: '1', state_version: '1',
-    state: 'active', intent_state: 'active' }
-  const event = { event_id: 'settlement', root_seq: 1, task_revision: 1, type: 'execution_observed', phase: 'execution_succeeded',
-    occurred_at: '2026-10-07T00:00:00.000Z', recorded_at: '2026-10-07T00:00:00.000Z',
-    trace_context: { root_task_id: rootTaskId, root_trace_id: rootTraceId, task_revision: 1 } }
-  const read = vi.fn<NonNullable<typeof bridge.collaborationRootExecution>>(async (request) => {
-    if (request.action !== 'trace') throw Error('history cannot execute work')
-    return { ok: true, value: { root, events: [event], next_after_seq: null, coverage: 'partial',
-      ...(request.cursor.evidence ? { execution: { event_id: 'settlement', attempt_id: 'attempt', state: 'succeeded',
-        digest: 'a'.repeat(64), events: [{ sequence: 1, observedAt: 0, type: 'file.completed', success: true }],
-        next_after_sequence: null, provider_visibility: 'boundary_only' } } : {}) } }
+it.each(['conversation.trajectory.external', 'slark.collaboration.history'] as const)(
+  'YAML-loaded %s reads displayed audit and execution evidence without submitting work', async (slot) => {
+    const f = await bench(true), bridge = window.__DSH_DESKTOP_HOST__
+    if (!bridge) throw Error('missing Desktop fixture')
+    bridge.collaborationPlanningAvailable = true
+    const root = { root_task_id: rootTaskId, root_trace_id: rootTraceId, task_revision: '1', state_version: '1',
+      state: 'active', intent_state: 'active' }
+    const event = { event_id: 'settlement', root_seq: 1, task_revision: 1, type: 'execution_observed', phase: 'execution_succeeded',
+      occurred_at: '2026-10-07T00:00:00.000Z', recorded_at: '2026-10-07T00:00:00.000Z',
+      trace_context: { root_task_id: rootTaskId, root_trace_id: rootTraceId, task_revision: 1 } }
+    const read = vi.fn<NonNullable<typeof bridge.collaborationRootExecution>>(async (request) => {
+      if (request.action !== 'trace') throw Error('history cannot execute work')
+      return { ok: true, value: { root, events: [event], next_after_seq: null, coverage: 'partial',
+        ...(request.cursor.evidence ? { execution: { event_id: 'settlement', attempt_id: 'attempt', state: 'succeeded',
+          digest: 'a'.repeat(64), events: [{ sequence: 1, observedAt: 0, type: 'file.completed', success: true }],
+          next_after_sequence: null, provider_visibility: 'boundary_only' } } : {}) } }
+    })
+    bridge.collaborationRootExecution = read
+    const original = { source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'first', source_revision: '1' },
+      snapshot_digest: 'a'.repeat(64), original_message: '@Guide 原始任务' }
+    f.originals.push(original)
+    const entry = f.ctx.slots.entries(slot).find(e => slot === 'slark.collaboration.history'
+    || e.options.id === 'slark-collaboration-trace')
+    if (!entry?.inject) throw Error('missing readonly history registration')
+    const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
+    if (!bindings.traceAction || !bindings.traceEvidenceAction) throw Error('missing readonly trajectory commands')
+    await bindings.hooks.slarkResults.refresh()
+    await bindings.traceEvidenceAction(original.snapshot_digest, 'settlement')
+    expect(read).not.toHaveBeenCalled()
+    await bindings.traceAction(original.snapshot_digest)
+    expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.trace?.page?.root.root_trace_id).toBe(rootTraceId)
+    await bindings.traceEvidenceAction(original.snapshot_digest, 'settlement')
+    expect(read.mock.calls.map(([request]) => request)).toEqual([
+      { action: 'trace', source: original.source, cursor: { after_seq: 0, limit: 20 } },
+      { action: 'trace', source: original.source, cursor: { after_seq: 0, limit: 20, evidence: { event_id: 'settlement', after_sequence: 0 } } },
+    ])
+    expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.trace?.execution?.page?.events)
+      .toEqual([{ sequence: 1, observedAt: 0, type: 'file.completed', success: true }])
+    expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+    expect(f.invoke).not.toHaveBeenCalled()
   })
-  bridge.collaborationRootExecution = read
-  const original = { source: { workspace_id: f.workspace.id, session_id: 'session-1', source_message_id: 'first', source_revision: '1' },
-    snapshot_digest: 'a'.repeat(64), original_message: '@Guide 原始任务' }
-  f.originals.push(original)
-  const entry = f.ctx.slots.entries('conversation.trajectory.external').find(e => e.options.id === 'slark-collaboration-trace')
-  if (!entry?.inject) throw Error('missing trajectory registration')
-  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
-  if (!bindings.traceAction || !bindings.traceEvidenceAction) throw Error('missing readonly trajectory commands')
-  await bindings.hooks.slarkResults.refresh()
-  await bindings.traceEvidenceAction(original.snapshot_digest, 'settlement')
-  expect(read).not.toHaveBeenCalled()
-  await bindings.traceAction(original.snapshot_digest)
-  expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.trace?.page?.root.root_trace_id).toBe(rootTraceId)
-  await bindings.traceEvidenceAction(original.snapshot_digest, 'settlement')
-  expect(read.mock.calls.map(([request]) => request)).toEqual([
-    { action: 'trace', source: original.source, cursor: { after_seq: 0, limit: 20 } },
-    { action: 'trace', source: original.source, cursor: { after_seq: 0, limit: 20, evidence: { event_id: 'settlement', after_sequence: 0 } } },
-  ])
-  expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.trace?.execution?.page?.events)
-    .toEqual([{ sequence: 1, observedAt: 0, type: 'file.completed', success: true }])
-  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
-})
 it.each([false,true])('retained root drafts use recovery after root rollout closes, legacy execution=%s',async(legacy)=>{
   const { composer,pick,submit,sink,invoke }=await bench(true)
   const host=window.__DSH_DESKTOP_HOST__!
@@ -1510,7 +1764,7 @@ it('routes explicit task confirmation through the YAML-loaded original Session b
   const original = { source:{ workspace_id:f.workspace.id,session_id:'session-1',source_message_id:'first',source_revision:'1' },
     snapshot_digest:'a'.repeat(64),original_message:'@Guide 原始任务' }
   f.originals.push(original)
-  const entry=f.ctx.slots.entries('conversation.input.dock').find(item=>item.options.id==='slark-collaboration-results')
+  const entry=f.ctx.slots.entries('slark.collaboration.history')[0]
   if(!entry?.inject) throw Error('missing results registration')
   const value: unknown=Reflect.apply(entry.inject,undefined,[SessionId('session-1')])
   if(!value || typeof value!=='object' || !('executionAction' in value) || typeof value.executionAction!=='function') throw Error('missing command')
@@ -1545,7 +1799,7 @@ it('keeps the scoped draft when its Host disappears before submission', async ()
 
 it('YAML-loaded trajectory and dock share the original Source model and unload their registrations', async () => {
   const f = await bench(true)
-  const dock = f.ctx.slots.entries('conversation.input.dock').find(e => e.options.id === 'slark-collaboration-results')
+  const dock = f.ctx.slots.entries('conversation.chat.timeline')[0]
   const trace = f.ctx.slots.entries('conversation.trajectory.external').find(e => e.options.id === 'slark-collaboration-trace')
   expect(trace).toBeDefined()
   const a = Reflect.apply(dock!.inject!, undefined, [SessionId('session-1')]) as CollaborationResultsInjected
@@ -1556,9 +1810,394 @@ it('YAML-loaded trajectory and dock share the original Source model and unload t
   await vi.waitFor(() => { expect(f.originals).toHaveLength(1) })
   await b.hooks.slarkResults.refresh()
   expect(b.hooks.slarkResults.getSnapshot().groups[0]?.original.original_message).toContain('请检查登录问题')
-  expect(f.retainActivity).toHaveBeenCalledWith('trajectory')
+  const conversation = f.ctx.uiConversation.binding(SessionId('session-1'))
+  const stop = conversation.snapshot.subscribe(() => {})
+  onTestFinished(stop)
+  await vi.waitFor(() => { expect(conversation.snapshot.getSnapshot().activeTargets.has('trajectory')).toBe(true) })
   const slots = f.ctx.slots
-  await f.ctx.fiber.dispose()
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing Slark plugin')
+  await plugin.fiber.dispose()
   expect(slots.entries('conversation.trajectory.external')).toEqual([])
-  expect(f.releaseActivity).toHaveBeenCalled()
+  await vi.waitFor(() => { expect(conversation.snapshot.getSnapshot().activeTargets.has('trajectory')).toBe(false) })
+})
+
+
+it('inserts a directory-selected scoped Agent into the existing composer without sending', async () => {
+  const f = await bench(true)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope panel')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as ProjectScopeInjected
+  await bindings.refreshScope()
+  f.composer.setDraft('请检查这个方案：')
+  expect(typeof Reflect.get(bindings, 'insertAgent')).toBe('function')
+  const model = bindings.hooks.slarkScope, focus = vi.spyOn(f.composer, 'focus')
+  const insert = vi.spyOn(bindings, 'insertAgent')
+  const props: Parameters<typeof ProjectScopePanel>[0] = { ...panelRuntime('session-1'), ...bindings, renderSlot: () => null,
+    useInput: selector => selector(useSyncExternalStore(
+      listener => f.composer.state.subscribe(listener), () => f.composer.state.getSnapshot())),
+    inputActions: f.composer.actions, t: dockTranslate,
+    useSlarkScope: selector => selector(useSyncExternalStore(model.subscribe, model.getSnapshot)) }
+  const view = render(createElement(ProjectScopePanel, props))
+  onTestFinished(() => { view.unmount() })
+  await vi.waitFor(() => { expect(within(view.container).getByTestId<HTMLButtonElement>('slark-scope-mention-project-1-agent-1').disabled).toBe(false) })
+  await vi.waitFor(() => { expect(model.agentForMention(agent.project_id, agent.agent_id)).toBeDefined() })
+  const capture = vi.spyOn(f.composer.actions, 'captureInsertion')
+  const edit = vi.spyOn(f.composer, 'insertReference')
+  fireEvent.click(within(view.container).getByTestId('slark-scope-mention-project-1-agent-1'))
+  expect(capture).toHaveBeenCalledOnce()
+  expect(edit).toHaveBeenCalledOnce()
+  expect(insert).toHaveReturnedWith(true)
+  expect(focus).toHaveBeenCalledTimes(1)
+  expect(f.composer.snapshot.draft).toBe('请检查这个方案：@Guide · 项目空间 ')
+  expect(f.composer.snapshot.occurrences).toHaveLength(1)
+  const reference: unknown = JSON.parse(f.composer.snapshot.occurrences[0]?.ref ?? '')
+  expect(reference).toMatchObject({ project_id: agent.project_id, agent_id: agent.agent_id })
+  await expect(`draft=${JSON.stringify(f.composer.snapshot.draft)}\nmention=${f.composer.snapshot.occurrences[0]?.label}\ncollaboration-submissions=${f.submit.mock.calls.length}\nordinary-model-prompts=${f.prompt.mock.calls.length}\n`).toMatchFileSnapshot(join(process.cwd(), 'packages/client/ui-slark-agent/tests/expected/directory-mentions.expected.txt'))
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+})
+
+
+it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'stale-draft', 'archived', 'moved', 'bridge-changed', 'session-closed', 'scope-missing', 'plugin-closed', 'claimed', 'scope-only', 'mode-closed', 'invalid-span'] as const)(
+  'directory insertion preserves the draft and never sends when %s', async (mode) => {
+    const f = await bench(true, true, true, mode !== 'scope-only')
+    const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+    if (!entry?.inject) throw Error('missing scope panel')
+    const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as ProjectScopeInjected
+    await bindings.refreshScope()
+    f.composer.setDraft('保留这个草稿')
+    let span = f.composer.actions.captureInsertion()
+    let projectId = agent.project_id, agentId = agent.agent_id
+    if (mode === 'unknown-project') projectId = 'not-selected'
+    if (mode === 'unknown-agent') agentId = 'not-loaded'
+    if (mode === 'unavailable') {
+      await bindings.applyScope([agent.project_id, 'stopped-project'])
+      projectId = 'stopped-project'; agentId = 'stopped-agent'
+    }
+    if (mode === 'scope-cleared') await bindings.applyScope([])
+    if (mode === 'stale-draft') f.composer.setDraft('用户的新草稿')
+    if (mode === 'archived') f.workspace.archived = true
+    if (mode === 'moved') f.workspace.id = '48c7c5cb-38fc-466f-9d92-89cc49f84051'
+    if (mode === 'bridge-changed') Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...window.__DSH_DESKTOP_HOST__ })
+    if (mode === 'mode-closed' && window.__DSH_DESKTOP_HOST__) window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable = false
+    if (mode === 'invalid-span') span = { ...span, start: -1, end: -1 }
+    if (mode === 'session-closed') await f.closeSession()
+    if (mode === 'scope-missing') vi.spyOn(f.ctx.sessions, 'scope').mockReturnValue(undefined)
+    if (mode === 'plugin-closed') {
+      const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+      await plugin?.fiber?.dispose()
+    }
+    if (mode === 'claimed') {
+      f.composer.setDraft('')
+      expect(f.composer.beginCommand({ name: 'other', token: '/other ', submit: async () => ({ kind: 'success' }) }, f.composer.actions.captureInsertion())).toBe(true)
+      expect(f.composer.snapshot.phase).toBe('claimed')
+      span = f.composer.actions.captureInsertion()
+    }
+    const draft = f.composer.snapshot.draft
+    expect(bindings.insertAgent(projectId, agentId, span)).toBe(false)
+    expect(f.composer.snapshot.draft).toBe(draft)
+    expect(f.composer.snapshot.occurrences).toHaveLength(0)
+    expect(f.submit).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  })
+
+it('directory picks share the original Source with an existing structured Agent mention', async () => {
+  const f = await bench(true)
+  await f.pick('', '检查交互；')
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope panel')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as ProjectScopeInjected
+  await bindings.refreshScope()
+  expect(bindings.insertAgent(agent.project_id, agent.agent_id, f.composer.actions.captureInsertion())).toBe(true)
+  const refs = f.composer.snapshot.occurrences.map(item => JSON.parse(item.ref) as { source_id: string; original_source_id: string })
+  expect(refs).toHaveLength(2)
+  expect(refs[0]?.source_id).not.toBe(refs[1]?.source_id)
+  expect(refs[0]?.original_source_id).toBe(refs[1]?.original_source_id)
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('opens one real sidebar page from the YAML launcher and removes its type and history slot on unload', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope launcher')
+  const bindings = Reflect.apply(entry.inject, undefined, [id]) as ProjectScopeInjected & ScopeLauncherInjected
+  f.composer.setDraft('保留聊天草稿')
+  bindings.openCollaboration(); bindings.openCollaboration()
+  const tabs = f.ctx.sidebarRight.tabsIn(id).filter(tab => tab.kind === 'slark-collaboration')
+  expect(tabs).toHaveLength(1)
+  expect(tabs[0]?.title).toBe('Slark 协同')
+  const definition = f.ctx.sidebarRightTabs.get('slark-collaboration')
+  const guide = definition?.guide?.[0]
+  if (!guide?.title || !guide.description) throw Error('missing collaboration guide')
+  expect(guide.icon).toBeDefined()
+  expect(guide.title()).toBe('Slark 协同')
+  expect(guide.description()).toContain('@Agent')
+  expect(f.ctx.slots.entries('conversation.input.dock').map(item => item.options.id)).toEqual([
+    'slark-collaboration-activity', 'slark-project-scope',
+  ])
+  expect(f.ctx.slots.entries('slark.collaboration.history')).toHaveLength(1)
+  const panel = f.ctx.slots.entries('sidebar.right.pane.tab').find(item => item.options.key === definition?.id)
+  if (!panel?.inject) throw Error('missing collaboration page')
+  const injectPanel = panel.inject
+  expect(Reflect.apply(injectPanel, undefined, [id])).toBe(bindings)
+  expect(f.composer.snapshot.draft).toBe('保留聊天草稿')
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  await plugin?.fiber?.dispose()
+  expect(f.ctx.sidebarRightTabs.get('slark-collaboration')).toBeUndefined()
+  expect(f.ctx.slots.entries('slark.collaboration.history')).toHaveLength(0)
+  bindings.openCollaboration()
+  expect(f.ctx.sidebarRight.tabsIn(id).filter(tab => tab.kind === 'slark-collaboration')).toHaveLength(1)
+  expect(() => { Reflect.apply(injectPanel, undefined, [id]) }).toThrow('collaboration_view_closed')
+})
+
+it('does not open another Session from a stale collaboration launcher', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope launcher')
+  const bindings = Reflect.apply(entry.inject, undefined, [id]) as ScopeLauncherInjected
+  const opened = vi.spyOn(f.ctx.sidebarRight, 'openTab')
+  f.ctx.sidebarRight.bind({ sessionId: SessionId('other'), actions: {} as never, surfaces: {},
+    closeWithFocus: () => {}, openWithFocus: () => {}, canSplitPane: () => true })
+  bindings.openCollaboration()
+  expect(opened).not.toHaveBeenCalled()
+})
+
+it.each(['missing', 'closed'] as const)('refuses a collaboration page without a live Session owner (%s)', async (mode) => {
+  const f = await bench(true)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope launcher')
+  const injectLauncher = entry.inject
+  const bindings = Reflect.apply(injectLauncher, undefined, [SessionId('session-1')]) as ProjectScopeInjected
+  await bindings.refreshScope()
+  if (mode === 'closed') {
+    await f.closeSession()
+    expect(bindings.hooks.slarkScope.agentForMention(agent.project_id, agent.agent_id)).toBeUndefined()
+  }
+  const id = SessionId(mode === 'missing' ? 'missing' : 'session-1')
+  expect(() => { Reflect.apply(injectLauncher, undefined, [id]) }).toThrow('collaboration_view_closed')
+  expect(f.composer.snapshot.draft).toBe('')
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+})
+
+it.each([false, true])('replaces the sidebar scope model when the same Session receives a new Controller owner (previous live=%s)', async (keepPrevious) => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  if (!entry?.inject) throw Error('missing scope launcher')
+  const first = Reflect.apply(entry.inject, undefined, [id]) as ProjectScopeInjected
+  await first.refreshScope()
+  const closePrevious = await f.rebind(keepPrevious)
+  const next = Reflect.apply(entry.inject, undefined, [id]) as ProjectScopeInjected
+  expect(next.hooks.slarkScope).not.toBe(first.hooks.slarkScope)
+  expect(first.hooks.slarkScope.agentForMention(agent.project_id, agent.agent_id)).toBeUndefined()
+  expect(first.insertAgent(agent.project_id, agent.agent_id, f.composer.actions.captureInsertion())).toBe(false)
+  await next.refreshScope()
+  expect(next.hooks.slarkScope.getSnapshot().scope?.selected_project_ids).toEqual([agent.project_id])
+  await closePrevious()
+  expect(Reflect.apply(entry.inject, undefined, [id])).toBe(next)
+  expect(next.hooks.slarkScope.getSnapshot().scope?.selected_project_ids).toEqual([agent.project_id])
+})
+
+
+it('publishes YAML-owned timeline records only while viewed, keeps ordinary events empty and clears on plugin removal', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  if (!entry?.inject) throw Error('missing timeline registration')
+  const bindings = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+  const model = bindings.hooks.slarkResults
+  const original = { source: { workspace_id: f.workspace.id, session_id: id, source_message_id: 'original', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · Project original',
+    timeline_position: { after_sequence: null, local_order: '1' } }
+  f.sourceReads.mockImplementation(async () => ({ ok: true, value: { items: [original] } }))
+  const records = f.chatTimeline.source(id), changed = vi.fn(), off = records.subscribe(changed)
+  const conversation = f.ctx.uiConversation.binding(id), stopActivity = conversation.snapshot.subscribe(() => {})
+  await vi.waitFor(() => { expect(records.getSnapshot()).toEqual([
+    { recordId: original.snapshot_digest, afterSequence: null, localOrder: '1' },
+  ]) })
+  const before = records.getSnapshot()
+  await model.refresh()
+  expect(records.getSnapshot()).toBe(before)
+  expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(true)
+  expect(f.ctx.sessions.binding(id)!.eventSource.getSnapshot().entries).toEqual([])
+  await bindings.loadSources(); await bindings.loadReplies(original.snapshot_digest)
+  await bindings.executionAction(original.snapshot_digest, 'task', true)
+  f.sourceReads.mockImplementation(async () => ({ ok: true, value: { items: [{ ...original, timeline_position: null }] } }))
+  await model.refresh()
+  expect(records.getSnapshot()).toEqual([])
+  await model.refresh()
+  expect(model.getSnapshot().groups[0]?.original.timeline_position).toBeNull()
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  off(); stopActivity()
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing Slark plugin')
+  await plugin.fiber.dispose()
+  expect(records.getSnapshot()).toEqual([])
+  expect(() => { Reflect.apply(entry.inject!, undefined, [id]) }).toThrow('collaboration_view_closed')
+})
+
+
+it('rebinds collaboration activity and readonly history when the same Session receives a fresh Controller scope', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  if (!entry?.inject) throw Error('missing timeline registration')
+  const before = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+  await f.rebind()
+  const after = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+  expect(after).not.toBe(before)
+  expect(after.hooks.slarkResults).not.toBe(before.hooks.slarkResults)
+  await before.hooks.slarkResults.refresh()
+  expect(f.sourceReads).not.toHaveBeenCalled()
+  await after.hooks.slarkResults.refresh()
+  expect(f.sourceReads).toHaveBeenCalledOnce()
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+})
+
+it('restores old and multi-target replies through the YAML registrant without dispatching another task', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const originals = ['new', 'old'].map((message, index) => ({
+    source: { workspace_id: f.workspace.id, session_id: id, source_message_id: message, source_revision: '1' },
+    snapshot_digest: String(index + 1).repeat(64), original_message: `@Guide · Project ${message}`,
+    timeline_position: { after_sequence: null, local_order: String(2 - index) },
+  }))
+  f.sourceReads.mockResolvedValue({ ok: true, value: { items: originals } })
+  const projections = originals.map(original => ({ ok: true, value: {
+    deliveries: (original === originals[0] ? ['A', 'B'] : ['old']).map(target => ({
+      delivery_id: `${original.source.source_message_id}-${target}`, invocation_id: `invocation-${target}`,
+      delivery_state: 'delivered', delivery_state_version: '2', source_locator: original.source,
+      source_snapshot_digest: original.snapshot_digest, execution_state: 'succeeded', invocation_state_version: '3',
+      target_display_snapshot: { agent_name: 'Guide', project_name: target }, answer: `answer-${target}`,
+    })),
+  } }))
+  const releases: Array<() => void> = []
+  f.deliveries.mockImplementation(async (input) => {
+    await new Promise<void>((resolve) => { releases.push(resolve) })
+    return projections[originals.findIndex(item => item.source.source_message_id === input.source.source_message_id)]!
+  })
+  const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  if (!entry?.inject) throw Error('missing timeline registration')
+  const bindings = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+  const model = bindings.hooks.slarkResults, read = model.refresh()
+  onTestFinished(async () => { releases.forEach((release) => { release() }); await read })
+  await vi.waitFor(() => { expect(releases).toHaveLength(2) })
+  expect(model.getSnapshot()).toMatchObject({ phase: 'loading', groups: [
+    { original: originals[0], replies: [], phase: 'loading' }, { original: originals[1], replies: [], phase: 'loading' },
+  ] })
+  releases.shift()!()
+  await vi.waitFor(() => { expect(model.getSnapshot().groups[0]?.replies.map(reply => reply.answer)).toEqual(['answer-A', 'answer-B']) })
+  expect(model.getSnapshot().phase).toBe('loading')
+  expect(model.getSnapshot().groups[1]?.replies).toEqual([])
+  releases.splice(0).forEach((release) => { release() })
+  await read
+  expect(model.getSnapshot().groups.map(group => group.original.source.source_message_id)).toEqual(['new', 'old'])
+  expect(model.getSnapshot().groups.flatMap(group => group.replies.map(reply => reply.answer)))
+    .toEqual(['answer-A', 'answer-B', 'answer-old'])
+  // Later automatic reads retain the same immutable reply identities and require no new submission.
+  f.deliveries.mockImplementation(async input =>
+    projections[originals.findIndex(item => item.source.source_message_id === input.source.source_message_id)]!)
+  const props: Parameters<typeof CollaborationTimeline>[0] = {
+    ...dockRuntime(id), recordId: null, t: dockTranslate,
+    useSlarkResults: selector => selector(useSyncExternalStore(model.subscribe, model.getSnapshot)),
+    loadSources: () => bindings.loadSources(), loadReplies: digest => bindings.loadReplies(digest),
+    executionAction: (digest, taskId, reconcile) => bindings.executionAction(digest, taskId, reconcile),
+  }
+  const view = render(createElement('div', undefined, ...originals.map(original =>
+    createElement(CollaborationTimeline, { ...props, key: original.snapshot_digest, recordId: original.snapshot_digest }))))
+  onTestFinished(() => { view.unmount() })
+  expect(view.container.querySelectorAll('[data-testid=slark-timeline-original]')).toHaveLength(2)
+  expect(view.container.querySelectorAll('[data-testid=slark-timeline-reply]')).toHaveLength(3)
+  expect(view.container.textContent).toMatch(/Guide · A.*answer-A.*Guide · B.*answer-B.*answer-old/s)
+  await expect(`${view.container.textContent}\n`).toMatchFileSnapshot(join(process.cwd(),
+    'packages/client/ui-slark-agent/tests/expected/history-recovery.expected.txt'))
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['source', 'empty', 'read-error'] as const)('loads %s collaboration history from the blank Conversation composer before mounting Chat or the sidebar', async (mode) => {
+  const f = await bench(true), id = SessionId('session-1')
+  const original = { source: { workspace_id: f.workspace.id, session_id: id, source_message_id: 'original', source_revision: '1' },
+    snapshot_digest: 'a'.repeat(64), original_message: '@Guide · Project original',
+    timeline_position: { after_sequence: null, local_order: '1' } }
+  f.sourceReads.mockImplementation(async () => {
+    if (mode === 'read-error') throw Error('history unavailable')
+    return { ok: true, value: { items: mode === 'source' ? [original] : [] } }
+  })
+  const conversation = f.ctx.uiConversation.binding(id)
+  const off = conversation.snapshot.subscribe(() => {})
+  onTestFinished(off)
+  // A blank Conversation mounts its composer but refuses the Chat view until an independent activity is observed.
+  for (const entry of f.ctx.slots.entries('conversation.input.dock')) {
+    if (entry.inject) Reflect.apply(entry.inject, undefined, [id])
+    if (entry.options.id === 'slark-collaboration-activity') {
+      const component = entry.component
+      if (typeof component !== 'function') throw Error('missing collaboration activity component')
+      expect(Reflect.apply(component, undefined, [dockRuntime(id)])).toBeNull()
+    }
+  }
+  await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalled() })
+  await vi.waitFor(() => {
+    expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(mode !== 'empty')
+  })
+  const records = f.chatTimeline.source(id)
+  const offRecords = records.subscribe(() => {})
+  onTestFinished(offRecords)
+  expect(records.getSnapshot()).toEqual(mode === 'source'
+    ? [{ recordId: original.snapshot_digest, afterSequence: null, localOrder: '1' }] : [])
+  if (mode === 'source') {
+    const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+    if (!entry?.inject) throw Error('missing timeline registration')
+    const bindings = Reflect.apply(entry.inject, undefined, [id]) as CollaborationResultsInjected
+    const model = bindings.hooks.slarkResults
+    const props: Parameters<typeof CollaborationTimeline>[0] = {
+      ...dockRuntime(id), recordId: original.snapshot_digest, t: dockTranslate,
+      useSlarkResults: selector => selector(useSyncExternalStore(model.subscribe, model.getSnapshot)),
+      loadSources: () => bindings.loadSources(), loadReplies: digest => bindings.loadReplies(digest),
+      executionAction: (digest, taskId, reconcile) => bindings.executionAction(digest, taskId, reconcile),
+    }
+    const view = render(createElement(CollaborationTimeline, props))
+    onTestFinished(() => { view.unmount() })
+    await expect(`${view.container.textContent}\n`).toMatchFileSnapshot(join(process.cwd(),
+      'packages/client/ui-slark-agent/tests/expected/blank-conversation-collaboration.expected.txt'))
+  }
+  expect(f.ctx.sessions.binding(id)!.eventSource.getSnapshot().entries).toEqual([])
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin?.fiber) throw Error('missing Slark plugin')
+  await plugin.fiber.dispose()
+  expect(records.getSnapshot()).toEqual([])
+  expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(false)
+})
+
+it('releases composer-initialized history observers when its Session Controller closes without another view mount', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const originalObservers = f.workspace.subscribers
+  const conversation = f.ctx.uiConversation.binding(id)
+  const off = conversation.snapshot.subscribe(() => {})
+  onTestFinished(off)
+  for (const entry of f.ctx.slots.entries('conversation.input.dock')) {
+    if (entry.inject) Reflect.apply(entry.inject, undefined, [id])
+  }
+  await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalled() })
+  expect(f.workspace.subscribers).toBe(originalObservers + 3)
+  await f.closeSession()
+  expect(f.workspace.subscribers).toBe(0)
+  expect(f.chatTimeline.source(id).getSnapshot()).toEqual([])
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+})
+
+it('refuses history for absent or closed Session Controllers and replaces a retained previous Controller without keeping its observers', async () => {
+  const f = await bench(true), id = SessionId('session-1')
+  const entry = f.ctx.slots.entries('conversation.chat.timeline')[0]
+  if (!entry?.inject) throw Error('missing timeline registration')
+  const inject = entry.inject
+  expect(() => { Reflect.apply(inject, undefined, [SessionId('absent')]) }).toThrow('collaboration_view_closed')
+  const before = Reflect.apply(inject, undefined, [id]) as CollaborationResultsInjected
+  const closePrevious = await f.rebind(true)
+  const after = Reflect.apply(inject, undefined, [id]) as CollaborationResultsInjected
+  expect(after.hooks.slarkResults).not.toBe(before.hooks.slarkResults)
+  expect(f.workspace.subscribers).toBe(2)
+  await closePrevious()
+  expect(f.workspace.subscribers).toBe(2)
+  await before.hooks.slarkResults.refresh()
+  expect(f.sourceReads).not.toHaveBeenCalled()
+  await f.ctx.sessions.binding(id)!.ctx.fiber.dispose()
+  expect(f.workspace.subscribers).toBe(0)
+  expect(() => { Reflect.apply(inject, undefined, [id]) }).toThrow('collaboration_view_closed')
 })

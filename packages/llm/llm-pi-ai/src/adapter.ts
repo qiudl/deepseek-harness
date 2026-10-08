@@ -329,7 +329,7 @@ export class PiAiAdapter extends LlmAdapter {
     const snapshot = this.current()
     const profile = this.profileOf(snapshot, provider)
     const resolved = this.modelOf(snapshot, provider, model)
-    if (provider !== 'deepseek' || resolved.api !== 'openai-completions') {
+    if (resolved.api !== 'openai-completions') {
       throw new LlmError('pi-ai route cannot capture a complete prepared snapshot', 'PREPARED_SNAPSHOT_UNSUPPORTED')
     }
     const apiKey = await this.config.resolveApiKey(provider, profile)

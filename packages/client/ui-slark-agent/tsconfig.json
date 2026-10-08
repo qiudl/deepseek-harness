@@ -21,6 +21,9 @@
       "path": "../ui-conversation/tsconfig.client.json"
     },
     {
+      "path": "../ui-chat/tsconfig.client.json"
+    },
+    {
       "path": "../ui-input-trigger"
     },
     {
@@ -43,6 +46,12 @@
     },
     {
       "path": "../ui-trajectory"
+    },
+    {
+      "path": "../ui-workspace"
+    },
+    {
+      "path": "../ui-sidebar-right"
     }
   ]
 }

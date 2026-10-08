@@ -8,6 +8,7 @@ import { collaborationJournalDigest, describeCollaborationSource, parseCollabora
 import type { CollaborationSourceSnapshot } from './collaboration-source-journal.ts'
 
 const referenceBytes = 1024 * 1024
+const sourceReferenceCount = 10 * 8
 const id = z.string().regex(/^[!-~]{1,256}$/u).refine(value => !/[/\\]/u.test(value) && value !== '.' && value !== '..')
 const digest = z.string().regex(/^[a-f0-9]{64}$/u)
 const version = z.string().refine(value => /^[1-9][0-9]{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n)
@@ -323,7 +324,7 @@ export async function openCollaborationReferenceJournal(facility: Pick<DomainFac
         }
         const siblings = [...table.entries()].map(([, value]) => value).filter(value =>
           collaborationJournalDigest(value.descriptor) === collaborationJournalDigest(captured.descriptor))
-        if (table.size >= 128 * 8 || siblings.length >= 8
+        if (table.size >= 128 * sourceReferenceCount || siblings.length >= sourceReferenceCount
           || siblings.reduce((total, value) => total + value.request.byte_length, captured.request.byte_length) > referenceBytes)
           throw Error('collaboration_reference_capacity_reached')
         try { await table.put(key, captured) } catch (error) { recoveryRequired = true; throw error }

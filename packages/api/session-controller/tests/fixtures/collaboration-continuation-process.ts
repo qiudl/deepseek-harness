@@ -14,7 +14,11 @@ if (!directory || !point) throw Error('fixture arguments missing')
 const ctx = new Context()
 await ctx.plugin(Storage)
 const backend = new JsonStorageBackend(directory), original = backend.kv.open.bind(backend.kv)
-async function stop() { process.send?.({ event: point }); await new Promise<void>(() => {}) }
+async function stop() {
+  process.channel?.ref()
+  process.send?.({ event: point })
+  await new Promise<void>(() => {})
+}
 backend.kv.open = async (descriptor) => {
   const unit = await original(descriptor), put = unit.putRecord.bind(unit)
   if (descriptor.name === 'collaboration_continuation_v1') unit.putRecord = async (...args) => {
