@@ -44,6 +44,15 @@ export interface ConversationBinding {
    */
   retainActivity(target: string): () => void
   /**
+   * Contribute display activity from an independent authorized history source.
+   * The source is observed only while the Conversation snapshot has subscribers.
+   * This neither appends Session events nor activates an execution or target builder.
+   * @param target - Display activity identity owned by the contributing plugin.
+   * @param source - Current readonly presence of displayable records.
+   * @returns Idempotent removal; the Session binding also removes it on disposal.
+   */
+  registerActivity(target: string, source: ObservableSnapshot<boolean>): () => void
+  /**
    * Resolve one target-owned snapshot source.
    * The first subscriber activates the target unless shell selection already
    * activated it; activation lasts for the remaining Session lifetime.
@@ -56,8 +65,17 @@ export interface ConversationBinding {
 }
 
 class BoundConversation implements ConversationBinding {
-  readonly snapshot: SnapshotStore<ConversationSnapshot>
+  readonly snapshot: ObservableSnapshot<ConversationSnapshot>
+  private readonly published: SnapshotStore<ConversationSnapshot>
   readonly openTurn: SnapshotStore<number | undefined>
+  private readonly activities = new Map<symbol, {
+    target: string
+    source: ObservableSnapshot<boolean>
+    active: boolean
+    stop?: () => void
+  }>()
+  private subscribers = 0
+  private disposed = false
   private readonly viewStore: ConversationViewSnapshotStore
   private readonly targetSources = new Map<string, ObservableSnapshot<unknown>>()
   private readonly retainedActivity = new Map<symbol, string>()
@@ -70,7 +88,24 @@ class BoundConversation implements ConversationBinding {
     private readonly assembler: ConversationNodeAssembler,
   ) {
     this.viewStore = assembler
-    this.snapshot = createSnapshotStore(this.currentSnapshot())
+    this.published = createSnapshotStore(this.currentSnapshot())
+    this.snapshot = {
+      getSnapshot: () => this.published.getSnapshot(),
+      subscribe: (listener) => {
+        if (this.disposed) return () => {}
+        const stop = this.published.subscribe(listener)
+        this.subscribers++
+        if (this.subscribers === 1) {
+          for (const token of this.activities.keys()) this.observeActivity(token)
+        }
+        let subscribed = true
+        return () => {
+          if (!subscribed) return
+          subscribed = false; stop(); this.subscribers--
+          if (this.subscribers === 0) this.stopActivities()
+        }
+      },
+    }
     this.openTurn = createSnapshotStore(assembler.openTurn())
     this.replace(feed.getSnapshot())
     this.disposeFeed = feed.subscribe(() => {
@@ -98,22 +133,63 @@ class BoundConversation implements ConversationBinding {
   }
 
   activate(target: string): void {
-    if (this.assembler.activateTarget(target)) this.snapshot.set(this.currentSnapshot())
+    if (this.assembler.activateTarget(target)) this.published.set(this.currentSnapshot())
     this.openTurn.set(this.assembler.openTurn())
   }
 
   retainActivity(target: string): () => void {
     const token = Symbol(target)
     this.retainedActivity.set(token, target)
-    this.snapshot.set(this.currentSnapshot())
+    this.published.set(this.currentSnapshot())
     return () => {
-      if (this.retainedActivity.delete(token)) this.snapshot.set(this.currentSnapshot())
+      if (this.retainedActivity.delete(token)) this.published.set(this.currentSnapshot())
     }
   }
 
   rebuild(): void { this.publish(this.assembler.rebuildRegistry()) }
 
+  registerActivity(target: string, source: ObservableSnapshot<boolean>): () => void {
+    if (this.disposed) throw Error('conversation_activity_closed')
+    const token = Symbol(target)
+    const entry = { target, source, active: source.getSnapshot() }
+    this.activities.set(token, entry)
+    if (this.subscribers) this.observeActivity(token)
+    if (entry.active) this.published.set(this.currentSnapshot())
+    return () => {
+      const current = this.activities.get(token)
+      if (!current) return
+      this.activities.delete(token)
+      current.stop?.()
+      if (!this.disposed && current.active) this.published.set(this.currentSnapshot())
+    }
+  }
+
+  private observeActivity(token: symbol): void {
+    const entry = this.activities.get(token)
+    if (!entry || entry.stop !== undefined || this.disposed) return
+    const update = () => {
+      if (this.disposed || this.activities.get(token) !== entry) return
+      const active = entry.source.getSnapshot()
+      if (active === entry.active) return
+      entry.active = active
+      this.published.set(this.currentSnapshot())
+    }
+    entry.stop = entry.source.subscribe(update)
+    update()
+  }
+
+  private stopActivities(): void {
+    for (const entry of this.activities.values()) {
+      const stop = entry.stop
+      delete entry.stop
+      stop?.()
+    }
+  }
+
   dispose(): void {
+    this.disposed = true
+    this.stopActivities()
+    this.activities.clear()
     this.cancelFrame()
     this.disposeFeed()
     this.retainedActivity.clear()
@@ -180,14 +256,18 @@ class BoundConversation implements ConversationBinding {
   }
 
   private flush(): void {
-    if (this.assembler.flush()) this.snapshot.set(this.currentSnapshot())
+    if (this.assembler.flush()) this.published.set(this.currentSnapshot())
     this.openTurn.set(this.assembler.openTurn())
   }
 
   private currentSnapshot(): ConversationSnapshot {
+    const activeTargets = new Set(this.assembler.activityTargets())
+    for (const activity of this.activities.values()) {
+      if (activity.active) activeTargets.add(activity.target)
+    }
     return {
       views: this.viewStore,
-      activeTargets: new Set([...this.assembler.activityTargets(), ...this.retainedActivity.values()]),
+      activeTargets: new Set([...activeTargets, ...this.retainedActivity.values()]),
     }
   }
 }

@@ -1,6 +1,7 @@
 /** Failure policy through the built Web process and native configuration watcher. */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
@@ -167,6 +168,47 @@ function exit(result: { timedOut: boolean; signal?: string | undefined; exitCode
 }
 
 describe.skipIf(!built)('Web process failure matrix', () => {
+  it('reloads Session Controller without retaining its file-upload resolver', async () => {
+    const f = fixture()
+    const app = start(f)
+    try {
+      await app.serves()
+      await app.wait(() => app.state('session-controller') === FiberState.ACTIVE)
+      for (const generation of [1, 2]) {
+        writeFileSync(f.patch, f.render('matrix-optional', undefined, generation) + '- id: session-controller\n  disabled: true\n')
+        await app.wait(() => app.state('session-controller') === FiberState.DISPOSED)
+        writeFileSync(f.patch, f.render('matrix-optional', undefined, generation) + '- id: session-controller\n  disabled: false\n')
+        await app.wait(() => app.state('session-controller') === FiberState.ACTIVE)
+      }
+      const url = readFileSync(f.serverUrl, 'utf8')
+      const auth = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(10_000) })
+      const cookie = auth.headers.get('set-cookie')?.split(';', 1)[0]
+      if (!cookie) throw new Error('Missing Web authentication cookie')
+      const sessionId = randomUUID()
+      const rpcId = randomUUID()
+      const created = await fetch(new URL('/api/session/create', url), {
+        method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId, method: 'session/create',
+          payload: { args: { request: { sessionId, cwd: f.root } } } }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      expect(await created.json()).toMatchObject({ type: 'server-response', rpcId,
+        result: { ok: true, value: { sessionId, agentPreset: 'standard' } } })
+      const data = Buffer.from('Session Controller reload preserves raw upload ownership.\n')
+      const digest = createHash('sha256').update(data).digest('hex')
+      const uploaded = await fetch(new URL(`/api/session/uploadFileBinary?sessionId=${sessionId}&name=reload.txt`, url), {
+        method: 'POST', headers: { cookie, 'content-type': 'application/octet-stream' }, body: data,
+        signal: AbortSignal.timeout(10_000),
+      })
+      const receiptId: unknown = expect.any(String)
+      expect(await uploaded.json()).toMatchObject({ ok: true, value: {
+        receiptId, file: { attachmentId: `sha256:${digest}`, name: 'reload.txt', bytes: data.length },
+      } })
+      expect(readFileSync(join(f.home, 'attachments', 'v1', 'files', digest.slice(0, 2), digest, 'reload.txt'))).toEqual(data)
+      expect(app.logs()).not.toContain('Agent resolver is already registered')
+    } finally { exit(await app.close(), 0) }
+  })
+
   for (const required of [false, true]) {
     const id = required ? 'acp' : 'matrix-optional'
     it.each(failures)(`${required ? 'required' : 'optional'} startup %s`, async (failure, diagnostic) => {

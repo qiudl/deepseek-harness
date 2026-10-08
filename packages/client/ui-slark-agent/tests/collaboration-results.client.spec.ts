@@ -30,15 +30,16 @@ it.each([false, true])('publishes a verified result before an older Source finis
   const refresh = f.model.refresh()
   onTestFinished(async () => { held.resolve({ ok: true, value: { deliveries: [] } }); f.model.dispose(); await refresh })
   await entered.promise
+  await vi.waitFor(() => { expect(f.model.getSnapshot().groups[0]?.replies[0]?.answer).toBe('Updated verified result') })
   const intermediate = f.model.getSnapshot()
   expect(intermediate.phase).toBe('loading')
   expect(intermediate.groups[0]?.replies[0]?.answer).toBe('Updated verified result')
-  expect(intermediate.groups).toHaveLength(loaded ? 2 : 1)
+  expect(intermediate.groups).toHaveLength(2)
   held.resolve({ ok: true, value: { deliveries: [] } })
   await refresh
   expect(f.model.getSnapshot().phase).toBe('ready')
   expect(f.model.getSnapshot().groups).toHaveLength(2)
-  expect(intermediate.groups).toHaveLength(loaded ? 2 : 1)
+  expect(intermediate.groups).toHaveLength(2)
 })
 
 it('removes a denied result while the next original message is still loading', async () => {
@@ -55,6 +56,7 @@ it('removes a denied result while the next original message is still loading', a
   const refresh = f.model.refresh()
   onTestFinished(async () => { held.resolve({ ok: true, value: { deliveries: [] } }); f.model.dispose(); await refresh })
   await entered.promise
+  await vi.waitFor(() => { expect(f.model.getSnapshot().groups[0]?.phase).toBe('error') })
   expect(f.model.getSnapshot().groups[0]?.replies).toEqual([])
   expect(f.model.getSnapshot().groups[0]?.phase).toBe('error')
   f.reset()
@@ -76,8 +78,222 @@ it.each(['workspace-removal', 'dispose'] as const)('stops older reads when an in
   })
   onTestFinished(stop)
   await vi.waitFor(() => { expect(interrupted).toBe(true) })
-  expect(f.deliveries).toHaveBeenCalledTimes(1)
+  expect(f.deliveries).not.toHaveBeenCalled()
   expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+it('shows fresh originals before slow history reads finish', async () => {
+  const f = fixture(), second = { ...original, source: { ...source, source_message_id: 'second' },
+    snapshot_digest: 'b'.repeat(64) }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, second] } })
+  let release!: () => void
+  const blocked = new Promise<void>((resolve) => { release = resolve })
+  const deliveries = vi.fn(async () => { await blocked; return { ok: true as const, value: { deliveries: [] } } })
+  f.bridge.collaborationDeliveries = deliveries
+  const read = f.model.refresh()
+  try {
+    await vi.waitFor(() => { expect(deliveries).toHaveBeenCalledTimes(2) })
+    expect(f.model.getSnapshot()).toMatchObject({ phase: 'loading', groups: [
+      { original, phase: 'loading', replies: [] }, { original: second, phase: 'loading', replies: [] },
+    ] })
+  } finally { release(); await read; f.model.dispose() }
+})
+
+it('shows an authorized reply while a different original is still reading', async () => {
+  const f = fixture(), second = { ...original, source: { ...source, source_message_id: 'second' },
+    snapshot_digest: 'b'.repeat(64) }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, second] } })
+  let release!: () => void
+  const blocked = new Promise<void>((resolve) => { release = resolve })
+  const deliveries = vi.fn(async (request: DeliveryRequest) => {
+    if (request.source.source_message_id === source.source_message_id) await blocked
+    return { ok: true as const, value: { deliveries: [{ ...reply, source_locator: request.source,
+      source_snapshot_digest: request.source.source_message_id === 'second' ? second.snapshot_digest : original.snapshot_digest }] } }
+  })
+  f.bridge.collaborationDeliveries = deliveries
+  const read = f.model.refresh()
+  try {
+    await vi.waitFor(() => { expect(deliveries).toHaveBeenCalledTimes(2) })
+    await vi.waitFor(() => { expect(f.model.getSnapshot().groups[1]?.replies[0]?.answer).toBe(reply.answer) })
+    expect(f.model.getSnapshot().phase).toBe('loading')
+    expect(f.model.getSnapshot().groups[0]).toMatchObject({ phase: 'loading', replies: [] })
+  } finally { release(); await read; f.model.dispose() }
+})
+
+it('keeps displayed replies stable until each refreshed authorization read settles', async () => {
+  const f = fixture(), second = { ...original, source: { ...source, source_message_id: 'second' },
+    snapshot_digest: 'b'.repeat(64) }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, second] } })
+  f.bridge.collaborationDeliveries = async request => ({ ok: true, value: { deliveries: [{ ...reply,
+    source_locator: request.source, source_snapshot_digest: request.source.source_message_id === 'second'
+      ? second.snapshot_digest : original.snapshot_digest }] } })
+  await f.model.refresh()
+  let release!: () => void
+  const blocked = new Promise<void>((resolve) => { release = resolve })
+  const deliveries = vi.fn(async () => { await blocked; return { ok: true as const, value: { deliveries: [] } } })
+  f.bridge.collaborationDeliveries = deliveries
+  const read = f.model.refresh()
+  try {
+    await vi.waitFor(() => { expect(deliveries).toHaveBeenCalledTimes(2) })
+    expect(f.model.getSnapshot().groups.map(group => group.replies[0]?.answer)).toEqual([reply.answer, reply.answer])
+  } finally { release(); await read; f.model.dispose() }
+})
+
+it('removes a restricted answer while other refreshed originals are still reading', async () => {
+  const f = fixture(), second = { ...original, source: { ...source, source_message_id: 'second' },
+    snapshot_digest: 'b'.repeat(64) }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, second] } })
+  f.bridge.collaborationDeliveries = async request => ({ ok: true, value: { deliveries: [{ ...reply,
+    source_locator: request.source, source_snapshot_digest: request.source.source_message_id === 'second'
+      ? second.snapshot_digest : original.snapshot_digest }] } })
+  await f.model.refresh()
+  let release!: () => void
+  const blocked = new Promise<void>((resolve) => { release = resolve })
+  f.bridge.collaborationDeliveries = async (request) => {
+    if (request.source.source_message_id === 'second') { await blocked; return { ok: true, value: { deliveries: [] } } }
+    const { target_display_snapshot: _target, ...restricted } = replyWithoutAnswer
+    return { ok: true, value: { deliveries: [{ ...restricted,
+      delivery_state: 'restricted', source_locator: request.source, source_snapshot_digest: original.snapshot_digest }] } }
+  }
+  const read = f.model.refresh()
+  try {
+    await vi.waitFor(() => { expect(f.model.getSnapshot().groups[0]?.replies[0]?.delivery_state).toBe('restricted') })
+    const snapshot = f.model.getSnapshot()
+    expect(snapshot.phase).toBe('loading')
+    expect(snapshot.groups[0]?.replies[0]).not.toHaveProperty('answer')
+    expect(snapshot.groups[0]?.replies[0]?.target_display_snapshot).toBeUndefined()
+    expect(snapshot.groups[1]?.replies[0]?.answer).toBe(reply.answer)
+    release(); await read
+    expect(snapshot.groups[1]?.replies[0]?.answer).toBe(reply.answer)
+    expect(f.model.getSnapshot().groups[1]?.replies).toEqual([])
+  } finally { release(); await read; f.model.dispose() }
+})
+
+it('refuses duplicate timeline positions before showing partial results', async () => {
+  const f = fixture(true), position = { after_sequence: 7, local_order: '1' }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [{ ...original, timeline_position: position },
+    { ...original, source: { ...source, source_message_id: 'second' }, snapshot_digest: 'b'.repeat(64),
+      timeline_position: position }] } })
+  const published: ReturnType<typeof f.model.getSnapshot>[] = []
+  const stop = f.model.subscribe(() => { published.push(f.model.getSnapshot()) })
+  try {
+    await vi.waitFor(() => { expect(f.model.getSnapshot().phase).toBe('error') })
+    expect(f.deliveries).not.toHaveBeenCalled()
+    expect(published.every(state => state.groups.length === 0)).toBe(true)
+  } finally { stop(); f.model.dispose() }
+})
+
+it('restores all original replies when separate authorized reads exceed thirty seconds in total', async () => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort(new DOMException('Read timed out', 'TimeoutError')) }, ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.useRealTimers() })
+  const f = fixture()
+  const originals = Array.from({ length: 4 }, (_, i) => ({ ...original,
+    source: { ...source, source_message_id: `message-${i}` }, snapshot_digest: String(i + 1).repeat(64) }))
+  f.reads.mockResolvedValue({ ok: true, value: { items: originals } })
+  f.bridge.collaborationDeliveries = async (request) => {
+    await new Promise(resolve => setTimeout(resolve, 18_000))
+    const item = originals.find(item => item.source.source_message_id === request.source.source_message_id)!
+    return { ok: true, value: { deliveries: [{ ...reply, source_locator: item.source,
+      source_snapshot_digest: item.snapshot_digest, answer: item.source.source_message_id }] } }
+  }
+  f.bridge.collaborationPending = async (request) => {
+    await new Promise(resolve => setTimeout(resolve, 6_000))
+    return { ok: true, value: { source: request.source, plan: null, frozen_task_count: 0, pending_items: [] } }
+  }
+  try {
+    const read = f.model.refresh()
+    await vi.advanceTimersByTimeAsync(100_000)
+    await read
+    expect(f.model.getSnapshot().groups.map(group => group.replies[0]?.answer))
+      .toEqual(originals.map(item => item.source.source_message_id))
+    expect(f.model.getSnapshot().groups.every(group => group.phase === 'ready')).toBe(true)
+  } finally { f.model.dispose(); timeout.mockRestore(); vi.useRealTimers() }
+})
+
+it.each([20_000, 80_000])('loads a reply page when delivery takes %s ms and planning stays in its read window', async (deliveryMs) => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort(new DOMException('Read timed out', 'TimeoutError')) }, ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.useRealTimers() })
+  const f = fixture()
+  f.bridge.collaborationDeliveries = async (request) => {
+    await new Promise(resolve => setTimeout(resolve, deliveryMs))
+    return { ok: true, value: { deliveries: [{ ...reply, delivery_id: request.after_delivery_id ? 'delivery2' : 'delivery' }],
+      ...(request.after_delivery_id ? {} : { next_cursor: 'delivery' }) } }
+  }
+  f.bridge.collaborationPending = async (request) => {
+    await new Promise(resolve => setTimeout(resolve, 15_000))
+    return { ok: true, value: { source: request.source, plan: null, frozen_task_count: 0, pending_items: [] } }
+  }
+  try {
+    const refresh = f.model.refresh()
+    await vi.advanceTimersByTimeAsync(deliveryMs + 16_000); await refresh
+    const page = f.model.loadReplies(original.snapshot_digest)
+    await vi.advanceTimersByTimeAsync(deliveryMs + 16_000); await page
+    expect(f.model.getSnapshot().groups[0]?.replies.map(item => item.delivery_id)).toEqual(['delivery', 'delivery2'])
+    expect(f.model.getSnapshot().groups[0]).not.toHaveProperty('pendingUnavailable')
+  } finally { f.model.dispose(); timeout.mockRestore(); vi.useRealTimers() }
+})
+
+it('limits concurrent original reads while an unavailable original does not erase another reply', async () => {
+  const f = fixture(), originals = Array.from({ length: 4 }, (_, i) => ({ ...original,
+    source: { ...source, source_message_id: `message-${i}` }, snapshot_digest: String(i + 1).repeat(64) }))
+  f.reads.mockResolvedValue({ ok: true, value: { items: originals } })
+  const releases: Array<() => void> = []
+  let active = 0, maximum = 0
+  f.bridge.collaborationDeliveries = async (request) => {
+    active++; maximum = Math.max(maximum, active)
+    await new Promise<void>((resolve) => { releases.push(resolve) })
+    active--
+    const item = originals.find(item => item.source.source_message_id === request.source.source_message_id)!
+    return item === originals[0] ? { ok: false, errorCode: 'unavailable' }
+      : { ok: true, value: { deliveries: [{ ...reply, source_locator: item.source, source_snapshot_digest: item.snapshot_digest }] } }
+  }
+  try {
+    const read = f.model.refresh()
+    await vi.waitFor(() => { expect(releases).toHaveLength(2) })
+    releases.splice(0).forEach((release) => { release() })
+    await vi.waitFor(() => { expect(releases).toHaveLength(2) })
+    releases.splice(0).forEach((release) => { release() })
+    await read
+    expect(maximum).toBe(2)
+    expect(f.model.getSnapshot().groups[0]).toMatchObject({ phase: 'error', replies: [] })
+    expect(f.model.getSnapshot().groups.slice(1).every(group => group.replies.length === 1)).toBe(true)
+  } finally { releases.forEach((release) => { release() }); f.model.dispose() }
+})
+
+it('stops opening further original reads when the complete query window expires', async () => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort(new DOMException('Read timed out', 'TimeoutError')) }, ms > 180_000 ? 1 : ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.useRealTimers() })
+  const f = fixture(), releases: Array<() => void> = []
+  f.reads.mockResolvedValue({ ok: true, value: { items: Array.from({ length: 4 }, (_, i) => ({ ...original,
+    source: { ...source, source_message_id: `message-${i}` }, snapshot_digest: String(i + 1).repeat(64) })) } })
+  const deliveries = vi.fn(async () => {
+    await new Promise<void>((resolve) => { releases.push(resolve) })
+    return { ok: true as const, value: { deliveries: [reply] } }
+  })
+  f.bridge.collaborationDeliveries = deliveries
+  try {
+    const read = f.model.refresh()
+    await vi.advanceTimersByTimeAsync(2)
+    releases.splice(0).forEach((release) => { release() })
+    await read
+    expect(deliveries).toHaveBeenCalledTimes(2)
+    expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+  } finally { releases.forEach((release) => { release() }); f.model.dispose(); timeout.mockRestore(); vi.useRealTimers() }
 })
 
 it('keeps the aggregate view within its budget when loading additional replies', async () => {
@@ -98,7 +314,7 @@ it('keeps the aggregate view within its budget when loading additional replies',
   expect(f.model.getSnapshot().groups[1]?.replies).toHaveLength(5)
   f.model.dispose()
 })
-function fixture() {
+function fixture(timeline = false) {
   let grouped = true, remoteGeneration: unknown = 1
   const listeners = new Set<() => void>(), changed = () => { listeners.forEach((fn) => { fn() }) }
   const workspaces: WorkspaceSource = { getSnapshot: () => workspaceSnapshot(workspace_id, 'session', grouped),
@@ -108,12 +324,53 @@ function fixture() {
   const reads = vi.fn<ConstructorParameters<typeof CollaborationResultsModel>[3]>(async () => ({ ok: true, value: { items: [original] } }))
   const deliveries = vi.fn<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>(async () => ({ ok: true, value: { deliveries: [reply] } }))
   let bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true, collaborationDeliveries: deliveries }
-  const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge)
+  const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge, 'session', undefined, timeline)
   onTestFinished(() => { model.dispose() })
   return { model, reads, bridge, deliveries, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
     quietReset: () => { remoteGeneration = 2 },
     move: () => { grouped = false; changed() }, reset: () => { remoteGeneration = 2; changed() } }
 }
+it('rejects a changed local order even when the ordinary sequence and Source identity remain the same', async () => {
+  const f = fixture(true), placed = { ...original, timeline_position: { after_sequence: 7, local_order: '1' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [placed] } })
+  await f.model.refresh()
+  f.reads.mockResolvedValue({ ok: true, value: { items: [{ ...placed, timeline_position: { after_sequence: 7, local_order: '2' } }] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toEqual({ phase: 'error', groups: [] })
+})
+
+it('retains verified positions and refuses missing opt-in metadata, malformed records and position substitution', async () => {
+  const f = fixture(true), placed = { ...original, timeline_position: { after_sequence: 7, local_order: '1' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [placed] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot().groups[0]?.original.timeline_position).toEqual(placed.timeline_position)
+  f.reads.mockResolvedValue({ ok: true, value: { items: [{ ...placed, timeline_position: { after_sequence: 8, local_order: '1' } }] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+  for (const timeline_position of [undefined, {}, { after_sequence: -1, local_order: '1' },
+    { after_sequence: Number.MAX_SAFE_INTEGER + 1, local_order: '1' }, { after_sequence: '7', local_order: '1' },
+    { after_sequence: 7, local_order: '0' }, { after_sequence: 7, local_order: '9223372036854775808' },
+    { after_sequence: 7, local_order: '1', model: 'private' }]) {
+    f.reads.mockResolvedValue({ ok: true, value: { items: [{ ...original, timeline_position }] } } as never)
+    await f.model.refresh()
+    expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+  }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+  f.reads.mockResolvedValue({ ok: true, value: { items: [{ ...original, timeline_position: null }] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot().groups[0]?.original.timeline_position).toBeNull()
+})
+
+it('refuses two different original records assigned the same independent display order across pages', async () => {
+  const f = fixture(true), first = { ...original, timeline_position: { after_sequence: 7, local_order: '1' } }
+  const second = { ...first, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'second' } }
+  f.reads.mockImplementation(async cursor => ({ ok: true, value: cursor ? { items: [second] }
+    : { items: [first], next_cursor: first.snapshot_digest } }))
+  await f.model.refresh(); await f.model.loadSources()
+  expect(f.model.getSnapshot()).toMatchObject({ phase: 'error', groups: [] })
+})
 it('reconstructs original messages and results using readonly coordinates, with separate execution and delivery state', async () => {
   const f = fixture()
   await f.model.refresh()
@@ -819,7 +1076,8 @@ it('refreshes each original Source with its own deadline while reading its trace
 
 it.each(['finish', 'reset', 'dispose', 'dispose-on-notification'] as const)('services a queued trace before older Sources and handles %s', async (ending) => {
   const f = fixture(), older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
-  f.reads.mockResolvedValue({ ok: true, value: { items: [original, older] } })
+  const peer = { ...older, snapshot_digest: 'c'.repeat(64), source: { ...source, source_message_id: 'peer' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, peer, older] } })
   f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
   Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
   await f.model.refresh()
@@ -847,7 +1105,7 @@ it.each(['finish', 'reset', 'dispose', 'dispose-on-notification'] as const)('ser
   const trace = f.model.traceAction(original.snapshot_digest)
   held.resolve(undefined)
   await Promise.all([refresh, trace])
-  expect(order).toEqual(ending === 'finish' ? ['message', 'trace', 'older'] : ['message', 'trace'])
+  expect(order).toEqual(ending === 'finish' ? ['message', 'peer', 'trace', 'older'] : ['message', 'peer', 'trace'])
   if (ending === 'finish') expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe('ready')
   else expect(f.model.getSnapshot().groups).toEqual([])
 })

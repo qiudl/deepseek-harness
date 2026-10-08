@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
 import { collaborationJournalDigest } from '../src/collaboration-source-journal.ts'
 import { CollaborationAnalysisRunner } from '../src/collaboration-analysis.ts'
+import type { CollaborationReferenceCatalogue } from '../src/collaboration-reference-catalogue.ts'
 import type { CollaborationSourceSnapshot } from '../src/collaboration-source-journal.ts'
 
 class Adapter extends LlmAdapter {
@@ -43,6 +44,123 @@ async function harness() {
   return { ctx, lifetime, adapter, runner, prepare, close: () => ctx.fiber.dispose() }
 }
 const persist = () => vi.fn(async (_manifest: import('../src/collaboration-analysis.ts').CollaborationAnalysisManifest, _signal: AbortSignal) => {})
+
+it.each([false, true])('records the actual complete original UTF-16 range before dispatch (catalogue=%s)', async (withCatalogue) => {
+  const h = await harness()
+  try {
+    const c = await h.prepare(), commit = persist()
+    const source = { ...c.source, original_message: '@Guide  请生成😀；不要读取文件。\r\n' }
+    const catalogue: CollaborationReferenceCatalogue = { source_position: 1, total_messages: 0, omitted_entries: false, entries: [] }
+    await h.runner.run(source, c.prepared, commit, new AbortController().signal, undefined, withCatalogue ? catalogue : undefined)
+    const system = commit.mock.calls[0]![0].request.system!
+    const hint = system.slice(system.indexOf(' The complete original_message evidence span'))
+    await expect(hint + '\n').toMatchFileSnapshot('./expected/collaboration-analysis.original-range.expected.txt')
+    expect(source.original_message.length).toBe(23)
+    expect(h.adapter.requests[0]!.system).toBe(system)
+    expect(system).toContain('This literal rule never changes discussion, a negated assignment or ambiguity into delegation.')
+    expect(h.adapter.requests).toHaveLength(1)
+  } finally { await h.close() }
+})
+
+it.each(['\n', '\r\n'])('returns the unchanged JSON body of one complete json fence (%j)', async (newline) => {
+  const h = await harness()
+  try {
+    const body = ' {"intent":"delegate","task_candidates":[],"pending_candidates":[],"literal":"@Guide  保留限制与 ``` 文本"} '
+    h.adapter.response = async function* () {
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: ` \n\`\`\`json ${newline}${body}${newline}\`\`\`\t\n` } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const c = await h.prepare(), commit = persist()
+    const result = await h.runner.run(c.source, c.prepared, commit, new AbortController().signal)
+    expect(result.jsonText).toBe(body)
+    await expect(JSON.stringify(result) + '\n').toMatchFileSnapshot('./expected/collaboration-analysis.fenced-json.expected.txt')
+    expect(commit).toHaveBeenCalledOnce()
+    expect(h.adapter.requests).toHaveLength(1)
+    expect(h.adapter.requests[0]!.tools).toEqual([])
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+it.each([32768, 32769])('counts the complete fenced response against the stream byte budget (%i)', async (bytes) => {
+  const h = await harness()
+  try {
+    const body = JSON.stringify({ literal: 'x'.repeat(bytes - Buffer.byteLength('```json\n{"literal":""}\n```')) })
+    h.adapter.response = async function* () {
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: `\`\`\`json\n${body}\n\`\`\`` } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const c = await h.prepare(), result = h.runner.run(c.source, c.prepared, persist(), new AbortController().signal)
+    if (bytes === 32768) expect((await result).jsonText).toBe(body)
+    else await expect(result).rejects.toThrow('collaboration_analysis_output_budget')
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+it.each([
+  'Here is the result:\n```json\n{}\n```',
+  '```json\n{}\n```\nExplanation',
+  '```json\n{}\n```\n```json\n{}\n```',
+  '```\n{}\n```', '```javascript\n{}\n```', '```json {} ```',
+  '```json\n{}', '```json\n{\n```', '```json\n{} {}\n```',
+  ...['null', '[]', '42', '"text"', 'true'].map(value => `\`\`\`json\n${value}\n\`\`\``),
+])('refuses a fenced response that is not one complete JSON object (%j)', async (text) => {
+  const h = await harness()
+  try {
+    h.adapter.response = async function* () {
+      yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const c = await h.prepare()
+    await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal))
+      .rejects.toThrow('collaboration_analysis_invalid_json')
+    expect(h.adapter.requests).toHaveLength(1)
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
+it.each(['previous', 'invented'].flatMap(locator => [false, true].map(fenced => ({ locator, fenced }))))(
+  'only returns a reference present in the captured metadata ($locator, fenced=$fenced)', async ({ locator, fenced }) => {
+    const h = await harness()
+    try {
+      const c = await h.prepare(), commit = persist()
+      const catalogue: CollaborationReferenceCatalogue = { source_position: 2, total_messages: 1, omitted_entries: false,
+        entries: [{ source_kind: 'message', source_locator: 'previous', source_version: '1', message_position: 1, author: 'user' }] }
+      h.adapter.response = async function* () {
+        const body = JSON.stringify({ intent: 'delegate', task_candidates: [], pending_candidates: [],
+          reference_candidates: [{ source_kind: 'message', source_locator: locator, source_version: '1', selection: { unit: 'whole' } }] })
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: fenced ? `\`\`\`json\n${body}\n\`\`\`` : body } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      }
+      const run = h.runner.run(c.source, c.prepared, commit, new AbortController().signal, undefined, catalogue)
+      if (locator === 'previous') expect((await run).jsonText).toContain('"source_locator":"previous"')
+      else await expect(run).rejects.toThrow('collaboration_analysis_reference_unavailable')
+      expect(commit).toHaveBeenCalledOnce()
+      const manifest = commit.mock.calls[0]![0]
+      expect(manifest.prompt_version).toBe('3')
+      expect(manifest.request.system).toContain('selection ({unit:"whole"}')
+      expect(manifest.request.system).not.toContain('selection_range')
+      expect(h.adapter.requests).toHaveLength(1)
+      expect(h.runner.active).toBe(0)
+    } finally { await h.close() }
+  })
+
+it.each([{ proposals: [null] }, { proposals: [[]] }, { proposals: ['previous'] }, { proposals: [] },
+  { proposals: {} }, { proposals: Array.from({ length: 81 }, () => ({ source_kind: 'message', source_locator: 'previous', source_version: '1' })) }])(
+  'refuses malformed or over-budget model reference proposals ($proposals)', async ({ proposals }) => {
+    const h = await harness()
+    try {
+      const c = await h.prepare()
+      h.adapter.response = async function* () {
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: JSON.stringify({ reference_candidates: proposals }) } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      }
+      await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal, undefined,
+        { source_position: 2, total_messages: 1, omitted_entries: false, entries: [
+          { source_kind: 'message', source_locator: 'previous', source_version: '1', message_position: 1, author: 'user' }] }))
+        .rejects.toThrow('collaboration_analysis_reference_unavailable')
+      expect(h.runner.active).toBe(0)
+    } finally { await h.close() }
+  })
 
 it.each([undefined, 0, -1, 1.5, 8193])('refuses an unavailable analysis output cap (%s) before writing or dispatching', async (maxTokens) => {
   const h = await harness()

@@ -346,6 +346,34 @@ it('refuses numeric or unknown prompt versions without altering a legacy journal
   await journal.close()
 })
 
+it('reopens versioned reference inputs beside unchanged original and clarification records', async () => {
+  const h = await harness(), legacy = await manifest(h.facility), clarification = await clarificationManifest(h.facility)
+  const catalogue = { source_position: 2, total_messages: 1, omitted_entries: false,
+    entries: [{ source_kind: 'message' as const, source_locator: 'previous', source_version: '1' as const, message_position: 1, author: 'user' as const }] }
+  const journal = await openCollaborationAnalysisJournal(h.facility)
+  const before = await journal.prepare(legacy, signal())
+  const previous = await journal.prepare(clarification, signal())
+  for (const base of [legacy, clarification]) {
+    const original = base.request.messages[0]!.content[0]!
+    if (original.type !== 'text') throw Error('expected text')
+    const m = { ...base, prompt_version: base.prompt_version === '1' ? '3' as const : '4' as const,
+      reference_catalogue: catalogue, request: { ...base.request, messages: [createMessage({ role: 'user', source: { kind: 'user' },
+        content: [{ type: 'text', text: JSON.stringify({ ...JSON.parse(original.text) as Record<string, unknown>, reference_catalogue: catalogue }) }] })] } }
+    // The union is reconstructed from the serialized durable input, rather than a callable handle.
+    const record = await journal.prepare(m as import('../src/collaboration-analysis.ts').CollaborationAnalysisManifest, signal())
+    expect(JSON.parse(record.manifest_json)).toMatchObject({ reference_catalogue: catalogue })
+    await expect(journal.prepare({ ...m, reference_catalogue: { ...catalogue, total_messages: 2 } } as never, signal())).rejects.toThrow()
+    await expect(journal.prepare({ ...m, reference_catalogue: { ...catalogue, body: 'secret' } } as never, signal())).rejects.toThrow()
+  }
+  await journal.close()
+  const reopened = await openCollaborationAnalysisJournal(h.facility)
+  const records = [...reopened.records()]
+  expect(records).toHaveLength(4)
+  expect(records.find(record => record.input_manifest_digest === before.input_manifest_digest)).toEqual(before)
+  expect(records.find(record => record.input_manifest_digest === previous.input_manifest_digest)).toEqual(previous)
+  await reopened.close()
+})
+
 it('refuses a valid input stored under a foreign key and retains the original bytes', async () => {
   const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
   const saved = await journal.prepare(m, signal())

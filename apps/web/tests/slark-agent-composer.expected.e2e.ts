@@ -103,6 +103,9 @@ it('sends two scoped Agents from the built composer as one original message with
   const workspaceCall = async ({ workspace_id, operation }: WorkspaceRequest) => {
     if (operation.kind === 'get') return { ok: true,
       value: { workspace_id, version: '1', selected_project_ids: ['product', 'engineering'] } }
+    if (operation.kind === 'projects') return { ok: true, value: { items: [
+      { project_id: 'product', project_name: 'Product' }, { project_id: 'engineering', project_name: 'Engineering' },
+    ], next_cursor: null } }
     return { ok: true, value: { items: [
       { project_id: 'product', project_name: 'Product', agent_id: 'guide', agent_name: 'Guide',
         available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
@@ -134,8 +137,19 @@ it('sends two scoped Agents from the built composer as one original message with
     if (!element) throw Error('composer missing')
     return element
   }, { timeout: 10_000 })
-  fireEvent.paste(input, { clipboardData: { items: [], getData: () => '@Gui' } })
-  fireEvent.mouseDown(await screen.findByRole('option', { name: /Guide · Product/ }, { timeout: 10_000 }))
+  const launcher = await screen.findByTestId('slark-scope-toggle')
+  expect(screen.queryByTestId('slark-scope-panel')).toBeNull()
+  fireEvent.click(launcher); fireEvent.click(launcher)
+  const panel = await screen.findByRole('region', { name: 'Slark collaboration' })
+  expect(screen.getAllByTestId('slark-scope-panel')).toHaveLength(1)
+  expect(panel.querySelector('[data-composer-input]')).toBeNull()
+  await waitFor(() => {
+    expect(within(panel).getByTestId<HTMLButtonElement>('slark-scope-mention-product-guide').disabled).toBe(false)
+  })
+  fireEvent.click(within(panel).getByTestId('slark-scope-mention-product-guide'))
+  await waitFor(() => { expect(input.textContent).toBe('@Guide · Product '); expect(document.activeElement).toBe(input) })
+  expect(submit).not.toHaveBeenCalled()
+  expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
   fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'check login; @Tes' } })
   fireEvent.mouseDown(await screen.findByRole('option', { name: /Tester · Engineering/ }, { timeout: 10_000 }))
   fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'test the redirect' } })
@@ -162,6 +176,7 @@ it('sends two scoped Agents from the built composer as one original message with
   if (host === null || typeof host !== 'object') throw Error('missing execution consumer')
   await expect([`parent-execution=${String(Reflect.get(host, 'collaborationExecutionAvailable'))}`, `original=${sent.original_message}`,
     ...sent.active_mentions.map(mention => `target=${mention.binding.target.project_id}/${mention.binding.target.agent_id}`),
+    'first-mention=directory-click', 'directory-click-submissions=0',
     'shared-original-source=true', 'distinct-mention-ids=2', 'original-submissions=1', 'ordinary-model-prompts=0', 'draft=empty',
   ].join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
     'apps/web/tests/expected/slark-agent-composer/multiple-agents.expected.txt'))
@@ -266,8 +281,9 @@ it('saves multiple Slark spaces in the built collaboration area and never invoke
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
   fireEvent.click(start)
-  const panel = await screen.findByRole('region', { name: 'Slark collaboration' }, { timeout: 10_000 })
-  fireEvent.click(within(panel).getByTestId('slark-scope-toggle'))
+  const launcher = await screen.findByTestId('slark-scope-toggle')
+  fireEvent.click(launcher)
+  let panel = await screen.findByRole('region', { name: 'Slark collaboration' }, { timeout: 10_000 })
   fireEvent.click(await within(panel).findByRole('checkbox', { name: 'Product' }))
   fireEvent.click(within(panel).getByRole<HTMLInputElement>('checkbox', { name: 'Engineering' }))
   fireEvent.click(within(panel).getByTestId('slark-scope-apply'))
@@ -280,8 +296,12 @@ it('saves multiple Slark spaces in the built collaboration area and never invoke
   ]
   fireEvent.click(within(panel).getByTestId('slark-scope-clear'))
   fireEvent.click(within(panel).getByTestId('slark-scope-cancel'))
-  fireEvent.click(within(panel).getByTestId('slark-scope-toggle'))
-  expect((within(panel).getByRole<HTMLInputElement>('checkbox', { name: 'Product' })).checked).toBe(true)
+  await waitFor(() => { expect(screen.queryByTestId('slark-scope-panel')).toBeNull() })
+  fireEvent.click(launcher)
+  panel = await screen.findByRole('region', { name: 'Slark collaboration' })
+  await waitFor(() => {
+    expect(within(panel).getByRole<HTMLInputElement>('checkbox', { name: 'Product' }).checked).toBe(true)
+  })
   expect(bridge.mock.calls.filter(([x]) => x.operation.kind === 'apply')).toHaveLength(1)
   observations.push(`cancel-retains=${selected.join(',')}`)
   const input = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')

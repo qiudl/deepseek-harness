@@ -1,5 +1,6 @@
-/** Original-Session collaboration results; plain text replies never submit a new chat turn. */
+/** Workspace collaboration results; plain text replies never submit a new chat turn. */
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useRef } from 'react'
 import type { PropsLocale, PropsRuntime, SlotInjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CollaborationResultsModel } from './collaboration-results.ts'
 import type { zh } from './locales.ts'
@@ -10,13 +11,17 @@ export interface CollaborationResultsInjected {
   hooks: { slarkResults: CollaborationResultsModel }
   traceEvidenceAction?(digest: string, eventId: string, more?: boolean): Promise<void>
   traceAction?(digest: string, more?: boolean): Promise<void>
+  locateOriginal?(digest: string): Promise<void>
   consumptionAction?(digest: string, deliveryId: string, reconcile?: boolean): Promise<void>
   executionAction(digest: string, taskId?: string, reconcile?: boolean): Promise<void>
   loadSources(): Promise<void>
   loadReplies(snapshotDigest: string): Promise<void>
 }
-type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & SlotInjectFace<CollaborationResultsInjected>
-const planningStatus: Partial<Record<string, keyof typeof zh>> = {
+import type {} from './ProjectScopeDock.tsx'
+
+type Props = PropsRuntime<'slark.collaboration.history'> & PropsLocale<'slarkAgent'> & SlotInjectFace<CollaborationResultsInjected>
+/** Locale keys for the coordinator's readonly planning states. */
+export const planningStatus: Partial<Record<string, keyof typeof zh>> = {
   queued: 'task.planningQueued',
   planning: 'task.planning',
   failed: 'task.planningFailed',
@@ -26,20 +31,39 @@ const planningStatus: Partial<Record<string, keyof typeof zh>> = {
 }
 
 /**
- * Display each original message and its readable task results in this Session.
+ * Display original messages and readable task results from the bound Session or workspace.
  * @param props - Framework result hook, readonly paging commands and locale copy.
  * @returns a task region with complete plain text replies, or no region when no records exist.
  */
-export function CollaborationResultsDock({ useSlarkResults, loadSources, loadReplies, executionAction, consumptionAction, t }: Props) {
+export function CollaborationResultsDock({ useSlarkResults, loadSources, loadReplies, executionAction, consumptionAction,
+  locateOriginal, t }: Props) {
   const state = useSlarkResults(value => value)
-  if (state.groups.length === 0 && state.phase !== 'error') return null
-  return <section className={css.panel} aria-label={t('task.collaborationHistory')} data-testid="slark-collaboration-results">
-    <strong>{t('task.collaborationHistory')}</strong>
+  const articles = useRef(new Map<string, HTMLElement>())
+  const focusDigest = state.focus?.snapshotDigest, focusSequence = state.focus?.sequence
+  useEffect(() => {
+    if (!focusDigest) return
+    const node = articles.current.get(focusDigest)
+    if (!node) return
+    node.focus({ preventScroll: true })
+    node.scrollIntoView({ block: 'nearest' })
+  }, [focusDigest, focusSequence])
+  if (state.groups.length === 0 && state.phase !== 'error' && state.location?.status !== 'unavailable') return null
+  const title = state.workspaceHistory ? 'task.workspaceHistory' : 'task.collaborationHistory'
+  return <section className={css.panel} aria-label={t(title)} data-testid="slark-collaboration-results">
+    <strong>{t(title)}</strong>
     {state.phase === 'error' && <p role="status">{t('task.readUnavailable')}</p>}
+    {state.location?.status === 'unavailable' && <p role="status">{t('task.sourceUnavailable')}</p>}
     <div className={css.records}>
-      {state.groups.map(group => <article className={css.message} key={group.original.snapshot_digest}>
+      {state.groups.map(group => <article className={css.message} key={group.original.snapshot_digest} tabIndex={-1}
+        data-testid="slark-collaboration-original" data-source-digest={group.original.snapshot_digest}
+        ref={(node) => {
+          if (node) articles.current.set(group.original.snapshot_digest, node)
+          else articles.current.delete(group.original.snapshot_digest)
+        }}>
         <small>{t('task.question')}</small>
         <div className={css.text}>{group.original.original_message}</div>
+        {state.locatorAvailable && locateOriginal && <Button size="sm" disabled={state.phase === 'loading'}
+          data-testid="slark-source-locate" onClick={() => { void locateOriginal(group.original.snapshot_digest) }}>{t('task.viewOriginal')}</Button>}
         {group.phase === 'error' ? <p role="status">{t('task.readUnavailable')}</p>
           : group.replies.length === 0 && !group.pending?.length && !group.pendingUnavailable &&
             <p role="status">{t(planningStatus[group.planningState ?? ''] ?? 'task.awaitingResult')}</p>}
@@ -93,6 +117,6 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
     </div>
     {state.nextCursor && <Button size="sm" disabled={state.phase === 'loading'}
       data-testid="slark-collaboration-messages-more"
-      onClick={() => { void loadSources() }}>{t('task.moreMessages')}</Button>}
+      onClick={() => { void loadSources() }}>{t(state.workspaceHistory ? 'task.moreWorkspaceMessages' : 'task.moreMessages')}</Button>}
   </section>
 }

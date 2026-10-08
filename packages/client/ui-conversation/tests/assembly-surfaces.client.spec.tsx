@@ -102,6 +102,32 @@ async function bench(opts?: { blank?: boolean }) {
 }
 
 describe('resident composer', () => {
+  it('shows independent history in an otherwise blank Session without replacing its composer or writing Session events', async () => {
+    const runtime = await bench({ blank: true })
+    const presence = createSnapshotStore(false), stop = vi.fn()
+    const subscription = vi.fn((listener: () => void) => {
+      const off = presence.subscribe(listener)
+      return () => { off(); stop() }
+    })
+    const remove = runtime.ctx.uiConversation.binding(SID).registerActivity('independent-test', {
+      getSnapshot: () => presence.getSnapshot(), subscribe: subscription,
+    })
+    runtime.slots.register({ name: 'conversation.view', id: 'chat', label: 'Chat' },
+      () => <div data-testid="independent-history">original and reply</div>)
+    const view = runtime.renderRoot()
+    const composer = view.container.querySelector('[data-composer-input]')
+    expect(view.queryByTestId('independent-history')).toBeNull()
+    expect(subscription).toHaveBeenCalledOnce()
+    await act(async () => { presence.set(true); await runtime.flush() })
+    expect(view.getByTestId('independent-history').textContent).toBe('original and reply')
+    expect(view.container.querySelector('[data-composer-input]')).toBe(composer)
+    expect(runtime.sessions.binding(SID)!.eventSource.getSnapshot().entries).toHaveLength(0)
+    await act(async () => { remove(); await runtime.flush() })
+    expect(view.queryByTestId('independent-history')).toBeNull()
+    expect(view.container.querySelector('[data-composer-input]')).toBe(composer)
+    expect(stop).toHaveBeenCalledOnce()
+    await runtime.dispose()
+  })
   it('renders the locked view state while no session exists at all', async () => {
     const runtime = await SlotTestRuntime.create()
     provideWorkspaceNavigation(runtime)

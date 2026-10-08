@@ -308,8 +308,10 @@ Host service owning upload storage and Agent-scoped staged receipts.
 ```ts cordis-catalog
 /**
  * Register the ordinary-Session resolver used when a raw upload addresses a cold Session.
+ * Only one registration may be active; the owning plugin must dispose it before reloading.
  * @param resolve - resolver that returns the exact live Agent or throws a Remote error.
- * @returns disposer removing this resolver.
+ * @returns idempotent disposer removing only this registration, never its replacement.
+ * @throws when another resolver registration is active.
  */
 registerAgentResolver(resolve: AgentResolver): () => void
 

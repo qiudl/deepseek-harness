@@ -1,4 +1,4 @@
-import { Context } from '@deepseek-ai/cordis'
+import { Context, FiberState } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
@@ -255,6 +255,37 @@ describe('Session file uploads', () => {
     expect(() => { uploads.registerAgentResolver(replacement) }).toThrow('already registered')
     expect(disposeReplacement).toBeTypeOf('function')
     disposeReplacement()
+  })
+
+  it('releases a contextual Service resolver when its owning plugin reloads', async () => {
+    const { ctx, agent, disposeAgent } = await uploadHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    await disposeAgent()
+    const first = vi.fn(async () => agent)
+    const replacement = vi.fn(async () => {
+      await ctx.agents.register(agent)
+      return agent
+    })
+    let releaseFirst!: () => void
+    const owner = await ctx.plugin((child) => {
+      child.effect(() => {
+        releaseFirst = child.fileUploads.registerAgentResolver(first)
+        return releaseFirst
+      })
+    })
+    expect(() => ctx.fileUploads.registerAgentResolver(replacement)).toThrow('already registered')
+    await owner.dispose()
+    const next = await ctx.plugin((child) => {
+      child.effect(() => child.fileUploads.registerAgentResolver(replacement))
+    })
+    expect(next.state).toBe(FiberState.ACTIVE)
+    releaseFirst()
+    await expect(ctx.fileUploads.uploadStream({
+      sessionId: SESSION,
+      data: (async function* (): AsyncIterable<Uint8Array> { yield Uint8Array.of(7) })(),
+    })).resolves.toMatchObject({ file: { bytes: 1 } })
+    expect(first).not.toHaveBeenCalled()
+    expect(replacement).toHaveBeenCalledWith(SESSION)
   })
 
   it('rejects a cold upload when no Agent resolver is registered', async () => {
