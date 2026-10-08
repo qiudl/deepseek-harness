@@ -1959,6 +1959,13 @@ it('restores old and multi-target replies through the YAML registrant without di
   const model = bindings.hooks.slarkResults, read = model.refresh()
   onTestFinished(async () => { releases.forEach((release) => { release() }); await read })
   await vi.waitFor(() => { expect(releases).toHaveLength(2) })
+  expect(model.getSnapshot()).toMatchObject({ phase: 'loading', groups: [
+    { original: originals[0], replies: [], phase: 'loading' }, { original: originals[1], replies: [], phase: 'loading' },
+  ] })
+  releases.shift()!()
+  await vi.waitFor(() => { expect(model.getSnapshot().groups[0]?.replies.map(reply => reply.answer)).toEqual(['answer-A', 'answer-B']) })
+  expect(model.getSnapshot().phase).toBe('loading')
+  expect(model.getSnapshot().groups[1]?.replies).toEqual([])
   releases.splice(0).forEach((release) => { release() })
   await read
   expect(model.getSnapshot().groups.map(group => group.original.source.source_message_id)).toEqual(['new', 'old'])

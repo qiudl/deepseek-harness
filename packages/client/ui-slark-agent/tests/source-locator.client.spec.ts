@@ -167,6 +167,20 @@ it('replaces an in-flight history read with the verified original without cancel
   expect(f.target.getSnapshot().focus?.snapshotDigest).toBe(older.snapshot_digest)
 })
 
+it('keeps the located original visible while a newer history page is still reading', async () => {
+  const f = fixture()
+  f.setNewHead(); f.target.revealOriginal(older)
+  let release!: () => void
+  const blocked = new Promise<void>((resolve) => { release = resolve })
+  f.deliveries.mockImplementation(async () => { await blocked; return { ok: true, value: { deliveries: [] } } })
+  const read = f.target.refresh()
+  try {
+    await vi.waitFor(() => { expect(f.deliveries).toHaveBeenCalled() })
+    expect(f.target.getSnapshot().phase).toBe('loading')
+    expect(f.target.getSnapshot().groups.map(group => group.original)).toContainEqual(older)
+  } finally { release(); await read; f.target.dispose() }
+})
+
 it('counts a located old original within the bounded workspace history capacity', async () => {
   const f = fixture()
   const items = Array.from({ length: 128 }, (_, i) => ({ ...second, snapshot_digest: i.toString(16).padStart(64, '0'),

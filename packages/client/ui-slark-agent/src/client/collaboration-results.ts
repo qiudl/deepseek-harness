@@ -375,6 +375,11 @@ export class CollaborationResultsModel {
       const prior = more ? this.state.groups : []
       const known = new Set(prior.map(item => item.original.snapshot_digest))
       const groups: CollaborationResultGroup[] = [...prior]
+      const validateGroups = (visible: readonly CollaborationResultGroup[]): void => {
+        const orders = visible.flatMap(group => group.original.timeline_position ? [group.original.timeline_position.local_order] : [])
+        if (new Set(orders).size !== orders.length) throw Error('invalid_source_page')
+        if (visible.length > 128 || bytes(visible) > 16 * 1024 * 1024) throw Error('result_view_budget')
+      }
       const cursors = more ? new Map(this.sourceCursors) : new Map<string, SourceCursor>()
       let nextCursor = cursor, pages = 0
       do {
@@ -393,7 +398,19 @@ export class CollaborationResultsModel {
         })
         if (groups.length + items.length > 128) throw Error('invalid_source_cursor')
         items.forEach((original) => { known.add(original.snapshot_digest) })
-        const pageGroups = Array<CollaborationResultGroup>(items.length)
+        const offset = groups.length
+        groups.push(...items.map((original): CollaborationResultGroup => {
+          const previous = oldGroups.find(group => group.original.snapshot_digest === original.snapshot_digest)
+          return { ...previous, original, replies: previous?.replies ?? [], phase: 'loading' }
+        }))
+        const publishProgress = (): void => {
+          const located = oldGroups.find(group => group.original.snapshot_digest === this.locatedOriginal?.snapshot_digest)
+          const visible = located && !groups.some(group => group.original.snapshot_digest === located.original.snapshot_digest)
+            ? [located, ...groups] : [...groups]
+          validateGroups(visible)
+          this.publish({ phase: 'loading', groups: visible, ...(this.state.nextCursor ? { nextCursor: this.state.nextCursor } : {}) })
+        }
+        publishProgress()
         const originals = items.entries()
         const readGroups = async (): Promise<void> => {
           for (const [index, original] of originals) {
@@ -403,13 +420,13 @@ export class CollaborationResultsModel {
             for (let i = 1; i < (this.replyPages.get(original.snapshot_digest) ?? 1) && group.nextCursor; i++) {
               group = await this.results(original, signal, generation, group.nextCursor, group.replies, previous)
             }
-            pageGroups[index] = group
             if (!this.readCurrent(generation, controller)) return
+            groups[offset + index] = group
+            publishProgress()
           }
         }
         await Promise.all(Array.from({ length: Math.min(2, items.length) }, readGroups))
         if (!this.readCurrent(generation, controller)) return
-        groups.push(...pageGroups)
         nextCursor = page.next_cursor; pages++
       } while (!more && nextCursor !== undefined && pages < this.sourcePages)
       const located = this.locatedOriginal
@@ -426,10 +443,7 @@ export class CollaborationResultsModel {
           if (!this.readCurrent(generation, controller)) return
         }
       }
-      if (groups.length > 128) throw Error('result_view_budget')
-      const orders = groups.flatMap(group => group.original.timeline_position ? [group.original.timeline_position.local_order] : [])
-      if (new Set(orders).size !== orders.length) throw Error('invalid_source_page')
-      if (bytes(groups) > 16 * 1024 * 1024) throw Error('result_view_budget')
+      validateGroups(groups)
       if (more) this.sourcePages++
       this.sourceCursors = cursors
       this.publish({ phase: 'ready', groups, ...(nextCursor ? { nextCursor } : {}) })
