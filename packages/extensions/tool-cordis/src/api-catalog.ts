@@ -1006,7 +1006,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'registerAgentResolver(resolve: AgentResolver): () => void',
         description: 'Register the ordinary-Session resolver used when a raw upload addresses a cold Session.',
         parameters: [{ name: 'resolve', description: 'resolver that returns the exact live Agent or throws a Remote error.' }],
-        returns: 'disposer removing this resolver.',
+        returns: 'disposer removing only this registration, including through a caller-scoped service.',
       },
       {
         signature: '@Remote(\'upload\') upload(agent: Agent, request: EncodedFileUploadRequest, signal: AbortSignal): Promise<FileUploadValue>',
