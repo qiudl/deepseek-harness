@@ -62,6 +62,11 @@ function validReceipt(value: unknown, original: SourceCoordinates,
     !sameSource(source as Record<string, unknown>, original)) return false
   if (mode === 'execution') return receipt.submission_state === 'accepted' ||
     (receipt.submission_state === 'discussion' && receipt.invocation_id === undefined)
+  if (receipt.submission_state === 'discussion') {
+    const sourceKeys = ['workspace_id', 'session_id', 'source_message_id', 'source_revision']
+    return Object.keys(receipt).length === 2 && Object.hasOwn(receipt, 'source') &&
+      Object.keys(source).length === sourceKeys.length && sourceKeys.every(key => Object.hasOwn(source, key))
+  }
   if (receipt.submission_state !== 'planning_recorded') return false
   const keys = ['source', 'submission_state', 'root_task_id', 'root_trace_id']
   return Object.keys(receipt).length === keys.length && keys.every(key => Object.hasOwn(receipt, key)) &&

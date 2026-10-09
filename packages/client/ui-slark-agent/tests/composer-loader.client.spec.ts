@@ -1383,6 +1383,68 @@ it('cancels the Session feed read of a passive reply without querying Main or co
 })
 
 const rootTaskId = 'bfb432fd-a2a2-4cbd-b1dc-4648c8944081', rootTraceId = 'a'.repeat(32)
+it('root-planning discussion sends one ordinary prompt and never dispatches an Agent', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__!
+  host.collaborationPlanningAvailable = true
+  host.collaborationExecutionAvailable = false
+  const execute = vi.fn<NonNullable<typeof host.collaborationRootExecution>>()
+  host.collaborationRootExecution = execute
+  await f.pick('', '这里只讨论名字，不委派任务。')
+  const original = f.composer.snapshot.draft
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision,
+  }, submission_state: 'discussion' } }))
+  f.composer.submit(); f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.submit).toHaveBeenCalledOnce(); expect(f.prompt).toHaveBeenCalledOnce()
+  expect(f.prompt).toHaveBeenCalledWith([{ type: 'text', text: original }], 'queue', expect.any(AbortSignal),
+    collaborationDiscussionRequestId(f.submit.mock.calls[0]![0]))
+  expect(execute).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+it('root discussion recovery keeps its original Source and stable ordinary prompt identity', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__!
+  host.collaborationPlanningAvailable = true
+  host.collaborationExecutionAvailable = false
+  await f.pick('', '只讨论，不调用。')
+  const original = f.composer.snapshot.draft
+  const response = async (input: DesktopCollaborationSourceInput) => ({ ok: true as const, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision,
+  }, submission_state: 'discussion' as const } })
+  f.submit.mockImplementation(response)
+  f.prompt.mockRejectedValueOnce(Error('ordinary prompt response lost'))
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(original)
+  expect(f.prompt).toHaveBeenCalledOnce()
+  host.collaborationPlanningAvailable = false
+  const recover = vi.fn(response)
+  host.collaborationRecover = recover
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.submit).toHaveBeenCalledOnce(); expect(recover).toHaveBeenCalledOnce()
+  expect(recover.mock.calls[0]![0]).toEqual(f.submit.mock.calls[0]![0])
+  expect(f.prompt.mock.calls[1]?.[3]).toBe(f.prompt.mock.calls[0]?.[3])
+  expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
+it.each(['invocation', 'private', 'root', 'source-field'] as const)('root discussion refuses an extra %s field', async (change) => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__!
+  host.collaborationPlanningAvailable = true
+  host.collaborationExecutionAvailable = false
+  await f.pick('', '只讨论，不执行。')
+  const original = f.composer.snapshot.draft
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision,
+    ...(change === 'source-field' ? { private: 'must-not-cross' } : {}),
+  }, submission_state: 'discussion', ...(change === 'invocation' ? { invocation_id: 'foreign' }
+    : change === 'private' ? { private: 'must-not-cross' } : change === 'root' ? { root_task_id: rootTaskId } : {}) } }))
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.notices.getSnapshot()?.level).toBe('error') })
+  expect(f.composer.snapshot.draft).toBe(original)
+  expect(f.prompt).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
+})
 it('shows saved planning and refreshes original history when automatic execution is unavailable', async () => {
   const { composer, pick, submit, sink, invoke } = await bench(true)
   const host = window.__DSH_DESKTOP_HOST__!
