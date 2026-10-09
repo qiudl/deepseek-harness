@@ -118,6 +118,72 @@ it('bounds excessive empty stream chunks independently of the byte budget', asyn
   } finally { await h.close() }
 })
 
+it.each([false, true])('charges completed text once with streamed deltas=%s at the UTF-8 limit', async (deltas) => {
+  const h = await harness()
+  try {
+    const text = JSON.stringify({ value: '中'.repeat(10918) + 'ab' })
+    expect(Buffer.byteLength(text)).toBe(32768)
+    h.adapter.response = async function* () {
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      if (deltas) for (let start = 0; start < text.length; start += 1000) {
+        yield { type: 'text-delta', index: 0, text: text.slice(start, start + 1000) }
+      }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const c = await h.prepare()
+    expect(await h.runner.run(c.source, c.prepared, persist(), new AbortController().signal)).toEqual({ jsonText: text })
+    expect(h.adapter.requests).toHaveLength(1)
+  } finally { await h.close() }
+})
+
+it('accounts for interleaved reasoning and text without charging their assembled copies twice', async () => {
+  const h = await harness()
+  try {
+    const reasoning = '中'.repeat(6000), text = '{"intent":"discuss"}'
+    h.adapter.response = async function* () {
+      yield { type: 'block-start', index: 0, blockType: 'reasoning' }
+      yield { type: 'reasoning-delta', index: 0, text: reasoning.slice(0, 3000) }
+      yield { type: 'block-start', index: 1, blockType: 'text' }
+      yield { type: 'text-delta', index: 1, text }
+      yield { type: 'reasoning-delta', index: 0, text: reasoning.slice(3000) }
+      yield { type: 'block-end', index: 1, block: { type: 'text', text } }
+      yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const c = await h.prepare()
+    expect(await h.runner.run(c.source, c.prepared, persist(), new AbortController().signal)).toEqual({ jsonText: text })
+  } finally { await h.close() }
+})
+
+it.each(['delta', 'final', 'aggregate', 'shorter-final'] as const)('rejects output overflow at %s without consuming more stream data', async (mode) => {
+  const h = await harness()
+  let reachedFinish = false, streamClosed = false
+  try {
+    h.adapter.response = async function* () {
+      try {
+        yield { type: 'block-start', index: 0, blockType: 'reasoning' }
+        if (mode === 'delta') yield { type: 'reasoning-delta', index: 0, text: '中'.repeat(10923) }
+        else if (mode === 'final') {
+          yield { type: 'reasoning-delta', index: 0, text: 'short' }
+          yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'x'.repeat(32769) } }
+        } else {
+          yield { type: 'reasoning-delta', index: 0, text: 'x'.repeat(20000) }
+          yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: mode === 'shorter-final' ? '' : 'x'.repeat(20000) } }
+          yield { type: 'block-end', index: 1, block: { type: 'text', text: 'x'.repeat(12769) } }
+        }
+        reachedFinish = true
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      } finally { streamClosed = true }
+    }
+    const c = await h.prepare()
+    await expect(h.runner.run(c.source, c.prepared, persist(), new AbortController().signal)).rejects.toThrow('collaboration_analysis_output_budget')
+    expect(reachedFinish).toBe(false)
+    expect(streamClosed).toBe(true)
+    expect(h.runner.active).toBe(0)
+  } finally { await h.close() }
+})
+
 it('checks the model context budget before committing or dispatching the original request', async () => {
   const h = await harness()
   try {

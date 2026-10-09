@@ -43,8 +43,8 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['root-analysis-failure', 'root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
-  const rootAnalysis = mode === 'root-analysis' || mode === 'root-analysis-failure'
+it.each(['root-analysis-budget', 'root-analysis-failure', 'root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+  const rootAnalysis = mode === 'root-analysis' || mode === 'root-analysis-failure' || mode === 'root-analysis-budget'
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
   const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
@@ -164,6 +164,11 @@ it.each(['root-analysis-failure', 'root-analysis', 'root-submission', 'source-on
       { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
       { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: mode === 'root-analysis-failure' ? 'private-provider-invalid-json' : result } },
       { type: 'content_block_stop', index: 0 },
+      ...(mode === 'root-analysis-budget' ? [
+        { type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking: 'x'.repeat(17000) } },
+        { type: 'content_block_stop', index: 1 },
+      ] : []),
       { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
       { type: 'message_stop' },
     ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''))
