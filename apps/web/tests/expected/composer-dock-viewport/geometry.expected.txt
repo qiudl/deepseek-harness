@@ -1,0 +1,2 @@
+1228x812: controls reachable, Send visible, dock scrollable, empty dock has no gap
+760x500: controls reachable, Send visible, dock scrollable, empty dock has no gap

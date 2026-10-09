@@ -164,7 +164,9 @@ export function ConversationContent(props: ConversationContentProps) {
     <div className={clsx(css.composerStack, hero && css.composerHero)}>
       {hero && <HeroShell t={t} renderSlot={renderSlot} />}
       {hero && heroWorkspaceRow}
-      {zone !== undefined && renderSlot('conversation.input.dock', zone)}
+      {zone !== undefined && <div className={css.composerDock} data-composer-dock="">
+        {renderSlot('conversation.input.dock', zone)}
+      </div>}
       {inputBar}
     </div>
   )
