@@ -15,6 +15,75 @@ const EXPECTED = join(process.cwd(), 'apps/web/tests/expected/slark-agent-compos
 installAssembledBootEnv()
 afterEach(() => { window.dispatchEvent(new Event('pagehide')); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
 
+it.each(['click', 'enter'] as const)('root mode %s dispatches the frozen task and displays its reply without a panel action', async (mode) => {
+  vi.stubGlobal('crypto', webcrypto)
+  const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051', trace = 'b'.repeat(32)
+  type Source = { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
+  let original: { source: Source; snapshot_digest: string; original_message: string } | undefined
+  let dispatched = false
+  const submit = vi.fn(async (input: Source & { original_message: string }) => {
+    const source = { workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision }
+    original = { source, snapshot_digest: 'a'.repeat(64), original_message: input.original_message }
+    return { ok: true, value: { source, submission_state: 'planning_recorded',
+      root_task_id: 'bfb432fd-a2a2-4cbd-b1dc-4648c8944081', root_trace_id: trace } }
+  })
+  const execute = vi.fn(async (request: { action: string; source?: Source; previewId?: string; taskId?: string }) => {
+    if (request.action === 'preview') {
+      expect(request.source).toEqual(original?.source)
+      return { ok: true, rootTraceId: trace, previewId: 'preview', executionEnabled: true,
+        tasks: [{ taskId: 'task', question: 'check login', agentName: 'Guide', projectName: 'Product' }] }
+    }
+    expect(request).toEqual({ action: 'confirm', previewId: 'preview', taskId: 'task' })
+    dispatched = true
+    return { ok: true, status: 'recorded' }
+  })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {
+    collaborationScopeAvailable: true, collaborationPlanningAvailable: true, collaborationExecutionAvailable: false,
+    collaborationSubmit: submit, collaborationRootExecution: execute,
+    collaborationPending: async ({ source }: { source: Source }) => ({ ok: true,
+      value: { source, plan: null, pending_items: [], frozen_task_count: 1 } }),
+    collaborationDeliveries: async ({ source }: { source: Source }) => ({ ok: true, value: { deliveries: dispatched ? [{
+      delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1',
+      source_locator: source, source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded', invocation_state_version: '2',
+      target_display_snapshot: { agent_name: 'Guide', project_name: 'Product' }, answer: 'Login checked.' }] : [] } }),
+    collaborationWorkspace: async ({ workspace_id, operation }: WorkspaceRequest) => operation.kind === 'get'
+      ? { ok: true, value: { workspace_id, version: '1', selected_project_ids: ['product'] } }
+      : { ok: true, value: { items: [{ project_id: 'product', project_name: 'Product', agent_id: 'guide', agent_name: 'Guide',
+        available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' }], next_cursor: null, scope_version: '1' } },
+  })
+  const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'], remote: { workspaceId: workspace } })
+  remote.mock.unary('fileReferences/list', { ok: true, value: [] })
+  remote.mock.unary('sessionReferenceResolver/candidates', { ok: true, value: [] })
+  remote.mock.unary('session/collaborationSources', () => ({ ok: true, value: { items: original ? [original] : [] } }))
+  const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
+  const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
+  if (!start) throw Error('fixture Workspace action missing')
+  fireEvent.click(start)
+  const input = await waitFor(() => {
+    const element = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
+    if (!element) throw Error('composer missing')
+    return element
+  }, { timeout: 10_000 })
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => '@Gui' } })
+  fireEvent.mouseDown(await screen.findByRole('option', { name: /Guide · Product/ }, { timeout: 10_000 }))
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'check login' } })
+  const send = await screen.findByRole('button', { name: 'Send message' })
+  expect(send.hasAttribute('disabled')).toBe(false)
+  if (mode === 'click') fireEvent.click(send)
+  else fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => { expect(input.textContent).toBe('') }, { timeout: 10_000 })
+  await screen.findByText(`Tasks dispatched. Trace ID: ${trace}`)
+  await screen.findByText('Login checked.', {}, { timeout: 10_000 })
+  expect(submit).toHaveBeenCalledTimes(1)
+  expect(execute.mock.calls.map(([request]) => request.action)).toEqual(['preview', 'confirm'])
+  expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
+  await expect([`original=${original?.original_message}`, 'planning-receipts=1', 'execution=preview,confirm',
+    `notice=Tasks dispatched. Trace ID: ${trace}`, 'reply=Login checked.', 'ordinary-model-prompts=0', 'draft=empty',
+  ].join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
+    'apps/web/tests/expected/slark-agent-composer/root-send.expected.txt'))
+})
+
 it('sends two scoped Agents from the built composer as one original message without opening a task form', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
