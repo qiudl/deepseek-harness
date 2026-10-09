@@ -113,6 +113,7 @@ it.each(['success', 'checkpoint_failure', 'checkpoint_false', 'cancel'] as const
   const post = async (operation: unknown) => fetch(`http://127.0.0.1:${address.port}/internal/desktop-collaboration-analysis`, { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify({ action: 'root_feedback', binding_key: 'b'.repeat(64), operation }) })
   const query = { action: 'read', target, selection, delivery_id: 'delivery-1' }
   await controller.collaborationRootFeedback(query, signal)
+  expect(await controller.collaborationRootConsumption({ ...query, action: 'continuation_read' }, signal)).toEqual({ kind: 'continuation', commit: null })
   const beforeResponse = await post(query)
   expect(beforeResponse.status).toBe(200)
   const before = await beforeResponse.json() as { value: { event_count: number; log_digest: string } }
@@ -120,6 +121,7 @@ it.each(['success', 'checkpoint_failure', 'checkpoint_false', 'cancel'] as const
   expect(preparedResponse.status).toBe(200)
   type Consumer = Awaited<ReturnType<SessionController['collaborationRootConsumption']>>
   const prepared = await preparedResponse.json() as { value: Consumer }
+  if (prepared.value.kind !== 'consumer') throw Error('unexpected observation')
   const record = prepared.value.record
   if (!record || record.state !== 'prepared') throw Error('consumer not prepared')
   const b = record.binding
@@ -159,6 +161,7 @@ it.each(['success', 'checkpoint_failure', 'checkpoint_false', 'cancel'] as const
   const read = await post({ ...query,action:'consumer_read' })
   expect(read.status).toBe(200)
   const consumed = await read.json() as { value:Consumer }
+  if (consumed.value.kind !== 'consumer') throw Error('unexpected observation')
   expect(consumed.value.record?.state).toBe('consumed')
   expect(consumed.value.observation).toMatchObject({ status:'context_applied',continuation_observed:mode === 'success' })
   expect(consumed.value.record?.binding.root_trace_id).toBe(root.root_trace_id)
@@ -167,6 +170,23 @@ it.each(['success', 'checkpoint_failure', 'checkpoint_false', 'cancel'] as const
     expect(JSON.stringify(adapter.requests[0])).toContain(root.root_trace_id)
     expect(JSON.stringify(adapter.requests[0])).toContain(answer)
   }
+  if (mode === 'cancel') {
+    const failed = vi.spyOn(facility!, 'open').mockRejectedValueOnce(Error('observation_open_failed'))
+    await expect(controller.collaborationRootConsumption({ ...query, action: 'continuation_read' }, signal)).rejects.toThrow('observation_open_failed')
+    failed.mockRestore()
+    return
+  }
+  const observation = await post({ ...query, action: 'continuation_read' })
+  expect(observation.status).toBe(200)
+  const observed = await observation.json() as { value: { kind: string
+    commit: null | { observation_id: string; consumption: { root_trace_id: string } } } }
+  expect(observed.value.kind).toBe('continuation')
+  if (mode === 'success') {
+    expect(observed.value.commit?.consumption.root_trace_id).toBe(root.root_trace_id)
+    const repeat = await post({ ...query, action: 'continuation_read' })
+    expect(await repeat.json()).toEqual(observed)
+  } else expect(observed.value.commit).toBeNull()
+  expect(adapter.requests).toHaveLength(mode === 'success' ? 1 : 0)
   const handle=await ctx.sessionPersistence.open(agent.id,'read')
   try {
     const { events }=await handle.read()

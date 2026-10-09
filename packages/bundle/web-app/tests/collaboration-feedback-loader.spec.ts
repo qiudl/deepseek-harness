@@ -150,6 +150,7 @@ it.each((['reply', 'before_flush', 'after_flush', 'model_checkpoint'] as const).
   const bounded: unknown = await (await post(query)).json()
   expect(bounded).toMatchObject({ value: { status: loss === 'model_checkpoint' ? 'context_applied' : 'queued', continuation_observed: false } })
   delayed.mockRestore()
+  await vi.waitFor(() => { expect(adapter.requests).toHaveLength(1) })
   await agent.whenIdle()
   expect(adapter.requests).toHaveLength(1); expect(JSON.stringify(adapter.requests[0])).toContain(answer)
   expect(JSON.stringify(adapter.requests[0])).toContain(source.original_message)

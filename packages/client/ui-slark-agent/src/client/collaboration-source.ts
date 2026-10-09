@@ -5,6 +5,7 @@ import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigge
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { createCollaborationReplyMatcher, readCollaborationPending, collaborationQuestionText } from './collaboration-dialogue.ts'
 import type { zh } from './locales.ts'
+import { dispatchPlannedSource } from './dispatch-planned-source.ts'
 
 interface Reference {
   kind: 'collaboration-v2'
@@ -238,8 +239,22 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
             return { kind: 'error', text: t(result.reconciliationRequired ? 'submit.uncertainV2' : 'submit.unavailableV2') }
           }
           if (!validReceipt(result, original, mode)) return { kind: 'error', text: t('submit.uncertainV2') }
-          if (result.value.submission_state === 'planning_recorded')
-            return { kind: 'success', text: t('submit.plannedV2').replace('{trace}', result.value.root_trace_id) }
+          if (result.value.submission_state === 'planning_recorded') {
+            window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
+            // oxlint-disable-next-line typescript/unbound-method -- Capture identity and bind the Main method for this send.
+            const execute = host.collaborationRootExecution
+            if (recovery || !execute)
+              return { kind: 'success', text: t('submit.plannedV2').replace('{trace}', result.value.root_trace_id) }
+            const current = () => window.__DSH_DESKTOP_HOST__ === host && host.collaborationRootExecution === execute && available()
+                && ctx.sessions.scopeOf(actx) === session.sessionId && ctx.sessions.scope(session.sessionId) !== undefined
+                && workspaceOf(ctx, session.sessionId) === first.r.workspace_id
+            const state = await dispatchPlannedSource(execute.bind(host), original, result.value.root_trace_id, signal, current)
+            signal.throwIfAborted()
+            if (current()) window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
+            const copy = state === 'recorded' ? 'submit.dispatchedV2'
+              : state === 'not_admitted' ? 'submit.dispatchPendingV2' : 'submit.dispatchUncertainV2'
+            return { kind: 'success', text: t(copy).replace('{trace}', result.value.root_trace_id) }
+          }
           if (result.value.submission_state === 'discussion') {
             const ordinary = ctx.sessions.sessionOf(actx)
             if (!ordinary || ordinary.sessionId !== session.sessionId) return { kind: 'error', text: t('submit.changed') }

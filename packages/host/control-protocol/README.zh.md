@@ -40,7 +40,7 @@ kind: "package-reference"
 
 `profile.remote_ui_read` 将启动、资源、Session 和五种精确的启动元数据读取绑定到同一有效视图租约。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
 
-`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
+`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。`turnWindow` 保留原生历史分页：`minMessages` 必须为正安全整数且不超过 `maxMessages`（省略时为 50），`minTurns` 必须为正安全整数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
 
 `profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
 
@@ -184,3 +184,5 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 独立的 `profile.root_feedback` 能力允许在同一私有分析传输中传递有界的 `root_feedback` 操作与观察记录。Account 绑定仍由父进程负责。观察记录区分持久入队、已接纳的 Session 上下文及已观察到的助手续跑；其中不含结果文本或签名，不能独立认证云端消费。
 
 消费回执采用独立的 `dsh-collaboration-consumption-receipt-v1` 签名域。提交将原根 trace、执行命令、消费尝试和逻辑步骤绑定到实际 Session 事件坐标、首次持久化前缀及本地 journal 提交。投递签名不能替代消费证据。这些编解码器仅确立语法，不授予权限。
+
+首条回复凭据使用 `dsh-collaboration-continuation-observation-v1` 签名域。commit 嵌套原消费 commit，并独立绑定观察 ID、`assistant_message_committed`、助手事件序号和观察到的持久前缀。消费签名不能证明此域；凭据不包含回复正文或完成声明。

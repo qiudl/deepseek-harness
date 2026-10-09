@@ -234,8 +234,9 @@ describe('Session file uploads', () => {
     await expect(uploading).rejects.toMatchObject({ code: 'session/not-found' })
   })
 
-  it('resolves a cold ordinary Agent and releases the resolver registration', async () => {
-    const { ctx, uploads, agent, disposeAgent } = await uploadHarness()
+  it.each(['direct', 'context'] as const)('resolves a cold ordinary Agent and releases the %s resolver registration', async (access) => {
+    const { ctx, uploads: direct, agent, disposeAgent } = await uploadHarness()
+    const uploads = access === 'context' ? ctx.fileUploads : direct
     await disposeAgent()
     const resolveAgent = vi.fn(async () => {
       await ctx.agents.register(agent)
@@ -255,6 +256,25 @@ describe('Session file uploads', () => {
     expect(() => { uploads.registerAgentResolver(replacement) }).toThrow('already registered')
     expect(disposeReplacement).toBeTypeOf('function')
     disposeReplacement()
+  })
+
+  it('releases the caller-owned Agent resolver before its plugin is mounted again', async () => {
+    const { ctx, agent } = await uploadHarness()
+    const resolverPlugin = {
+      name: 'upload-resolver-lifecycle',
+      inject: ['fileUploads'],
+      apply(owner: Context) {
+        owner.effect(() => owner.fileUploads.registerAgentResolver(async () => agent))
+      },
+    }
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const fiber = ctx.plugin(resolverPlugin)
+      await fiber
+      expect(() => ctx.fileUploads.registerAgentResolver(async () => agent)).toThrow('already registered')
+      await fiber.dispose()
+      const release = ctx.fileUploads.registerAgentResolver(async () => agent)
+      release()
+    }
   })
 
   it('rejects a cold upload when no Agent resolver is registered', async () => {

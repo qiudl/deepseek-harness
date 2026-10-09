@@ -41,7 +41,7 @@ export class CollaborationAnalysisRunner {
    * @param source - original frozen journal snapshot captured by this Profile.
    * @param prepared - original executable snapshot handle; recovered Sources have none.
    * @param persist - Host-owned durable attempt writer; commits the full manifest before resolving.
-   * @param cancellation - current attempt cancellation, combined with Profile lifetime and 30-second limit.
+   * @param cancellation - Attempt cancellation; Profile lifetime and separate 30-second preparation/execution limits also apply.
    * @param rootTraceId - Optional original root derived by the Profile owner before analysis capture is published.
    * @returns syntactically valid, untrusted model JSON; not a plan or accepted task.
    */
@@ -61,7 +61,7 @@ export class CollaborationAnalysisRunner {
    * @param predecessor - Previous local input reference, or null when none was persisted.
    * @param prepared - Fresh captured call with the original provider/model/reasoning setting.
    * @param persist - Trusted writer committing the complete new manifest and current one-use grant.
-   * @param cancellation - Current operation signal, combined with Profile lifetime and the 30-second limit.
+   * @param cancellation - Operation cancellation; Profile lifetime and separate 30-second preparation/execution limits also apply.
    * @returns untrusted model JSON after one verified provider call, with the same budgets as original analysis.
    */
   async runRootAttempt(root: CollaborationRootSubmission,
@@ -78,7 +78,7 @@ export class CollaborationAnalysisRunner {
    * @param input - Parsed original/reply snapshots and selected pending identities from the current coordinator.
    * @param prepared - Current Profile's newly captured one-shot call matching the original model snapshot.
    * @param persist - Commits the complete clarification manifest before consuming a dispatch grant.
-   * @param cancellation - Attempt cancellation, combined with Profile lifetime and the analysis deadline.
+   * @param cancellation - Attempt cancellation, combined with Profile lifetime and both analysis phase deadlines.
    * @returns untrusted model JSON; accepted tasks and model calls are never restored or repeated.
    */
   async runClarification(input: CollaborationClarificationInput, prepared: PreparedLlmSnapshotCall,
@@ -124,7 +124,11 @@ export class CollaborationAnalysisRunner {
     timer.unref()
     this.used.add(prepared)
     this.running++
-    const work = this.execute(manifest, prepared, persist, signal).finally(() => { this.running--; clearTimeout(timer) })
+    const work = this.execute(manifest, prepared, async (input, active) => {
+      await persist(input, active)
+      active.throwIfAborted()
+      timer.refresh()
+    }, signal).finally(() => { this.running--; clearTimeout(timer) })
     try { return await waitForAnalysis(work, signal) }
     finally {
       controller.abort(new Error('collaboration_analysis_finished'))
@@ -147,6 +151,7 @@ export class CollaborationAnalysisRunner {
       evidence.calls++
     })
     let bytes = 0, chunks = 0, finished = false, text = ''
+    const deltaBytes = new Map<number, number>()
     for await (const chunk of stream) {
       signal.throwIfAborted()
       if (++chunks > 32768 || finished) throw new Error('collaboration_analysis_invalid_stream')
@@ -156,13 +161,18 @@ export class CollaborationAnalysisRunner {
           if (chunk.blockType !== 'text' && chunk.blockType !== 'reasoning') throw new Error('collaboration_analysis_invalid_stream')
           break
         case 'tool-call-delta': throw new Error('collaboration_analysis_tool_output')
-        case 'text-delta': case 'reasoning-delta':
-          bytes += Buffer.byteLength(chunk.text, 'utf8')
+        case 'text-delta': case 'reasoning-delta': {
+          const size = Buffer.byteLength(chunk.text, 'utf8')
+          bytes += size
+          deltaBytes.set(chunk.index, (deltaBytes.get(chunk.index) ?? 0) + size)
           break
+        }
         case 'block-end':
-          if (chunk.block.type === 'text') { text += chunk.block.text; bytes += Buffer.byteLength(chunk.block.text, 'utf8') }
-          else if (chunk.block.type === 'reasoning') bytes += Buffer.byteLength(chunk.block.text, 'utf8')
-          else throw new Error('collaboration_analysis_tool_output')
+          if (chunk.block.type !== 'text' && chunk.block.type !== 'reasoning') throw new Error('collaboration_analysis_tool_output')
+          // The assembled block repeats its deltas; a shorter final block cannot refund observed bytes.
+          bytes += Math.max(0, Buffer.byteLength(chunk.block.text, 'utf8') - (deltaBytes.get(chunk.index) ?? 0))
+          deltaBytes.delete(chunk.index)
+          if (chunk.block.type === 'text') text += chunk.block.text
           break
         case 'usage':
           if (chunk.usage.inputTokens + (chunk.usage.cacheReadTokens ?? 0) + (chunk.usage.cacheWriteTokens ?? 0) > inputBudget

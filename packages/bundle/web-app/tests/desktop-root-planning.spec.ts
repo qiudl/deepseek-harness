@@ -78,7 +78,7 @@ async function harness() {
     await legacy.close(); await roots.close(); await sources.close(); await facility.closeAll(); await backend.close()
     await ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true })
   })
-  return { make, preparing, target, root, pending, legacy, first, source, adapter, active,
+  return { make, preparing, target, root, pending, legacy, first, source, adapter, active, facility,
     addRoot: async (messageId: string) => {
       const { host_journal_commit: _commit, ...original } = source
       const nextSource = await sources.capture({ ...original, source_message_id: messageId,
@@ -307,4 +307,51 @@ it('refuses durable attempt evidence when the current root receipt differs from 
   h.setRoot({ ...h.root, receipt: { ...h.root.receipt, state_version: 2 } })
   await expect(h.make().readEvidence(h.target, h.signal)).rejects.toThrow('root_changed')
   expect(h.adapter.requests).toBe(0)
+})
+
+it('allows a fresh attempt to finish after a late grant without renewing that grant', async () => {
+  const h = await harness(), owner = h.make(), binding = 'a'.repeat(64)
+  const entered = Promise.withResolvers<undefined>(), finish = Promise.withResolvers<undefined>()
+  h.adapter.before = async () => { entered.resolve(undefined); await finish.promise }
+  vi.useFakeTimers()
+  try {
+    const d = await owner.prepare(h.target, binding, h.signal)
+    await vi.advanceTimersByTimeAsync(29000)
+    const grant = dispatchGrant(d), work = owner.dispatch(d.attempt_request_id, binding, grant, h.signal)
+    const outcome = work.then(value => ({ value }), (error: unknown) => ({ error }))
+    await entered.promise
+    await vi.advanceTimersByTimeAsync(5000)
+    finish.resolve(undefined)
+    expect(await outcome).toEqual({ value: { jsonText: '{}' } })
+    expect((await owner.readEvidence(h.target, h.signal)).attempt?.dispatch).toEqual(grant)
+    expect(h.adapter.requests).toBe(1)
+  } finally { finish.resolve(undefined); vi.useRealTimers() }
+})
+
+
+it('retains a failed recovery model call after owner close under the original trace', async () => {
+  const h = await harness(), owner = h.make(), binding = 'a'.repeat(64)
+  const d = await owner.prepare(h.target, binding, h.signal)
+  h.adapter.before = async () => { throw Error('provider-private-details') }
+  await expect(owner.dispatch(d.attempt_request_id, binding, dispatchGrant(d), h.signal)).rejects.toThrow('collaboration_analysis_failed')
+  await owner.close()
+  const reopened = await openCollaborationRootPlanningJournal(h.facility)
+  expect([...reopened.failures()]).toMatchObject([{ reason: 'model_failure', trace_id: h.root.root_trace_id,
+    attempt_request_id: d.attempt_request_id, input_manifest_digest: d.input_manifest_digest }])
+  expect(JSON.stringify([...reopened.failures()])).not.toContain('provider-private-details')
+  expect([...reopened.records()][0]!.output).toBeUndefined()
+  expect(h.adapter.requests).toBe(1)
+  await reopened.close()
+})
+
+it('does not record a consumed-attempt failure when model preparation rejects before input persistence', async () => {
+  const h = await harness(), owner = h.make()
+  h.preparing.mockImplementationOnce(async () => ({ root: h.root, analyze: async () => { throw Error('collaboration_analysis_input_budget') } }))
+  await expect(owner.prepare(h.target, 'a'.repeat(64), h.signal)).rejects.toThrow('collaboration_analysis_input_budget')
+  await owner.close()
+  const reopened = await openCollaborationRootPlanningJournal(h.facility)
+  expect([...reopened.failures()]).toEqual([])
+  expect([...reopened.records()]).toEqual([])
+  expect(h.adapter.requests).toBe(0)
+  await reopened.close()
 })

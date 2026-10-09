@@ -1383,7 +1383,7 @@ it('cancels the Session feed read of a passive reply without querying Main or co
 })
 
 const rootTaskId = 'bfb432fd-a2a2-4cbd-b1dc-4648c8944081', rootTraceId = 'a'.repeat(32)
-it('shows saved planning with its trace, without emitting execution admission', async () => {
+it('shows saved planning and refreshes original history when automatic execution is unavailable', async () => {
   const { composer, pick, submit, sink, invoke } = await bench(true)
   const host = window.__DSH_DESKTOP_HOST__!
   Reflect.set(host, 'collaborationPlanningAvailable', true)
@@ -1399,8 +1399,60 @@ it('shows saved planning with its trace, without emitting execution admission', 
   composer.submit()
   await vi.waitFor(() => { expect(composer.snapshot.draft).toBe('') })
   expect(composer.notices.getSnapshot()?.text).toBe(`规划已保存，尚未开始执行。追踪编号：${rootTraceId}`)
-  expect(admitted).not.toHaveBeenCalled(); expect(sink).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled()
+  expect(admitted).toHaveBeenCalledTimes(1); expect(sink).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled()
 })
+it('ordinary root-planning send dispatches its authorized frozen task without a panel action', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__!
+  host.collaborationPlanningAvailable = true
+  host.collaborationExecutionAvailable = false
+  const execute = vi.fn<NonNullable<typeof host.collaborationRootExecution>>(async request =>
+    request.action === 'preview' ? { ok: true, rootTraceId, previewId: rootTaskId, executionEnabled: true,
+      tasks: [{ taskId: rootTaskId, question: '请检查登录问题', agentName: agent.name, projectName: agent.project_name }] }
+      : { ok: true, status: 'recorded' })
+  host.collaborationRootExecution = execute
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision },
+  submission_state: 'planning_recorded', root_task_id: rootTaskId, root_trace_id: rootTraceId } }))
+  await f.pick('', '请检查登录问题')
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  const sent = f.submit.mock.calls[0]![0]
+  expect(execute.mock.calls.map(([request]) => request)).toEqual([
+    { action: 'preview', source: { workspace_id: sent.workspace_id, session_id: sent.session_id,
+      source_message_id: sent.source_message_id, source_revision: sent.source_revision } },
+    { action: 'confirm', previewId: rootTaskId, taskId: rootTaskId },
+  ])
+  expect(f.composer.notices.getSnapshot()?.text).toBe(`任务已派发。追踪编号：${rootTraceId}`)
+  expect(f.submit).toHaveBeenCalledTimes(1)
+  expect(f.sink).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled()
+})
+
+it.each(['disabled', 'rejected', 'changed-bridge'] as const)('root dispatch reports %s without retaining a resendable draft', async (mode) => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__!
+  host.collaborationPlanningAvailable = true
+  host.collaborationExecutionAvailable = false
+  const execute = vi.fn<NonNullable<typeof host.collaborationRootExecution>>(async (request) => {
+    if (mode === 'changed-bridge') Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+    return request.action === 'preview' ? { ok: true, rootTraceId, previewId: rootTaskId, executionEnabled: mode !== 'disabled',
+      tasks: [{ taskId: rootTaskId }] } : { ok: false }
+  })
+  host.collaborationRootExecution = execute
+  f.submit.mockImplementation(async input => ({ ok: true, value: { source: {
+    workspace_id: input.workspace_id, session_id: input.session_id,
+    source_message_id: input.source_message_id, source_revision: input.source_revision },
+  submission_state: 'planning_recorded', root_task_id: rootTaskId, root_trace_id: rootTraceId } }))
+  await f.pick('', '请检查登录问题')
+  f.composer.submit()
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe('') })
+  expect(f.composer.notices.getSnapshot()?.text).toBe(mode === 'disabled'
+    ? `规划已保存，任务尚未全部派发。追踪编号：${rootTraceId}`
+    : `规划已保存，派发结果待核对。请勿重复发送。追踪编号：${rootTraceId}`)
+  expect(execute).toHaveBeenCalledTimes(mode === 'rejected' ? 2 : 1)
+  expect(f.submit).toHaveBeenCalledTimes(1)
+  expect(f.sink).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled()
+})
+
 it.each(['accepted', 'bad-trace', 'extra-private', 'missing-root', 'changed-source', 'missing-value', 'null-value'] as const)(
   'root planning refuses %s replies and retains the original draft', async (change) => {
     const { composer, pick, submit, sink } = await bench(true)
@@ -1497,7 +1549,7 @@ it.each(['missing','rejected','bad-receipt'] as const)('closed-root recovery ret
   expect(submit).not.toHaveBeenCalled();expect(sink).not.toHaveBeenCalled()
 })
 
-it('routes explicit task confirmation through the YAML-loaded original Session binding', async () => {
+it('routes task confirmation and expired-preview consumption through the YAML-loaded original Session binding', async () => {
   const f = await bench(true)
   const bridge = window.__DSH_DESKTOP_HOST__
   if (!bridge) throw Error('missing Desktop fixture')
@@ -1522,13 +1574,27 @@ it('routes explicit task confirmation through the YAML-loaded original Session b
   await bindings.executionAction(original.snapshot_digest,'task')
   expect(execution).toHaveBeenLastCalledWith({ action:'confirm',previewId:'main-preview',taskId:'task' })
   expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('recorded')
+  const deliveries = f.deliveries.getMockImplementation()!
+  f.deliveries.mockImplementation(async (input) => {
+    const result = await deliveries(input)
+    return { ...result, value: { deliveries: result.value.deliveries.map(reply => ({ ...reply, task_id: 'task' })) } }
+  })
+  await bindings.hooks.slarkResults.refresh()
+  execution.mockResolvedValueOnce({ ok: false, errorCode: 'collaboration_execution_preview_expired', reconciliationRequired: false })
+    .mockResolvedValueOnce({ ok: true, previewId: 'fresh-preview', rootTraceId: 'b'.repeat(32), executionEnabled: true,
+      tasks: [{ taskId: 'task', question: 'Do the displayed work', agentName: 'Guide', projectName: 'Project' }] })
+    .mockResolvedValueOnce({ ok: true, rootTraceId: 'b'.repeat(32), consumptionAcknowledged: true, status: 'context_applied', continuationObserved: true })
+  await bindings.consumptionAction?.(original.snapshot_digest, 'delivery-v2')
+  expect(execution.mock.calls.slice(-3).map(([request]) => request.action)).toEqual(['consume', 'preview', 'consume'])
+  expect(execution).toHaveBeenLastCalledWith({ action: 'consume', previewId: 'fresh-preview', taskId: 'task', deliveryId: 'delivery-v2' })
+  expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.execution).toMatchObject({ outcomes: { task: 'recorded' }, consumptions: { 'delivery-v2': 'continued' } })
   expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
   const plugin=[...f.ctx.loader.entries()].find(item=>item.options.name==='composer-test:source')
   if(!plugin?.fiber) throw Error('missing loaded source')
   await plugin.fiber.dispose()
   await bindings.executionAction(original.snapshot_digest,'task')
   await bindings.consumptionAction?.(original.snapshot_digest,'delivery')
-  expect(execution).toHaveBeenCalledTimes(2)
+  expect(execution).toHaveBeenCalledTimes(5)
 })
 
 it('keeps the scoped draft when its Host disappears before submission', async () => {

@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { openCollaborationSourceJournal } from '../src/collaboration-source-journal.ts'
+import { collaborationJournalDigest, openCollaborationSourceJournal } from '../src/collaboration-source-journal.ts'
 
 const roots: string[] = []
 const cleanups: (() => Promise<void>)[] = []
@@ -63,6 +63,26 @@ async function manifest(facility: DomainFacility) {
       source_revision: source.source_revision, original_message: source.original_message, active_mentions: source.active_mentions }) }], source: { kind: 'user' } })] } }
 }
 const signal = () => new AbortController().signal
+
+it('retains sanitized failed analysis evidence after reopening without rewriting the consumed input', async () => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const record = await journal.prepare(m, signal())
+  await journal.dispatch(record, grant(record), signal())
+  const before = await readFile(join(h.root, 'collaboration_analysis_v2.json'))
+  await journal.recordFailure(record, Error('collaboration_analysis_timeout'))
+  await journal.recordFailure(record, Error('collaboration_analysis_timeout'))
+  const failures = [...journal.failures()]
+  expect(failures).toHaveLength(1)
+  expect(failures[0]).toMatchObject({ input_manifest_digest: record.input_manifest_digest,
+    source_digest: record.source_digest, attempt_request_id: record.attempt_request_id,
+    reason: 'timeout', trace_id: null })
+  expect([...journal.outputs()]).toEqual([])
+  expect(await readFile(join(h.root, 'collaboration_analysis_v2.json'))).toEqual(before)
+  await journal.close()
+  const reopened = await openCollaborationAnalysisJournal(h.facility)
+  expect([...reopened.failures()]).toEqual(failures)
+  await expect(reopened.saveOutput(record, '{}', signal())).rejects.toThrow('failure_recorded')
+})
 const grant = (record: { attempt_request_id: string; input_manifest_digest: string; source_digest: string }) => ({
   attempt_request_id: record.attempt_request_id, plan_id: 'plan', expected_plan_revision: '1', attempt_id: 'attempt',
   attempt_fence: '1', input_manifest_digest: record.input_manifest_digest, source_digest: record.source_digest,
@@ -262,14 +282,13 @@ it('closes the output domain even if input domain close reports failure', async 
     },
   })
   await expect(journal.close()).rejects.toThrow('input-close-failed')
-  expect(closed).toEqual(['collaboration_analysis_v2', 'collaboration_analysis_output_v2'])
+  expect(closed).toEqual(['collaboration_analysis_v2', 'collaboration_analysis_output_v2', 'collaboration_analysis_failure_v1'])
   await expect(journal.close()).rejects.toThrow('input-close-failed')
-  expect(closed).toHaveLength(2)
+  expect(closed).toHaveLength(3)
 })
 
 
 import { clarificationAnalysisMessage, parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
-import { collaborationJournalDigest } from '../src/collaboration-source-journal.ts'
 async function clarificationManifest(facility: DomainFacility) {
   const m = await manifest(facility)
   const sources = await openCollaborationSourceJournal(facility)
@@ -378,7 +397,7 @@ it('closes the opened input domain when the output domain cannot open', async ()
   expect(closed).toEqual(['collaboration_analysis_v2'])
 })
 
-it('retains both close failures and refuses reads or writes after closing', async () => {
+it('retains all close failures and refuses reads or writes after closing', async () => {
   const h = await harness(), m = await manifest(h.facility), open = h.facility.open.bind(h.facility)
   const journal = await openCollaborationAnalysisJournal({ open: async (spec) => {
     const domain = await open(spec), close = domain.close.bind(domain)
@@ -387,7 +406,7 @@ it('retains both close failures and refuses reads or writes after closing', asyn
   } })
   const record = await journal.prepare(m, signal())
   await expect(journal.close()).rejects.toMatchObject({ message: 'collaboration_analysis_journal_close_failed',
-    errors: [Error('collaboration_analysis_v2'), Error('collaboration_analysis_output_v2')] })
+    errors: [Error('collaboration_analysis_v2'), Error('collaboration_analysis_output_v2'), Error('collaboration_analysis_failure_v1')] })
   expect(() => [...journal.records()]).toThrow('collaboration_analysis_journal_closed')
   expect(() => [...journal.outputs()]).toThrow('collaboration_analysis_journal_closed')
   await expect(journal.prepare(m, signal())).rejects.toThrow('collaboration_analysis_journal_closed')
@@ -504,4 +523,101 @@ it('keeps all 256 restored analysis inputs and their original IDs when a new inp
   expect(await restored.prepare(m, signal())).toEqual(saved)
   expect(await readFile(path)).toEqual(bytes)
   await restored.close()
+})
+
+
+it.each([
+  ['collaboration_root_planning_timeout', 'timeout'],
+  ['collaboration_analysis_cancelled', 'cancelled'],
+  ['collaboration_analysis_closed', 'cancelled'],
+  ['collaboration_root_planning_closed', 'cancelled'],
+  ['collaboration_root_planning_cancelled', 'cancelled'],
+  ['collaboration_analysis_invalid_json', 'invalid_json'],
+  ['collaboration_analysis_invalid_stream', 'invalid_stream'],
+  ['collaboration_analysis_tool_output', 'invalid_stream'],
+  ['collaboration_analysis_output_budget', 'budget'],
+  ['collaboration_analysis_token_budget', 'budget'],
+  ['collaboration_analysis_failed', 'model_failure'],
+  ['private provider credential', 'unclassified'],
+  [null, 'unclassified'],
+  ['AbortError', 'cancelled'],
+])('retains only the reason vocabulary for %s and the original trace', async (message, reason) => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const trace = 'c'.repeat(32)
+  const record = await journal.prepare({ ...m, request: { ...m.request, traceparent: `00-${trace}-${'d'.repeat(16)}-01` } }, signal())
+  const dispatched = await journal.dispatch(record, grant(record), signal())
+  const error = message === null ? { private: 'provider credential' } : Error(message)
+  if (message === 'AbortError' && error instanceof Error) error.name = 'AbortError'
+  await journal.recordFailure(record, error)
+  const rows = [...journal.failures()]
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ reason, trace_id: trace, attempt_request_id: record.attempt_request_id })
+  expect(rows[0]!.dispatch_digest).toBe(collaborationJournalDigest(dispatched.dispatch))
+  expect(JSON.stringify(rows)).not.toContain('private')
+  expect(Object.isFrozen(rows[0])).toBe(true)
+  await journal.close()
+})
+
+it('does not manufacture a failure before dispatch or after committed output', async () => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const record = await journal.prepare(m, signal())
+  await journal.recordFailure(record, Error('collaboration_analysis_timeout'))
+  expect([...journal.failures()]).toEqual([])
+  await journal.dispatch(record, grant(record), signal())
+  await journal.saveOutput(record, '{}', signal())
+  await journal.recordFailure(record, Error('collaboration_analysis_timeout'))
+  expect([...journal.failures()]).toEqual([])
+  expect(await journal.saveOutput(record, '{}', signal())).toMatchObject({ json_text: '{}' })
+  await expect(journal.recordFailure({ ...record, attempt_request_id: 'foreign' }, Error('failure'))).rejects.toThrow('input')
+  await journal.close()
+  expect(() => [...journal.failures()]).toThrow('closed')
+  await expect(journal.recordFailure(record, Error('failure'))).rejects.toThrow('closed')
+})
+
+it.each(['before', 'after'] as const)('refuses reuse after a failure write rejects %s persistence, then reads actual durable evidence', async (stage) => {
+  let armed = false
+  const fail = async () => { if (armed) throw Error('lost failure ack') }
+  const h = await harness(undefined, stage === 'before' ? { beforeWrite: fail } : { afterWrite: fail })
+  const m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const record = await journal.prepare(m, signal())
+  await journal.dispatch(record, grant(record), signal())
+  armed = true
+  await expect(journal.recordFailure(record, Error('collaboration_analysis_timeout'))).rejects.toThrow('lost failure ack')
+  expect(() => [...journal.failures()]).toThrow('recovery_required')
+  await expect(journal.recordFailure(record, Error('collaboration_analysis_timeout'))).rejects.toThrow('recovery_required')
+  await expect(journal.saveOutput(record, '{}', signal())).rejects.toThrow('recovery_required')
+  await journal.close(); armed = false
+  const reopened = await openCollaborationAnalysisJournal(h.facility)
+  expect([...reopened.failures()]).toHaveLength(stage === 'after' ? 1 : 0)
+  await expect(reopened.dispatch(record, grant(record), signal())).rejects.toThrow('dispatch_used')
+  await reopened.close()
+})
+
+it.each(['key', 'binding', 'missing', 'output'] as const)('refuses inconsistent failure %s evidence without rewriting files', async (mode) => {
+  const h = await harness(), m = await manifest(h.facility), journal = await openCollaborationAnalysisJournal(h.facility)
+  const record = await journal.prepare(m, signal())
+  await journal.dispatch(record, grant(record), signal())
+  await journal.recordFailure(record, Error('collaboration_analysis_timeout'))
+  await journal.close()
+  const path = join(h.root, 'collaboration_analysis_failure_v1.json'), original = await readFile(path, 'utf8')
+  const file = JSON.parse(original) as { tables: { failures: Record<string, { dispatch_digest: string }> } }
+  if (mode === 'key') file.tables.failures = { ['a'.repeat(64)]: file.tables.failures[record.input_manifest_digest]! }
+  if (mode === 'binding') file.tables.failures[record.input_manifest_digest]!.dispatch_digest = 'a'.repeat(64)
+  if (mode === 'missing') {
+    const inputPath = join(h.root, 'collaboration_analysis_v2.json')
+    const inputs = JSON.parse(await readFile(inputPath, 'utf8')) as { tables: { attempts: object } }
+    inputs.tables.attempts = {}
+    await writeFile(inputPath, JSON.stringify(inputs))
+  }
+  if (mode === 'output') {
+    file.tables.failures = {}
+    await writeFile(path, JSON.stringify(file))
+    const outputOwner = await openCollaborationAnalysisJournal(h.facility)
+    await outputOwner.saveOutput(record, '{}', signal())
+    await outputOwner.close()
+  }
+  const bytes = mode === 'output' ? original : JSON.stringify(file)
+  await writeFile(path, bytes)
+  await expect(openCollaborationAnalysisJournal(h.facility)).rejects.toThrow('failure_invalid')
+  expect(await readFile(path, 'utf8')).toBe(bytes)
 })

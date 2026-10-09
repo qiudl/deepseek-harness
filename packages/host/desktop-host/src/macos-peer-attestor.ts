@@ -178,12 +178,15 @@ async function nativeBindings(): Promise<MacOSPeerBindings> {
 
 /**
  * Create a fail-closed macOS UDS peer attestor for a signed Slark daemon.
+ * Overlapping checks of identical app executable snapshots share only their pending signature verification.
+ * Each connection still checks its peer identity and executable before and after verification.
  * @param options - accepted signing teams and optional native test adapter.
  * @returns attestor that derives UID and digest from the connected peer process.
  */
 export function createMacOSPeerAttestor(options: MacOSPeerAttestorOptions): UnixPeerAttestor {
   if (options.allowedTeamIdentifiers.size === 0
     || [...options.allowedTeamIdentifiers].some(team => !TEAM_IDENTIFIER.test(team))) throw new HostAuthorityError('invalid_input')
+  const pendingBundleSignatures = new Map<string, Promise<string>>()
   return async (socket) => {
     try {
       const bindings = options.bindings ?? await nativeBindings()
@@ -207,9 +210,21 @@ export function createMacOSPeerAttestor(options: MacOSPeerAttestorOptions): Unix
         // copy cannot pass codesign verification; keep the original descriptor
         // open and compare its identity and bytes again after verifying the
         // bundle path. Standalone executables can still use a private snapshot.
-        const team = /\.app\/Contents\/MacOS\/[^/]+$/u.test(path)
-          ? await bindings.verifyCodeSignature(path)
-          : await verifyExecutableSnapshot(bytesBefore, candidate => bindings.verifyCodeSignature(candidate))
+        let team: string
+        if (/\.app\/Contents\/MacOS\/[^/]+$/u.test(path)) {
+          const key = JSON.stringify([path, before.dev, before.ino, before.size, before.mode,
+            before.uid, before.nlink, before.mtimeMs, before.ctimeMs,
+            createHash('sha256').update(bytesBefore).digest('hex')])
+          let verification = pendingBundleSignatures.get(key)
+          if (!verification) {
+            verification = Promise.resolve().then(() => bindings.verifyCodeSignature(path))
+              .finally(() => { pendingBundleSignatures.delete(key) })
+            pendingBundleSignatures.set(key, verification)
+          }
+          team = await verification
+        } else {
+          team = await verifyExecutableSnapshot(bytesBefore, candidate => bindings.verifyCodeSignature(candidate))
+        }
         if (!options.allowedTeamIdentifiers.has(team)) throw new HostAuthorityError('unauthorized')
         const after = fstatSync(fd)
         const namedAfter = lstatSync(path)

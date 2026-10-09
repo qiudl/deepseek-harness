@@ -28,13 +28,15 @@
     "src/collaboration-analysis.ts",
     "src/collaboration-clarification-input.ts",
     "src/collaboration-analysis-journal.ts",
+    "src/collaboration-analysis-failure-journal.ts",
     "src/collaboration-delivery-journal.ts",
     "src/collaboration-discussion.ts",
     "src/collaboration-root-journal.ts",
     "src/collaboration-root-execution-journal.ts",
     "src/collaboration-root-planning-journal.ts",
     "src/collaboration-feedback.ts",
-    "src/collaboration-consumption-journal.ts"
+    "src/collaboration-consumption-journal.ts",
+    "src/collaboration-continuation-journal.ts"
   ],
   "references": [
     {

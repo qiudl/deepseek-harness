@@ -8,6 +8,7 @@ import css from './CollaborationResultsDock.module.css'
 const phases = new Map<string, keyof typeof zh>([
   ['root_accepted', 'trace.accepted'], ['revision_created', 'trace.revised'], ['root_state_changed', 'trace.stateChanged'],
   ['execution_admitted', 'trace.admitted'], ['consumer_authorized', 'trace.consumer'], ['context_applied', 'trace.consumed'],
+  ['assistant_message_committed', 'trace.assistantCommitted'],
   ['execution_succeeded', 'trace.succeeded'], ['execution_failed', 'trace.failed'], ['execution_cancelled', 'trace.cancelled'],
   ['execution_revoked', 'trace.revoked'], ['execution_indeterminate', 'trace.indeterminate'],
   ['delivery_local_committed', 'trace.delivered'], ['delivery_rendered', 'trace.rendered'],
@@ -35,7 +36,7 @@ export function CollaborationTrajectory({ useSlarkResults, traceAction, traceEvi
     <div className={css.records}>
       {state.groups.map(group => <article className={css.message} key={group.original.snapshot_digest}>
         <div className={css.text}>{group.original.original_message}</div>
-        <Button data-testid="slark-trace-load" size="sm" disabled={state.phase === 'loading' || group.trace?.phase === 'loading'}
+        <Button data-testid="slark-trace-load" size="sm" disabled={group.trace?.phase === 'loading' || group.trace?.execution?.phase === 'loading'}
           onClick={() => { void traceAction?.(group.original.snapshot_digest) }}>{t(group.trace ? 'trace.refresh' : 'trace.load')}</Button>
         {group.trace?.phase === 'error' && <p role="status">{t('trace.unavailable')}</p>}
         {group.trace?.page && <>
@@ -54,7 +55,7 @@ export function CollaborationTrajectory({ useSlarkResults, traceAction, traceEvi
                   {event.trace_context.attempt_id && <><dt>{t('trace.attempt')}</dt><dd>{event.trace_context.attempt_id}</dd></>}
                   {event.trace_context.causation_id && <><dt>{t('trace.cause')}</dt><dd>{event.trace_context.causation_id}</dd></>}
                 </dl>
-                {terminalPhases.has(event.phase) && <Button data-testid="slark-trace-execution" size="sm" disabled={group.trace?.execution?.phase === 'loading' || state.phase === 'loading'}
+                {terminalPhases.has(event.phase) && <Button data-testid="slark-trace-execution" size="sm" disabled={group.trace?.execution?.phase === 'loading' || group.trace?.phase === 'loading'}
                   onClick={() => { void traceEvidenceAction?.(group.original.snapshot_digest, event.event_id) }}>{t('trace.executionDetails')}</Button>}
                 {group.trace?.execution?.eventId === event.event_id && group.trace.execution.page && <>
                   <p>{t('trace.providerBoundary')}</p>
@@ -66,13 +67,13 @@ export function CollaborationTrajectory({ useSlarkResults, traceAction, traceEvi
                       {item.success !== undefined && <> · {t(item.success ? 'trace.observationSucceeded' : 'trace.observationFailed')}</>}
                     </li>)}
                   </ol>
-                  {group.trace.execution.page.next_after_sequence !== null && <Button data-testid="slark-trace-execution-more" size="sm" disabled={group.trace.execution.phase === 'loading' || state.phase === 'loading'}
+                  {group.trace.execution.page.next_after_sequence !== null && <Button data-testid="slark-trace-execution-more" size="sm" disabled={group.trace.execution.phase === 'loading' || group.trace.phase === 'loading'}
                     onClick={() => { void traceEvidenceAction?.(group.original.snapshot_digest, event.event_id, true) }}>{t('trace.moreExecution')}</Button>}
                 </>}
               </details>
             </li>)}
           </ol>
-          {group.trace.page.next_after_seq !== null && <Button data-testid="slark-trace-more" size="sm" disabled={group.trace.phase === 'loading' || state.phase === 'loading'}
+          {group.trace.page.next_after_seq !== null && <Button data-testid="slark-trace-more" size="sm" disabled={group.trace.phase === 'loading' || group.trace.execution?.phase === 'loading'}
             onClick={() => { void traceAction?.(group.original.snapshot_digest, true) }}>{t('trace.more')}</Button>}
         </>}
       </article>)}

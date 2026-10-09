@@ -20,3 +20,6 @@
           - term: Attempt ID
           - definition: attempt
           - button "View execution details"
+  - article:
+    - text: An older collaboration message
+    - button "Load collaboration trace"

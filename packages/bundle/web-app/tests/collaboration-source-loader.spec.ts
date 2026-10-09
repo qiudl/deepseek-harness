@@ -6,6 +6,8 @@ import { decodeHostControlFrame, encodeHostControlFrame, parseHostRootPlanningAt
 import { parseHostRootAnalysisOutput, parseHostRootSubmissionTarget, parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 /** REQ-20260930-0004: Loader-mounted Source capture, real JSON journal and private HTTP. */
 import { Context } from '@deepseek-ai/cordis'
+import DeepSeekLlmApiExtensions from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
+import * as PluginInventory from '@deepseek-ai/dsh-plugin-package-inventory-deepseek'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest, parseCollaborationClarificationInput, parseCollaborationReferenceMetadata, parseCollaborationRootSubmission } from '@deepseek-ai/dsh-api-session-controller'
@@ -13,6 +15,8 @@ import type { CollaborationRootPlanningRecord } from '@deepseek-ai/dsh-api-sessi
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
+import FileUploads from '@deepseek-ai/dsh-client-file-upload'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
@@ -41,7 +45,8 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+it.each(['root-analysis-budget', 'root-analysis-failure', 'root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+  const rootAnalysis = mode === 'root-analysis' || mode === 'root-analysis-failure' || mode === 'root-analysis-budget'
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
   const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
@@ -62,10 +67,11 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     await rm(directory, { recursive: true, force: true })
   })
   vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
-  vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', ((mode === 'analysis-profile' || mode === 'analysis-missing-domain' || mode === 'root-analysis') || mode === 'root-submission') ? 'B'.repeat(43) : '')
+  vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', ((mode === 'analysis-profile' || mode === 'analysis-missing-domain' || rootAnalysis) || mode === 'root-submission') ? 'B'.repeat(43) : '')
   vi.stubEnv('DSH_PROFILE_DELIVERY_TOKEN', mode === 'delivery' ? 'C'.repeat(43) : '')
   vi.stubEnv('DSH_PROFILE_REFERENCE_TOKEN', mode === 'reference' ? 'D'.repeat(43) : '')
   for (const key of ['DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) vi.stubEnv(key, '')
+  if (mode === 'source-only') vi.stubEnv('DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'E'.repeat(43))
   // GUI/transport peers are fixtures; Source owners, registry, model runtime and storage load from YAML.
   ctx.provide('webServer', { host: '127.0.0.1', port: 0, register(route: { path: string; handler: typeof routes extends Map<string, infer T> ? T : never }) {
     routes.set(route.path, route.handler); return () => { routes.delete(route.path) }
@@ -75,15 +81,17 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
   ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'fixture', model: 'selected' }) } as never)
   ctx.provide('attachments', { imageLimits: { maxImageBytes: 1, maxImagesPerMessage: 1, maxMessageImageBytes: 1,
     maxImagePixels: 1, maxImageDimension: 1, mediaTypes: ['image/png'] } } as never)
-  ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
+  if (mode !== 'source-only') ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
   ctx.provide('fs', {} as never)
   const header: SessionHeader = { version: SESSION_FORMAT_VERSION, id: SessionId('source-session'), cwd, createdAt: 1, isSeeded: false }
   ctx.provide('sessionPersistence', testSessionPersistence(ctx, { list: async () => [header],
     inspect: async () => ({ meta: header, events: [] }) }) as never)
   installSessionReadTestServices(ctx)
   const plugins = {
+    ...(mode === 'source-only' ? { commands: CommandRuntime, uploads: FileUploads } : {}),
     storage: Storage, sessions: SessionStore, agents: AgentRegistry, llm: LlmRuntime, workspace: WorkspaceRegistry,
     controller: SessionController, web: WebApp,
+    extensions: DeepSeekLlmApiExtensions, inventory: PluginInventory,
     domain: { name: 'source-test-domain', inject: ['storage'], apply(domainCtx: Context) {
       backend = new JsonStorageBackend(join(directory, 'state'))
       domainCtx.storage.backend.register('json', backend)
@@ -144,6 +152,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       prompt_version: string
       request: { system: string; messages: { content: { text: string }[] }[] }
     }
+    expect(wire).not.toHaveProperty('dsh_plugin_packages')
     expect(wire.model).toBe('selected'); expect(wire.max_tokens).toBe(8192)
     expect(wire.tools ?? []).toEqual([])
     expect(wire.system).toBe(manifest.request.system)
@@ -157,8 +166,13 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     res.end([
       { type: 'message_start', message: { id: 'fixture-response', model: 'selected', usage: { input_tokens: 3, output_tokens: 0 } } },
       { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
-      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: result } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: mode === 'root-analysis-failure' ? 'private-provider-invalid-json' : result } },
       { type: 'content_block_stop', index: 0 },
+      ...(mode === 'root-analysis-budget' ? [
+        { type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking: 'x'.repeat(17000) } },
+        { type: 'content_block_stop', index: 1 },
+      ] : []),
       { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
       { type: 'message_stop' },
     ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''))
@@ -167,15 +181,15 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     options: () => resolveAdapterOptions({ baseURL: origin, models: [{ id: 'selected' }] }),
     resolveAuth: async () => ({ headers: { 'x-api-key': 'fixture-source-key' } }), resolveUserId: () => '00000000-0000-4000-8000-000000000001' as AnonymousUserId,
     // Malformed external extension JSON must not introduce tools into the logged Source analysis request.
-    prepareExtensions: async () => ({ fields: mode === 'analysis-extension'
-      ? { tools: [{ type: 'function', function: { name: 'injected_tool', description: '', parameters: {} } }] } as never
-      : {}, accept: async () => {} }),
+    prepareExtensions: async request => mode === 'analysis-extension'
+      ? { fields: { tools: [{ type: 'function', function: { name: 'injected_tool', description: '', parameters: {} } }] } as never, accept: async () => {} }
+      : ctx.deepseekLlmApiExtensions.prepare(request),
   })
   const prepared = vi.spyOn(adapter, 'prepareSnapshot'), stream = vi.spyOn(adapter, 'stream')
   ctx.llm.registerAdapter(['fixture'], adapter)
   const workspace = await ctx.workspaceRegistry.create(cwd), sessionId = SessionId('source-session')
   await workspace.attachSession(sessionId)
-  const session = ctx.sessions.create(sessionId, { meta: { cwd } })
+  const session = ctx.sessions.create(sessionId, { meta: { cwd, createdAt: header.createdAt } })
   session.append('model/selection', { provider: 'fixture', model: 'selected' })
   const referenceText = '\ufeff范围说明😀\r\n只读分析，不修改文件'
   const referenceMessage = createUserMessage({ content: [{ type: 'text', text: referenceText }], source: { kind: 'user' } })
@@ -196,18 +210,22 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
       headers: { authorization, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
+  if (mode === 'source-only') {
+    expect((await ctx.sessionController.list({}, new AbortController().signal)).items
+      .find(item => item.sessionId === header.id)?.blank).toBe(true)
+  }
   const preparation =
-    (mode === 'analysis-profile' || mode === 'root-analysis')
+    (mode === 'analysis-profile' || rootAnalysis)
       ? ((await factory['collaborationAnalysis'](
         origin,
         'B'.repeat(43),
-        { action: mode === 'root-analysis' ? 'prepare_root' : 'prepare', ...(mode==='root-analysis'?{ resume_binding_key:'f'.repeat(64) }:{}), binding_key: 'd'.repeat(64), input: mode === 'root-analysis' ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
+        { action: rootAnalysis ? 'prepare_root' : 'prepare', ...(rootAnalysis?{ resume_binding_key:'f'.repeat(64) }:{}), binding_key: 'd'.repeat(64), input: rootAnalysis ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
         new AbortController().signal,
         () => false,
       )) as { kind: string; attempt_request_id: string; input_manifest_digest: string; source_digest: string; root?: unknown })
       : undefined
   const first =
-    (mode === 'analysis-profile' || mode === 'root-analysis')
+    (mode === 'analysis-profile' || rootAnalysis)
       ? {
         kind: 'recovered' as const,
         snapshot: await ctx.sessionController.readCollaborationSourceSnapshot(
@@ -224,6 +242,31 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
         ? await ctx.sessionController.captureCollaborationRoot({ source, namespace_id: 'n2_' + 'a'.repeat(64),
           objective_ref: 'objective-1', task_grant_ref: 'grant-1', continuation_policy: 'display_only' }, new AbortController().signal)
         : await ctx.sessionController.captureCollaborationSource(source, new AbortController().signal)
+  if (mode === 'source-only') {
+    expect((await ctx.sessionController.list({}, new AbortController().signal)).items
+      .find(item => item.sessionId === header.id)?.blank).toBe(false)
+    const controllerEntry = [...ctx.loader.entries()].find(entry => entry.options.id === 'controller')
+    if (!controllerEntry?.fiber) throw Error('Controller Loader entry missing')
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await controllerEntry.fiber.restart()
+      await ctx.loader.await()
+      expect(ctx.get('sessionController')).toBeDefined()
+      const choice = await fetch(`${origin}/internal/desktop-workspace-model-selection`, {
+        method: 'POST', headers: { authorization: `Bearer ${'E'.repeat(43)}` },
+        body: JSON.stringify({ workspace_id: workspace.id, session_id: sessionId }),
+      })
+      expect(choice.status).toBe(200)
+      expect(await choice.json()).toEqual({ workspace_id: workspace.id, session_id: sessionId,
+        provider: 'fixture', model: 'selected' })
+      expect(await ctx.sessionController.readCollaborationSourceSnapshot({
+        workspace_id: source.workspace_id, session_id: source.session_id,
+        source_message_id: source.source_message_id, source_revision: source.source_revision,
+      }, new AbortController().signal))
+        .toEqual(first.snapshot)
+    }
+    expect(session.seq).toBe(seq)
+    expect(providerRequests).toBe(0)
+  }
   if ('submission' in first) {
     const submission = parseCollaborationRootSubmission(first.submission)
     expect(submission.state).toBe('pending')
@@ -412,17 +455,17 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     expect(await planning.json()).toEqual({ error: 'unavailable' })
     expect(providerRequests).toBe(0)
   }
-  const analysisJournal = mode !== 'root-submission' && mode !== 'analysis-missing-domain' && mode !== 'source-only' && mode !== 'analysis-profile' && mode !== 'root-analysis' && mode !== 'delivery' && mode !== 'reference' ? await openCollaborationAnalysisJournal(facility!) : undefined
+  const analysisJournal = mode !== 'root-submission' && mode !== 'analysis-missing-domain' && mode !== 'source-only' && mode !== 'analysis-profile' && !rootAnalysis && mode !== 'delivery' && mode !== 'reference' ? await openCollaborationAnalysisJournal(facility!) : undefined
   const analysisWriter = analysisJournal ? createCollaborationAnalysisWriter(analysisJournal, async (record) => {
     expect(providerRequests).toBe(0)
     return { attempt_request_id: record.attempt_request_id, plan_id: 'fixture-plan', expected_plan_revision: '1',
       attempt_id: 'fixture-attempt', attempt_fence: '1', input_manifest_digest: record.input_manifest_digest,
       source_digest: record.source_digest, lease_expires_at: new Date(Date.now() + 30000).toISOString(), dispatch_granted: true }
   }) : undefined
-  if ((mode === 'analysis-profile' || mode === 'root-analysis')) {
+  if ((mode === 'analysis-profile' || rootAnalysis)) {
     expect(providerRequests).toBe(0)
     expect(preparation?.kind).toBe('prepared')
-    if (mode === 'root-analysis') {
+    if (rootAnalysis) {
       const root = parseHostRootSubmissionDescriptor(preparation?.root)
       expect(root.root_trace_id).toMatch(/^[a-f0-9]{32}$/u)
       const rootTarget = { ...target, namespace_id:root.namespace_id, command_id:root.command_id }
@@ -488,6 +531,32 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     }
     expect((await postAnalysis({ ...dispatch, binding_key: 'e'.repeat(64) })).status).toBe(422)
     expect(providerRequests).toBe(0)
+    if (mode === 'root-analysis-failure') {
+      const inputPath = join(directory, 'state', 'collaboration_analysis_v2.json')
+      const rootPath = join(directory, 'state', 'collaboration_root_submission_v1.json')
+      const rootBytes = await readFile(rootPath)
+      expect((await postAnalysis(dispatch)).status).toBe(422)
+      expect(providerRequests).toBe(1)
+      const inputBytes = await readFile(inputPath)
+      expect((await postAnalysis(dispatch)).status).toBe(422)
+      expect(providerRequests).toBe(1)
+      await ctx.fiber.dispose()
+      const saved = JSON.parse(await readFile(join(directory, 'state', 'collaboration_analysis_failure_v1.json'), 'utf8')) as { tables: { failures: Record<string, unknown> } }
+      const rows = Object.values(saved.tables.failures)
+      expect(rows).toHaveLength(1)
+      const root = parseHostRootSubmissionDescriptor(preparation!.root)
+      expect(rows[0]).toMatchObject({ reason: 'invalid_json', trace_id: root.root_trace_id,
+        input_manifest_digest: preparation!.input_manifest_digest, source_digest: preparation!.source_digest,
+        attempt_request_id: preparation!.attempt_request_id, dispatch_digest: collaborationJournalDigest(grant) })
+      expect(JSON.stringify(rows)).not.toContain('private-provider')
+      await expect(readFile(join(directory, 'state', 'collaboration_analysis_output_v2.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await readFile(inputPath)).toEqual(inputBytes)
+      expect(await readFile(rootPath)).toEqual(rootBytes)
+      expect(session.seq).toBe(seq)
+      routes.delete('/v1/messages')
+      expect(routes.size).toBe(0)
+      return
+    }
     const result = (await factory['collaborationAnalysis'](
       origin,
       'B'.repeat(43),
@@ -547,7 +616,7 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
         .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-clarification.request.expected.txt'))
       expect(session.seq).toBe(seq)
     }
-    if (mode === 'root-analysis') {
+    if (rootAnalysis) {
       const root = parseHostRootSubmissionDescriptor(preparation?.root)
       const targetRoot = { ...target, namespace_id: root.namespace_id, command_id: root.command_id }
       const read = { action: 'read_root_output', binding_key: 'd'.repeat(64), target: targetRoot }

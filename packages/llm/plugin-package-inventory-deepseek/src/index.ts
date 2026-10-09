@@ -185,7 +185,7 @@ async function collectActivePluginPackages(
 }
 
 /**
- * Register the complete `dsh_plugin_packages` request contribution when enabled.
+ * Register package metadata for enabled requests other than isolated collaboration analysis.
  * @param ctx - plugin context carrying Loader entry metadata and the DeepSeek request-extension registry.
  * @param config - validated default-on configuration.
  */
@@ -195,6 +195,7 @@ export function apply(ctx: Context, config: Config): void {
   const resolver = new PackageIdentityResolver(hostBaseUrl, ctx.get('pluginPackages'))
   ctx.deepseekLlmApiExtensions.register('dsh_plugin_packages', {
     prepare: async (request) => {
+      if (request.purpose === 'collaboration-analysis') return undefined
       const value: DeepSeekPluginPackageInventoryExtension = {
         version: 1,
         packages: await collectActivePluginPackages(ctx, resolver, hostBaseUrl, request.sessionId),

@@ -1,4 +1,5 @@
 /** REQ-20260930-0004: complete Host analysis inputs and consumed dispatch grants, separate from Session logs. */
+import { openCollaborationAnalysisFailures, type CollaborationAnalysisFailure } from './collaboration-analysis-failure-journal.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
@@ -131,6 +132,14 @@ export interface CollaborationAnalysisJournal {
    * @returns the committed frozen output, also accessible for read-only recovery.
    */
   saveOutput(record:CollaborationAnalysisJournalRecord,jsonText:string,signal:AbortSignal):Promise<AnalysisOutput>
+  /** Retain a sanitized failed local analysis observation after consumed dispatch; success takes precedence.
+   * @param record - Original durable input; identity must still match.
+   * @param error - Local operation failure, mapped to a fixed reason vocabulary.
+   * @returns Completion after the observation commits; no retry or cloud terminal state is authorized.
+   */
+  recordFailure(record: CollaborationAnalysisJournalRecord, error: unknown): Promise<void>
+  /** @returns Retained failures tied to original inputs and consumed dispatches. */
+  failures(): IterableIterator<CollaborationAnalysisFailure>
   /** @returns frozen original outputs; recovery never constructs executable model calls. */
   outputs():IterableIterator<AnalysisOutput>
   /** @returns a frozen record iterator for read-only recovery and reconciliation. */
@@ -160,10 +169,12 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
     await domain.close()
     throw error
   }
+  let failures: Awaited<ReturnType<typeof openCollaborationAnalysisFailures>> | undefined
   const closeDomains = async () => {
     const results = await Promise.allSettled([
       Promise.resolve().then(() => domain.close()),
       Promise.resolve().then(() => outputDomain.close()),
+      Promise.resolve().then(() => failures?.close()),
     ])
     const errors: unknown[] = []
     for (const result of results) if (result.status === 'rejected') errors.push(result.reason)
@@ -188,6 +199,20 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
     throw error
   }
 
+  try {
+    failures = await openCollaborationAnalysisFailures(facility, 'collaboration_analysis_failure_v1', (key) => {
+      const record = table.get(key)
+      if (!record?.dispatch) return undefined
+      const manifest = JSON.parse(record.manifest_json) as CollaborationAnalysisManifest
+      const parent = manifest.request.traceparent
+      const trace_id = parent === undefined ? null
+        : z.string().regex(/^00-(?!0{32})[a-f0-9]{32}-(?!0{16})[a-f0-9]{16}-01$/u).parse(parent).slice(3, 35)
+      return { identity: { attempt_request_id: record.attempt_request_id, input_manifest_digest: key,
+        source_digest: record.source_digest, dispatch_digest: hash(canonical(record.dispatch)), trace_id },
+      hasOutput: outputs.get(key) !== undefined }
+    })
+  } catch (error) { await closeDomains(); throw error }
+  const failureJournal = failures
   let tail = Promise.resolve(), closing: Promise<void> | undefined, recoveryRequired = false
   const healthy = () => { if (recoveryRequired) throw Error('collaboration_analysis_journal_recovery_required') }
   const enqueue = <T>(work: () => Promise<T>): Promise<T> => {
@@ -270,6 +295,7 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
           if (previous.json_text !== value.json_text) throw Error('collaboration_analysis_output_conflict')
           return previous
         }
+        failureJournal.assertNoFailure(value.input_manifest_digest)
         try {
           await outputs.put(value.input_manifest_digest, value)
         } catch (error) {
@@ -279,6 +305,19 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
         signal.throwIfAborted()
         return value
       })
+    },
+    recordFailure(record, error) {
+      return enqueue(async () => {
+        const stored = table.get(record.input_manifest_digest)
+        if (!stored || stored.attempt_request_id !== record.attempt_request_id || stored.manifest_json !== record.manifest_json) {
+          throw Error('collaboration_analysis_failure_input_conflict')
+        }
+        await failureJournal.record(record.input_manifest_digest, error)
+      })
+    },
+    failures() {
+      if (closing) throw Error('collaboration_analysis_journal_closed')
+      healthy(); return failureJournal.records()
     },
     outputs() {
       if (closing) throw Error('collaboration_analysis_journal_closed')

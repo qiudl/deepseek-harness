@@ -40,7 +40,7 @@ Client 列表行和驻留 Session 使用当前 `sessionListMetadata` 投影纠�
 
 `prepareWorkspaceModelSnapshot(sessionId, workspaceId, signal)` 使用该来源选择准备完整 [LLM 快照](../../llm/llm/README.zh.md)，随后重验归属与选择。准备期间发生变化会被拒绝，返回工作区/会话身份与当前进程的一次性调用。这个仅供 Host 使用的方法采用提供服务的 Profile 上下文，不暴露 Remote 入口，不激活 Agent，不写 Session 事件，准备阶段不发送模型请求。调用方负责取消、Source 认证及 journal；元数据不是授权证明。
 
-可信 Profile 协调器可以从本 Host 包导入 `openCollaborationSourceJournal`，传入自己配置的 `storageDomain` form。独立的 `collaboration_source_v2` 领域在规划前保存 Source 原文、已分类的 mention 及 prepared 模型元数据。`capture` 在持久化后返回脱离输入且深度冻结的快照；相同重试返回原条目 UUID 和首次提交版本，相同工作区/会话/消息/revision 下内容变化则拒绝。该领域不追加普通 Session 事件，也不发送模型请求。只有 Session 历史包含以 Source 派生的讨论请求 ID 提交的完整原文时，`collaborationSources` 才隐藏该原消息；领取或取消不改变接受结果，隐藏条目仍可作为分页游标。
+可信 Profile 协调器可以从本 Host 包导入 `openCollaborationSourceJournal`，传入自己配置的 `storageDomain` form。独立的 `collaboration_source_v2` 领域在规划前保存 Source 原文、已分类的 mention 及 prepared 模型元数据。`capture` 在持久化后返回脱离输入且深度冻结的快照；相同重试返回原条目 UUID 和首次提交版本，相同工作区/会话/消息/revision 下内容变化则拒绝。该领域不追加普通 Session 事件，也不发送模型请求。 Source 提交后，即使模型轮次尚未开始，其当前工作区的 Session 在列表响应和实时列表通知中也会标记为非空。Profile 重开后从原日志恢复此判断，不重写 Session 事件或派发任务；有待判断的空会话且日志不可读时拒绝列表请求，避免把无法确定的会话当作空会话复用。只有 Session 历史包含以 Source 派生的讨论请求 ID 提交的完整原文时，`collaborationSources` 才隐藏该原消息；领取或取消不改变接受结果，隐藏条目仍可作为分页游标。
 
 journal 最多保留 128 条尚未路由的 Source，不会为了接收新来源而淘汰原记录。写入确认失败后，调用方必须关闭并重新打开 journal，按原身份核对结果。损坏数据、未知持久版本、被改动的内容摘要和不匹配的记录键会令打开失败，同时保留原有字节。调用方必须在捕获前校验 Account 和工作区归属、分类主动 mention，并提供实际 prepared 元数据；journal 不认证这些事实。
 
@@ -123,7 +123,7 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 `openCollaborationAnalysisJournal(facility)` 拥有独立的单文件 `collaboration_analysis_v2` 领域。`createCollaborationAnalysisWriter(journal, claim)` 提供 Source 分析所需的 persist 回调：先提交完整、无信号 manifest 的规范 JSON，再向当前可信协调器申请派发资格，匹配的资格记录持久化后才返回。`CollaborationAnalysisJournalRecord` 保留原始请求 ID、完整 Source digest 与输入 manifest digest；`CollaborationAnalysisDispatchGrant` 绑定 plan/revision/attempt/fence 和租约。重复请求、取消、过期资格和写入确认丢失都会阻止派发。恢复只能枚举冻结的输入与资格记录，不恢复可执行调用。Profile 在已接受写入排空后关闭 `CollaborationAnalysisJournal`。回调中的协调器权限以及真实聊天/传输装配仍由调用方负责。
 
-分析仅使用含原文和显式 mention 元数据的一条 user 消息及分析提示词，工具为空，不携带普通历史。每个 Profile 最多允许两个尚未清理的调用，等待上限 30 秒；取消后仍不响应的操作保留并发位置直到清理完成。输入采用保守的 16 KiB UTF-8 请求预算，输出限制为提供方 8192 token 和累计流文本 32 KiB；超限拒绝，不截断。纯中间件回复、工具输出、非成功终止结果及非法 JSON 均拒绝。这里不执行模型修复、重试或重启后的可执行恢复；云端 attempt 租约、候选受理及实际聊天调用方仍由协调器负责。
+分析仅使用含原文和显式 mention 元数据的一条 user 消息及分析提示词，工具为空，不携带普通历史。每个 Profile 最多允许两个尚未清理的调用，持久化准备及获取许可最多等待 30 秒，随后提供方调用另有 30 秒上限；取消后仍不响应的操作保留并发位置直到清理完成。输入采用保守的 16 KiB UTF-8 请求预算，输出限制为提供方 8192 token，以及正文和推理文本合计 32 KiB；超限拒绝，不截断。每个块按累计增量字节与组装后字节的较大值计数，结束事件不会重复计算相同内容，也不会退还已观察的字节。纯中间件回复、工具输出、非成功终止结果及非法 JSON 均拒绝。这里不执行模型修复、重试或重启后的可执行恢复；云端 attempt 租约、候选受理及实际聊天调用方仍由协调器负责。
 
 `inspectCollaborationSource(target, signal)` 通过所属 Profile 的注册表与 journal 读取原始持久 Source，仅返回原坐标及完整 RFC 8785 快照的 SHA-256，摘要包含首次 journal 提交标识。记录不存在、归属丢失、附加元数据、取消和 Profile 销毁都会拒绝。读取与已接受的捕获串行执行，不准备模型或恢复调用；延迟打开的 journal 由 Profile 持有至销毁。私有 worker HTTP 读取器调用这一仅供 Host 使用的方法。
 
@@ -133,7 +133,9 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 `openCollaborationDeliveryJournal(facility)` 串行处理已接受的写入，最多保留 4096 条回复，序列化键与记录正文共计不超过 16 MiB，不淘汰已有记录。内容冲突、受限投影、非法摘要，以及损坏或未知版本的持久数据均拒绝且不修复。写入结果不确定时，句柄拒绝后续操作，必须关闭并重开；恢复返回首次提交，不执行任务。Profile 管理迟到的 journal 打开，并在销毁时排空已接受的写入。本地提交不证明云端已投递；签名、确认和聊天展示由协调器负责。
 
-`CollaborationAnalysisJournal.saveOutput` 另将完整、不可信的模型 JSON 写入独立的单文件 `collaboration_analysis_output_v2` 领域，再向父 Host 返回分析成功。结果绑定原已消耗尝试、Source/输入摘要及原文输出摘要，不能替换已有文本。`outputs()` 仅供读取冻结记录进行对账。非法 JSON、超限结果、损坏关联和写入确认丢失都会拒绝使用，同时保留文件。打开和关闭 journal 管理两个领域；已有输入、Source 与 Session 格式保持独立。
+`CollaborationAnalysisJournal.saveOutput` 另将完整、不可信的模型 JSON 写入独立的单文件 `collaboration_analysis_output_v2` 领域，再向父 Host 返回分析成功。结果绑定原已消耗尝试、Source/输入摘要及原文输出摘要，不能替换已有文本。`outputs()` 仅供读取冻结记录进行对账。非法 JSON、超限结果、损坏关联和写入确认丢失都会拒绝使用，同时保留文件。打开和关闭 journal 管理输入、输出与失败领域；已有输入、Source 与 Session 格式保持独立。
+
+`recordFailure` 和 `failures()` 将本地分析失败保存在独立的 `collaboration_analysis_failure_v1` 与 `collaboration_root_planning_failure_v1` 领域。每条不可变观察绑定已消费派发的摘要、尝试、输入、Source 与原 trace（无追踪的旧分析为 null），并保留固定原因和观察时间，不保存原始错误或模型文本。已持久化的成功输出优先；消费派发前的失败不产生记录。写入确认丢失要求重新打开失败领域；损坏或冲突证据拒绝使用，且不改写已有 journal。失败记录不代表 provider 未执行、云端已终结或获准重试。
 
 `openCollaborationRootPlanningJournal(facility)` 为新规划尝试管理独立、单文件布局的 `collaboration_root_planning_v1` 领域。每条记录保留原已受理的根、trace、Source 和回执，以及前驱引用、新请求身份、实际准备的模型元数据与完整请求。必须保持原 provider、model 和有效推理设置；generation 与 adapter 注册身份不能冒充原准备。请求包含隔离的分析提示词和一条用户消息，不带工具、采样覆盖或可执行元数据。输入连同消息封装最多 16 KiB，完整记录输入最多 1 MiB，最多保留 256 次尝试。此 journal 不打开或迁移已有 Source、根、分析和 Session 文件。
 
@@ -167,7 +169,7 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 
 #### Token 影响
 
-每次调用包含完整提示词与 Source JSON；请求预算为 16 KiB UTF-8，提供方输出最多 8192 token，累计流文本最多 32 KiB。超限拒绝，不截断。
+每次调用包含完整提示词与 Source JSON；请求预算为 16 KiB UTF-8，提供方输出最多 8192 token，正文和推理文本按上述逐块规则计数，合计最多 32 KiB。超限拒绝，不截断。
 
 #### KV Cache 影响
 
@@ -221,3 +223,5 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 `collaboration-result` 消息来源只记录归属。未加载此生产者的读取器保留完整消息与元数据；来源 kind 不授予执行权限，也不改变重放语义。Session 检查点执行与来源 kind 无关。
 
 `collaborationRootConsumption` 接受私有 `consumer_prepare`、`consumer_start` 与 `consumer_read`。独立的 `collaboration_consumption_v1` domain 在云端授权前提交稳定命令，并在唤醒原会话空闲 Agent 前一次性记录带期限的首次授权。写入确认丢失会停用当前句柄；重开和重复请求不能恢复唤醒许可。LLM 检查点先 flush 实际 Session 输入，提交其 turn/step/event 坐标，再沿原根 trace 持久记录 Provider 请求 span，最后调用适配器。历史读取可恢复消费事实，不触发派发。首次消费前缀不可变；后续助手回复观察与消费事实分离，也不证明整个任务完成。当前云端授权仍由已认证父进程负责。
+
+`continuation_read` 在独立的 `collaboration_continuation_v1` 域记录原消费步骤中首条已持久化的助手消息。它校验原消费前缀，并在日志增长和重新打开后保留首次观察 ID 与前缀。历史或 Session 身份变化会拒绝观察；写入结果不确定时必须重新打开。此读取不唤醒 Agent、不续签授权，也不证明 turn 或根任务完成。

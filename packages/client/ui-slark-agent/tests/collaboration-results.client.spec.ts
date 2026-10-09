@@ -15,6 +15,71 @@ const reply = { delivery_id: 'delivery', invocation_id: 'invocation', delivery_s
 const { answer: _answer, ...replyWithoutAnswer } = reply
 type DeliveryRequest = Parameters<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>[0]
 
+it.each([false, true])('publishes a verified result before an older Source finishes, with prior history=%s', async (loaded) => {
+  const f = fixture(), older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, older] } })
+  f.deliveries.mockImplementation(async request => ({ ok: true, value: { deliveries: request.source.source_message_id === 'older'
+    ? [] : [reply] } }))
+  if (loaded) await f.model.refresh()
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementation(async (request) => {
+    if (request.source.source_message_id === 'older') { entered.resolve(undefined); return held.promise }
+    return { ok: true, value: { deliveries: [{ ...reply, answer: 'Updated verified result' }] } }
+  })
+  const refresh = f.model.refresh()
+  onTestFinished(async () => { held.resolve({ ok: true, value: { deliveries: [] } }); f.model.dispose(); await refresh })
+  await entered.promise
+  const intermediate = f.model.getSnapshot()
+  expect(intermediate.phase).toBe('loading')
+  expect(intermediate.groups[0]?.replies[0]?.answer).toBe('Updated verified result')
+  expect(intermediate.groups).toHaveLength(loaded ? 2 : 1)
+  held.resolve({ ok: true, value: { deliveries: [] } })
+  await refresh
+  expect(f.model.getSnapshot().phase).toBe('ready')
+  expect(f.model.getSnapshot().groups).toHaveLength(2)
+  expect(intermediate.groups).toHaveLength(loaded ? 2 : 1)
+})
+
+it('removes a denied result while the next original message is still loading', async () => {
+  const f = fixture(), older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, older] } })
+  f.deliveries.mockImplementation(async request => ({ ok: true, value: { deliveries: request.source.source_message_id === 'older' ? [] : [reply] } }))
+  await f.model.refresh()
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementation(async (request) => {
+    if (request.source.source_message_id === 'older') { entered.resolve(undefined); return held.promise }
+    return { ok: false, errorCode: 'denied' }
+  })
+  const refresh = f.model.refresh()
+  onTestFinished(async () => { held.resolve({ ok: true, value: { deliveries: [] } }); f.model.dispose(); await refresh })
+  await entered.promise
+  expect(f.model.getSnapshot().groups[0]?.replies).toEqual([])
+  expect(f.model.getSnapshot().groups[0]?.phase).toBe('error')
+  f.reset()
+  expect(f.model.getSnapshot().groups).toEqual([])
+  held.resolve({ ok: true, value: { deliveries: [] } })
+  await refresh
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+it.each(['workspace-removal', 'dispose'] as const)('stops older reads when an incremental notification triggers %s', async (ending) => {
+  const f = fixture(), older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, older] } })
+  let interrupted = false
+  const stop = f.model.subscribe(() => {
+    if (interrupted || f.model.getSnapshot().phase !== 'loading' || !f.model.getSnapshot().groups.length) return
+    interrupted = true
+    if (ending === 'workspace-removal') f.move()
+    else f.model.dispose()
+  })
+  onTestFinished(stop)
+  await vi.waitFor(() => { expect(interrupted).toBe(true) })
+  expect(f.deliveries).toHaveBeenCalledTimes(1)
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
 it('keeps the aggregate view within its budget when loading additional replies', async () => {
   const f = fixture(), second = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'second' } }
   f.reads.mockResolvedValue({ ok: true, value: { items: [original, second] } })
@@ -472,6 +537,95 @@ it('allows a new explicit confirmation only after the original command is known 
   expect(f.model.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('recorded')
 })
 
+const expiredPreview = { ok: false, errorCode: 'collaboration_execution_preview_expired', reconciliationRequired: false }
+it.each([false, true])('renews an expired Main preview once without changing consumption reconcile=%s', async (reconcile) => {
+  const f = await executableFixture()
+  f.command.mockResolvedValueOnce(expiredPreview)
+    .mockResolvedValueOnce({ ...f.preview, previewId: 'fresh', executionEnabled: !reconcile })
+    .mockResolvedValueOnce({ ok: true, rootTraceId: f.preview.rootTraceId, status: 'context_applied', consumptionAcknowledged: true, continuationObserved: true })
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery', reconcile)
+  expect(f.command.mock.calls.slice(-3).map(([request]) => request)).toEqual([
+    { action: reconcile ? 'consumption-status' : 'consume', previewId: 'preview', taskId: 'task', deliveryId: 'delivery' },
+    { action: 'preview', source },
+    { action: reconcile ? 'consumption-status' : 'consume', previewId: 'fresh', taskId: 'task', deliveryId: 'delivery' },
+  ])
+  expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('continued')
+})
+
+it.each([null, { ...expiredPreview, reconciliationRequired: true }, { ...expiredPreview, errorCode: 'unavailable' },
+  { ok: false, errorCode: expiredPreview.errorCode }, { ok: false }, { ok: true }])('never renews an uncertain consumption response %j', async (response) => {
+  const f = await executableFixture(), before = f.command.mock.calls.length
+  f.command.mockResolvedValue(response)
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command).toHaveBeenCalledTimes(before + 1)
+  expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('uncertain')
+})
+
+it.each(['trace', 'task-id', 'question', 'agent', 'project', 'length', 'disabled', 'invalid'] as const)(
+  'does not consume after preview renewal changes %s', async (change) => {
+    const f = await executableFixture(), task = { ...f.preview.tasks[0]! }
+    const refreshed = { ...f.preview, previewId: 'fresh', tasks: [task] }
+    if (change === 'trace') refreshed.rootTraceId = 'c'.repeat(32)
+    if (change === 'task-id') task.taskId = 'different'
+    if (change === 'question') task.question = 'Different work'
+    if (change === 'agent') task.agentName = 'Different Agent'
+    if (change === 'project') task.projectName = 'Different project'
+    if (change === 'length') refreshed.tasks.push({ ...task, taskId: 'second' })
+    if (change === 'disabled') refreshed.executionEnabled = false
+    f.command.mockResolvedValueOnce(expiredPreview).mockResolvedValueOnce(change === 'invalid' ? null : refreshed)
+    const before = f.command.mock.calls.length
+    await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+    expect(f.command).toHaveBeenCalledTimes(before + 2)
+    expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('uncertain')
+  },
+)
+
+it('does not loop when the refreshed preview also expires', async () => {
+  const f = await executableFixture(), before = f.command.mock.calls.length
+  f.command.mockResolvedValueOnce(expiredPreview).mockResolvedValueOnce(f.preview).mockResolvedValueOnce(expiredPreview)
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command).toHaveBeenCalledTimes(before + 3)
+  expect(f.model.getSnapshot().groups[0]?.execution?.consumptions?.delivery).toBe('uncertain')
+})
+
+it.each(['preview', 'consumption'] as const)('discards expired-preview recovery after ownership changes during %s', async (phase) => {
+  const f = await executableFixture()
+  f.command.mockResolvedValueOnce(expiredPreview)
+  if (phase === 'consumption') f.command.mockResolvedValueOnce(f.preview)
+  f.command.mockImplementationOnce(async () => { f.reset(); return f.preview })
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command.mock.calls.slice(1).map(([request]) => request.action)).toEqual(
+    phase === 'preview' ? ['consume', 'preview'] : ['consume', 'preview', 'consume'])
+  expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+it('preserves unknown execution and consumption outcomes through readonly preview refresh', async () => {
+  const f = await executableFixture()
+  f.command.mockResolvedValue({ ok: false })
+  await f.model.executionAction(original.snapshot_digest, 'task')
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  f.command.mockResolvedValue({ ...f.preview, previewId: 'fresh' })
+  await f.model.executionAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]?.execution).toMatchObject({ previewId: 'fresh', outcomes: { task: 'uncertain' }, consumptions: { delivery: 'uncertain' } })
+  const before = f.command.mock.calls.length
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery')
+  expect(f.command).toHaveBeenCalledTimes(before)
+})
+
+it.each(['preview', 'confirm', 'consume'] as const)('serializes competing actions while %s is pending', async (action) => {
+  const f = await executableFixture(), held = Promise.withResolvers<unknown>(), entered = Promise.withResolvers<undefined>()
+  f.command.mockImplementationOnce(() => { entered.resolve(undefined); return held.promise })
+  const pending = action === 'consume' ? f.model.consumptionAction(original.snapshot_digest, 'delivery')
+    : f.model.executionAction(original.snapshot_digest, action === 'confirm' ? 'task' : undefined)
+  onTestFinished(async () => { held.resolve({ ok: false }); f.model.dispose(); await pending })
+  await entered.promise
+  const before = f.command.mock.calls.length
+  await f.model.executionAction(original.snapshot_digest)
+  await f.model.consumptionAction(original.snapshot_digest, 'delivery', true)
+  expect(f.command).toHaveBeenCalledTimes(before)
+  held.resolve({ ok: false }); await pending
+})
+
 it('reads original-root trajectory without preview or execution and restores requested pages on refresh', async () => {
   const f = fixture()
   Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
@@ -636,4 +790,176 @@ it('bounds combined cloud history across separate original Sources', async () =>
   expect(snapshot.groups.some(g => g.trace?.phase === 'error')).toBe(true)
   expect(snapshot.groups.some(g => g.trace?.phase === 'ready')).toBe(true)
   expect(new TextEncoder().encode(JSON.stringify(snapshot.groups.map(g => g.trace))).length).toBeLessThan(16 * 1024 * 1024)
+})
+
+// REQ-20261004-0008: real network latency must not discard explicit trajectory reads.
+it.each(['finish', 'reset', 'dispose'] as const)('queues a trace behind a pending refresh and handles %s', async (ending) => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const root = { root_task_id: 'root', root_trace_id: 'b'.repeat(32), task_revision: '1', state_version: '1', state: 'active', intent_state: 'active' }
+  const trace = vi.fn(async () => ({ ok: true, value: { root, events: [], next_after_seq: null, coverage: 'partial' } }))
+  f.bridge.collaborationRootExecution = trace
+  await f.model.refresh()
+  const hold = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  f.deliveries.mockImplementationOnce(() => hold.promise)
+  const refresh = f.model.refresh()
+  await vi.waitFor(() => { expect(f.deliveries).toHaveBeenCalledTimes(2) })
+  const selected = f.model.traceAction(original.snapshot_digest)
+  const duplicate = f.model.traceAction(original.snapshot_digest)
+  expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe('loading')
+  expect(trace).not.toHaveBeenCalled()
+  if (ending === 'reset') f.reset()
+  if (ending === 'dispose') f.model.dispose()
+  hold.resolve({ ok: true, value: { deliveries: [reply] } })
+  await Promise.all([refresh, selected, duplicate])
+  expect(trace).toHaveBeenCalledTimes(ending === 'finish' ? 1 : 0)
+  if (ending === 'finish') expect(f.model.getSnapshot().groups[0]?.trace?.page?.root.root_trace_id).toBe(root.root_trace_id)
+  else expect(f.model.getSnapshot().groups.every(g => g.trace === undefined)).toBe(true)
+})
+
+it('runs queued execution evidence before a requested background refresh and coalesces clicks', async () => {
+  const f = fixture(), order: string[] = []
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  f.bridge.collaborationRootExecution = async (request) => {
+    if (request.action !== 'trace') throw Error('readonly test')
+    const page = auditPage()
+    if (!request.cursor.evidence) return page
+    order.push('evidence')
+    return { ...page, value: { ...page.value, execution: { event_id: 'event-1', attempt_id: 'attempt',
+      state: 'succeeded', digest: 'a'.repeat(64), provider_visibility: 'boundary_only', next_after_sequence: null,
+      events: [{ sequence: 1, observedAt: 0, type: 'tool.completed', success: true }] } } }
+  }
+  await f.model.refresh()
+  await f.model.traceAction(original.snapshot_digest)
+  const hold = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  f.deliveries.mockImplementationOnce(() => hold.promise)
+  const refresh = f.model.refresh()
+  await vi.waitFor(() => { expect(f.deliveries).toHaveBeenCalledTimes(2) })
+  f.deliveries.mockImplementation(async () => { order.push('refresh'); return { ok: true, value: { deliveries: [reply] } } })
+  const evidence = f.model.traceEvidenceAction(original.snapshot_digest, 'event-1')
+  const duplicate = f.model.traceEvidenceAction(original.snapshot_digest, 'event-1')
+  expect(f.model.getSnapshot().groups[0]?.trace?.execution?.phase).toBe('loading')
+  await f.model.refresh()
+  hold.resolve({ ok: true, value: { deliveries: [reply] } })
+  await Promise.all([refresh, evidence, duplicate])
+  await vi.waitFor(() => { expect(order).toEqual(['evidence', 'refresh']) })
+  expect(f.model.getSnapshot().groups[0]?.trace?.execution?.page?.events).toHaveLength(1)
+})
+
+it.each(['reset', 'dispose'] as const)('discards queued execution evidence after %s without reading the previous root', async (ending) => {
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const trace = vi.fn(async () => auditPage())
+  f.bridge.collaborationRootExecution = trace
+  await f.model.refresh()
+  await f.model.traceAction(original.snapshot_digest)
+  const hold = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  f.deliveries.mockImplementationOnce(() => hold.promise)
+  const refresh = f.model.refresh()
+  await vi.waitFor(() => { expect(f.deliveries).toHaveBeenCalledTimes(2) })
+  const evidence = f.model.traceEvidenceAction(original.snapshot_digest, 'event-1')
+  expect(f.model.getSnapshot().groups[0]?.trace?.execution?.phase).toBe('loading')
+  // The current Source's background history read starts independently of its held results.
+  expect(trace).toHaveBeenCalledTimes(2)
+  if (ending === 'reset') f.reset()
+  else f.model.dispose()
+  hold.resolve({ ok: true, value: { deliveries: [reply] } })
+  await Promise.all([refresh, evidence])
+  expect(trace).toHaveBeenCalledTimes(2)
+  expect(f.model.getSnapshot().groups.every(g => g.trace === undefined)).toBe(true)
+})
+
+it('refreshes each original Source with its own deadline while reading its trace independently of result latency', async () => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort(new DOMException('Timed out', 'TimeoutError')) }, ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.clearAllTimers(); vi.useRealTimers() })
+  const f = fixture(), originals = [original, ...['b', 'c'].map(id => ({ ...original,
+    snapshot_digest: id.repeat(64), source: { ...source, source_message_id: id } }))]
+  f.reads.mockResolvedValue({ ok: true, value: { items: originals } })
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const delay = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms) })
+  let slow = false
+  f.bridge.collaborationDeliveries = async (request) => {
+    if (slow) await delay(12_000)
+    const found = originals.find(item => item.source.source_message_id === request.source.source_message_id)!
+    return { ok: true, value: { deliveries: [{ ...reply, source_locator: found.source, source_snapshot_digest: found.snapshot_digest }] } }
+  }
+  f.bridge.collaborationPending = async (request) => {
+    if (slow) await delay(12_000)
+    return { ok: true, value: { source: request.source, plan: null, frozen_task_count: 0, pending_items: [] } }
+  }
+  f.bridge.collaborationRootExecution = async () => { if (slow) await delay(18_000); return auditPage() }
+  await f.model.refresh()
+  for (const item of originals) await f.model.traceAction(item.snapshot_digest)
+  slow = true
+  const refresh = f.model.refresh()
+  onTestFinished(async () => { f.model.dispose(); await refresh })
+  await vi.advanceTimersByTimeAsync(100_000)
+  await refresh
+  expect(f.model.getSnapshot().groups.map(group => ({ phase: group.phase, pendingUnavailable: group.pendingUnavailable,
+    trace: group.trace?.phase, events: group.trace?.page?.events.length }))).toEqual(originals.map(() => ({
+    phase: 'ready', pendingUnavailable: undefined, trace: 'ready', events: 1,
+  })))
+})
+
+it.each(['finish', 'reset', 'dispose', 'dispose-on-notification'] as const)('services a queued trace before older Sources and handles %s', async (ending) => {
+  const f = fixture(), older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original, older] } })
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  await f.model.refresh()
+  const order: string[] = [], entered = Promise.withResolvers<undefined>(), held = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementation(async (request) => {
+    order.push(request.source.source_message_id)
+    if (request.source.source_message_id === 'message') { entered.resolve(undefined); await held.promise }
+    return { ok: true, value: { deliveries: [] } }
+  })
+  f.bridge.collaborationRootExecution = async () => {
+    order.push('trace')
+    if (ending === 'reset') f.reset()
+    if (ending === 'dispose') f.model.dispose()
+    return auditPage()
+  }
+  const refresh = f.model.refresh()
+  onTestFinished(async () => { held.resolve(undefined); f.model.dispose(); await refresh })
+  await entered.promise
+  if (ending === 'dispose-on-notification') {
+    const stop = f.model.subscribe(() => {
+      if (f.model.getSnapshot().groups[0]?.trace?.phase === 'ready') queueMicrotask(() => { f.model.dispose() })
+    })
+    onTestFinished(stop)
+  }
+  const trace = f.model.traceAction(original.snapshot_digest)
+  held.resolve(undefined)
+  await Promise.all([refresh, trace])
+  expect(order).toEqual(ending === 'finish' ? ['message', 'trace', 'older'] : ['message', 'trace'])
+  if (ending === 'finish') expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe('ready')
+  else expect(f.model.getSnapshot().groups).toEqual([])
+})
+
+it.each([32_000, 41_000])('bounds a history read at the Desktop response deadline for a %i ms response', async (elapsed) => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort() }, ms)
+    return controller.signal
+  })
+  onTestFinished(() => { timeout.mockRestore(); vi.clearAllTimers(); vi.useRealTimers() })
+  const f = fixture()
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  f.bridge.collaborationRootExecution = async () => {
+    await new Promise<void>((resolve) => { setTimeout(resolve, elapsed) })
+    return auditPage()
+  }
+  await f.model.refresh()
+  const read = f.model.traceAction(original.snapshot_digest)
+  onTestFinished(async () => { f.model.dispose(); await read })
+  await vi.advanceTimersByTimeAsync(42_000)
+  await read
+  expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe(elapsed < 40_000 ? 'ready' : 'error')
+  if (elapsed > 40_000) expect(f.model.getSnapshot().groups[0]?.trace?.page).toBeUndefined()
 })

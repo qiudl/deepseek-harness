@@ -1006,7 +1006,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'registerAgentResolver(resolve: AgentResolver): () => void',
         description: 'Register the ordinary-Session resolver used when a raw upload addresses a cold Session.',
         parameters: [{ name: 'resolve', description: 'resolver that returns the exact live Agent or throws a Remote error.' }],
-        returns: 'disposer removing this resolver.',
+        returns: 'disposer removing only this registration, including through a caller-scoped service.',
       },
       {
         signature: '@Remote(\'upload\') upload(agent: Agent, request: EncodedFileUploadRequest, signal: AbortSignal): Promise<FileUploadValue>',
@@ -1990,10 +1990,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Persisted enqueue/consumption evidence. Removed or claimed messages are never automatically reinserted.',
       },
       {
-        signature: 'async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionResult>',
+        signature: 'async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise< CollaborationConsumptionResult | CollaborationContinuationResult >',
         description: 'Execute a private durable consumer command under authenticated Main\'s current authority.',
-        parameters: [{ name: 'value', description: 'Consumer read/prepare/start, original root and exact delivery; start requires a fresh cloud grant.' }, { name: 'signal', description: 'Current parent and Profile lifetime; recovery never restores live wake permission.' }],
-        returns: 'Durable record and observation; only first start may wake the attached original Agent.',
+        parameters: [{ name: 'value', description: 'Consumer or first-reply operation with the original root and delivery; start requires a fresh cloud grant.' }, { name: 'signal', description: 'Current parent and Profile lifetime; recovery never restores live wake permission.' }],
+        returns: 'Durable consumer record or independent first-reply commit; only first start may wake the attached original Agent.',
       },
       {
         signature: 'async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise< CollaborationSourceCoordinates & { readonly snapshot_digest: string } >',
@@ -4867,6 +4867,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CollaborationConsumptionResult',
     declaration: 'export type CollaborationConsumptionResult = Readonly<{\n    kind: \'consumer\';\n    record: CollaborationConsumptionRecord | null;\n    observation: CollaborationFeedbackObservation;\n    commit?: ReturnType<typeof collaborationConsumptionCommit>;\n}>;',
+  },
+  {
+    name: 'CollaborationContinuationResult',
+    declaration: 'export type CollaborationContinuationResult = {\n    kind: \'continuation\';\n    commit: ReturnType<typeof collaborationContinuationCommit> | null;\n};',
   },
   {
     name: 'CollaborationDeliveryRecord',

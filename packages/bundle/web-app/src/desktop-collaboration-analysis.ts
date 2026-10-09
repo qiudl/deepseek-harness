@@ -103,7 +103,7 @@ export class DesktopCollaborationAnalysis {
     const active = AbortSignal.any([signal, this.lifetime])
     active.throwIfAborted()
     const action: unknown = operation && typeof operation === 'object' ? Object.getOwnPropertyDescriptor(operation, 'action')?.value : undefined
-    const consumer = action === 'consumer_read' || action === 'consumer_prepare' || action === 'consumer_start'
+    const consumer = action === 'continuation_read' || action === 'consumer_read' || action === 'consumer_prepare' || action === 'consumer_start'
     const consume = this.consumption
     if (consumer && !consume) throw Error('collaboration_consumption_unavailable')
     const result = consumer && consume ? await consume(operation, active) : await this.feedback(operation, active)
@@ -275,6 +275,10 @@ export class DesktopCollaborationAnalysis {
         owned.throwIfAborted()
         return result
       })
+      .catch(async (error: unknown) => {
+        if (p.record) await journal.recordFailure(p.record, error)
+        throw error
+      })
       .finally(() => {
         p.controller.abort(Error('collaboration_analysis_finished'))
         clearTimeout(p.timer)
@@ -411,6 +415,7 @@ export class DesktopCollaborationAnalysis {
     if (this.closing || !p || !p.result || p.started || p.binding !== binding || p.controller.signal.aborted)
       throw Error('collaboration_analysis_preparation_unavailable')
     p.started = true
+    p.timer.refresh()
     const cancel = () => {
       p.controller.abort(signal.reason)
     }
@@ -428,10 +433,12 @@ export class DesktopCollaborationAnalysis {
    */
   close(): Promise<void> {
     this.closing ??= Promise.resolve().then(async () => {
-      for (const p of this.pending) {
+      const entries = [...this.pending]
+      for (const p of entries) {
         p.controller.abort(Error('collaboration_analysis_closed'))
         clearTimeout(p.timer)
       }
+      await Promise.allSettled(entries.map(p => Promise.resolve(p.result)))
       await this.rootPlanning?.close()
       await (await this.journal)?.close()
     })

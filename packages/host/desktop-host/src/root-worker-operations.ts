@@ -8,13 +8,14 @@ import type { UnixHostServerOptions } from './unix-transport.ts'
  * @returns Server callbacks and the capabilities those callbacks implement.
  */
 export function rootWorkerOperations(workers: ProfileWorkerSupervisor): Pick<UnixHostServerOptions,
-  'rootJournal' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported'
+  'rootJournal' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
   | 'inspectRootPlanningAttempt' | 'inspectCollaborationRoot' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot'> {
   return {
     rootJournal: workers.rootJournal.bind(workers),
     rootPlanningSupported: true,
     rootExecutionSupported: true,
     rootFeedbackSupported: true,
+    rootContinuationSupported: true,
     inspectRootPlanningAttempt: workers.inspectRootPlanningAttempt.bind(workers),
     inspectCollaborationRoot: workers.inspectCollaborationRoot.bind(workers),
     inspectCollaborationSource: workers.inspectCollaborationSource.bind(workers),
