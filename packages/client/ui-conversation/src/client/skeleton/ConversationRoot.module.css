@@ -340,6 +340,20 @@ button.crumb:hover {
   display: flex;
   flex-direction: column;
   gap: var(--dsh-composer-stack-gap);
+  max-height: var(--dsh-conversation-viewport-height, 100dvh);
+}
+
+.composerDock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dsh-composer-stack-gap);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.composerDock:empty,
+.composerDock:not(:has(> [data-slot='conversation.input.dock'] > *)) {
+  display: none;
 }
 
 /* Common seat for the composer chain (fallback + elected overlay siblings). */
