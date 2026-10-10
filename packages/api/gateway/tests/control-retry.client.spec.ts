@@ -118,6 +118,91 @@ describe('RemoteStream', () => {
     expect(carrierFailed).toHaveBeenNthCalledWith(2, repeated)
   })
 
+  it('recovers a service reload before the opening snapshot', async () => {
+    const unavailable = new RemoteError('gateway/service-unavailable', 'service reloading', { endpoint: 'session/follow' })
+    const stream = supervisor(hostSource(true).connection, [
+      { terminal: unavailable },
+      { terminal: unavailable },
+      { values: ['restored'], hold: true },
+    ])
+    try {
+      const opened = await stream[Symbol.asyncIterator]().next()
+      expect(opened).toMatchObject({ done: false, value: { generation: 3, value: 'restored' } })
+    } finally {
+      await stream.dispose()
+    }
+  })
+
+  it('reopens history after a reload interrupts an accepted generation', async () => {
+    const unavailable = new RemoteError('gateway/service-unavailable', 'service reloading', { endpoint: 'session/follow' })
+    const stream = supervisor(hostSource(true).connection, [
+      { values: ['before'], terminal: new RemoteStreamCarrierError('reload interrupted history') },
+      { terminal: unavailable },
+      { values: ['after'], hold: true },
+    ])
+    try {
+      const iterator = stream[Symbol.asyncIterator]()
+      const first = await iterator.next()
+      if (first.done) throw new Error('fixture ended before opening')
+      first.value.accept()
+      expect(await iterator.next()).toMatchObject({ done: false, value: { value: 'after' } })
+    } finally {
+      await stream.dispose()
+    }
+  })
+
+  it('resets the service retry budget after accepting a recovered snapshot', async () => {
+    const unavailable = new RemoteError('gateway/service-unavailable', 'service reloading', { endpoint: 'session/follow' })
+    const stream = supervisor(hostSource(true).connection, [
+      ...Array.from({ length: 5 }, () => ({ terminal: unavailable })),
+      { values: ['recovered'], terminal: unavailable },
+      { values: ['recovered again'], hold: true },
+    ])
+    try {
+      const iterator = stream[Symbol.asyncIterator]()
+      const first = await iterator.next()
+      if (first.done) throw new Error('fixture ended before opening')
+      first.value.accept()
+      expect(await iterator.next()).toMatchObject({ done: false, value: { value: 'recovered again' } })
+    } finally {
+      await stream.dispose()
+    }
+  })
+
+  it('preserves a persistent service failure after bounded retries', async () => {
+    const unavailable = new RemoteError('gateway/service-unavailable', 'service failed', { endpoint: 'session/follow' })
+    let opened = 0
+    const stream = new RemoteStream(hostSource(true).connection, {
+      name: 'fixture stream',
+      open: scripted(Array.from({ length: 6 }, () => ({ terminal: unavailable })), () => { opened++ }),
+      ended: () => new Error('fixture ended'),
+    })
+    await expect(stream[Symbol.asyncIterator]().next()).rejects.toBe(unavailable)
+    expect(opened).toBe(6)
+  })
+
+  it('cancels a pending service retry without opening another generation', async () => {
+    const failed = Promise.withResolvers<undefined>()
+    let opened = 0
+    const stream = new RemoteStream<string>(hostSource(true).connection, {
+      name: 'fixture stream',
+      open: () => ({
+        async * [Symbol.asyncIterator]() {
+          opened++
+          failed.resolve(undefined)
+          throw new RemoteError('gateway/service-unavailable', 'service reloading', { endpoint: 'session/follow' })
+        },
+      }),
+      ended: () => new Error('fixture ended'),
+    })
+    const next = stream[Symbol.asyncIterator]().next()
+    await failed.promise
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await stream.dispose()
+    expect(await next).toMatchObject({ done: true })
+    expect(opened).toBe(1)
+  })
+
   it('folds a non-Error terminal escape into a marked gateway/internal failure', async () => {
     const stream = new RemoteStream(hostSource(true).connection, {
       name: 'fixture stream',
