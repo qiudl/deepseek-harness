@@ -169,6 +169,7 @@ export class CollaborationAnalysisRunner {
       evidence.calls++
     })
     let bytes = 0, chunks = 0, finished = false, text = ''
+    const deltaBytes = new Map<number, number>()
     for await (const chunk of stream) {
       signal.throwIfAborted()
       if (++chunks > 32768 || finished) throw new Error('collaboration_analysis_invalid_stream')
@@ -178,13 +179,18 @@ export class CollaborationAnalysisRunner {
           if (chunk.blockType !== 'text' && chunk.blockType !== 'reasoning') throw new Error('collaboration_analysis_invalid_stream')
           break
         case 'tool-call-delta': throw new Error('collaboration_analysis_tool_output')
-        case 'text-delta': case 'reasoning-delta':
-          bytes += Buffer.byteLength(chunk.text, 'utf8')
+        case 'text-delta': case 'reasoning-delta': {
+          const size = Buffer.byteLength(chunk.text, 'utf8')
+          bytes += size
+          deltaBytes.set(chunk.index, (deltaBytes.get(chunk.index) ?? 0) + size)
           break
+        }
         case 'block-end':
-          if (chunk.block.type === 'text') { text += chunk.block.text; bytes += Buffer.byteLength(chunk.block.text, 'utf8') }
-          else if (chunk.block.type === 'reasoning') bytes += Buffer.byteLength(chunk.block.text, 'utf8')
-          else throw new Error('collaboration_analysis_tool_output')
+          if (chunk.block.type !== 'text' && chunk.block.type !== 'reasoning') throw new Error('collaboration_analysis_tool_output')
+          // The assembled block repeats its deltas; a shorter final block cannot refund observed bytes.
+          bytes += Math.max(0, Buffer.byteLength(chunk.block.text, 'utf8') - (deltaBytes.get(chunk.index) ?? 0))
+          deltaBytes.delete(chunk.index)
+          if (chunk.block.type === 'text') text += chunk.block.text
           break
         case 'usage':
           if (chunk.usage.inputTokens + (chunk.usage.cacheReadTokens ?? 0) + (chunk.usage.cacheWriteTokens ?? 0) > inputBudget

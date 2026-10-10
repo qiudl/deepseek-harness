@@ -103,3 +103,5 @@ Agent 提及依赖当前账号的 Slark Desktop 桥报告可调用。没有该�
 [协作轨迹决策](../../../.agents/notes/implemented/feature/2026-10-07-slark-collaboration-trajectory.zh.md)说明只读历史与外部界面活动。
 
 轨迹 tab 将 `assistant_message_committed` 显示为原对话已产生回复。界面保留 partial 覆盖说明和独立返回的根状态；这条观察不会将整个任务标为完成。
+
+工作区就绪或连接代际变化会更新当前 Agent 查询；延迟加载后无需重输 `@`，用户明确关闭的菜单保持关闭。

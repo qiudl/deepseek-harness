@@ -112,14 +112,17 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   const invoke = vi.fn(async (_input: InvokeInput) => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
   const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
-  const workspace = { id: workspaceId, archived: false, siblings: [] as SessionId[], subscribers: 0, onSubscribe: () => {} }
+  const workspace = { id: workspaceId, archived: false, ready: true, siblings: [] as SessionId[], subscribers: 0, onSubscribe: () => {} }
+  const workspaceListeners = new Set<() => void>()
+  const connectionListeners = new Set<() => void>()
   ctx.provide('workspaces', { list: {
-    getSnapshot: () => ({ phase: 'ready', state: 'idle', error: null,
+    getSnapshot: () => ({ phase: workspace.ready ? 'ready' : 'loading', state: 'idle', error: null,
       archivedSessionIds: workspace.archived ? [id] : [],
       items: [{ workspaceId: workspace.id, sessionIds: [id, ...workspace.siblings] }] }),
-    subscribe: () => {
+    subscribe: (listener: () => void) => {
+      workspaceListeners.add(listener)
       workspace.subscribers++; workspace.onSubscribe()
-      return () => { workspace.subscribers-- }
+      return () => { workspace.subscribers--; workspaceListeners.delete(listener) }
     },
   } } as never)
   const originals: { source: { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
@@ -143,7 +146,9 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
         ctx.provide('remote.session', namespace as never)
       }
     }
-    ctx.provide('connection', { generation: { getSnapshot: () => 1, subscribe: () => () => {} } } as never)
+    ctx.provide('connection', { generation: { getSnapshot: () => 1, subscribe: (listener: () => void) => {
+      connectionListeners.add(listener); return () => { connectionListeners.delete(listener) }
+    } } } as never)
     if (navigationAvailable) ctx.provide('uiWorkspace', { openSession } as never)
   }
   const submit = vi.fn(async (input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse> => {
@@ -255,8 +260,36 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     return () => previous.ctx.fiber.dispose()
   }, releaseLocator, chatTimeline, ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf,
   scopeDirectory, workspace, sourceReads,
+  workspaceChanged: () => { workspaceListeners.forEach((listener) => { listener() }) },
+  connectionChanged: () => { connectionListeners.forEach((listener) => { listener() }) },
   deliveries, pending, clarify, originals, openSession, closeSession: () => scope.fiber.dispose() }
 }
+
+it('restores the first @ query when the YAML-loaded workspace feed becomes ready', async () => {
+  const f = await bench(true)
+  f.workspace.ready = false; f.workspaceChanged()
+  f.composer.setDraft('@Gui')
+  await vi.waitFor(() => { expect(f.controller.menu.getSnapshot().open).toBe(false) })
+  const draft = f.composer.snapshot.draft
+  f.workspace.ready = true; f.workspaceChanged()
+  await vi.waitFor(() => { expect(f.controller.menu.getSnapshot().groups.find(group => group.source === 'slark-agent')?.items[0]?.label).toBe('Guide · 项目空间') })
+  expect(f.composer.snapshot.draft).toBe(draft)
+  expect(f.submit).not.toHaveBeenCalled()
+})
+
+it('rechecks a retained @ query after Connection recovery without reviving an explicit dismissal', async () => {
+  const f = await bench(true)
+  f.scopeDirectory.mockResolvedValueOnce({ ok: false, errorCode: 'unavailable', refreshRequired: false })
+  f.composer.setDraft('@Gui')
+  await vi.waitFor(() => { expect(f.controller.menu.getSnapshot().open).toBe(false) })
+  f.connectionChanged()
+  await vi.waitFor(() => { expect(f.controller.menu.getSnapshot().groups[0]?.items[0]?.label).toBe('Guide · 项目空间') })
+  f.controller.dismiss()
+  const reads = f.scopeDirectory.mock.calls.length
+  f.connectionChanged()
+  expect(f.controller.menu.getSnapshot().open).toBe(false)
+  expect(f.scopeDirectory).toHaveBeenCalledTimes(reads)
+})
 
 type PickedScopedReference = {
   submission_mode?: 'planning'
@@ -1751,7 +1784,7 @@ it.each(['missing','rejected','bad-receipt'] as const)('closed-root recovery ret
   expect(submit).not.toHaveBeenCalled();expect(sink).not.toHaveBeenCalled()
 })
 
-it('routes explicit task confirmation through the YAML-loaded original Session binding', async () => {
+it('routes task confirmation and expired-preview consumption through the YAML-loaded original Session binding', async () => {
   const f = await bench(true)
   const bridge = window.__DSH_DESKTOP_HOST__
   if (!bridge) throw Error('missing Desktop fixture')
@@ -1776,13 +1809,27 @@ it('routes explicit task confirmation through the YAML-loaded original Session b
   await bindings.executionAction(original.snapshot_digest,'task')
   expect(execution).toHaveBeenLastCalledWith({ action:'confirm',previewId:'main-preview',taskId:'task' })
   expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.execution?.outcomes?.task).toBe('recorded')
+  const deliveries = f.deliveries.getMockImplementation()!
+  f.deliveries.mockImplementation(async (input) => {
+    const result = await deliveries(input)
+    return { ...result, value: { deliveries: result.value.deliveries.map(reply => ({ ...reply, task_id: 'task' })) } }
+  })
+  await bindings.hooks.slarkResults.refresh()
+  execution.mockResolvedValueOnce({ ok: false, errorCode: 'collaboration_execution_preview_expired', reconciliationRequired: false })
+    .mockResolvedValueOnce({ ok: true, previewId: 'fresh-preview', rootTraceId: 'b'.repeat(32), executionEnabled: true,
+      tasks: [{ taskId: 'task', question: 'Do the displayed work', agentName: 'Guide', projectName: 'Project' }] })
+    .mockResolvedValueOnce({ ok: true, rootTraceId: 'b'.repeat(32), consumptionAcknowledged: true, status: 'context_applied', continuationObserved: true })
+  await bindings.consumptionAction?.(original.snapshot_digest, 'delivery-v2')
+  expect(execution.mock.calls.slice(-3).map(([request]) => request.action)).toEqual(['consume', 'preview', 'consume'])
+  expect(execution).toHaveBeenLastCalledWith({ action: 'consume', previewId: 'fresh-preview', taskId: 'task', deliveryId: 'delivery-v2' })
+  expect(bindings.hooks.slarkResults.getSnapshot().groups[0]?.execution).toMatchObject({ outcomes: { task: 'recorded' }, consumptions: { 'delivery-v2': 'continued' } })
   expect(f.submit).not.toHaveBeenCalled(); expect(f.sink).not.toHaveBeenCalled()
   const plugin=[...f.ctx.loader.entries()].find(item=>item.options.name==='composer-test:source')
   if(!plugin?.fiber) throw Error('missing loaded source')
   await plugin.fiber.dispose()
   await bindings.executionAction(original.snapshot_digest,'task')
   await bindings.consumptionAction?.(original.snapshot_digest,'delivery')
-  expect(execution).toHaveBeenCalledTimes(2)
+  expect(execution).toHaveBeenCalledTimes(5)
 })
 
 it('keeps the scoped draft when its Host disappears before submission', async () => {
@@ -2192,7 +2239,7 @@ it('refuses history for absent or closed Session Controllers and replaces a reta
   const closePrevious = await f.rebind(true)
   const after = Reflect.apply(inject, undefined, [id]) as CollaborationResultsInjected
   expect(after.hooks.slarkResults).not.toBe(before.hooks.slarkResults)
-  expect(f.workspace.subscribers).toBe(2)
+  expect(f.workspace.subscribers).toBe(3)
   await closePrevious()
   expect(f.workspace.subscribers).toBe(2)
   await before.hooks.slarkResults.refresh()

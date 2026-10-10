@@ -3,7 +3,7 @@
 import { join } from 'node:path'
 import { webcrypto } from 'node:crypto'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { installAssembledBootEnv, mountAssembledApp } from './assembled-boot.ts'
 import { installRemoteCollaboration } from '../src/remote-collaboration.ts'
 type WorkspaceRequest = { workspace_id: string
@@ -15,7 +15,7 @@ const EXPECTED = join(process.cwd(), 'apps/web/tests/expected/slark-agent-compos
 installAssembledBootEnv()
 afterEach(() => { window.dispatchEvent(new Event('pagehide')); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
 
-it('clicking Send in root mode dispatches the frozen task and displays its reply without a panel action', async () => {
+it.each(['click', 'enter'] as const)('root mode %s dispatches the frozen task and displays its reply without a panel action', async (mode) => {
   vi.stubGlobal('crypto', webcrypto)
   const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051', trace = 'b'.repeat(32)
   type Source = { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
@@ -24,6 +24,8 @@ it('clicking Send in root mode dispatches the frozen task and displays its reply
     original_message: string
     timeline_position: { after_sequence: null; local_order: string } } | undefined
   let dispatched = false
+  const pendingGate = Promise.withResolvers<undefined>()
+  onTestFinished(() => { pendingGate.resolve(undefined) })
   const submit = vi.fn(async (input: Source & { original_message: string }) => {
     const source = { workspace_id: input.workspace_id, session_id: input.session_id,
       source_message_id: input.source_message_id, source_revision: input.source_revision }
@@ -45,8 +47,10 @@ it('clicking Send in root mode dispatches the frozen task and displays its reply
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {
     collaborationScopeAvailable: true, collaborationPlanningAvailable: true, collaborationExecutionAvailable: false,
     collaborationSubmit: submit, collaborationRootExecution: execute,
-    collaborationPending: async ({ source }: { source: Source }) => ({ ok: true,
-      value: { source, plan: null, pending_items: [], frozen_task_count: 1 } }),
+    collaborationPending: async ({ source }: { source: Source }) => {
+      await pendingGate.promise
+      return { ok: true, value: { source, plan: null, pending_items: [], frozen_task_count: 1 } }
+    },
     collaborationDeliveries: async ({ source }: { source: Source }) => ({ ok: true, value: { deliveries: dispatched ? [{
       delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1',
       source_locator: source, source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded', invocation_state_version: '2',
@@ -74,7 +78,8 @@ it('clicking Send in root mode dispatches the frozen task and displays its reply
   fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'check login' } })
   const send = await screen.findByRole('button', { name: 'Send message' })
   expect(send.hasAttribute('disabled')).toBe(false)
-  fireEvent.click(send)
+  if (mode === 'click') fireEvent.click(send)
+  else fireEvent.keyDown(input, { key: 'Enter' })
   await waitFor(() => { expect(input.textContent).toBe('') }, { timeout: 10_000 })
   await screen.findByText(`Tasks dispatched. Trace ID: ${trace}`)
   await screen.findByText('Login checked.', {}, { timeout: 10_000 })

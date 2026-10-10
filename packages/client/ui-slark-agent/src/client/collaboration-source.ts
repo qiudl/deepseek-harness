@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { createCollaborationReplyMatcher, readCollaborationPending, collaborationQuestionText } from './collaboration-dialogue.ts'
 import type { zh } from './locales.ts'
@@ -124,6 +125,25 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
   const reply = createCollaborationReplyMatcher(ctx, t, workspaceOf)
   return {
     trigger: '@', name: 'slark-agent', matchEnterPosition: 'anywhere',
+    subscribeCandidates(session, listener) {
+      let workspace = workspaceOf(ctx, session.sessionId)
+      const workspaces = ctx.inject(['workspaces'], (bound) => {
+        const changed = () => {
+          const next = workspaceOf(bound, session.sessionId)
+          if (next === workspace) return
+          workspace = next
+          listener()
+        }
+        bound.effect(() => bound.workspaces.list.subscribe(changed), 'slark-agent: candidate workspace')
+        changed()
+      })
+      const connection = ctx.inject(['connection'], (bound) => {
+        const source = (bound.get('connection') as ConnectionHandle).generation
+        bound.effect(() => source.subscribe(listener), 'slark-agent: candidate connection')
+        listener()
+      })
+      return () => { void workspaces.dispose(); void connection.dispose() }
+    },
     async candidates(session, { query, signal }) {
       const host = window.__DSH_DESKTOP_HOST__, workspace = workspaceOf(ctx, session.sessionId)
       const current = () => !signal.aborted && window.__DSH_DESKTOP_HOST__ === host &&

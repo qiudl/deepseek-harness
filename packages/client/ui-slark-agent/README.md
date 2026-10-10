@@ -103,3 +103,5 @@ An original collaboration Source keeps the Conversation shell active even before
 The [collaboration trajectory decision](../../../.agents/notes/implemented/feature/2026-10-07-slark-collaboration-trajectory.md) describes readonly history and external shell activity.
 
 The Trajectory tab labels `assistant_message_committed` as a reply committed in the original conversation. It keeps partial coverage and the independently reported root state; this observation does not mark the entire task complete.
+
+Workspace readiness and Connection replacement invalidate the active Agent query. Late-loaded directories populate the unchanged `@` token; explicitly dismissed menus stay closed.

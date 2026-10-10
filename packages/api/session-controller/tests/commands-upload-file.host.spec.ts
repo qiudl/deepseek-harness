@@ -234,8 +234,9 @@ describe('Session file uploads', () => {
     await expect(uploading).rejects.toMatchObject({ code: 'session/not-found' })
   })
 
-  it('resolves a cold ordinary Agent and releases the resolver registration', async () => {
-    const { ctx, uploads, agent, disposeAgent } = await uploadHarness()
+  it.each(['direct', 'context'] as const)('resolves a cold ordinary Agent and releases the %s resolver registration', async (access) => {
+    const { ctx, uploads: direct, agent, disposeAgent } = await uploadHarness()
+    const uploads = access === 'context' ? ctx.fileUploads : direct
     await disposeAgent()
     const resolveAgent = vi.fn(async () => {
       await ctx.agents.register(agent)

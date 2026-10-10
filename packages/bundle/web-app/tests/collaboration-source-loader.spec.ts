@@ -14,6 +14,8 @@ import type { CollaborationRootPlanningRecord } from '@deepseek-ai/dsh-api-sessi
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
+import FileUploads from '@deepseek-ai/dsh-client-file-upload'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
@@ -43,8 +45,8 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['root-analysis-failure', 'root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
-  const rootAnalysis = mode === 'root-analysis' || mode === 'root-analysis-failure'
+it.each(['root-analysis-budget', 'root-analysis-failure', 'root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+  const rootAnalysis = mode === 'root-analysis' || mode === 'root-analysis-failure' || mode === 'root-analysis-budget'
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
   const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
@@ -69,6 +71,7 @@ it.each(['root-analysis-failure', 'root-analysis', 'root-submission', 'source-on
   vi.stubEnv('DSH_PROFILE_DELIVERY_TOKEN', mode === 'delivery' ? 'C'.repeat(43) : '')
   vi.stubEnv('DSH_PROFILE_REFERENCE_TOKEN', mode === 'reference' ? 'D'.repeat(43) : '')
   for (const key of ['DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) vi.stubEnv(key, '')
+  if (mode === 'source-only') vi.stubEnv('DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'E'.repeat(43))
   // GUI/transport peers are fixtures; Source owners, registry, model runtime and storage load from YAML.
   ctx.provide('webServer', { host: '127.0.0.1', port: 0, register(route: { path: string; handler: typeof routes extends Map<string, infer T> ? T : never }) {
     routes.set(route.path, route.handler); return () => { routes.delete(route.path) }
@@ -78,13 +81,14 @@ it.each(['root-analysis-failure', 'root-analysis', 'root-submission', 'source-on
   ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'fixture', model: 'selected' }) } as never)
   ctx.provide('attachments', { imageLimits: { maxImageBytes: 1, maxImagesPerMessage: 1, maxMessageImageBytes: 1,
     maxImagePixels: 1, maxImageDimension: 1, mediaTypes: ['image/png'] } } as never)
-  ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
+  if (mode !== 'source-only') ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
   ctx.provide('fs', {} as never)
   const header: SessionHeader = { version: SESSION_FORMAT_VERSION, id: SessionId('source-session'), cwd, createdAt: 1, isSeeded: false }
   ctx.provide('sessionPersistence', testSessionPersistence(ctx, { list: async () => [header],
     inspect: async () => ({ meta: header, events: [] }) }) as never)
   installSessionReadTestServices(ctx)
   const plugins = {
+    ...(mode === 'source-only' ? { commands: CommandRuntime, uploads: FileUploads } : {}),
     storage: Storage, sessions: SessionStore, agents: AgentRegistry, llm: LlmRuntime, workspace: WorkspaceRegistry,
     controller: SessionController, web: WebApp,
     extensions: DeepSeekLlmApiExtensions, inventory: PluginInventory,
@@ -166,6 +170,11 @@ it.each(['root-analysis-failure', 'root-analysis', 'root-submission', 'source-on
       { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
       { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: mode === 'root-analysis-failure' ? 'private-provider-invalid-json' : result } },
       { type: 'content_block_stop', index: 0 },
+      ...(mode === 'root-analysis-budget' ? [
+        { type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking: 'x'.repeat(17000) } },
+        { type: 'content_block_stop', index: 1 },
+      ] : []),
       { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
       { type: 'message_stop' },
     ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''))
@@ -247,6 +256,25 @@ it.each(['root-analysis-failure', 'root-analysis', 'root-submission', 'source-on
   if (mode === 'source-only') {
     expect((await ctx.sessionController.list({}, new AbortController().signal)).items
       .find(item => item.sessionId === header.id)?.blank).toBe(false)
+    const controllerEntry = [...ctx.loader.entries()].find(entry => entry.options.id === 'controller')
+    if (!controllerEntry?.fiber) throw Error('Controller Loader entry missing')
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await controllerEntry.fiber.restart()
+      await ctx.loader.await()
+      expect(ctx.get('sessionController')).toBeDefined()
+      const choice = await fetch(`${origin}/internal/desktop-workspace-model-selection`, {
+        method: 'POST', headers: { authorization: `Bearer ${'E'.repeat(43)}` },
+        body: JSON.stringify({ workspace_id: workspace.id, session_id: sessionId }),
+      })
+      expect(choice.status).toBe(200)
+      expect(await choice.json()).toEqual({ workspace_id: workspace.id, session_id: sessionId,
+        provider: 'fixture', model: 'selected' })
+      expect(await ctx.sessionController.readCollaborationSourceSnapshot({
+        workspace_id: source.workspace_id, session_id: source.session_id,
+        source_message_id: source.source_message_id, source_revision: source.source_revision,
+      }, new AbortController().signal))
+        .toEqual(first.snapshot)
+    }
     expect(session.seq).toBe(seq)
     expect(providerRequests).toBe(0)
   }

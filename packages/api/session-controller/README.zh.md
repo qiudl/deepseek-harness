@@ -127,7 +127,7 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 `openCollaborationAnalysisJournal(facility)` 拥有独立的单文件 `collaboration_analysis_v2` 领域。`createCollaborationAnalysisWriter(journal, claim)` 提供 Source 分析所需的 persist 回调：先提交完整、无信号 manifest 的规范 JSON，再向当前可信协调器申请派发资格，匹配的资格记录持久化后才返回。`CollaborationAnalysisJournalRecord` 保留原始请求 ID、完整 Source digest 与输入 manifest digest；`CollaborationAnalysisDispatchGrant` 绑定 plan/revision/attempt/fence 和租约。重复请求、取消、过期资格和写入确认丢失都会阻止派发。恢复只能枚举冻结的输入与资格记录，不恢复可执行调用。Profile 在已接受写入排空后关闭 `CollaborationAnalysisJournal`。回调中的协调器权限以及真实聊天/传输装配仍由调用方负责。
 
-分析仅使用含原文和显式 mention 元数据的一条 user 消息及分析提示词，工具为空，不携带普通历史。每个 Profile 最多允许两个尚未清理的调用，持久化准备及获取许可最多等待 30 秒，随后提供方调用另有 30 秒上限；取消后仍不响应的操作保留并发位置直到清理完成。输入采用保守的 16 KiB UTF-8 请求预算，输出限制为提供方 8192 token 和累计流文本 32 KiB；超限拒绝，不截断。纯中间件回复、工具输出、非成功终止结果及非法 JSON 均拒绝。这里不执行模型修复、重试或重启后的可执行恢复；云端 attempt 租约、候选受理及实际聊天调用方仍由协调器负责。
+分析仅使用含原文和显式 mention 元数据的一条 user 消息及分析提示词，工具为空，不携带普通历史。每个 Profile 最多允许两个尚未清理的调用，持久化准备及获取许可最多等待 30 秒，随后提供方调用另有 30 秒上限；取消后仍不响应的操作保留并发位置直到清理完成。输入采用保守的 16 KiB UTF-8 请求预算，输出限制为提供方 8192 token，以及正文和推理文本合计 32 KiB；超限拒绝，不截断。每个块按累计增量字节与组装后字节的较大值计数，结束事件不会重复计算相同内容，也不会退还已观察的字节。纯中间件回复、工具输出、非成功终止结果及非法 JSON 均拒绝。这里不执行模型修复、重试或重启后的可执行恢复；云端 attempt 租约、候选受理及实际聊天调用方仍由协调器负责。
 
 运行器接受原始 JSON 对象，或完整的单个外层 Markdown `json` 围栏，并原样保留围栏内 JSON 文本。前后说明文字、多段代码块、其他围栏标签、截断 JSON、数组及标量值均拒绝。流预算包含围栏；引用验证和候选受理规则保持不变。输出 journal 与回执对去除外层围栏后返回的 JSON 文本计算摘要；原始 Source 与输入 manifest 保持不变。
 
