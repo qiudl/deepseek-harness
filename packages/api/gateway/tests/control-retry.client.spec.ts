@@ -193,7 +193,7 @@ describe('RemoteStream', () => {
             signal.addEventListener('abort', () => { resolve() }, { once: true })
             listening.resolve(undefined)
           })
-          throw new RemoteError('gateway/service-unavailable', 'service stopped', {})
+          throw new RemoteError('gateway/service-unavailable', 'service stopped', { endpoint: 'session/follow' })
         },
       }),
       ended: () => new Error('fixture ended'),
