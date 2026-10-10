@@ -20,7 +20,7 @@ export function DraftPersistence({ sessionId, bridge, useInput, inputActions, t 
     }, () => { setFailed(true) })
     writer.current = owned
     void owned.start()
-    return () => { owned.dispose(); if (writer.current === owned) writer.current = null }
+    return () => { owned.dispose(); writer.current = null }
   }, [bridge, sessionId, inputActions, latest])
   useEffect(() => { void writer.current?.update() }, [draft])
   return failed ? <p role="status" data-testid="slark-draft-unsaved">{t('draft.unsaved')}</p> : null

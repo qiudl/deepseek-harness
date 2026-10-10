@@ -19,7 +19,7 @@ it('keeps a pending write in its original Session when the view changes Session'
     const runtime = dockRuntime(sessionId)
     return { ...runtime, bridge, t: dockTranslate, useInput: selector => selector({ ...runtime.input, draft: text }) }
   }
-  const view = render(createElement(DraftPersistence, props('first', 'first text')))
+  const view = render(createElement(DraftPersistence, props('first', 'first text')), { reactStrictMode: true })
   onTestFinished(() => { view.unmount() })
   await vi.waitFor(() => { expect(writes).toHaveLength(1) })
   view.rerender(createElement(DraftPersistence, props('second', 'second text')))
