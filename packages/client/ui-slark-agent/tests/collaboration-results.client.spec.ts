@@ -338,7 +338,7 @@ it('keeps the aggregate view within its budget when loading additional replies',
   expect(f.model.getSnapshot().groups[1]?.replies).toHaveLength(5)
   f.model.dispose()
 })
-function fixture(timeline = false) {
+function fixture(timeline = false, locate = false) {
   let grouped = true, remoteGeneration: unknown = 1
   const listeners = new Set<() => void>(), changed = () => { listeners.forEach((fn) => { fn() }) }
   const workspaces: WorkspaceSource = { getSnapshot: () => workspaceSnapshot(workspace_id, 'session', grouped),
@@ -348,7 +348,7 @@ function fixture(timeline = false) {
   const reads = vi.fn<ConstructorParameters<typeof CollaborationResultsModel>[3]>(async () => ({ ok: true, value: { items: [original] } }))
   const deliveries = vi.fn<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>(async () => ({ ok: true, value: { deliveries: [reply] } }))
   let bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true, collaborationDeliveries: deliveries }
-  const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge, 'session', undefined, timeline)
+  const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge, 'session', locate ? async () => ({ ok: true, value: { items: [original] } }) : undefined, timeline)
   onTestFinished(() => { model.dispose() })
   return { model, reads, bridge, deliveries, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
     quietReset: () => { remoteGeneration = 2 },
@@ -1244,4 +1244,29 @@ it.each([32_000, 41_000])('bounds a history read at the Desktop response deadlin
   await read
   expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe(elapsed < 40_000 ? 'ready' : 'error')
   if (elapsed > 40_000) expect(f.model.getSnapshot().groups[0]?.trace?.page).toBeUndefined()
+})
+
+it('does not publish a completed old delivery after navigation replaces its read controller', async () => {
+  const f = fixture(false, true)
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementationOnce(() => { entered.resolve(undefined); return held.promise })
+  const refresh = f.model.refresh()
+  onTestFinished(async () => { held.resolve({ ok: true, value: { deliveries: [] } }); f.model.dispose(); await refresh })
+  await entered.promise
+  held.resolve({ ok: true, value: { deliveries: [{ ...reply, answer: 'obsolete delivery' }] } })
+  // The transport fulfills wait(), then navigation runs before its consumer resumes.
+  await Promise.resolve()
+  expect(f.model.revealOriginal(original)).toBe(true)
+  const published: string[] = []
+  const stop = f.model.subscribe(() => {
+    for (const group of f.model.getSnapshot().groups) {
+      for (const item of group.replies) if (item.answer) published.push(item.answer)
+    }
+  })
+  onTestFinished(stop)
+  await refresh
+  await vi.waitFor(() => { expect(f.model.getSnapshot().phase).toBe('ready') })
+  expect(published).not.toContain('obsolete delivery')
+  expect(f.model.getSnapshot().groups[0]?.original).toEqual(original)
 })

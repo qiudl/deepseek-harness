@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
 import {
@@ -181,7 +181,34 @@ describe('RemoteStream', () => {
     expect(opened).toBe(6)
   })
 
+  it('finishes disposal when the active carrier reports a service failure after abort', async () => {
+    const listening = Promise.withResolvers<undefined>()
+    let opened = 0
+    const stream = new RemoteStream<string>(hostSource(true).connection, {
+      name: 'fixture stream',
+      open: signal => ({
+        async * [Symbol.asyncIterator]() {
+          opened++
+          await new Promise<void>((resolve) => {
+            signal.addEventListener('abort', () => { resolve() }, { once: true })
+            listening.resolve(undefined)
+          })
+          throw new RemoteError('gateway/service-unavailable', 'service stopped', {})
+        },
+      }),
+      ended: () => new Error('fixture ended'),
+    })
+    const next = stream[Symbol.asyncIterator]().next()
+    onTestFinished(async () => { await stream.dispose(); await next })
+    await listening.promise
+    await stream.dispose()
+    expect(await next).toEqual({ done: true, value: undefined })
+    expect(opened).toBe(1)
+  })
+
   it('cancels a pending service retry without opening another generation', async () => {
+    vi.useFakeTimers()
+    onTestFinished(() => { vi.useRealTimers() })
     const failed = Promise.withResolvers<undefined>()
     let opened = 0
     const stream = new RemoteStream<string>(hostSource(true).connection, {
@@ -196,8 +223,10 @@ describe('RemoteStream', () => {
       ended: () => new Error('fixture ended'),
     })
     const next = stream[Symbol.asyncIterator]().next()
+    onTestFinished(async () => { await stream.dispose(); await next })
     await failed.promise
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.getTimerCount()).toBe(1)
     await stream.dispose()
     expect(await next).toMatchObject({ done: true })
     expect(opened).toBe(1)
@@ -268,6 +297,13 @@ describe('RemoteStream', () => {
 
   it('stops a pending retry when the logical stream is disposed', async () => {
     const source = hostSource(false)
+    const subscribed = Promise.withResolvers<undefined>()
+    const subscribe = source.connection.generation.subscribe
+    source.connection.generation.subscribe = (listener) => {
+      const dispose = subscribe(listener)
+      subscribed.resolve(undefined)
+      return dispose
+    }
     let opened = 0
     const stream = new RemoteStream(source.connection, {
       name: 'fixture stream',
@@ -277,7 +313,9 @@ describe('RemoteStream', () => {
       ended: () => new Error('ended'),
     })
     const pending = stream[Symbol.asyncIterator]().next()
-    await vi.waitFor(() => { expect(opened).toBe(1) })
+    onTestFinished(async () => { await stream.dispose(); await pending })
+    await subscribed.promise
+    expect(opened).toBe(1)
     source.publish(false)
 
     await stream.dispose()

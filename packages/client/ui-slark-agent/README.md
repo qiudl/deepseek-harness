@@ -104,4 +104,4 @@ The [collaboration trajectory decision](../../../.agents/notes/implemented/featu
 
 The Trajectory tab labels `assistant_message_committed` as a reply committed in the original conversation. It keeps partial coverage and the independently reported root state; this observation does not mark the entire task complete.
 
-Workspace readiness and Connection replacement invalidate the active Agent query. Late-loaded directories populate the unchanged `@` token; explicitly dismissed menus stay closed.
+The scoped source always provides candidate subscriptions. Workspace readiness and Connection replacement invalidate the active Agent query. Late-loaded directories populate the unchanged `@` token; explicitly dismissed menus stay closed.

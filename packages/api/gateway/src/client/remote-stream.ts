@@ -166,7 +166,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
 }
 
 async function waitForServiceRetry(attempt: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return
+  // The supervisor checked lifetime and revision immediately before this synchronous registration.
   await new Promise<void>((resolve) => {
     const finish = (): void => {
       clearTimeout(timer)
@@ -175,7 +175,6 @@ async function waitForServiceRetry(attempt: number, signal: AbortSignal): Promis
     }
     const timer = setTimeout(finish, 100 * 2 ** (attempt - 1))
     signal.addEventListener('abort', finish, { once: true })
-    if (signal.aborted) finish()
   })
 }
 
