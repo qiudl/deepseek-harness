@@ -204,6 +204,8 @@ describe('CI workflow', () => {
       const cores = jobName === 'windows-native-tests' ? 2 : 16
       expect(evaluateRunsOn(job['runs-on'], { vars: { DSH_CI_FAILOVER_WINDOWS: 'blacksmith' } }))
         .toBe(`blacksmith-${cores}vcpu-windows-2025`)
+      expect(evaluateRunsOn(job['runs-on'], { vars: { DSH_CI_FAILOVER_WINDOWS: 'github' } }))
+        .toBe('windows-2025')
       expect(job.if).toBe("github.event_name == 'pull_request'")
     }
 
@@ -245,7 +247,10 @@ describe('CI workflow', () => {
     }
 
     expect(windowsCoverage.name).toBe('windows node 24 / coverage')
-    expect(windowsCoverage.env).toMatchObject({ DSH_COVERAGE_PARTITIONS: "${{ vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '4' || '' }}" })
+    if (!isRecord(windowsCoverage.env)) throw new TypeError('Windows coverage must define env')
+    for (const [name, limit] of [['DSH_COVERAGE_MAX_WORKERS', '2'], ['DSH_COVERAGE_PARTITIONS', '2'], ['DSH_GATE_CONCURRENCY', '1']] as const) {
+      expect(evaluateRunsOn(windowsCoverage.env[name], { vars: { DSH_CI_FAILOVER_WINDOWS: 'github' } })).toBe(limit)
+    }
     const coverageSteps = windowsCoverage.steps as unknown[]
     const coverageCommands = coverageSteps.filter((step): step is Record<string, unknown> & { run: string } => (
       isRecord(step) && typeof step.run === 'string'
