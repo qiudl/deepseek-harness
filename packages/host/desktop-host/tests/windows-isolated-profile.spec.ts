@@ -159,6 +159,59 @@ describe('Windows isolated Profile preparation', () => {
     expect(() => { prepareWindowsIsolatedProfile({ ...options, bindings: unsafe.bindings }) }).toThrow()
   })
 
+  it('preserves worker-rewritten mutable documents that inherit the verified private DACL', () => {
+    const state = fixture()
+    const options = {
+      root, profileId, userSid, maximumManagedFileBytes: 64 * 1024, prepareMcpStorage: true,
+      bindings: state.bindings,
+    }
+    prepareWindowsIsolatedProfile(options)
+    // The running worker replaces its mutable documents atomically; replacements inherit the
+    // parent directory DACL instead of restating an explicit protected descriptor.
+    const inheritedFile = (): WindowsHostPrivatePathEvidence => ({
+      kind: 'file',
+      reparsePoint: false,
+      linkCount: 1,
+      ownerSid: userSid,
+      daclProtected: false,
+      access: [
+        { sid: userSid, type: 'allow', mask: 0x1F01FF, inherited: true, objectInherit: false, containerInherit: false },
+        { sid: 'S-1-5-18', type: 'allow', mask: 0x1F01FF, inherited: true, objectInherit: false, containerInherit: false },
+        { sid: 'S-1-5-32-544', type: 'allow', mask: 0x1F01FF, inherited: true, objectInherit: false, containerInherit: false },
+      ],
+    })
+    const patchPath = `${root}\\profiles\\${profileId}\\cordis.patch.yml`
+    state.readPrivateFile.mockImplementation((path) => {
+      const contents = state.existing.get(path)
+      if (contents === undefined) return undefined
+      // The Host-owned non-mutable patch is never rewritten by the worker and keeps its
+      // explicit protected descriptor; worker-mutable documents come back inherited.
+      return { contents, evidence: path === patchPath ? evidence('file') : inheritedFile() }
+    })
+    state.createPrivateFile.mockImplementation((path, contents) => {
+      if (state.existing.has(path)) return { state: 'exists', evidence: inheritedFile() }
+      state.existing.set(path, Buffer.from(contents))
+      return { state: 'created', evidence: evidence('file') }
+    })
+
+    expect(() => { prepareWindowsIsolatedProfile(options) }).not.toThrow()
+
+    // A mutable file owned by another principal or carrying an extra principal still fails closed.
+    state.readPrivateFile.mockReturnValueOnce({
+      contents: Buffer.from('{}\n'),
+      evidence: { ...inheritedFile(), ownerSid: 'S-1-5-21-1000-2000-3000-1002' },
+    })
+    expect(() => { prepareWindowsIsolatedProfile(options) }).toThrow('unavailable')
+
+    // The Host-owned patch is not mutable: an inherited-DACL replacement is still rejected.
+    state.readPrivateFile.mockImplementation((path) => {
+      const contents = state.existing.get(path)
+      if (contents === undefined) return undefined
+      return { contents, evidence: inheritedFile() }
+    })
+    expect(() => { prepareWindowsIsolatedProfile(options) }).toThrow('unavailable')
+  })
+
   it('fails closed when create-only native support is unavailable', () => {
     const state = fixture()
     const bindings = { ...state.bindings }
