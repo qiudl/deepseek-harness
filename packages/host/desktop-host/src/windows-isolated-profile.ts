@@ -2,6 +2,7 @@ import { win32 } from 'node:path'
 import {
   assertWindowsHostPrivatePathEvidence,
   windowsHostPrivateSecurityDescriptor,
+  type WindowsHostPrivatePathEvidence,
   type WindowsHostRegistrationFileBindings,
 } from './windows-host-registration.ts'
 import { HostAuthorityError } from './types.ts'
@@ -24,6 +25,34 @@ function checkedRoot(path: string): string {
     throw new HostAuthorityError('invalid_input')
   }
   return path
+}
+
+const FULL_CONTROL = 0x1F01FF
+const LOCAL_SYSTEM_SID = 'S-1-5-18'
+const BUILTIN_ADMINISTRATORS_SID = 'S-1-5-32-544'
+
+/**
+ * Verify one existing worker-mutable Profile document after the owning worker rewrote it.
+ * The worker replaces mutable documents atomically, so the replacement inherits the DACL of its
+ * just-verified private parent directories instead of carrying an explicit protected descriptor.
+ * Ownership, non-reparse, single-link, and the exact allow-FA principal set still must hold.
+ * @param evidence - Handle-derived facts about the existing file.
+ * @param userSid - Expected owner and private DACL principal.
+ */
+function assertWindowsWorkerMutableFileEvidence(
+  evidence: WindowsHostPrivatePathEvidence, userSid: string,
+): void {
+  if (evidence.kind !== 'file' || evidence.reparsePoint || evidence.linkCount !== 1
+    || evidence.ownerSid !== userSid || evidence.access.length !== 3) {
+    throw new HostAuthorityError('unavailable')
+  }
+  const expected = new Set([userSid, LOCAL_SYSTEM_SID, BUILTIN_ADMINISTRATORS_SID])
+  for (const entry of evidence.access) {
+    if (entry.type !== 'allow' || entry.mask !== FULL_CONTROL || !expected.delete(entry.sid)) {
+      throw new HostAuthorityError('unavailable')
+    }
+  }
+  if (expected.size !== 0) throw new HostAuthorityError('unavailable')
 }
 
 /**
@@ -115,13 +144,21 @@ export function prepareWindowsIsolatedProfile(options: {
     const maximumBytes = file.maximumBytes ?? options.maximumManagedFileBytes
     if (file.contents.length > maximumBytes) throw new HostAuthorityError('unavailable')
     const result = options.bindings.createPrivateFile(file.path, file.contents, securityDescriptor)
-    assertWindowsHostPrivatePathEvidence(result.evidence, 'file', options.userSid)
-    if (result.state === 'created') continue
+    if (result.state === 'created') {
+      assertWindowsHostPrivatePathEvidence(result.evidence, 'file', options.userSid)
+      continue
+    }
     const existing = options.bindings.readPrivateFile(file.path, maximumBytes)
     if (existing === undefined) throw new HostAuthorityError('unavailable')
     if (existing.contents.length > maximumBytes) throw new HostAuthorityError('unavailable')
+    if (file.mutable) {
+      // The owning worker replaces its mutable documents atomically; the replacement inherits the
+      // private DACL from the directories verified above rather than restating it explicitly.
+      assertWindowsWorkerMutableFileEvidence(existing.evidence, options.userSid)
+      continue
+    }
     assertWindowsHostPrivatePathEvidence(existing.evidence, 'file', options.userSid)
-    if (!file.mutable && !existing.contents.equals(file.contents)) throw new HostAuthorityError('conflict')
+    if (!existing.contents.equals(file.contents)) throw new HostAuthorityError('conflict')
   }
   return { profileRoot, persistenceRoot, pluginRoots: [pluginsRoot], persistenceGeneration: 1 }
 }

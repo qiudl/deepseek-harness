@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { PassThrough } from 'node:stream'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { getDshRuntimeVersion, initProfile, readProfileManifest } from '@deepseek-ai/dsh-app-boot'
-import { anchorPathSpec, readProfileRegistry, runPluginCommand, runProfilePnpm, viewProfilePackage } from '../src/operations.ts'
+import { anchorPathSpec, readProfileRegistry, resolveOperationCommand, runPluginCommand, runProfilePnpm, viewProfilePackage } from '../src/operations.ts'
 
 /** What execa resolves for a run that settled, including the buffered output the pre-install lookup is read for. */
 interface FakeOutcome {
@@ -906,7 +906,7 @@ it('reads the registry pnpm\'s own configuration names in the profile, and answe
   const answer = (value: object) => command.run.mockResolvedValueOnce(value as never)
   answer({ exitCode: 0, stdout: 'https://registry.npmmirror.com/\n', stderr: '' })
   expect(await readProfileRegistry(dir, { timeoutMs: 5 })).toBe('https://registry.npmmirror.com/')
-  expect(command.run).toHaveBeenLastCalledWith('pnpm', ['config', 'get', 'registry'], expect.objectContaining({ cwd: dir, timeout: 5, reject: false, stdin: 'ignore' }))
+  expect(command.run).toHaveBeenLastCalledWith(resolveOperationCommand(undefined), ['config', 'get', 'registry'], expect.objectContaining({ cwd: dir, timeout: 5, reject: false, stdin: 'ignore' }))
   // Output pnpm prefixes with a notice keeps its last line; a failed or empty answer, or one that is no URL, reads as unknown.
   answer({ exitCode: 0, stdout: 'WARN  something\nhttps://npm.corp.example/', stderr: '' })
   expect(await readProfileRegistry(dir, { command: '/app/pnpm', args: ['--x'], timeoutMs: 5 })).toBe('https://npm.corp.example/')
@@ -924,7 +924,7 @@ it('asks the registry through pnpm view in the profile directory, without pnpm\'
   const answer = (value: object) => command.run.mockResolvedValueOnce(value as never)
   answer({ exitCode: 0, stdout: '{"name":"x"}', stderr: '', timedOut: false, isCanceled: false })
   expect(await viewProfilePackage(dir, 'x@^1', { timeoutMs: 5 })).toEqual({ exitCode: 0, stdout: '{"name":"x"}', stderr: '', timedOut: false })
-  expect(command.run).toHaveBeenLastCalledWith('pnpm', ['view', 'x@^1', 'name', 'version', 'description', 'dsh', '--json', '--config.fetch-retries=0'],
+  expect(command.run).toHaveBeenLastCalledWith(resolveOperationCommand(undefined), ['view', 'x@^1', 'name', 'version', 'description', 'dsh', '--json', '--config.fetch-retries=0'],
     expect.objectContaining({ cwd: dir, timeout: 5, reject: false, stdin: 'ignore' }))
   expect((command.run.mock.lastCall as unknown[])[2]).not.toHaveProperty('cancelSignal')
   // A registry asked by URL goes on the command line; null leaves the choice to pnpm's own configuration.
@@ -958,4 +958,20 @@ it('uses application-owned executable arguments and environment for package oper
   expect(command.run).toHaveBeenLastCalledWith(runtime.command,
     [...runtime.args, 'view', 'example', 'name', 'version', 'description', 'dsh', '--json', '--config.fetch-retries=0'],
     expect.objectContaining({ env: expect.objectContaining(runtime.env) as unknown }))
+})
+
+it('anchors the default pnpm command to its .cmd sibling on Windows (REQ-20261010-0013)', () => {
+  expect(resolveOperationCommand(undefined, 'win32')).toBe('pnpm.cmd')
+})
+
+it('passes configured commands through unchanged on every platform', () => {
+  expect(resolveOperationCommand('pnpm', 'win32')).toBe('pnpm')
+  expect(resolveOperationCommand('node', 'win32')).toBe('node')
+  expect(resolveOperationCommand('pnpm.cmd', 'win32')).toBe('pnpm.cmd')
+  expect(resolveOperationCommand('C:\tools\pnpm\pnpm.exe', 'win32')).toBe('C:\tools\pnpm\pnpm.exe')
+})
+
+it('keeps the default command unchanged off Windows', () => {
+  expect(resolveOperationCommand(undefined, 'darwin')).toBe('pnpm')
+  expect(resolveOperationCommand(undefined, 'linux')).toBe('pnpm')
 })
