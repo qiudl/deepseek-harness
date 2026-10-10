@@ -145,6 +145,50 @@ async function bootRegistries(): Promise<{
 }
 
 describe('Conversation registries', () => {
+  it('uses independent display presence to open an empty Conversation and observes it only while viewed', async () => {
+    const { uiConversation, binding } = await bootRegistries(), conversation = uiConversation.binding(binding)
+    const presence = createSnapshotStore(false), observe = vi.spyOn(presence, 'subscribe')
+    const remove = conversation.registerActivity('slark-collaboration', presence)
+    expect(observe).not.toHaveBeenCalled()
+    const first = conversation.snapshot.subscribe(() => {}), second = conversation.snapshot.subscribe(() => {})
+    expect(observe).toHaveBeenCalledOnce()
+    presence.set(true)
+    expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(true)
+    expect(binding.eventSource.getSnapshot().entries).toEqual([])
+    first(); first()
+    presence.set(false)
+    expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(false)
+    second()
+    presence.set(true)
+    expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(false)
+    const third = conversation.snapshot.subscribe(() => {})
+    expect(observe).toHaveBeenCalledTimes(2)
+    expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(true)
+    remove(); remove()
+    expect(conversation.snapshot.getSnapshot().activeTargets.has('slark-collaboration')).toBe(false)
+    third()
+  })
+
+  it('keeps other activity owners and removes subscriptions on Session closure without accepting late callbacks', async () => {
+    const { uiConversation, binding } = await bootRegistries(), conversation = uiConversation.binding(binding)
+    const first = createSnapshotStore(true), second = createSnapshotStore(true), callbacks = new Set<() => void>()
+    const stop = vi.fn()
+    const removeFirst = conversation.registerActivity('collaboration', first)
+    conversation.registerActivity('collaboration', second)
+    const snapshotStop = conversation.snapshot.subscribe(() => {})
+    const removeLate = conversation.registerActivity('late', { getSnapshot: () => true,
+      subscribe: (callback) => { callbacks.add(callback); return stop } })
+    removeFirst()
+    expect(conversation.snapshot.getSnapshot().activeTargets.has('collaboration')).toBe(true)
+    await binding.ctx.fiber.dispose()
+    expect(stop).toHaveBeenCalledOnce()
+    for (const callback of callbacks) callback()
+    removeLate(); snapshotStop()
+    expect(() => conversation.registerActivity('later', first)).toThrow('conversation_activity_closed')
+    const closedStop = conversation.snapshot.subscribe(() => {})
+    closedStop()
+  })
+
   it('publishes open turns without an active view and detaches when the Session scope ends', async () => {
     const { uiConversation, binding } = await bootRegistries()
     const conversation = uiConversation.binding(binding)

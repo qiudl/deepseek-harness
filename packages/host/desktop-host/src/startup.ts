@@ -732,6 +732,8 @@ export async function startDesktopHostApplication(
       ...rootWorkerOperations(workers),
       rootAnalysisSupported: true,
       rootAnalysisRecoverySupported: true,
+      sourceAnalysisRecoverySupported: true,
+      sourceLiveResumeSupported: true,
       rootLookupSupported: true,
       rootPendingLookupSupported: true,
       rootLiveResumeSupported: true,

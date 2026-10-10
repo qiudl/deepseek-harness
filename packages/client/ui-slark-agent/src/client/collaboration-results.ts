@@ -3,10 +3,11 @@ import { readCollaborationExecutionEvidence, readCollaborationTracePage, type Co
 import { readCollaborationPending } from './collaboration-dialogue.ts'
 import type { CollaborationDialogueBridge, CollaborationPendingPage } from './collaboration-dialogue.ts'
 import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionCollaborationSourceItem, SessionCollaborationSourcesValue } from '@deepseek-ai/dsh-api-session-controller/types'
 
 type Source = SessionCollaborationSourceItem['source']
+const RESULT_READ_WINDOW_MS = 180_000
 /** Main's readable result projection; transport delivery and execution have separate states. */
 export interface ScopedCollaborationReply {
   readonly delivery_id: string
@@ -56,14 +57,20 @@ export interface CollaborationResultGroup {
 /** Stable observable value consumed by the injected framework hook. */
 export interface CollaborationResultsSnapshot {
   readonly phase: 'idle' | 'loading' | 'ready' | 'error'
+  readonly workspaceHistory?: true
+  readonly locatorAvailable?: true
+  readonly focus?: { readonly snapshotDigest: string; readonly sequence: number }
+  readonly location?: { readonly snapshotDigest: string; readonly status: 'loading' | 'opened' | 'unavailable' }
   readonly executionAvailable?: boolean
   readonly groups: readonly CollaborationResultGroup[]
   readonly nextCursor?: string
 }
 type Generation = { getSnapshot(): unknown; subscribe(fn: () => void): () => void }
 type ReadableResultsBridge = CollaborationResultsBridge & Required<Pick<CollaborationResultsBridge, 'collaborationDeliveries'>>
-type ReadSources = (cursor: string | undefined, signal: AbortSignal) => Promise<
+type ReadSources = (cursor: string | undefined, signal: AbortSignal, sessionId: SessionId) => Promise<
   { ok: true; value: SessionCollaborationSourcesValue } | { ok: false }>
+type ReadOriginal = (original: SessionCollaborationSourceItem, signal: AbortSignal) => ReturnType<ReadSources>
+type SourceCursor = { sessionId: SessionId; nativeCursor?: string }
 const empty = (): CollaborationResultsSnapshot => ({ phase: 'idle', groups: [] })
 const sameSource = (a: Source, b: Source): boolean => a.workspace_id === b.workspace_id && a.session_id === b.session_id
   && a.source_message_id === b.source_message_id && a.source_revision === b.source_revision
@@ -71,6 +78,21 @@ const bytes = (value: unknown): number => new TextEncoder().encode(JSON.stringif
 const array = (value: unknown): boolean => Array.isArray(value)
 const safeText = (value: unknown, max: number): value is string => typeof value === 'string'
   && !/\p{Surrogate}/u.test(value) && new TextEncoder().encode(value).length <= max
+function validPosition(value: unknown): boolean {
+  if (value === null) return true
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const row = value as Record<string, unknown>
+  return Object.keys(row).sort().join(',') === 'after_sequence,local_order'
+    && (row.after_sequence === null || typeof row.after_sequence === 'number'
+      && Number.isSafeInteger(row.after_sequence) && row.after_sequence >= 0)
+    && typeof row.local_order === 'string' && /^[1-9][0-9]{0,18}$/u.test(row.local_order)
+    && BigInt(row.local_order) <= 9223372036854775807n
+}
+function samePosition(a: SessionCollaborationSourceItem, b: SessionCollaborationSourceItem): boolean {
+  const first = a.timeline_position, second = b.timeline_position
+  return first === second || first != null && second != null
+    && first.after_sequence === second.after_sequence && first.local_order === second.local_order
+}
 function executionPreview(result: unknown, previous: CollaborationExecutionView): CollaborationExecutionView & { previewId: string } {
   if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true
     || !('rootTraceId' in result) || typeof result.rootTraceId !== 'string' || !/^(?!0{32}$)[a-f0-9]{32}$/u.test(result.rootTraceId)
@@ -112,6 +134,11 @@ export class CollaborationResultsModel {
   private observers = new Set<() => void>()
   private generation = 0
   private workspaceId: string | undefined
+  private sessionIds: readonly SessionId[] = []
+  private sourceCursors = new Map<string, SourceCursor>()
+  private locatedOriginal: SessionCollaborationSourceItem | undefined
+  private focusSequence = 0
+  private location: CollaborationResultsSnapshot['location']
   private connectionGeneration: unknown
   private boundBridge: CollaborationResultsBridge | undefined
   private controller: AbortController | undefined
@@ -125,31 +152,48 @@ export class CollaborationResultsModel {
   private timer: ReturnType<typeof setInterval> | undefined
   private unsubscribe: (() => void)[]
   private refreshEvent = (event: Event): void => {
-    if ((event as CustomEvent<Source | undefined>).detail?.session_id === this.sessionId) void this.refresh()
+    this.bind()
+    const sessionId = (event as CustomEvent<Source | undefined>).detail?.session_id
+    if (this.sessionIds.some(id => id === sessionId)) void this.refresh()
   }
 
   constructor(private sessionId: SessionId, private workspaces: WorkspaceSource, private connection: Generation,
     private readSources: ReadSources, private bridge: () => CollaborationResultsBridge | undefined,
-    private readonly activity: (active: boolean) => void = () => {}) {
+    private history: 'session' | 'workspace' = 'session', private readOriginal?: ReadOriginal, private timeline = false) {
     const changed = () => { if (this.bind() && this.observers.size) void this.refresh() }
     this.unsubscribe = [workspaces.subscribe(changed), connection.subscribe(changed)]
     this.bind()
   }
   private bind(): boolean {
     const data = this.workspaces.getSnapshot(), host = this.bridge(), connection = this.connection.getSnapshot()
-    const workspaceId = host?.collaborationScopeAvailable && host.collaborationDeliveries && connection !== undefined
+    const workspace = host?.collaborationScopeAvailable && host.collaborationDeliveries && connection !== undefined
       && data.phase === 'ready' && data.state !== 'error' && !data.archivedSessionIds.includes(this.sessionId)
-      ? data.items.find(item => item.sessionIds.includes(this.sessionId))?.workspaceId : undefined
-    if (workspaceId === this.workspaceId && host === this.boundBridge && connection === this.connectionGeneration) return false
+      ? data.items.find(item => item.sessionIds.includes(this.sessionId)) : undefined
+    const workspaceId = workspace?.workspaceId
+    const members = workspace === undefined ? [] : this.history === 'workspace'
+      ? workspace.sessionIds.filter(id => !data.archivedSessionIds.includes(id))
+      : [this.sessionId]
+    const sessionIds = [...new Set(members)].sort((a, b) => a === this.sessionId ? -1 : b === this.sessionId ? 1 : a.localeCompare(b))
+    if (workspaceId === this.workspaceId && host === this.boundBridge && connection === this.connectionGeneration
+      && sessionIds.length === this.sessionIds.length && sessionIds.every((id, i) => id === this.sessionIds[i])) return false
+    this.sessionIds = sessionIds; this.sourceCursors.clear()
+    this.locatedOriginal = undefined; this.location = undefined
     this.workspaceId = workspaceId; this.boundBridge = host; this.connectionGeneration = connection
     this.executions.clear(); this.traces.clear(); this.tracePages.clear()
     this.generation++; this.sourcePages = 1; this.replyPages.clear(); this.controller?.abort(); this.publish(empty())
     return true
   }
   private current(generation: number): boolean { this.bind(); return !this.closed && generation === this.generation }
+  private readCurrent(generation: number, controller: AbortController): boolean {
+    return this.current(generation) && this.controller === controller
+  }
   private publish(state: CollaborationResultsSnapshot): void {
-    const { executionAvailable: _available, ...base } = state
+    const { executionAvailable: _available, focus: _focus, location: _location, ...base } = state
     this.state = { ...base,
+      ...(this.history === 'workspace' ? { workspaceHistory: true as const } : {}),
+      ...(this.readOriginal ? { locatorAvailable: true as const } : {}),
+      ...(this.locatedOriginal ? { focus: { snapshotDigest: this.locatedOriginal.snapshot_digest, sequence: this.focusSequence } } : {}),
+      ...(this.location ? { location: this.location } : {}),
       ...(this.boundBridge?.collaborationPlanningAvailable && this.boundBridge.collaborationRootExecution
         ? { executionAvailable: true } : {}),
       groups: state.groups.map((group) => {
@@ -159,7 +203,6 @@ export class CollaborationResultsModel {
         const { execution: _old, trace: _trace, ...original } = group
         return { ...original, ...(execution ? { execution } : {}), ...(trace ? { trace } : {}) }
       }) }
-    this.activity(!this.closed && this.state.groups.length > 0)
     if (!this.closed) this.observers.forEach((fn) => { fn() })
   }
   /**
@@ -191,25 +234,121 @@ export class CollaborationResultsModel {
     if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-collaboration-admitted', this.refreshEvent)
     this.controller?.abort(); this.generation++; this.executions.clear()
     this.traces.clear(); this.tracePages.clear(); this.publish(this.state)
+    if (this.location?.status === 'loading') this.location = undefined
+    this.publish(this.state)
   }
-  private sourcePage(value: SessionCollaborationSourcesValue, cursor?: string): SessionCollaborationSourcesValue {
+  private sourcePage(value: SessionCollaborationSourcesValue, cursor?: string,
+    sessionId = this.sessionId): SessionCollaborationSourcesValue {
     if (!array(value.items) || value.items.length > 8 || bytes(value) > 256 * 1024
       || (value.next_cursor !== undefined && (value.items.length === 0 || value.next_cursor !== value.items.at(-1)?.snapshot_digest || value.next_cursor === cursor))) throw Error('invalid_source_page')
     const seen = new Set<string>()
     for (const item of value.items) {
-      if (item.source.session_id !== this.sessionId || item.source.workspace_id !== this.workspaceId
+      if (item.source.session_id !== sessionId || item.source.workspace_id !== this.workspaceId
         || !/^[a-f0-9]{64}$/u.test(item.snapshot_digest) || seen.has(item.snapshot_digest)
-        || !safeText(item.original_message, 32 * 1024)) throw Error('invalid_source_page')
+        || !safeText(item.original_message, 32 * 1024)
+        || (Object.hasOwn(item, 'timeline_position') ? !validPosition(item.timeline_position) : this.timeline)) throw Error('invalid_source_page')
       seen.add(item.snapshot_digest)
     }
     return value
+  }
+  private async sourceRead(cursor: string | undefined, signal: AbortSignal, generation: number,
+    cursors: Map<string, SourceCursor>): Promise<SessionCollaborationSourcesValue> {
+    signal = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+    signal.throwIfAborted()
+    if (this.history === 'session') {
+      const read = await wait(this.readSources(cursor, signal, this.sessionId), signal)
+      if (!this.current(generation)) throw Error('obsolete')
+      if (!read.ok) throw Error('source_unavailable')
+      return this.sourcePage(read.value, cursor)
+    }
+    const start: SourceCursor = cursor === undefined ? { sessionId: this.sessionId } : cursors.get(cursor) as SourceCursor
+    let nativeCursor = start.nativeCursor
+    const remaining = this.sessionIds.slice(this.sessionIds.indexOf(start.sessionId))
+    for (const [i, sessionId] of remaining.entries()) {
+      signal.throwIfAborted()
+      const read = await wait(this.readSources(nativeCursor, signal, sessionId), signal)
+      if (!this.current(generation)) throw Error('obsolete')
+      if (!read.ok) throw Error('source_unavailable')
+      const page = this.sourcePage(read.value, nativeCursor, sessionId)
+      const nextSessionId = remaining[i + 1]
+      const following = page.next_cursor ? { sessionId, nativeCursor: page.next_cursor }
+        : nextSessionId ? { sessionId: nextSessionId } : undefined
+      if (page.items.length) {
+        const last = (page.items.at(-1) as SessionCollaborationSourceItem).snapshot_digest
+        if (following) cursors.set(last, following)
+        return { items: page.items, ...(following ? { next_cursor: last } : {}) }
+      }
+      nativeCursor = undefined
+    }
+    return { items: [] }
+  }
+  private async lookupOriginal(original: SessionCollaborationSourceItem, signal: AbortSignal): Promise<SessionCollaborationSourceItem> {
+    signal = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+    signal.throwIfAborted()
+    const read = await wait((this.readOriginal as ReadOriginal)(original, signal), signal)
+    signal.throwIfAborted()
+    if (!read.ok || read.value.items.length !== 1 || read.value.next_cursor !== undefined) throw Error('source_unavailable')
+    const page = this.sourcePage(read.value, undefined, SessionId(original.source.session_id))
+    const item = page.items[0] as SessionCollaborationSourceItem
+    if (!sameSource(item.source, original.source) || item.snapshot_digest !== original.snapshot_digest
+      || item.original_message !== original.original_message || !samePosition(item, original)) throw Error('source_substituted')
+    return item
+  }
+  /**
+   * Revalidate one displayed original before the owning plugin navigates to it.
+   * @param digest - Existing displayed Source snapshot digest.
+   * @param open - Synchronous navigation callback invoked only while the original ownership remains current.
+   * @returns Completion of the readonly lookup; failure is displayed without opening a substituted Session.
+   */
+  async locateOriginal(digest: string, open: (original: SessionCollaborationSourceItem) => void): Promise<void> {
+    this.bind()
+    const original = this.state.groups.find(group => group.original.snapshot_digest === digest)?.original
+    if (this.closed || this.pending || !this.workspaceId || !this.readOriginal || !original) return
+    this.pending = true; this.again = false
+    const generation = this.generation, controller = new AbortController()
+    this.controller = controller
+    this.location = { snapshotDigest: digest, status: 'loading' }
+    this.publish({ ...this.state, phase: 'loading' })
+    try {
+      const item = await this.lookupOriginal(original, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]))
+      if (!this.readCurrent(generation, controller)) return
+      open(item)
+      if (!this.current(generation)) return
+      this.location = { snapshotDigest: digest, status: 'opened' }
+    } catch {
+      if (!this.readCurrent(generation, controller)) return
+      this.location = { snapshotDigest: digest, status: 'unavailable' }
+    } finally {
+      if (this.readCurrent(generation, controller)) this.publish({ ...this.state, phase: 'ready' })
+      this.finishQuery()
+    }
+  }
+  /**
+   * Reveal a just-verified original in its owning Session, retaining it beyond the newest history page.
+   * @param original - Immutable Source supplied by the current locator's synchronous navigation callback.
+   * @returns false when the owning Session, workspace or reader is unavailable; accepted work is never cancelled.
+   */
+  revealOriginal(original: SessionCollaborationSourceItem): boolean {
+    this.bind()
+    if (this.closed || !this.readOriginal || !this.workspaceId || original.source.workspace_id !== this.workspaceId
+      || original.source.session_id !== this.sessionId) return false
+    this.controller?.abort(); this.controller = undefined
+    this.locatedOriginal = original; this.focusSequence++
+    this.location = { snapshotDigest: original.snapshot_digest, status: 'opened' }
+    this.sourcePages = 1; this.replyPages.clear(); this.sourceCursors.clear()
+    this.publish({ phase: 'ready', groups: [{ original, replies: [], phase: 'loading' }] })
+    if (this.pending) this.again = true
+    return true
   }
   /** The caller binds an available reader and verifies the owning generation before each page. */
   private async results(original: SessionCollaborationSourceItem, signal: AbortSignal, generation: number,
     cursor?: string, prior: readonly ScopedCollaborationReply[] = [],
     previous: readonly ScopedCollaborationReply[] = [],
     onReplies?: (group: CollaborationResultGroup) => void): Promise<CollaborationResultGroup> {
+    // Allow Main's two-minute delivery chain and its separate planning read.
+    signal = AbortSignal.any([signal, AbortSignal.timeout(RESULT_READ_WINDOW_MS)])
     try {
+      signal.throwIfAborted()
       const host = this.boundBridge as ReadableResultsBridge
       const plan = host.collaborationPending ? readCollaborationPending(host, original.source, signal).then(
         value => ({ pending: value.pending_items, planningState: value.plan?.planning_state }),
@@ -255,69 +394,111 @@ export class CollaborationResultsModel {
     let ownsQuery = true
     const generation = this.generation, controller = new AbortController()
     this.controller = controller
+    // Budget eight originals per Native page, two workers, retained reply pages and a located original.
+    const extraReplyPages = [...this.replyPages.values()].reduce((sum, pages) => sum + pages - 1, 0)
+    const queryBudget = 30_000 * (this.sourcePages + 1) + RESULT_READ_WINDOW_MS * (4 * this.sourcePages + extraReplyPages + 1)
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(queryBudget)])
     this.publish({ ...this.state, phase: 'loading' })
     try {
       const oldGroups = this.state.groups
       const prior = more ? this.state.groups : []
       const known = new Set(prior.map(item => item.original.snapshot_digest))
       const groups: CollaborationResultGroup[] = [...prior]
+      const validateGroups = (visible: readonly CollaborationResultGroup[]): void => {
+        const orders = visible.flatMap(group => group.original.timeline_position ? [group.original.timeline_position.local_order] : [])
+        if (new Set(orders).size !== orders.length) throw Error('invalid_source_page')
+        if (visible.length > 128 || bytes(visible) > 16 * 1024 * 1024) throw Error('result_view_budget')
+      }
+      const cursors = more ? new Map(this.sourceCursors) : new Map<string, SourceCursor>()
       let nextCursor = cursor, pages = 0
       do {
-        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
-        const read = await wait(this.readSources(nextCursor, signal), signal)
-        if (!this.current(generation)) return
-        if (!read.ok) throw Error('source_unavailable')
-        const page = this.sourcePage(read.value, nextCursor)
-        if (page.items.some(item => known.has(item.snapshot_digest)) || groups.length + page.items.length > 128) throw Error('invalid_source_cursor')
-        if (this.readWaiters.length) {
-          const resume = this.acquireTraceQuery(generation)
-          ownsQuery = false
-          this.finishQuery()
-          if (!await resume) return
-          ownsQuery = true
-          if (!this.current(generation)) return
-          this.controller = controller
-        }
-        const completed = new Map<string, CollaborationResultGroup>()
-        page.items.forEach(item => known.add(item.snapshot_digest))
-        const publishGroup = (group: CollaborationResultGroup) => {
-          if (controller.signal.aborted || !this.current(generation)) return
-          completed.set(group.original.snapshot_digest, group)
-          const visible = [...groups, ...page.items.flatMap((item) => {
-            const result = completed.get(item.snapshot_digest)
-              ?? oldGroups.find(old => old.original.snapshot_digest === item.snapshot_digest)
-            return result ? [result] : []
-          }), ...oldGroups.filter(item => !known.has(item.original.snapshot_digest))]
-          if (bytes(visible) > 16 * 1024 * 1024) throw Error('result_view_budget')
-          this.publish({ ...this.state, phase: 'loading', groups: visible })
-        }
-        // Source pages admit at most eight messages; different Sources never share cursors or reply state.
-        const pageGroups = await Promise.all(page.items.map(async (original) => {
-          const previous = oldGroups.find(item => item.original.snapshot_digest === original.snapshot_digest)?.replies ?? []
-          const sourceSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)])
-          const tracePages = this.tracePages.get(original.snapshot_digest)
-          const [group] = await Promise.all([
-            (async () => {
-              let result = await this.results(original, sourceSignal, generation, undefined, [], previous, publishGroup)
-              for (let i = 1; i < (this.replyPages.get(original.snapshot_digest) ?? 1) && result.nextCursor; i++) {
-                result = await this.results(original, sourceSignal, generation, result.nextCursor, result.replies, previous, publishGroup)
-              }
-              publishGroup(result)
-              return result
-            })(),
-            tracePages === undefined ? undefined : this.traceRead(original, sourceSignal, generation, tracePages),
-          ])
-          return group
+        const page = await this.sourceRead(nextCursor, signal, generation, cursors)
+        if (!this.readCurrent(generation, controller)) return
+        const items = page.items.filter((item) => {
+          const located = this.locatedOriginal
+          if (located?.snapshot_digest === item.snapshot_digest && (!sameSource(located.source, item.source)
+            || located.original_message !== item.original_message || !samePosition(located, item))) throw Error('source_substituted')
+          const previous = oldGroups.find(group => group.original.snapshot_digest === item.snapshot_digest)?.original
+          if (previous && (!sameSource(previous.source, item.source) || previous.original_message !== item.original_message
+            || !samePosition(previous, item))) throw Error('source_substituted')
+          if (!known.has(item.snapshot_digest)) return true
+          if (located?.snapshot_digest === item.snapshot_digest) return false
+          throw Error('invalid_source_cursor')
+        })
+        if (groups.length + items.length > 128) throw Error('invalid_source_cursor')
+        items.forEach((original) => { known.add(original.snapshot_digest) })
+        const offset = groups.length
+        groups.push(...items.map((original): CollaborationResultGroup => {
+          const previous = oldGroups.find(group => group.original.snapshot_digest === original.snapshot_digest)
+          return { ...previous, original, replies: previous?.replies ?? [], phase: 'loading' }
         }))
-        if (!this.current(generation)) return
-        groups.push(...pageGroups)
+        const publishProgress = (): void => {
+          const located = oldGroups.find(group => group.original.snapshot_digest === this.locatedOriginal?.snapshot_digest)
+          const visible = located && !groups.some(group => group.original.snapshot_digest === located.original.snapshot_digest)
+            ? [located, ...groups] : [...groups]
+          validateGroups(visible)
+          this.publish({ phase: 'loading', groups: visible, ...(this.state.nextCursor ? { nextCursor: this.state.nextCursor } : {}) })
+        }
+        publishProgress()
+        for (let offsetIndex = 0; offsetIndex < items.length; offsetIndex += 2) {
+          if (this.readWaiters.length) {
+            const resume = this.acquireTraceQuery(generation)
+            ownsQuery = false
+            this.finishQuery()
+            if (!await resume) return
+            ownsQuery = true
+            if (!this.current(generation)) return
+            this.controller = controller
+          }
+          await Promise.all(items.slice(offsetIndex, offsetIndex + 2).map(async (original, index) => {
+            signal.throwIfAborted()
+            const previous = oldGroups.find(item => item.original.snapshot_digest === original.snapshot_digest)?.replies ?? []
+            const tracePages = this.tracePages.get(original.snapshot_digest)
+            const progress = (group: CollaborationResultGroup): void => {
+              if (!this.readCurrent(generation, controller)) return
+              groups[offset + offsetIndex + index] = group
+              publishProgress()
+            }
+            const [group] = await Promise.all([
+              (async () => {
+                let result = await this.results(original, signal, generation, undefined, [], previous, progress)
+                for (let i = 1; i < (this.replyPages.get(original.snapshot_digest) ?? 1) && result.nextCursor; i++) {
+                  result = await this.results(original, signal, generation, result.nextCursor, result.replies, previous, progress)
+                }
+                return result
+              })(),
+              tracePages === undefined ? undefined : this.traceRead(original,
+                AbortSignal.any([signal, AbortSignal.timeout(40_000)]), generation, tracePages),
+            ])
+            if (!this.readCurrent(generation, controller)) return
+            groups[offset + offsetIndex + index] = group
+            publishProgress()
+          }))
+          if (!this.readCurrent(generation, controller)) return
+        }
+        if (!this.readCurrent(generation, controller)) return
         nextCursor = page.next_cursor; pages++
       } while (!more && nextCursor !== undefined && pages < this.sourcePages)
+      const located = this.locatedOriginal
+      if (located && !known.has(located.snapshot_digest)) {
+        let original: SessionCollaborationSourceItem | undefined
+        try { original = await this.lookupOriginal(located, signal) }
+        catch {
+          if (!this.readCurrent(generation, controller)) return
+          this.locatedOriginal = undefined; this.location = { snapshotDigest: located.snapshot_digest, status: 'unavailable' }
+        }
+        if (!this.readCurrent(generation, controller)) return
+        if (original) {
+          groups.unshift(await this.results(original, signal, generation))
+          if (!this.readCurrent(generation, controller)) return
+        }
+      }
+      validateGroups(groups)
       if (more) this.sourcePages++
+      this.sourceCursors = cursors
       this.publish({ phase: 'ready', groups, ...(nextCursor ? { nextCursor } : {}) })
     } catch {
-      controller.abort()
-      if (this.current(generation)) this.publish({ phase: 'error', groups: [] })
+      if (this.readCurrent(generation, controller)) this.publish({ phase: 'error', groups: [] })
     } finally {
       controller.abort()
       if (ownsQuery) this.finishQuery()
@@ -365,9 +546,9 @@ export class CollaborationResultsModel {
     this.controller = controller
     this.publish({ ...this.state, phase: 'loading' })
     try {
-      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(RESULT_READ_WINDOW_MS)])
       let next = await this.results(group.original, signal, generation, group.nextCursor, group.replies)
-      if (this.current(generation)) {
+      if (this.readCurrent(generation, controller)) {
         if (bytes(this.state.groups.map(item =>
           item.original.snapshot_digest === group.original.snapshot_digest ? next : item)) > 16 * 1024 * 1024) {
           next = { original: group.original, replies: [], phase: 'error' }
@@ -581,6 +762,6 @@ export class CollaborationResultsModel {
   /** Release observers and readonly requests; accepted tasks continue independently. */
   dispose(): void {
     this.stop(); this.closed = true; this.unsubscribe.forEach((fn) => { fn() }); this.observers.clear()
-    this.state = empty(); this.activity(false)
+    this.state = empty()
   }
 }
