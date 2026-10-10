@@ -151,6 +151,9 @@ describe('BrowserBody', () => {
     expect(frame.getAttribute('sandbox')).toBe(WEB_BROWSER_SANDBOX)
     expect(mounted.view.getByRole('note').textContent).toContain(zh['web.embedHint'])
     expect(mounted.view.getByRole('note').querySelector('button')?.textContent).toBe(zh.external)
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    fireEvent.click(mounted.view.getByRole('note').querySelector('button')!)
+    expect(open).toHaveBeenCalledExactlyOnceWith('https://example.com/one', '_blank', 'noopener,noreferrer')
     expect(frame.getAttribute('allow')).toBeNull()
     // jsdom does not reflect the iframe referrerPolicy property to its attribute.
     expect(frame.referrerPolicy).toBe('no-referrer')
