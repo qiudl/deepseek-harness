@@ -126,8 +126,10 @@ it('refuses unavailable, malformed, changed, and ambiguous Agent submissions', a
   ctx.provide('conversation', { input: { for: () => ({ state: {
     getSnapshot: () => ({ draft, occurrences }),
   } }) } } as never)
+  vi.stubGlobal('window', undefined)
   const fiber = ctx.plugin({ inject: [...inject], apply })
   await fiber.await()
+  vi.unstubAllGlobals()
   if (!source) throw new Error('Slark Agent source did not register')
   const registered = source
   expect(slotSession).toEqual({ sessionId: session.sessionId })

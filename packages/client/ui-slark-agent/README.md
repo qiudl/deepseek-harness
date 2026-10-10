@@ -105,3 +105,7 @@ The [collaboration trajectory decision](../../../.agents/notes/implemented/featu
 The Trajectory tab labels `assistant_message_committed` as a reply committed in the original conversation. It keeps partial coverage and the independently reported root state; this observation does not mark the entire task complete.
 
 The scoped source always provides candidate subscriptions. Workspace readiness and Connection replacement invalidate the active Agent query. Late-loaded directories populate the unchanged `@` token; explicitly dismissed menus stay closed.
+
+Recovery trajectory stages distinguish durable receipt custody, verification and effects needing review. They retain the original execution identifiers and remain read-only; a received receipt does not mark the root successful.
+
+When Desktop provides `conversationDraft`, the composer restores and saves text through its encrypted, Profile-and-Session-scoped store. This is currently available in Slark for macOS. Restoration does not retain attachments or structured Agent references, submit a message, or change model context; an `@` name must be selected again to authorize an Agent. Writes use revisions to reject stale editors. Failed or uncertain storage shows a copy-before-closing notice and stops writing. Without the bridge, editor behavior is unchanged.

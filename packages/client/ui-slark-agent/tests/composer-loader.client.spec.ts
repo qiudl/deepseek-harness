@@ -25,6 +25,8 @@ import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { createElement, useSyncExternalStore } from 'react'
 import { fireEvent, render, within } from '@testing-library/react'
+import { DraftPersistence } from '../src/client/DraftPersistence.tsx'
+import type { DraftBridge } from '../src/client/draft-persistence.ts'
 import { ProjectScopePanel } from '../src/client/ProjectScopeDock.tsx'
 import { panelRuntime, dockRuntime, dockTranslate } from './fixture-state.client.ts'
 import { CollaborationTimeline } from '../src/client/CollaborationTimeline.tsx'
@@ -47,7 +49,7 @@ const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id
 type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST__']>['invokeEnterpriseAgent']>>[0]
 
 async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration,
-  executionAvailable = collaboration, navigationAvailable = true, pluginRemote = false) {
+  executionAvailable = collaboration, navigationAvailable = true, pluginRemote = false, conversationDraft?: DraftBridge) {
   vi.stubGlobal('crypto', webcrypto)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
   const ctx = new Context(), id = SessionId('session-1')
@@ -186,6 +188,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     } }
   })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {
+    conversationDraft,
     collaborationScopeAvailable: collaboration, collaborationExecutionAvailable: executionAvailable,
     collaborationWorkspace: scopeDirectory, collaborationSubmit: submit,
     collaborationDeliveries: deliveries, collaborationPending: pending, collaborationClarify: clarify,
@@ -2247,4 +2250,43 @@ it('refuses history for absent or closed Session Controllers and replaces a reta
   await f.ctx.sessions.binding(id)!.ctx.fiber.dispose()
   expect(f.workspace.subscribers).toBe(0)
   expect(() => { Reflect.apply(inject, undefined, [id]) }).toThrow('collaboration_view_closed')
+})
+
+
+it('YAML-loaded draft slot restores plain text, persists editor changes and disposes without sending', async () => {
+  let stored = { revision: 1, text: '@Guide · 项目空间 待发送' }
+  const bridge = vi.fn<DraftBridge>(async (request) => {
+    expect(request.sessionId).toBe('session-1')
+    if (request.action === 'write') {
+      expect(request.revision).toBe(stored.revision)
+      stored = { revision: stored.revision + 1, text: request.text }
+    }
+    return { ok: true, value: { ...stored } }
+  })
+  const f = await bench(true, true, true, true, true, false, bridge)
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-draft-persistence')
+  if (!entry?.inject) throw Error('missing draft slot')
+  expect(entry.component).toBe(DraftPersistence)
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as { sessionId: SessionId; bridge: DraftBridge }
+  const props: Parameters<typeof DraftPersistence>[0] = { ...dockRuntime('session-1'), ...bindings,
+    useInput: selector => selector(useSyncExternalStore(
+      listener => f.composer.state.subscribe(listener), () => f.composer.state.getSnapshot())),
+    inputActions: f.composer.actions, t: dockTranslate }
+  const view = render(createElement(DraftPersistence, props))
+  onTestFinished(() => { view.unmount() })
+  await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe(stored.text) })
+  expect(f.composer.snapshot.occurrences).toHaveLength(0)
+  f.composer.setDraft('保留新的文字')
+  await vi.waitFor(() => { expect(stored.text).toBe('保留新的文字') })
+  f.composer.setDraft('')
+  await vi.waitFor(() => { expect(stored.text).toBe('') })
+  view.unmount()
+  const calls = bridge.mock.calls.length
+  f.composer.setDraft('unmounted')
+  await Promise.resolve()
+  expect(bridge.mock.calls).toHaveLength(calls)
+  expect(f.submit).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
+  const slots = f.ctx.slots
+  await f.ctx.fiber.dispose()
+  expect(slots.entries('conversation.input.dock')).toEqual([])
 })

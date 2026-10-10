@@ -1,3 +1,5 @@
+import { DraftPersistence } from './DraftPersistence.tsx'
+import type { DraftBridge } from './draft-persistence.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-trajectory/client'
 import { CollaborationTrajectory } from './CollaborationTrajectory.tsx'
 /** DSH `@` source for the live, employee-assigned Slark Agent directory. */
@@ -55,6 +57,7 @@ interface AgentItem {
 }
 
 interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge {
+  conversationDraft?: DraftBridge
   collaborationScopeAvailable?: boolean
   collaborationExecutionAvailable?: boolean
   collaborationPlanningAvailable?: boolean
@@ -142,6 +145,13 @@ function agentLabel(item: Pick<AgentItem, 'name'> & { project_name?: unknown }):
 /** Register a stable-reference source; ordinary model serialization refuses the Agent chip. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-slark-agent: dictionaries')
+  ctx.slots.inject('conversation.input.dock', () => {
+    const bridge = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__?.conversationDraft
+    if (!bridge) return () => {}
+    return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-draft-persistence', order: 5, locale: NS,
+      inject: sessionId => ({ sessionId, bridge }),
+    }, DraftPersistence)
+  })
   ctx.slots.inject('conversation.input.dock', () => {
     if (typeof window !== 'undefined' && window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return () => {}
     return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-agent-tasks', order: 25, locale: NS,
