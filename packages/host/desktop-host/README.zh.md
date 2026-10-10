@@ -69,7 +69,7 @@ Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的
 
 Profile worker 句柄读取其私有 `session/follow`、`workspace/follow` 或 `$events` NDJSON 路由。它只接受有界的事件项和明确的结束帧，调用方释放时取消 HTTP 读取，并拒绝格式错误、失败或不完整的流。Host 只通过 `profile.remote_ui_stream` 暴露这个读取端：每次短暂的打开、轮询或关闭请求都校验绑定 owner 的租约；每条连接最多保留八个游标；每个游标最多缓存一个 512 KiB 事件，并以 16 KiB 分块返回，空闲时不阻塞控制通道。租约撤销后的下一次请求或连接断开会取消读取。worker 令牌和通用 Gateway 流都不会通过控制通道。
 
-账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。注册表出现并发变更时，回退被阻止并返回 `stale`。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
+账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。期间没有其他注册表写入时，回退恢复原快照及其已发布 schema；POSIX 存储保留原文件字节。该 Profile 出现并发变更时，回退被阻止并返回 `stale`；其他 Profile 的变更会保留。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
 
 恢复不含可选绑定字段的记录后再添加账号绑定时，Host 按注册表的规范字段顺序写入，使更新后的记录在 Host 重启后仍可读取。
 

@@ -12,7 +12,7 @@ interface ProfileRegistryOptions {
   readonly keyHandleUnlocked?: (keyHandle: string) => boolean
   readonly prepareRoot?: (root: string) => void
   readonly loadSnapshot?: (path: string) => unknown
-  readonly persistSnapshot?: (path: string, root: string, snapshot: RegistryFile) => void
+  readonly persistSnapshot?: (path: string, root: string, snapshot: unknown) => void
 }
 
 interface RegistryFile { readonly version: 3 | 4; readonly profiles: readonly PersonProfileRecord[] }
@@ -127,6 +127,7 @@ function unlockMaterial(value: string): Buffer {
 export class ProfileRegistry {
   private readonly path: string
   private profiles: PersonProfileRecord[]
+  private snapshot?: { readonly value: unknown; readonly contents: string }
 
   constructor(private readonly options: ProfileRegistryOptions) {
     if (options.deviceIndexKey.byteLength !== 32) throw new HostAuthorityError('invalid_input')
@@ -172,7 +173,9 @@ export class ProfileRegistry {
   ): Promise<PersonProfileRecord> {
     // Capture and mutate without yielding: the prior owner may have a different identity index.
     const before = this.profiles
+    const beforeSnapshot = this.snapshot
     const profile = this.registerAccountRecord(input)
+    const preparedSnapshot = this.snapshot
     const previous = before.find(candidate => candidate.profileId === profile.profileId)
     try {
       await prepare(profile)
@@ -181,7 +184,11 @@ export class ProfileRegistry {
         throw new HostAuthorityError('stale')
       }
       if (previous !== profile) {
-        if (previous) this.rollbackUpdate(profile, previous)
+        if (beforeSnapshot && this.snapshot === preparedSnapshot) {
+          this.persist(beforeSnapshot.value, beforeSnapshot.contents)
+          this.snapshot = beforeSnapshot
+          this.profiles = before
+        } else if (previous) this.rollbackUpdate(profile, previous)
         else this.rollbackRegistration(profile.profileId)
       }
       throw error
@@ -528,7 +535,10 @@ export class ProfileRegistry {
     if (this.options.loadSnapshot) {
       try {
         const parsed = this.options.loadSnapshot(this.path)
-        return parsed === undefined ? [] : this.parseSnapshot(parsed)
+        if (parsed === undefined) return []
+        const profiles = this.parseSnapshot(parsed)
+        this.snapshot = { value: parsed, contents: `${JSON.stringify(parsed)}\n` }
+        return profiles
       } catch (error) {
         if (error instanceof HostAuthorityError) throw error
         throw new HostAuthorityError('unavailable')
@@ -542,7 +552,11 @@ export class ProfileRegistry {
     try {
       const stat = fstatSync(fd)
       if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== (process.getuid?.() ?? stat.uid) || (stat.mode & 0o077) !== 0) throw new HostAuthorityError('unavailable')
-      return this.parseSnapshot(JSON.parse(readFileSync(fd, 'utf8')))
+      const contents = readFileSync(fd, 'utf8')
+      const parsed: unknown = JSON.parse(contents)
+      const profiles = this.parseSnapshot(parsed)
+      this.snapshot = { value: parsed, contents }
+      return profiles
     } catch (error) {
       if (error instanceof HostAuthorityError) throw error
       throw new HostAuthorityError('unavailable')
@@ -582,11 +596,17 @@ export class ProfileRegistry {
     const version = profiles.some(profile => profile.accountBindings?.some(binding =>
       binding.authorityBindingScope !== undefined)) ? 4 as const : 3 as const
     const snapshot = { version, profiles }
+    const contents = `${JSON.stringify(snapshot satisfies RegistryFile)}\n`
+    this.persist(snapshot, contents)
+    this.snapshot = { value: snapshot, contents }
+  }
+
+  private persist(snapshot: unknown, contents: string): void {
     if (this.options.persistSnapshot) { this.options.persistSnapshot(this.path, this.options.root, snapshot); return }
     const temporary = join(this.options.root, `.profiles-${randomUUID()}.tmp`)
     const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
     try {
-      writeSync(fd, `${JSON.stringify(snapshot satisfies RegistryFile)}\n`)
+      writeSync(fd, contents)
       fsyncSync(fd)
     } finally { closeSync(fd) }
     renameSync(temporary, this.path)

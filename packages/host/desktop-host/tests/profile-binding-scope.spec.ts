@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -124,5 +124,41 @@ describe('independent Slark login bindings for one Account Profile', () => {
     expect(readFileSync(path)).toEqual(before)
     expect(statSync(path).mode).toBe(mode)
     expect(new ProfileRegistry(options).resolveProfile(original.profileId)).toEqual(original)
+  })
+
+  it.each([false, true])('keeps released v2 bytes on worker failure (storage hook=%s)', async (storageHook) => {
+    const { registry, options, path } = fixture()
+    const { authorityBindingScope: _scope, ...legacy } = feishu
+    const { unlockVerifier: _verifier, accountBindings: _bindings, ...original } = await registry.registerAccount(legacy)
+    writeFileSync(path, JSON.stringify({ version: 2, profiles: [{
+      profileId: original.profileId, kind: original.kind, personIndex: original.personIndex, keyHandle: original.keyHandle,
+      accountBindings: [{
+        authorityEnvironmentId: environment, handle: legacy.accountBindingHandle,
+      }], bindingGeneration: original.bindingGeneration, createdAt: original.createdAt,
+    }] }))
+    const before = readFileSync(path)
+    const mode = statSync(path).mode
+    const loaded = new ProfileRegistry({ ...options, ...(storageHook ? {
+      loadSnapshot: () => { const snapshot: unknown = JSON.parse(readFileSync(path, 'utf8')); return snapshot },
+      persistSnapshot: (_path: string, _root: string, snapshot: unknown) => { writeFileSync(path, JSON.stringify(snapshot)) },
+    } : {}) })
+    await expect(loaded.provisionAccount(email, async () => { throw new Error('worker failed') }))
+      .rejects.toThrow('worker failed')
+    expect(readFileSync(path)).toEqual(before)
+    expect(statSync(path).mode).toBe(mode)
+  })
+
+  it('retains another Profile written while the scoped worker fails', async () => {
+    const { registry, options } = fixture()
+    const original = await registry.registerAccount(feishu)
+    let neighbor: typeof original | undefined
+    await expect(registry.provisionAccount(email, async () => {
+      neighbor = await registry.registerAccount({ ...account, subject: 'neighbor', keyHandle: 'keychain:neighbor',
+        accountBindingHandle: 'neighbor-binding', authorityBindingVersion: 1 })
+      throw new Error('worker failed')
+    })).rejects.toThrow('worker failed')
+    const restarted = new ProfileRegistry(options)
+    expect(restarted.resolveBinding(environment, feishu.accountBindingHandle, 5)).toEqual(original)
+    expect(restarted.resolveProfile(neighbor!.profileId)).toEqual(neighbor)
   })
 })
