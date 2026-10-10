@@ -172,6 +172,7 @@ export class TabDomain {
       ...placement.paneId === undefined ? {} : { paneId: placement.paneId },
       ...placement.preferNewPane === undefined ? {} : { preferNewPane: placement.preferNewPane },
       ...placement.revealIfOpened === undefined ? {} : { revealIfOpened: placement.revealIfOpened },
+      ...placement.reuseMatchingParams === undefined ? {} : { reuseMatchingParams: placement.reuseMatchingParams },
     })
     const held: Held = {
       id: randomUUID() as SidebarRightOccurrenceId,
