@@ -1634,7 +1634,10 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       'profile_unlock_material',
     ]
     const hasAccountAccessToken = Object.hasOwn(params, 'account_access_token')
-    exactKeys(params, hasAccountAccessToken ? tokenKeys : legacyKeys)
+    const hasBindingScope = Object.hasOwn(params, 'authority_binding_scope')
+    if (hasBindingScope && !hasAccountAccessToken) reject()
+    exactKeys(params, [...(hasAccountAccessToken ? tokenKeys : legacyKeys),
+      ...(hasBindingScope ? ['authority_binding_scope'] : [])])
     return {
       version: 1, type: 'request', request_id: requestId, method: 'profile.ensure',
       params: {
@@ -1646,6 +1649,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         account_issuer: accountIssuer(params.account_issuer), account_subject: boundedText(params.account_subject, 512),
         profile_key_handle: boundedText(params.profile_key_handle, 512),
         profile_unlock_material: unlockMaterial(params.profile_unlock_material),
+        ...(hasBindingScope ? { authority_binding_scope: digest(params.authority_binding_scope) } : {}),
       },
     }
   }
