@@ -126,6 +126,8 @@ export interface SidebarRightTabPlacement {
   readonly preferNewPane?: boolean
   /** Resource tabs reveal existing content by default; `false` permits duplicates. Pages always deduplicate within the target pane. */
   readonly revealIfOpened?: boolean
+  /** Reveal a matching multi-instance page in this Session instead of opening another. */
+  readonly reuseMatchingParams?: boolean
   /** `true` opens in this tab's place — its pane and strip slot — and closes this tab in the same step. */
   readonly replaceTab?: boolean
 }

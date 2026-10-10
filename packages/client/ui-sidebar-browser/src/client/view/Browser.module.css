@@ -49,6 +49,27 @@
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
 }
 
+.embedFallback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+.embedFallback button {
+  flex-shrink: 0;
+  padding: 0;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
 .addressBox {
   position: relative;
   flex: 1 1 auto;
