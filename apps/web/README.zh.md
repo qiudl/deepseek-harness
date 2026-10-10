@@ -17,3 +17,5 @@ Client 插件应用前，载体通过端口读取 `/__collaboration__`。父页�
 ## 验证
 
 [远程载体测试](tests/remote-boot.spec.ts) 覆盖认证握手和安装顺序。[范围消费者测试](tests/remote-collaboration.spec.ts) 使用真实 WorkerTunnel 和 MessagePort，覆盖拒绝、取消和期限。这些隔离测试不代表真实 Account、provider 或独立 Agent 执行验收通过。
+
+插件安装浏览器测试在高亮卡片不可见时记录卡片、高亮变化和浏览器时间戳。它保留可见性检查的超时，并重新抛出原始错误。
