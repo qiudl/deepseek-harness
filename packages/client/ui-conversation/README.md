@@ -146,7 +146,10 @@ The selector must be a pure function of the owner currency. Its non-null return 
 
 `conversation.input.activity` hosts one control between the model selector and Send. Its `onActiveChange` callback expands that control across the toolbar and hides ordinary accessory controls and the context meter while preserving the editor and submit action. Closing the activity restores those controls with context details closed. The empty hero dock remains collapsed when it has no content. The occupant releases expansion on unmount and owns any activity-specific feedback.
 
+An independent-history owner can register a readonly activity source on a Conversation binding. Present records activate the existing Session view even when the ordinary Session remains blank; this does not create a Session event or start an Agent. The binding observes activity only while its snapshot has readers, stops observations after the last reader leaves, and removes activity when its owner or Session is disposed.
+
 <a id="model-experience"></a>
+
 ## Model Experience
 
 None, as this package renders browser state and sends user-admitted inputs through Session Controller APIs without constructing model requests.

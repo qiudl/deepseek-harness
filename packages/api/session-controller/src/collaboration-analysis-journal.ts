@@ -7,6 +7,7 @@ import type { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import { describeCollaborationSource, parseCollaborationSourceSnapshot } from './collaboration-source-journal.ts'
 import { clarificationAnalysisMessage, parseCollaborationClarificationInput } from './collaboration-clarification-input.ts'
+import { parseCollaborationReferenceCatalogue } from './collaboration-reference-catalogue.ts'
 import type { CollaborationAnalysisManifest } from './collaboration-analysis.ts'
 
 const id = z.string().regex(/^[\x21-\x7e]{1,256}$/u)
@@ -40,9 +41,12 @@ function valid(record: CollaborationAnalysisJournalRecord): boolean {
     const parsed: unknown = JSON.parse(record.manifest_json)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false
     const manifest = parsed as Record<string, unknown>
-    const clarification = manifest.prompt_version === '2' ? parseCollaborationClarificationInput(manifest.clarification) : undefined
-    if ((manifest.prompt_version !== '1' && manifest.prompt_version !== '2')
-      || Object.keys(manifest).sort().join(',') !== (clarification ? 'clarification,prompt_version,request,source' : 'prompt_version,request,source')
+    const clarification = (manifest.prompt_version === '2' || manifest.prompt_version === '4') ? parseCollaborationClarificationInput(manifest.clarification) : undefined
+    const catalogue = manifest.prompt_version === '3' || manifest.prompt_version === '4'
+      ? parseCollaborationReferenceCatalogue(manifest.reference_catalogue) : undefined
+    const keys = ['prompt_version', 'request', 'source', ...(clarification ? ['clarification'] : []), ...(catalogue ? ['reference_catalogue'] : [])]
+    if (!['1', '2', '3', '4'].includes(String(manifest.prompt_version)) || typeof manifest.prompt_version !== 'string'
+      || Object.keys(manifest).sort().join(',') !== keys.sort().join(',')
       || canonical(manifest) !== record.manifest_json) return false
     const source = parseCollaborationSourceSnapshot(manifest.source)
     if (clarification && canonical(clarification.original_snapshot) !== canonical(source)) return false
@@ -60,9 +64,11 @@ function valid(record: CollaborationAnalysisJournalRecord): boolean {
     const message = request.messages[0] as { role?: unknown; source?: { kind?: unknown }; content?: { type?: unknown; text?: unknown }[] }
     if (message.role !== 'user' || message.source?.kind !== 'user' || message.content?.length !== 1
       || message.content[0]?.type !== 'text' || typeof message.content[0].text !== 'string') return false
-    const expected: unknown = clarification ? JSON.parse(clarificationAnalysisMessage(clarification))
+    const original: Record<string, unknown> = clarification
+      ? JSON.parse(clarificationAnalysisMessage(clarification)) as Record<string, unknown>
       : { source_message_id: source.source_message_id, source_revision: source.source_revision,
         original_message: source.original_message, active_mentions: source.active_mentions }
+    const expected = catalogue === undefined ? original : { ...original, reference_catalogue: catalogue }
     if (canonical(JSON.parse(message.content[0].text)) !== canonical(expected)) return false
     return record.dispatch === undefined || (record.dispatch.attempt_request_id === record.attempt_request_id
       && record.dispatch.input_manifest_digest === record.input_manifest_digest && record.dispatch.source_digest === record.source_digest

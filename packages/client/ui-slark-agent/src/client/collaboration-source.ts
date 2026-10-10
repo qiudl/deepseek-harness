@@ -119,9 +119,9 @@ function workspaceOf(ctx: Context, sessionId: SessionId): string | undefined {
  * Candidates require current scope and execution availability; every send rechecks Session membership and the original chip.
  * @param ctx - the source entry's Client Context; optional workspace state is read on each operation.
  * @param t - the entry's typed locale dictionary.
- * @returns a source that submits original text through Main and retains failed drafts without fallback.
+ * @returns a source with workspace/connection candidate subscriptions, Main submission and retained failed drafts.
  */
-export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typeof zh) => string): InputTriggerSource {
+export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typeof zh) => string): InputTriggerSource & Required<Pick<InputTriggerSource, 'subscribeCandidates'>> {
   const reply = createCollaborationReplyMatcher(ctx, t, workspaceOf)
   return {
     trigger: '@', name: 'slark-agent', matchEnterPosition: 'anywhere',
