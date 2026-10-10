@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 import type { OfflineProfileRecoveryPreflight, PersonProfileRecord } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import type { BundledPluginCatalog } from './bundled-plugins.ts'
 import type { AppliedMigrationOwnerState, MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
 
 const MAX_PROFILE_TREE_ENTRIES = 100_000
@@ -256,6 +257,7 @@ export class OfflineProfileRecoveryInspector {
     readonly installationId: string
     readonly expectedUid: number
     readonly currentRuntimeAppRoot?: string
+    readonly bundledCatalog?: BundledPluginCatalog
     readonly targetFor: (profileId: string) => FileOwnerJsonlMigrationGenerationTarget
     readonly ownerStateApplicator: MigrationOwnerStateApplicator
   }) {}
@@ -323,6 +325,18 @@ export class OfflineProfileRecoveryInspector {
         if (runtimeRoot !== this.options.currentRuntimeAppRoot) legacyRuntimeRoots.add(runtimeRoot)
       }
       if (sourceRuntimeRoots.size > 1) throw new HostAuthorityError('runtime_incompatible')
+      const bundledDependencies: Array<readonly [string, string]> = []
+      for (const [name, spec] of Object.entries(dependencies)) {
+        if (verifiedDependencies.has(name)) continue
+        let digest: string | undefined
+        try { digest = await this.options.bundledCatalog?.inspectInstalled(name, spec, webComposition) } catch {
+          throw new HostAuthorityError('runtime_incompatible')
+        }
+        if (digest !== undefined) {
+          verifiedDependencies.add(name)
+          bundledDependencies.push([name, digest])
+        }
+      }
       const hasUnverifiedDependencies = Object.keys(dependencies)
         .some(dependency => !verifiedDependencies.has(dependency))
       const compatibility = hasUnverifiedDependencies
@@ -361,6 +375,7 @@ export class OfflineProfileRecoveryInspector {
           path: link.path, target: link.target, kind: link.kind, size: link.size,
         })),
         runtimeClosures,
+        bundledDependencies,
         state,
         compatibility,
       }))

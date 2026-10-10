@@ -507,6 +507,7 @@ export async function startDesktopHostApplication(
       () => workers.dispose(profile.profileId), claimRestart)
     }
     const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
+    const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, uid)
     const recoveryInspector = new OfflineProfileRecoveryInspector({
       hostRoot: root,
       installationId: config.installationId,
@@ -514,6 +515,7 @@ export async function startDesktopHostApplication(
       ...(currentRuntimeAppRoot === undefined ? {} : { currentRuntimeAppRoot }),
       targetFor,
       ownerStateApplicator,
+      ...(bundledCatalog === undefined ? {} : { bundledCatalog }),
     })
     const inspectOfflineAccountProfile = (
       profile: PersonProfileRecord,
@@ -596,7 +598,6 @@ export async function startDesktopHostApplication(
       },
     })
     const pnpmEntrypointPath = config.pnpmEntrypointPath
-    const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, uid)
     const pluginExecutor = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
       uid,
       inspectScripts: (packageName, spec) => inspectPluginScripts({ packageName, spec }),

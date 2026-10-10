@@ -44,6 +44,7 @@ const windowsUnsupportedPackages = process.platform === 'win32'
 const windowsUnsupportedOwnerTests = process.platform === 'win32'
   ? [
       'packages/host/desktop-host/tests/bundled-plugins.spec.ts',
+      'packages/host/desktop-host/tests/bundled-plugin-recovery.spec.ts',
       'packages/host/desktop-host/tests/desktop-host-lease-fences.spec.ts',
       'packages/host/desktop-host/tests/desktop-host.spec.ts',
       'packages/host/desktop-host/tests/extension-operations.spec.ts',
@@ -146,6 +147,7 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       // composes their stable-handle and ACL counterparts instead.
       'packages/host/desktop-host/src/approval.ts',
       'packages/host/desktop-host/src/bundled-plugins.ts',
+      'packages/host/desktop-host/src/bundled-plugin-recovery.ts',
       'packages/host/desktop-host/src/desktop-host.ts',
       'packages/host/desktop-host/src/dsh-web-profile-worker.ts',
       'packages/host/desktop-host/src/extension-operations.ts',

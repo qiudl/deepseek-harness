@@ -14,6 +14,7 @@ import {
   packagedRuntimeAppRoot,
 } from '../src/offline-profile-recovery.ts'
 import type { PersonProfileRecord } from '../src/types.ts'
+import { bundledRecoveryFixture } from './fixtures/bundled-recovery.ts'
 
 const uid = process.getuid?.() ?? 0
 const profileId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3150'
@@ -77,6 +78,25 @@ async function releasedPatch(value: Awaited<ReturnType<typeof fixture>>): Promis
 }
 
 describe('offline Profile existing-only inspector', () => {
+  it('recovers an exact released bundled installation and rejects changes before confirmation', async () => {
+    const value = await fixture()
+    await unlink(join(value.web, 'node_modules', 'fixture-plugin'))
+    const bundled = await bundledRecoveryFixture(value.hostRoot, value.web)
+    const inspector = new OfflineProfileRecoveryInspector({
+      hostRoot: value.hostRoot, installationId, expectedUid: uid,
+      currentRuntimeAppRoot: value.currentRuntime, targetFor: () => value.target,
+      ownerStateApplicator: value.ownerStateApplicator, bundledCatalog: bundled.catalog,
+    })
+    const before = await readFile(join(value.web, 'package.json'))
+    const first = await inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(first).toMatchObject({ state: 'recoverable', compatibility: 'current', pluginCount: 1 })
+    await expect(inspector.prepareConfirmedProfile(profile(), first)).resolves.toBeUndefined()
+    expect(await readFile(join(value.web, 'package.json'))).toEqual(before)
+    await writeFile(join(bundled.installed, 'lib/index.js'), 'modified after preflight')
+    await expect(inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
   it('accepts the exact released settings-owner patch without modifying it during preflight', async () => {
     const value = await fixture()
     const path = join(value.profileRoot, 'cordis.patch.yml')

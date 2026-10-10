@@ -82,7 +82,7 @@ macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启�
 并发的 macOS peer 校验仅在应用可执行文件的身份和字节相同时，共享正在进行的代码签名验证。验证完成或失败后立即移除共享记录；每条连接仍独立检查内核 peer，并在验证前后检查可执行文件。独立可执行文件的快照验证方式不变。
 
 
-离线 Account 恢复只有在每个顶层依赖都通过当前打包 runtime 或摘要已验证的 Profile 兼容闭包解析时，才会启动声明的插件。Profile 内扁平化的依赖树会被报告为 runtime 不兼容并保留只读导出能力；Host 不会根据文件可读或存在锁文件来推断兼容。
+离线 Account 恢复只有在每个顶层依赖都通过当前打包 runtime、摘要已验证的 Profile 兼容闭包或当前 embedding 目录中精确匹配的归档安装解析时，才会启动声明的插件。对于已发布的 `file:.bundled-plugins/<sha256>.tgz` 布局，只读预检校验两处归档、锁文件身份与完整性，以及安装目录内每个文件与可信归档一致，包括包内依赖。链接、缺失、多余、被修改或权限不安全的文件均拒绝。预检摘要绑定这些内容，确认时重新检查。其他 Profile 内依赖树仍被报告为 runtime 不兼容并保留只读导出能力；文件可读或存在锁文件本身不能证明兼容。
 
 命令写入按 Profile 与 Session 串行，不同 Session 可并发。fsync 日志在执行前记录 `started`，随后记录 committed outcome；两者之间崩溃恢复为 `unknown`，绝不推断成功。审批决策同时比较 payload hash、decision version、window generation 与过期时间。环境上下文只附着到 Session lease，不形成 Profile 全局状态。
 
