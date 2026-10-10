@@ -3,7 +3,7 @@
 import { join } from 'node:path'
 import { webcrypto } from 'node:crypto'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { installAssembledBootEnv, mountAssembledApp } from './assembled-boot.ts'
 import { installRemoteCollaboration } from '../src/remote-collaboration.ts'
 type WorkspaceRequest = { workspace_id: string
@@ -21,6 +21,8 @@ it.each(['click', 'enter'] as const)('root mode %s dispatches the frozen task an
   type Source = { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
   let original: { source: Source; snapshot_digest: string; original_message: string } | undefined
   let dispatched = false
+  const pendingGate = Promise.withResolvers<undefined>()
+  onTestFinished(() => { pendingGate.resolve(undefined) })
   const submit = vi.fn(async (input: Source & { original_message: string }) => {
     const source = { workspace_id: input.workspace_id, session_id: input.session_id,
       source_message_id: input.source_message_id, source_revision: input.source_revision }
@@ -41,8 +43,10 @@ it.each(['click', 'enter'] as const)('root mode %s dispatches the frozen task an
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {
     collaborationScopeAvailable: true, collaborationPlanningAvailable: true, collaborationExecutionAvailable: false,
     collaborationSubmit: submit, collaborationRootExecution: execute,
-    collaborationPending: async ({ source }: { source: Source }) => ({ ok: true,
-      value: { source, plan: null, pending_items: [], frozen_task_count: 1 } }),
+    collaborationPending: async ({ source }: { source: Source }) => {
+      await pendingGate.promise
+      return { ok: true, value: { source, plan: null, pending_items: [], frozen_task_count: 1 } }
+    },
     collaborationDeliveries: async ({ source }: { source: Source }) => ({ ok: true, value: { deliveries: dispatched ? [{
       delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1',
       source_locator: source, source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded', invocation_state_version: '2',

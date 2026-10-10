@@ -207,9 +207,14 @@ export class CollaborationResultsModel {
   /** The caller binds an available reader and verifies the owning generation before each page. */
   private async results(original: SessionCollaborationSourceItem, signal: AbortSignal, generation: number,
     cursor?: string, prior: readonly ScopedCollaborationReply[] = [],
-    previous: readonly ScopedCollaborationReply[] = []): Promise<CollaborationResultGroup> {
+    previous: readonly ScopedCollaborationReply[] = [],
+    onReplies?: (group: CollaborationResultGroup) => void): Promise<CollaborationResultGroup> {
     try {
       const host = this.boundBridge as ReadableResultsBridge
+      const plan = host.collaborationPending ? readCollaborationPending(host, original.source, signal).then(
+        value => ({ pending: value.pending_items, planningState: value.plan?.planning_state }),
+        () => ({ pendingUnavailable: true as const }),
+      ) : Promise.resolve({})
       const result = await wait(host.collaborationDeliveries({ source: original.source, limit: 50,
         ...(cursor ? { after_delivery_id: cursor } : {}) }), signal)
       if (!this.current(generation)) throw Error('obsolete')
@@ -232,20 +237,12 @@ export class CollaborationResultsModel {
         return item
       })]
       if (replies.length > 4096 || bytes(replies) > 16 * 1024 * 1024) throw Error('result_view_budget')
-      let pending: CollaborationPendingPage['pending_items'] | undefined, pendingUnavailable = false
-      let planningState: string | undefined
-      if (host.collaborationPending) {
-        try {
-          const currentPlan = await readCollaborationPending(host, original.source, signal)
-          pending = currentPlan.pending_items
-          planningState = currentPlan.plan?.planning_state
-        }
-        catch { pendingUnavailable = true }
-        if (!this.current(generation)) throw Error('obsolete')
-      }
-      return { original, replies, phase: 'ready', ...(pending === undefined ? {} : { pending }),
-        ...(planningState === undefined ? {} : { planningState }),
-        ...(pendingUnavailable ? { pendingUnavailable: true } : {}), ...(page.next_cursor ? { nextCursor: page.next_cursor } : {}) }
+      const group: CollaborationResultGroup = { original, replies, phase: 'ready',
+        ...(page.next_cursor ? { nextCursor: page.next_cursor } : {}) }
+      onReplies?.(group)
+      const planning = await plan
+      if (!this.current(generation)) throw Error('obsolete')
+      return { ...group, ...planning }
     } catch { return { original, replies: [], phase: 'error' } }
   }
   private async query(more: boolean): Promise<void> {
@@ -272,45 +269,57 @@ export class CollaborationResultsModel {
         if (!read.ok) throw Error('source_unavailable')
         const page = this.sourcePage(read.value, nextCursor)
         if (page.items.some(item => known.has(item.snapshot_digest)) || groups.length + page.items.length > 128) throw Error('invalid_source_cursor')
-        for (const original of page.items) {
-          if (this.readWaiters.length) {
-            // Resume this refresh after the explicit reads already waiting, before another poll.
-            const resume = this.acquireTraceQuery(generation)
-            ownsQuery = false
-            this.finishQuery()
-            if (!await resume) return
-            ownsQuery = true
-            if (!this.current(generation)) return
-            this.controller = controller
-          }
-          known.add(original.snapshot_digest)
+        if (this.readWaiters.length) {
+          const resume = this.acquireTraceQuery(generation)
+          ownsQuery = false
+          this.finishQuery()
+          if (!await resume) return
+          ownsQuery = true
+          if (!this.current(generation)) return
+          this.controller = controller
+        }
+        const completed = new Map<string, CollaborationResultGroup>()
+        page.items.forEach(item => known.add(item.snapshot_digest))
+        const publishGroup = (group: CollaborationResultGroup) => {
+          if (controller.signal.aborted || !this.current(generation)) return
+          completed.set(group.original.snapshot_digest, group)
+          const visible = [...groups, ...page.items.flatMap((item) => {
+            const result = completed.get(item.snapshot_digest)
+              ?? oldGroups.find(old => old.original.snapshot_digest === item.snapshot_digest)
+            return result ? [result] : []
+          }), ...oldGroups.filter(item => !known.has(item.original.snapshot_digest))]
+          if (bytes(visible) > 16 * 1024 * 1024) throw Error('result_view_budget')
+          this.publish({ ...this.state, phase: 'loading', groups: visible })
+        }
+        // Source pages admit at most eight messages; different Sources never share cursors or reply state.
+        const pageGroups = await Promise.all(page.items.map(async (original) => {
           const previous = oldGroups.find(item => item.original.snapshot_digest === original.snapshot_digest)?.replies ?? []
           const sourceSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)])
           const tracePages = this.tracePages.get(original.snapshot_digest)
           const [group] = await Promise.all([
             (async () => {
-              let result = await this.results(original, sourceSignal, generation, undefined, [], previous)
+              let result = await this.results(original, sourceSignal, generation, undefined, [], previous, publishGroup)
               for (let i = 1; i < (this.replyPages.get(original.snapshot_digest) ?? 1) && result.nextCursor; i++) {
-                result = await this.results(original, sourceSignal, generation, result.nextCursor, result.replies, previous)
+                result = await this.results(original, sourceSignal, generation, result.nextCursor, result.replies, previous, publishGroup)
               }
+              publishGroup(result)
               return result
             })(),
             tracePages === undefined ? undefined : this.traceRead(original, sourceSignal, generation, tracePages),
           ])
-          groups.push(group)
-          if (!this.current(generation)) return
-          const visible = [...groups, ...oldGroups.filter(item => !known.has(item.original.snapshot_digest))]
-          if (bytes(visible) > 16 * 1024 * 1024) throw Error('result_view_budget')
-          this.publish({ ...this.state, phase: 'loading', groups: visible })
-          if (!this.current(generation)) return
-        }
+          return group
+        }))
+        if (!this.current(generation)) return
+        groups.push(...pageGroups)
         nextCursor = page.next_cursor; pages++
       } while (!more && nextCursor !== undefined && pages < this.sourcePages)
       if (more) this.sourcePages++
       this.publish({ phase: 'ready', groups, ...(nextCursor ? { nextCursor } : {}) })
     } catch {
+      controller.abort()
       if (this.current(generation)) this.publish({ phase: 'error', groups: [] })
     } finally {
+      controller.abort()
       if (ownsQuery) this.finishQuery()
     }
   }
@@ -368,6 +377,7 @@ export class CollaborationResultsModel {
           item.original.snapshot_digest === group.original.snapshot_digest ? next : item) })
       }
     } finally {
+      controller.abort()
       this.finishQuery()
     }
   }

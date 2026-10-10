@@ -69,16 +69,18 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   const invoke = vi.fn(async (_input: InvokeInput) => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
   const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
-  const workspace = { id: workspaceId, archived: false }
+  const workspace = { id: workspaceId, archived: false, ready: true }
+  const workspaceListeners = new Set<() => void>()
   ctx.provide('workspaces', { list: {
-    getSnapshot: () => ({ phase: 'ready', state: 'idle', error: null,
+    getSnapshot: () => ({ phase: workspace.ready ? 'ready' : 'loading', state: 'idle', error: null,
       archivedSessionIds: workspace.archived ? [id] : [],
       items: [{ workspaceId: workspace.id, sessionIds: [id] }] }),
-    subscribe: () => () => undefined,
+    subscribe: (listener: () => void) => { workspaceListeners.add(listener); return () => { workspaceListeners.delete(listener) } },
   } } as never)
   const originals: { source: { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
     snapshot_digest: string
     original_message: string }[] = []
+  const connectionListeners = new Set<() => void>()
   const sourceReads = vi.fn<typeof ctx.remote.session.collaborationSources>(async () => ({ ok: true, value: { items: originals } }))
   if (servicesAvailable) {
     const namespace = { collaborationSources: sourceReads }
@@ -86,7 +88,10 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
       ctx.provide('remote', { session: namespace } as never)
       ctx.provide('remote.session', namespace as never)
     }
-    ctx.provide('connection', { generation: { getSnapshot: () => 1, subscribe: () => () => {} } } as never)
+    ctx.provide('connection', { generation: { getSnapshot: () => 1,
+      subscribe: (listener: () => void) => {
+        connectionListeners.add(listener); return () => { connectionListeners.delete(listener) }
+      } } } as never)
   }
   const submit = vi.fn(async (input: DesktopCollaborationSourceInput): Promise<CollaborationSubmissionResponse> => {
     originals.push({ source: { workspace_id: input.workspace_id, session_id: input.session_id,
@@ -189,8 +194,36 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   }
   return { ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf, scopeDirectory, workspace, sourceReads,
     retainActivity, releaseActivity,
-    deliveries, pending, clarify, originals, closeSession: () => scope.fiber.dispose() }
+    deliveries, pending, clarify, originals,
+    workspaceChanged: () => { workspaceListeners.forEach((listener) => { listener() }) },
+    connectionChanged: () => { connectionListeners.forEach((listener) => { listener() }) }, closeSession: () => scope.fiber.dispose() }
 }
+
+it('restores the first @ query when the YAML-loaded workspace feed becomes ready', async () => {
+  const f = await bench(true)
+  f.workspace.ready = false; f.workspaceChanged()
+  f.composer.setDraft('@Gui')
+  await vi.waitFor(() => { expect(f.controller.menu.getSnapshot().open).toBe(false) })
+  const draft = f.composer.snapshot.draft
+  f.workspace.ready = true; f.workspaceChanged()
+  await vi.waitFor(() => { expect(f.controller.menu.getSnapshot().groups.find(group => group.source === 'slark-agent')?.items[0]?.label).toBe('Guide · 项目空间') })
+  expect(f.composer.snapshot.draft).toBe(draft)
+  expect(f.submit).not.toHaveBeenCalled()
+})
+
+it('rechecks a retained @ query after Connection recovery without reviving an explicit dismissal', async () => {
+  const f = await bench(true)
+  f.scopeDirectory.mockResolvedValueOnce({ ok: false, errorCode: 'unavailable', refreshRequired: false })
+  f.composer.setDraft('@Gui')
+  await vi.waitFor(() => { expect(f.controller.menu.getSnapshot().open).toBe(false) })
+  f.connectionChanged()
+  await vi.waitFor(() => { expect(f.controller.menu.getSnapshot().groups[0]?.items[0]?.label).toBe('Guide · 项目空间') })
+  f.controller.dismiss()
+  const reads = f.scopeDirectory.mock.calls.length
+  f.connectionChanged()
+  expect(f.controller.menu.getSnapshot().open).toBe(false)
+  expect(f.scopeDirectory).toHaveBeenCalledTimes(reads)
+})
 
 type PickedScopedReference = {
   submission_mode?: 'planning'
