@@ -249,6 +249,30 @@ it.each([false, true])('blocks approved browser guest input across update overla
   expect(guest.sendInputEvent).toHaveBeenCalledTimes(2)
 })
 
+it('routes only approved guest HTTP(S) popup requests and always denies native windows', async () => {
+  const f = await fixture()
+  const guests = new DesktopBrowserGuests(() => 'http://127.0.0.1:4317') as GuestsFixture
+  guests.bind(f.window, () => () => {})
+  const reservation = guests.acquire(f.contents, 'session:test')
+  const { frame, guest } = browserGuest(reservation)
+  f.contents.emit('will-attach-webview', { preventDefault: vi.fn() }, {}, { src: frame.url, partition: reservation.partition })
+  f.contents.emit('did-attach-webview', {}, guest)
+  guest.emit('dom-ready')
+  const handle = guest.setWindowOpenHandler.mock.calls[0]![0] as (request: { url: string; postBody?: object }) => { action: string }
+  expect(handle({ url: 'https://example.com/new' })).toEqual({ action: 'deny' })
+  expect(f.contents.send).toHaveBeenCalledWith(DESKTOP_IPC.browserOpenRequested,
+    { lease: reservation.lease, url: 'https://example.com/new' })
+  f.contents.send.mockClear()
+  for (const request of [{ url: 'file:///private' }, { url: 'http://127.0.0.1:4317/' },
+    { url: 'https://example.com/post', postBody: {} }]) {
+    expect(handle(request)).toEqual({ action: 'deny' })
+  }
+  expect(f.contents.send).not.toHaveBeenCalled()
+  guest.emit('destroyed')
+  expect(handle({ url: 'https://example.com/late' })).toEqual({ action: 'deny' })
+  expect(f.contents.send).not.toHaveBeenCalled()
+})
+
 it('rejects other windows, subframes, remote/shell pages, and malformed edits', async () => {
   const f = await fixture()
   const get = f.handlers.get(DESKTOP_IPC.shortcutsGet)!
