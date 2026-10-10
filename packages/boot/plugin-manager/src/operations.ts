@@ -28,6 +28,21 @@ export interface PackageOperationContext {
   home?: string
 }
 
+/** Resolve the package-manager executable for one operation.
+ * On Windows the default `pnpm` resolves through PATH to Corepack's extensionless
+ * shell shim, which cannot be spawned without a shell and fails with
+ * "not an internal or external command"; the default is therefore anchored to its
+ * `pnpm.cmd` sibling. An explicitly configured command is the caller's choice and
+ * passes through unchanged.
+ * @param command Configured executable name or path, defaulting to `pnpm`.
+ * @param platform Override for `process.platform`, used by tests.
+ * @returns Executable that can be spawned without a shell.
+ */
+export function resolveOperationCommand(command?: string, platform: NodeJS.Platform = process.platform): string {
+  if (command !== undefined) return command
+  return platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+}
+
 /** Output and cancellation policy for one pnpm operation. */
 export interface PackageOperationOptions {
   /** The pnpm executable name or path; resolved through `PATH` like the `dsh plugin` command. Defaults to `pnpm`. */
@@ -174,7 +189,7 @@ async function namedSpecManifest(
     return existsSync(filename) ? JSON.parse(readFileSync(filename, 'utf8')) as object : undefined
   }
   if (parsed.kind !== 'registry') return undefined
-  const viewed = await execa(options.command ?? 'pnpm', [
+  const viewed = await execa(resolveOperationCommand(options.command), [
     ...options.args ?? [], 'view', parsed.spec, 'name', 'version', 'peerDependencies', '--json',
     ...flags, '--config.fetch-retries=0',
   ], {
@@ -354,7 +369,7 @@ export async function runProfilePnpm(
   // run is killed: a lifecycle script outlives the pnpm process that started it.
   // The CLI keeps the caller's process group, so an interrupt still reaches it.
   const grouped = leadsOwnGroup(options.execution)
-  const child = execa(options.command ?? 'pnpm', [...options.args ?? [], ...args.map(arg => anchorPathSpec(arg, context.cwd))], {
+  const child = execa(resolveOperationCommand(options.command), [...options.args ?? [], ...args.map(arg => anchorPathSpec(arg, context.cwd))], {
     cwd: dir, env: environment, extendEnv: false, reject: false,
     stdout: options.execution === 'cli' ? 'inherit' : 'pipe',
     stderr: options.execution === 'cli' ? 'inherit' : 'pipe',
@@ -504,7 +519,7 @@ export async function runProfilePnpm(
         await restore()
         const hadLockfile = savedFiles.some(file => file.path.endsWith('pnpm-lock.yaml') && file.text !== undefined)
         const repair = ['install', hadLockfile ? '--frozen-lockfile' : '--config.lockfile=false']
-        const repairing = execa(options.command ?? 'pnpm', [...options.args ?? [], ...repair], {
+        const repairing = execa(resolveOperationCommand(options.command), [...options.args ?? [], ...repair], {
           cwd: dir, env: environment, extendEnv: false, reject: false, stdin: 'ignore',
           ...options.idleTimeoutMs === undefined ? {} : { timeout: options.idleTimeoutMs },
         })
@@ -594,7 +609,7 @@ export interface PackageViewOptions {
 export async function readProfileRegistry(
   dir: string, options: { command?: string; args?: readonly string[]; env?: Readonly<Record<string, string>>; timeoutMs: number },
 ): Promise<string | null> {
-  const result = await execa(options.command ?? 'pnpm', [...options.args ?? [], 'config', 'get', 'registry'], {
+  const result = await execa(resolveOperationCommand(options.command), [...options.args ?? [], 'config', 'get', 'registry'], {
     cwd: dir, env: { ...scrubbedParentEnv(), ...options.env }, extendEnv: false, reject: false, stdin: 'ignore', timeout: options.timeoutMs,
   })
   // The registry is the last line: pnpm may print a notice before it.
@@ -623,7 +638,7 @@ export function registryArguments(registry: Registry): string[] {
  * @returns pnpm's exit, output, and how the lookup ended.
  */
 export async function viewProfilePackage(dir: string, spec: string, options: PackageViewOptions): Promise<PackageViewResult> {
-  const result = await execa(options.command ?? 'pnpm', [
+  const result = await execa(resolveOperationCommand(options.command), [
     ...options.args ?? [], 'view', spec, 'name', 'version', 'description', 'dsh', '--json',
     ...registryArguments(options.registry ?? null), '--config.fetch-retries=0',
   ], {
