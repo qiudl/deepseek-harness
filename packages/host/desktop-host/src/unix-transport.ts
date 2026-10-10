@@ -468,6 +468,7 @@ const capabilities = [
   'profile.lease_close',
   'profile.ensure',
   'profile.ensure_account_token',
+  'profile.ensure_binding_scope',
   'profile.bootstrap_local',
   'profile.open',
   'profile.open_local',
@@ -1296,6 +1297,8 @@ export class HostControlAuthority {
           if (frame.method === 'profile.ensure') {
             if (!frame.params.account_access_token) throw new HostAuthorityError('upgrade_required')
             profile = await this.options.host.ensureAccountProfile({
+              ...(frame.params.authority_binding_scope === undefined
+                ? {} : { authorityBindingScope: frame.params.authority_binding_scope }),
               accountAccessToken: frame.params.account_access_token,
               issuer: frame.params.account_issuer,
               subject: frame.params.account_subject,
@@ -2477,6 +2480,7 @@ export class UnixHostClient {
    * @returns ready opaque Profile id.
    */
   async ensureAccountProfile(input: AccountBindingInput & {
+    readonly authorityBindingScope?: string
     readonly issuer: string
     readonly subject: string
     readonly accountAccessToken: string
@@ -2487,6 +2491,10 @@ export class UnixHostClient {
     if (!this.inspection.capabilities.includes('profile.ensure_account_token' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
+    if (input.authorityBindingScope !== undefined
+      && !this.inspection.capabilities.includes('profile.ensure_binding_scope' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
     const request: ProfileEnsureRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
       params: {
@@ -2494,6 +2502,7 @@ export class UnixHostClient {
         account_access_token: input.accountAccessToken,
         account_issuer: input.issuer, account_subject: input.subject, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
+        ...(input.authorityBindingScope === undefined ? {} : { authority_binding_scope: input.authorityBindingScope as never }),
       },
     }
     return this.callReadyProfile(request, input.signal)

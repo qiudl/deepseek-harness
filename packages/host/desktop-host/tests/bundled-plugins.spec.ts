@@ -4,14 +4,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 
-const fsFaults = vi.hoisted(() => ({ failRename: false }))
+const fsFaults = vi.hoisted(() => ({ failRename: false, shortRead: false }))
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   const renameSync: typeof actual.renameSync = (oldPath, newPath) => {
     if (fsFaults.failRename) throw Object.assign(Error('rename failed'), { code: 'EIO' })
     actual.renameSync(oldPath, newPath)
   }
-  return { ...actual, renameSync }
+  const readSync = (...args: Parameters<typeof actual.readSync>) => fsFaults.shortRead ? 0 : actual.readSync(...args)
+  return { ...actual, renameSync, readSync }
 })
 import { BUNDLED_ARCHIVE_DIRECTORY, BundledPluginCatalog, parseBundledPluginSpec } from '../src/bundled-plugins.ts'
 import { isPinnedPluginSpec, runProfilePluginCommand } from '../src/plugin-command.ts'
@@ -94,6 +95,23 @@ it('refuses an embedding archive whose bytes do not match the catalog and writes
   const { web } = webRoot()
   expect(() => catalog.materialize(catalog.get('dsh-duet', '0.3.0')!, web)).toThrow('bundled_plugin_digest_mismatch')
   expect(existsSync(join(web, BUNDLED_ARCHIVE_DIRECTORY))).toBe(false)
+})
+
+it('reads only catalog-owned archive identities and refuses an empty archive', () => {
+  const root = embedding()
+  const catalog = BundledPluginCatalog.load(root, uid)
+  const plugin = catalog.get('dsh-duet', '0.3.0')!
+  expect(catalog.readArchive(plugin)).toEqual(archive)
+  expect(() => catalog.readArchive({ ...plugin })).toThrow('invalid_bundled_plugins')
+  writeFileSync(join(root, row.file), '')
+  expect(() => catalog.readArchive(plugin)).toThrow('unsafe_bundled_plugins')
+})
+
+it('rejects an embedding archive truncated during its bounded read', () => {
+  const catalog = BundledPluginCatalog.load(embedding(), uid)
+  fsFaults.shortRead = true
+  onTestFinished(() => { fsFaults.shortRead = false })
+  expect(() => catalog.readArchive(catalog.get('dsh-duet', '0.3.0')!)).toThrow('bundled_plugin_digest_mismatch')
 })
 
 function commandFixture() {

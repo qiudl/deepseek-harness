@@ -80,6 +80,8 @@ export interface PersonProfileRecord {
     readonly authorityEnvironmentId: string
     readonly handle: string
     readonly authorityBindingVersion: number
+    /** Hash of the assertion issuer's login identity; versions are ordered only within this scope. */
+    readonly authorityBindingScope?: string
   }[]
   readonly bindingGeneration: number
   readonly createdAt: number
