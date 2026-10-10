@@ -36,11 +36,11 @@ describe.skipIf(MODE === 'record')('web e2e: Sidebar Browser', () => {
     })
     browser = await chromium.launch()
     page = await newEnglishPage(browser)
-    await page.route('https://browser.test/**', async (route) => {
+    await page.context().route('https://browser.test/**', async (route) => {
       const name = new URL(route.request().url()).pathname.slice(1) || 'one'
       await route.fulfill({
         contentType: 'text/html',
-        body: `<h1>${name}</h1><a href="/inside">Inside navigation</a><p>isolated HTTPS fixture</p>`,
+        body: `<h1>${name}</h1><a href="/inside">Inside navigation</a><a href="/popup" target="_blank">Open popup</a><p>isolated HTTPS fixture</p>`,
       })
     })
     await page.route('http://127.0.0.1:3080/**', async route => route.fulfill({
@@ -75,6 +75,15 @@ describe.skipIf(MODE === 'record')('web e2e: Sidebar Browser', () => {
     await frame.waitFor({ state: 'visible' })
     await page.frameLocator('[data-sidebar-browser-frame]').getByRole('heading', { name: 'one' }).waitFor()
     expect(await frame.getAttribute('allow')).toBeNull()
+    const fallback = column.getByRole('note')
+    await fallback.getByText('Blank page? This site may not allow embedding.').waitFor()
+    await fallback.getByRole('button', { name: 'Open in system browser' }).waitFor()
+    const popupPromise = page.waitForEvent('popup')
+    await page.frameLocator('[data-sidebar-browser-frame]').getByRole('link', { name: 'Open popup' }).click()
+    const popup = await popupPromise
+    await popup.getByRole('heading', { name: 'popup' }).waitFor()
+    await popup.close()
+    await page.frameLocator('[data-sidebar-browser-frame]').getByRole('heading', { name: 'one' }).waitFor()
     await column.getByRole('button', { name: 'Disable sandbox restrictions' }).click()
     await expect.poll(() => frame.getAttribute('sandbox')).toBeNull()
     await column.getByText('Sandbox restrictions are disabled; the page can navigate the top-level app and use downloads, modal dialogs, and input locks.', { exact: true }).waitFor()
@@ -85,7 +94,8 @@ describe.skipIf(MODE === 'record')('web e2e: Sidebar Browser', () => {
     await column.getByText('URL changed', { exact: true }).waitFor()
     expect(await column.getByRole('button', { name: 'Back', exact: true }).isDisabled()).toBe(true)
     expect(await column.getByRole('button', { name: 'Forward', exact: true }).isDisabled()).toBe(true)
-    expect(await column.getByRole('button', { name: 'Open in system browser', exact: true }).isDisabled()).toBe(true)
+    expect(await column.locator('form').getByRole('button', { name: 'Open in system browser', exact: true }).isDisabled()).toBe(true)
+    await fallback.waitFor({ state: 'hidden' })
     await column.getByRole('button', { name: 'Reload' }).click()
     await page.frameLocator('[data-sidebar-browser-frame]').getByRole('heading', { name: 'one' }).waitFor()
     await input.fill('https://browser.test/two')

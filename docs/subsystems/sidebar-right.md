@@ -80,6 +80,7 @@ Two opens are the navigation controller, and every way into the column calls one
 | `paneId` | Land a new tab in this pane; default is the active docked pane (the first docked pane while a floating pane is active). |
 | `replaceTab` | Take this tab's pane and strip slot, closing it in the same step; a floating tab lends no place, so the new tab lands as if unplaced. |
 | `revealIfOpened` | Default `true`: a tab already showing the same `(kind, address)` is focused and handed `params`. `false` opens another tab regardless. |
+| `reuseMatchingParams` (`openTab` only) | For a multi-instance page, focus an existing tab in the same Session with matching original navigation parameters; leave its navigation unchanged. |
 | `preferNewPane` | Prefer a new docked pane under the normal pane budget and room rule; fall back to the target pane when it cannot split. Ignored with `replaceTab`. |
 | `kind` (`openResource` only) | Name the opening type instead of ranking claims; its implementation in force opens the address, and its `canOpen` still applies. |
 | `params` | Navigation parameters for the body, delivered as `navigation.params`. `openResource` types them by resource type through the merge-extensible `SidebarRightResourceParamsMap` (the text preview declares `{ line?: number }`); `openTab<K>` types them by kind through `SidebarRightTabParamsMap`, `undefined` for a kind that declares none; a body reads `SidebarRightNavigationParams`, the union of both. Values are JSON-shaped by convention and not validated at run time. |

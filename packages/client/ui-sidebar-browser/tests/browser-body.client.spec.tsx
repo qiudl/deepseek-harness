@@ -122,7 +122,7 @@ describe('BrowserBody', () => {
     expect(mounted.view.getByRole('status').textContent).toBe(zh['load.failed'])
     act(() => { providers[0]!.openRequested('https://new.example/') })
     expect(mounted.tabActions.openTab).toHaveBeenCalledExactlyOnceWith('browser', {
-      params: { url: 'https://new.example/' }, revealIfOpened: false,
+      params: { url: 'https://new.example/' }, reuseMatchingParams: true,
     })
   })
 
@@ -149,6 +149,11 @@ describe('BrowserBody', () => {
     let frame = mounted.view.container.querySelector('iframe')!
     expect(frame.getAttribute('src')).toBe('https://example.com/one')
     expect(frame.getAttribute('sandbox')).toBe(WEB_BROWSER_SANDBOX)
+    expect(mounted.view.getByRole('note').textContent).toContain(zh['web.embedHint'])
+    expect(mounted.view.getByRole('note').querySelector('button')?.textContent).toBe(zh.external)
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    fireEvent.click(mounted.view.getByRole('note').querySelector('button')!)
+    expect(open).toHaveBeenCalledExactlyOnceWith('https://example.com/one', '_blank', 'noopener,noreferrer')
     expect(frame.getAttribute('allow')).toBeNull()
     // jsdom does not reflect the iframe referrerPolicy property to its attribute.
     expect(frame.referrerPolicy).toBe('no-referrer')
@@ -253,7 +258,7 @@ describe('BrowserBody', () => {
     const input = mounted.view.getByRole('textbox') as HTMLInputElement
     await waitFor(() => { expect(input.value).toBe('https://initial.example/path') })
     await waitFor(() => { expect(mounted.view.container.querySelector('iframe')).not.toBeNull() })
-    fireEvent.click(mounted.view.getByRole('button', { name: zh.external }))
+    fireEvent.click(mounted.view.getAllByRole('button', { name: zh.external })[0]!)
     expect(open).toHaveBeenCalledWith('https://initial.example/path', '_blank', 'noopener,noreferrer')
   })
 
