@@ -350,7 +350,7 @@ export function apply(ctx: ClientContext): void {
     order: 5,
     showGroupTitle: false,
     matchEnterPosition: 'anywhere',
-    subscribeCandidates: scopedSource.subscribeCandidates,
+    subscribeCandidates: (session, listener) => scopedSource.subscribeCandidates(session, listener),
     matchEnterPlainText: () => {
       const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
       return Boolean(host?.collaborationScopeAvailable && host.collaborationExecutionAvailable

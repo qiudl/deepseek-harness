@@ -298,7 +298,7 @@ describe('RemoteStream', () => {
   it('stops a pending retry when the logical stream is disposed', async () => {
     const source = hostSource(false)
     const subscribed = Promise.withResolvers<undefined>()
-    const subscribe = source.connection.generation.subscribe
+    const subscribe = source.connection.generation.subscribe.bind(source.connection.generation)
     source.connection.generation.subscribe = (listener) => {
       const dispose = subscribe(listener)
       subscribed.resolve(undefined)
