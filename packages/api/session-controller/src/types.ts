@@ -307,10 +307,19 @@ export interface SessionListValue {
   readonly items: readonly SessionSummary[]
 }
 
-/** Read original collaboration messages for one Session; the cursor is a prior snapshot digest. */
+/** Read original collaboration messages for one Session; exact lookup and pagination are mutually exclusive. */
 export interface SessionCollaborationSourcesRequest {
   readonly sessionId: SessionId
   readonly cursor?: string
+  readonly snapshotDigest?: string
+  /** Opt into independent display positions; omission retains the existing response fields. */
+  readonly includeTimeline?: true
+}
+
+/** First observed display position, independent of ordinary Session events and model inputs. */
+export interface SessionCollaborationTimelinePosition {
+  readonly after_sequence: number | null
+  readonly local_order: string
 }
 
 /** Original user text and immutable coordinates; no model configuration, journal grants or cloud proof. */
@@ -323,6 +332,8 @@ export interface SessionCollaborationSourceItem {
   }
   readonly snapshot_digest: string
   readonly original_message: string
+  /** Included only on opt-in reads; null means an older Source has no recorded position. */
+  readonly timeline_position?: SessionCollaborationTimelinePosition | null
 }
 
 /** At most eight complete messages and 256 KiB of encoded JSON; another page never truncates text. */

@@ -17,3 +17,5 @@ Scope-only parents expose no execution methods. A parent advertising exactly `wo
 ## Verification
 
 The [remote carrier tests](tests/remote-boot.spec.ts) exercise the authenticated handshake and installation order. The [scope consumer tests](tests/remote-collaboration.spec.ts) use the real WorkerTunnel and MessagePorts, including refusal, cancellation and deadlines. These isolated tests do not establish live Account, provider or independent Agent execution acceptance.
+
+The plugin installation browser test records card and highlight changes with browser timestamps when the highlighted card is unavailable. It retains the visibility timeout and rethrows the original failure.

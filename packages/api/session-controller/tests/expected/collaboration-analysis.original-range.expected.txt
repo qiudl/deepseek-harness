@@ -1,0 +1,1 @@
+ The complete original_message evidence span has UTF-16 start 0 and end 23. Copy these exact offsets when using the complete original message; they do not apply to clarification replies or selected reference content.

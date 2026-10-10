@@ -130,6 +130,9 @@ export class DesktopRootPlanning {
         if (!p.record) throw Error('collaboration_root_planning_missing')
         await journal.saveOutput(p.record, result.jsonText, owned)
         return result
+      }).catch(async (error: unknown) => {
+        if (p.record) await journal.recordFailure(p.record, error)
+        throw error
       })
       await p.result
     })().catch((error: unknown) => { p.ready.reject(error); throw error }).finally(() => {
@@ -211,6 +214,7 @@ export class DesktopRootPlanning {
     await this.inspect(p.target, attemptId, binding, signal)
     if (p.started) throw Error('collaboration_root_planning_dispatch_used')
     p.started = true
+    p.timer.refresh()
     const abort = () =>{  p.controller.abort(signal.reason) }
     signal.addEventListener('abort', abort, { once: true })
     try { signal.throwIfAborted(); p.grant.resolve(grant); return await wait(p.result, signal) }

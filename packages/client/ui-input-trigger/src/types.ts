@@ -171,6 +171,13 @@ export interface InputTriggerSource {
   readonly matchEnterPlainText?: (session: ClientSessionContext) => boolean
   candidates(session: ClientSessionContext, req: CandidateRequest): Promise<readonly InputTriggerCandidate[]>
   /**
+   * Notify when candidate availability changes without another editor gesture.
+   * @param session - Owning Session projection.
+   * @param listener - Invalidates its current query, including an automatically closed empty menu.
+   * @returns Removal called on source removal or Session disposal; explicit dismissal stays closed.
+   */
+  subscribeCandidates?(session: ClientSessionContext, listener: () => void): () => void
+  /**
    * Synchronous breadcrumb rendered above this source's group, re-polled on
    * every hit. Implementing IS the participation claim; `undefined` means
    * this request needs no header. A crumb pick routes back through

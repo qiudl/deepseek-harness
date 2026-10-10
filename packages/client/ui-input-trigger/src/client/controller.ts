@@ -102,6 +102,7 @@ export class InputTriggerController {
   private disposed = false
   /** Per-source lexicon unsubscribers (sources without the hook never enter). */
   private readonly lexiconOffs = new Map<InputTriggerSource, () => void>()
+  private readonly candidateOffs = new Map<InputTriggerSource, () => void>()
 
   constructor(private readonly deps: InputTriggerControllerDeps) {
     // Scope-birth prewarm: sessions are always agent-backed, so the one-time
@@ -111,6 +112,7 @@ export class InputTriggerController {
     for (const src of deps.roster.all()) {
       src.warm?.(projection)
       this.watchLexicon(src, projection)
+      this.watchCandidates(src, projection)
     }
     this.refreshLexicon()
   }
@@ -419,6 +421,8 @@ export class InputTriggerController {
     }
     this.lexiconOffs.get(source)?.()
     this.lexiconOffs.delete(source)
+    this.candidateOffs.get(source)?.()
+    this.candidateOffs.delete(source)
     this.refreshLexicon()
   }
 
@@ -430,10 +434,13 @@ export class InputTriggerController {
    * @param source - the newly registered source.
    */
   sourceAdded(source: InputTriggerSource): void {
+    if (this.disposed) return
     const projection = this.project()
     source.warm?.(projection)
     this.watchLexicon(source, projection)
+    this.watchCandidates(source, projection)
     this.refreshLexicon()
+    this.refreshCandidateSource(source)
   }
 
   /** External dismiss (e.g. pointer outside the composer area). */
@@ -462,6 +469,8 @@ export class InputTriggerController {
     this.hit = null
     for (const off of this.lexiconOffs.values()) off()
     this.lexiconOffs.clear()
+    for (const off of this.candidateOffs.values()) off()
+    this.candidateOffs.clear()
   }
 
   /** The session projection handed to sources (agent-backed identity; constant per scope). */
@@ -523,6 +532,27 @@ export class InputTriggerController {
         this.fetchCandidates(hit, this.deps.roster.sources(hit.trigger))
       })
     }))
+  }
+
+  private watchCandidates(source: InputTriggerSource, projection: ClientSessionContext): void {
+    if (!source.subscribeCandidates) return
+    this.candidateOffs.set(source, source.subscribeCandidates(projection, () => {
+      this.refreshCandidateSource(source)
+    }))
+  }
+
+  private refreshCandidateSource(source: InputTriggerSource): void {
+    const hit = this.hit
+    if (this.disposed || !hit || hit.trigger !== source.trigger ||
+      (this.dismissed && dismissedHit(this.dismissed, hit))) return
+    const launched = this.launcher.getSnapshot()
+    const roster = this.deps.roster.sources(hit.trigger).filter(item => launched === null || item.name === launched)
+    if (!roster.includes(source)) return
+    this.stopFetch()
+    this.menu.set(seedGroups(this.menu.getSnapshot(), roster))
+    this.reduce({ type: 'hit', hit })
+    this.refreshHeaders(hit, roster)
+    this.fetchCandidates(hit, roster)
   }
 
   /** Launch the candidate fetch for one hit generation, superseding the previous one. */

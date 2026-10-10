@@ -34,6 +34,8 @@ export type WorkspaceResponse = { ok: true
   { ok: false; errorCode: string; refreshRequired: boolean; currentScope?: ProjectScope }
 /** Narrow transport used by the scope projection. */
 export interface WorkspaceBridge {
+  collaborationExecutionAvailable?: boolean
+  collaborationPlanningAvailable?: boolean
   collaborationWorkspace?(input: WorkspaceRequest): Promise<WorkspaceResponse>
 }
 /** Stable snapshot consumed through an entry-injected framework hook. */
@@ -47,6 +49,7 @@ export interface ProjectScopeSnapshot {
   agentCursor: string | null
   loadingProjects: boolean
   loadingAgents: boolean
+  mentionAvailable: boolean
   notice: 'conflict' | 'uncertain' | 'unavailable' | null
 }
 /** Scope data belongs to this Session's current registry workspace, never a recent workspace. */
@@ -66,7 +69,7 @@ export class ProjectScopeModel {
   }
   private empty(workspaceId: WorkspaceId | null): ProjectScopeSnapshot {
     return { workspaceId, phase: 'idle', scope: null, projects: [], projectCursor: null,
-      agents: [], agentCursor: null, loadingProjects: false, loadingAgents: false, notice: null }
+      agents: [], agentCursor: null, loadingProjects: false, loadingAgents: false, mentionAvailable: false, notice: null }
   }
   private bindWorkspace(): void {
     const data = this.workspaces.getSnapshot()
@@ -89,6 +92,21 @@ export class ProjectScopeModel {
   }
   /** Read the same snapshot identity until data changes. @returns the current Session projection. */
   getSnapshot = (): ProjectScopeSnapshot => this.snapshot
+  /**
+   * Resolve a loaded Agent only while its saved scope and Host remain current.
+   * @param projectId - selected project identity.
+   * @param agentId - loaded Agent identity.
+   * @returns the current directory item and workspace, or no usable mention.
+   */
+  agentForMention(projectId: string, agentId: string): { workspaceId: WorkspaceId; agent: ScopedAgentItem } | undefined {
+    if (this.closed) return undefined
+    this.bindWorkspace()
+    const state = this.snapshot
+    if (!state.mentionAvailable || state.phase !== 'ready' || !state.workspaceId ||
+      !state.scope?.selected_project_ids.includes(projectId)) return undefined
+    const agent = state.agents.find(item => item.project_id === projectId && item.agent_id === agentId)
+    return agent?.available && agent.reason_code === 'ready' ? { workspaceId: state.workspaceId, agent } : undefined
+  }
   /** Subscribe to structural updates. @param fn - observer. @returns observer removal. */
   subscribe = (fn: () => void): (() => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn) } }
 
@@ -122,7 +140,8 @@ export class ProjectScopeModel {
     if (!result?.ok || !('selected_project_ids' in result.value)) {
       this.publish({ ...this.snapshot, phase: 'error', notice: notice ?? 'unavailable' }); return
     }
-    this.publish({ ...this.snapshot, scope: result.value, phase: 'ready' })
+    this.publish({ ...this.snapshot, scope: result.value, phase: 'ready', mentionAvailable:
+      this.boundBridge?.collaborationExecutionAvailable === true || this.boundBridge?.collaborationPlanningAvailable === true })
     await Promise.all([this.loadProjects(true), this.loadAgents(true)])
   }
   /**

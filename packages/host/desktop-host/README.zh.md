@@ -77,6 +77,9 @@ Profile registry 为每个 Profile 保存 opaque Profile id、opaque Keychain ha
 
 macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启动一个 Host，分别检查 Node executable 与固定 DSH entrypoint，按照嵌入应用发布版本提供的 SHA-256 pin 校验 Account 公钥环，执行原生 peer PID／executable／code-signature attestation，并发布不含秘密的精确 `~/.dsh/host/registration.v1.json` discovery 记录。取得 Host 独占所有权后，Runtime 升级只能原子刷新该记录的 executable signature digest；installation、key、endpoint 和 socket 字段必须全部保持一致。Profile worker 不继承 ambient environment。Host 校验子进程确实拥有其报告的 loopback listener，自行把一次性启动 token 兑换为签名 Cookie，确认未认证 `/` 为 401、携 Cookie 的 `/` 为 200，然后立即丢弃 token。
 
+并发的 macOS peer 校验仅在应用可执行文件的身份和字节相同时，共享正在进行的代码签名验证。验证完成或失败后立即移除共享记录；每条连接仍独立检查内核 peer，并在验证前后检查可执行文件。独立可执行文件的快照验证方式不变。
+
+
 离线 Account 恢复只有在每个顶层依赖都通过当前打包 runtime 或摘要已验证的 Profile 兼容闭包解析时，才会启动声明的插件。Profile 内扁平化的依赖树会被报告为 runtime 不兼容并保留只读导出能力；Host 不会根据文件可读或存在锁文件来推断兼容。
 
 命令写入按 Profile 与 Session 串行，不同 Session 可并发。fsync 日志在执行前记录 `started`，随后记录 committed outcome；两者之间崩溃恢复为 `unknown`，绝不推断成功。审批决策同时比较 payload hash、decision version、window generation 与过期时间。环境上下文只附着到 Session lease，不形成 Profile 全局状态。
@@ -213,7 +216,7 @@ Web worker 工厂另生成随机 `DSH_PROFILE_ANALYSIS_TOKEN`，禁止调用方�
 Web worker 工厂另生成并保留 `DSH_PROFILE_DELIVERY_TOKEN`，供仅父 Host 可用的 `receiveCollaborationDelivery` 句柄使用。完整投递 JSON 上限为 1 MiB；所属 Profile 校验其结构，返回最多 8 KiB 的不可信本地提交 JSON，不回传答案。已停止的 worker、重定向、取消和非法响应均拒绝。该能力保留在视图租约之外。父 Host 必须认证账户命名空间与可读云端投影；该私有 HTTP 句柄不授予签名云端确认，也不提供控制协议上传。大回复需要在现有控制帧上限内进行已认证的分块传输。
 
 
-Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。worker 保存输出后，Host 签署原始 JSON 摘要、派发 grant 及当前 Account/安装/进程身份。保存失败或权限变化不会返回签名结果。取消关闭原操作；签名将已保存输出绑定到原派发及当前 Account 和 Host，不建立任务语义或 Agent 执行权限。
+Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。分析请求使用协议已有的30秒权限有效期上限，覆盖有界模型执行；其他控制请求仍为15秒。返回输出前重新检查有效期和当前 Account/Profile 权限。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。worker 保存输出后，Host 签署原始 JSON 摘要、派发 grant 及当前 Account/安装/进程身份。保存失败或权限变化不会返回签名结果。取消关闭原操作；签名将已保存输出绑定到原派发及当前 Account 和 Host，不建立任务语义或 Agent 执行权限。
 
 相同的当前 Account/Profile 校验覆盖 `capture_reply` 与 `prepare_clarification`。补充捕获、完整输入准备和派发全过程保留 Host 派生的归属摘要；客户端核验各操作对应的不可执行描述或准备结果类别。客户端仅在派发时接纳输出，并将其签名凭据与该派发核对。这两项操作不改变视图租约，不授予云端权限，也不受理任务。
 
@@ -226,7 +229,11 @@ Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后
 
 支持根分析的 worker 显式公布 `profile.root_analysis`。根准备使用当前 Account 授权的 Profile，并与派发保留同一 Host 绑定；客户端在发送新命令前拒绝旧端。Unix 和 Windows 启动接入同一种根分析 worker owner。旧 Source 分析保持独立，根准备不会回退到旧流程。
 
-读取已保存输出要求独立的 `profile.root_analysis_recovery` 能力。访问 worker 前后均检查当前 Account/Profile 授权，并使用私有分析 token。旧 worker 拒绝该命令；保存的派发元数据不会触发第二次模型调用。
+`sourceAnalysisRecoverySupported` 单独声明 `profile.source_analysis_recovery`。`read_source_output` 使用私有分析令牌，只访问当前 Account 所属 Profile，读取后重新检查权限。Host 验证原 Source、已消费派发记录及保存输出摘要，再按当前 Account 和安装/进程身份签名。客户端拒绝未签名的已保存响应，并核验精确字节及当前 Host。worker 使用专用有界输出读取器，让解码后 32 KiB 的 JSON 在 base64 编码后仍可完整传递；通用 JSON 字符串限制不变。输出缺失不授予调用，过期的已保存派发记录不授予当前云端权限。
+
+`sourceLiveResumeSupported` 独立声明 `profile.source_live_resume`。Host 为普通 Source 的 prepare 与 resume 派生稳定的 Account/Profile/安装/进程摘要，派发权仍绑定当前连接。访问 worker 前后均检查授权与能力。交接成功保留原 attempt 和期限，并使旧连接失去派发权；不支持的 worker 在访问前拒绝。
+
+读取已保存输出要求独立的 `profile.root_analysis_recovery` 能力。访问 worker 前后均检查当前 Account/Profile 授权，并使用私有分析 token。Host 按当前 Account 和安装/进程身份签署匹配的原派发记录及保存输出摘要。客户端必须取得该回执，并核验原始字节和当前 Host 身份。旧 worker 拒绝该命令；保存的派发元数据不会触发第二次模型调用。
 
 `rootLookupSupported` 独立于准备能力公布 `profile.root_lookup`。`recover_root` 复用当前 Account/Profile 校验及私有 worker token，但只接受 recovered 元数据；旧端在查询前拒绝。
 

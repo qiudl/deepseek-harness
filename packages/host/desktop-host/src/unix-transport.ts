@@ -5,7 +5,7 @@ import { parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAt
   encodeHostRootPlanningAttemptAuthorityPayload, matchHostRootPlanningAttemptTarget, matchHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion,
   ProfileRootPlanningAttemptAuthorityRequest, HostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import { matchHostRootAnalysisOutput } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostSourceAnalysisOutput, matchHostSourceAnalysisOutput, parseHostRootAnalysisOutput, matchHostRootAnalysisOutput } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata, type ProfileRootJournalRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootAuthorityChallenge, parseHostRootAuthorityAssertion, encodeHostRootAuthorityPayload, parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootSubmissionTarget, HostRootSubmissionDescriptor, ProfileRootAuthorityRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -248,6 +248,10 @@ export interface UnixHostServerOptions {
   /** Root preparation is supported by this worker composition; old workers never advertise it. */
   readonly rootAnalysisSupported?: boolean
   readonly rootAnalysisRecoverySupported?: boolean
+  /** Worker can read saved ordinary Source output without model preparation. */
+  readonly sourceAnalysisRecoverySupported?: boolean
+  /** Allows handoff of an original live, undispatched Source preparation. */
+  readonly sourceLiveResumeSupported?: boolean
   /** Worker supports read-only lookup of already admitted roots without preparation. */
   readonly rootLookupSupported?: boolean
   /** Supports read-only lookup of pending roots for cloud receipt reconciliation. */
@@ -438,7 +442,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootAnalysisRecoverySupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream'
 >
 
@@ -1585,6 +1589,8 @@ export class HostControlAuthority {
           if ((command.action === 'prepare_root_attempt' || command.action === 'read_root_attempt' || command.action === 'dispatch_root_attempt')
             && (!this.options.rootPlanningSupported || !this.options.inspectRootPlanningAttempt)) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'resume_root' && !this.options.rootLiveResumeSupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'resume_source' && !this.options.sourceLiveResumeSupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'read_source_output' && !this.options.sourceAnalysisRecoverySupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'read_root_output' && !this.options.rootAnalysisRecoverySupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'reconcile_root' && !this.options.rootPendingLookupSupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'recover_root' && !this.options.rootLookupSupported) throw new HostAuthorityError('upgrade_required')
@@ -1592,11 +1598,26 @@ export class HostControlAuthority {
           const { ownerId: _connectionOwner,...resumeAccount }=account
           const resumeBinding=createHash('sha256').update(JSON.stringify(['dsh-root-live-resume-v1',identity.installationId,
             identity.installationPublicKey,identity.hostInstanceId,identity.processNonce,profileId,resumeAccount])).digest('hex')
-          const payload = (command.action === 'read_root_output' || command.action === 'read_root_attempt' || command.action === 'prepare_root_attempt') ? { ...command, target: { ...command.target }, binding_key: binding }
+          const sourceResumeBinding = createHash('sha256').update(JSON.stringify(['dsh-source-live-resume-v1', identity.installationId,
+            identity.installationPublicKey, identity.hostInstanceId, identity.processNonce, profileId, resumeAccount])).digest('hex')
+          const payload = (command.action === 'read_source_output' || command.action === 'read_root_output' || command.action === 'read_root_attempt' || command.action === 'prepare_root_attempt') ? { ...command, target: { ...command.target }, binding_key: binding }
             : { ...command, binding_key: binding, ...((command.action==='prepare_root' || command.action==='resume_root') &&
-              this.options.rootLiveResumeSupported ? { resume_binding_key:resumeBinding } : {}) }
+              this.options.rootLiveResumeSupported ? { resume_binding_key:resumeBinding } : {}),
+            ...((command.action === 'prepare' || command.action === 'resume_source') && this.options.sourceLiveResumeSupported
+              ? { resume_binding_key: sourceResumeBinding } : {}) }
           const value = await execute(profileId, payload, context.signal)
           if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          const signOutput = (dispatch: unknown, outputDigest: string) => {
+            const unsigned = parseHostCollaborationAnalysisReceipt({ schema_version: 1,
+              authority_environment_id: account.authorityEnvironmentId, account_binding_handle: account.accountBindingHandle,
+              authority_binding_version: account.authorityBindingVersion, account_issuer: account.issuer, account_subject: account.subject,
+              installation_id: identity.installationId, installation_public_key: identity.installationPublicKey,
+              host_instance_id: identity.hostInstanceId, process_nonce: identity.processNonce, dispatch,
+              output_digest: outputDigest, signature: 'A'.repeat(86) })
+            const signature = sign(null, Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(unsigned)),
+              privateKeyObject(identity.installationPrivateKey)).toString('base64url')
+            return { ...unsigned, signature }
+          }
           let result: HostCollaborationAnalysisResult
           if (command.action === 'root_feedback') {
             let record: unknown = value
@@ -1630,9 +1651,20 @@ export class HostControlAuthority {
           else if (command.action === 'read_root_attempt') result = { kind: 'root_attempt_evidence', evidence: matchHostRootPlanningEvidence(value, command.target) }
           else if (command.action === 'prepare_root_attempt') result = { kind: 'root_attempt_prepared',
             preparation: matchHostRootPlanningAttemptTarget(value, command.target) }
-          else if (command.action === 'read_root_output') result = { kind:'root_output',evidence:matchHostRootAnalysisOutput(value,command.target) }
+          else if (command.action === 'read_source_output') {
+            const evidence = matchHostSourceAnalysisOutput(value, command.target)
+            result = { kind: 'source_output', evidence: evidence.state === 'saved'
+              ? parseHostSourceAnalysisOutput({ ...evidence, analysis_receipt: signOutput(evidence.dispatch, evidence.output_digest) })
+              : evidence }
+          }
+          else if (command.action === 'read_root_output') {
+            const evidence = matchHostRootAnalysisOutput(value, command.target)
+            result = { kind: 'root_output', evidence: evidence.state === 'saved'
+              ? parseHostRootAnalysisOutput({ ...evidence, analysis_receipt: signOutput(evidence.dispatch, evidence.output_digest) })
+              : evidence }
+          }
           else if (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') result = parseHostCollaborationAnalysisResult({ kind: 'root_prepared', preparation: value })
-          else if (command.action === 'prepare' || command.action === 'prepare_clarification') result = parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: value })
+          else if (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') result = parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: value })
           else if (command.action === 'capture_reply') result = parseHostCollaborationAnalysisResult({ kind: 'reply_source', capture: value })
           else {
             if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).join(',') !== 'jsonText' || !('jsonText' in value) || typeof value.jsonText !== 'string')
@@ -1641,14 +1673,9 @@ export class HostControlAuthority {
               result = parseHostCollaborationAnalysisResult({ kind: 'output', json_base64url: Buffer.from(value.jsonText, 'utf8').toString('base64url') })
             } else {
             // The private worker returns only after its output journal commits; failed writes never reach signing.
-              const unsigned = parseHostCollaborationAnalysisReceipt({ schema_version:1,
-                authority_environment_id:account.authorityEnvironmentId,account_binding_handle:account.accountBindingHandle,
-                authority_binding_version:account.authorityBindingVersion,account_issuer:account.issuer,account_subject:account.subject,
-                installation_id:identity.installationId,installation_public_key:identity.installationPublicKey,
-                host_instance_id:identity.hostInstanceId,process_nonce:identity.processNonce,dispatch:command.grant,
-                output_digest:createHash('sha256').update(value.jsonText,'utf8').digest('hex'),signature:'A'.repeat(86) })
-              const signature=sign(null,Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(unsigned)),privateKeyObject(identity.installationPrivateKey)).toString('base64url')
-              result = parseHostCollaborationAnalysisResult({ kind:'output',json_base64url:Buffer.from(value.jsonText,'utf8').toString('base64url'),analysis_receipt:{ ...unsigned,signature } })
+              const analysis_receipt = signOutput(command.grant, createHash('sha256').update(value.jsonText, 'utf8').digest('hex'))
+              result = parseHostCollaborationAnalysisResult({ kind: 'output',
+                json_base64url: Buffer.from(value.jsonText, 'utf8').toString('base64url'), analysis_receipt })
             }
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
@@ -1991,6 +2018,8 @@ export class HostControlAuthority {
           ...(this.options.collaborationAnalysis && this.options.rootPlanningSupported && this.options.inspectRootPlanningAttempt
             ? ['profile.root_planning_attempt', 'profile.root_planning_attempt_recovery'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootPendingLookupSupported ? ['profile.root_pending_lookup'] : []),
+          ...(this.options.collaborationAnalysis && this.options.sourceAnalysisRecoverySupported ? ['profile.source_analysis_recovery'] : []),
+          ...(this.options.collaborationAnalysis && this.options.sourceLiveResumeSupported ? ['profile.source_live_resume'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootAnalysisRecoverySupported ? ['profile.root_analysis_recovery'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootAnalysisSupported ? ['profile.root_analysis'] : []),
           ...(this.options.collaborationAnalysis ? ['profile.collaboration_analysis'] : []),
@@ -2893,17 +2922,21 @@ export class UnixHostClient {
     if (command.action === 'root_execution_journal' && !this.inspection.capabilities.includes('profile.root_execution_journal' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'read_root_attempt' && !this.inspection.capabilities.includes('profile.root_planning_attempt_recovery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'resume_root' && !this.inspection.capabilities.includes('profile.root_live_resume' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'read_source_output' && !this.inspection.capabilities.includes('profile.source_analysis_recovery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'resume_source' && !this.inspection.capabilities.includes('profile.source_live_resume' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'read_root_output' && !this.inspection.capabilities.includes('profile.root_analysis_recovery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'reconcile_root' && !this.inspection.capabilities.includes('profile.root_pending_lookup' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'recover_root' && !this.inspection.capabilities.includes('profile.root_lookup' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'prepare_root' && !this.inspection.capabilities.includes('profile.root_analysis' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     const request: ProfileCollaborationAnalysisRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_analysis', params: {
-        ...this.collaborationAccountRequestParams(input), command,
+        ...this.collaborationAccountRequestParams(input, 30_000), command,
       } }
     const frame = await this.callCurrentPeer(request, active)
     const result = parseHostCollaborationAnalysisResult(frame.result)
-    const expected = command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
+    const expected = command.action === 'read_source_output' ? 'source_output' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
+    if (command.action === 'resume_source' && (result.kind !== 'prepared' || !result.preparation || typeof result.preparation !== 'object' ||
+      Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
     if (command.action === 'resume_root' && (result.kind !== 'root_prepared' || !result.preparation || typeof result.preparation !== 'object' || Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
     if ((command.action === 'recover_root' || command.action === 'reconcile_root') && (result.kind !== 'root_prepared' || !result.preparation || typeof result.preparation !== 'object' || Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'recovered')) throw new HostAuthorityError('unavailable')
     if (result.kind !== expected) throw new HostAuthorityError('unavailable')
@@ -2911,16 +2944,21 @@ export class UnixHostClient {
     if (result.kind === 'root_attempt_prepared' && command.action === 'prepare_root_attempt')
       matchHostRootPlanningAttemptTarget(result.preparation, command.target)
     if (result.kind === 'root_output' && command.action === 'read_root_output') matchHostRootAnalysisOutput(result.evidence,command.target)
-    const dispatch = command.action === 'dispatch' ? command.grant : undefined
-    if (result.kind === 'output' && result.analysis_receipt) {
-      const receipt=result.analysis_receipt
+    if (result.kind === 'source_output' && command.action === 'read_source_output') matchHostSourceAnalysisOutput(result.evidence, command.target)
+    const saved = (result.kind === 'source_output' || result.kind === 'root_output') && result.evidence.state === 'saved'
+      ? result.evidence : undefined
+    if (saved && !saved.analysis_receipt) throw new HostAuthorityError('unauthorized')
+    const dispatch = saved?.dispatch ?? (command.action === 'dispatch' ? command.grant : undefined)
+    const receipt = saved?.analysis_receipt ?? (result.kind === 'output' ? result.analysis_receipt : undefined)
+    const encodedOutput = saved?.json_base64url ?? (result.kind === 'output' ? result.json_base64url : '')
+    if (receipt) {
       const expected=parseHostCollaborationAnalysisReceipt({ ...receipt,
         authority_environment_id:input.authorityEnvironmentId,account_binding_handle:input.accountBindingHandle,
         authority_binding_version:input.authorityBindingVersion,account_issuer:input.issuer,account_subject:input.subject,
         installation_id:this.inspection.installation_id,installation_public_key:this.inspection.installation_public_key,
         host_instance_id:this.inspection.host_instance_id,process_nonce:this.inspection.process_nonce,dispatch })
       if (encodeHostCollaborationAnalysisReceiptPayload(receipt)!==encodeHostCollaborationAnalysisReceiptPayload(expected)
-        || createHash('sha256').update(Buffer.from(result.json_base64url,'base64url')).digest('hex')!==receipt.output_digest
+        || createHash('sha256').update(Buffer.from(encodedOutput,'base64url')).digest('hex')!==receipt.output_digest
         || !verify(null,Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(receipt)),publicKeyObject(receipt.installation_public_key),Buffer.from(receipt.signature,'base64url'))) throw new HostAuthorityError('unauthorized')
     }
     return result
@@ -3900,8 +3938,8 @@ export class UnixHostClient {
     authorityBindingVersion: number
     issuer: string
     subject: string
-  }) {
-    return { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+  }, lifetimeMs = 15_000) {
+    return { ...this.auth(lifetimeMs), authority_environment_id: input.authorityEnvironmentId as never,
       account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
       account_issuer: input.issuer, account_subject: input.subject }
   }
@@ -3933,7 +3971,7 @@ export class UnixHostClient {
       && result.process_nonce === this.inspection.process_nonce
   }
 
-  private auth(): Pick<
+  private auth(lifetimeMs = 15_000): Pick<
     ProfileStatusRequest['params'],
     'client_instance_id' | 'host_instance_id' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'
   > {
@@ -3944,7 +3982,7 @@ export class UnixHostClient {
       process_nonce: this.state.processNonce,
       jti: randomUUID() as HostControlJti,
       issued_at: issuedAt,
-      expires_at: issuedAt + 15_000,
+      expires_at: issuedAt + lifetimeMs,
     }
   }
 

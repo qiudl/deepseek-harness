@@ -1,4 +1,5 @@
 /** REQ-20260930-0004: complete Host analysis inputs and consumed dispatch grants, separate from Session logs. */
+import { openCollaborationAnalysisFailures, type CollaborationAnalysisFailure } from './collaboration-analysis-failure-journal.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
@@ -6,6 +7,7 @@ import type { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import { describeCollaborationSource, parseCollaborationSourceSnapshot } from './collaboration-source-journal.ts'
 import { clarificationAnalysisMessage, parseCollaborationClarificationInput } from './collaboration-clarification-input.ts'
+import { parseCollaborationReferenceCatalogue } from './collaboration-reference-catalogue.ts'
 import type { CollaborationAnalysisManifest } from './collaboration-analysis.ts'
 
 const id = z.string().regex(/^[\x21-\x7e]{1,256}$/u)
@@ -39,9 +41,12 @@ function valid(record: CollaborationAnalysisJournalRecord): boolean {
     const parsed: unknown = JSON.parse(record.manifest_json)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false
     const manifest = parsed as Record<string, unknown>
-    const clarification = manifest.prompt_version === '2' ? parseCollaborationClarificationInput(manifest.clarification) : undefined
-    if ((manifest.prompt_version !== '1' && manifest.prompt_version !== '2')
-      || Object.keys(manifest).sort().join(',') !== (clarification ? 'clarification,prompt_version,request,source' : 'prompt_version,request,source')
+    const clarification = (manifest.prompt_version === '2' || manifest.prompt_version === '4') ? parseCollaborationClarificationInput(manifest.clarification) : undefined
+    const catalogue = manifest.prompt_version === '3' || manifest.prompt_version === '4'
+      ? parseCollaborationReferenceCatalogue(manifest.reference_catalogue) : undefined
+    const keys = ['prompt_version', 'request', 'source', ...(clarification ? ['clarification'] : []), ...(catalogue ? ['reference_catalogue'] : [])]
+    if (!['1', '2', '3', '4'].includes(String(manifest.prompt_version)) || typeof manifest.prompt_version !== 'string'
+      || Object.keys(manifest).sort().join(',') !== keys.sort().join(',')
       || canonical(manifest) !== record.manifest_json) return false
     const source = parseCollaborationSourceSnapshot(manifest.source)
     if (clarification && canonical(clarification.original_snapshot) !== canonical(source)) return false
@@ -59,9 +64,11 @@ function valid(record: CollaborationAnalysisJournalRecord): boolean {
     const message = request.messages[0] as { role?: unknown; source?: { kind?: unknown }; content?: { type?: unknown; text?: unknown }[] }
     if (message.role !== 'user' || message.source?.kind !== 'user' || message.content?.length !== 1
       || message.content[0]?.type !== 'text' || typeof message.content[0].text !== 'string') return false
-    const expected: unknown = clarification ? JSON.parse(clarificationAnalysisMessage(clarification))
+    const original: Record<string, unknown> = clarification
+      ? JSON.parse(clarificationAnalysisMessage(clarification)) as Record<string, unknown>
       : { source_message_id: source.source_message_id, source_revision: source.source_revision,
         original_message: source.original_message, active_mentions: source.active_mentions }
+    const expected = catalogue === undefined ? original : { ...original, reference_catalogue: catalogue }
     if (canonical(JSON.parse(message.content[0].text)) !== canonical(expected)) return false
     return record.dispatch === undefined || (record.dispatch.attempt_request_id === record.attempt_request_id
       && record.dispatch.input_manifest_digest === record.input_manifest_digest && record.dispatch.source_digest === record.source_digest
@@ -131,6 +138,14 @@ export interface CollaborationAnalysisJournal {
    * @returns the committed frozen output, also accessible for read-only recovery.
    */
   saveOutput(record:CollaborationAnalysisJournalRecord,jsonText:string,signal:AbortSignal):Promise<AnalysisOutput>
+  /** Retain a sanitized failed local analysis observation after consumed dispatch; success takes precedence.
+   * @param record - Original durable input; identity must still match.
+   * @param error - Local operation failure, mapped to a fixed reason vocabulary.
+   * @returns Completion after the observation commits; no retry or cloud terminal state is authorized.
+   */
+  recordFailure(record: CollaborationAnalysisJournalRecord, error: unknown): Promise<void>
+  /** @returns Retained failures tied to original inputs and consumed dispatches. */
+  failures(): IterableIterator<CollaborationAnalysisFailure>
   /** @returns frozen original outputs; recovery never constructs executable model calls. */
   outputs():IterableIterator<AnalysisOutput>
   /** @returns a frozen record iterator for read-only recovery and reconciliation. */
@@ -160,10 +175,12 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
     await domain.close()
     throw error
   }
+  let failures: Awaited<ReturnType<typeof openCollaborationAnalysisFailures>> | undefined
   const closeDomains = async () => {
     const results = await Promise.allSettled([
       Promise.resolve().then(() => domain.close()),
       Promise.resolve().then(() => outputDomain.close()),
+      Promise.resolve().then(() => failures?.close()),
     ])
     const errors: unknown[] = []
     for (const result of results) if (result.status === 'rejected') errors.push(result.reason)
@@ -188,6 +205,20 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
     throw error
   }
 
+  try {
+    failures = await openCollaborationAnalysisFailures(facility, 'collaboration_analysis_failure_v1', (key) => {
+      const record = table.get(key)
+      if (!record?.dispatch) return undefined
+      const manifest = JSON.parse(record.manifest_json) as CollaborationAnalysisManifest
+      const parent = manifest.request.traceparent
+      const trace_id = parent === undefined ? null
+        : z.string().regex(/^00-(?!0{32})[a-f0-9]{32}-(?!0{16})[a-f0-9]{16}-01$/u).parse(parent).slice(3, 35)
+      return { identity: { attempt_request_id: record.attempt_request_id, input_manifest_digest: key,
+        source_digest: record.source_digest, dispatch_digest: hash(canonical(record.dispatch)), trace_id },
+      hasOutput: outputs.get(key) !== undefined }
+    })
+  } catch (error) { await closeDomains(); throw error }
+  const failureJournal = failures
   let tail = Promise.resolve(), closing: Promise<void> | undefined, recoveryRequired = false
   const healthy = () => { if (recoveryRequired) throw Error('collaboration_analysis_journal_recovery_required') }
   const enqueue = <T>(work: () => Promise<T>): Promise<T> => {
@@ -270,6 +301,7 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
           if (previous.json_text !== value.json_text) throw Error('collaboration_analysis_output_conflict')
           return previous
         }
+        failureJournal.assertNoFailure(value.input_manifest_digest)
         try {
           await outputs.put(value.input_manifest_digest, value)
         } catch (error) {
@@ -279,6 +311,19 @@ export async function openCollaborationAnalysisJournal(facility: Pick<DomainFaci
         signal.throwIfAborted()
         return value
       })
+    },
+    recordFailure(record, error) {
+      return enqueue(async () => {
+        const stored = table.get(record.input_manifest_digest)
+        if (!stored || stored.attempt_request_id !== record.attempt_request_id || stored.manifest_json !== record.manifest_json) {
+          throw Error('collaboration_analysis_failure_input_conflict')
+        }
+        await failureJournal.record(record.input_manifest_digest, error)
+      })
+    },
+    failures() {
+      if (closing) throw Error('collaboration_analysis_journal_closed')
+      healthy(); return failureJournal.records()
     },
     outputs() {
       if (closing) throw Error('collaboration_analysis_journal_closed')

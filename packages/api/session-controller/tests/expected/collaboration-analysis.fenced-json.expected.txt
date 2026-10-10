@@ -1,0 +1,1 @@
+{"jsonText":" {\"intent\":\"delegate\",\"task_candidates\":[],\"pending_candidates\":[],\"literal\":\"@Guide  保留限制与 ``` 文本\"} "}

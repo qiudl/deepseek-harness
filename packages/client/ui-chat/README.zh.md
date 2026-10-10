@@ -144,7 +144,10 @@ Chat 会在历史前插与 renderer 重新挂载时恢复语义锚点，并且�
 
 -----
 
+独立历史通过 `ctx.chatTimeline` 注册已校验的 JSON 记录身份和位置。Chat 保留普通 Node、分组及待发送输入的渲染，通过 `conversation.chat.timeline` 展示独立记录；`recordId: null` 的入口负责只读分页和旧历史提示。记录落在组内时会展开该组成员，不修改 Session 数据。晚注册及注销会通知视图，Chat 没有读取者时停止观察来源。
+
 <a id="model-experience"></a>
+
 ## 模型体验
 
 无，因为本包在浏览器中渲染已记录的对话状态，不注册任何面向模型的内容。

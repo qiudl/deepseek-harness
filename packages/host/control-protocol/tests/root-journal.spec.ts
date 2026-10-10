@@ -59,6 +59,16 @@ it('saved output retains expired evidence with bounded frames and rejects altere
   const encoded = encodeHostControlFrame(frame as never)
   expect(Buffer.byteLength(encoded)).toBeLessThan(65536)
   expect(decodeHostControlFrame(encoded)).toEqual(frame)
+  const signed = { ...evidence, analysis_receipt: { schema_version: 1,
+    authority_environment_id: s.environment_id, account_binding_handle: 'binding:test', authority_binding_version: 1,
+    account_issuer: s.account_issuer, account_subject: s.account_subject,
+    installation_id: proof.installation_id, installation_public_key: proof.installation_public_key,
+    host_instance_id: proof.host_instance_id, process_nonce: proof.process_nonce,
+    dispatch: evidence.dispatch, output_digest: evidence.output_digest, signature: 'A'.repeat(86) } }
+  const signedFrame = { ...frame, result: { kind: 'root_output', evidence: signed } }
+  const signedEncoded = encodeHostControlFrame(signedFrame as never)
+  expect(Buffer.byteLength(signedEncoded)).toBeLessThan(65536)
+  expect(decodeHostControlFrame(signedEncoded)).toEqual(signedFrame)
   expect(parseHostRootAnalysisOutput({ state:'missing',root:savedRoot })).toEqual({ state:'missing',root:savedRoot })
   for(const bad of [{ ...evidence,output_digest:'0'.repeat(64) },{ ...evidence,json_base64url:Buffer.from(JSON.stringify({ value:'x'.repeat(32757) })).toString('base64url') },{ ...evidence,dispatch:{ ...evidence.dispatch,source_digest:'0'.repeat(64) } },{ ...evidence,manifest_json:'private' },{ ...evidence,state:'unknown' }]) expect(()=>parseHostRootAnalysisOutput(bad)).toThrow()
   expect(()=>matchHostRootAnalysisOutput(evidence,

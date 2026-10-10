@@ -34,6 +34,8 @@ async function fixture(
   rootLookupSupported = false, rootPendingLookupSupported = false, rootLiveResumeSupported = false,
   rootPlanningSupported = false, rootExecutionSupported = false, rootFeedbackSupported = false,
   enabled = true, omitRootReaders = false, referenceEnabled = false, captureEnabled = false, contentEnabled = false,
+  sourceAnalysisRecoverySupported = false,
+  sourceLiveResumeSupported = false,
   rootContinuationSupported = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
@@ -126,6 +128,8 @@ async function fixture(
     rootContinuationSupported,
     rootAnalysisSupported,
     rootAnalysisRecoverySupported,
+    sourceAnalysisRecoverySupported,
+    sourceLiveResumeSupported,
     rootLookupSupported,
     rootPendingLookupSupported,
     rootLiveResumeSupported,
@@ -486,6 +490,92 @@ it('refuses a Source digest or coordinate mismatch from the private worker', asy
 function analysisGrant(f:Awaited<ReturnType<typeof fixture>>) {
   return { attempt_request_id:f.challenge.request_id,plan_id:'plan',expected_plan_revision:'1',attempt_id:'attempt',attempt_fence:'1',source_digest:f.challenge.snapshot_digest,input_manifest_digest:'b'.repeat(64),lease_expires_at:new Date(20000).toISOString(),dispatch_granted:true }
 }
+it('the Host refuses Source resume even when its peer incorrectly advertises support', async () => {
+  const f = await fixture(false, false, false, false, false, false, false, false, true)
+  await f.grant()
+  const analysis = vi.fn(async () => ({}))
+  f.setAnalysis(analysis)
+  Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, 'profile.source_live_resume'])
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'resume_source', input: {} } }))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.some(frame => frame.type === 'request' && frame.method === 'profile.collaboration_analysis')).toBe(true)
+  expect(analysis).not.toHaveBeenCalled()
+})
+it.each(['live', 'old', 'wrong_kind', 'revoked', 'cancelled'] as const)(
+  'Source live resume uses a separate capability and Host-derived Account identity: %s', async (mode) => {
+    const f = await fixture(false, false, false, false, false, false, false, false, true, false, false, false, false, false, mode !== 'old')
+    await f.grant()
+    const c = f.challenge, cancel = new AbortController(), commands: Record<string, unknown>[] = []
+    const descriptor = { workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id,
+      source_revision: c.source_revision, snapshot_digest: c.snapshot_digest }
+    const preparation = { kind: 'prepared', descriptor, attempt_request_id: c.request_id,
+      input_manifest_digest: 'b'.repeat(64), source_digest: c.snapshot_digest }
+    f.setAnalysis(async (_profile, command) => {
+      commands.push(command)
+      if (command.action === 'resume_source' && mode === 'revoked') f.host.revokeOwner(f.ownerId)
+      if (command.action === 'resume_source' && mode === 'cancelled') cancel.abort()
+      return command.action === 'resume_source' && mode === 'wrong_kind' ? { kind: 'recovered', descriptor } : preparation
+    })
+    await f.client.collaborationAnalysis({ ...f.account, command: { action: 'prepare', input: {} } })
+    const resumed = f.client.collaborationAnalysis({ ...f.account, command: { action: 'resume_source', input: {} }, signal: cancel.signal })
+    if (mode === 'live') {
+      expect(await resumed).toEqual({ kind: 'prepared', preparation })
+      expect(commands[0]?.resume_binding_key).toMatch(/^[a-f0-9]{64}$/u)
+      expect(commands[1]?.resume_binding_key).toBe(commands[0]?.resume_binding_key)
+      expect(commands[1]?.binding_key).not.toBe(commands[1]?.resume_binding_key)
+    } else await expect(resumed).rejects.toThrow()
+    expect(commands).toHaveLength(mode === 'old' ? 1 : 2)
+  },
+)
+it.each(['saved', 'maximum', 'unsigned', 'signature', 'peer'] as const)(
+  'saved Root output carries current installation proof without dispatch: %s', async (mode) => {
+    const { parseHostRootSubmissionTarget, parseHostCollaborationAnalysisReceipt,
+      encodeHostCollaborationAnalysisReceiptPayload } = await import('@deepseek-ai/dsh-host-control-protocol')
+    const f = await fixture(true, true)
+    await f.grant()
+    const c = f.challenge
+    const root = { namespace_id: 'n2_' + 'b'.repeat(64), command_id: randomUUID(), root_task_id: randomUUID(),
+      root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64), source_descriptor: {
+        workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id,
+        source_revision: c.source_revision, snapshot_digest: c.snapshot_digest } }
+    const { snapshot_digest: _digest, ...coordinates } = root.source_descriptor
+    const target = parseHostRootSubmissionTarget({ namespace_id: root.namespace_id, command_id: root.command_id, ...coordinates })
+    const jsonText = mode === 'maximum' ? JSON.stringify({ text: '\u0000'.repeat(5459) + 'abc' }) : '{"intent":"discuss"}'
+    const dispatch = analysisGrant(f), output_digest = createHash('sha256').update(jsonText).digest('hex')
+    let reads = 0
+    f.setAnalysis(async (_profile, command) => {
+      reads++
+      expect(command.action).toBe('read_root_output')
+      return { state: 'saved', root, dispatch, output_digest, json_base64url: Buffer.from(jsonText).toString('base64url') }
+    })
+    if (mode !== 'saved' && mode !== 'maximum') f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.collaboration_analysis' || frame.result.kind !== 'root_output'
+        || frame.result.evidence.state !== 'saved') return frame
+      const evidence = frame.result.evidence
+      const receipt = parseHostCollaborationAnalysisReceipt(Object.getOwnPropertyDescriptor(evidence, 'analysis_receipt')?.value)
+      if (mode === 'unsigned') {
+        const { analysis_receipt: _proof, ...unsigned } = { ...evidence, analysis_receipt: receipt }
+        return { ...frame, result: { kind: 'root_output', evidence: unsigned } }
+      }
+      return { ...frame, result: { kind: 'root_output', evidence: { ...evidence,
+        analysis_receipt: mode === 'peer' ? { ...receipt, process_nonce: 'B'.repeat(43) }
+          : { ...receipt, signature: 'A'.repeat(86) } } } }
+    })
+    const pending = f.client.collaborationAnalysis({ ...f.account, command: { action: 'read_root_output', target } })
+    if (mode === 'saved' || mode === 'maximum') {
+      const result = await pending
+      if (result.kind !== 'root_output' || result.evidence.state !== 'saved') throw Error('missing saved Root output')
+      const proof = parseHostCollaborationAnalysisReceipt(Object.getOwnPropertyDescriptor(result.evidence, 'analysis_receipt')?.value)
+      expect(proof).toMatchObject({ dispatch, output_digest, account_binding_handle: f.account.accountBindingHandle,
+        installation_id: f.identity.installationId })
+      expect(verify(null, Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(proof)), f.keys.publicKey,
+        Buffer.from(proof.signature, 'base64url'))).toBe(true)
+      expect(Buffer.from(result.evidence.json_base64url, 'base64url').toString('utf8')).toBe(jsonText)
+      if (mode === 'maximum') expect(Buffer.byteLength(jsonText)).toBe(32768)
+    } else await expect(pending).rejects.toThrow()
+    expect(reads).toBe(1)
+  },
+)
 it('authorizes analysis under the original connection Account and derives its private binding in Host', async () => {
   const f = await fixture()
   const input = { ...f.account, command: { action: 'dispatch' as const, attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) } }
@@ -514,6 +604,28 @@ it('refuses revoked or changed Profile analysis replies and propagates transport
     return { jsonText: '{}' }
   })
   await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'dispatch', attempt_request_id: f.challenge.request_id, grant: analysisGrant(f) }, signal: controller.signal })).rejects.toThrow()
+})
+it.each([18_000, 29_000])('returns committed analysis after %i ms within the bounded request authority', async (elapsed) => {
+  const f = await fixture(); await f.grant()
+  f.setAnalysis(async () => { f.time.value += elapsed; return { jsonText: '{}' } })
+  const result = await f.client.collaborationAnalysis({ ...f.account, command: {
+    action: 'dispatch', attempt_request_id: f.challenge.request_id,
+    grant: { ...analysisGrant(f), lease_expires_at: new Date(31_000).toISOString() },
+  } })
+  expect(result.kind).toBe('output')
+  if (result.kind === 'output') expect(result.analysis_receipt?.output_digest).toBe(createHash('sha256').update('{}').digest('hex'))
+})
+it.each(['expired', 'revoked'] as const)('refuses a slow analysis result when its authority is %s', async (failure) => {
+  const f = await fixture(); await f.grant()
+  f.setAnalysis(async () => {
+    f.time.value += failure === 'expired' ? 30_000 : 18_000
+    if (failure === 'revoked') f.host.revokeOwner(f.ownerId)
+    return { jsonText: '{}' }
+  })
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: {
+    action: 'dispatch', attempt_request_id: f.challenge.request_id,
+    grant: { ...analysisGrant(f), lease_expires_at: new Date(31_000).toISOString() },
+  } })).rejects.toThrow()
 })
 it('keeps large escaped original output below the Host frame byte budget', async () => {
   const f = await fixture()
@@ -1408,7 +1520,7 @@ it('signs durable consumption in a separate domain and refuses a changed origina
 })
 
 it('signs first-reply observations under the current Host without treating consumption signatures as reply evidence', async () => {
-  const f = await fixture(false,false,false,false,false,false,false,true,true,false,false,false,false,true)
+  const f = await fixture(false,false,false,false,false,false,false,true,true,false,false,false,false,false,false,true)
   const original = replyFixture(f).commit
   const consumption = { ...original,root_task_id:randomUUID(),root_trace_id:'d'.repeat(32),task_revision:1,
     execution_command_id:randomUUID(),consumption_id:randomUUID(),consumer_attempt_id:randomUUID(),consumer_step_id:randomUUID(),
@@ -1439,9 +1551,11 @@ it('enforces root rollout capabilities on the server even if the client advertis
   const target = { namespace_id: 'n2_' + 'a'.repeat(64), command_id: randomUUID(),
     workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id, source_revision: c.source_revision }
   const input = { namespace_id: target.namespace_id, continuation_policy: 'follow_authorized_plan', source: {} }
-  const caps = ['root_continuation', 'root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
+  const caps = ['root_continuation', 'source_analysis_recovery', 'root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
   Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, ...caps.map(c => 'profile.' + c)])
   const commands = [
+    { action: 'read_source_output', target: { workspace_id: c.workspace_id, session_id: c.session_id,
+      source_message_id: c.source_message_id, source_revision: c.source_revision } },
     { action: 'root_feedback', operation: { action: 'continuation_read' } },
     ...['root_feedback', 'root_execution_journal'].map(action => ({ action, operation: { action: 'read' } })),
     ...['prepare_root_attempt', 'read_root_attempt', 'read_root_output'].map(action => ({ action, target })),
@@ -1528,3 +1642,86 @@ it('refuses continuation reads before sending when the current Host lacks its ca
   await f.grant()
   await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'root_feedback', operation: { action: 'continuation_read' } } })).rejects.toMatchObject({ code: 'upgrade_required' })
 })
+it.each(['saved', 'maximum', 'missing', 'old', 'foreign', 'revoked', 'cancelled', 'digest'] as const)(
+  'saved Source output requires its recovery capability and current Account: %s', async (mode) => {
+    const f = await fixture(false, false, false, false, false, false, false, false, true, false, false, false, false, mode !== 'old')
+    await f.grant()
+    const c = f.challenge, cancel = new AbortController()
+    const descriptor = parseHostCollaborationSourceDescriptor({ workspace_id: c.workspace_id, session_id: c.session_id,
+      source_message_id: c.source_message_id, source_revision: c.source_revision, snapshot_digest: c.snapshot_digest })
+    const { snapshot_digest: _digest, ...target } = descriptor
+    const text = mode === 'maximum' ? JSON.stringify({ text: '\u0000'.repeat(5459) + 'abc' }) : JSON.stringify({ intent: 'delegate' })
+    const outputDigest = createHash('sha256').update(text).digest('hex')
+    const dispatch = { ...analysisGrant(f), lease_expires_at: '2026-10-01T00:00:00.000Z' }
+    let calls = 0
+    f.setAnalysis(async (profileId, command) => {
+      calls++
+      expect(profileId).toBe(f.profile.profileId)
+      expect(command).toMatchObject({ action: 'read_source_output', target })
+      expect(command.binding_key).toMatch(/^[a-f0-9]{64}$/u)
+      if (mode === 'revoked') f.host.revokeOwner(f.ownerId)
+      if (mode === 'cancelled') cancel.abort()
+      if (mode === 'missing') return { state: 'missing', descriptor }
+      return { state: 'saved', descriptor: mode === 'foreign' ? { ...descriptor, source_message_id: 'other' } : descriptor,
+        dispatch, output_digest: mode === 'digest' ? '0'.repeat(64) : outputDigest,
+        json_base64url: Buffer.from(text).toString('base64url') }
+    })
+    const pending = f.client.collaborationAnalysis({ ...f.account, command: { action: 'read_source_output', target }, signal: cancel.signal })
+    if (mode === 'saved' || mode === 'maximum') {
+      const result = await pending
+      expect(result.kind).toBe('source_output')
+      if (result.kind !== 'source_output' || result.evidence.state !== 'saved') throw Error('missing saved output')
+      expect(result.evidence.dispatch).toEqual(dispatch)
+      expect(Buffer.from(result.evidence.json_base64url, 'base64url').toString('utf8')).toBe(text)
+      if (mode === 'maximum') expect(Buffer.byteLength(text)).toBe(32768)
+      expect(result.evidence.analysis_receipt).toMatchObject({ account_binding_handle: f.account.accountBindingHandle,
+        installation_id: f.identity.installationId, dispatch, output_digest: outputDigest })
+    } else if (mode === 'missing') expect(await pending).toEqual({ kind: 'source_output', evidence: { state: 'missing', descriptor } })
+    else await expect(pending).rejects.toThrow()
+    expect(calls).toBe(mode === 'old' ? 0 : 1)
+  },
+)
+
+it.each(['unsigned', 'signature', 'binding', 'peer', 'output', 'grant', 'receipt_grant', 'receipt_digest', 'source'] as const)(
+  'rejects tampered saved Source evidence from an authenticated carrier: %s', async (mode) => {
+    const f = await fixture(false, false, false, false, false, false, false, false, true, false, false, false, false, true)
+    await f.grant()
+    const c = f.challenge
+    const descriptor = parseHostCollaborationSourceDescriptor({ workspace_id: c.workspace_id, session_id: c.session_id,
+      source_message_id: c.source_message_id, source_revision: c.source_revision, snapshot_digest: c.snapshot_digest })
+    const { snapshot_digest: _digest, ...target } = descriptor
+    const text = JSON.stringify({ intent: 'delegate' })
+    f.setAnalysis(async () => ({ state: 'saved', descriptor, dispatch: analysisGrant(f),
+      output_digest: createHash('sha256').update(text).digest('hex'), json_base64url: Buffer.from(text).toString('base64url') }))
+    f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.collaboration_analysis' || frame.result.kind !== 'source_output'
+        || frame.result.evidence.state !== 'saved') return frame
+      const evidence = frame.result.evidence, receipt = evidence.analysis_receipt
+      if (!receipt) throw Error('expected signed original output')
+      if (mode === 'unsigned') {
+        const { analysis_receipt: _receipt, ...unsigned } = evidence
+        return { ...frame, result: { kind: 'source_output', evidence: unsigned } }
+      }
+      if (mode === 'output') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, json_base64url: Buffer.from('{}').toString('base64url'),
+      } } }
+      if (mode === 'source') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, descriptor: { ...descriptor, session_id: 'other' as typeof descriptor.session_id },
+      } } }
+      if (mode === 'grant') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, dispatch: { ...evidence.dispatch, plan_id: 'other' as typeof evidence.dispatch.plan_id },
+        analysis_receipt: { ...receipt, dispatch: { ...receipt.dispatch, plan_id: 'other' } },
+      } } }
+      if (mode === 'receipt_grant') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, analysis_receipt: { ...receipt, dispatch: { ...receipt.dispatch, plan_id: 'other' } },
+      } } }
+      if (mode === 'receipt_digest') return { ...frame, result: { kind: 'source_output', evidence: {
+        ...evidence, analysis_receipt: { ...receipt, output_digest: '0'.repeat(64) },
+      } } }
+      const altered = mode === 'binding' ? { ...receipt, authority_binding_version: 2 }
+        : mode === 'peer' ? { ...receipt, process_nonce: 'B'.repeat(43) } : { ...receipt, signature: 'A'.repeat(86) }
+      return { ...frame, result: { kind: 'source_output', evidence: { ...evidence, analysis_receipt: altered } } }
+    })
+    await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'read_source_output', target } })).rejects.toThrow()
+  },
+)

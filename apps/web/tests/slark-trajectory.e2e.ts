@@ -2,12 +2,28 @@
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
+import { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import type { LlmModelInfo, LlmResolvedModelInfo, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { expect, it } from 'vitest'
 import { captureStableAria, compareOrRefreshGolden, launchWebScaffold, readPersistedEvents, seedSession, webSnapshotMode } from './scaffold.ts'
 import { newEnglishPage, WEB_FIXTURE_TIME } from './support.ts'
 import { AUTO_REVIEW_FIXTURE } from './auto-review-fixture.ts'
 
 const mode = webSnapshotMode()
+class SourceOnlyAdapter extends LlmAdapter {
+  override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+    return Promise.resolve([{ provider, id: 'source-only', name: 'Source only' }])
+  }
+  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({ provider, id: model, name: model })
+  }
+  override async prepareSnapshot(provider: string, model: string): Promise<PreparedAdapterCall> {
+    return { model: await this.resolveModel(provider, model), stream: () => this.stream() }
+  }
+  override async *stream(): AsyncIterable<StreamChunk> {
+    throw Error('Source listing must never dispatch a model request')
+  }
+}
 it.skipIf(mode === 'record')('replays a recorded Session beside its readonly collaboration trajectory after reload', async () => {
   const fixture = await readFile(fileURLToPath(new URL('../../../snapshots/web/auto-review-denial/session.v3.jsonl', import.meta.url)), 'utf8')
   const scaffold = await launchWebScaffold(AUTO_REVIEW_FIXTURE)
@@ -20,22 +36,34 @@ it.skipIf(mode === 'record')('replays a recorded Session beside its readonly col
     const originalEvents = await readPersistedEvents(scaffold, id)
     const page = await newEnglishPage(browser)
     await page.clock.setFixedTime(WEB_FIXTURE_TIME)
-    let sourceReads = 0, prompts = 0
+    let sourceReads = 0, prompts = 0, liveSourceListing = false
     await page.route('**/api/session/collaborationSources', async (route) => {
+      if (liveSourceListing) { await route.continue(); return }
       sourceReads++
       const request = route.request().postDataJSON() as { rpcId: string }
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ type: 'server-response', rpcId: request.rpcId,
         result: { ok: true, value: { items: [{ source: { workspace_id: workspace.id, session_id: id, source_message_id: 'original', source_revision: '1' },
-          snapshot_digest: 'a'.repeat(64), original_message: 'Verify the recorded file operation' }] } } }) })
+          snapshot_digest: 'a'.repeat(64), original_message: 'Verify the recorded file operation',
+          timeline_position: { after_sequence: null, local_order: '2' } },
+        { source: { workspace_id: workspace.id, session_id: id, source_message_id: 'older', source_revision: '1' },
+          snapshot_digest: 'c'.repeat(64), original_message: 'An older collaboration message',
+          timeline_position: { after_sequence: null, local_order: '1' } }] } } }) })
     })
     await page.route('**/api/session/prompt', async (route) => { prompts++; await route.abort() })
     await page.addInitScript(() => {
       const root = { root_task_id: 'root', root_trace_id: 'b'.repeat(32), task_revision: '2', state_version: '3', state: 'active', intent_state: 'active' }
+      let olderReleased = false
       Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true, collaborationPlanningAvailable: true,
         collaborationExecutionAvailable: false,
         collaborationWorkspace: async ({ workspace_id }: { workspace_id: string }) => ({ ok: true,
           value: { workspace_id, version: '1', selected_project_ids: [] } }),
-        collaborationDeliveries: async () => ({ ok: true, value: { deliveries: [] } }),
+        collaborationDeliveries: async ({ source }: { source: { source_message_id: string } }) => {
+          if (source.source_message_id === 'older' && !olderReleased) await new Promise<void>((resolve) => {
+            window.addEventListener('trajectory-older-release', () => { olderReleased = true; resolve() }, { once: true })
+            Reflect.set(window, '__trajectoryOlderWaiting', true)
+          })
+          return { ok: true, value: { deliveries: [] } }
+        },
         collaborationRootExecution: async ({ action }: { action: string }) => {
           if (action !== 'trace') throw Error('browsing cannot execute work')
           return { ok: true, value: { root, coverage: 'partial', next_after_seq: null,
@@ -56,7 +84,13 @@ it.skipIf(mode === 'record')('replays a recorded Session beside its readonly col
       await page.locator(`[data-row-key="session:${id}"]`).click()
       await page.getByRole('tab', { name: 'Trajectory', exact: true }).click()
       const panel = page.getByTestId('slark-collaboration-trajectory')
-      await panel.getByTestId('slark-trace-load').click()
+      await page.waitForFunction(() => Reflect.get(window, '__trajectoryOlderWaiting') === true)
+      await panel.getByText('Verify the recorded file operation', { exact: true }).waitFor()
+      expect(await panel.locator('article').count()).toBe(2)
+      await panel.getByText('An older collaboration message', { exact: true }).waitFor()
+      await page.evaluate(() => { window.dispatchEvent(new Event('trajectory-older-release')) })
+      await panel.getByText('An older collaboration message', { exact: true }).waitFor()
+      await panel.getByTestId('slark-trace-load').first().click()
       await panel.getByText('b'.repeat(32), { exact: true }).waitFor()
       await panel.locator('summary').click()
       expect(await panel.textContent()).toContain('Original task in progress')
@@ -77,6 +111,48 @@ it.skipIf(mode === 'record')('replays a recorded Session beside its readonly col
     expect(prompts).toBe(0)
     expect(await readPersistedEvents(scaffold, id)).toEqual(openedEvents)
     await compareOrRefreshGolden(fileURLToPath(new URL('./expected/slark-trajectory/recorded-session.expected.md', import.meta.url)), first, mode)
+
+    // Persist through the real Profile owner without starting a model turn.
+    liveSourceListing = true
+    const sourceSession = await scaffold.ctx.sessionController.create({ workspaceId: workspace.id })
+    scaffold.ctx.effect(() => scaffold.ctx.llm.registerAdapter(['source-only-fixture'], new SourceOnlyAdapter()),
+      'source-only collaboration fixture adapter')
+    await scaffold.ctx.sessionController.selectModel({ sessionId: sourceSession.sessionId,
+      provider: 'source-only-fixture', model: 'source-only' })
+    const source = { workspace_id: workspace.id, session_id: sourceSession.sessionId,
+      source_message_id: 'source-only-message', source_revision: '1',
+      original_message: 'Retain the unresolved collaboration without replaying it', active_mentions: [] }
+    const captured = await scaffold.ctx.sessionController.captureCollaborationSource(source, new AbortController().signal)
+    const sourceRow = page.locator(`[data-row-key="session:${sourceSession.sessionId}"]`)
+    await sourceRow.waitFor()
+    await sourceRow.click()
+    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click()
+    await page.getByTestId('slark-collaboration-trajectory').getByText(source.original_message, { exact: true }).waitFor()
+    const sourceEvents = await readPersistedEvents(scaffold, sourceSession.sessionId)
+    expect(sourceEvents.some(event => event.type === 'turn/start')).toBe(false)
+    const newSession = page.getByRole('button', { name: 'New session in Trajectory fixture', exact: true })
+    const group = page.getByRole('treeitem').filter({ has: page.getByText('Trajectory fixture', { exact: true }) }).first()
+    await group.hover()
+    await newSession.click()
+    const selected = page.locator('[data-row-key^="session:"][aria-selected="true"]')
+    await expect.poll(async () => {
+      const key = await selected.getAttribute('data-row-key')
+      return key !== null && key !== `session:${sourceSession.sessionId}`
+    }).toBe(true)
+    const blankId = await selected.getAttribute('data-row-key')
+    expect(blankId).toMatch(/^session:/u)
+    await sourceRow.waitFor()
+    await page.reload({ waitUntil: 'load' })
+    await sourceRow.waitFor()
+    await sourceRow.click()
+    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click()
+    await page.getByTestId('slark-collaboration-trajectory').getByText(source.original_message, { exact: true }).waitFor()
+    expect(await scaffold.ctx.sessionController.readCollaborationSourceSnapshot({ workspace_id: workspace.id,
+      session_id: sourceSession.sessionId, source_message_id: source.source_message_id, source_revision: '1' },
+    new AbortController().signal)).toEqual(captured.snapshot)
+    expect(await readPersistedEvents(scaffold, sourceSession.sessionId)).toEqual(sourceEvents)
+    expect(await readPersistedEvents(scaffold, id)).toEqual(openedEvents)
+    expect(prompts).toBe(0)
   } finally {
     try { await browser?.close() } finally { await scaffold.close() }
   }
