@@ -38,7 +38,7 @@ export default defineConfig([
     dts: false,
     clean: false,
     codeSplitting: false,
-    noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
+    noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u, /^tar(?:\/|$)/u],
     plugins: [deferredTypertPlugin()],
   },
   {

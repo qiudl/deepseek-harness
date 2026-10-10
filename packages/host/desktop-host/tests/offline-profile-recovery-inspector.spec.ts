@@ -1,8 +1,40 @@
-import { chmod, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { createHash } from 'node:crypto'
+import { create as createArchive, Header } from 'tar'
+import { gzipSync } from 'node:zlib'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { verifyCopiedBundledPlugin } from '../src/bundled-plugin-recovery.ts'
+
+const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyEntries'>())
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const open: typeof actual.open = async (...args) => {
+    const handle = await actual.open(...args)
+    const fault = readFaults.get(String(args[0]))
+    if (fault === 'short') vi.spyOn(handle, 'read').mockResolvedValueOnce({ bytesRead: 0, buffer: Buffer.alloc(0) })
+    if (fault === 'changed') {
+      const original = handle.stat.bind(handle)
+      vi.spyOn(handle, 'stat').mockImplementationOnce(() => original()).mockImplementationOnce(async () => {
+        const stat = await original()
+        stat.mtimeMs += 1
+        return stat
+      })
+    }
+    return handle
+  }
+  const readdir = async (...args: Parameters<typeof actual.readdir>) => {
+    const entries = await actual.readdir(...args)
+    if (readFaults.get(String(args[0])) === 'manyEntries') {
+      const file = entries.find(entry => entry.isFile())!
+      return Array.from({ length: 8193 }, () => file)
+    }
+    return entries
+  }
+  return { ...actual, open, readdir }
+})
 import {
   FileOwnerJsonlMigrationGenerationTarget,
 } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
@@ -14,6 +46,7 @@ import {
   packagedRuntimeAppRoot,
 } from '../src/offline-profile-recovery.ts'
 import type { PersonProfileRecord } from '../src/types.ts'
+import { BundledPluginCatalog, bundledDependencySpec } from '../src/bundled-plugins.ts'
 
 const uid = process.getuid?.() ?? 0
 const profileId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3150'
@@ -76,7 +109,182 @@ async function releasedPatch(value: Awaited<ReturnType<typeof fixture>>): Promis
   return text
 }
 
+const bundledFiles = {
+  'package.json': JSON.stringify({ name: 'fixture-plugin', version: '1.0.0', bundledDependencies: ['nested'] }),
+  'index.js': 'export const fixture = true\n',
+  'empty.js': '',
+  'node_modules/nested/package.json': JSON.stringify({ name: 'nested', version: '1.0.0' }),
+  'node_modules/nested/index.js': 'export const nested = true\n',
+}
+
+async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles) {
+  const value = await fixture()
+  const installed = join(value.web, 'node_modules', 'fixture-plugin')
+  await unlink(installed)
+  const source = join(value.hostRoot, 'archive-source')
+  for (const [path, content] of Object.entries(files)) {
+    for (const root of [join(source, 'package'), installed]) {
+      await mkdir(join(root, path, '..'), { recursive: true, mode: 0o700 })
+      await writeFile(join(root, path), content, { mode: 0o600 })
+    }
+  }
+  const embedding = join(value.hostRoot, 'bundled')
+  await mkdir(embedding, { mode: 0o700 })
+  const archive = join(embedding, 'fixture.tgz')
+  if (archiveBytes) await writeFile(archive, archiveBytes)
+  else await createArchive({ gzip: true, cwd: source, file: archive }, ['package'])
+  const digest = createHash('sha256').update(await readFile(archive)).digest('hex')
+  await writeFile(join(embedding, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1, plugins: [{
+    name: 'fixture-plugin', version: '1.0.0', file: 'fixture.tgz', sha256: digest,
+    repository: 'https://example.com/fixture', sourceSha: 'a'.repeat(40), entryIds: [],
+  }] }))
+  await mkdir(join(value.web, '.bundled-plugins'), { mode: 0o700 })
+  await writeFile(join(value.web, '.bundled-plugins', `${digest}.tgz`), await readFile(archive), { mode: 0o600 })
+  await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': bundledDependencySpec(digest) } }))
+  const options = {
+    hostRoot: value.hostRoot, installationId, expectedUid: uid, currentRuntimeAppRoot: value.currentRuntime,
+    targetFor: () => value.target, ownerStateApplicator: value.ownerStateApplicator,
+    bundledCatalog: BundledPluginCatalog.load(embedding, uid),
+  }
+  return { ...value, installed, archive, digest, inspector: new OfflineProfileRecoveryInspector(options), files,
+    catalog: options.bundledCatalog }
+}
+
+function verifyBundle(value: Awaited<ReturnType<typeof bundledFixture>>) {
+  return verifyCopiedBundledPlugin(value.catalog, value.catalog.get('fixture-plugin', '1.0.0')!, value.web, uid)
+}
+
+function unsafeArchive(path: string, type: 'File' | 'SymbolicLink' | 'CharacterDevice' | 'ExtendedHeader' = 'File', size = 1, includeBase = true): Buffer {
+  const valid: Buffer[] = []
+  for (const [name, content] of Object.entries(includeBase ? bundledFiles : {})) {
+    const data = Buffer.from(content)
+    const header = new Header({ path: `package/${name}`, type: 'File', size: data.length, mode: 0o600, uid, gid: uid })
+    const block = Buffer.alloc(512)
+    header.encode(block)
+    const padded = Buffer.alloc(Math.ceil(data.length / 512) * 512)
+    data.copy(padded)
+    valid.push(block, padded)
+  }
+  const header = new Header({ path, type, size, mode: 0o600, uid, gid: uid,
+    ...(type === 'SymbolicLink' ? { linkpath: 'index.js' } : {}) })
+  const block = Buffer.alloc(512)
+  header.encode(block)
+  return gzipSync(Buffer.concat([...valid, block, Buffer.alloc(512), Buffer.alloc(1024)]))
+}
+
+async function treeInventory(root: string): Promise<unknown[]> {
+  const result: unknown[] = []
+  const visit = async (directory: string): Promise<void> => {
+    for (const name of (await readdir(directory)).sort()) {
+      const path = join(directory, name)
+      const stat = await lstat(path)
+      result.push([path, stat.mode, stat.size, stat.mtimeMs, stat.isFile()
+        ? createHash('sha256').update(await readFile(path)).digest('hex') : null])
+      if (stat.isDirectory()) await visit(path)
+    }
+  }
+  await visit(root)
+  return result
+}
+
 describe('offline Profile existing-only inspector', () => {
+  it.each([
+    unsafeArchive('package/../outside'), unsafeArchive('/package/index.js'),
+    unsafeArchive('package/index.js'),
+    unsafeArchive('package/node_modules/link', 'SymbolicLink', 0),
+    unsafeArchive('package/device', 'CharacterDevice', 0),
+    unsafeArchive('package/huge', 'File', 128 * 1024 * 1024 + 1),
+    unsafeArchive('package/truncated', 'File', 4096),
+    unsafeArchive('package/meta', 'ExtendedHeader', 65537),
+    Buffer.from('invalid archive'),
+    unsafeArchive('package/index.js', 'File', 1, false),
+  ])('rejects an unsafe archive even when its digest is catalog-pinned %#', async (archive) => {
+    const value = await bundledFixture(archive)
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
+  it('bounds copied package enumeration even if the filesystem keeps returning entries', async () => {
+    const value = await bundledFixture()
+    readFaults.set(value.installed, 'manyEntries')
+    onTestFinished(() => { readFaults.delete(value.installed) })
+    await expect(verifyBundle(value)).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
+  it.each(['short', 'changed'] as const)('rejects a plugin file with a %s read', async (fault) => {
+    const value = await bundledFixture()
+    const path = join(value.installed, 'index.js')
+    readFaults.set(path, fault)
+    onTestFinished(() => { readFaults.delete(path) })
+    await expect(verifyBundle(value)).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+  })
+
+  it.each(['file-mode', 'directory-mode', 'archive-directory-mode', 'extra-directory'])
+  ('rejects unsafe copied package metadata: %s', async (kind) => {
+    const value = await bundledFixture()
+    if (kind === 'file-mode') await chmod(join(value.installed, 'index.js'), 0o666)
+    if (kind === 'directory-mode') await chmod(value.installed, 0o777)
+    if (kind === 'archive-directory-mode') await chmod(join(value.web, '.bundled-plugins'), 0o777)
+    if (kind === 'extra-directory') await mkdir(join(value.installed, 'extra'), { mode: 0o700 })
+    await expect(verifyBundle(value)).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
+  it('rejects an archive whose package identity does not match the catalog', async () => {
+    const value = await bundledFixture(undefined, { ...bundledFiles,
+      'package.json': JSON.stringify({ name: 'other-plugin', version: '1.0.0' }) })
+    await expect(verifyBundle(value)).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
+  it('recovers copied catalog plugins including bundled nested dependencies without writing Profile files', async () => {
+    const value = await bundledFixture()
+    const before = await treeInventory(value.profileRoot)
+    const inspected = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(inspected).toMatchObject({ state: 'recoverable', compatibility: 'current', pluginCount: 1 })
+    await value.inspector.prepareConfirmedProfile(profile(), inspected)
+    for (const [path, content] of Object.entries(value.files)) {
+      expect(await readFile(join(value.installed, path), 'utf8')).toBe(content)
+    }
+    await expect(readFile(join(value.profileRoot, 'runtime-compat', 'journals', `${inspected.preflightDigest}.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it.each(['modified', 'missing', 'extra', 'symlink', 'profile-archive', 'embedding-archive'])
+  ('rejects a copied bundled dependency with %s content', async (kind) => {
+    const value = await bundledFixture()
+    const nested = join(value.installed, 'node_modules', 'nested', 'index.js')
+    if (kind === 'modified') await writeFile(nested, 'tampered')
+    if (kind === 'missing') await unlink(nested)
+    if (kind === 'extra') await writeFile(join(value.installed, 'node_modules', 'nested', 'extra.js'), 'extra')
+    if (kind === 'symlink') { await unlink(nested); await symlink(join(value.installed, 'index.js'), nested) }
+    if (kind === 'profile-archive') await writeFile(join(value.web, '.bundled-plugins', `${value.digest}.tgz`), 'tampered')
+    if (kind === 'embedding-archive') await writeFile(value.archive, 'tampered')
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
+  it('rejects a copied plugin changed after its confirmed preflight', async () => {
+    const value = await bundledFixture()
+    const preflight = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    await writeFile(join(value.installed, 'node_modules', 'nested', 'index.js'), 'tampered')
+    await expect(value.inspector.prepareConfirmedProfile(profile(), preflight))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+  })
+
+  it('keeps copied dependencies blocked when their source is not the exact catalog archive', async () => {
+    const value = await bundledFixture()
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': '1.0.0' } }))
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .resolves.toMatchObject({ state: 'compatibility_blocked', compatibility: 'read_only_export_only' })
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a group-writable copied dependency', async () => {
+    const value = await bundledFixture()
+    await chmod(join(value.installed, 'index.js'), 0o666)
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'profile_integrity_failed' })
+  })
+
   it('accepts the exact released settings-owner patch without modifying it during preflight', async () => {
     const value = await fixture()
     const path = join(value.profileRoot, 'cordis.patch.yml')
