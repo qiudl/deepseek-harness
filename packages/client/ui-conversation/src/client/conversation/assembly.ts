@@ -38,6 +38,11 @@ export interface ConversationBinding {
    * @param target - registered or subsequently registered Conversation target.
    */
   activate(target: string): void
+  /** Keep the shell visible for externally persisted activity without appending Session events.
+   * @param target - Conversation view showing the activity.
+   * @returns An idempotent release; independent owners retain independent activity.
+   */
+  retainActivity(target: string): () => void
   /**
    * Contribute display activity from an independent authorized history source.
    * The source is observed only while the Conversation snapshot has subscribers.
@@ -73,6 +78,7 @@ class BoundConversation implements ConversationBinding {
   private disposed = false
   private readonly viewStore: ConversationViewSnapshotStore
   private readonly targetSources = new Map<string, ObservableSnapshot<unknown>>()
+  private readonly retainedActivity = new Map<symbol, string>()
   private revision = -1
   private frame: number | undefined
   private disposeFeed: () => void = () => {}
@@ -131,6 +137,15 @@ class BoundConversation implements ConversationBinding {
     this.openTurn.set(this.assembler.openTurn())
   }
 
+  retainActivity(target: string): () => void {
+    const token = Symbol(target)
+    this.retainedActivity.set(token, target)
+    this.published.set(this.currentSnapshot())
+    return () => {
+      if (this.retainedActivity.delete(token)) this.published.set(this.currentSnapshot())
+    }
+  }
+
   rebuild(): void { this.publish(this.assembler.rebuildRegistry()) }
 
   registerActivity(target: string, source: ObservableSnapshot<boolean>): () => void {
@@ -177,6 +192,7 @@ class BoundConversation implements ConversationBinding {
     this.activities.clear()
     this.cancelFrame()
     this.disposeFeed()
+    this.retainedActivity.clear()
   }
 
   private replace(window: SessionEventWindow): void {
@@ -251,7 +267,7 @@ class BoundConversation implements ConversationBinding {
     }
     return {
       views: this.viewStore,
-      activeTargets,
+      activeTargets: new Set([...activeTargets, ...this.retainedActivity.values()]),
     }
   }
 }

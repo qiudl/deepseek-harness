@@ -27,6 +27,8 @@ Chat 与 Trajectory 可以识别同一个持久 event family，但各自保留�
 
 shell 拥有 View 选择，并在 binding 创建、被选为 current 或 View roster 变化时，于渲染前解析已注册的偏好 View 或 Chat fallback。assembler 只接收解析后的 target id，不自行选择 Chat 或其他默认 target。第三方 View 使用相同的选择与激活操作。View Definition 可以提供 `toolCallFocus(callId)`；shell 仅为声明了此能力且可见的目标提供 Inspect，由目标将调用 id 映射为自己的焦点标识。
 
+`ConversationBinding.retainActivity(target)` 为保存在 Session 事件窗口之外的活动保持界面可见。每次调用返回独立且幂等的释放函数。保留的目标计入 `activeTargets`，但不会构造事件节点、模型输入或合成轮次；Session 绑定释放时清除所有此类贡献。
+
 <a id="group-definitions"></a>
 ## Group Definition
 

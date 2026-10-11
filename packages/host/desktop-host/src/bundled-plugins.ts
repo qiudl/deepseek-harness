@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 
 /** Embedding-owned plugin archives the Host may install without network access. */
@@ -97,6 +97,40 @@ export class BundledPluginCatalog {
     return this.plugins.find(plugin => plugin.name === name && plugin.version === exactVersion)
   }
 
+  /** @param name Declared package name. @param spec Manifest dependency source. @returns Exact catalog archive identity, or undefined. */
+  getForDependency(name: string, spec: unknown): BundledPlugin | undefined {
+    return this.plugins.find(plugin => plugin.name === name && spec === bundledDependencySpec(plugin.sha256))
+  }
+
+  /** @param plugin Catalog-owned row. @returns Re-hashed embedding archive bytes without writing Profile files. */
+  readArchive(plugin: BundledPlugin): Buffer {
+    if (this.get(plugin.name, plugin.version) !== plugin) throw Error('invalid_bundled_plugins')
+    trustedEmbeddingPath(this.root, true, this.uid)
+    const source = join(this.root, plugin.file)
+    trustedEmbeddingPath(source, false, this.uid)
+    const fd = openSync(source, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      const before = fstatSync(fd)
+      if (!before.isFile() || ![this.uid, 0].includes(before.uid) || (before.mode & 0o022) !== 0
+        || before.size < 1 || before.size > MAX_ARCHIVE_BYTES) throw Error('unsafe_bundled_plugins')
+      const bytes = Buffer.alloc(before.size)
+      let offset = 0
+      while (offset < bytes.length) {
+        const count = readSync(fd, bytes, offset, bytes.length - offset, offset)
+        if (!count) throw Error('bundled_plugin_digest_mismatch')
+        offset += count
+      }
+      const after = fstatSync(fd)
+      const current = lstatSync(source)
+      if (!bytes.length || bytes.length > MAX_ARCHIVE_BYTES
+        || before.size !== bytes.length || before.size !== after.size || before.mtimeMs !== after.mtimeMs
+        || before.ctimeMs !== after.ctimeMs || current.isSymbolicLink() || current.dev !== after.dev
+        || current.ino !== after.ino || current.mode !== after.mode
+        || createHash('sha256').update(bytes).digest('hex') !== plugin.sha256) throw Error('bundled_plugin_digest_mismatch')
+      return bytes
+    } finally { closeSync(fd) }
+  }
+
   /**
    * Copy one verified archive into `<webRoot>/.bundled-plugins/<sha256>.tgz` without replacing existing content.
    * @param plugin Catalog row. @param webRoot Selected `profiles/web` directory owned by the Host user.
@@ -120,11 +154,7 @@ export class BundledPluginCatalog {
 
   private copy(plugin: BundledPlugin, webRoot: string): string {
     if (this.get(plugin.name, plugin.version) !== plugin || !isAbsolute(webRoot)) throw Error('invalid_bundled_plugins')
-    const source = join(this.root, plugin.file)
-    trustedEmbeddingPath(source, false, this.uid)
-    const bytes = readFileSync(source)
-    if (!bytes.length || bytes.length > MAX_ARCHIVE_BYTES
-      || createHash('sha256').update(bytes).digest('hex') !== plugin.sha256) throw Error('bundled_plugin_digest_mismatch')
+    const bytes = this.readArchive(plugin)
     const directory = join(webRoot, BUNDLED_ARCHIVE_DIRECTORY)
     try { mkdirSync(directory, { mode: 0o700 }) } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error

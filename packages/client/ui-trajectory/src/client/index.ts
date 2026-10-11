@@ -83,6 +83,7 @@ export function apply(ctx: Context): void {
     locale: NS,
     label: () => t('view.trajectory'),
     children: {
+      'conversation.trajectory.external': { kind: 'list', scope: 'session' },
       'conversation.trajectory.images': { kind: 'single', scope: 'session' },
     },
     inject: (sessionId: SessionId): TrajectoryViewInjected => {

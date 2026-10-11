@@ -1,0 +1,8 @@
+trace=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+root=active
+execution=succeeded
+revision=2
+runtime=file.completed
+provider-visibility=boundary-only
+ordinary-model-prompts=0
+commands=trace-only

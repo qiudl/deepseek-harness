@@ -145,6 +145,7 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       // macOS implementations at the same per-file 100% threshold. Windows
       // composes their stable-handle and ACL counterparts instead.
       'packages/host/desktop-host/src/approval.ts',
+      'packages/host/desktop-host/src/bundled-plugin-recovery.ts',
       'packages/host/desktop-host/src/bundled-plugins.ts',
       'packages/host/desktop-host/src/desktop-host.ts',
       'packages/host/desktop-host/src/dsh-web-profile-worker.ts',

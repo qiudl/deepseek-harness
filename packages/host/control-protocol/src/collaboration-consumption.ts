@@ -1,3 +1,4 @@
+import { exactReceiptFields, canonicalReceiptJson } from './collaboration-receipt-fields.js'
 /** REQ-20261004-0008: persisted original-Session consumption has its own signature domain. */
 import {
   parseHostCollaborationDeliveryReceipt,
@@ -60,25 +61,7 @@ const consumptionKeys = [
   'consuming_step',
   'session_prefix',
 ]
-function exact(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (
-    !value ||
-    typeof value !== 'object' ||
-    (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) ||
-    Object.getOwnPropertySymbols(value).length
-  )
-    throw Error('invalid_consumption_receipt')
-  const fields = Object.getOwnPropertyDescriptors(value)
-  if (
-    Object.keys(fields).length !== keys.length ||
-    keys.some((k) => {
-      const field = fields[k]
-      return !field?.enumerable || !('value' in field)
-    })
-  )
-    throw Error('invalid_consumption_receipt')
-  return Object.fromEntries(keys.map(k => [k, fields[k]?.value]))
-}
+const exact = (value: unknown, keys: readonly string[]) => exactReceiptFields(value, keys, 'invalid_consumption_receipt')
 function text(value: unknown, pattern: RegExp): string {
   if (typeof value !== 'string' || pattern.exec(value)?.[0] !== value) throw Error('invalid_consumption_receipt')
   return value
@@ -135,26 +118,11 @@ export function parseHostCollaborationConsumptionReceipt(value: unknown): HostCo
     }),
   })
 }
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']'
-  if (value !== null && typeof value === 'object') {
-    const row = value as Record<string, unknown>
-    return (
-      '{' +
-      Object.keys(row)
-        .sort()
-        .map(k => JSON.stringify(k) + ':' + canonical(row[k]))
-        .join(',') +
-      '}'
-    )
-  }
-  return JSON.stringify(value)
-}
 /** Domain-separated Native signing bytes bind every consumed event and attempt field.
  * @param value - Exact consumption receipt.
  * @returns Canonical payload bytes excluding the signature itself.
  */
 export function encodeHostCollaborationConsumptionReceiptPayload(value: HostCollaborationConsumptionReceipt): Uint8Array {
   const { signature: _signature, ...payload } = parseHostCollaborationConsumptionReceipt(value)
-  return new TextEncoder().encode(canonical(['dsh-collaboration-consumption-receipt-v1', payload]))
+  return new TextEncoder().encode(canonicalReceiptJson(['dsh-collaboration-consumption-receipt-v1', payload]))
 }

@@ -487,3 +487,57 @@ it('refuses a new attempt at capacity while preserving the entire predecessor ch
   await expect(full.prepare(next, signal())).rejects.toThrow('capacity_reached')
   expect(await readFile(file, 'utf8')).toBe(bytes)
 })
+
+
+it('retains a failed recovery attempt under the original trace without changing consumed input or predecessor journals', async () => {
+  const h = await harness(), journal = await openCollaborationRootPlanningJournal(h.facility)
+  const record = await journal.prepare(h.manifest, signal())
+  await journal.recordFailure(record, Error('collaboration_analysis_timeout'))
+  expect([...journal.failures()]).toEqual([])
+  const dispatched = await journal.dispatch(record, grant(record), signal())
+  const path = join(h.directory, 'collaboration_root_planning_v1.json'), before = await readFile(path)
+  await journal.recordFailure(record, Error('collaboration_analysis_timeout'))
+  const failures = [...journal.failures()]
+  expect(failures).toHaveLength(1)
+  expect(failures[0]).toMatchObject({ reason: 'timeout', trace_id: h.root.root_trace_id,
+    source_digest: h.root.source_digest, input_manifest_digest: record.input_manifest_digest,
+    attempt_request_id: record.manifest.attempt_request_id, dispatch_digest: collaborationJournalDigest(dispatched.dispatch) })
+  await journal.close()
+  expect(() => [...journal.failures()]).toThrow('closed')
+  const reopened = await openCollaborationRootPlanningJournal(h.facility)
+  expect([...reopened.failures()]).toEqual(failures)
+  await expect(reopened.saveOutput(record, '{}', signal())).rejects.toThrow('failure_recorded')
+  await expect(reopened.dispatch(record, grant(record), signal())).rejects.toThrow('dispatch_used')
+  expect(await readFile(path)).toEqual(before)
+  await h.unchanged()
+  await reopened.close()
+})
+
+it('closes the planning input when its failure domain cannot open', async () => {
+  const h = await harness(), open = h.facility.open.bind(h.facility), closed: string[] = []
+  await expect(openCollaborationRootPlanningJournal({ open: async (spec) => {
+    if (spec.name === 'collaboration_root_planning_failure_v1') throw Error('failure-domain-unavailable')
+    const domain = await open(spec), close = domain.close.bind(domain)
+    domain.close = async () => { closed.push(spec.name); await close() }
+    return domain
+  } })).rejects.toThrow('failure-domain-unavailable')
+  expect(closed).toEqual(['collaboration_root_planning_v1'])
+})
+
+it.each(['input', 'failure', 'both'] as const)('closes both domains while retaining %s close errors', async (mode) => {
+  const h = await harness(), open = h.facility.open.bind(h.facility), closed: string[] = []
+  const journal = await openCollaborationRootPlanningJournal({ open: async (spec) => {
+    const domain = await open(spec), close = domain.close.bind(domain)
+    domain.close = async () => {
+      closed.push(spec.name); await close()
+      if (mode === 'both' || (spec.name === 'collaboration_root_planning_v1' ? mode === 'input' : mode === 'failure')) throw Error(spec.name)
+    }
+    return domain
+  } })
+  const closing = journal.close()
+  if (mode === 'both') await expect(closing).rejects.toMatchObject({ message: 'collaboration_root_planning_close_failed',
+    errors: [Error('collaboration_root_planning_v1'), Error('collaboration_root_planning_failure_v1')] })
+  else await expect(closing).rejects.toThrow(mode === 'input' ? 'collaboration_root_planning_v1' : 'collaboration_root_planning_failure_v1')
+  expect(closed).toEqual(['collaboration_root_planning_v1', 'collaboration_root_planning_failure_v1'])
+  expect(journal.close()).toBe(closing)
+})

@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -84,7 +84,7 @@ describe('registry authority validation', () => {
     expect(readFileSync(path, 'utf8')).toBe(before)
   })
 
-  it.each([null, [], 1, { version: 3, profiles: null }, { version: 4, profiles: [] },
+  it.each([null, [], 1, { version: 3, profiles: null }, { version: 5, profiles: [] },
     { version: 3, profiles: [], extra: true }, { profiles: [], version: 3 }])('rejects malformed container %j', (value) => {
     const { options, path } = fixture()
     const content = JSON.stringify(value)
@@ -141,11 +141,17 @@ describe('registry authority validation', () => {
       bindingGeneration: rest.bindingGeneration, createdAt: rest.createdAt,
     }))
     writeFileSync(path, JSON.stringify({ version: 2, profiles: legacy }))
+    const before = readFileSync(path)
+    const mode = statSync(path).mode
     const loaded = new ProfileRegistry(options)
+    expect(readFileSync(path)).toEqual(before)
+    expect(statSync(path).mode).toBe(mode)
     const old = loaded.resolveProfile(original.profileId)!
     expect(old.unlockVerifier).toBeNull()
     expect(() => { loaded.verifyUnlock(old, base.keyHandle, base.unlockMaterial) }).toThrow(/unauthorized/)
     await expect(loaded.createLocalAnonymous({ ...base, keyHandle: 'keychain:neighbor' })).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(readFileSync(path)).toEqual(before)
+    expect(statSync(path).mode).toBe(mode)
     const updated = await loaded.registerAccount({ ...base, ...(bound ? binding : {}) })
     expect(updated.bindingGeneration).toBe(original.bindingGeneration + 1)
     expect(updated.unlockVerifier).not.toBeNull()

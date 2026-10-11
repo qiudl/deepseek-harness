@@ -156,6 +156,7 @@ export class DesktopHost {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
     readonly authorityBindingVersion: number
+    readonly authorityBindingScope?: string
     readonly accountAccessToken: string
     readonly keyHandle: string
     readonly unlockMaterial: string
@@ -174,6 +175,7 @@ export class DesktopHost {
       issuer: input.issuer, subject: input.subject, accountBindingHandle: input.accountBindingHandle,
       authorityEnvironmentId: input.authorityEnvironmentId,
       authorityBindingVersion: input.authorityBindingVersion, keyHandle: input.keyHandle,
+      ...(input.authorityBindingScope === undefined ? {} : { authorityBindingScope: input.authorityBindingScope }),
       unlockMaterial: input.unlockMaterial,
     }, ensureWorker)
     this.grant(input.ownerId, profile.profileId, 'connected', undefined, true)

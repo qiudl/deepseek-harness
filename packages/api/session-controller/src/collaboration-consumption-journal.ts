@@ -77,6 +77,13 @@ const recordSchema = z
 export type CollaborationConsumptionBinding = Readonly<z.infer<typeof bindingSchema>>
 /** Durable command and first consumption evidence; never an executable recovery handle. */
 export type CollaborationConsumptionRecord = Readonly<z.infer<typeof recordSchema>>
+/** Validate a retained consumption record without creating or renewing dispatch authority.
+ * @param value - Record read from an independent durable observation domain.
+ * @returns Detached, immutable record in the original consumption grammar.
+ */
+export function parseCollaborationConsumptionRecord(value: unknown): CollaborationConsumptionRecord {
+  return deepFreeze(recordSchema.parse(value))
+}
 const requestSchema = z.strictObject({
   request_id: uuid,
   consumption_id: uuid,

@@ -133,7 +133,7 @@ export function TrajectoryView({
   useSession, useTrajectory, useDuration, loadOlder, loadImage, setActualDuration,
   viewRequest, completeViewRequest, renderSlot, t, jsonStringWrapping,
 }: ConvViewProps
-  & PropsRenderSlots<'conversation.trajectory.images'>
+  & PropsRenderSlots<'conversation.trajectory.images' | 'conversation.trajectory.external'>
   & InjectFace<TrajectoryViewInjected>
   & PropsLocale<'trajectory'>) {
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<number>>(EMPTY_TURN_IDS)
@@ -509,6 +509,7 @@ export function TrajectoryView({
 
   return (
     <div className={css.root} data-conversation-composer-overlay="">
+      {renderSlot('conversation.trajectory.external', {})}
       <TrajectoryToolbar
         actualDuration={actualDuration}
         onActualDurationChange={(nextActualDuration) => {

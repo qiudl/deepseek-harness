@@ -1,0 +1,7 @@
+original=@Guide · Product check login
+planning-receipts=1
+execution=preview,confirm
+notice=Tasks dispatched. Trace ID: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+reply=Login checked.
+ordinary-model-prompts=0
+draft=empty

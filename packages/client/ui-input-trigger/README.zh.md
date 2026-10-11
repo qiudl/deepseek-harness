@@ -49,6 +49,8 @@ Enter 钩子默认只在去除首尾空白后的草稿以其触发符开头时�
 
 `src/core/` 是纯内核——触发器检测、菜单归约与精确匹配，零 React／DOM／cordis——而 `src/client/service.ts` 把内核接到菜单快照存储、逐 hit 候选拉取（以 generation 把关、被后继请求通过 `AbortSignal` 取代、失败的 source 静默丢弃并留一条 console 记录）与 pick 路径上。每个会话 scope 各解析一个 `InputTriggerController`（`sessionOf`）；对话接线层在控制器上驱动 `track`／`arbitrate`／`onSpace`／`adjudicate`。source 会被预热进它能触达的每个会话控制器；`lexicon` 名录在预热后变化的 source 实现 `subscribeLexicon`，控制器每收到通知就重拉。`MenuView` 自注册进 `conversation.input.overlay`（列表类，会话 scope），菜单关闭期间渲染 null。`listbox` 角色落在其滚动视口而非有界外壳上，因为面包屑头部不是选项，listbox 也不得承载它；面包屑走菜单存储之外的独立快照存储，冻结的归约器因此对它一无所知。overlay 的 SlotMap 合并放在本包，因为依赖方向（ui-conversation → ui-input-trigger）不允许反向的类型导入。
 
+来源延迟注册后会重新查询已输入的触发词，无需重新输入。候选可用性会独立变化的来源实现 `subscribeCandidates`；通知会更新当前查询，即使空菜单已自动关闭，也不会重新打开用户明确关闭的菜单。来源或会话释放时移除订阅。
+
 </details>
 
 -----

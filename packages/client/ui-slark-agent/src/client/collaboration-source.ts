@@ -2,9 +2,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { createCollaborationReplyMatcher, readCollaborationPending, collaborationQuestionText } from './collaboration-dialogue.ts'
 import type { zh } from './locales.ts'
+import { dispatchPlannedSource } from './dispatch-planned-source.ts'
 
 interface Reference {
   kind: 'collaboration-v2'
@@ -117,12 +119,31 @@ function workspaceOf(ctx: Context, sessionId: SessionId): string | undefined {
  * Candidates require current scope and execution availability; every send rechecks Session membership and the original chip.
  * @param ctx - the source entry's Client Context; optional workspace state is read on each operation.
  * @param t - the entry's typed locale dictionary.
- * @returns a source that submits original text through Main and retains failed drafts without fallback.
+ * @returns a source with workspace/connection candidate subscriptions, Main submission and retained failed drafts.
  */
-export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typeof zh) => string): InputTriggerSource {
+export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typeof zh) => string): InputTriggerSource & Required<Pick<InputTriggerSource, 'subscribeCandidates'>> {
   const reply = createCollaborationReplyMatcher(ctx, t, workspaceOf)
   return {
     trigger: '@', name: 'slark-agent', matchEnterPosition: 'anywhere',
+    subscribeCandidates(session, listener) {
+      let workspace = workspaceOf(ctx, session.sessionId)
+      const workspaces = ctx.inject(['workspaces'], (bound) => {
+        const changed = () => {
+          const next = workspaceOf(bound, session.sessionId)
+          if (next === workspace) return
+          workspace = next
+          listener()
+        }
+        bound.effect(() => bound.workspaces.list.subscribe(changed), 'slark-agent: candidate workspace')
+        changed()
+      })
+      const connection = ctx.inject(['connection'], (bound) => {
+        const source = (bound.get('connection') as ConnectionHandle).generation
+        bound.effect(() => source.subscribe(listener), 'slark-agent: candidate connection')
+        listener()
+      })
+      return () => { void workspaces.dispose(); void connection.dispose() }
+    },
     async candidates(session, { query, signal }) {
       const host = window.__DSH_DESKTOP_HOST__, workspace = workspaceOf(ctx, session.sessionId)
       const current = () => !signal.aborted && window.__DSH_DESKTOP_HOST__ === host &&
@@ -238,8 +259,22 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
             return { kind: 'error', text: t(result.reconciliationRequired ? 'submit.uncertainV2' : 'submit.unavailableV2') }
           }
           if (!validReceipt(result, original, mode)) return { kind: 'error', text: t('submit.uncertainV2') }
-          if (result.value.submission_state === 'planning_recorded')
-            return { kind: 'success', text: t('submit.plannedV2').replace('{trace}', result.value.root_trace_id) }
+          if (result.value.submission_state === 'planning_recorded') {
+            window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
+            // oxlint-disable-next-line typescript/unbound-method -- Capture identity and bind the Main method for this send.
+            const execute = host.collaborationRootExecution
+            if (recovery || !execute)
+              return { kind: 'success', text: t('submit.plannedV2').replace('{trace}', result.value.root_trace_id) }
+            const current = () => window.__DSH_DESKTOP_HOST__ === host && host.collaborationRootExecution === execute && available()
+                && ctx.sessions.scopeOf(actx) === session.sessionId && ctx.sessions.scope(session.sessionId) !== undefined
+                && workspaceOf(ctx, session.sessionId) === first.r.workspace_id
+            const state = await dispatchPlannedSource(execute.bind(host), original, result.value.root_trace_id, signal, current)
+            signal.throwIfAborted()
+            if (current()) window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
+            const copy = state === 'recorded' ? 'submit.dispatchedV2'
+              : state === 'not_admitted' ? 'submit.dispatchPendingV2' : 'submit.dispatchUncertainV2'
+            return { kind: 'success', text: t(copy).replace('{trace}', result.value.root_trace_id) }
+          }
           if (result.value.submission_state === 'discussion') {
             const ordinary = ctx.sessions.sessionOf(actx)
             if (!ordinary || ordinary.sessionId !== session.sessionId) return { kind: 'error', text: t('submit.changed') }

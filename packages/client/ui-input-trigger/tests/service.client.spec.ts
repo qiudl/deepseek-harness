@@ -502,6 +502,53 @@ describe('programmatic source launcher', () => {
   })
 })
 
+it('opens the unchanged @ query when its source registers after typing', async () => {
+  const f = controllerBench(), late = readySource('@', 'slark-agent', [{ name: 'Guide · Project' }])
+  await f.root.plugin(() => {})
+  try {
+    f.controller.track('@Gui', 4, { tier: 'plain' }, 1)
+    expect(f.controller.menu.getSnapshot().open).toBe(false)
+    f.sources.push(late.source)
+    f.controller.sourceAdded(late.source)
+    await tick()
+    expect(f.controller.menu.getSnapshot().open).toBe(true)
+    expect(f.controller.menu.getSnapshot().groups[0]?.items[0]?.name).toBe('Guide · Project')
+  } finally { f.controller.dispose(); await f.root.fiber.dispose() }
+})
+
+it.each(['empty', 'pending', 'dismissed', 'removed', 'disposed', 'different-token'] as const)
+('updates a cold @ query on candidate readiness while respecting %s', async (mode) => {
+  let ready = false, notify: (() => void) | undefined
+  const held = Promise.withResolvers<readonly InputTriggerCandidate[]>()
+  const read = vi.fn(async () => ready ? [{ name: 'Guide · Project' }] : mode === 'pending' ? held.promise : [])
+  const source: InputTriggerSource & { subscribeCandidates(session: ClientSessionContext, listener: () => void): () => void } = {
+    trigger: '@', name: 'slark-agent', candidates: read, onPick: () => undefined,
+    subscribeCandidates: (_session, listener) => { notify = listener; return () => { notify = undefined } },
+  }
+  const f = controllerBench([source])
+  await f.root.plugin(() => {})
+  try {
+    f.controller.track('@Gui', 4, { tier: 'plain' }, 1)
+    await tick()
+    if (mode === 'dismissed') f.controller.dismiss()
+    if (mode === 'removed') { f.sources.length = 0; f.controller.sourceRemoved(source) }
+    if (mode === 'disposed') f.controller.dispose()
+    if (mode === 'different-token') f.controller.track('ordinary text', 13, { tier: 'plain' }, 2)
+    ready = true
+    notify?.()
+    await tick(); await tick()
+    if (mode === 'empty' || mode === 'pending') {
+      expect(f.controller.menu.getSnapshot().groups[0]?.items).toEqual([{ name: 'Guide · Project' }])
+      held.resolve([{ name: 'obsolete' }]); await tick()
+      expect(f.controller.menu.getSnapshot().groups[0]?.items).toEqual([{ name: 'Guide · Project' }])
+    } else {
+      expect(f.controller.menu.getSnapshot().open).toBe(false)
+      expect(read).toHaveBeenCalledTimes(1)
+    }
+    if (mode === 'removed' || mode === 'disposed') expect(notify).toBeUndefined()
+  } finally { held.resolve([]); f.controller.dispose(); await f.root.fiber.dispose() }
+})
+
 describe('scope-birth warm', () => {
   it('construction warms every source once with the session projection', () => {
     const cmd = deferredSource('/', 'command')

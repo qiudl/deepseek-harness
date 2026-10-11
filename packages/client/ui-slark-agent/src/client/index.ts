@@ -1,3 +1,7 @@
+import { DraftPersistence } from './DraftPersistence.tsx'
+import type { DraftBridge } from './draft-persistence.ts'
+import type {} from '@deepseek-ai/dsh-client-ui-trajectory/client'
+import { CollaborationTrajectory } from './CollaborationTrajectory.tsx'
 /** DSH `@` source for the live, employee-assigned Slark Agent directory. */
 import type { ChatTimelineRecord } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { ConversationBinding } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -63,6 +67,7 @@ interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBri
   collaborationConversations?(): Promise<
     { ok: true; value: { items: ConversationRow[]; global_pending_count: number } } |
     { ok: false; errorCode: string }>
+  conversationDraft?: DraftBridge
   collaborationScopeAvailable?: boolean
   collaborationExecutionAvailable?: boolean
   collaborationPlanningAvailable?: boolean
@@ -261,6 +266,13 @@ export function apply(ctx: ClientContext): void {
     }, CollaborationMobileTab))
   })
   ctx.slots.inject('conversation.input.dock', () => {
+    const bridge = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__?.conversationDraft
+    if (!bridge) return () => {}
+    return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-draft-persistence', order: 5, locale: NS,
+      inject: sessionId => ({ sessionId, bridge }),
+    }, DraftPersistence)
+  })
+  ctx.slots.inject('conversation.input.dock', () => {
     if (typeof window !== 'undefined' && window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return () => {}
     return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-agent-tasks', order: 25, locale: NS,
       inject: sessionId => ({ sessionId }),
@@ -268,7 +280,7 @@ export function apply(ctx: ClientContext): void {
   })
   ctx.inject(['remote', 'remote.session', 'connection', 'workspaces', 'uiConversation', 'chatTimeline'], (resultsCtx) => {
     if (typeof window === 'undefined' || !window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable ||
-      !window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable) return
+      !(window.__DSH_DESKTOP_HOST__.collaborationExecutionAvailable || window.__DSH_DESKTOP_HOST__.collaborationPlanningAvailable)) return
     const connection = resultsCtx.get('connection') as ConnectionHandle
     const readBridge = shareCollaborationReads(() => window.__DSH_DESKTOP_HOST__, connection.generation)
     const models = new Map<string, ResultsEntry>()
@@ -305,6 +317,10 @@ export function apply(ctx: ClientContext): void {
           },
           subscribe: listener => timelineModel.subscribe(listener),
         })
+        const stopTraceActivity = owner.registerActivity('trajectory', {
+          getSnapshot: () => timelineModel.getSnapshot().groups.length > 0,
+          subscribe: listener => timelineModel.subscribe(listener),
+        })
         let previous: ReturnType<typeof timelineModel.getSnapshot> | undefined
         let records: readonly ChatTimelineRecord[] = []
         const stopTimeline = resultsCtx.chatTimeline.register(sessionId, {
@@ -327,13 +343,17 @@ export function apply(ctx: ClientContext): void {
         })
         const releaseEffect = source.ctx.effect(() => () => {
           models.delete(sessionId)
-          stopTimeline(); stopActivity(); timelineModel.dispose(); model.dispose()
+          stopTimeline(); stopActivity(); stopTraceActivity(); timelineModel.dispose(); model.dispose()
         }, 'ui-slark-agent: Session result projections')
         entry = { owner, model, timelineModel, release: () => { void releaseEffect() },
           timelineBindings: { hooks: { slarkResults: timelineModel }, loadSources: () => timelineModel.loadSources(),
+            traceEvidenceAction: (digest, eventId, more) => timelineModel.traceEvidenceAction(digest, eventId, more),
+            traceAction: (digest, more) => timelineModel.traceAction(digest, more),
             loadReplies: digest => timelineModel.loadReplies(digest),
             executionAction: (digest, taskId, reconcile) => timelineModel.executionAction(digest, taskId, reconcile) },
           bindings: { hooks: { slarkResults: model }, loadSources: () => model.loadSources(),
+            traceEvidenceAction: (digest, eventId, more) => model.traceEvidenceAction(digest, eventId, more),
+            traceAction: (digest, more) => model.traceAction(digest, more),
             locateOriginal: digest => model.locateOriginal(digest, (original) => {
               const navigation = resultsCtx.get('uiWorkspace')
               if (!navigation) throw Error('source_navigation_unavailable')
@@ -390,6 +410,10 @@ export function apply(ctx: ClientContext): void {
       name: 'slark.collaboration.history', locale: NS,
       inject: sessionId => entryFor(sessionId).bindings,
     }, CollaborationResultsDock))
+    resultsCtx.slots.inject('conversation.trajectory.external', () => resultsCtx.slots.register({
+      name: 'conversation.trajectory.external', id: 'slark-collaboration-trace', order: 10, locale: NS,
+      inject: sessionId => entryFor(sessionId).timelineBindings,
+    }, CollaborationTrajectory))
     resultsCtx.slots.inject('conversation.chat.timeline', () => resultsCtx.slots.register({
       name: 'conversation.chat.timeline', locale: NS,
       inject: sessionId => entryFor(sessionId).timelineBindings,
@@ -478,6 +502,7 @@ export function apply(ctx: ClientContext): void {
     order: 5,
     showGroupTitle: false,
     matchEnterPosition: 'anywhere',
+    subscribeCandidates: (session, listener) => scopedSource.subscribeCandidates(session, listener),
     matchEnterPlainText: () => {
       const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
       return Boolean(host?.collaborationScopeAvailable && host.collaborationExecutionAvailable

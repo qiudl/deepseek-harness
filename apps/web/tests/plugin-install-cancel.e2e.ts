@@ -209,12 +209,49 @@ it('cancels installation, retries and highlights the enabled plugin at 40% alpha
       expect(JSON.parse(await readFile(manifestPath, 'utf8'))).toMatchObject({ dependencies: { 'slow-package': '1.0.0' } })
       // Freeze the real highlight's expiry timer and CSS first frame independently.
       await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
+      const highlightTrace = await page.evaluateHandle(() => {
+        const originalPanel = document.querySelector('[data-plugin-panel]')
+        const read = () => {
+          const card = document.querySelector('[data-plugin-package="slow-package"]')
+          return {
+            panel: document.querySelector('[data-plugin-panel]') !== null,
+            originalPanelConnected: originalPanel?.isConnected ?? false,
+            card: card !== null,
+            highlight: card?.hasAttribute('data-plugin-highlight') ?? false,
+            status: card?.getAttribute('data-plugin-status') ?? null,
+          }
+        }
+        let previous = JSON.stringify(read())
+        const events = [{ at: Date.now(), ...read() }]
+        const observer = new MutationObserver(() => {
+          const state = read()
+          const next = JSON.stringify(state)
+          if (next === previous) return
+          previous = next
+          if (events.length < 32) events.push({ at: Date.now(), ...state })
+        })
+        observer.observe(document.body, {
+          childList: true, subtree: true, attributes: true,
+          attributeFilter: ['data-plugin-highlight', 'data-plugin-status'],
+        })
+        return { events, observer, read }
+      })
       const pausedHighlight = await page.addStyleTag({ content: '[data-plugin-highlight] { animation-play-state: paused !important; }' })
       try {
         await dialog.getByRole('button', { name: '立即启用', exact: true }).click()
         await dialog.waitFor({ state: 'hidden' })
         const card = panel.locator('[data-plugin-package="slow-package"][data-plugin-highlight]')
-        await card.waitFor({ state: 'visible' })
+        try {
+          await card.waitFor({ state: 'visible' })
+        } catch (error) {
+          const diagnostic = await highlightTrace.evaluate(trace => ({
+            events: trace.events, current: { at: Date.now(), ...trace.read() },
+          })).catch((diagnosticError: unknown) => ({
+            unavailable: diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError),
+          }))
+          console.log('[plugin-install-highlight]', diagnostic)
+          throw error
+        }
         // `enableInstalled` marks the card and starts the directory reload the
         // Host answers, so the highlight is observable before the reload
         // commits the enabled bundle into the list. Measured 61 ms between the
@@ -251,6 +288,8 @@ it('cancels installation, retries and highlights the enabled plugin at 40% alpha
         await page.clock.runFor(2400)
         await card.waitFor({ state: 'detached' })
       } finally {
+        await highlightTrace.evaluate((trace) => { trace.observer.disconnect() })
+        await highlightTrace.dispose()
         await pausedHighlight.evaluate((element) => { element.parentNode?.removeChild(element) })
         await page.emulateMedia({ colorScheme: null, reducedMotion: null })
         await page.clock.resume()

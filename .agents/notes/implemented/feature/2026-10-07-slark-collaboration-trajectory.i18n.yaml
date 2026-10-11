@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-07-slark-collaboration-trajectory.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-10-07-slark-collaboration-trajectory.md
+/agent-note-original-session-collaboration-trajectory:
+  en: 9b914f5f8b26b7bc
+  zh: 134d7b438a36a4cf
+/agent-note-original-session-collaboration-trajectory/problem:
+  en: 0594fde1d349730b
+  zh: c5b7b278aace4456
+/agent-note-original-session-collaboration-trajectory/decision:
+  en: 068ea743cb133299
+  zh: 8b2279b658651588
+/agent-note-original-session-collaboration-trajectory/alternatives-considered:
+  en: 5780e7e47f7f993b
+  zh: f282b529fe3fc080
+/agent-note-original-session-collaboration-trajectory/consequences:
+  en: cc64840d8ede8c00
+  zh: 6b48ef22e63b994b

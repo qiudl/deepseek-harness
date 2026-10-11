@@ -282,6 +282,13 @@ describe('Main-only Profile operations', () => {
   it('rejects invalid authorization lifetimes and Account bootstrap material', () => {
     const source = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.ensure","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"binding:opaque","authority_binding_version":1,"account_access_token":"header.payload.signature","account_issuer":"https://accounts.dsh.colorbuyai.com","account_subject":"person","profile_key_handle":"keychain:person","profile_unlock_material":"${'A'.repeat(43)}"}}\n`
     expect(encodeHostControlFrame(decodeHostControlFrame(source))).toBe(source)
+    const scoped = JSON.parse(source) as { params: Record<string, unknown> }
+    scoped.params.authority_binding_scope = 'a'.repeat(64)
+    const scopedSource = `${JSON.stringify(scoped)}\n`
+    expect(encodeHostControlFrame(decodeHostControlFrame(scopedSource))).toBe(scopedSource)
+    expectMutationsRejected(scopedSource, ['params', 'authority_binding_scope'], [null, '', 'A'.repeat(64), 'a'.repeat(63)])
+    delete scoped.params.account_access_token
+    expect(() => decodeHostControlFrame(`${JSON.stringify(scoped)}\n`)).toThrow(HostControlProtocolError)
 
     expectMutationsRejected(source, ['params', 'issued_at'], [null, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])
     expectMutationsRejected(source, ['params', 'expires_at'], [null, -1, 999, 1000])

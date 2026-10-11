@@ -3,7 +3,7 @@
 import { join } from 'node:path'
 import { webcrypto } from 'node:crypto'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { installAssembledBootEnv, mountAssembledApp } from './assembled-boot.ts'
 import { installRemoteCollaboration } from '../src/remote-collaboration.ts'
 type WorkspaceRequest = { workspace_id: string
@@ -14,6 +14,83 @@ const EXPECTED = join(process.cwd(), 'apps/web/tests/expected/slark-agent-compos
 
 installAssembledBootEnv()
 afterEach(() => { window.dispatchEvent(new Event('pagehide')); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
+
+it.each(['click', 'enter'] as const)('root mode %s dispatches the frozen task and displays its reply without a panel action', async (mode) => {
+  vi.stubGlobal('crypto', webcrypto)
+  const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051', trace = 'b'.repeat(32)
+  type Source = { workspace_id: string; session_id: string; source_message_id: string; source_revision: string }
+  let original: { source: Source
+    snapshot_digest: string
+    original_message: string
+    timeline_position: { after_sequence: null; local_order: string } } | undefined
+  let dispatched = false
+  const pendingGate = Promise.withResolvers<undefined>()
+  onTestFinished(() => { pendingGate.resolve(undefined) })
+  const submit = vi.fn(async (input: Source & { original_message: string }) => {
+    const source = { workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision }
+    original = { source, snapshot_digest: 'a'.repeat(64), original_message: input.original_message,
+      timeline_position: { after_sequence: null, local_order: '1' } }
+    return { ok: true, value: { source, submission_state: 'planning_recorded',
+      root_task_id: 'bfb432fd-a2a2-4cbd-b1dc-4648c8944081', root_trace_id: trace } }
+  })
+  const execute = vi.fn(async (request: { action: string; source?: Source; previewId?: string; taskId?: string }) => {
+    if (request.action === 'preview') {
+      expect(request.source).toEqual(original?.source)
+      return { ok: true, rootTraceId: trace, previewId: 'preview', executionEnabled: true,
+        tasks: [{ taskId: 'task', question: 'check login', agentName: 'Guide', projectName: 'Product' }] }
+    }
+    expect(request).toEqual({ action: 'confirm', previewId: 'preview', taskId: 'task' })
+    dispatched = true
+    return { ok: true, status: 'recorded' }
+  })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {
+    collaborationScopeAvailable: true, collaborationPlanningAvailable: true, collaborationExecutionAvailable: false,
+    collaborationSubmit: submit, collaborationRootExecution: execute,
+    collaborationPending: async ({ source }: { source: Source }) => {
+      await pendingGate.promise
+      return { ok: true, value: { source, plan: null, pending_items: [], frozen_task_count: 1 } }
+    },
+    collaborationDeliveries: async ({ source }: { source: Source }) => ({ ok: true, value: { deliveries: dispatched ? [{
+      delivery_id: 'delivery', invocation_id: 'invocation', delivery_state: 'pending', delivery_state_version: '1',
+      source_locator: source, source_snapshot_digest: 'a'.repeat(64), execution_state: 'succeeded', invocation_state_version: '2',
+      target_display_snapshot: { agent_name: 'Guide', project_name: 'Product' }, answer: 'Login checked.' }] : [] } }),
+    collaborationWorkspace: async ({ workspace_id, operation }: WorkspaceRequest) => operation.kind === 'get'
+      ? { ok: true, value: { workspace_id, version: '1', selected_project_ids: ['product'] } }
+      : { ok: true, value: { items: [{ project_id: 'product', project_name: 'Product', agent_id: 'guide', agent_name: 'Guide',
+        available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' }], next_cursor: null, scope_version: '1' } },
+  })
+  const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'], remote: { workspaceId: workspace } })
+  remote.mock.unary('fileReferences/list', { ok: true, value: [] })
+  remote.mock.unary('sessionReferenceResolver/candidates', { ok: true, value: [] })
+  remote.mock.unary('session/collaborationSources', () => ({ ok: true, value: { items: original ? [original] : [] } }))
+  const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
+  const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
+  if (!start) throw Error('fixture Workspace action missing')
+  fireEvent.click(start)
+  const input = await waitFor(() => {
+    const element = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
+    if (!element) throw Error('composer missing')
+    return element
+  }, { timeout: 10_000 })
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => '@Gui' } })
+  fireEvent.mouseDown(await screen.findByRole('option', { name: /Guide · Product/ }, { timeout: 10_000 }))
+  fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'check login' } })
+  const send = await screen.findByRole('button', { name: 'Send message' })
+  expect(send.hasAttribute('disabled')).toBe(false)
+  if (mode === 'click') fireEvent.click(send)
+  else fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => { expect(input.textContent).toBe('') }, { timeout: 10_000 })
+  await screen.findByText(`Tasks dispatched. Trace ID: ${trace}`)
+  await screen.findByText('Login checked.', {}, { timeout: 10_000 })
+  expect(submit).toHaveBeenCalledTimes(1)
+  expect(execute.mock.calls.map(([request]) => request.action)).toEqual(['preview', 'confirm'])
+  expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
+  await expect([`original=${original?.original_message}`, 'planning-receipts=1', 'execution=preview,confirm',
+    `notice=Tasks dispatched. Trace ID: ${trace}`, 'reply=Login checked.', 'ordinary-model-prompts=0', 'draft=empty',
+  ].join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
+    'apps/web/tests/expected/slark-agent-composer/root-send.expected.txt'))
+})
 
 it('sends two scoped Agents from the built composer as one original message without opening a task form', async () => {
   vi.stubGlobal('crypto', webcrypto)
@@ -286,7 +363,8 @@ it('asks a natural question in the built composer and accepts a plain clarificat
   remote.mock.unary('session/collaborationSources', () => ({ ok: true, value: { items: original ? [{
     source: { workspace_id: original.workspace_id, session_id: original.session_id,
       source_message_id: original.source_message_id, source_revision: original.source_revision },
-    snapshot_digest: 'a'.repeat(64), original_message: original.original_message }] : [] } }))
+    snapshot_digest: 'a'.repeat(64), original_message: original.original_message,
+    timeline_position: { after_sequence: null, local_order: '1' } }] : [] } }))
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
@@ -303,6 +381,7 @@ it('asks a natural question in the built composer and accepts a plain clarificat
   fireEvent.keyDown(input, { key: 'Enter' })
   const question = await screen.findByText('Guide · Product Which login problem should I check?', { exact: true }, { timeout: 10_000 })
   await waitFor(() => { expect(input.textContent).toBe('') })
+  await screen.findByText(original?.original_message ?? '', { exact: true })
   const observations = [`question=${question.textContent}`, `original=${original?.original_message}`]
   fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'Please check the redirect to the home page.' } })
   await waitFor(() => { expect(input.textContent).toBe('Please check the redirect to the home page.') })
@@ -317,4 +396,57 @@ it('asks a natural question in the built composer and accepts a plain clarificat
     'clarification-submissions=1', 'ordinary-model-prompts=0', 'draft=empty')
   await expect(observations.join('\n') + '\n').toMatchFileSnapshot(join(process.cwd(),
     'apps/web/tests/expected/slark-agent-composer/clarification.expected.txt'))
+})
+
+it('reads original-root collaboration history from the built Trajectory tab without executing work', async () => {
+  const workspace = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
+  const root = { root_task_id: 'root', root_trace_id: 'b'.repeat(32), task_revision: '2', state_version: '3', state: 'active', intent_state: 'active' }
+  const trace = vi.fn(async (request: { action: string; cursor: { evidence?: { event_id: string } } }) => {
+    if (request.action !== 'trace') throw Error('history must not execute')
+    return { ok: true, value: { root, coverage: 'partial', next_after_seq: null,
+      events: [{ event_id: 'settlement', root_seq: 1, task_revision: 1, type: 'execution_observed', phase: 'execution_succeeded',
+        occurred_at: '2026-10-07T00:00:00.000Z', recorded_at: '2026-10-07T00:00:00.000Z',
+        trace_context: { root_task_id: root.root_task_id, root_trace_id: root.root_trace_id, task_revision: 1, attempt_id: 'attempt' } }],
+      ...(request.cursor.evidence ? { execution: { event_id: 'settlement', attempt_id: 'attempt', state: 'succeeded',
+        digest: 'a'.repeat(64), next_after_sequence: null, provider_visibility: 'boundary_only',
+        events: [{ sequence: 1, observedAt: 1791331200000, type: 'file.completed', runtimeId: 'file-proof', success: true }] } } : {}) } }
+  })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationScopeAvailable: true, collaborationPlanningAvailable: true,
+    collaborationExecutionAvailable: false, collaborationRootExecution: trace,
+    collaborationDeliveries: async () => ({ ok: true, value: { deliveries: [] } }),
+    collaborationWorkspace: async () => ({ ok: true, value: { workspace_id: workspace, version: '1', selected_project_ids: [] } }),
+  })
+  const remote = mountAssembledApp({ exclude: ['@deepseek-ai/dsh-client-ui-settings-models'], remote: { workspaceId: workspace } })
+  remote.mock.unary('fileReferences/list', { ok: true, value: [] })
+  remote.mock.unary('sessionReferenceResolver/candidates', { ok: true, value: [] })
+  remote.mock.unary('session/collaborationSources', (input: unknown) => {
+    if (!input || typeof input !== 'object') throw Error('request missing')
+    const request: unknown = Reflect.get(input, 'request')
+    if (!request || typeof request !== 'object') throw Error('session request missing')
+    const sessionId: unknown = Reflect.get(request, 'sessionId')
+    if (typeof sessionId !== 'string') throw Error('session missing')
+    return { ok: true, value: { items: [{ source: { workspace_id: workspace, session_id: sessionId,
+      source_message_id: 'original', source_revision: '1' }, snapshot_digest: 'a'.repeat(64), original_message: 'Check the recorded file operation',
+    timeline_position: { after_sequence: null, local_order: '1' } }] } }
+  })
+  const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
+  const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
+  if (!start) throw Error('fixture Workspace action missing')
+  fireEvent.click(start)
+  await waitFor(() => { expect(remote.mock.log.calls('session/collaborationSources').length).toBeGreaterThan(0) })
+  await screen.findByText('Check the recorded file operation', {}, { timeout: 10_000 })
+  fireEvent.click(await screen.findByRole('tab', { name: 'Trajectory' }, { timeout: 10_000 }))
+  const panel = await screen.findByTestId('slark-collaboration-trajectory', {}, { timeout: 10_000 })
+  fireEvent.click(within(panel).getByTestId('slark-trace-load'))
+  await within(panel).findByText(root.root_trace_id)
+  expect(panel.textContent).toContain('Original task in progress')
+  expect(panel.textContent).toContain('Remote execution succeeded')
+  fireEvent.click(within(panel).getByTestId('slark-trace-execution'))
+  await within(panel).findByText('file-proof')
+  expect(panel.textContent).toContain('2026-10-07T00:00:00.000Z')
+  expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
+  expect(trace.mock.calls.every(([request]) => request.action === 'trace')).toBe(true)
+  await expect([`trace=${root.root_trace_id}`, 'root=active', 'execution=succeeded', 'revision=2', 'runtime=file.completed',
+    'provider-visibility=boundary-only', 'ordinary-model-prompts=0', 'commands=trace-only'].join('\n') + '\n')
+    .toMatchFileSnapshot(join(process.cwd(), 'apps/web/tests/expected/slark-agent-composer/trajectory.expected.txt'))
 })

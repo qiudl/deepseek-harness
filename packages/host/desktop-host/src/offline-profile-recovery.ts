@@ -7,6 +7,8 @@ import type { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-s
 import type { OfflineProfileRecoveryPreflight, PersonProfileRecord } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import type { AppliedMigrationOwnerState, MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
+import type { BundledPlugin, BundledPluginCatalog } from './bundled-plugins.ts'
+import { verifyCopiedBundledPlugin } from './bundled-plugin-recovery.ts'
 
 const MAX_PROFILE_TREE_ENTRIES = 100_000
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024
@@ -25,6 +27,7 @@ type RecoveryPlan = Readonly<{
   sourceRuntimeRoot?: string
   sourceRuntimeDigest?: string
   links: readonly LinkFact[]
+  bundledPlugins: readonly { readonly plugin: BundledPlugin; readonly catalog: BundledPluginCatalog }[]
 }>
 
 function contained(root: string, candidate: string): boolean {
@@ -256,6 +259,7 @@ export class OfflineProfileRecoveryInspector {
     readonly installationId: string
     readonly expectedUid: number
     readonly currentRuntimeAppRoot?: string
+    readonly bundledCatalog?: BundledPluginCatalog
     readonly targetFor: (profileId: string) => FileOwnerJsonlMigrationGenerationTarget
     readonly ownerStateApplicator: MigrationOwnerStateApplicator
   }) {}
@@ -288,7 +292,6 @@ export class OfflineProfileRecoveryInspector {
       const profileComposition = await checkedDirectory(join(profileRoot, 'profiles'), this.options.expectedUid)
       const webComposition = await checkedDirectory(join(profileComposition, 'web'), this.options.expectedUid)
       const manifest = await checkedFile(join(webComposition, 'package.json'), this.options.expectedUid)
-      const lockfile = await checkedFile(join(webComposition, 'pnpm-lock.yaml'), this.options.expectedUid)
       let manifestValue: unknown
       try { manifestValue = JSON.parse(manifest.toString('utf8')) } catch { throw new HostAuthorityError('profile_integrity_failed') }
       if (typeof manifestValue !== 'object' || manifestValue === null || Array.isArray(manifestValue)) {
@@ -297,6 +300,18 @@ export class OfflineProfileRecoveryInspector {
       const dependencies = (manifestValue as { dependencies?: unknown }).dependencies
       if (typeof dependencies !== 'object' || dependencies === null || Array.isArray(dependencies)) {
         throw new HostAuthorityError('profile_integrity_failed')
+      }
+      let lockfile: Buffer | null
+      try {
+        lockfile = await checkedFile(join(webComposition, 'pnpm-lock.yaml'), this.options.expectedUid)
+      } catch (error) {
+        // Released empty Profiles have no package-manager installation or lockfile.
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT'
+          || Object.keys(dependencies).length !== 0
+          || (await readdir(webComposition)).some(name => name === 'node_modules' || name === '.bundled-plugins')) {
+          throw error
+        }
+        lockfile = null
       }
       const pluginCount = Object.keys(dependencies).length
       const links = await linkFacts(profileComposition, this.options.expectedUid)
@@ -323,6 +338,16 @@ export class OfflineProfileRecoveryInspector {
         if (runtimeRoot !== this.options.currentRuntimeAppRoot) legacyRuntimeRoots.add(runtimeRoot)
       }
       if (sourceRuntimeRoots.size > 1) throw new HostAuthorityError('runtime_incompatible')
+      const bundledPlugins: Array<{ plugin: BundledPlugin; catalog: BundledPluginCatalog }> = []
+      for (const [name, spec] of Object.entries(dependencies)) {
+        if (verifiedDependencies.has(name)) continue
+        const catalog = this.options.bundledCatalog
+        const plugin = catalog?.getForDependency(name, spec)
+        if (!catalog || !plugin) continue
+        await verifyCopiedBundledPlugin(catalog, plugin, webComposition, this.options.expectedUid)
+        bundledPlugins.push({ plugin, catalog })
+        verifiedDependencies.add(name)
+      }
       const hasUnverifiedDependencies = Object.keys(dependencies)
         .some(dependency => !verifiedDependencies.has(dependency))
       const compatibility = hasUnverifiedDependencies
@@ -356,11 +381,12 @@ export class OfflineProfileRecoveryInspector {
         ownerStateGeneration: ownerPaths.generation,
         patchDigest: hash(patch),
         manifestDigest: hash(manifest),
-        lockfileDigest: hash(lockfile),
+        lockfileDigest: lockfile === null ? null : hash(lockfile),
         links: links.map(link => ({
           path: link.path, target: link.target, kind: link.kind, size: link.size,
         })),
         runtimeClosures,
+        bundledPlugins: bundledPlugins.map(({ plugin }) => ({ name: plugin.name, version: plugin.version, digest: plugin.sha256 })),
         state,
         compatibility,
       }))
@@ -371,6 +397,7 @@ export class OfflineProfileRecoveryInspector {
         ...(sourceRuntimeRoots.size === 0 ? {} : { sourceRuntimeRoot: [...sourceRuntimeRoots][0] }),
         ...(sourceRuntimeDigest === undefined ? {} : { sourceRuntimeDigest }),
         links,
+        bundledPlugins,
       })
       this.planDigestByProfile.set(profile.profileId, preflightDigest)
       return {
@@ -398,6 +425,11 @@ export class OfflineProfileRecoveryInspector {
     // lookup only consumes the exact plan produced by that successful call.
     const plan = this.plans.get(preflight.preflightDigest)
     if (!plan || plan.profileId !== profile.profileId) throw new HostAuthorityError('recovery_preflight_stale')
+    for (const { plugin, catalog } of plan.bundledPlugins) {
+      try {
+        await verifyCopiedBundledPlugin(catalog, plugin, join(plan.profileRoot, 'profiles', 'web'), this.options.expectedUid)
+      } catch { throw new HostAuthorityError('recovery_preflight_stale') }
+    }
     if (!plan.sourceRuntimeRoot) return
 
     const source = await runtimeTreeDigest(plan.sourceRuntimeRoot, this.options.expectedUid, true)

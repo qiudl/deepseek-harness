@@ -34,7 +34,8 @@ export interface RemoteStreamOptions<Item> {
  * Connection owns physical retry timing; Gateway performs each requested
  * replacement. The domain consumer owns its opening item and every later
  * item, and calls {@link RemoteStreamItem.accept} only after validating the
- * opening baseline or cursor.
+ * opening baseline or cursor. A temporarily unavailable service is retried
+ * up to five times with 100–1600 ms delays; other Remote failures stay terminal.
  */
 export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>> {
   private readonly lifetime = new AbortController()
@@ -94,6 +95,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
 
   private async * read(): AsyncGenerator<RemoteStreamItem<Item>> {
     let attempt = 0
+    let serviceAttempt = 0
     let generation = 0
     let observedRevision = this.revision
     try {
@@ -101,6 +103,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
         if (observedRevision !== this.revision) {
           observedRevision = this.revision
           attempt = 0
+          serviceAttempt = 0
         }
         const revision = this.revision
         const generationAbort = new AbortController()
@@ -120,6 +123,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
                 if (this.generationAbort !== generationAbort || revision !== this.revision) return
                 accepted = true
                 attempt = 0
+                serviceAttempt = 0
               },
             }
           }
@@ -129,6 +133,10 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
         } catch (error) {
           if (isAborted(this.lifetime.signal)) return
           if (revision !== this.revision) continue
+          if (remoteErrorOf(error)?.code === 'gateway/service-unavailable' && serviceAttempt < 5) {
+            await waitForServiceRetry(++serviceAttempt, signal)
+            continue
+          }
           if (!(error instanceof RemoteStreamCarrierError)) throw terminalStreamFailure(error)
           this.options.carrierFailed?.(error)
           if (revision !== this.revision) continue
@@ -155,6 +163,19 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
       this.generationAbort = undefined
     }
   }
+}
+
+async function waitForServiceRetry(attempt: number, signal: AbortSignal): Promise<void> {
+  // The supervisor checked lifetime and revision immediately before this synchronous registration.
+  await new Promise<void>((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, 100 * 2 ** (attempt - 1))
+    signal.addEventListener('abort', finish, { once: true })
+  })
 }
 
 async function waitForRemoteStreamRetry(

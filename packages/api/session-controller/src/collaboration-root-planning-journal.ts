@@ -1,4 +1,5 @@
 /** REQ-20261004-0008: fresh planning inputs under immutable roots, in a separate Profile-owned domain. */
+import { openCollaborationAnalysisFailures, type CollaborationAnalysisFailure } from './collaboration-analysis-failure-journal.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -197,6 +198,14 @@ export interface CollaborationRootPlanningJournal {
    * @returns immutable record including the saved output; this does not admit tasks.
    */
   saveOutput(record: CollaborationRootPlanningRecord, jsonText: string, signal: AbortSignal): Promise<CollaborationRootPlanningRecord>
+  /** Record a local analysis failure against the consumed original grant; no retry is authorized.
+   * @param record - Committed planning input.
+   * @param error - Local failure sanitized to a fixed reason vocabulary.
+   * @returns Completion after the independent failure observation commits.
+   */
+  recordFailure(record: CollaborationRootPlanningRecord, error: unknown): Promise<void>
+  /** @returns Immutable failed-analysis observations, without executable calls. */
+  failures(): IterableIterator<CollaborationAnalysisFailure>
   /** Read metadata only after accepted writes finish; current unused local input is required.
    * @param attemptId - Exact previously prepared attempt identity.
    * @param signal - Cancellation while awaiting preceding journal operations.
@@ -230,6 +239,16 @@ export async function openCollaborationRootPlanningJournal(facility: Pick<Domain
       deepFreeze(value)
     }
     tips(all())
+  } catch (error) { await domain.close(); throw error }
+  let failures: Awaited<ReturnType<typeof openCollaborationAnalysisFailures>>
+  try {
+    failures = await openCollaborationAnalysisFailures(facility, 'collaboration_root_planning_failure_v1', (key) => {
+      const r = all().find(row => row.input_manifest_digest === key)
+      if (!r?.dispatch) return undefined
+      return { identity: { attempt_request_id: r.manifest.attempt_request_id, input_manifest_digest: key,
+        source_digest: r.manifest.root.source_digest, dispatch_digest: collaborationJournalDigest(r.dispatch),
+        trace_id: r.manifest.root.root_trace_id }, hasOutput: r.output !== undefined }
+    })
   } catch (error) { await domain.close(); throw error }
   let tail = Promise.resolve(), closing: Promise<void> | undefined, recoveryRequired = false
   const healthy = () => {
@@ -295,9 +314,17 @@ export async function openCollaborationRootPlanningJournal(facility: Pick<Domain
           if (r.output.json_text !== jsonText) throw Error('collaboration_root_planning_output_conflict')
           return r
         }
+        failures.assertNoFailure(record.input_manifest_digest)
         return put(deepFreeze({ ...r, output }))
       })
     },
+    recordFailure(record, error) {
+      return queue(new AbortController().signal, async () => {
+        stored(record)
+        await failures.record(record.input_manifest_digest, error)
+      })
+    },
+    failures() { healthy(); return failures.records() },
     inspectAttempt(attemptId, signal) {
       return queue(signal, () => {
         const r = table.get(attemptId)
@@ -320,7 +347,17 @@ export async function openCollaborationRootPlanningJournal(facility: Pick<Domain
         r.manifest.root.namespace_id === namespace && r.manifest.root.root_task_id === rootId) ?? null)
     },
     records() { healthy(); return all().values() },
-    close() { closing ??= tail.then(() => domain.close()); return closing },
+    close() {
+      closing ??= tail.then(async () => {
+        const results = await Promise.allSettled([
+          Promise.resolve().then(() => domain.close()), Promise.resolve().then(() => failures.close()),
+        ])
+        const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result): unknown => result.reason)
+        if (errors.length === 1) throw errors[0]
+        if (errors.length > 1) throw new AggregateError(errors, 'collaboration_root_planning_close_failed')
+      })
+      return closing
+    },
   }
 }
 /**

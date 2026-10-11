@@ -337,6 +337,29 @@ describe('authenticated Unix transport', () => {
     await server.close()
   })
 
+  it('switches independent login bindings through the authenticated socket and fences retired selectors', async () => {
+    const { server, socketPath } = await fixture()
+    onTestFinished(async () => { await server.close() })
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    onTestFinished(() => { client.close() })
+    const common = { issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'), keyHandle: 'keychain:u1', unlockMaterial }
+    const first = { ...common, accountBindingHandle: 'feishu', authorityBindingVersion: 5, authorityBindingScope: 'a'.repeat(64) }
+    const second = { ...common, accountBindingHandle: 'email', authorityBindingVersion: 1, authorityBindingScope: 'b'.repeat(64) }
+    const original = await client.ensureAccountProfile(first)
+    const switched = await client.ensureAccountProfile(second)
+    expect(switched.profileId).toBe(original.profileId)
+    expect((await client.ensureAccountProfile(first)).profileId).toBe(original.profileId)
+    await client.ensureAccountProfile({ ...second, accountBindingHandle: 'email-rebound', authorityBindingVersion: 2 })
+    await expect(client.restoreProfile({ ...second, profileSelector: switched.profileSelector }))
+      .rejects.toMatchObject({ code: 'stale' })
+    await expect(client.ensureAccountProfile(second)).rejects.toMatchObject({ code: 'stale' })
+  })
+
   it('keeps the existing Profile when a newer binding replaces its Account issuer', async () => {
     const { server, socketPath } = await fixture()
     const client = await UnixHostClient.connect({
@@ -427,7 +450,7 @@ describe('authenticated Unix transport', () => {
     await server.close()
   })
 
-  it('reports an upgrade requirement locally before sending token-bearing ensure to an older Host', async () => {
+  it.each(['profile.ensure_account_token', 'profile.ensure_binding_scope'])('requires %s before ensure', async (capability) => {
     const { server, socketPath } = await fixture()
     const client = await UnixHostClient.connect({
       socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
@@ -435,11 +458,12 @@ describe('authenticated Unix transport', () => {
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     })
     const inspection = client.inspection as { capabilities: typeof client.inspection.capabilities }
-    inspection.capabilities = inspection.capabilities.filter(value => value !== 'profile.ensure_account_token')
+    inspection.capabilities = inspection.capabilities.filter(value => value !== capability)
     await expect(client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'older-host-user', authorityEnvironmentId: stagingEnvironmentId,
       accountAccessToken: accountToken(slarkIssuer, 'older-host-user'),
       accountBindingHandle: 'binding:older-host', authorityBindingVersion: 1,
+      authorityBindingScope: 'a'.repeat(64),
       keyHandle: 'keychain:older-host', unlockMaterial,
     })).rejects.toMatchObject({ code: 'upgrade_required' })
     client.close()
