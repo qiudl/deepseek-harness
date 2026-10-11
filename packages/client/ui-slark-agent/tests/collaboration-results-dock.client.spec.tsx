@@ -7,6 +7,7 @@ import { workspaceSnapshot, dockRuntime, dockTranslate } from './fixture-state.c
 import { CollaborationResultsModel } from '../src/client/collaboration-results.ts'
 import type { CollaborationResultsBridge } from '../src/client/collaboration-results.ts'
 import { CollaborationResultsDock } from '../src/client/CollaborationResultsDock.tsx'
+import { CollaborationTimeline } from '../src/client/CollaborationTimeline.tsx'
 import { zh } from '../src/client/locales.ts'
 
 afterEach(cleanup)
@@ -35,6 +36,36 @@ function fixture(answer = '完整回复', workspace = false, locator = false) {
     loadReplies: (id: string) => model.loadReplies(id), t: dockTranslate }
   return { model, read, readSources, readOriginal, props, original, item, bridge }
 }
+it('admitted Main response reaches the actual chat through the result model and final delivery replaces it', async () => {
+  const f = fixture('最终权威正文'), stop = vi.fn()
+  let receive: ((value: unknown) => void) | undefined
+  Object.assign(f.bridge, { collaborationResponseAvailable: true,
+    collaborationResponse: vi.fn((_request: unknown, callback: (value: unknown) => void) => { receive = callback; return stop }) })
+  f.read.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  const view = render(<CollaborationTimeline {...f.props} recordId={f.original.snapshot_digest} />)
+  onTestFinished(() => { view.unmount() })
+  await waitFor(() => { expect(f.model.getSnapshot().groups).toHaveLength(1) })
+  for (const detail of [undefined, {}, { source: { ...source, workspace_id: 'other' } },
+    { source: { ...source, session_id: 'other' } }]) {
+    await act(async () => { window.dispatchEvent(new CustomEvent('dsh-slark-response-admitted', { detail })) })
+  }
+  expect(receive).toBeUndefined()
+  await act(async () => { window.dispatchEvent(new CustomEvent('dsh-slark-response-admitted', {
+    detail: { source: f.original.source, previewId: 'preview', taskId: 'task' } })) })
+  expect(receive).toBeTypeOf('function')
+  await act(async () => { window.dispatchEvent(new CustomEvent('dsh-slark-response-admitted', {
+    detail: { source: f.original.source, previewId: 'preview', taskId: 'task' } })) })
+  expect(f.bridge.collaborationResponse).toHaveBeenCalledOnce()
+  const base = { source_locator: f.original.source, task_id: 'task', target_display_snapshot: { agent_name: 'Guide', project_name: 'Project' } }
+  await act(async () => { receive!({ ...base, kind: 'response_snapshot', schema_version: 1, provisional: true,
+    invocation_id: f.item.invocation_id, attempt_fence: '1', seq: '1', source_digest: f.original.snapshot_digest,
+    text: '第一段真正正文🙂', text_digest: 'e'.repeat(64), emitted_at: String(Date.now()) }) })
+  expect(screen.getByTestId('slark-timeline-response').textContent).toContain('第一段真正正文🙂')
+  f.read.mockResolvedValue({ ok: true, value: { deliveries: [f.item] } })
+  await act(async () => { receive!({ ...base, kind: 'terminal_available', invocation_id: f.item.invocation_id }) })
+  await screen.findByText('最终权威正文')
+  expect(screen.queryByTestId('slark-timeline-response')).toBeNull(); expect(stop).toHaveBeenCalledOnce()
+})
 it('focuses the exact original after clicking its locator and does not steal focus on readonly polling', async () => {
   const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView'), scroll = vi.fn()
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll })
