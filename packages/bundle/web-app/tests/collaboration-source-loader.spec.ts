@@ -246,6 +246,8 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
     await expect(readFile(disk)).rejects.toMatchObject({ code: 'ENOENT' })
     expect((await postAnalysis(command, `Bearer ${token}`)).status).toBe(403)
     expect((await postAnalysis({ ...command, attempt_request_id: randomUUID() })).status).toBe(400)
+    for (const key of ['attachments', 'references'])
+      expect((await postAnalysis({ ...command, input: { ...original, source: { ...source, [key]: [] } } })).status).toBe(422)
     const repeat = await postAnalysis(command)
     expect(repeat.status).toBe(200)
     expect((await repeat.json() as { value: unknown }).value).toEqual(preparation)

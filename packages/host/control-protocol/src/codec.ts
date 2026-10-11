@@ -1,3 +1,4 @@
+import { parseHostRootTextContextReceipt } from './root-text-context.ts'
 import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
 import { parseHostRootPlanningEvidence } from './root-planning-evidence.ts'
 import { parseHostRootPlanningAttemptDescriptor, parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
@@ -1339,14 +1340,20 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
     return { kind: row.kind, root: parseHostRootSubmissionDescriptor(row.root) }
   }
   if (row.kind === 'root_captured') {
-    exactKeys(row, ['kind', 'capture'])
+    exactKeys(row, ['kind', 'capture', ...(Object.hasOwn(row, 'context_receipt') ? ['context_receipt'] : [])])
     const capture = registrationRecord(row.capture)
     exactKeys(capture, ['kind', 'descriptor', 'root'])
     if (capture.kind !== 'captured' && capture.kind !== 'recovered') reject()
     const descriptor = parseHostCollaborationSourceDescriptor(capture.descriptor)
     const root = parseHostRootSubmissionDescriptor(capture.root)
     if (JSON.stringify(descriptor) !== JSON.stringify(root.source_descriptor)) reject()
-    return { kind: row.kind, capture: remoteSessionJson({ kind: capture.kind, descriptor, root }) }
+    const receipt = Object.hasOwn(row, 'context_receipt') ? parseHostRootTextContextReceipt(row.context_receipt) : undefined
+    if (receipt && (capture.kind !== 'captured' || receipt.root.namespace_id !== root.namespace_id
+      || receipt.root.command_id !== root.command_id || receipt.root.root_task_id !== root.root_task_id
+      || receipt.root.root_trace_id !== root.root_trace_id || receipt.root.payload_digest !== root.payload_digest
+      || receipt.root.source_digest !== descriptor.snapshot_digest)) reject()
+    return { kind: row.kind, capture: remoteSessionJson({ kind: capture.kind, descriptor, root }),
+      ...(receipt ? { context_receipt: receipt } : {}) }
   }
   if (row.kind === 'reply_source') {
     exactKeys(row, ['kind', 'capture'])

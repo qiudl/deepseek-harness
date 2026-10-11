@@ -622,7 +622,7 @@ export type HostCollaborationAnalysisResult =
   | Readonly<{ kind: 'source_output'; evidence: HostSourceAnalysisOutput }>
   | Readonly<{ kind: 'root_output'; evidence: HostRootAnalysisOutput }>
   | Readonly<{ kind: 'root_prepared'; preparation: HostRemoteSessionJson }>
-  | Readonly<{ kind: 'root_captured'; capture: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'root_captured'; capture: HostRemoteSessionJson; context_receipt?: import('./root-text-context.ts').HostRootTextContextReceipt }>
   | Readonly<{ kind: 'root_capture_released'; root: HostRootSubmissionDescriptor }>
   | Readonly<{ kind: 'prepared'; preparation: HostRemoteSessionJson }>
   | Readonly<{ kind: 'reply_source'; capture: HostRemoteSessionJson }>

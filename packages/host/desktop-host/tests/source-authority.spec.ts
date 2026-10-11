@@ -1296,6 +1296,78 @@ it.each(['capture_root', 'start_captured_root', 'release_captured_root'] as cons
   f.setAnalysis(async () => { f.host.revokeOwner(f.ownerId); return value })
   await expect(f.client.collaborationAnalysis(request)).rejects.toThrow()
 })
+it.each(['signed', 'recovered', 'extra_input', 'signature', 'input_digest', 'binding', 'root'] as const)(
+  'complete text capture receipts bind the actual original ingress: %s', async (mode) => {
+    const { parseHostRootAnalysisInput, encodeHostRootTextContextPayload, encodeHostRootTextInput } = await import('@deepseek-ai/dsh-host-control-protocol')
+    const f = await fixture(false, false, false, false, false, false, false, false, true, false,
+      false, false, false, false, false, false, true)
+    await f.grant()
+    const c = f.challenge, descriptor = { workspace_id: c.workspace_id, session_id: c.session_id,
+      source_message_id: c.source_message_id, source_revision: c.source_revision, snapshot_digest: c.snapshot_digest }
+    const source = { ...descriptor, original_message: '@Guide 请解释什么是缓存', active_mentions: [] }
+    const { snapshot_digest: _snapshot, ...text } = source
+    const input = parseHostRootAnalysisInput({ namespace_id: 'n2_' + 'b'.repeat(64), continuation_policy: 'follow_authorized_plan',
+      source: mode === 'extra_input' ? { ...text, attachments: [] } : text })
+    const root = { namespace_id: input.namespace_id, command_id: randomUUID(), root_task_id: randomUUID(),
+      root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64), source_descriptor: descriptor }
+    f.setAnalysis(async () => ({ kind: mode === 'recovered' ? 'recovered' : 'captured', descriptor, root }))
+    let altered = false
+    if (['signature', 'input_digest', 'binding', 'root'].includes(mode)) f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.collaboration_analysis' || frame.result.kind !== 'root_captured') return frame
+      const receipt = frame.result.context_receipt
+      if (!receipt) throw Error('missing signed ingress')
+      altered = true
+      const changed = mode === 'signature' ? { ...receipt, signature: 'A'.repeat(86) }
+        : mode === 'input_digest' ? { ...receipt, source_input_digest: 'f'.repeat(64) }
+          : mode === 'binding' ? { ...receipt, authority_binding_version: 2 }
+            : { ...receipt, root: { ...receipt.root, command_id: randomUUID() } }
+      return { ...frame, result: { ...frame.result, context_receipt: changed } }
+    })
+    const pending = f.client.collaborationAnalysis({ ...f.account, command: { action: 'capture_root', input } })
+    if (['signature', 'input_digest', 'binding', 'root'].includes(mode)) {
+      await expect(pending).rejects.toThrow(); expect(altered).toBe(true); return
+    }
+    const result = await pending
+    if (result.kind !== 'root_captured') throw Error('missing captured root')
+    if (mode !== 'signed') { expect(result.context_receipt).toBeUndefined(); return }
+    const receipt = result.context_receipt
+    expect(receipt).toBeDefined()
+    if (!receipt) throw Error('missing signed ingress')
+    expect(receipt.source_input_digest).toBe(createHash('sha256').update(encodeHostRootTextInput(text)).digest('hex'))
+    expect(receipt.root).toMatchObject({ command_id: root.command_id, root_task_id: root.root_task_id,
+      source_digest: descriptor.snapshot_digest })
+    expect(verify(null, Buffer.from(encodeHostRootTextContextPayload(receipt)), f.keys.publicKey,
+      Buffer.from(receipt.signature, 'base64url'))).toBe(true)
+  },
+)
+it('capture client rejects a missing capability before send and a substituted result kind after send', async () => {
+  const { parseHostRootAnalysisInput } = await import('@deepseek-ai/dsh-host-control-protocol')
+  const f = await fixture(false, false, false, false, false, false, false, false, true, false,
+    false, false, false, false, false, false, true)
+  await f.grant()
+  const c = f.challenge, descriptor = { workspace_id: c.workspace_id, session_id: c.session_id,
+    source_message_id: c.source_message_id, source_revision: c.source_revision, snapshot_digest: c.snapshot_digest }
+  const input = parseHostRootAnalysisInput({ namespace_id: 'n2_' + 'b'.repeat(64), continuation_policy: 'follow_authorized_plan',
+    source: { workspace_id: c.workspace_id, session_id: c.session_id,
+      source_message_id: c.source_message_id, source_revision: c.source_revision } })
+  const root = { namespace_id: input.namespace_id, command_id: randomUUID(), root_task_id: randomUUID(),
+    root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64), source_descriptor: descriptor }
+  f.setAnalysis(async () => ({ kind: 'captured', descriptor, root }))
+  const capabilities = f.client.inspection.capabilities
+  Reflect.set(f.client.inspection, 'capabilities', capabilities.filter(cap => cap !== 'profile.root_capture'))
+  const before = f.seen.length
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'capture_root', input } })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.length).toBe(before)
+  Reflect.set(f.client.inspection, 'capabilities', capabilities)
+  let altered = false
+  f.alter((frame) => {
+    if (frame.type !== 'result' || frame.method !== 'profile.collaboration_analysis') return frame
+    altered = true
+    return { ...frame, result: { kind: 'output', json_base64url: Buffer.from('{}').toString('base64url') } }
+  })
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'capture_root', input } })).rejects.toMatchObject({ code: 'unavailable' })
+  expect(altered).toBe(true)
+})
 it('root preparation requires its own capability and current Account, and rejects Source-only downgrades', async()=>{
   const { parseHostRootAnalysisInput }=await import('@deepseek-ai/dsh-host-control-protocol')
   const input=parseHostRootAnalysisInput({ namespace_id:'n2_'+'b'.repeat(64),continuation_policy:'follow_authorized_plan',source:{ text:'original' } })
