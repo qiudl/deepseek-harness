@@ -742,7 +742,7 @@ jobs:
           pnpm exec vitest run --no-file-parallelism --testTimeout 90000 `
             packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts `
             packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts `
-            -t 'lacks WRITE_DAC and WRITE_OWNER|keeps an inherit-only ACE|FullControl open' --reporter=json --outputFile=$reportPath
+            -t 'lacks WRITE_DAC and WRITE_OWNER|keeps an inherit-only ACE|FullControl open' --reporter=default --reporter=json --outputFile=$reportPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
           $targets = @($report.testResults.assertionResults | Where-Object { $_.fullName -match 'lacks WRITE_DAC and WRITE_OWNER|keeps an inherit-only ACE|FullControl open' })
