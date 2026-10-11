@@ -444,6 +444,7 @@ export async function startDesktopHostApplication(
   if (config.pnpmEntrypointPath !== undefined) executableArtifact(config.pnpmEntrypointPath, uid)
   const workerFactory = new DshWebProfileWorkerFactory({
     nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+    ...(config.pnpmEntrypointPath === undefined ? {} : { pnpmEntrypointPath: config.pnpmEntrypointPath }),
   })
   /* v8 ignore next -- the production subprocess factory is exercised by packaged Host integration, not unit composition. */
   const workers = new ProfileWorkerSupervisor(dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)))
