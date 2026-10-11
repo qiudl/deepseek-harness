@@ -158,7 +158,7 @@ it('groups owned work, filters by workspace and title, and completes rename and 
   const sessions = { byId: Object.fromEntries(ids.map(id => [id, { displayTitle: `Topic ${id}`, updatedAt: 3 }])) }
   const workspaces = { phase: 'ready', dedicatedCollaborationSessionIds: [] as SessionId[],
     pinnedSessionIds: [] as SessionId[], archivedSessionIds: [] as SessionId[], items: [
-      { workspaceId, title: 'North', sessionIds: ids.slice(0, 7) as unknown as SessionId[] },
+      { workspaceId, title: 'North', sessionIds: ids.slice(0, 7).map(SessionId) },
       { workspaceId: otherWorkspaceId, title: 'South', sessionIds: [SessionId(ids[7])] },
     ] }
   const renameConversation = vi.fn(async () => {}), archiveConversation = vi.fn(async () => {})

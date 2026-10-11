@@ -115,7 +115,7 @@ describe('SidebarRoot shell', () => {
         if (key === 'sidebar.collaboration') collaborationOwner = owner as SidebarSectionOwnerProps
         return <span data-testid={key}>{key}</span>
       },
-    } as unknown as SidebarRootComponentProps
+    } as SidebarRootComponentProps
     const view = render(<SidebarRoot {...props} />)
     expect(screen.getByRole('tab', { name: /Collaboration/ }).getAttribute('aria-selected')).toBe('false')
     expect(screen.getByTestId('sidebar.workspaces')).toBeTruthy()

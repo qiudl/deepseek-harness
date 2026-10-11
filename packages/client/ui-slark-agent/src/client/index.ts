@@ -155,7 +155,7 @@ function agentLabel(item: Pick<AgentItem, 'name'> & { project_name?: unknown }):
 /** Register a stable-reference source; ordinary model serialization refuses the Agent chip. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-slark-agent: dictionaries')
-  let focusPending: ((row: ConversationRow) => Promise<void>) | undefined
+  let focusPending: ((row: ConversationRow & { first_pending_digest: string }) => Promise<void>) | undefined
   ctx.inject(['uiWorkspace', 'workspaces'], (browserCtx) => {
     if (typeof window === 'undefined' || typeof window.__DSH_DESKTOP_HOST__?.collaborationConversations !== 'function') return
     const index = createSnapshotStore<ConversationIndex>({ state: 'loading', items: [], global_pending_count: 0 })
@@ -191,7 +191,7 @@ export function apply(ctx: ClientContext): void {
         if (!ownedSession(sessionId, row.workspace_id)) return
         browserCtx.uiWorkspace.openSession(sessionId)
         if (row.pending_count > 0 && row.first_pending_digest && focusPending) {
-          void focusPending(row).catch(() => undefined)
+          void focusPending({ ...row, first_pending_digest: row.first_pending_digest }).catch(() => undefined)
         }
       },
       startConversation: () => { browserCtx.uiWorkspace.startCollaborationSession() },
@@ -378,7 +378,6 @@ export function apply(ctx: ClientContext): void {
       return entry
     }
     focusPending = async (row) => {
-      if (!row.first_pending_digest) return
       const sessionId = SessionId(row.session_id)
       const reference = ctx.sessions.retain(sessionId, { source: 'collaborationLocator' })
       try {

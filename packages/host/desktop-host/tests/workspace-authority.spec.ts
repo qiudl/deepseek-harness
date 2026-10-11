@@ -290,6 +290,26 @@ it('fails closed when an archive capability or worker callback is absent', async
   }
 })
 
+it('rejects an archive target that diverges from its bound request identity', async () => {
+  const f = await fixture()
+  await f.grant()
+  const target = { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id,
+    environment_id: f.challenge.environment_id, account_issuer: f.challenge.account_issuer,
+    account_subject: f.challenge.account_subject }
+  await f.client.inspectCollaborationArchiveIntent({ ...f.account, target })
+  const request = f.seen.find(frame => frame.type === 'request' && frame.method === 'profile.collaboration_archive_intent')
+  if (!request || request.type !== 'request' || request.method !== 'profile.collaboration_archive_intent')
+    throw Error('missing archive intent request')
+  for (const change of [
+    { environment_id: randomUUID() },
+    { account_subject: randomUUID() },
+  ]) {
+    const result = await f.session.handleRequest({ ...request, request_id: randomUUID() as never,
+      params: { ...request.params, target: { ...request.params.target, ...change } } })
+    expect(result.type).toBe('error')
+  }
+})
+
 it('rejects archive requests for changed Account identity and mismatched result frames', async () => {
   const f = await fixture()
   await f.grant()
@@ -320,6 +340,7 @@ it('rejects archive requests for changed Account identity and mismatched result 
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.collaboration_archive_transition'
     ? { ...frame, result: { archive_phase: 'released' } } : frame)
   await expect(f.client.transitionCollaborationArchive(stage)).rejects.toMatchObject({ code: 'unavailable' })
+  f.setTransitionArchive(async () => ({ archive_phase: 'archived' }))
   for (const [method, invoke] of [
     ['profile.collaboration_archive_state', () => f.client.attestCollaborationArchiveState(state)],
     ['profile.collaboration_archive_intent', () => f.client.inspectCollaborationArchiveIntent(intent)],
