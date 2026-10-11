@@ -100,6 +100,42 @@ it('discards a recovered archive token from a replaced Profile worker', async ()
   await workers.disposeAll()
 })
 
+it('returns archive replies from the current Profile worker', async () => {
+  const identity = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
+    environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'issuer', account_subject: 'alice' }
+  const signal = new AbortController().signal
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    inspectCollaborationArchiveState: async (received, receivedSignal) => {
+      expect(received).toEqual(identity)
+      expect(receivedSignal).toBe(signal)
+      return { archive_phase: 'archived' }
+    },
+    inspectCollaborationArchiveIntent: async (received, receivedSignal) => {
+      expect(received).toEqual(identity)
+      expect(receivedSignal).toBe(signal)
+      return { archive_phase: 'prepared', archive_token: identity.archive_token }
+    },
+    transitionCollaborationArchive: async (received, receivedSignal) => {
+      expect(received).toEqual({ ...identity, action: 'stage' })
+      expect(receivedSignal).toBe(signal)
+      return { archive_phase: 'staged' }
+    },
+  }))
+  await workers.start(input)
+  try {
+    await expect(workers.inspectCollaborationArchiveState(input.profileId, identity, signal))
+      .resolves.toEqual({ archive_phase: 'archived' })
+    await expect(workers.inspectCollaborationArchiveIntent(input.profileId, identity, signal))
+      .resolves.toEqual({ archive_phase: 'prepared', archive_token: identity.archive_token })
+    await expect(workers.transitionCollaborationArchive(input.profileId, { ...identity, action: 'stage' }, signal))
+      .resolves.toEqual({ archive_phase: 'staged' })
+  } finally {
+    await workers.disposeAll()
+  }
+})
+
 it('refuses archive reads and writes before a capable Profile worker exists', async () => {
   const workers = new ProfileWorkerSupervisor(async () => ({
     closeNotifications() {}, abort() {}, done: Promise.resolve(),
