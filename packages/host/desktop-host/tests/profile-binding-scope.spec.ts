@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -12,16 +12,30 @@ const email = { ...account, accountBindingHandle: 'email-binding', authorityBind
 const feishu = { ...account, accountBindingHandle: 'feishu-binding', authorityBindingVersion: 5,
   authorityBindingScope: 'b'.repeat(64) }
 
-function fixture() {
+type FileMode = 'posix' | 'external'
+const fileModes: FileMode[] = process.platform === 'win32' ? ['external'] : ['posix', 'external']
+
+function fixture(fileMode: FileMode) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-binding-scope-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
-  const options = { root, deviceIndexKey: Buffer.alloc(32, 7), clock: { now: () => 1000 } }
+  // Windows production supplies its private-file authority; its ACL policy has an owning suite.
+  // These hooks retain real file round trips while keeping binding tests independent of POSIX modes.
+  const options = { root, deviceIndexKey: Buffer.alloc(32, 7), clock: { now: () => 1000 },
+    ...(fileMode === 'external' ? {
+      prepareRoot: () => undefined,
+      loadSnapshot: (path: string) => {
+        const snapshot: unknown = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : undefined
+        return snapshot
+      },
+      persistSnapshot: (path: string, _root: string, snapshot: unknown) => { writeFileSync(path, JSON.stringify(snapshot)) },
+    } : {}),
+  }
   return { options, path: join(root, 'profiles.json'), registry: new ProfileRegistry(options) }
 }
 
-describe('independent Slark login bindings for one Account Profile', () => {
+describe.each(fileModes)('independent Slark login bindings for one Account Profile (%s)', (fileMode) => {
   it('keeps the original Profile through 5 → 1 → 5 and a registry restart', async () => {
-    const { registry, options, path } = fixture()
+    const { registry, options, path } = fixture(fileMode)
     const { authorityBindingScope: _scope, ...legacy } = feishu
     const original = await registry.registerAccount(legacy)
     const before = readFileSync(path)
@@ -44,7 +58,7 @@ describe('independent Slark login bindings for one Account Profile', () => {
   })
 
   it('retains each scope high-water mark and retires replaced handles across other login switches', async () => {
-    const { registry, options, path } = fixture()
+    const { registry, options, path } = fixture(fileMode)
     await registry.registerAccount(email)
     await registry.registerAccount({ ...email, accountBindingHandle: 'new-email', authorityBindingVersion: 2 })
     await registry.registerAccount(feishu)
@@ -57,7 +71,7 @@ describe('independent Slark login bindings for one Account Profile', () => {
   })
 
   it('rejects an unscoped writer after a scope is established without changing the file', async () => {
-    const { registry, path } = fixture()
+    const { registry, path } = fixture(fileMode)
     await registry.registerAccount(email)
     const before = readFileSync(path)
     const { authorityBindingScope: _scope, ...oldClient } = feishu
@@ -66,7 +80,7 @@ describe('independent Slark login bindings for one Account Profile', () => {
   })
 
   it('does not let another scope claim an existing handle or bypass its legacy version', async () => {
-    const { registry, path } = fixture()
+    const { registry, path } = fixture(fileMode)
     const { authorityBindingScope: _scope, ...legacy } = feishu
     await registry.registerAccount(legacy)
     const before = readFileSync(path)
@@ -80,7 +94,7 @@ describe('independent Slark login bindings for one Account Profile', () => {
   })
 
   it('rejects malformed or unbound scopes before writing', async () => {
-    const { registry, path } = fixture()
+    const { registry, path } = fixture(fileMode)
     await registry.registerAccount(email)
     const before = readFileSync(path)
     await expect(registry.registerAccount({ ...email, authorityBindingScope: 'invalid' }))
@@ -91,7 +105,7 @@ describe('independent Slark login bindings for one Account Profile', () => {
   })
 
   it('prevents one login from migrating another scope or a Profile shared by other bindings', async () => {
-    const { registry, path } = fixture()
+    const { registry, path } = fixture(fileMode)
     const original = await registry.registerAccount(email)
     await expect(registry.registerAccount({ ...email, subject: 'migrated', authorityBindingVersion: 2,
       authorityBindingScope: feishu.authorityBindingScope })).rejects.toMatchObject({ code: 'profile_mismatch' })
@@ -105,7 +119,7 @@ describe('independent Slark login bindings for one Account Profile', () => {
   })
 
   it('allows an older broker to renew a known handle without discarding its scope', async () => {
-    const { registry, options } = fixture()
+    const { registry, options } = fixture(fileMode)
     const original = await registry.registerAccount(email)
     const { authorityBindingScope: _scope, ...unscoped } = email
     const renewed = await registry.registerAccount(unscoped)
@@ -114,7 +128,7 @@ describe('independent Slark login bindings for one Account Profile', () => {
   })
 
   it('restores the original released registry when worker preparation fails', async () => {
-    const { registry, options, path } = fixture()
+    const { registry, options, path } = fixture(fileMode)
     const { authorityBindingScope: _scope, ...legacy } = feishu
     const original = await registry.registerAccount(legacy)
     const before = readFileSync(path)
@@ -127,7 +141,7 @@ describe('independent Slark login bindings for one Account Profile', () => {
   })
 
   it.each([false, true])('keeps released v2 bytes on worker failure (storage hook=%s)', async (storageHook) => {
-    const { registry, options, path } = fixture()
+    const { registry, options, path } = fixture(fileMode)
     const { authorityBindingScope: _scope, ...legacy } = feishu
     const { unlockVerifier: _verifier, accountBindings: _bindings, ...original } = await registry.registerAccount(legacy)
     writeFileSync(path, JSON.stringify({ version: 2, profiles: [{
@@ -149,7 +163,7 @@ describe('independent Slark login bindings for one Account Profile', () => {
   })
 
   it('retains another Profile written while the scoped worker fails', async () => {
-    const { registry, options } = fixture()
+    const { registry, options } = fixture(fileMode)
     const original = await registry.registerAccount(feishu)
     let neighbor: typeof original | undefined
     await expect(registry.provisionAccount(email, async () => {

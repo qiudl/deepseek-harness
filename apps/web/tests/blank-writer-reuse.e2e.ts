@@ -48,7 +48,17 @@ describe.each([false, true])('web e2e: selected blank writer held: %s', (held) =
     await page.addInitScript((id) => {
       localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: id }))
     }, sessionId)
-    await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
+    // The composer can paint while writer acquisition is still pending.
+    // A held writer first refuses; wait for the successful fallback reply.
+    const restored = page.waitForResponse(async (response) => {
+      if (new URL(response.url()).pathname !== '/api/session/create') return false
+      const body = await response.json() as { result?: { ok?: boolean } }
+      return response.ok() && body.result?.ok === true
+    })
+    await Promise.all([
+      page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' }),
+      restored,
+    ])
     await page.locator('[data-composer-input]').first().waitFor({ timeout: 30_000 })
     return page
   }

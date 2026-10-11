@@ -257,6 +257,7 @@ describe.skipIf(MODE === 'record')('web e2e: first-run DeepSeek credential setup
     await compareOrRefreshGolden(MODELS_EXPECTED, modelEditor, MODE)
     await settings.getByRole('button', { name: '保存', exact: true }).click()
     await customModelId.waitFor({ state: 'detached', timeout: 15_000 })
+    await settings.getByRole('status').filter({ hasText: /^已保存 DeepSeek \(deepseek-official\)。$/ }).waitFor()
 
     const document = await readFile(join(scaffold.harnessHome, 'profiles', 'scaffold', 'cordis.patch.yml'), 'utf8')
     expect(document).toContain('id: private-preview')

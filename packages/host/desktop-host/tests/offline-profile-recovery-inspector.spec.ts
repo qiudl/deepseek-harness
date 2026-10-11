@@ -188,6 +188,55 @@ async function treeInventory(root: string): Promise<unknown[]> {
 }
 
 describe('offline Profile existing-only inspector', () => {
+  async function releasedEmptyProfile() {
+    const value = await fixture()
+    await rm(join(value.web, 'node_modules'), { recursive: true })
+    await unlink(join(value.web, 'pnpm-lock.yaml'))
+    // Signed macOS 0.4.23 layout; the anonymous package name carries no identity.
+    const manifest = await readFile(new URL('./fixtures/released-empty-profile.package.json', import.meta.url))
+    await writeFile(join(value.web, 'package.json'), manifest)
+    return value
+  }
+
+  it('recovers the released empty-plugin Profile without creating a lockfile', async () => {
+    const value = await releasedEmptyProfile()
+    const before = await treeInventory(value.profileRoot)
+    const inspected = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(inspected).toMatchObject({ state: 'recoverable', compatibility: 'current', pluginCount: 0 })
+    await value.inspector.prepareConfirmedProfile(profile(), inspected)
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('binds lockfile absence separately from a subsequently installed lockfile', async () => {
+    const value = await releasedEmptyProfile()
+    const absent = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    await writeFile(join(value.web, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    const before = await treeInventory(value.profileRoot)
+    const installed = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(installed.preflightDigest).not.toBe(absent.preflightDigest)
+    await expect(value.inspector.prepareConfirmedProfile(profile(), absent))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it.each(['node_modules', '.bundled-plugins'])('rejects a missing lock with retained %s installation state', async (name) => {
+    const value = await releasedEmptyProfile()
+    await mkdir(join(value.web, name), { mode: 0o700 })
+    const before = await treeInventory(value.profileRoot)
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'profile_integrity_failed' })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it.each([[], null, { 'fixture-plugin': '1.0.0' }])('rejects a missing lock with invalid or nonempty dependencies: %j', async (dependencies) => {
+    const value = await releasedEmptyProfile()
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies }))
+    const before = await treeInventory(value.profileRoot)
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'profile_integrity_failed' })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
   it.each([
     unsafeArchive('package/../outside'), unsafeArchive('/package/index.js'),
     unsafeArchive('package/index.js'),

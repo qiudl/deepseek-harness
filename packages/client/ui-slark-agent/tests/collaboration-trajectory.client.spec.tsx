@@ -118,3 +118,20 @@ it('keeps manual trajectory reads available during background result refresh', (
   expect(p.traceAction).toHaveBeenCalledTimes(2)
   expect(p.traceEvidenceAction).toHaveBeenCalledTimes(1)
 })
+
+it('distinguishes receipt custody and effect review after remount without offering execution', () => {
+  const state = snapshot(), group = state.groups[0]!, page = group.trace!.page!
+  const phases = ['receipt_received', 'reconciliation_started', 'execution_indeterminate', 'reconciliation_needs_review']
+  const recovered = { ...state, groups: [{ ...group, trace: { ...group.trace!, page: { ...page,
+    events: phases.map((phase, i) => ({ ...page.events[0]!, phase, root_seq: i + 1, event_id: String(i) })) } } }] }
+  const p = props(recovered), view = render(<CollaborationTrajectory {...p} />)
+  for (const key of ['trace.receiptReceived', 'trace.reconciliationStarted', 'trace.reconciliationNeedsReview'] as const)
+    expect(view.container.textContent).toContain(zh[key])
+  expect(view.container.textContent).not.toContain(zh['trace.reconciliationResolved'])
+  expect(view.container.textContent).not.toContain(zh['trace.rootSucceeded'])
+  expect(screen.getAllByTestId('slark-trace-execution')).toHaveLength(1)
+  view.unmount()
+  render(<CollaborationTrajectory {...p} />)
+  expect(screen.getByText(root.root_trace_id)).toBeTruthy()
+  expect(p.executionAction).not.toHaveBeenCalled()
+})

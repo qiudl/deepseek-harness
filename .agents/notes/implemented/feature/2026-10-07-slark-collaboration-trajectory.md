@@ -24,6 +24,8 @@ An expiring Main preview is a temporary selection handle, not an execution or co
 
 **Give Slark its own conversation page.** A second navigation path would separate the initiating conversation from its execution feedback; the owned Trajectory slot preserves that context.
 
+For a recovered execution, the trace distinguishes receipt custody, verification started, and resolved or review-required reconciliation. Main opts into these stages; older clients receive their existing generic observation type. The cloud commits these audit facts with settlement before acknowledging the receipt. Reading them never repeats execution, and neither receipt custody nor execution settlement asserts root completion. Executions without an original trace association remain unassociated.
+
 ## Consequences
 
 Every cloud read revalidates authority; account, workspace and connection changes discard cached records. Provider internals remain unobservable and audit coverage stays partial. Activity releases are independent and idempotent, and Session disposal removes them. Verification includes an empty-Session shell, plugin disposal, bounded paging, late-response rejection and the assembled Trajectory entry; external fixtures do not certify installed-provider acceptance.
