@@ -395,7 +395,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
       const target = makeDir(scratch, 'inherit-only')
       withholdWriteOwner(target)
       icacls(target, '/grant', '*S-1-5-32-545:(OI)(CI)(IO)(F)')
-      const inheritOnlyBefore = aclLines(target).filter(line => line.includes('(IO)'))
+      const inheritOnlyBefore = normalized(target, aclLines(target)).filter(line => line.includes('(IO)'))
       expect(inheritOnlyBefore).toHaveLength(1)
 
       const run = runScript(['-Path', target, '-AllowRoot', scratch, '-Out', join(scratch, 'out')])
@@ -404,7 +404,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
       expect(reports(run)).toContainEqual(containingObject({ kind: 'verification', operation: 'grant', path: target, status: 'verified' }))
       expect(reports(run).find(entry => entry.operation === 'inspect_acl' && entry.path === target))
         .toMatchObject({ details: { writeDac: true, writeOwner: false } })
-      expect(aclLines(target).filter(line => line.includes('(IO)'))).toEqual(inheritOnlyBefore)
+      expect(normalized(target, aclLines(target)).filter(line => line.includes('(IO)'))).toEqual(inheritOnlyBefore)
       expect(aclLines(target).join('\n')).toMatch(/\(F\)/u)
     } finally {
       dispose(scratch)
