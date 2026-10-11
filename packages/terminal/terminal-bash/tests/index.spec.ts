@@ -512,6 +512,7 @@ describe('BashTerminalBackend startup rollback', () => {
 
   it('rejects premature pwsh stdin readiness without an executed marker', async () => {
     const ctx = new Context()
+    provideWorkingDirectoryFixture(ctx)
     await ctx.plugin(EmptySandbox)
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: '/workspace' })

@@ -1584,11 +1584,14 @@ it('builds coverage gates from the standard Windows fork workflow environment', 
   try {
     Object.assign(process.env, effective)
     const gates = gatesForMode('ci-coverage')
-    expect(gates.map(gate => gate.id)).toEqual(['native-system', 'coverage', 'coverage-exempt-heavy'])
+    const electronPrerequisites = process.platform === 'win32' ? ['electron-install'] : []
+    expect(gates.map(gate => gate.id)).toEqual(['native-system', ...electronPrerequisites, 'coverage', 'coverage-exempt-heavy'])
     for (const id of ['coverage', 'coverage-exempt-heavy']) {
       const gate = gates.find(gate => gate.id === id)
       expect(gate?.args).toContain('--maxWorkers=1')
-      expect(gate?.needs).toEqual(['native-system'])
+      expect(gate?.needs).toEqual(id === 'coverage'
+        ? ['native-system', ...electronPrerequisites]
+        : ['native-system'])
     }
     expect(gates.find(gate => gate.id === 'coverage')?.args).toContain('--coverage')
     expect(effective.DSH_COVERAGE_PARTITIONS).toBe('')

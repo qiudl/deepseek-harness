@@ -306,7 +306,7 @@ describe.skipIf(MODE === 'record')('web e2e: pending plan review across Sidebar 
 
   async function showPlugins(): Promise<void> {
     await page.getByRole('button', { name: 'Plugins', exact: true }).click()
-    await expect.poll(() => page.locator('[data-composer-input]').count(), { timeout: 10_000 }).toBe(0)
+    await expect.poll(() => page.locator('[data-composer-input]:visible').count(), { timeout: 10_000 }).toBe(0)
   }
 
   /** Deliver a plan review to one Session, run the scenario, and withdraw the review. */

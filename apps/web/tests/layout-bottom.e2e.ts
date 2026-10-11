@@ -7,7 +7,7 @@ import { compareOrRefreshGolden, launchWebScaffold, watchConsole, webSnapshotMod
 async function geometry(page: Page) {
   return page.evaluate(() => {
     const bottom = document.querySelector<HTMLElement>('[data-shell-bottom]')!
-    const main = document.querySelector('[data-slot="main"]')!.parentElement!
+    const main = document.querySelector('[data-main-panel]:not([hidden]) [data-slot="main"]')!.parentElement!
     const sidebar = document.querySelector('[data-slot="sidebar"]')!.parentElement!
     const rect = (element: Element) => {
       const box = element.getBoundingClientRect()

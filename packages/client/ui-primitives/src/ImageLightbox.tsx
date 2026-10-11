@@ -126,87 +126,89 @@ export function ImageLightbox({ src, alt, labels, onClose, onSave }: {
       aria-modal="true"
       aria-label={labels.dialog}
     >
-      <div className={css.mask} aria-hidden="true" onMouseDown={onClose} />
-      <div
-        className={css.viewport}
-        onWheel={(event) => {
-          event.preventDefault()
-          changeZoom(zoom + (event.deltaY < 0 ? 0.25 : -0.25))
-        }}
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId)
-          pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
-          if (pointers.current.size === 2) pinchDistance.current = pointerDistance(pointers.current)
-        }}
-        onPointerMove={(event) => {
-          const previous = pointers.current.get(event.pointerId)
-          if (previous === undefined) return
-          pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
-          if (pointers.current.size === 2) {
-            const distance = pointerDistance(pointers.current)
-            if (pinchDistance.current !== null && distance > 0) {
-              changeZoom(zoom * distance / pinchDistance.current)
-            }
-            pinchDistance.current = distance
-          } else if (zoom > 1) {
-            setPan(current => ({
-              x: current.x + event.clientX - previous.x,
-              y: current.y + event.clientY - previous.y,
-            }))
-          }
-        }}
-        onPointerUp={(event) => {
-          pointers.current.delete(event.pointerId)
-          pinchDistance.current = null
-        }}
-        onPointerCancel={(event) => {
-          pointers.current.delete(event.pointerId)
-          pinchDistance.current = null
-        }}
-      >
-        <img
-          className={css.image}
-          src={src}
-          alt={alt}
-          draggable={false}
-          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
-        />
-      </div>
-      <div className={css.toolbar}>
-        {onSave !== undefined && (
-          <button
-            type="button"
-            data-testid="attachment-btn-save"
-            aria-label={saveState === 'saving' ? labels.cancelSave : labels.save}
-            onClick={() => {
-              if (saveState === 'saving') {
-                void cancelDesktopAttachmentSave()
-                return
+      <div className={css.stage}>
+        <div className={css.mask} aria-hidden="true" onMouseDown={onClose} />
+        <div
+          className={css.viewport}
+          onWheel={(event) => {
+            event.preventDefault()
+            changeZoom(zoom + (event.deltaY < 0 ? 0.25 : -0.25))
+          }}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId)
+            pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+            if (pointers.current.size === 2) pinchDistance.current = pointerDistance(pointers.current)
+          }}
+          onPointerMove={(event) => {
+            const previous = pointers.current.get(event.pointerId)
+            if (previous === undefined) return
+            pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+            if (pointers.current.size === 2) {
+              const distance = pointerDistance(pointers.current)
+              if (pinchDistance.current !== null && distance > 0) {
+                changeZoom(zoom * distance / pinchDistance.current)
               }
-              void presentDesktopAttachmentSave(onSave, ({ state, percent }) => {
-                setSaveState(state)
-                setSavePercent(percent)
-              })
-            }}
-          >
-            <IconDownloadOutlineMedium size={16} />
-          </button>
+              pinchDistance.current = distance
+            } else if (zoom > 1) {
+              setPan(current => ({
+                x: current.x + event.clientX - previous.x,
+                y: current.y + event.clientY - previous.y,
+              }))
+            }
+          }}
+          onPointerUp={(event) => {
+            pointers.current.delete(event.pointerId)
+            pinchDistance.current = null
+          }}
+          onPointerCancel={(event) => {
+            pointers.current.delete(event.pointerId)
+            pinchDistance.current = null
+          }}
+        >
+          <img
+            className={css.image}
+            src={src}
+            alt={alt}
+            draggable={false}
+            style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+          />
+        </div>
+        <div className={css.toolbar}>
+          {onSave !== undefined && (
+            <button
+              type="button"
+              data-testid="attachment-btn-save"
+              aria-label={saveState === 'saving' ? labels.cancelSave : labels.save}
+              onClick={() => {
+                if (saveState === 'saving') {
+                  void cancelDesktopAttachmentSave()
+                  return
+                }
+                void presentDesktopAttachmentSave(onSave, ({ state, percent }) => {
+                  setSaveState(state)
+                  setSavePercent(percent)
+                })
+              }}
+            >
+              <IconDownloadOutlineMedium size={16} />
+            </button>
+          )}
+          <button type="button" data-testid="attachment-btn-zoom-out" aria-label={labels.zoomOut} disabled={zoom <= 0.25} onClick={() => { changeZoom(zoom - 0.25) }}>−</button>
+          <button type="button" data-testid="attachment-btn-zoom-reset" aria-label={labels.resetZoom} onClick={() => { changeZoom(1) }}>{Math.round(zoom * 100)}%</button>
+          <button type="button" data-testid="attachment-btn-zoom-in" aria-label={labels.zoomIn} disabled={zoom >= 4} onClick={() => { changeZoom(zoom + 0.25) }}>+</button>
+        </div>
+        {saveState !== 'idle' && (
+          <span className={css.saveStatus} role="status" aria-live="polite">
+            {saveState === 'saving'
+              ? `${labels.saving}${savePercent === null ? '' : ` ${savePercent}%`}`
+              : saveState === 'saved' ? labels.saved : labels.saveFailed}
+          </span>
         )}
-        <button type="button" data-testid="attachment-btn-zoom-out" aria-label={labels.zoomOut} disabled={zoom <= 0.25} onClick={() => { changeZoom(zoom - 0.25) }}>−</button>
-        <button type="button" data-testid="attachment-btn-zoom-reset" aria-label={labels.resetZoom} onClick={() => { changeZoom(1) }}>{Math.round(zoom * 100)}%</button>
-        <button type="button" data-testid="attachment-btn-zoom-in" aria-label={labels.zoomIn} disabled={zoom >= 4} onClick={() => { changeZoom(zoom + 0.25) }}>+</button>
+        <span className={css.zoomStatus} role="status" aria-live="polite">{Math.round(zoom * 100)}%</span>
+        <button ref={closeRef} type="button" data-testid="attachment-btn-close" className={css.close} aria-label={labels.close} onClick={onClose}>
+          <IconCloseOutlineRegular size={16} />
+        </button>
       </div>
-      {saveState !== 'idle' && (
-        <span className={css.saveStatus} role="status" aria-live="polite">
-          {saveState === 'saving'
-            ? `${labels.saving}${savePercent === null ? '' : ` ${savePercent}%`}`
-            : saveState === 'saved' ? labels.saved : labels.saveFailed}
-        </span>
-      )}
-      <span className={css.zoomStatus} role="status" aria-live="polite">{Math.round(zoom * 100)}%</span>
-      <button ref={closeRef} type="button" data-testid="attachment-btn-close" className={css.close} aria-label={labels.close} onClick={onClose}>
-        <IconCloseOutlineRegular size={16} />
-      </button>
     </div>,
     document.body,
   )
