@@ -185,6 +185,19 @@ function commandReadAccount(
     account_subject: params.account_subject as HostWorkspaceAuthorityChallenge['account_subject'],
   }, ownerId)
 }
+function archiveProfileReadAuthorizer(
+  host: DesktopHost,
+  params: ProfileCollaborationArchiveIntentRequest['params'] | ProfileCollaborationArchiveTransitionRequest['params'],
+  ownerId: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]['ownerId'],
+  signal: AbortSignal,
+  clock: () => number,
+): () => string {
+  const target = params.target
+  if (target.environment_id !== params.authority_environment_id
+    || target.account_issuer !== params.account_issuer
+    || target.account_subject !== params.account_subject) throw new HostAuthorityError('profile_mismatch')
+  return collaborationReadAuthorizer(host, commandReadAccount(params, ownerId), params.expires_at, signal, clock)
+}
 function signAuthorityPayload(identity: HostIdentity, payload: Uint8Array): HostControlSignature {
   return sign(null, payload, privateKeyObject(identity.installationPrivateKey)).toString('base64url') as HostControlSignature
 }
@@ -1589,12 +1602,7 @@ export class HostControlAuthority {
           const inspect = this.options.inspectCollaborationArchiveIntent
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const target = frame.params.target
-          if (target.environment_id !== frame.params.authority_environment_id ||
-            target.account_issuer !== frame.params.account_issuer ||
-            target.account_subject !== frame.params.account_subject) throw new HostAuthorityError('profile_mismatch')
-          const account = commandReadAccount(frame.params, ownerId)
-          const authorize = collaborationReadAuthorizer(this.options.host, account,
-            frame.params.expires_at, context.signal, clock)
+          const authorize = archiveProfileReadAuthorizer(this.options.host, frame.params, ownerId, context.signal, clock)
           const profileId = authorize()
           const result = parseHostCollaborationArchiveIntentValue(await inspect(profileId, target, context.signal))
           if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
@@ -1604,12 +1612,7 @@ export class HostControlAuthority {
           const transition = this.options.transitionCollaborationArchive
           if (!transition) throw new HostAuthorityError('upgrade_required')
           const target = frame.params.target
-          if (target.environment_id !== frame.params.authority_environment_id ||
-            target.account_issuer !== frame.params.account_issuer ||
-            target.account_subject !== frame.params.account_subject) throw new HostAuthorityError('profile_mismatch')
-          const account = commandReadAccount(frame.params, ownerId)
-          const authorize = collaborationReadAuthorizer(this.options.host, account,
-            frame.params.expires_at, context.signal, clock)
+          const authorize = archiveProfileReadAuthorizer(this.options.host, frame.params, ownerId, context.signal, clock)
           const profileId = authorize()
           const result = parseHostCollaborationArchiveTransitionResult(
             await transition(profileId, target, context.signal))
