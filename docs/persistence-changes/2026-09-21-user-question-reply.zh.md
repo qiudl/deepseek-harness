@@ -9,7 +9,7 @@ kind: persistence-change
 
 ## 概述
 
-新增受限定的 user-question-reply 消息来源，将已继续的 ask_user_question 调用的迟到回答送入 agent inbox。
+将 user-question-reply 来源归因接入 Slark collaboration-result 的类型历史。
 
 ## 目录
 
@@ -27,32 +27,32 @@ id: 2026-09-21-user-question-reply
 baseline: false
 changes:
   - root: "event:agent/inbox/spliced"
-    previous: "2026-09-16-session-format-v4"
-    after: "6178f1edcb23f361f2a6cb2c859b1c2187220d5695ece4a3400e0d92845a7178"
+    previous: "2026-10-06-collaboration-result-attribution"
+    after: "fca6a6cdab6313eae42e0d8a1533e795a7cbce20cf88858febe0c2bcb73e4346"
     decision: same-version
   - root: "event:developer/message"
-    previous: "2026-09-16-session-format-v4"
-    after: "186159f5f6f67a0b8cd095b8fe55bef42d4f25ca1a1c248f859867af2ece0467"
+    previous: "2026-10-06-collaboration-result-attribution"
+    after: "57b8dc41ba4243fbbdfae7d1ad595561d8608a108235229c31409c4120b2bfba"
     decision: same-version
   - root: "event:session/title-llm-request"
-    previous: "2026-09-16-session-format-v4"
-    after: "ae84c5e493f94acc63cfb70389073ba616ed7ae7aa4fadde048bdcc64d49bb46"
+    previous: "2026-10-06-collaboration-result-attribution"
+    after: "de4a9471c9747581aa969d4b6de74ce4f9257fe5d02542f7b096ff884c3a9a08"
     decision: same-version
   - root: "event:user/message"
-    previous: "2026-09-16-session-format-v4"
-    after: "b83ed1b1cfffbd7bd5cca06ea72e44be57beb68b39e5a96660ce42a9e21aa411"
+    previous: "2026-10-06-collaboration-result-attribution"
+    after: "ca818cdfb08e9ce763b9d63783667ee405531595750090dba92c15591645402b"
     decision: same-version
 ```
 
 <a id="compatibility"></a>
 ## 兼容性
 
-已有日志不含该来源，仍然有效。新来源是普通用户消息上的受限定归属；没有 dsh-user-questions 的读取方保留消息，并从内容推导历史。只有 userQuestions projection 读取该来源，关闭指定的问题并记录答案。answer RPC 是唯一生产方，只写入 outcome answered；关闭 Client 面板不会持久化回复。不新增事件类型，也不改变 Session header。
+已有 Session 格式 4 的记录保持有效。两种来源仅包含归因信息；不认识该来源类型的读取器保留已记录的消息与元数据，不据此授予权限，也不需要依赖写入方回放。在本 fork 集成时，新引入的 user-question-reply 确认记录承接已接受的 Slark collaboration-result 确认记录。已发行的会话代际文件不改写。
 
 <a id="verification"></a>
 ## 验证
 
-pnpm exec vitest run packages/interaction/user-questions/tests packages/interaction/tool-ask-user/tests：81 个测试通过。projection、reply、view 和 process-group 的定向测试共 70 个通过。pnpm run typecheck 通过。pnpm run doc-sync 的 42 项检查全部通过，包括持久化历史和翻译配对。
+rc.2 集成通过 JSONL 目录迁移、原生来源准入、v3 到 v4 迁移、Host 历史迁移来源测试以及 182 项 YAML 加载的 Slark 输入框回归。历史格式清单验证 v0 到 v4 的完整参考。
 
 <a id="dev-note"></a>
 ## 开发备注

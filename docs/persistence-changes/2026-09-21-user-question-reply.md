@@ -9,7 +9,7 @@ English | [中文](2026-09-21-user-question-reply.zh.md)
 
 ## Summary
 
-Adds a qualified user-question-reply message source for a late answer to a continued ask_user_question call.
+Integrates user-question-reply attribution with the Slark collaboration-result history.
 
 ## Table of Contents
 
@@ -27,32 +27,32 @@ id: 2026-09-21-user-question-reply
 baseline: false
 changes:
   - root: "event:agent/inbox/spliced"
-    previous: "2026-09-16-session-format-v4"
-    after: "6178f1edcb23f361f2a6cb2c859b1c2187220d5695ece4a3400e0d92845a7178"
+    previous: "2026-10-06-collaboration-result-attribution"
+    after: "fca6a6cdab6313eae42e0d8a1533e795a7cbce20cf88858febe0c2bcb73e4346"
     decision: same-version
   - root: "event:developer/message"
-    previous: "2026-09-16-session-format-v4"
-    after: "186159f5f6f67a0b8cd095b8fe55bef42d4f25ca1a1c248f859867af2ece0467"
+    previous: "2026-10-06-collaboration-result-attribution"
+    after: "57b8dc41ba4243fbbdfae7d1ad595561d8608a108235229c31409c4120b2bfba"
     decision: same-version
   - root: "event:session/title-llm-request"
-    previous: "2026-09-16-session-format-v4"
-    after: "ae84c5e493f94acc63cfb70389073ba616ed7ae7aa4fadde048bdcc64d49bb46"
+    previous: "2026-10-06-collaboration-result-attribution"
+    after: "de4a9471c9747581aa969d4b6de74ce4f9257fe5d02542f7b096ff884c3a9a08"
     decision: same-version
   - root: "event:user/message"
-    previous: "2026-09-16-session-format-v4"
-    after: "b83ed1b1cfffbd7bd5cca06ea72e44be57beb68b39e5a96660ce42a9e21aa411"
+    previous: "2026-10-06-collaboration-result-attribution"
+    after: "ca818cdfb08e9ce763b9d63783667ee405531595750090dba92c15591645402b"
     decision: same-version
 ```
 
 <a id="compatibility"></a>
 ## Compatibility
 
-Existing logs contain no such source and remain valid. The new source is qualified attribution on an ordinary user message; readers without dsh-user-questions preserve the message and derive history from its content. Only the userQuestions projection reads this source to close the named question and record its answers. The answer RPC is its only producer and writes outcome answered; closing the Client panel persists no reply. No event type or Session header changes.
+Existing Session format 4 records remain valid. Both source kinds carry attribution only; unknown-kind readers preserve the logged message and metadata. Neither grants authority or requires producer-specific replay. The incoming user-question-reply acknowledgement follows the accepted Slark collaboration-result acknowledgement when integrated into this fork. No released Session generation is rewritten.
 
 <a id="verification"></a>
 ## Verification
 
-pnpm exec vitest run packages/interaction/user-questions/tests packages/interaction/tool-ask-user/tests: 81 tests passed. The focused projection, reply, view, and process-group suite passed 70 tests. pnpm run typecheck passed. pnpm run doc-sync passed all 42 gates, including persistence history and translation pairing.
+The rc.2 integration passed the JSONL catalog migration and native source admission tests, the v3-to-v4 migration tests, the Host legacy migration source tests, and 182 YAML-loaded Slark composer regressions. Historical format inventories verify complete references for v0 through v4.
 
 <a id="dev-note"></a>
 ## Dev Note
