@@ -187,3 +187,50 @@ it('rejects stale archive and restore authority before updating the visible inde
   })
   await expect(b.archiveConversation(sessionId)).rejects.toThrow('collaboration_membership_changed')
 })
+
+it('rechecks archive eligibility and handles Host replacement without optimistic state', async () => {
+  const f = registration(), b = f.bindings
+  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  f.using.mockResolvedValueOnce({ ok: false, error: { message: 'rename denied' } } as never)
+  await expect(b.renameConversation(sessionId, 'Denied')).rejects.toThrow('rename denied')
+  Reflect.deleteProperty(f.host, 'collaborationArchive')
+  await expect(b.archiveConversation(sessionId)).rejects.toThrow('collaboration_archive_unavailable')
+  await expect(b.restoreConversation(sessionId)).rejects.toThrow('collaboration_archive_unavailable')
+  Reflect.set(f.host, 'collaborationArchive', f.archive)
+  f.state.dedicatedCollaborationSessionIds.splice(0)
+  f.conversations.mockResolvedValueOnce({ ok: true, value: { items: [], global_pending_count: 0 } })
+  await expect(b.archiveConversation(sessionId)).rejects.toThrow('collaboration_archive_unavailable')
+  f.state.dedicatedCollaborationSessionIds.push(sessionId)
+  f.conversations.mockResolvedValueOnce({ ok: true, value: { items: [], global_pending_count: 0 } })
+  await expect(b.archiveConversation(sessionId)).resolves.toBeUndefined()
+  expect(f.archive).toHaveBeenCalledWith({ workspace_id: workspaceId, session_id: sessionId, action: 'archive' })
+  f.archive.mockImplementationOnce(async () => {
+    Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+    return { state: 'archived' as const }
+  })
+  await expect(b.archiveConversation(sessionId)).rejects.toThrow('collaboration_archive_unavailable')
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', f.host)
+  f.archive.mockImplementationOnce(async () => {
+    Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+    return { state: 'restored' as const }
+  })
+  await expect(b.restoreConversation(sessionId)).rejects.toThrow('collaboration_archive_unavailable')
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', f.host)
+})
+
+it('keeps index state fail closed when refresh and archive reads race', async () => {
+  const f = registration(), b = f.bindings
+  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  const pending = Promise.withResolvers<Awaited<ReturnType<typeof f.conversations>>>()
+  f.conversations.mockImplementationOnce(() => pending.promise)
+  f.refresh()
+  f.refresh()
+  expect(f.conversations).toHaveBeenCalledTimes(2)
+  pending.resolve({ ok: false, errorCode: 'offline' } as never)
+  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable'))
+  await b.togglePin(sessionId, false)
+  expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable')
+  await expect(b.restoreConversation(sessionId)).rejects.toThrow('collaboration_archive_unavailable')
+  await b.archiveConversation(sessionId)
+  expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable')
+})
