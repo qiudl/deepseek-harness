@@ -151,6 +151,8 @@ GUI 模型选择要求确切提供方／模型对出现在可用目录中；不�
 
 `session.collaborationSources({ sessionId, snapshotDigest })` 精确定位一条已有的不可变原消息，包括已路由到普通讨论的消息。精确摘要与分页 cursor 互斥；原消息不存在或无权读取时拒绝。该只读操作返回一条完整记录且无后续游标，保留相同的归属及取消检查。
 
+`session.collaborationMembership({ entries })` 最多核对 50 组工作区与会话身份，使用当前注册表以及 Source 读取所用的冷会话归属证明。返回顺序一致的归属与置顶布尔值，不返回消息或账户身份；已登记但验证异常的会话使整批失败，Host 不会把未知状态计为零。
+
 `analyzeClarification` 使用捕获补充消息时准备的调用，校验独立冻结的原始与补充 Source、选定待澄清项、相关此前回复、已冻结任务 ID 及原始 mention 顺序。Source 解析要求合法 Unicode；每个待澄清项的 mention 列表非空，证据跨度不得拆开代理对。完整 prompt-version-2 manifest 提交前后，均从当前 Profile 重读全部 Source 并检查模型选择与归属。原消息与补充消息保持同一 provider、model、推理配置及 adapter 注册；准备序号可以不同。两种分析方法共用一个调用，不能执行两次。恢复只读任一 manifest 版本，不重写或恢复调用；第二版派发另绑定原计划及修订号。
 
 <a id="model-experience"></a>

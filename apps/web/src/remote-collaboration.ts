@@ -146,16 +146,18 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     lifetime.signal.throwIfAborted()
     if (!exact(advertised, ['schema', 'methods']) || advertised.schema !== schema || !Array.isArray(advertised.methods)) return
     const methods: readonly unknown[] = advertised.methods
-    const execution = methods.length === 4
-      && ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
-    if (!execution && (methods.length !== 1 || methods[0] !== 'workspace')) return
+    const conversations = methods.includes('conversations')
+    const archive = methods.includes('archive')
+    const execution = ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
+    if (!methods.includes('workspace') || methods.length !== (execution ? 4 : 1) + (conversations ? 1 : 0) + (archive ? 1 : 0)
+      || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive'].includes(String(method)))) return
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
     const bridge = {
       collaborationScopeAvailable: true,
       collaborationExecutionAvailable: execution,
-      ...(execution ? createRemoteCollaborationExecution({ signal: lifetime.signal,
-        async call(method, input, signal) {
+      ...((execution || conversations || archive) ? (() => {
+        const call = async (method: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> => {
           const rpcId = 'collaboration-' + String(++sequence)
           const response = await exchange(fetch, '/api/' + method, { method: 'POST',
             headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request',
@@ -166,8 +168,30 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
           if (!exact(value, ['type', 'rpcId', 'result']) || value.type !== 'server-response' || value.rpcId !== rpcId
             || !exact(value.result, ['ok', 'value']) || value.result.ok !== true) throw Error('invalid collaboration response')
           return value.result.value
-        },
-      }) : {}),
+        }
+        const methods = createRemoteCollaborationExecution({ signal: lifetime.signal, call })
+        return { ...(execution ? { collaborationSubmit: methods.collaborationSubmit,
+          collaborationPending: methods.collaborationPending, collaborationDeliveries: methods.collaborationDeliveries } : {}),
+        ...(conversations ? { collaborationConversations: methods.collaborationConversations } : {}),
+        ...(archive ? { collaborationArchive: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 60_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            const input = exact(raw, ['workspace_id', 'session_id', 'action']) ? raw : undefined
+            if (!input || typeof input.workspace_id !== 'string' || !uuid.test(input.workspace_id)
+                || typeof input.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(input.session_id)
+                || /[/\\]/u.test(input.session_id) || input.session_id === '.' || input.session_id === '..'
+                || (input.action !== 'archive' && input.action !== 'restore'))
+              throw Error('invalid archive action')
+            const result = await call('collaboration/archive', input, signal)
+            if (!exact(result, ['state']) || !['archived', 'restored', 'retry_required', 'conflict'].includes(String(result.state)))
+              throw Error('invalid archive result')
+            return result
+          } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}) }
+      })() : {}),
       async collaborationWorkspace(raw: unknown): Promise<unknown> {
         let input: Record<string, unknown> | undefined
         let sent = false

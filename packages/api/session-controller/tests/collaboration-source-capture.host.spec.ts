@@ -104,6 +104,28 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('REQ-20261011-0002 checks current workspace membership before exposing index rows', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    try {
+      const request = { entries: [{ workspaceId: h.workspace.id, sessionId: h.sessionId }] }
+      expect(await h.controller.collaborationMembership(request, signal)).toEqual({ entries: [
+        { workspaceId: h.workspace.id, sessionId: h.sessionId, owned: true, pinned: false, archived: false },
+      ] })
+      await expect(h.controller.collaborationMembership({ ...request, owner: 'other' } as never, signal)).rejects.toThrow()
+      await expect(h.controller.collaborationMembership({ entries: [request.entries[0]!, request.entries[0]!] }, signal)).rejects.toThrow()
+      await h.ctx.workspaceRegistry.archiveSession(h.sessionId)
+      expect(await h.controller.collaborationMembership(request, signal)).toEqual({ entries: [
+        { workspaceId: h.workspace.id, sessionId: h.sessionId, owned: true, pinned: false, archived: true },
+      ] })
+      await h.ctx.workspaceRegistry.unarchiveSession(h.sessionId)
+      await h.workspace.detachSession(h.sessionId)
+      expect(await h.controller.collaborationMembership(request, signal)).toEqual({ entries: [
+        { workspaceId: h.workspace.id, sessionId: h.sessionId, owned: false, pinned: false, archived: false },
+      ] })
+      expect(h.stream).not.toHaveBeenCalled()
+      expect(h.resume).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
   it('keeps a Source-only Session nonblank through list refresh and Profile restart without starting a turn', async () => {
     const h = await harness(), signal = new AbortController().signal
     const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd, createdAt: 1, isSeeded: false } })
@@ -112,6 +134,8 @@ describe('Profile-owned collaboration Source capture', () => {
     const rows: boolean[] = []
     h.ctx.on('api-session/added', (row) => { if (row.sessionId === h.sessionId) rows.push(row.blank) })
     const captured = await h.controller.captureCollaborationSource(h.source(), signal)
+    expect(h.ctx.workspaceRegistry.collaborationSessionIds).toContain(h.sessionId)
+    expect(await h.ctx.waterfall('workspace/session-collaboration', { sessionId: h.sessionId }, () => Promise.resolve(false))).toBe(true)
     expect(rows).toContain(false)
     const first = (await h.controller.list({}, signal)).items.find(row => row.sessionId === h.sessionId)
     expect({ blank: first?.blank, sessionProjectionBlank: first?.projections?.values.sessionListMetadata?.blank,
@@ -126,6 +150,7 @@ describe('Profile-owned collaboration Source capture', () => {
     const bytes = await readFile(h.sourceFile)
     await h.dispose()
     const next = await harness(h.root, h.cwd)
+    expect(next.ctx.workspaceRegistry.collaborationSessionIds).toContain(next.sessionId)
     expect((await next.controller.list({}, signal)).items.find(row => row.sessionId === next.sessionId)?.blank).toBe(false)
     expect(next.ctx.sessions.get(next.sessionId)).toBeUndefined()
     next.ctx.sessions.create(next.sessionId, { meta: { cwd: next.cwd, createdAt: 1, isSeeded: false } })

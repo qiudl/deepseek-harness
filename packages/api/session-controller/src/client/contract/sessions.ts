@@ -94,6 +94,7 @@ export interface ISessions {
     workspaceId?: WorkspaceId
     cwd?: string
     sessionId?: SessionId
+    dedicatedCollaboration?: true
   }): Promise<SessionId>
   /**
    * Resolve an already discovered direct-parent address without opening it.

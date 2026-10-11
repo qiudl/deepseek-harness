@@ -40,6 +40,10 @@ import { openCollaborationRootPlanningJournal } from '@deepseek-ai/dsh-api-sessi
 import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from './desktop-collaboration-analysis.ts'
 import { openCollaborationAnalysisJournal } from '@deepseek-ai/dsh-api-session-controller'
 import { handleDesktopWorkspaceModelSelectionRequest } from './desktop-workspace-model-selection.ts'
+import { handleDesktopCollaborationArchiveStateRequest } from './desktop-collaboration-archive-state.ts'
+import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-collaboration-archive-transition.ts'
+import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
+import type {} from '@deepseek-ai/dsh-workspace'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
 import { DesktopSessionControl } from './desktop-session-control.ts'
@@ -366,6 +370,69 @@ export function apply(ctx: Context, config: Config): void {
             return { workspace_id: result.workspaceId, session_id: result.sessionId,
               provider: result.selection.provider, model: result.selection.model,
               ...result.selection.reasoningEffort === undefined ? {} : { reasoning_effort: result.selection.reasoningEffort } }
+          }),
+      }))
+    })
+  }
+  if (workspaceModelToken && /^[A-Za-z0-9_-]{43}$/u.test(workspaceModelToken)) {
+    ctx.inject(['workspaceRegistry'], (workspaceCtx) => {
+      workspaceCtx.effect(() => workspaceCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-archive-state',
+        handler: (req, res) => handleDesktopCollaborationArchiveStateRequest(req, res, workspaceModelToken,
+          async (target, signal) => {
+            signal.throwIfAborted()
+            const state = await workspaceCtx.workspaceRegistry.inspectCollaborationArchiveState({
+              workspaceId: target.workspace_id, sessionId: target.session_id,
+              token: target.archive_token, environmentId: target.environment_id,
+              accountIssuer: target.account_issuer, accountSubject: target.account_subject,
+            })
+            signal.throwIfAborted()
+            return { archive_phase: state.phase }
+          }),
+      }))
+    })
+  }
+  const archiveTransitionToken = process.env.DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN
+  if (archiveTransitionToken && /^[A-Za-z0-9_-]{43}$/u.test(archiveTransitionToken)) {
+    ctx.inject(['workspaceRegistry'], (workspaceCtx) => {
+      workspaceCtx.effect(() => workspaceCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-archive-intent',
+        handler: (req, res) => handleDesktopCollaborationArchiveIntentRequest(req, res, archiveTransitionToken,
+          async (target, signal) => {
+            signal.throwIfAborted()
+            const found = await workspaceCtx.workspaceRegistry.findCollaborationArchiveIntent({
+              workspaceId: target.workspace_id, sessionId: target.session_id,
+              environmentId: target.environment_id, accountIssuer: target.account_issuer,
+              accountSubject: target.account_subject,
+            })
+            signal.throwIfAborted()
+            return found === null ? { archive_phase: 'missing', archive_token: null }
+              : { archive_phase: found.phase, archive_token: found.token }
+          }),
+      }))
+      workspaceCtx.effect(() => workspaceCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-collaboration-archive-transition',
+        handler: (req, res) => handleDesktopCollaborationArchiveTransitionRequest(req, res, archiveTransitionToken,
+          async (target, signal) => {
+            signal.throwIfAborted()
+            const intent = {
+              workspaceId: target.workspace_id as never, sessionId: target.session_id as never,
+              token: target.archive_token, environmentId: target.environment_id,
+              accountIssuer: target.account_issuer, accountSubject: target.account_subject,
+            }
+            const registry = workspaceCtx.workspaceRegistry
+            if (target.action === 'stage') {
+              const staged = await registry.stageCollaborationArchive(intent)
+              signal.throwIfAborted()
+              return { archive_phase: staged.phase ?? 'staged' }
+            }
+            else if (target.action === 'prepared') await registry.recordCollaborationArchivePrepared(intent)
+            else if (target.action === 'archive') await registry.archivePreparedCollaborationSession(intent)
+            else if (target.action === 'restore') await registry.restoreCollaborationSession(intent)
+            else await registry.finishCollaborationArchiveRelease(intent)
+            signal.throwIfAborted()
+            return { archive_phase: ({ prepared: 'prepared', archive: 'archived',
+              restore: 'restored', finish_release: 'released' } as const)[target.action] }
           }),
       }))
     })

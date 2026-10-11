@@ -26,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-fs'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import { foldRequestHeader, SessionId } from '@deepseek-ai/dsh-session'
-import { realpathNormalize, WorkspaceId } from '@deepseek-ai/dsh-workspace'
+import { realpathNormalize, WorkspaceId, WorkspaceUnknownSessionError } from '@deepseek-ai/dsh-workspace'
 import { openCollaborationRootJournal, parseCollaborationRootLookup, parseCollaborationRootCaptureInput, parseCollaborationRootTarget, parseCollaborationRootAdmission } from './collaboration-root-journal.ts'
 import type { CollaborationRootJournal, CollaborationRootCaptureInput, CollaborationRootSubmission, CollaborationRootDescriptor, CollaborationRootAdmission } from './collaboration-root-journal.ts'
 import { openCollaborationSourceJournal, parseCollaborationSourceInput, parseCollaborationSourceCoordinates,
@@ -78,6 +78,8 @@ import type {
   SessionForkValue,
   SessionListRequest,
   SessionListValue,
+  SessionCollaborationMembershipRequest,
+  SessionCollaborationMembershipValue,
   SessionCollaborationSourcesRequest,
   SessionCollaborationSourcesValue,
   SessionCollaborationSourceItem,
@@ -296,6 +298,16 @@ export class SessionController extends TypertRemoteService {
     }, 'session-controller.promotions')
     this.history = new SessionHistoryController(ctx, (observation) => { this.promote(observation) })
     this.listState = new ApiSessionList(ctx)
+    ctx.on('workspace/session-collaboration', async ({ sessionId }, next) => {
+      const facility = ctx.get('storageDomain')
+      if (facility === undefined) return next()
+      this.collaborationJournal ??= openCollaborationSourceJournal(facility)
+      const journal = await this.collaborationJournal
+      for (const source of journal.sources()) {
+        if (source.session_id === sessionId) return true
+      }
+      return next()
+    })
     this.fileApplications = internals.fileApplications ?? nativeFileApplications
     this.openFileApplication = internals.openFileApplication ?? openNativeFileApplication
     this.openPath = internals.openPath ?? openNativeAssociatedPath
@@ -422,13 +434,14 @@ export class SessionController extends TypertRemoteService {
     return Object.freeze({ workspaceId, sessionId, selection })
   }
 
-  private async inspectCollaborationMembership(sessionId: SessionId, workspaceId: WorkspaceId, signal?: AbortSignal) {
+  private async inspectCollaborationMembership(sessionId: SessionId, workspaceId: WorkspaceId, signal?: AbortSignal,
+    allowArchived = false) {
     signal?.throwIfAborted()
     const workspace = this.ctx.workspaceRegistry.get(workspaceId)
     if (workspace === undefined) throw new Error('collaboration_workspace_not_found')
     const mismatch = () => new Error('collaboration_session_workspace_mismatch')
-    if (!workspace.sessionIds.includes(sessionId)
-      || this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId)) throw mismatch()
+    const archived = this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId)
+    if (!workspace.sessionIds.includes(sessionId) || (archived && !allowArchived)) throw mismatch()
     const attached = this.ctx.sessions.get(sessionId)
     const inspection = attached === undefined
       ? await this.inspect(sessionId, signal)
@@ -446,7 +459,7 @@ export class SessionController extends TypertRemoteService {
     signal?.throwIfAborted()
     if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace
       || !workspace.sessionIds.includes(sessionId) || cwd !== workspace.path
-      || this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId)
+      || this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId) !== archived
       || this.ctx.sessions.get(sessionId) !== attached) throw mismatch()
     const agent = this.ctx.agents.get(sessionId)
     if (hasApiSessionSubagentOwner(this.ctx, { header: inspection.meta }, agent)
@@ -541,7 +554,7 @@ export class SessionController extends TypertRemoteService {
       const previous = journal.read(captured)
       if (previous !== undefined) {
         const snapshot = await journal.capture({ ...captured, model_snapshot: previous.model_snapshot }, ownedSignal)
-        this.publishCollaborationSourcePresence(snapshot)
+        await this.publishCollaborationSourcePresence(snapshot)
         await inspectCurrent()
         ownedSignal.throwIfAborted()
         return Object.freeze({ kind: 'recovered' as const, snapshot })
@@ -564,6 +577,11 @@ export class SessionController extends TypertRemoteService {
       const inspected = await waitForRead(this.inspect(sessionId, ownedSignal))
       const catalogue = createCollaborationReferenceCatalogue(inspected.events, captured.source_message_id)
       await checkSelection()
+      // Establish the archive guard before either journal can commit a Source.
+      // A failed capture may leave a conservative marker, but an archived Source
+      // must never be accepted during the gap between journal and registry writes.
+      await this.ctx.workspaceRegistry.markCollaborationSession(sessionId)
+      await checkSelection()
       if (this.collaborationTimelineJournal === undefined) {
         const facility = this.ctx.get('storageDomain')
         if (facility === undefined) throw Error('collaboration_source_journal_unavailable')
@@ -574,7 +592,7 @@ export class SessionController extends TypertRemoteService {
       await timeline.record(captured, inspected.events.at(-1)?.seq ?? null, ownedSignal)
       await checkSelection()
       const snapshot = await journal.capture({ ...captured, model_snapshot: prepared.prepared.snapshot }, ownedSignal)
-      this.publishCollaborationSourcePresence(snapshot)
+      await this.publishCollaborationSourcePresence(snapshot)
       await checkSelection()
       ownedSignal.throwIfAborted()
       return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared,
@@ -624,8 +642,9 @@ export class SessionController extends TypertRemoteService {
     return operation
   }
 
-  private publishCollaborationSourcePresence(snapshot: CollaborationSourceSnapshot): void {
+  private async publishCollaborationSourcePresence(snapshot: CollaborationSourceSnapshot): Promise<void> {
     const sessionId = SessionId(snapshot.session_id)
+    await this.ctx.workspaceRegistry.markCollaborationSession(sessionId)
     this.listState.recordCollaborationSource(sessionId)
     const session = this.ctx.sessions.get(sessionId)
     if (session !== undefined) this.ctx.emit('api-session/added', this.listState.summaryFor(session))
@@ -1310,9 +1329,41 @@ export class SessionController extends TypertRemoteService {
       this.collaborationJournal ??= openCollaborationSourceJournal(facility)
       const journal = await waitForCollaborationSourceRead(this.collaborationJournal, owned)
       owned.throwIfAborted()
-      for (const source of journal.sources()) this.listState.recordCollaborationSource(SessionId(source.session_id))
+      for (const source of journal.sources()) {
+        const sessionId = SessionId(source.session_id)
+        try { await this.ctx.workspaceRegistry.markCollaborationSession(sessionId) }
+        catch (error) {
+          if (error instanceof WorkspaceUnknownSessionError) continue
+          throw error
+        }
+        this.listState.recordCollaborationSource(sessionId)
+      }
     }
     return { items: await this.listState.list(owned) }
+  }
+
+  /** Check current native ownership of one bounded cloud-index page without opening or changing a Session.
+   * @param request - Workspace and Session pairs from one index page.
+   * @param signal - Cancellation of the caller's read.
+   * @returns Current ownership, pin and archive flags for each pair.
+   */
+  @Remote('collaborationMembership')
+  async collaborationMembership(request: SessionCollaborationMembershipRequest,
+    signal: AbortSignal): Promise<SessionCollaborationMembershipValue> {
+    const checked = readCollaborationMembershipRequest(request)
+    const entries: SessionCollaborationMembershipValue['entries'][number][] = []
+    for (const value of checked.entries) {
+      signal.throwIfAborted()
+      const workspaceId = WorkspaceId(value.workspaceId), sessionId = SessionId(value.sessionId)
+      const workspace = this.ctx.workspaceRegistry.get(workspaceId)
+      const owned = workspace !== undefined && workspace.sessionIds.includes(sessionId)
+      const archived = owned && this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId)
+      if (owned) await this.inspectCollaborationMembership(sessionId, workspaceId, signal, true)
+      entries.push({ workspaceId: value.workspaceId, sessionId: value.sessionId,
+        owned, archived, pinned: owned && !archived && this.ctx.workspaceRegistry.pinnedSessionIds.includes(sessionId) })
+    }
+    signal.throwIfAborted()
+    return { entries }
   }
 
   /**
@@ -1579,6 +1630,32 @@ export class SessionController extends TypertRemoteService {
     return this.controlState.control(signal)
   }
 
+}
+
+function readCollaborationMembershipRequest(raw: unknown): SessionCollaborationMembershipRequest {
+  const invalid = (): never => { throw Error('collaboration_membership_query_invalid') }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).length !== 1) invalid()
+  const row = raw as Record<string, unknown>
+  const rawEntries: unknown = row.entries
+  if (!Array.isArray(rawEntries) || rawEntries.length < 1 || rawEntries.length > 50) throw Error('collaboration_membership_query_invalid')
+  const workspacePattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+  const sessionPattern = /^[!-~]{1,256}$/u
+  const entries: { workspaceId: string; sessionId: string }[] = []
+  const seen = new Set<string>()
+  for (const candidate of rawEntries) {
+    const value: unknown = candidate
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).sort().join(',') !== 'sessionId,workspaceId') invalid()
+    const fields = value as Record<string, unknown>
+    const workspaceId = fields.workspaceId, sessionId = fields.sessionId
+    if (typeof workspaceId !== 'string' || typeof sessionId !== 'string') throw Error('collaboration_membership_query_invalid')
+    if (!workspacePattern.test(workspaceId) || !sessionPattern.test(sessionId)
+      || /[/\\]/u.test(sessionId) || sessionId === '.' || sessionId === '..'
+      || seen.has(workspaceId + '\0' + sessionId)) invalid()
+    seen.add(workspaceId + '\0' + sessionId)
+    entries.push({ workspaceId, sessionId })
+  }
+  return { entries }
 }
 
 function validCollaborationSourcesRequest(value: unknown): value is SessionCollaborationSourcesRequest {

@@ -49,6 +49,7 @@ export class WorkspaceFeed {
   private knownIds: Set<string>
   private order: readonly string[]
   private archived: readonly string[]
+  private dedicatedCollaboration: readonly string[]
   private pinned: readonly string[]
 
   /** @param ctx - Host context containing the authoritative Workspace registry. */
@@ -57,6 +58,7 @@ export class WorkspaceFeed {
     this.knownIds = new Set(baseline.map(workspace => String(workspace.id)))
     this.order = baseline.map(workspace => String(workspace.id))
     this.archived = ctx.workspaceRegistry.archivedSessionIds.map(String)
+    this.dedicatedCollaboration = ctx.workspaceRegistry.dedicatedCollaborationSessionIds.map(String)
     this.pinned = ctx.workspaceRegistry.pinnedSessionIds.map(String)
     ctx.on('domain/changed', (change: DomainChanged) => { this.changed(change) })
     ctx.effect(() => () => {
@@ -73,6 +75,7 @@ export class WorkspaceFeed {
     return {
       items: this.ctx.workspaceRegistry.list().map(workspaceView),
       archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds],
+      dedicatedCollaborationSessionIds: [...this.ctx.workspaceRegistry.dedicatedCollaborationSessionIds],
       pinnedSessionIds: [...this.ctx.workspaceRegistry.pinnedSessionIds],
     }
   }
@@ -117,6 +120,11 @@ export class WorkspaceFeed {
       if (!sameStrings(this.archived, nextArchived)) {
         this.archived = nextArchived
         this.publish({ type: 'archived', archivedSessionIds: [...state.archivedSessionIds] })
+      }
+      const nextDedicated = state.dedicatedCollaborationSessionIds.map(String)
+      if (!sameStrings(this.dedicatedCollaboration, nextDedicated)) {
+        this.dedicatedCollaboration = nextDedicated
+        this.publish({ type: 'dedicatedCollaboration', sessionIds: [...state.dedicatedCollaborationSessionIds] })
       }
       const nextPinned = state.pinnedSessionIds.map(String)
       if (!sameStrings(this.pinned, nextPinned)) {

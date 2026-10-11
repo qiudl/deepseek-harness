@@ -55,6 +55,10 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `profile.workspace_authority` 使用同一授权读取器签发安装级归属证明，不打开视图、不追加 Session 事件、不发送模型请求。客户端核验准确挑战、当前安装/进程、有效期和签名。未安装读取器时不发布此能力。服务器的 nonce、消费及 Source 校验仍须独立完成，见[协议](../control-protocol/README.zh.md#challenge-authentication)。
 
+`profile.collaboration_archive_transition` 核验当前账号绑定，将一个精确 token 动作转交选定的 Profile worker，并在返回前再次核验账号授权。worker supervisor 拒绝已替换代际的响应；在拒绝前本地写入仍可能已提交。因此调用方保留原 token，并在回包不确定时对账持久阶段。只有启动组合提供 worker 阶段转移函数时才声明此能力。
+
+`profile.collaboration_archive_intent` 使用同一账号授权及当前 worker 代际，按 Session 找回未完成归档的 token。Host 在 worker 读取前后核验账号授权，并拒绝已替换 worker 的结果；只有 Registry 确认工作区成员关系后，无意图结果才有效。
+
 `profile.collaboration_registration` 使用当前连接已验证的 Account grant 和安装私钥，将服务器挑战与当前 Host 进程一起签名。客户端按已核验的安装身份验证签名，检查全部挑战/进程字段及有效期，返回冻结证明。Unix 与 Windows 共用这套 authority/client 方法。它不启动 worker、不打开视图租约、不修改 Profile/Session 数据。Slark 私有 Host broker 持有独立连接并负责取消；服务器挑战持久层、公钥登记及操作对账不属于该方法。
 
 仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。

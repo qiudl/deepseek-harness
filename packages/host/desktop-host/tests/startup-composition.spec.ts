@@ -187,6 +187,12 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   }) }
   const inspectWorkspaceModelSelection = vi.fn<NonNullable<ProfileWorkerHandle['inspectWorkspaceModelSelection']>>(
     async target => ({ ...target, provider: 'deepseek', model: 'chat' }))
+  const inspectCollaborationArchiveState = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationArchiveState']>>(
+    async () => ({ archive_phase: 'archived' }))
+  const inspectCollaborationArchiveIntent = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationArchiveIntent']>>(
+    async () => ({ archive_phase: 'missing', archive_token: null }))
+  const transitionCollaborationArchive = vi.fn<NonNullable<ProfileWorkerHandle['transitionCollaborationArchive']>>(
+    async () => ({ archive_phase: 'staged' }))
   const inspectCollaborationSource = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationSource']>>(
     async () => sourceDescriptor)
   const readCollaborationSourceSnapshot = vi.fn<NonNullable<ProfileWorkerHandle['readCollaborationSourceSnapshot']>>(
@@ -219,7 +225,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       generation: workerSpecs.length,
       bootstrapCookie: { name: 'fixture', value: 'private' },
       generateText,
-      inspectWorkspaceModelSelection, inspectCollaborationSource, readCollaborationSourceSnapshot,
+      inspectWorkspaceModelSelection, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
+      transitionCollaborationArchive,
+      inspectCollaborationSource, readCollaborationSourceSnapshot,
       collaborationAnalysis, receiveCollaborationDelivery,
       closeNotifications: () => { workerEvents.push(`notifications:${spec.profileId}`) },
       abort: () => { workerEvents.push(`abort:${spec.profileId}`); rejectDone?.(new Error('worker exit failed')) },
@@ -264,6 +272,21 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(serverOptions.inspectWorkspaceModelSelection?.(profile.profileId, selectionTarget, collaborationSignal))
     .resolves.toEqual({ ...selectionTarget, provider: 'deepseek', model: 'chat' })
   expect(inspectWorkspaceModelSelection).toHaveBeenCalledWith(selectionTarget, collaborationSignal)
+  const archiveTarget = { ...selectionTarget, archive_token: randomUUID(),
+    environment_id: randomUUID(), account_issuer: 'issuer', account_subject: 'subject' }
+  await expect(serverOptions.inspectCollaborationArchiveState?.(profile.profileId, archiveTarget, collaborationSignal))
+    .resolves.toEqual({ archive_phase: 'archived' })
+  expect(inspectCollaborationArchiveState).toHaveBeenCalledWith(archiveTarget, collaborationSignal)
+  const intentTarget = { workspace_id: archiveTarget.workspace_id, session_id: archiveTarget.session_id,
+    environment_id: archiveTarget.environment_id, account_issuer: archiveTarget.account_issuer,
+    account_subject: archiveTarget.account_subject }
+  await expect(serverOptions.inspectCollaborationArchiveIntent?.(profile.profileId, intentTarget, collaborationSignal))
+    .resolves.toEqual({ archive_phase: 'missing', archive_token: null })
+  expect(inspectCollaborationArchiveIntent).toHaveBeenCalledWith(intentTarget, collaborationSignal)
+  const transitionTarget = { ...archiveTarget, action: 'stage' as const }
+  await expect(serverOptions.transitionCollaborationArchive?.(profile.profileId, transitionTarget, collaborationSignal))
+    .resolves.toEqual({ archive_phase: 'staged' })
+  expect(transitionCollaborationArchive).toHaveBeenCalledWith(transitionTarget, collaborationSignal)
   await expect(serverOptions.inspectCollaborationSource?.(profile.profileId, sourceTarget, collaborationSignal))
     .resolves.toEqual(sourceDescriptor)
   expect(inspectCollaborationSource).toHaveBeenCalledWith(sourceTarget, collaborationSignal)

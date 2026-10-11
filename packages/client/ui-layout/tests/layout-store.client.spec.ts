@@ -13,6 +13,8 @@ describe('createLayoutStore', () => {
     expect(store.getSnapshot()).toEqual({
       panelInfo: { activePanelId: null },
       layoutInfo: {
+        mobileSection: 'chat',
+        mobileLastList: 'ordinary',
         sidebar: 280,
         viewportWidth: 1920,
         narrowExpanded: false,
@@ -23,6 +25,19 @@ describe('createLayoutStore', () => {
         rightbarInstant: false,
       },
     })
+  })
+
+  it('returns phone chat to the list it opened from', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.showMobileSection('collaboration')
+    actions.showMobileChat()
+    expect(store.getSnapshot().layoutInfo.mobileSection).toBe('chat')
+    actions.showMobileList()
+    expect(store.getSnapshot().layoutInfo.mobileSection).toBe('collaboration')
+    actions.showMobileSection('ordinary')
+    actions.showMobileChat()
+    actions.showMobileList()
+    expect(store.getSnapshot().layoutInfo.mobileSection).toBe('ordinary')
   })
 
   it('creates independent instances without browser persistence', () => {

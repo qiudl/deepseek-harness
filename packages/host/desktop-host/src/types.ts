@@ -116,6 +116,19 @@ export interface ProfileWorkerHandle {
     target: HostWorkspaceModelSelectionTarget,
     signal: AbortSignal,
   ) => Promise<HostWorkspaceModelSelection>
+  readonly inspectCollaborationArchiveState?: (
+    target: import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveStateTarget,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveStateValue>
+  readonly inspectCollaborationArchiveIntent?: (
+    target: import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveIntentTarget,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveIntentValue>
+  /** Parent-only durable mutation; the Account coordinator must reconcile uncertain replies by token. */
+  readonly transitionCollaborationArchive?: (
+    target: import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveTransitionTarget,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveTransitionResult>
   /**
    * Private Parent analysis command; this handle grants no Account/cloud authority.
    * @param command - Prepare/dispatch JSON with the original binding digest; caller keeps Account/peer current.

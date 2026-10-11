@@ -45,6 +45,12 @@ import type {
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
+  HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
+  HostCollaborationArchiveStateTarget, ProfileCollaborationArchiveStateRequest,
+  HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
+  ProfileCollaborationArchiveIntentRequest,
+  HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult,
+  ProfileCollaborationArchiveTransitionRequest,
   HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult, ProfileCollaborationAnalysisRequest,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
   ProfileSourceAuthorityRequest,
@@ -80,6 +86,10 @@ import {
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
   encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
+  encodeHostCollaborationArchiveStatePayload, parseHostCollaborationArchiveStateChallenge,
+  parseHostCollaborationArchiveStateAssertion,
+  parseHostCollaborationArchiveIntentTarget, parseHostCollaborationArchiveIntentValue,
+  parseHostCollaborationArchiveTransitionTarget, parseHostCollaborationArchiveTransitionResult,
   encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
   encodeHostReferenceAuthorityPayload, parseHostReferenceAuthorityChallenge, parseHostReferenceAuthorityAssertion,
   parseHostCollaborationReferenceSelection, parseHostCollaborationReferenceCapture,
@@ -209,6 +219,20 @@ export interface UnixHostServerOptions {
     target: HostWorkspaceModelSelectionTarget,
     signal: AbortSignal,
   ) => Promise<HostWorkspaceModelSelection>
+  /** Read a token-bound archive phase from the authorized Profile's durable Registry. */
+  readonly inspectCollaborationArchiveState?: (
+    profileId: string,
+    target: HostCollaborationArchiveStateTarget,
+    signal: AbortSignal,
+  ) => Promise<Readonly<{ archive_phase: 'staged' | 'prepared' | 'archived' | 'restored' }>>
+  /** Recover the original token from the current Account Profile only. */
+  readonly inspectCollaborationArchiveIntent?: (
+    profileId: string, target: HostCollaborationArchiveIntentTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationArchiveIntentValue>
+  /** Mutate only the current Account Profile's durable archive intent. */
+  readonly transitionCollaborationArchive?: (
+    profileId: string, target: HostCollaborationArchiveTransitionTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationArchiveTransitionResult>
   /** Read root metadata only from the Account-authorized Profile's durable journal. */
   readonly rootJournal?: (profileId: string, command: HostRootJournalCommand, signal: AbortSignal) => Promise<HostRootJournalMetadata>
   /** Read committed root binding metadata. */
@@ -440,7 +464,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported'
     | 'remoteUiStream'
 >
 
@@ -1534,6 +1558,64 @@ export class HostControlAuthority {
             method: frame.method,
             result: { ...unsigned, signature },
           })
+        } else if (frame.method === 'profile.collaboration_archive_state') {
+          const inspect = this.options.inspectCollaborationArchiveState
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const observed = await inspect(profileId, {
+            workspace_id: c.workspace_id, session_id: c.session_id, archive_token: c.archive_token,
+            environment_id: c.environment_id, account_issuer: c.account_issuer,
+            account_subject: c.account_subject,
+          }, context.signal)
+          if (authorize() !== profileId || observed.archive_phase !== c.archive_phase) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          const identity = this.options.identity
+          const unsigned: HostCollaborationArchiveStateAssertion = {
+            schema_version: 1, challenge: c, ...assertionIdentityFields(identity),
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = signAuthorityPayload(identity, encodeHostCollaborationArchiveStatePayload(unsigned))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { ...unsigned, signature } })
+        } else if (frame.method === 'profile.collaboration_archive_intent') {
+          const inspect = this.options.inspectCollaborationArchiveIntent
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const target = frame.params.target
+          if (target.environment_id !== frame.params.authority_environment_id ||
+            target.account_issuer !== frame.params.account_issuer ||
+            target.account_subject !== frame.params.account_subject) throw new HostAuthorityError('profile_mismatch')
+          const account = commandReadAccount(frame.params, ownerId)
+          const authorize = collaborationReadAuthorizer(this.options.host, account,
+            frame.params.expires_at, context.signal, clock)
+          const profileId = authorize()
+          const result = parseHostCollaborationArchiveIntentValue(await inspect(profileId, target, context.signal))
+          if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+            request_id: frame.request_id, method: frame.method, result })))
+        } else if (frame.method === 'profile.collaboration_archive_transition') {
+          const transition = this.options.transitionCollaborationArchive
+          if (!transition) throw new HostAuthorityError('upgrade_required')
+          const target = frame.params.target
+          if (target.environment_id !== frame.params.authority_environment_id ||
+            target.account_issuer !== frame.params.account_issuer ||
+            target.account_subject !== frame.params.account_subject) throw new HostAuthorityError('profile_mismatch')
+          const account = commandReadAccount(frame.params, ownerId)
+          const authorize = collaborationReadAuthorizer(this.options.host, account,
+            frame.params.expires_at, context.signal, clock)
+          const profileId = authorize()
+          const result = parseHostCollaborationArchiveTransitionResult(
+            await transition(profileId, target, context.signal))
+          if (authorize() !== profileId || (target.action === 'stage'
+            ? result.archive_phase === 'released'
+            : result.archive_phase !== ({ prepared: 'prepared', archive: 'archived',
+              restore: 'restored', finish_release: 'released' } as const)[target.action])) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+            request_id: frame.request_id, method: frame.method, result })))
         } else if (frame.method === 'profile.collaboration_delivery') {
           const capture = this.options.collaborationDeliveryReceiver
           if (!capture) throw new HostAuthorityError('upgrade_required')
@@ -2015,6 +2097,9 @@ export class HostControlAuthority {
           ...(this.options.collaborationAnalysis ? ['profile.collaboration_analysis'] : []),
           ...(this.options.collaborationDeliveryReceiver ? ['profile.collaboration_delivery'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
+          ...(this.options.inspectCollaborationArchiveState ? ['profile.collaboration_archive_state'] : []),
+          ...(this.options.inspectCollaborationArchiveIntent ? ['profile.collaboration_archive_intent'] : []),
+          ...(this.options.transitionCollaborationArchive ? ['profile.collaboration_archive_transition'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session',
             'profile.remote_session.workspace_create', 'profile.remote_session.directory_picker', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
             'profile.remote_session.control_lease'] : []),
@@ -2718,6 +2803,105 @@ export class UnixHostClient {
       throw new HostAuthorityError('unauthorized')
     }
     return result
+  }
+
+  /** Verify a signature over the exact durable archive phase read by the Native Host.
+   * @param input - Current Account binding and server challenge.
+   * @returns Installation-verified phase assertion.
+   */
+  async attestCollaborationArchiveState(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostCollaborationArchiveStateChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationArchiveStateAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostCollaborationArchiveStateChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.collaboration_archive_state' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileCollaborationArchiveStateRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_archive_state',
+      params: { ...this.challengeRequestParams(input, challenge) },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostCollaborationArchiveStateAssertion(frame.result)
+    if (!this.matchesChallengeIdentity(result, challenge)
+      || challenge.expires_at <= this.now() || challenge.expires_at - this.now() > 300_000
+      || !verify(null, encodeHostCollaborationArchiveStatePayload(result),
+        publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /** Mutate the selected worker's durable token; an uncertain response requires same-token reconciliation.
+   * @param input - Current Account binding and exact token action.
+   * @returns Validated durable worker phase.
+   */
+  async transitionCollaborationArchive(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly target: HostCollaborationArchiveTransitionTarget
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationArchiveTransitionResult> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.collaboration_archive_transition' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostCollaborationArchiveTransitionTarget(input.target)
+    if (target.environment_id !== input.authorityEnvironmentId ||
+      target.account_issuer !== input.issuer || target.account_subject !== input.subject)
+      throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileCollaborationArchiveTransitionRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_archive_transition',
+      params: { ...this.collaborationAccountRequestParams(input), target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostCollaborationArchiveTransitionResult(frame.result)
+    if (target.action === 'stage' ? result.archive_phase === 'released'
+      : result.archive_phase !== ({ prepared: 'prepared', archive: 'archived',
+        restore: 'restored', finish_release: 'released' } as const)[target.action])
+      throw new HostAuthorityError('unavailable')
+    return result
+  }
+
+  /** Recover one original token after Main/Daemon restarts.
+   * @param input - Current Account binding and exact Session.
+   * @returns Persisted token and phase or explicit absence.
+   */
+  async inspectCollaborationArchiveIntent(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly target: HostCollaborationArchiveIntentTarget
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationArchiveIntentValue> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.collaboration_archive_intent' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostCollaborationArchiveIntentTarget(input.target)
+    if (target.environment_id !== input.authorityEnvironmentId ||
+      target.account_issuer !== input.issuer || target.account_subject !== input.subject)
+      throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileCollaborationArchiveIntentRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_archive_intent',
+      params: { ...this.collaborationAccountRequestParams(input), target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return parseHostCollaborationArchiveIntentValue(frame.result)
   }
 
   /**
@@ -3934,7 +4118,8 @@ export class UnixHostClient {
 
   private challengeRequestParams<Challenge extends
     HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge
-      | HostRootAuthorityChallenge | HostRootPlanningAttemptAuthorityChallenge>(
+      | HostRootAuthorityChallenge | HostRootPlanningAttemptAuthorityChallenge
+      | HostCollaborationArchiveStateChallenge>(
     input: { readonly accountBindingHandle: string; readonly authorityBindingVersion: number },
     challenge: Challenge,
   ) {
@@ -3948,9 +4133,9 @@ export class UnixHostClient {
 
   private matchesChallengeIdentity(
     result: HostWorkspaceAuthorityAssertion | HostSourceAuthorityAssertion | HostCollaborationRegistrationAssertion
-      | HostRootAuthorityAssertion | HostRootPlanningAttemptAuthorityAssertion,
+      | HostRootAuthorityAssertion | HostRootPlanningAttemptAuthorityAssertion | HostCollaborationArchiveStateAssertion,
     challenge: HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge
-      | HostRootAuthorityChallenge | HostRootPlanningAttemptAuthorityChallenge,
+      | HostRootAuthorityChallenge | HostRootPlanningAttemptAuthorityChallenge | HostCollaborationArchiveStateChallenge,
   ): boolean {
     return this.isConnected() && JSON.stringify(result.challenge) === JSON.stringify(challenge)
       && result.installation_id === this.inspection.installation_id
@@ -3988,6 +4173,9 @@ export class UnixHostClient {
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
   | ProfileWorkspaceAuthorityRequest
+  | ProfileCollaborationArchiveStateRequest
+  | ProfileCollaborationArchiveIntentRequest
+  | ProfileCollaborationArchiveTransitionRequest
   | ProfileSourceAuthorityRequest
   | ProfileReferenceAuthorityRequest
   | ProfileReferenceCaptureRequest

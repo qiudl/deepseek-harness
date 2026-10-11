@@ -41,6 +41,23 @@ async function baseContext(): Promise<Context> {
 }
 
 describe('Session creation failures', () => {
+  it('records dedicated collaboration only after its Session is attached to a Workspace', async () => {
+    const ctx = await baseContext()
+    const calls: string[] = []
+    const workspace = { id: 'workspace-1' as WorkspaceId, path: '/workspace',
+      attachSession: async () => { calls.push('attached') } } as Pick<Workspace, 'id' | 'path' | 'attachSession'>
+    ctx.provide('workspaceRegistry', { get: () => workspace, list: () => [workspace],
+      markDedicatedCollaborationSession: async () => { calls.push('marked') } } as never)
+    const ensureSession = async (sessionId: SessionId, cwd: string) => {
+      const session = ctx.sessions.create(sessionId, { meta: { cwd } })
+      return { id: sessionId, session } as Agent
+    }
+    const controller = new SessionCommandController(ctx, controllerAgents({ ensureSession }), '/default')
+    await controller.create({ workspaceId: workspace.id, dedicatedCollaboration: true })
+    expect(calls).toEqual(['attached', 'marked'])
+    await ctx.fiber.dispose()
+  })
+
   it('mints an identity with the default cwd when no explicit target is supplied', async () => {
     const ctx = await baseContext()
     ctx.provide('workspaceRegistry', { get: () => undefined, list: () => [] } as never)

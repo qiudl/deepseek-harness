@@ -13,7 +13,7 @@ function exact(value: unknown, keys: readonly string[]): Record<string, unknown>
     || !Object.hasOwn(fields[key], 'value'))) throw Error('invalid collaboration fields')
   return value as Record<string, unknown>
 }
-function id(value: unknown): boolean {
+function id(value: unknown): value is string {
   return typeof value === 'string' && /^[!-~]{1,256}$/u.test(value) && !/[/\\]/u.test(value)
     && value !== '.' && value !== '..'
 }
@@ -143,5 +143,46 @@ export function createRemoteCollaborationExecution(transport: Transport) {
     collaborationSubmit: async (value: unknown): Promise<unknown> => call('submit', value),
     collaborationPending: async (value: unknown): Promise<unknown> => call('pending', value),
     collaborationDeliveries: async (value: unknown): Promise<unknown> => call('deliveries', value),
+    collaborationConversations: async (): Promise<unknown> => {
+      const deadline = new AbortController(), timer = setTimeout(() => { deadline.abort() }, 38_000)
+      const signal = AbortSignal.any([deadline.signal, transport.signal])
+      try {
+        signal.throwIfAborted()
+        const response = await transport.call('collaboration/conversations', {}, signal)
+        signal.throwIfAborted()
+        if (!response || typeof response !== 'object') throw Error('invalid conversation reply')
+        const envelope = exact(response, Reflect.get(response, 'ok') === true ? ['ok', 'value'] : ['ok', 'errorCode'])
+        if (envelope.ok === false) {
+          if (typeof envelope.errorCode !== 'string' || !/^[a-z][a-z0-9_:-]{0,127}$/u.test(envelope.errorCode))
+            throw Error('invalid conversation refusal')
+          return envelope
+        }
+        if (envelope.ok !== true) throw Error('invalid conversation reply')
+        const page = exact(envelope.value, ['items', 'global_pending_count'])
+        if (!Array.isArray(page.items) || page.items.length > 500 || !Number.isSafeInteger(page.global_pending_count)
+          || Number(page.global_pending_count) < 0) throw Error('invalid conversation page')
+        let total = 0, previous = ''
+        for (const value of page.items) {
+          const item = exact(value, ['workspace_id', 'session_id', 'first_source_at', 'last_activity_at',
+            'source_count', 'pending_count', 'planning_count', 'running_count', 'issue_count', 'first_pending_digest', 'pinned', 'archived'])
+          if (typeof item.workspace_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(item.workspace_id)
+            || !id(item.session_id) || typeof item.first_source_at !== 'string' || !/^(0|[1-9][0-9]{0,18})$/u.test(item.first_source_at)
+            || typeof item.last_activity_at !== 'string' || !/^(0|[1-9][0-9]{0,18})$/u.test(item.last_activity_at)
+            || ![item.source_count, item.pending_count, item.planning_count, item.running_count, item.issue_count]
+              .every(n => Number.isSafeInteger(n) && Number(n) >= 0)
+            || (item.first_pending_digest !== null && (typeof item.first_pending_digest !== 'string'
+              || !/^[a-f0-9]{64}$/u.test(item.first_pending_digest)))
+            || (Number(item.pending_count) > 0) !== (item.first_pending_digest !== null)
+            || typeof item.pinned !== 'boolean' || typeof item.archived !== 'boolean'
+            || (item.archived && item.pinned)) throw Error('invalid conversation item')
+          const key = item.workspace_id + '\0' + item.session_id
+          if (key <= previous) throw Error('invalid conversation order')
+          previous = key; total += Number(item.pending_count)
+        }
+        if (total !== page.global_pending_count) throw Error('invalid conversation total')
+        return envelope
+      } catch { return { ok: false, errorCode: 'collaboration_index_unavailable' } }
+      finally { clearTimeout(timer) }
+    },
   }
 }

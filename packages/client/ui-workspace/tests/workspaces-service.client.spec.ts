@@ -93,6 +93,7 @@ function workspaceState(
   return {
     items,
     archivedSessionIds,
+    dedicatedCollaborationSessionIds: [],
     pinnedSessionIds: [],
     phase,
     state: phase === 'ready' ? 'idle' : 'loading',
@@ -281,6 +282,7 @@ function bench(options: BenchOptions = {}) {
     selectPanel: vi.fn(), retainMainPanels: vi.fn(),
     setSidebar: vi.fn(), toggleSidebar: vi.fn(), setViewportWidth: vi.fn(),
     setRightbar: vi.fn(), openRightbar: vi.fn(), closeRightbar: vi.fn(),
+    showMobileSection: vi.fn(), showMobileChat: vi.fn(), showMobileList: vi.fn(),
   }, () => true, createSnapshotStore({ activePanelId: null }))
   const selectPanel = vi.spyOn(layout, 'selectPanel')
   ctx.provide('layout', layout)
@@ -408,7 +410,9 @@ describe('UiWorkspaceService', () => {
 
   it('retains an explicit main target before revealing its Conversation', () => {
     const b = bench()
+    expect(b.uiWorkspace.currentSessionId()).toBeUndefined()
     b.uiWorkspace.openSession(sid('target'))
+    expect(b.uiWorkspace.currentSessionId()).toBe(sid('target'))
     expect(b.selectPanel).toHaveBeenCalledWith(null)
     expect(b.sessions.retain).toHaveBeenCalledWith(sid('target'), { source: 'mainView' })
     expect(b.sessions.refreshProjections).not.toHaveBeenCalled()
@@ -678,6 +682,20 @@ describe('UiWorkspaceService', () => {
     await expect(b.uiWorkspace.openWorkspace(wid('a'))).rejects.toBe('rejected without an Error')
     expect(b.notify).toHaveBeenLastCalledWith({ kind: 'createFailed', message: 'rejected without an Error' })
     expect(b.notify).toHaveBeenCalledTimes(3)
+  })
+
+  it('creates a dedicated collaboration Session and never reuses it as an ordinary blank', async () => {
+    const blank = summary('collab-blank', { cwd: '/w/alpha', blank: true })
+    const workspaces = { ...workspaceState([workspace('alpha', [blank.id])]),
+      dedicatedCollaborationSessionIds: [blank.id] }
+    const b = bench({ sessions: sessionState([blank]), workspaces })
+    b.uiWorkspace.startCollaborationSession(wid('alpha'))
+    await vi.waitFor(() => { expect(b.sessions.create).toHaveBeenCalledWith({
+      workspaceId: wid('alpha'), dedicatedCollaboration: true,
+    }) })
+    await b.uiWorkspace.connectWorkspace(wid('alpha'))
+    expect(b.sessions.create).toHaveBeenCalledWith({ workspaceId: wid('alpha') })
+    expect(b.sessions.create).not.toHaveBeenCalledWith({ workspaceId: wid('alpha'), sessionId: blank.id })
   })
 
   it('uses only an explicit Workspace or the recent-Workspace policy for new Sessions', async () => {

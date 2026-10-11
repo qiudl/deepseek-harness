@@ -1,6 +1,7 @@
 /** Client-side Workspace state model shared by Remote transport and UI projection. */
 
 import { notifySubscribers } from '@deepseek-ai/dsh-client-store'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {} from '@deepseek-ai/dsh-api-workspace-controller/remote'
 import { isRemoteFailure } from '@deepseek-ai/dsh-api-gateway/client'
 import type { RemoteFailure, RemoteResult, TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
@@ -33,6 +34,7 @@ export interface WorkspaceSnapshot {
   readonly items: readonly WorkspaceView[]
   /** Complete registry-global archive set in Host order. */
   readonly archivedSessionIds: WorkspaceArchiveValue['archivedSessionIds']
+  readonly dedicatedCollaborationSessionIds?: readonly SessionId[]
   /** Complete registry-global pin set, most recently pinned first. */
   readonly pinnedSessionIds: WorkspacePinValue['pinnedSessionIds']
   readonly state: 'idle' | 'loading' | 'error'
@@ -52,6 +54,7 @@ export interface WorkspaceFollowSink {
   replaceOrder(workspaceIds: readonly WorkspaceId[]): void
   /** Replace the complete archived Session set. */
   replaceArchived(sessionIds: WorkspaceArchiveValue['archivedSessionIds']): void
+  replaceDedicatedCollaboration?(sessionIds: readonly SessionId[]): void
   /** Replace the complete pinned Session set. */
   replacePinned(pinnedSessionIds: WorkspacePinValue['pinnedSessionIds']): void
 }
@@ -62,6 +65,7 @@ export interface WorkspaceFollowSink {
 export class ClientWorkspaceModel implements WorkspaceFollowSink {
   private items: readonly WorkspaceView[] = []
   private archivedSessionIds: WorkspaceArchiveValue['archivedSessionIds'] = []
+  private dedicatedCollaborationSessionIds: readonly SessionId[] = []
   private pinnedSessionIds: WorkspacePinValue['pinnedSessionIds'] = []
   private state: WorkspaceSnapshot['state'] = 'loading'
   private phase: WorkspaceListPhase = 'pending'
@@ -267,6 +271,7 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
     this.pinRequestSeq++
     this.installViews(baseline.items)
     this.installArchived(baseline.archivedSessionIds)
+    this.installDedicatedCollaboration(baseline.dedicatedCollaborationSessionIds ?? [])
     this.installPinned(baseline.pinnedSessionIds)
     this.state = 'idle'
     this.phase = 'ready'
@@ -297,6 +302,10 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
   replaceArchived(archivedSessionIds: WorkspaceArchiveValue['archivedSessionIds']): void {
     this.archiveRequestSeq++
     this.installArchived(archivedSessionIds)
+  }
+
+  replaceDedicatedCollaboration(sessionIds: readonly SessionId[]): void {
+    this.installDedicatedCollaboration(sessionIds)
   }
 
   /**
@@ -349,6 +358,7 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
     return {
       items: this.items,
       archivedSessionIds: this.archivedSessionIds,
+      dedicatedCollaborationSessionIds: this.dedicatedCollaborationSessionIds,
       pinnedSessionIds: this.pinnedSessionIds,
       state: this.state,
       phase: this.phase,
@@ -360,6 +370,13 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
     if (archivedSessionIds.length === this.archivedSessionIds.length
       && archivedSessionIds.every((id, index) => id === this.archivedSessionIds[index])) return
     this.archivedSessionIds = [...archivedSessionIds]
+    this.invalidate()
+  }
+
+  private installDedicatedCollaboration(sessionIds: readonly SessionId[]): void {
+    if (sessionIds.length === this.dedicatedCollaborationSessionIds.length
+      && sessionIds.every((id, index) => id === this.dedicatedCollaborationSessionIds[index])) return
+    this.dedicatedCollaborationSessionIds = [...sessionIds]
     this.invalidate()
   }
 

@@ -110,6 +110,9 @@ function acceptIncrement(accept: WorkspaceFollowSink, frame: WorkspaceFollowIncr
     case 'archived':
       accept.replaceArchived(frame.archivedSessionIds)
       return
+    case 'dedicatedCollaboration':
+      accept.replaceDedicatedCollaboration?.(frame.sessionIds)
+      return
     case 'pinned':
       accept.replacePinned(frame.pinnedSessionIds)
       return

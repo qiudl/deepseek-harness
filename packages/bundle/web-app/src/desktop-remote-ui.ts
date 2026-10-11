@@ -6,7 +6,7 @@ import { parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-co
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'session/collaborationSources',
+const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'session/collaborationSources', 'session/collaborationMembership',
   'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog'])
 const STARTUP_ZERO_ARG = new Set(['settings/describe', 'agentPresets/list',
@@ -94,6 +94,38 @@ export class DesktopRemoteUiExecutor {
         ...(page.items.length > 1 || page.next_cursor !== undefined ? { next_cursor: first.snapshot_digest } : {}) }
       if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 60 * 1024) throw new Error('desktop remote UI: result too large')
       return result
+    }
+    if (endpoint === 'session/collaborationMembership') {
+      const request = payload.args.request
+      if (Object.keys(payload.args).length !== 1 || !record(request)
+        || Object.keys(request).length !== 1 || !Array.isArray(request.entries)
+        || request.entries.length < 1 || request.entries.length > 50) throw new Error('desktop remote UI: invalid membership payload')
+      const seen = new Set<string>()
+      const membershipEntries: Array<{ workspaceId: string; sessionId: string }> = []
+      for (const value of request.entries) {
+        if (!record(value) || Object.keys(value).sort().join(',') !== 'sessionId,workspaceId'
+          || typeof value.workspaceId !== 'string'
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.workspaceId)
+          || typeof value.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(value.sessionId)
+          || /[/\\]/u.test(value.sessionId) || value.sessionId === '.' || value.sessionId === '..'
+          || seen.has(value.workspaceId + '\0' + value.sessionId)) throw new Error('desktop remote UI: invalid membership payload')
+        seen.add(value.workspaceId + '\0' + value.sessionId)
+        membershipEntries.push({ workspaceId: value.workspaceId, sessionId: value.sessionId })
+      }
+      const value: unknown = await this.gateway.invoke({ namespace: 'session', method: 'collaborationMembership', args: payload.args, signal })
+      if (!record(value) || Object.keys(value).length !== 1 || !Array.isArray(value.entries)
+        || value.entries.length !== request.entries.length) throw new Error('desktop remote UI: invalid membership result')
+      for (let i = 0; i < membershipEntries.length; i++) {
+        const actual: unknown = value.entries[i], expected = membershipEntries[i]
+        if (!expected) throw new Error('desktop remote UI: invalid membership result')
+        if (!record(actual) || Object.keys(actual).sort().join(',') !== 'archived,owned,pinned,sessionId,workspaceId'
+          || actual.workspaceId !== expected.workspaceId || actual.sessionId !== expected.sessionId
+          || typeof actual.owned !== 'boolean' || typeof actual.pinned !== 'boolean' || typeof actual.archived !== 'boolean'
+          || (actual.pinned && (!actual.owned || actual.archived))
+          || (actual.archived && !actual.owned)) throw new Error('desktop remote UI: invalid membership result')
+      }
+      if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 60 * 1024) throw new Error('desktop remote UI: membership result too large')
+      return value
     }
     if (endpoint === 'credentials/describe' &&
       (Object.keys(payload.args).length !== 1 || !Array.isArray(payload.args.refs) ||

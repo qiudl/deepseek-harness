@@ -160,6 +160,7 @@
     "apps/web/tests/agent-team-panel.e2e.ts",
     "apps/web/tests/sidebar-right.e2e.ts",
     "apps/web/tests/slark-collaboration-sidebar.e2e.ts",
+    "apps/web/tests/slark-collaboration-conversations.e2e.ts",
     "apps/web/tests/sidebar-terminal.e2e.ts",
     "apps/web/tests/chat-scroll-fixture.ts",
     "apps/web/tests/chat-scroll-contract.e2e.ts",

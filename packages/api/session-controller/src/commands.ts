@@ -109,6 +109,9 @@ export class SessionCommandController {
     if (request.workspaceId !== undefined && request.cwd !== undefined) {
       throw new RemoteError('gateway/bad-request', 'session.create accepts workspaceId or cwd, not both', {})
     }
+    if (request.dedicatedCollaboration === true && request.workspaceId === undefined) {
+      throw new RemoteError('gateway/bad-request', 'dedicated collaboration requires workspaceId', {})
+    }
     const sessionId = request.sessionId ?? brandString<SessionId>(`session-${randomUUID()}`)
     let workspace: Workspace | undefined
     if (request.workspaceId !== undefined) {
@@ -141,6 +144,9 @@ export class SessionCommandController {
           { sessionId, workspaceId: workspace.id },
         )
       }
+    }
+    if (request.dedicatedCollaboration === true) {
+      await this.ctx.workspaceRegistry.markDedicatedCollaborationSession(sessionId)
     }
     const agentPreset = this.agents.presetForSession(adopted.session)
     return { sessionId, ...(agentPreset === undefined ? {} : { agentPreset }) }

@@ -421,6 +421,21 @@ describe('Desktop remote UI read-only bridge', () => {
       .rejects.toThrow('endpoint denied')
     expect(invoke).toHaveBeenCalledTimes(6)
   })
+  it('REQ-20261011-0002 validates membership replies before passing them to Main', async () => {
+    const entry = { workspaceId: '11111111-1111-4111-8111-111111111111', sessionId: 'session-1' }
+    const invoke = vi.fn(async () => ({ entries: [{ ...entry, owned: true, pinned: false, archived: false }] }))
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+    const signal = new AbortController().signal
+    const payload = { args: { request: { entries: [entry] } } }
+    await expect(executor.execute('session/collaborationMembership', payload, signal))
+      .resolves.toEqual({ entries: [{ ...entry, owned: true, pinned: false, archived: false }] })
+    expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'collaborationMembership', args: payload.args, signal })
+    await expect(executor.execute('session/collaborationMembership', { args: { request: { entries: [entry, entry] } } }, signal))
+      .rejects.toThrow('invalid membership payload')
+    invoke.mockResolvedValue({ entries: [{ ...entry, owned: false, pinned: true, archived: false }] })
+    await expect(executor.execute('session/collaborationMembership', payload, signal))
+      .rejects.toThrow('invalid membership result')
+  })
 
   it('requires a private token, rejects forbidden endpoints and bounds input', async () => {
     const token = 'A'.repeat(43)
