@@ -39,4 +39,15 @@ it('requires its own parent token and exact identity before a durable transition
   expect(await resumed.json()).toEqual({ archive_phase: 'archived' })
   transition.mockImplementationOnce(async () => ({ archive_phase: 'released' as never }))
   expect((await send({ ...identity, action: 'stage' })).status).toBe(422)
+  for (const [action, archive_phase] of [
+    ['prepared', 'prepared'], ['archive', 'archived'], ['restore', 'restored'],
+    ['finish_release', 'released'],
+  ] as const) {
+    transition.mockImplementationOnce(async () => ({ archive_phase: archive_phase as never }))
+    const response = await send({ ...identity, action })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ archive_phase })
+  }
+  transition.mockImplementationOnce(async () => ({ archive_phase: 'prepared' as never }))
+  expect((await send({ ...identity, action: 'archive' })).status).toBe(422)
 })

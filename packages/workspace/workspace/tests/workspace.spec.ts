@@ -839,6 +839,23 @@ describe('header-validated membership projection', () => {
     await expect(harness({ pool: missing })).rejects.toThrow(/references missing workspace/)
   })
 
+  it('rejects repeated collaboration identities and inconsistent archive phases on load', async () => {
+    const sessionId = SessionId('archived-source')
+    const intent = { workspaceId: WorkspaceId('90000000-0000-4000-8000-000000000009'), sessionId,
+      token: '11111111-1111-4111-8111-111111111111', environmentId: 'production',
+      accountIssuer: 'issuer', accountSubject: 'alice', phase: 'archived' as const }
+    const base = { initialized: true, workspaceIds: [] as WorkspaceId[] }
+    for (const [change, reason] of [
+      [{ dedicatedCollaborationSessionIds: [sessionId, sessionId] }, /dedicated collaboration Session repeats/],
+      [{ collaborationSessionIds: [sessionId, sessionId] }, /collaboration Session repeats/],
+      [{ collaborationArchiveIntents: [intent, intent] }, /collaboration archive intent repeats/],
+      [{ collaborationArchiveIntents: [intent, { ...intent, sessionId: SessionId('other') }] }, /collaboration archive intent repeats/],
+      [{ collaborationArchiveIntents: [intent] }, /collaboration archive phase/],
+    ] as Array<[Partial<StoredDomainState>, RegExp]>) {
+      await expect(harness({ pool: storedPool([], { ...base, ...change }) })).rejects.toThrow(reason)
+    }
+  })
+
   it('fails list if the durable order and entity cache are externally diverged', async () => {
     const dir = await makeDir('cache-diverged')
     const result = await harness()
@@ -1152,6 +1169,9 @@ describe('dedicated collaboration ownership', () => {
     expect(await first.registry.stageCollaborationArchive(intent)).toEqual(intent)
     const { token: _token, ...lookup } = intent
     expect(await first.registry.findCollaborationArchiveIntent(lookup)).toEqual({ token: intent.token, phase: 'staged' })
+    await expect(first.registry.findCollaborationArchiveIntent({ ...lookup,
+      workspaceId: WorkspaceId('90000000-0000-4000-8000-000000000009') }))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
     await expect(first.registry.findCollaborationArchiveIntent({ ...lookup, accountSubject: 'bob' }))
       .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
     expect(await first.registry.findCollaborationArchiveIntent({ ...lookup, sessionId: SessionId('other') })).toBeNull()
@@ -1166,6 +1186,52 @@ describe('dedicated collaboration ownership', () => {
     expect(await second.registry.findCollaborationArchiveIntent(lookup)).toEqual({ token: intent.token, phase: 'staged' })
     await expect(second.registry.stageCollaborationArchive({ ...intent,
       token: '22222222-2222-4222-8222-222222222222' }))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
+  })
+  it('stages only a known dedicated or journal-confirmed collaboration Session', async () => {
+    const dir = await makeDir('archive-evidence')
+    const result = await harness({ sessions: [header('plain', dir, 100), header('dedicated', dir, 200)] })
+    const workspaceId = result.registry.list()[0]!.id
+    const identity = { workspaceId, environmentId: 'production', accountIssuer: 'issuer', accountSubject: 'alice' }
+    const plain = { ...identity, sessionId: SessionId('plain'), token: '11111111-1111-4111-8111-111111111111' }
+    const dedicated = { ...identity, sessionId: SessionId('dedicated'), token: '22222222-2222-4222-8222-222222222222' }
+    await expect(result.registry.stageCollaborationArchive(plain))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
+    await expect(result.registry.stageCollaborationArchive({ ...plain, sessionId: SessionId('unknown') }))
+      .rejects.toMatchObject({ name: 'WorkspaceUnknownSessionError' })
+    const confirm = result.ctx.on('workspace/session-collaboration', async ({ sessionId }, next) =>
+      sessionId === plain.sessionId || await next())
+    await result.registry.stageCollaborationArchive(plain)
+    confirm()
+    await result.registry.markDedicatedCollaborationSession(dedicated.sessionId)
+    await result.registry.stageCollaborationArchive(dedicated)
+    expect(result.registry.collaborationArchiveIntents).toEqual([plain, dedicated])
+  })
+  it('refuses stale worker archive reads and writes after local membership has disappeared', async () => {
+    const intent = { workspaceId: WorkspaceId('90000000-0000-4000-8000-000000000009'),
+      sessionId: SessionId('missing'), token: '11111111-1111-4111-8111-111111111111',
+      environmentId: 'production', accountIssuer: 'issuer', accountSubject: 'alice' }
+    const staged = await harness({ pool: storedPool([], { initialized: true, workspaceIds: [],
+      collaborationArchiveIntents: [intent] }) })
+    await expect(staged.registry.inspectCollaborationArchiveState(intent))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
+    const prepared = await harness({ pool: storedPool([], { initialized: true, workspaceIds: [],
+      collaborationArchiveIntents: [{ ...intent, phase: 'prepared' }] }) })
+    await expect(prepared.registry.archivePreparedCollaborationSession(intent))
+      .rejects.toMatchObject({ name: 'WorkspaceUnknownSessionError' })
+  })
+  it('refuses staging a previously archived collaboration Session', async () => {
+    const dir = await makeDir('archived-source')
+    const workspaceId = WorkspaceId('90000000-0000-4000-8000-000000000009')
+    const sessionId = SessionId('archived-source')
+    const pool = storedPool([[workspaceId, record(dir, [sessionId])]], {
+      initialized: true, workspaceIds: [workspaceId], archivedSessionIds: [sessionId],
+      collaborationSessionIds: [sessionId],
+    })
+    const result = await harness({ pool, sessions: [header(sessionId, dir, 100)] })
+    await expect(result.registry.stageCollaborationArchive({ workspaceId, sessionId,
+      token: '11111111-1111-4111-8111-111111111111', environmentId: 'production',
+      accountIssuer: 'issuer', accountSubject: 'alice' }))
       .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
   })
   it('keeps one token through prepare, local archive and local restore across restarts', async () => {
@@ -1184,14 +1250,34 @@ describe('dedicated collaboration ownership', () => {
       .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
     expect(() => first.registry.stageCollaborationArchive({ ...intent, phase: 'archived' }))
       .toThrow('collaboration archive intent conflicts')
+    expect(() => first.registry.inspectCollaborationArchiveState({ ...intent, phase: 'archived' } as never))
+      .toThrow('collaboration archive intent conflicts')
+    await expect(first.registry.restoreCollaborationSession(intent))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
+    await expect(first.registry.finishCollaborationArchiveRelease(intent))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
     await expect(first.registry.archivePreparedCollaborationSession(intent))
       .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
     await first.registry.recordCollaborationArchivePrepared(intent)
     await first.registry.recordCollaborationArchivePrepared(intent)
+    await expect(first.registry.restoreCollaborationSession(intent))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
     expect((await first.registry.inspectCollaborationArchiveState(intent)).phase).toBe('prepared')
     await expect(first.registry.archivePreparedCollaborationSession({ ...intent, accountSubject: 'mallory' }))
       .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
+    const stopActivity = first.ctx.on('workspace/session-activity', async (_request, next) =>
+      [...await next(), { kind: 'probe' }])
+    await expect(first.registry.archivePreparedCollaborationSession(intent))
+      .rejects.toMatchObject({ name: 'WorkspaceActiveSessionError' })
+    stopActivity()
+    await first.registry.pinSession(intent.sessionId)
     await first.registry.archivePreparedCollaborationSession(intent)
+    await first.registry.archivePreparedCollaborationSession(intent)
+    expect(first.registry.pinnedSessionIds).toEqual([])
+    await expect(first.registry.recordCollaborationArchivePrepared(intent))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
+    await expect(first.registry.finishCollaborationArchiveRelease(intent))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
     expect(first.registry.archivedSessionIds).toEqual([intent.sessionId])
     expect(first.registry.collaborationArchiveIntents[0]).toMatchObject({ ...intent, phase: 'archived' })
     await expect(first.registry.unarchiveSession(intent.sessionId))
@@ -1201,6 +1287,9 @@ describe('dedicated collaboration ownership', () => {
     const second = await harness({ pool, sessions })
     await second.registry.archivePreparedCollaborationSession(intent)
     await second.registry.restoreCollaborationSession(intent)
+    await second.registry.restoreCollaborationSession(intent)
+    await expect(second.registry.archivePreparedCollaborationSession(intent))
+      .rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
     expect(second.registry.archivedSessionIds).toEqual([])
     expect(second.registry.collaborationArchiveIntents[0]).toMatchObject({ ...intent, phase: 'restored' })
     await second.fiber.dispose()
@@ -1208,6 +1297,27 @@ describe('dedicated collaboration ownership', () => {
     const third = await harness({ pool, sessions })
     await third.registry.finishCollaborationArchiveRelease(intent)
     expect(third.registry.collaborationArchiveIntents).toEqual([])
+  })
+  it('keeps another Session retry token when one archive completes', async () => {
+    const dir = await makeDir('archive-independent')
+    const result = await harness({ sessions: [header('one', dir, 100), header('two', dir, 200)] })
+    const workspaceId = result.registry.list()[0]!.id
+    const first = { workspaceId, sessionId: SessionId('one'),
+      token: '11111111-1111-4111-8111-111111111111', environmentId: 'production',
+      accountIssuer: 'issuer', accountSubject: 'alice' }
+    const second = { ...first, sessionId: SessionId('two'), token: '22222222-2222-4222-8222-222222222222' }
+    await result.registry.markCollaborationSession(first.sessionId)
+    await result.registry.markCollaborationSession(second.sessionId)
+    await result.registry.stageCollaborationArchive(first)
+    await result.registry.stageCollaborationArchive(second)
+    await result.registry.recordCollaborationArchivePrepared(first)
+    await result.registry.archivePreparedCollaborationSession(first)
+    await result.registry.restoreCollaborationSession(first)
+    await result.registry.finishCollaborationArchiveRelease(first)
+    expect(result.registry.collaborationArchiveIntents).toEqual([second])
+    const { token: _token, ...lookup } = second
+    expect(await result.registry.findCollaborationArchiveIntent(lookup))
+      .toEqual({ token: second.token, phase: 'staged' })
   })
   it('keeps workspace membership while an archive token is outstanding', async () => {
     const dir = await makeDir('archive-intent-owner')
@@ -1260,6 +1370,7 @@ describe('dedicated collaboration ownership', () => {
     const pool = new MemoryMediaPool()
     const sessions = [header('dedicated', dir, 100)]
     const first = await harness({ pool, sessions })
+    await first.registry.markDedicatedCollaborationSession(SessionId('dedicated'))
     await first.registry.markDedicatedCollaborationSession(SessionId('dedicated'))
     await expect(first.registry.archiveSession(SessionId('dedicated'), { stopActivity: true }))
       .rejects.toMatchObject({ name: 'WorkspaceCollaborationStopArchiveError' })

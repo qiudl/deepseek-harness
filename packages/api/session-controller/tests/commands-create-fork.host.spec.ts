@@ -41,6 +41,13 @@ async function baseContext(): Promise<Context> {
 }
 
 describe('Session creation failures', () => {
+  it('rejects a dedicated collaboration without a Workspace before creating a Session', async () => {
+    const ctx = await baseContext()
+    const controller = new SessionCommandController(ctx, controllerAgents(), '/default')
+    await expectFailure(controller.create({ dedicatedCollaboration: true }), 'gateway/bad-request')
+    await ctx.fiber.dispose()
+  })
+
   it('records dedicated collaboration only after its Session is attached to a Workspace', async () => {
     const ctx = await baseContext()
     const calls: string[] = []

@@ -115,16 +115,14 @@ export class DesktopRemoteUiExecutor {
       const value: unknown = await this.gateway.invoke({ namespace: 'session', method: 'collaborationMembership', args: payload.args, signal })
       if (!record(value) || Object.keys(value).length !== 1 || !Array.isArray(value.entries)
         || value.entries.length !== request.entries.length) throw new Error('desktop remote UI: invalid membership result')
-      for (let i = 0; i < membershipEntries.length; i++) {
-        const actual: unknown = value.entries[i], expected = membershipEntries[i]
-        if (!expected) throw new Error('desktop remote UI: invalid membership result')
+      for (const [i, expected] of membershipEntries.entries()) {
+        const actual: unknown = value.entries[i]
         if (!record(actual) || Object.keys(actual).sort().join(',') !== 'archived,owned,pinned,sessionId,workspaceId'
           || actual.workspaceId !== expected.workspaceId || actual.sessionId !== expected.sessionId
           || typeof actual.owned !== 'boolean' || typeof actual.pinned !== 'boolean' || typeof actual.archived !== 'boolean'
           || (actual.pinned && (!actual.owned || actual.archived))
           || (actual.archived && !actual.owned)) throw new Error('desktop remote UI: invalid membership result')
       }
-      if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 60 * 1024) throw new Error('desktop remote UI: membership result too large')
       return value
     }
     if (endpoint === 'credentials/describe' &&

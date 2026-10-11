@@ -100,6 +100,42 @@ function mountShell({ collapsed = false, width = 300, shortcuts = [] }: {
 }
 
 describe('SidebarRoot shell', () => {
+  it('switches the desktop browser tab and follows the mobile collaboration section', () => {
+    const rendered: string[] = []
+    const toggleSidebar = vi.fn()
+    let collaborationOwner: SidebarSectionOwnerProps | undefined
+    const props = { collapsed: false, width: 300, mobileSection: undefined as 'collaboration' | 'ordinary' | undefined,
+      useSessions: neverHook, useSessionStatus, useSessionRetainInfo: neverHook,
+      usePanelInfo, selectPanel: () => {}, usePanels: (select: (rows: never[]) => unknown) => select([]),
+      useShortcuts: (select: (rows: never[]) => unknown) => select([]),
+      useCollaborationAvailable: (select: (available: boolean) => unknown) => select(true),
+      useResource, useWorkspaces: neverHook, startSession: vi.fn(), toggleSidebar, t,
+      renderSlot: (key: string, owner: unknown) => {
+        rendered.push(key)
+        if (key === 'sidebar.collaboration') collaborationOwner = owner as SidebarSectionOwnerProps
+        return <span data-testid={key}>{key}</span>
+      },
+    } as unknown as SidebarRootComponentProps
+    const view = render(<SidebarRoot {...props} />)
+    expect(screen.getByRole('tab', { name: /Collaboration/ }).getAttribute('aria-selected')).toBe('false')
+    expect(screen.getByTestId('sidebar.workspaces')).toBeTruthy()
+    expect(screen.getByTestId('sidebar.collaboration.badge')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: /Collaboration/ }))
+    expect(screen.getByRole('tab', { name: /Collaboration/ }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('sidebar.collaboration')).toBeTruthy()
+    collaborationOwner?.expandSidebar()
+    expect(toggleSidebar).not.toHaveBeenCalled()
+    view.rerender(<SidebarRoot {...{ ...props, collapsed: true } as SidebarRootComponentProps} />)
+    collaborationOwner?.expandSidebar()
+    expect(toggleSidebar).toHaveBeenCalledOnce()
+    view.rerender(<SidebarRoot {...props} />)
+    fireEvent.click(screen.getByRole('tab', { name: /Conversations/ }))
+    expect(screen.getByTestId('sidebar.workspaces')).toBeTruthy()
+    view.rerender(<SidebarRoot {...{ ...props, mobileSection: 'collaboration' } as SidebarRootComponentProps} />)
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.getByTestId('sidebar.collaboration')).toBeTruthy()
+    expect(rendered).toContain('sidebar.collaboration.badge')
+  })
   it('advertises the effective new-session binding', () => {
     const shortcut: ShortcutCatalogEntry = { id: 'session.new' as ShortcutCommandId, label: 'New', aliases: [],
       binding: null, modified: true, conflicts: [], issue: null, keys: ['Ctrl', 'N'], aria: 'Control+N' }

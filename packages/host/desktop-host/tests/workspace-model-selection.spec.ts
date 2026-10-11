@@ -100,6 +100,28 @@ it('discards a recovered archive token from a replaced Profile worker', async ()
   await workers.disposeAll()
 })
 
+it('refuses archive reads and writes before a capable Profile worker exists', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+  }))
+  const identity = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
+    environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'issuer', account_subject: 'alice' }
+  const signal = new AbortController().signal
+  const denied = async () => {
+    await expect(workers.inspectCollaborationArchiveState(input.profileId, identity, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(workers.inspectCollaborationArchiveIntent(input.profileId, identity, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(workers.transitionCollaborationArchive(input.profileId, { ...identity, action: 'stage' }, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  }
+  await denied()
+  await workers.start(input)
+  await denied()
+  await workers.disposeAll()
+})
+
 it('discards cancellation and wrong-target replies', async () => {
   const controller = new AbortController()
   const workers = new ProfileWorkerSupervisor(async () => ({

@@ -262,6 +262,75 @@ it('signs the observed durable archive phase only for the bound Account and toke
   await expect(f.client.attestCollaborationArchiveState(input)).rejects.toMatchObject({ code: 'unauthorized' })
 })
 
+it('fails closed when an archive capability or worker callback is absent', async () => {
+  for (const [capability, method] of [
+    ['profile.collaboration_archive_state', 'inspectCollaborationArchiveState'],
+    ['profile.collaboration_archive_intent', 'inspectCollaborationArchiveIntent'],
+    ['profile.collaboration_archive_transition', 'transitionCollaborationArchive'],
+  ] as const) {
+    const f = await fixture()
+    await f.grant()
+    const challenge = { ...f.challenge, archive_token: randomUUID(), archive_phase: 'archived' as const }
+    const target = { workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+      environment_id: challenge.environment_id, account_issuer: challenge.account_issuer,
+      account_subject: challenge.account_subject }
+    const invoke = () => capability === 'profile.collaboration_archive_state'
+      ? f.client.attestCollaborationArchiveState({ ...f.input, challenge })
+      : capability === 'profile.collaboration_archive_intent'
+        ? f.client.inspectCollaborationArchiveIntent({ ...f.account, target })
+        : f.client.transitionCollaborationArchive({ ...f.account,
+          target: { ...target, archive_token: challenge.archive_token, action: 'stage' } })
+    const before = f.seen.length
+    Reflect.set(f.client.inspection, 'capabilities', f.client.inspection.capabilities.filter(value => value !== capability))
+    await expect(invoke()).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(f.seen).toHaveLength(before)
+    Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, capability])
+    Reflect.set(Reflect.get(f.authority, 'options') as object, method, undefined)
+    await expect(invoke()).rejects.toThrow()
+  }
+})
+
+it('rejects archive requests for changed Account identity and mismatched result frames', async () => {
+  const f = await fixture()
+  await f.grant()
+  const challenge = { ...f.challenge, archive_token: randomUUID(), archive_phase: 'archived' as const }
+  const target = { workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+    environment_id: challenge.environment_id, account_issuer: challenge.account_issuer,
+    account_subject: challenge.account_subject }
+  const state = { ...f.input, challenge }
+  const intent = { ...f.account, target }
+  const transition = { ...f.account, target: {
+    workspace_id: target.workspace_id, session_id: target.session_id,
+    archive_token: challenge.archive_token, environment_id: target.environment_id,
+    account_issuer: target.account_issuer, account_subject: target.account_subject,
+    action: 'archive' as const,
+  } }
+  await expect(f.client.attestCollaborationArchiveState({ ...state,
+    challenge: { ...challenge, environment_id: randomUUID() as never } })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(f.client.inspectCollaborationArchiveIntent({ ...intent, target: { ...target,
+    environment_id: randomUUID() as never } })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(f.client.transitionCollaborationArchive({ ...transition, target: { ...transition.target,
+    account_issuer: 'https://other.example.test' } })).rejects.toThrow()
+  f.setTransitionArchive(async () => ({ archive_phase: 'staged' }))
+  await expect(f.client.transitionCollaborationArchive(transition)).rejects.toThrow()
+  f.setTransitionArchive(async () => ({ archive_phase: 'archived' }))
+  await expect(f.client.transitionCollaborationArchive(transition)).resolves.toEqual({ archive_phase: 'archived' })
+  f.setTransitionArchive(async () => ({ archive_phase: 'staged' }))
+  const stage = { ...transition, target: { ...transition.target, action: 'stage' as const } }
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.collaboration_archive_transition'
+    ? { ...frame, result: { archive_phase: 'released' } } : frame)
+  await expect(f.client.transitionCollaborationArchive(stage)).rejects.toMatchObject({ code: 'unavailable' })
+  for (const [method, invoke] of [
+    ['profile.collaboration_archive_state', () => f.client.attestCollaborationArchiveState(state)],
+    ['profile.collaboration_archive_intent', () => f.client.inspectCollaborationArchiveIntent(intent)],
+    ['profile.collaboration_archive_transition', () => f.client.transitionCollaborationArchive(transition)],
+  ] as const) {
+    f.alter(frame => frame.type === 'result' && frame.method === method
+      ? { ...frame, method: 'profile.collaboration_analysis', result: { kind: 'output', json_base64url: 'e30' } } : frame)
+    await expect(invoke()).rejects.toMatchObject({ code: 'unavailable' })
+  }
+})
+
 it('signs workspace ownership only on an Account-verified connection and checks the actual Profile worker', async () => {
   const f = await fixture()
   await expect(f.client.attestWorkspaceAuthority(f.input)).rejects.toMatchObject({ code: 'unauthorized' })

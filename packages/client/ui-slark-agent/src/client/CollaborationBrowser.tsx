@@ -79,7 +79,6 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
   const [actionError, setActionError] = useState(false)
   const [busy, setBusy] = useState(false)
   const run = async (action: () => Promise<void>, done: () => void): Promise<void> => {
-    if (busy) return
     setBusy(true); setActionError(false)
     try { await action(); done() } catch { setActionError(true) } finally { setBusy(false) }
   }

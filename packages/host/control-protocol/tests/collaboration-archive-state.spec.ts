@@ -5,6 +5,7 @@ import {
   encodeHostCollaborationArchiveStatePayload,
   parseHostCollaborationArchiveStateAssertion,
   parseHostCollaborationArchiveStateChallenge,
+  parseHostCollaborationArchiveStateTarget, parseHostCollaborationArchiveStateValue,
 } from '../src/index.ts'
 
 it('recovers only an Account-bound original token or explicit absence', () => {
@@ -64,6 +65,16 @@ it('uses a separate signing domain and binds token and durable phase', () => {
 })
 
 it('rejects altered token, phase and extra authority fields', () => {
+  expect(() => parseHostCollaborationArchiveStateAssertion({ ...assertion(), schema_version: 2 })).toThrow()
+  const c = challenge()
+  const target = { workspace_id: c.workspace_id, session_id: c.session_id,
+    archive_token: c.archive_token, environment_id: c.environment_id,
+    account_issuer: c.account_issuer, account_subject: c.account_subject }
+  expect(() => parseHostCollaborationArchiveStateTarget({ ...target, archive_token: 'bad' })).toThrow()
+  expect(parseHostCollaborationArchiveStateValue({ archive_phase: 'archived' })).toEqual({ archive_phase: 'archived' })
+  expect(() => parseHostCollaborationArchiveStateValue({ archive_phase: 'released' })).toThrow()
+  const { archive_token: _token, ...intent } = target
+  expect(() => parseHostCollaborationArchiveIntentTarget({ ...intent, account_subject: '' })).toThrow()
   for (const change of [
     { archive_token: 'invalid' }, { archive_phase: 'committed' },
     { extra: 'browser' },

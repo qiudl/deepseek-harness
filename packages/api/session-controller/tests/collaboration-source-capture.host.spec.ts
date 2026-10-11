@@ -113,6 +113,12 @@ describe('Profile-owned collaboration Source capture', () => {
       ] })
       await expect(h.controller.collaborationMembership({ ...request, owner: 'other' } as never, signal)).rejects.toThrow()
       await expect(h.controller.collaborationMembership({ entries: [request.entries[0]!, request.entries[0]!] }, signal)).rejects.toThrow()
+      for (const invalid of [null, [], { entries: [] }, { entries: [null] },
+        { entries: [{ workspaceId: 12, sessionId: h.sessionId }] },
+        { entries: [{ workspaceId: h.workspace.id, sessionId: '../other' }] },
+      ]) {
+        await expect(h.controller.collaborationMembership(invalid as never, signal)).rejects.toThrow('collaboration_membership_query_invalid')
+      }
       await h.ctx.workspaceRegistry.archiveSession(h.sessionId)
       expect(await h.controller.collaborationMembership(request, signal)).toEqual({ entries: [
         { workspaceId: h.workspace.id, sessionId: h.sessionId, owned: true, pinned: false, archived: true },

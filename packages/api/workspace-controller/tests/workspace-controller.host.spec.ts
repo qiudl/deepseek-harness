@@ -353,6 +353,27 @@ describe('WorkspaceController follow', () => {
     }
   })
 
+  it('publishes a dedicated collaboration Session in the live Workspace feed', async () => {
+    const { controller, ctx, root } = await harness()
+    const created = await controller.create({ path: stageDir(root, 'dedicated-feed') })
+    const session = ctx.sessions.create(SessionId('dedicated-feed-session'), { meta: { cwd: created.workspace.path } })
+    const workspace = ctx.workspaceRegistry.get(created.workspace.workspaceId)
+    if (!workspace) throw Error('Workspace missing')
+    await workspace.attachSession(session.id)
+    const feed = new WorkspaceFeed(ctx)
+    const abort = new AbortController()
+    const iterator = feed.follow(abort.signal)[Symbol.asyncIterator]()
+    try {
+      await expect(nextFrame(iterator)).resolves.toMatchObject({ type: 'baseline',
+        value: { dedicatedCollaborationSessionIds: [] } })
+      await ctx.workspaceRegistry.markDedicatedCollaborationSession(session.id)
+      await expect(nextFrame(iterator)).resolves.toEqual({ type: 'dedicatedCollaboration', sessionIds: [session.id] })
+    } finally {
+      abort.abort()
+      await iterator.return?.()
+    }
+  })
+
   it('starts with a complete baseline and emits committed increments in domain order', async () => {
     const { controller, ctx, root } = await harness()
     const abort = new AbortController()
