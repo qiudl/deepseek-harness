@@ -148,11 +148,11 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
     // Fresh directories can carry explicit FullControl ACEs on Windows runners.
     // Keep WRITE_DAC so repair is authorized, and remove grants that mask missing WRITE_OWNER.
     pwsh(
-      `$acl = Get-Acl -LiteralPath ${quote(path)}; $acl.SetAccessRuleProtection($true, $false); ` +
+      `$ErrorActionPreference = 'Stop'; $acl = Get-Acl -LiteralPath ${quote(path)}; $acl.SetAccessRuleProtection($true, $false); ` +
       '$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])); ' +
       'foreach ($rule in $rules) { $acl.RemoveAccessRuleSpecific($rule) }; ' +
       `$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(${quote(meSid)}, ` +
-      '[System.Security.AccessControl.FileSystemRights]::Modify -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions, ' +
+      '([System.Security.AccessControl.FileSystemRights]::Modify -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions), ' +
       `[System.Security.AccessControl.AccessControlType]::Allow)); Set-Acl -LiteralPath ${quote(path)} -AclObject $acl`,
     )
   }
