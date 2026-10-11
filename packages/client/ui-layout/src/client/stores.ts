@@ -101,6 +101,9 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
     actions: {
       selectPanel: (d, panelId: MainPanelId | null) => {
         d.panelInfo.activePanelId = panelId
+        if (panelId !== null && d.layoutInfo.mobileSection !== 'chat') {
+          d.layoutInfo.mobileSection = 'chat'
+        }
       },
       showMobileSection: (d, section: 'chat' | 'ordinary' | 'collaboration') => {
         d.layoutInfo.mobileSection = section

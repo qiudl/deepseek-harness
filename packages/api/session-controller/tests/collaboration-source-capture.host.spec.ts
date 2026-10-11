@@ -104,6 +104,13 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it('delegates collaboration classification when this controller has no storage domain', async () => {
+    const h = await harness(undefined, undefined, true)
+    try {
+      expect(await h.controllerContext.waterfall('workspace/session-collaboration', { sessionId: h.sessionId },
+        () => Promise.resolve(false))).toBe(false)
+    } finally { await h.dispose() }
+  })
   it('REQ-20261011-0002 checks current workspace membership before exposing index rows', async () => {
     const h = await harness(), signal = new AbortController().signal
     try {
@@ -256,6 +263,8 @@ describe('Profile-owned collaboration Source capture', () => {
     const captured = await h.controller.captureCollaborationSource(h.source(), signal)
     expect(h.ctx.workspaceRegistry.collaborationSessionIds).toContain(h.sessionId)
     expect(await h.ctx.waterfall('workspace/session-collaboration', { sessionId: h.sessionId }, () => Promise.resolve(false))).toBe(true)
+    expect(await h.ctx.waterfall('workspace/session-collaboration', { sessionId: SessionId('other-session') },
+      () => Promise.resolve(false))).toBe(false)
     expect(rows).toContain(false)
     const first = (await h.controller.list({}, signal)).items.find(row => row.sessionId === h.sessionId)
     expect({ blank: first?.blank, sessionProjectionBlank: first?.projections?.values.sessionListMetadata?.blank,

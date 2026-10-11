@@ -191,6 +191,10 @@ describe('AppFrame', () => {
     fireEvent.click(getByRole('button', { name: 'mobile.conversations' }))
     expect(frame.dataset.mobileSection).toBe('ordinary')
     expect(sidebarOwner().mobileSection).toBe('ordinary')
+    act(() => { instance.actions.selectPanel('settings' as MainPanelId) })
+    expect(frame.dataset.mobileSection).toBe('chat')
+    fireEvent.click(getByRole('button', { name: 'mobile.backToList' }))
+    expect(frame.dataset.mobileSection).toBe('ordinary')
     act(() => {
       instance.actions.showMobileSection('collaboration')
       instance.actions.showMobileChat()

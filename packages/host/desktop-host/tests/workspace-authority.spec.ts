@@ -2,7 +2,7 @@ import { generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import {
   decodeHostControlFrame,
   encodeHostControlFrame,
@@ -105,6 +105,7 @@ async function fixture() {
   const session = authority.openSession(ownerId, lifetime.signal)
   const seen: HostControlFrame[] = []
   let alter: ((frame: HostControlFrame) => HostControlFrame | Promise<HostControlFrame>) | undefined
+  let alterRequest: ((frame: HostControlFrame) => HostControlFrame) | undefined
   const client = await UnixHostClient.connectAuthenticatedTransport(
     {
       trustedInstallationId: identity.installationId,
@@ -114,9 +115,10 @@ async function fixture() {
     },
     {
       call: async (frame) => {
-        seen.push(frame)
+        const received = alterRequest ? alterRequest(frame) : frame
+        seen.push(received)
         const answer = decodeHostControlFrame(
-          encodeHostControlFrame(await session.handleRequest(decodeHostControlFrame(encodeHostControlFrame(frame)))),
+          encodeHostControlFrame(await session.handleRequest(decodeHostControlFrame(encodeHostControlFrame(received)))),
         )
         return alter ? alter(answer) : answer
       },
@@ -160,6 +162,9 @@ async function fixture() {
     time,
     alter: (callback: typeof alter) => {
       alter = callback
+    },
+    alterRequest: (callback: typeof alterRequest) => {
+      alterRequest = callback
     },
     setInspect: (callback: typeof inspect) => {
       inspect = callback
@@ -296,18 +301,43 @@ it('rejects an archive target that diverges from its bound request identity', as
   const target = { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id,
     environment_id: f.challenge.environment_id, account_issuer: f.challenge.account_issuer,
     account_subject: f.challenge.account_subject }
-  await f.client.inspectCollaborationArchiveIntent({ ...f.account, target })
-  const request = f.seen.find(frame => frame.type === 'request' && frame.method === 'profile.collaboration_archive_intent')
-  if (!request || request.type !== 'request' || request.method !== 'profile.collaboration_archive_intent')
-    throw Error('missing archive intent request')
   for (const change of [
     { environment_id: randomUUID() },
+    { account_issuer: 'https://other.example.test' },
     { account_subject: randomUUID() },
   ]) {
-    const result = await f.session.handleRequest({ ...request, request_id: randomUUID() as never,
-      params: { ...request.params, target: { ...request.params.target, ...change } } })
-    expect(result.type).toBe('error')
+    f.alterRequest(frame => frame.type === 'request' && frame.method === 'profile.collaboration_archive_intent'
+      ? { ...frame, params: { ...frame.params, target: { ...frame.params.target, ...change } } }
+      : frame)
+    await expect(f.client.inspectCollaborationArchiveIntent({ ...f.account, target }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
   }
+  f.alterRequest(undefined)
+})
+
+it('rejects a changed Profile after archive intent inspection and a missing transition handler', async () => {
+  const f = await fixture()
+  await f.grant()
+  const target = { workspace_id: f.challenge.workspace_id, session_id: f.challenge.session_id,
+    environment_id: f.challenge.environment_id, account_issuer: f.challenge.account_issuer,
+    account_subject: f.challenge.account_subject }
+  const authorize = f.host.authorizeAccountModelText.bind(f.host)
+  let reads = 0
+  const spy = vi.spyOn(f.host, 'authorizeAccountModelText').mockImplementation((input) => {
+    const profileId = authorize(input)
+    reads++
+    return reads === 4 ? 'changed-profile' as never : profileId
+  })
+  try {
+    await expect(f.client.inspectCollaborationArchiveIntent({ ...f.account, target }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+  } finally { spy.mockRestore() }
+  const transition = { ...f.account, target: { workspace_id: target.workspace_id, session_id: target.session_id,
+    archive_token: randomUUID(), environment_id: target.environment_id, account_issuer: target.account_issuer,
+    account_subject: target.account_subject, action: 'stage' as const } }
+  Reflect.set(Reflect.get(f.authority, 'options') as object, 'transitionCollaborationArchive', undefined)
+  await expect(f.client.transitionCollaborationArchive(transition))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
 })
 
 it('rejects archive requests for changed Account identity and mismatched result frames', async () => {
