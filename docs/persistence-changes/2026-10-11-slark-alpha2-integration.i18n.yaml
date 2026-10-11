@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for 2026-10-11-slark-alpha2-integration.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/persistence-changes/2026-10-11-slark-alpha2-integration.md
+/:
+  en: 3d5a424ae7d7e46b
+  zh: c22a8e4a62d8cc1a
+/2026-10-11-slark-alpha2-integration:
+  en: 4edc83e4c9871478
+  zh: 1bd5ed1f4ca57a2a
+/2026-10-11-slark-alpha2-integration/summary:
+  en: 5c37f4718c271dab
+  zh: 161653dd4ab7ffee
+/2026-10-11-slark-alpha2-integration/table-of-contents:
+  en: 6cf314a069ceb451
+  zh: 9adff678e9ecab3b
+/2026-10-11-slark-alpha2-integration/declaration:
+  en: 6907136f28e48c90
+  zh: 02f8298485f3d8e7
+/2026-10-11-slark-alpha2-integration/compatibility:
+  en: 457be195413b10bb
+  zh: 5c4b4e1ba183d01f
+/2026-10-11-slark-alpha2-integration/verification:
+  en: 56a4209427d722a7
+  zh: 14177e8be2390428
+/2026-10-11-slark-alpha2-integration/dev-note:
+  en: b75c8458928b72b9
+  zh: 003ba4e17b4b5269

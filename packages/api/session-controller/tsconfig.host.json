@@ -129,6 +129,9 @@
       "path": "../../workspace/workspace"
     },
     {
+      "path": "../../session/working-directory"
+    },
+    {
       "path": "../../storage/storage-domain"
     }
   ]

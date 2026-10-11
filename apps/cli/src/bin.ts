@@ -12,14 +12,24 @@ import { homedir } from 'node:os'
 import { parseDshArgs } from './args.ts'
 import { reportStartupFailure } from './startup-diagnostics.ts'
 import { slarkProfilePackageManager } from './slark-profile-package-manager.ts'
+import type { RunProfileOptions } from './profile-boot.ts'
+
+/** Installation-owned dependencies supplied by a packaged CLI launcher. */
+export type RunCliOptions = Pick<RunProfileOptions, 'packageManager'> & {
+  /** Permit plugin commands for Desktop's existing profile; reserved for its installed carrier. */
+  manageDesktopProfile?: boolean
+}
+
 
 /**
  * Run the public dsh command-line interface.
+ * @param options - Package runtime and Desktop profile access supplied by the installation.
  * @returns a promise that settles when the selected command mode finishes.
  */
-export async function runCli(): Promise<void> {
+export async function runCli(options: RunCliOptions = {}): Promise<void> {
   const version = getDshRuntimeVersion()
-  const invocation = parseDshArgs(process.argv.slice(2), version)
+  const { manageDesktopProfile, ...profileOptions } = options
+  const invocation = parseDshArgs(process.argv.slice(2), version, manageDesktopProfile)
 
   switch (invocation.mode) {
     case 'profile': {
@@ -31,7 +41,9 @@ export async function runCli(): Promise<void> {
           fromDefaultProfile: invocation.fromDefaultProfile,
           patchFiles: invocation.patches,
           args: invocation.args,
-          packageManager: slarkProfilePackageManager(invocation.profile, process.env, process.execPath, homedir()),
+          ...profileOptions,
+          packageManager: profileOptions.packageManager
+            ?? slarkProfilePackageManager(invocation.profile, process.env, process.execPath, homedir()),
         })
       } catch (error) {
         if (!(error instanceof StartupError)) throw error
@@ -42,7 +54,7 @@ export async function runCli(): Promise<void> {
     }
     case 'plugin': {
       const { runPlugin } = await import('./plugin.ts')
-      process.exit(await runPlugin(invocation.profile, invocation.args))
+      process.exit(await runPlugin(invocation.profile, invocation.args, options.packageManager))
       break
     }
     case 'dump-config': {

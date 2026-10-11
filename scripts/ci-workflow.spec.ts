@@ -1,9 +1,9 @@
+import { ciWorkerEnvironment, gatesForMode } from './run-gates.ts'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
-import { ciWorkerEnvironment, gatesForMode } from './run-gates.ts'
 
 function evaluateRunsOn(selector: unknown, context: Record<string, unknown>): unknown {
   if (typeof selector !== 'string') throw new TypeError('Runner selector must be a string')
@@ -15,108 +15,130 @@ const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{
 const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
-  it('builds coverage gates from the standard Windows fork workflow environment', () => {
-    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'windows-coverage')
-    if (!isRecord(job.env)) throw new TypeError('Windows coverage must define its environment')
-    const configured: Record<string, string> = {}
-    for (const key of ['DSH_COVERAGE_MAX_WORKERS', 'DSH_COVERAGE_PARTITIONS', 'DSH_GATE_CONCURRENCY']) {
-      const value: unknown = evaluateRunsOn(job.env[key], {
-        vars: { DSH_CI_FAILOVER_WINDOWS: 'github' },
-        github: { repository: 'qiudl/deepseek-harness', event: { pull_request: { user: { login: 'contributor' } } } },
-      })
-      if (typeof value !== 'string') throw new TypeError(`Invalid Windows coverage setting ${key}`)
-      configured[key] = value
+  it('keeps at most ten worker jobs active while runtime targets follow the SDK suite', () => {
+    const ci = loadWorkflow('.github/workflows/ci.yml')
+    const compatibility = workflowJob(ci, 'node-compat')
+    const runtime = workflowJob(ci, 'python-runtime')
+    if (!isRecord(ci.jobs) || !isRecord(compatibility.strategy) || !isRecord(runtime.with)) {
+      throw new TypeError('CI must define jobs, compatibility scheduling, and runtime inputs')
     }
-    const effective: Record<string, string> = {
-      ...configured,
-      ...ciWorkerEnvironment('ci-coverage', configured, 4),
-      npm_execpath: '/private/pnpm.cjs',
+    const compatibilityLimit = compatibility.strategy['max-parallel']
+    const targets = runtime.with.targets
+    if (typeof compatibilityLimit !== 'number' || typeof targets !== 'string') {
+      throw new TypeError('CI requires a numeric compatibility limit and explicit runtime targets')
     }
-    const previous = new Map(Object.keys(effective).map(key => [key, process.env[key]]))
-    try {
-      Object.assign(process.env, effective)
-      const gates = gatesForMode('ci-coverage')
-      expect(gates.map(gate => gate.id)).toEqual(['native-system', 'coverage', 'coverage-exempt-heavy'])
-      for (const id of ['coverage', 'coverage-exempt-heavy']) {
-        const gate = gates.find(gate => gate.id === id)
-        expect(gate?.args).toContain('--maxWorkers=1')
-        expect(gate?.needs).toEqual(['native-system'])
-      }
-      expect(gates.find(gate => gate.id === 'coverage')?.args).toContain('--coverage')
-      expect(effective.DSH_COVERAGE_PARTITIONS).toBe('')
-    } finally {
-      for (const [key, value] of previous) {
-        if (value === undefined) Reflect.deleteProperty(process.env, key)
-        else process.env[key] = value
+    expect(Number.isInteger(compatibilityLimit)).toBe(true)
+    expect(compatibilityLimit).toBeGreaterThan(0)
+    expect(compatibility.strategy).toMatchObject({
+      'fail-fast': false,
+      matrix: { include: [{ node: '22.19' }, { node: '24.9' }, { node: 26 }] },
+    })
+    expect(workflowJob(ci, 'all-checks-passed').needs).toContain('node-compat')
+    const ordinaryJobs = Object.entries(ci.jobs)
+      .filter(([name]) => !['node-compat', 'python-runtime', 'all-checks-passed'].includes(name))
+    for (const [name, job] of ordinaryJobs) {
+      if (!isRecord(job)) throw new TypeError(`${name} must define a job`)
+      expect(job).not.toHaveProperty('strategy')
+      expect(job).not.toHaveProperty('uses')
+    }
+    expect(ordinaryJobs.map(([name]) => name)).toContain('python-sdk')
+    expect(runtime.needs).toBe('python-sdk')
+    expect(runtime.strategy).toBeUndefined()
+    expect(runtime.with).toMatchObject({ targets: 'node24-linux-x64,node24-win-x64' })
+    expect(runtime.uses).toBe('./.github/workflows/build-exe-for-python-sdk.yml')
+
+    const builder = loadWorkflow('.github/workflows/build-exe-for-python-sdk.yml')
+    if (!isRecord(builder.jobs)) throw new TypeError('Python runtime builder must define jobs')
+    expect(Object.keys(builder.jobs).sort()).toEqual(['build', 'plan', 'sdk-wheel'])
+    const plan = workflowJob(builder, 'plan')
+    const wheel = workflowJob(builder, 'sdk-wheel')
+    const build = workflowJob(builder, 'build')
+    expect(plan.needs).toBeUndefined()
+    expect(plan.strategy).toBeUndefined()
+    expect(plan.uses).toBeUndefined()
+    expect(wheel.needs).toBe('plan')
+    expect(wheel.strategy).toBeUndefined()
+    expect(wheel.uses).toBeUndefined()
+    expect(build.needs).toEqual(['plan', 'sdk-wheel'])
+    expect(build.uses).toBeUndefined()
+    if (!isRecord(build.strategy)) throw new TypeError('Python runtime build must define its target matrix')
+    expect(build.strategy.matrix).toEqual({ include: '${{ fromJSON(needs.plan.outputs.matrix) }}' })
+
+    const beforeSdk = ordinaryJobs.length + compatibilityLimit
+    const afterSdk = ordinaryJobs.length - 1 + compatibilityLimit + Math.max(1, targets.split(',').length)
+    expect(beforeSdk).toBeLessThanOrEqual(10)
+    expect(afterSdk).toBeLessThanOrEqual(10)
+  })
+
+  it('retains aggregate diagnostics in required builds and protected publication', () => {
+    const ci = loadWorkflow('.github/workflows/ci.yml')
+    for (const [name, command] of [
+      ['node-24-consumers', 'pnpm run check:ci:consumers'],
+      ['windows-build', 'pnpm run check:ci:windows-blocking'],
+    ] as const) {
+      const job = workflowJob(ci, name)
+      expect(job.steps).toContainEqual(expect.objectContaining({ run: command }))
+    }
+    for (const [file, command] of [
+      ['release-publish.yml', 'pnpm run build:official'],
+      ['release-vendor-publish.yml', 'pnpm run build:lib:host'],
+    ] as const) {
+      expect(workflowJob(loadWorkflow('.github/workflows/' + file), 'pack').steps)
+        .toContainEqual(expect.objectContaining({ name: 'Build', run: command }))
+    }
+    const scripts = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
+    expect(scripts.scripts['build:lib:host']).toContain('tsc -b tsconfig.host.json')
+    expect(scripts.scripts['build:lib:client']).toContain('tsc -b tsconfig.client.json')
+    expect(scripts.scripts.typecheck).toBe('npm run build:lib:host && npm run typecheck:contracts-ready')
+  })
+
+  it('selects artifact builds only for PR release and API rehearsals', () => {
+    const official = "${{ github.event_name == 'pull_request' && 'pnpm run build --artifacts-only --profile official' || 'pnpm run build:official' }}"
+    const vendor = "${{ github.event_name == 'pull_request' && 'pnpm exec tsx scripts/compile-referenced-projects.ts host-libraries' || 'pnpm run build:lib:host' }}"
+    for (const [file, jobName, expected] of [
+      ['release.yml', 'pack', official],
+      ['release-vendor.yml', 'pack', vendor],
+      ['e2e.yml', 'e2e', official],
+    ] as const) {
+      const job = workflowJob(loadWorkflow('.github/workflows/' + file), jobName)
+      if (!Array.isArray(job.steps)) throw new TypeError(`${jobName} must define steps`)
+      const step = job.steps.filter(isRecord).find(candidate => typeof candidate.run === 'string'
+        && (candidate.run.includes('--artifacts-only') || candidate.run.includes('host-libraries')))
+      expect(step?.run).toBe(expected)
+      for (const event of ['pull_request', 'push', 'workflow_dispatch']) {
+        const expression = expected.slice('${{ '.length, -' }}'.length)
+        const selected: unknown = runInNewContext(expression, { github: { event_name: event } }, { timeout: 1000 })
+        expect(selected).toBe(event === 'pull_request'
+          ? file === 'release-vendor.yml'
+            ? 'pnpm exec tsx scripts/compile-referenced-projects.ts host-libraries'
+            : 'pnpm run build --artifacts-only --profile official'
+          : file === 'release-vendor.yml' ? 'pnpm run build:lib:host' : 'pnpm run build:official')
       }
     }
   })
 
-  it.each(['windows-build', 'windows-coverage', 'windows-native-tests'])(
-    '%s honors the Slark fork Windows GitHub runner choice', (name) => {
-      const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), name)
-      const evaluate = (repository: string, mode: string, author = 'contributor') => evaluateRunsOn(job['runs-on'], {
-        vars: { DSH_CI_FAILOVER_WINDOWS: mode },
-        github: { repository, event: { pull_request: { user: { login: author } } } },
-        fromJSON: (value: string) => {
-          const parsed: unknown = JSON.parse(value)
-          return parsed
-        },
-      })
-      expect(evaluate('qiudl/deepseek-harness', 'github')).toBe('windows-2025')
-      expect(evaluate('qiudl/deepseek-harness', 'github', 'dependabot[bot]')).toBe('windows-2025')
-      for (const repository of ['deepseek-ai/deepseek-harness', 'another/fork']) {
-        expect(evaluate(repository, 'github')).toBe('dsh-windows-2025-16core')
+  it('selects PR artifact compilation inside the Python executable builder', () => {
+    const job = workflowJob(loadWorkflow('.github/workflows/build-exe-for-python-sdk.yml'), 'build')
+    if (!Array.isArray(job.steps)) throw new TypeError('Python runtime builder must define steps')
+    const steps = job.steps.filter(isRecord)
+    const execute = steps.find(step => step.name === 'Build single-exe')
+    expect(steps.some(step => step.run === 'pnpm run build --artifacts-only')).toBe(false)
+    expect(execute).toMatchObject({
+      env: { DSH_BUILD_CLIENT_PROFILE: 'official' },
+    })
+    if (typeof execute?.run !== 'string') throw new TypeError('Python executable builder must define a command')
+    const expression = [...execute.run.matchAll(/\$\{\{ ([^{}]+) \}\}/g)]
+      .map(match => match[1]).find(value => value?.startsWith('inputs.ci'))
+    expect(expression).toBe("inputs.ci && github.event_name == 'pull_request' && '--artifacts-only' || ''")
+    if (expression === undefined) throw new TypeError('Python executable builder must select its build mode')
+    for (const ci of [false, true]) {
+      for (const event of ['pull_request', 'push', 'workflow_dispatch']) {
+        const context = { inputs: { ci }, github: { event_name: event } }
+        const selected: unknown = runInNewContext(expression, context, { timeout: 1000 })
+        expect(selected).toBe(ci && event === 'pull_request' ? '--artifacts-only' : '')
       }
-      expect(evaluate('qiudl/deepseek-harness', '')).toBe('dsh-windows-2025-16core')
-      expect(evaluate('qiudl/deepseek-harness', 'selfhosted')).toEqual(['self-hosted', 'dsh-win-ci', 'windows'])
-      expect(evaluate('qiudl/deepseek-harness', 'selfhosted', 'dependabot[bot]')).toBe('dsh-windows-2025-16core')
-      expect(evaluate('qiudl/deepseek-harness', 'blacksmith')).toBe(
-        name === 'windows-native-tests' ? 'blacksmith-2vcpu-windows-2025' : 'blacksmith-16vcpu-windows-2025',
-      )
-    },
-  )
-
-  it('bounds only explicitly selected standard Windows fork coverage', () => {
-    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'windows-coverage')
-    if (!isRecord(job.env)) throw new TypeError('Windows coverage must define its execution budgets')
-    const environment = job.env
-    const budgets = (repository: string, mode: string, author = 'contributor') => Object.fromEntries(
-      ['DSH_COVERAGE_MAX_WORKERS', 'DSH_COVERAGE_PARTITIONS', 'DSH_GATE_CONCURRENCY'].map(key => [key,
-        evaluateRunsOn(environment[key], {
-          vars: { DSH_CI_FAILOVER_WINDOWS: mode },
-          github: { repository, event: { pull_request: { user: { login: author } } } },
-        }),
-      ]),
-    )
-    const standard = { DSH_COVERAGE_MAX_WORKERS: '2', DSH_COVERAGE_PARTITIONS: '', DSH_GATE_CONCURRENCY: '2' }
-    const shared = { DSH_COVERAGE_MAX_WORKERS: '6', DSH_COVERAGE_PARTITIONS: '4', DSH_GATE_CONCURRENCY: '3' }
-    const defaults = { DSH_COVERAGE_MAX_WORKERS: '', DSH_COVERAGE_PARTITIONS: '', DSH_GATE_CONCURRENCY: '' }
-    expect(budgets('qiudl/deepseek-harness', 'github')).toEqual(standard)
-    expect(budgets('qiudl/deepseek-harness', 'github', 'dependabot[bot]')).toEqual(standard)
-    expect(budgets('qiudl/deepseek-harness', 'selfhosted')).toEqual(shared)
-    expect(budgets('qiudl/deepseek-harness', 'selfhosted', 'dependabot[bot]')).toEqual(defaults)
-    for (const repository of ['deepseek-ai/deepseek-harness', 'another/fork']) {
-      expect(budgets(repository, 'github')).toEqual(defaults)
     }
-    expect(budgets('qiudl/deepseek-harness', '')).toEqual(defaults)
-    expect(budgets('qiudl/deepseek-harness', 'blacksmith')).toEqual(defaults)
-    expect(job.env.DSH_COVERAGE_TEST_TIMEOUT_MS).toBe('90000')
   })
-
-  it.each(['node-24', 'node-24-coverage', 'node-24-consumers'])(
-    '%s uses available GitHub runners for the Slark fork without changing upstream defaults', (name) => {
-      const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), name)
-      const evaluate = (repository: string, mode: string) => evaluateRunsOn(job['runs-on'], {
-        vars: { DSH_CI_FAILOVER_LINUX: mode },
-        github: { repository },
-      })
-      expect(evaluate('qiudl/deepseek-harness', 'github')).toBe('ubuntu-24.04')
-      expect(evaluate('deepseek-ai/deepseek-harness', 'github')).toBe('dsh-ubuntu-24-04-16core')
-      expect(evaluate('another/fork', 'github')).toBe('dsh-ubuntu-24-04-16core')
-      expect(evaluate('qiudl/deepseek-harness', '')).toBe('dsh-ubuntu-24-04-16core')
-    },
-  )
 
   it('prepares confinement before Node compatibility smokes', () => {
     const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-compat')
@@ -166,6 +188,34 @@ describe('CI workflow', () => {
     expect(wine.steps).toContainEqual(expect.objectContaining({ name: 'Shut down wineserver', if: 'always()' }))
   })
 
+  it.each([
+    ['node-24-coverage', 'Linux', 'LINUX', 'pnpm run check:ci:coverage'],
+    ['windows-coverage', 'Windows', 'WINDOWS', 'pnpm run check:ci:coverage'],
+  ])('reuses %s coverage timings only within its platform and runner pool', (jobName, platform, variable, command) => {
+    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), jobName)
+    if (!Array.isArray(job.steps)) throw new TypeError(`${jobName} must define steps`)
+    const steps = job.steps.filter(isRecord)
+    const checkout = steps.findIndex(step => step.uses === 'actions/checkout@v7.0.1')
+    const restore = steps.findIndex(step => step.name === 'Restore coverage duration history')
+    const coverage = steps.findIndex(step => step.run === command)
+    const save = steps.findIndex(step => step.name === 'Save coverage duration history')
+    const prefix = `coverage-times-${platform}-\${{ runner.environment }}-\${{ vars.DSH_CI_FAILOVER_${variable} || 'enterprise' }}-`
+    const key = prefix + '${{ github.run_id }}-${{ github.run_attempt }}'
+    expect(checkout).toBeGreaterThanOrEqual(0)
+    expect(restore).toBeGreaterThan(checkout)
+    expect(coverage).toBeGreaterThan(restore)
+    expect(save).toBeGreaterThan(coverage)
+    expect(steps[restore]).toMatchObject({
+      uses: 'actions/cache/restore@v6.1.0',
+      with: { path: '.coverage-times.json', key, 'restore-keys': `${prefix}\n` },
+    })
+    expect(steps[save]).toMatchObject({
+      uses: 'actions/cache/save@v6.1.0',
+      if: '${{ !cancelled() }}',
+      with: { path: '.coverage-times.json', key },
+    })
+  })
+
   it('isolates every pnpm action setup destination per runner', () => {
     const files = ['.github/workflows/ci.yml', '.github/workflows/ci-master.yml']
     const setups: Array<{ jobName: string; step: unknown }> = []
@@ -212,7 +262,7 @@ describe('CI workflow', () => {
       if (jobName === 'node-24-consumers') {
         const browserCache: unknown = job.steps.find(step => isRecord(step) && isRecord(step.with)
           && step.with.path === '${{ env.PLAYWRIGHT_BROWSERS_PATH }}')
-        expect(browserCache).toMatchObject({ uses: 'actions/cache/restore@v4' })
+        expect(browserCache).toMatchObject({ uses: 'actions/cache/restore@v6.1.0' })
       }
       const store: unknown = job.steps.find(step => isRecord(step) && step.name === 'Configure pnpm store path')
       expect(store).toMatchObject({
@@ -335,10 +385,7 @@ describe('CI workflow', () => {
     }
 
     expect(windowsCoverage.name).toBe('windows node 24 / coverage')
-    expect(evaluateRunsOn(isRecord(windowsCoverage.env) ? windowsCoverage.env.DSH_COVERAGE_PARTITIONS : undefined, {
-      vars: { DSH_CI_FAILOVER_WINDOWS: 'selfhosted' },
-      github: { repository: 'qiudl/deepseek-harness', event: { pull_request: { user: { login: 'contributor' } } } },
-    })).toBe('4')
+    expect(windowsCoverage.env).toMatchObject({ DSH_COVERAGE_PARTITIONS: "${{ vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '4' || '' }}" })
     const coverageSteps = windowsCoverage.steps as unknown[]
     const coverageCommands = coverageSteps.filter((step): step is Record<string, unknown> & { run: string } => (
       isRecord(step) && typeof step.run === 'string'
@@ -364,32 +411,6 @@ describe('CI workflow', () => {
     expect(nativeTestCommand).toContain('--testTimeout 90000')
     expect(nativeTestCommand).toContain('tool-pwsh/tests/loader.spec.ts')
     expect(nativeTestCommand).toContain('workflow-ptc.spec.ts')
-
-    const aclFixtures = nativeTestCommands.find(step => step.name === 'Run Windows ACL fixture regressions')
-    expect(aclFixtures?.shell).toBe('pwsh')
-    expect(aclFixtures?.run).toContain('packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts')
-    expect(aclFixtures?.run).toContain('packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts')
-    const aclRun = aclFixtures?.run
-    if (typeof aclRun !== 'string') throw new TypeError('Windows ACL fixture command is required')
-    const filter = aclRun.match(/-t '([^']+)'/)?.[1]
-    if (!filter) throw new TypeError('Windows ACL fixture command must name its regression filter')
-    expect(aclRun).toContain(`$_.fullName -match '${filter}'`)
-    const pattern = new RegExp(filter)
-    const selected = [
-      'packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts',
-      'packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts',
-    ].flatMap(file => [...readFileSync(resolve(root, file), 'utf8').matchAll(/\bit\('([^']+)'/g)]
-      .flatMap(match => match[1] !== undefined && pattern.test(match[1]) ? [match[1]] : []))
-    expect(selected.sort()).toEqual([
-      'a FullControl open inside a granted root still works for files (the deny inherits to containers only)',
-      'grants full control for a Modify-only DACL without changing the owner',
-      'repairs a directory whose full-control ACE only applies to children',
-    ])
-    expect(aclFixtures?.run).toContain('--reporter=json --outputFile=$reportPath')
-    expect(aclFixtures?.run).toContain('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }')
-    expect(aclFixtures?.run).toContain('$targets.Count -ne 3')
-    expect(aclFixtures?.run).toContain("$_.status -ne 'passed'")
-    expect(aclFixtures?.['continue-on-error']).not.toBe(true)
 
     expect(workflow.jobs['windows-observational']).toBeUndefined()
     expect(windowsBuild['continue-on-error']).not.toBe(true)
@@ -540,6 +561,24 @@ describe('CI workflow', () => {
     expect(observational?.env).toMatchObject({ DSH_GATE_FAIL_FAST: '' })
   })
 
+  it('runs the darwin unit parity inventory at the coverage lanes\' test budget', () => {
+    const coverage = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-24-coverage')
+    if (!isRecord(coverage.env) || typeof coverage.env.DSH_COVERAGE_TEST_TIMEOUT_MS !== 'string') {
+      throw new TypeError('node-24-coverage must grant DSH_COVERAGE_TEST_TIMEOUT_MS')
+    }
+    const unitDarwin = workflowJob(loadWorkflow('.github/workflows/sandbox.yml'), 'unit-darwin')
+    if (!Array.isArray(unitDarwin.steps)) throw new TypeError('unit-darwin job must define steps')
+    const unit = unitDarwin.steps.filter(isRecord).find(step => step.name === 'Unit tests (darwin parity)')
+    // The whole unit inventory on a shared macos-latest runner pays the same
+    // scheduling delay the coverage lanes absorb; the ci-unit aggregate is the
+    // `pnpm run test` path that consumes the variable, and the value is the
+    // coverage lane's so the two budget classes cannot drift apart.
+    expect(unit).toMatchObject({
+      run: 'pnpm run check:ci:unit',
+      env: { DSH_COVERAGE_TEST_TIMEOUT_MS: coverage.env.DSH_COVERAGE_TEST_TIMEOUT_MS },
+    })
+  })
+
   it('gates standalone keyless blacksmith jobs and benchmark tiers on the failover variables', () => {
     const expectedFilenames = workflowJob(loadWorkflow('.github/workflows/expected-filenames.yml'), 'expected-filenames')
     const sandbox = workflowJob(loadWorkflow('.github/workflows/sandbox.yml'), 'sandbox-e2e')
@@ -585,7 +624,7 @@ describe('CI workflow', () => {
   it('always restores the hosted benchmark pnpm cache', () => {
     const benchmark = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-24-bench')
     if (!Array.isArray(benchmark.steps)) throw new TypeError('benchmark job must define steps')
-    const caches = benchmark.steps.filter(step => isRecord(step) && step.uses === 'actions/cache/restore@v4')
+    const caches = benchmark.steps.filter(step => isRecord(step) && step.uses === 'actions/cache/restore@v6.1.0')
 
     expect(caches).toHaveLength(1)
     expect(caches[0]).not.toHaveProperty('if')
@@ -597,15 +636,37 @@ describe('CI workflow', () => {
     })
   })
 
-  it('bounds the complete benchmark job to fifteen minutes', () => {
+  it('bounds the complete benchmark job to twenty minutes', () => {
     const benchmark = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-24-bench')
 
-    expect(benchmark['timeout-minutes']).toBe(15)
+    expect(benchmark['timeout-minutes']).toBe(20)
     expect(benchmark.steps).toContainEqual({
       name: 'Run performance benchmarks',
       env: { DSH_GATE_VERBOSE: '1' },
       run: 'pnpm run check:ci:bench',
     })
+  })
+
+  it('publishes the scaled benchmark report even when a budget fails', () => {
+    const benchmark = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-24-bench')
+    if (!Array.isArray(benchmark.steps)) throw new TypeError('benchmark job must define steps')
+
+    expect(benchmark.steps).toContainEqual({
+      name: 'Upload scaled benchmark report',
+      if: '${{ !cancelled() }}',
+      uses: 'actions/upload-artifact@v7.0.1',
+      with: {
+        name: 'benchmark-report',
+        path: 'benchmarks/.dsh-report/',
+        'include-hidden-files': true,
+        'if-no-files-found': 'warn',
+        'retention-days': 7,
+      },
+    })
+
+    const uploadIndex = benchmark.steps.findIndex(step => isRecord(step) && step.name === 'Upload scaled benchmark report')
+    const benchmarkIndex = benchmark.steps.findIndex(step => isRecord(step) && step.name === 'Run performance benchmarks')
+    expect(uploadIndex).toBeGreaterThan(benchmarkIndex)
   })
 
   it('gives the Wine Host TypeScript compile the repository heap budget', () => {
@@ -655,6 +716,7 @@ describe('CI workflow', () => {
     const NOT_PUSH_REACHABLE = new Set([
       "github.event_name == 'workflow_dispatch' && inputs.suite == 'larger-runner-benchmark'",
       "github.event_name == 'workflow_dispatch' && inputs.suite == 'consolidated-runner-benchmark'",
+      "github.event_name == 'workflow_dispatch' && inputs.suite == 'ssh-helper'",
     ])
     const pushReachable = Object.entries(workflow.jobs)
       .filter(([, job]) => {
@@ -699,7 +761,7 @@ describe('CI workflow', () => {
       // Removing this injection would send every pnpm call in the lane (setup,
       // store-path probe, install, and the gate) back to the root partition's
       // /tmp; rationale in
-      // .agents/notes/implemented/process/2026-08-28-ci-node-compile-cache-data-disk.md.
+      // .github/workflows/ci.yml.
       expect(redirectStepIndex, `${jobKey} must inject NODE_COMPILE_CACHE into GITHUB_ENV`).toBeGreaterThan(-1)
       const pnpmSetupIndex = job.steps.findIndex((step): step is Record<string, unknown> & { uses: string } => (
         isRecord(step) && typeof step.uses === 'string' && step.uses.includes('pnpm/action-setup')
@@ -740,11 +802,119 @@ describe('CI workflow', () => {
     expect(aggregate.needs).toContain('python-runtime')
   })
 
+  it('builds SSH executables only for explicit manual or release requests', () => {
+    const ci = loadWorkflow('.github/workflows/ci.yml')
+    if (!isRecord(ci.jobs)) throw new Error('PR CI must define jobs')
+    expect(Object.values(ci.jobs)).not.toContainEqual(expect.objectContaining({ uses: './.github/workflows/build-exe-for-ssh-helper.yml' }))
+    expect(workflowJob(ci, 'all-checks-passed').needs).not.toContain('ssh-helper')
+    const master = workflowJob(loadWorkflow('.github/workflows/ci-master.yml'), 'ssh-helper')
+    if (typeof master.if !== 'string') throw new Error('SSH manual caller must define its trigger condition')
+    for (const [event, suite, expected] of [
+      ['push', 'ssh-helper', false], ['pull_request', 'ssh-helper', false],
+      ['workflow_dispatch', 'larger-runner-benchmark', false], ['workflow_dispatch', 'ssh-helper', true],
+    ] as const) {
+      expect(runInNewContext(master.if, { github: { event_name: event, ref: 'refs/heads/master' }, inputs: { suite } }, { timeout: 1000 })).toBe(expected)
+    }
+    expect(master.with).toEqual({ targets: 'node24-linux-x64,node24-linux-arm64,node24-macos-arm64,node24-macos-x64' })
+    const workflow = loadWorkflow('.github/workflows/build-exe-for-ssh-helper.yml')
+    if (!isRecord(workflow.on)) throw new Error('SSH builder must define triggers')
+    expect(Object.keys(workflow.on).sort()).toEqual(['workflow_call', 'workflow_dispatch'])
+  })
+
+  it('requires SSH helper acceptance before uploading artifacts or publishing', () => {
+    const workflow = loadWorkflow('.github/workflows/build-exe-for-ssh-helper.yml')
+    const build = workflowJob(workflow, 'build')
+    if (!Array.isArray(build.steps)) throw new Error('SSH build must define its verification steps')
+    const steps = build.steps.filter(isRecord)
+    const artifact = steps.findIndex(step => String(step.run).includes('scripts/verify-ssh-helper-artifact.ts'))
+    const transport = steps.findIndex(step => String(step.run).includes('scripts/verify-ssh-helper-ssh.ts'))
+    const landlock = steps.findIndex(step => String(step.run).includes('--backend=landlock-run'))
+    const upload = steps.findIndex(step => String(step.uses).startsWith('actions/upload-artifact@'))
+    expect(artifact).toBeGreaterThan(-1)
+    expect(landlock).toBeGreaterThan(artifact)
+    expect(transport).toBeGreaterThan(artifact)
+    expect(upload).toBeGreaterThan(transport)
+    for (const index of [artifact, transport, landlock, upload]) expect(steps[index]).not.toHaveProperty('continue-on-error', true)
+    const publish = loadWorkflow('.github/workflows/publish-ssh-helper.yml')
+    expect(publish.permissions).toEqual({ contents: 'read' })
+    expect(workflowJob(publish, 'build')).toMatchObject({ needs: 'validate', with: { release: true } })
+    const verify = workflowJob(publish, 'verify')
+    expect(verify.needs).toEqual(['validate', 'build'])
+    expect(verify).not.toHaveProperty('if')
+    expect(verify).not.toHaveProperty('permissions')
+    if (!Array.isArray(verify.steps)) throw new Error('Release verification must define steps')
+    const verification = verify.steps.findIndex(step => isRecord(step) && String(step.run).includes('scripts/ssh-helper/release.ts'))
+    const checksums = verify.steps.findIndex(step => isRecord(step) && String(step.uses).startsWith('actions/upload-artifact@'))
+    expect(verification).toBeGreaterThan(-1)
+    expect(checksums).toBeGreaterThan(verification)
+    expect(verify.steps[verification]).not.toHaveProperty('continue-on-error', true)
+    const publication = workflowJob(publish, 'publish')
+    expect(publication).toMatchObject({ if: 'inputs.publish', needs: ['validate', 'verify'], permissions: { contents: 'write' } })
+    for (const requested of [false, true]) {
+      expect(runInNewContext(String(publication.if), { inputs: { publish: requested } }, { timeout: 1000 })).toBe(requested)
+    }
+  })
+
+  it('validates any ref by default but refuses publication without the matching SSH release tag', () => {
+    const workflow = loadWorkflow('.github/workflows/publish-ssh-helper.yml')
+    if (!isRecord(workflow.on)) throw new Error('SSH release must define triggers')
+    expect(Object.keys(workflow.on)).toEqual(['workflow_dispatch'])
+    expect(workflowEvent(workflow, 'workflow_dispatch').inputs).toMatchObject({ publish: { type: 'boolean', default: false } })
+    const validate = workflowJob(workflow, 'validate')
+    expect(validate.steps).toContainEqual(expect.objectContaining({ id: 'source', env: { PUBLISH: '${{ inputs.publish }}' } }))
+    const source = nodeStepSource(validate, 'source')
+    const evaluate = (publish: boolean, type: string, name: string): string => {
+      let output = ''
+      runInNewContext(source, {
+        process: { env: { PUBLISH: String(publish), GITHUB_REF_TYPE: type, GITHUB_REF_NAME: name, GITHUB_OUTPUT: 'output' } },
+        readFileSync: () => JSON.stringify({ version: '1.2.3' }),
+        execFileSync: () => `${'a'.repeat(40)}\n`,
+        appendFileSync: (_path: string, text: string) => { output += text },
+      }, { timeout: 1000 })
+      return output
+    }
+    const expected = `version=1.2.3\ncommit=${'a'.repeat(40)}\n`
+    expect(evaluate(false, 'branch', 'worktree/helper')).toBe(expected)
+    expect(evaluate(false, 'tag', 'arbitrary-tag')).toBe(expected)
+    expect(evaluate(true, 'tag', 'dsh-v1.2.3')).toBe(expected)
+    for (const [type, name] of [['branch', 'dsh-v1.2.3'], ['tag', 'dsh-v1.2.2'], ['tag', 'python-v1.2.3']] as const) {
+      expect(() => evaluate(true, type, name)).toThrow('Publication requires the matching dsh-v<version> tag')
+    }
+  })
+
+  it('validates the SSH native matrix before allocating runners', () => {
+    const plan = workflowJob(loadWorkflow('.github/workflows/build-exe-for-ssh-helper.yml'), 'plan')
+    const source = nodeStepSource(plan, 'targets')
+    const evaluate = (requested: string): unknown => {
+      let output = ''
+      runInNewContext(source, {
+        process: { env: { REQUESTED_TARGETS: requested, GITHUB_OUTPUT: 'output' } },
+        appendFileSync: (_path: string, text: string) => { output += text },
+      }, { timeout: 1000 })
+      return JSON.parse(output.slice('matrix='.length))
+    }
+    expect(evaluate('')).toHaveLength(4)
+    expect(evaluate('node24-linux-arm64')).toEqual([{ target: 'node24-linux-arm64', runner: 'ubuntu-24.04-arm' }])
+    for (const invalid of ['node24-linux-arm64,node24-linux-arm64', 'node24-win-x64', 'node24-linux-x64,', ' ']) {
+      expect(() => evaluate(invalid)).toThrow('Invalid or duplicate')
+    }
+  })
+
   it('keeps every Vitest project process-isolated on native Windows', () => {
     const config = readFileSync(resolve(root, 'vitest.config.ts'), 'utf8')
 
     expect(config).not.toContain("pool: process.platform === 'win32' ? 'threads' : 'forks'")
     expect(config.match(/pool: 'forks'/g)).toHaveLength(2)
+  })
+
+  it('applies the lane test budget inside every Vitest project', () => {
+    // Each inline project spreads coverageTestTimeoutOptions, the only route
+    // for DSH_COVERAGE_TEST_TIMEOUT_MS into projects; the behavior itself is
+    // pinned by scripts/lane-test-budget.spec.ts.
+    const config = readFileSync(resolve(root, 'vitest.config.ts'), 'utf8')
+
+    expect(config).toContain('const laneTestBudget = coverageTestTimeoutOptions(process.env[COVERAGE_TEST_TIMEOUT_ENV])')
+    expect(config.match(/^ {10}\.\.\.laneTestBudget,$/gm)).toHaveLength(2)
   })
 })
 
@@ -793,13 +963,12 @@ describe('Runtime and LLM e2e Blacksmith routing', () => {
 })
 
 describe('bubblewrap preparation script', () => {
-  it('pins bubblewrap to a recorded Launchpad build with a checksum-gated official fallback', () => {
+  it('pins and verifies the same bubblewrap payload across both download sources', () => {
     const script = readFileSync(resolve(root, 'scripts/prepare-ci-bubblewrap.sh'), 'utf8')
-    const url = /^readonly BUBBLEWRAP_URL="([^"]+)"$/mu.exec(script)?.[1]
-
-    expect(url).toBe('https://launchpad.net/~ubuntu-security-proposed/+archive/ubuntu/ppa/+build/33605876/+files/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb')
-    expect(script).toContain('readonly BUBBLEWRAP_ARCHIVE_URL="https://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"')
-    expect(script).toContain("readonly BUBBLEWRAP_SHA256='2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094'")
+    expect(script).toContain('https://launchpad.net/~ubuntu-security-proposed/+archive/ubuntu/ppa/+build/33605876/+files/bubblewrap_')
+    expect(script).toContain('readonly BUBBLEWRAP_SHA256=')
+    expect(script).toContain('"$BUBBLEWRAP_URL"')
+    expect(script).toContain('"$BUBBLEWRAP_ARCHIVE_URL"')
     expect(script.indexOf('sha256sum --check --status')).toBeLessThan(script.indexOf('dpkg-deb --extract'))
   })
 })
@@ -970,7 +1139,7 @@ describe('Python release workflows', () => {
     expect(manylinuxAddon).toMatchObject({ if: "runner.os == 'Linux'" })
     expect(JSON.stringify(manylinuxAddon)).toContain('manylinux_2_28_x86_64')
     expect(JSON.stringify(manylinuxAddon)).toContain('manylinux_2_28_aarch64')
-    expect(JSON.stringify(manylinuxAddon)).toContain('npm_config_build_from_source=true pnpm run install')
+    expect(JSON.stringify(manylinuxAddon)).toContain('npm_config_build_from_source=true pnpm --config.verifyDepsBeforeRun=false run install')
     expect(JSON.stringify(manylinuxAddon)).toContain('pnpm_setup_root')
     expect(JSON.stringify(manylinuxAddon)).toContain('$pnpm_setup_root:$pnpm_setup_root:ro')
     expect(JSON.stringify(manylinuxAddon)).toContain('node-pty-glibc-versions.txt')
@@ -1160,20 +1329,6 @@ describe('Weighted approval workflow', () => {
 })
 
 describe('Issue lifecycle workflow', () => {
-  it.each(['qiudl/deepseek-harness', 'deepseek-harness/deepseek-harness', 'deepseek-ai/deepseek-harness'])(
-    'limits the organization Project exception to the Slark fork (%s)', (repository) => {
-      const github = {
-        repository, event_name: 'pull_request_review',
-        event: { review: { state: 'changes_requested' }, action: 'submitted', changes: {} },
-      }
-      for (const [file, job] of [['issue-policy.yml', 'policy'], ['issue-lifecycle.yml', 'lifecycle']] as const) {
-        const condition = workflowJob(loadWorkflow('.github/workflows/' + file), job).if
-        expect(condition).toBeTypeOf('string')
-        expect(runInNewContext(String(condition), { github }, { timeout: 1000 }))
-          .toBe(repository !== 'qiudl/deepseek-harness')
-      }
-    },
-  )
   it('allocates lifecycle runners only for events that can change the board', () => {
     const lifecycle = loadWorkflow('.github/workflows/issue-lifecycle.yml')
     const policy = loadWorkflow('.github/workflows/issue-policy.yml')
@@ -1250,6 +1405,37 @@ describe('Issue lifecycle workflow', () => {
 })
 
 describe('npm release workflows', () => {
+  it('passes the optional vendor channel as a quoted argument while preserving default publication', () => {
+    const workflow = loadWorkflow('.github/workflows/release-vendor-publish.yml')
+    expect(workflow.on).toMatchObject({
+      workflow_dispatch: {
+        inputs: {
+          'dist-tag': {
+            required: false,
+            type: 'string',
+            default: '',
+          },
+        },
+      },
+    })
+    const publish = workflowJob(workflow, 'publish')
+    expect(publish.steps).toContainEqual({
+      name: 'Publish tarballs',
+      env: {
+        NODE_AUTH_TOKEN: '${{ secrets.NPM_TOKEN }}',
+        RELEASE_DIST_TAG: '${{ inputs.dist-tag }}',
+      },
+      run: [
+        'args=()',
+        'if [[ -n "$RELEASE_DIST_TAG" ]]; then',
+        '  args+=(--dist-tag "$RELEASE_DIST_TAG")',
+        'fi',
+        'pnpm run release:publish --family vendor --from dist/npm-vendor "${args[@]}"',
+        '',
+      ].join('\n'),
+    })
+  })
+
   it('keeps publication dispatch-only and pack in the PR workflow', () => {
     // pack stays in the PR/master release workflows so a PR proves the set packs.
     for (const file of ['release.yml', 'release-vendor.yml']) {
@@ -1350,6 +1536,15 @@ function loadWorkflow(path: string): Record<string, unknown> {
   return workflow
 }
 
+function nodeStepSource(job: Record<string, unknown>, id: string): string {
+  if (!Array.isArray(job.steps)) throw new Error('Node workflow job must define steps')
+  const step: unknown = job.steps.find(value => isRecord(value) && value.id === id)
+  if (!isRecord(step) || typeof step.run !== 'string') throw new Error(`Missing Node workflow step: ${id}`)
+  const source = step.run.split("<<'JS'\n")[1]?.split('\nJS')[0]?.replace(/^import .*;\n/gm, '')
+  if (source === undefined) throw new Error(`Workflow step ${id} must contain an executable Node script`)
+  return source
+}
+
 function workflowEvent(workflow: Record<string, unknown>, event: string): Record<string, unknown> {
   if (!isRecord(workflow.on) || !isRecord(workflow.on[event])) {
     throw new TypeError(`workflow must define the ${event} event`)
@@ -1367,3 +1562,124 @@ function workflowJob(workflow: Record<string, unknown>, job: string): Record<str
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+
+it('builds coverage gates from the standard Windows fork workflow environment', () => {
+  const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'windows-coverage')
+  if (!isRecord(job.env)) throw new TypeError('Windows coverage must define its environment')
+  const configured: Record<string, string> = {}
+  for (const key of ['DSH_COVERAGE_MAX_WORKERS', 'DSH_COVERAGE_PARTITIONS', 'DSH_GATE_CONCURRENCY']) {
+    const value: unknown = evaluateRunsOn(job.env[key], {
+      vars: { DSH_CI_FAILOVER_WINDOWS: 'github' },
+      github: { repository: 'qiudl/deepseek-harness', event: { pull_request: { user: { login: 'contributor' } } } },
+    })
+    if (typeof value !== 'string') throw new TypeError(`Invalid Windows coverage setting ${key}`)
+    configured[key] = value
+  }
+  const effective: Record<string, string> = {
+    ...configured,
+    ...ciWorkerEnvironment('ci-coverage', configured, 4),
+    npm_execpath: '/private/pnpm.cjs',
+  }
+  const previous = new Map(Object.keys(effective).map(key => [key, process.env[key]]))
+  try {
+    Object.assign(process.env, effective)
+    const gates = gatesForMode('ci-coverage')
+    const electronPrerequisites = process.platform === 'win32' ? ['electron-install'] : []
+    expect(gates.map(gate => gate.id)).toEqual(['native-system', ...electronPrerequisites, 'coverage', 'coverage-exempt-heavy'])
+    for (const id of ['coverage', 'coverage-exempt-heavy']) {
+      const gate = gates.find(gate => gate.id === id)
+      expect(gate?.args).toContain('--maxWorkers=1')
+      expect(gate?.needs).toEqual(id === 'coverage'
+        ? ['native-system', ...electronPrerequisites]
+        : ['native-system'])
+    }
+    expect(gates.find(gate => gate.id === 'coverage')?.args).toContain('--coverage')
+    expect(effective.DSH_COVERAGE_PARTITIONS).toBe('')
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) Reflect.deleteProperty(process.env, key)
+      else process.env[key] = value
+    }
+  }
+})
+
+it.each(['windows-build', 'windows-coverage', 'windows-native-tests'])(
+  '%s honors the Slark fork Windows GitHub runner choice', (name) => {
+    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), name)
+    const evaluate = (repository: string, mode: string, author = 'contributor') => evaluateRunsOn(job['runs-on'], {
+      vars: { DSH_CI_FAILOVER_WINDOWS: mode },
+      github: { repository, event: { pull_request: { user: { login: author } } } },
+      fromJSON: (value: string) => {
+        const parsed: unknown = JSON.parse(value)
+        return parsed
+      },
+    })
+    expect(evaluate('qiudl/deepseek-harness', 'github')).toBe('windows-2025')
+    expect(evaluate('qiudl/deepseek-harness', 'github', 'dependabot[bot]')).toBe('windows-2025')
+    for (const repository of ['deepseek-ai/deepseek-harness', 'another/fork']) {
+      expect(evaluate(repository, 'github')).toBe('dsh-windows-2025-16core')
+    }
+    expect(evaluate('qiudl/deepseek-harness', '')).toBe('dsh-windows-2025-16core')
+    expect(evaluate('qiudl/deepseek-harness', 'selfhosted')).toEqual(['self-hosted', 'dsh-win-ci', 'windows'])
+    expect(evaluate('qiudl/deepseek-harness', 'selfhosted', 'dependabot[bot]')).toBe('dsh-windows-2025-16core')
+    expect(evaluate('qiudl/deepseek-harness', 'blacksmith')).toBe(
+      name === 'windows-native-tests' ? 'blacksmith-2vcpu-windows-2025' : 'blacksmith-16vcpu-windows-2025',
+    )
+  },
+)
+
+it('bounds only explicitly selected standard Windows fork coverage', () => {
+  const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'windows-coverage')
+  if (!isRecord(job.env)) throw new TypeError('Windows coverage must define its execution budgets')
+  const environment = job.env
+  const budgets = (repository: string, mode: string, author = 'contributor') => Object.fromEntries(
+    ['DSH_COVERAGE_MAX_WORKERS', 'DSH_COVERAGE_PARTITIONS', 'DSH_GATE_CONCURRENCY'].map(key => [key,
+      evaluateRunsOn(environment[key], {
+        vars: { DSH_CI_FAILOVER_WINDOWS: mode },
+        github: { repository, event: { pull_request: { user: { login: author } } } },
+      }),
+    ]),
+  )
+  const standard = { DSH_COVERAGE_MAX_WORKERS: '2', DSH_COVERAGE_PARTITIONS: '', DSH_GATE_CONCURRENCY: '2' }
+  const shared = { DSH_COVERAGE_MAX_WORKERS: '6', DSH_COVERAGE_PARTITIONS: '4', DSH_GATE_CONCURRENCY: '3' }
+  const defaults = { DSH_COVERAGE_MAX_WORKERS: '', DSH_COVERAGE_PARTITIONS: '', DSH_GATE_CONCURRENCY: '' }
+  expect(budgets('qiudl/deepseek-harness', 'github')).toEqual(standard)
+  expect(budgets('qiudl/deepseek-harness', 'github', 'dependabot[bot]')).toEqual(standard)
+  expect(budgets('qiudl/deepseek-harness', 'selfhosted')).toEqual(shared)
+  expect(budgets('qiudl/deepseek-harness', 'selfhosted', 'dependabot[bot]')).toEqual(defaults)
+  for (const repository of ['deepseek-ai/deepseek-harness', 'another/fork']) {
+    expect(budgets(repository, 'github')).toEqual(defaults)
+  }
+  expect(budgets('qiudl/deepseek-harness', '')).toEqual(defaults)
+  expect(budgets('qiudl/deepseek-harness', 'blacksmith')).toEqual(defaults)
+  expect(job.env.DSH_COVERAGE_TEST_TIMEOUT_MS).toBe('90000')
+})
+
+it.each(['node-24', 'node-24-coverage', 'node-24-consumers'])(
+  '%s uses available GitHub runners for the Slark fork without changing upstream defaults', (name) => {
+    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), name)
+    const evaluate = (repository: string, mode: string) => evaluateRunsOn(job['runs-on'], {
+      vars: { DSH_CI_FAILOVER_LINUX: mode },
+      github: { repository },
+    })
+    expect(evaluate('qiudl/deepseek-harness', 'github')).toBe('ubuntu-24.04')
+    expect(evaluate('deepseek-ai/deepseek-harness', 'github')).toBe('dsh-ubuntu-24-04-16core')
+    expect(evaluate('another/fork', 'github')).toBe('dsh-ubuntu-24-04-16core')
+    expect(evaluate('qiudl/deepseek-harness', '')).toBe('dsh-ubuntu-24-04-16core')
+  },
+)
+
+it.each(['qiudl/deepseek-harness', 'deepseek-harness/deepseek-harness', 'deepseek-ai/deepseek-harness'])(
+  'limits the organization Project exception to the Slark fork (%s)', (repository) => {
+    const github = {
+      repository, event_name: 'pull_request_review',
+      event: { review: { state: 'changes_requested' }, action: 'submitted', changes: {} },
+    }
+    for (const [file, job] of [['issue-policy.yml', 'policy'], ['issue-lifecycle.yml', 'lifecycle']] as const) {
+      const condition = workflowJob(loadWorkflow('.github/workflows/' + file), job).if
+      expect(condition).toBeTypeOf('string')
+      expect(runInNewContext(String(condition), { github }, { timeout: 1000 }))
+        .toBe(repository !== 'qiudl/deepseek-harness')
+    }
+  },
+)

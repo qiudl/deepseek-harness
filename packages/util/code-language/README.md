@@ -56,5 +56,3 @@ The table does not change the request prefix; a consumer may include its hint in
 None.
 
 </details>
-
-**Runtime invariant:** No companion is published. This utility owns no mutable runtime relationship.

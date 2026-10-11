@@ -2,7 +2,7 @@
 /** REQ-20260930-0004: built Web composer and task dock against an external Desktop bridge fixture. */
 import { join } from 'node:path'
 import { webcrypto } from 'node:crypto'
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { installAssembledBootEnv, mountAssembledApp } from './assembled-boot.ts'
 import { installRemoteCollaboration } from '../src/remote-collaboration.ts'
@@ -67,7 +67,7 @@ it.each(['click', 'enter'] as const)('root mode %s dispatches the frozen task an
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
-  fireEvent.click(start)
+  await act(async () => { fireEvent.click(start) })
   const input = await waitFor(() => {
     const element = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
     if (!element) throw Error('composer missing')
@@ -140,7 +140,7 @@ it('sends two scoped Agents from the built composer as one original message with
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
-  fireEvent.click(start)
+  await act(async () => { fireEvent.click(start) })
   const input = await waitFor(() => {
     const element = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
     if (!element) throw Error('composer missing')
@@ -225,7 +225,7 @@ it('shows the project space, retries an edited inline task, and renders its repl
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace new-session action missing')
-  fireEvent.click(start)
+  await act(async () => { fireEvent.click(start) })
   const input = await waitFor(() => {
     const element = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
     if (!element) throw Error('composer missing')
@@ -289,7 +289,7 @@ it('saves multiple Slark spaces in the built collaboration area and never invoke
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
-  fireEvent.click(start)
+  await act(async () => { fireEvent.click(start) })
   const launcher = await screen.findByTestId('slark-scope-toggle')
   fireEvent.click(launcher)
   let panel = await screen.findByRole('region', { name: 'Slark collaboration' }, { timeout: 10_000 })
@@ -368,7 +368,7 @@ it('asks a natural question in the built composer and accepts a plain clarificat
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
-  fireEvent.click(start)
+  await act(async () => { fireEvent.click(start) })
   const input = await waitFor(() => {
     const element = document.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
     if (!element) throw Error('composer missing')
@@ -432,7 +432,7 @@ it('reads original-root collaboration history from the built Trajectory tab with
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
   if (!start) throw Error('fixture Workspace action missing')
-  fireEvent.click(start)
+  await act(async () => { fireEvent.click(start) })
   await waitFor(() => { expect(remote.mock.log.calls('session/collaborationSources').length).toBeGreaterThan(0) })
   await screen.findByText('Check the recorded file operation', {}, { timeout: 10_000 })
   fireEvent.click(await screen.findByRole('tab', { name: 'Trajectory' }, { timeout: 10_000 }))
