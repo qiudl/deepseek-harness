@@ -30,6 +30,7 @@ const RESERVED_ENV = new Set([
   'DSH_PROFILE_DELIVERY_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
+  'DSH_PROFILE_PNPM_ENTRYPOINT',
   'DSH_SLARK_EMBEDDED',
 ])
 
@@ -49,6 +50,7 @@ export type ProfileListenerAttestor = (pid: number, origin: string) => Promise<v
 export interface DshWebProfileWorkerFactoryOptions {
   readonly nodeExecutablePath: string
   readonly dshEntrypointPath: string
+  readonly pnpmEntrypointPath?: string
   readonly attestListener?: ProfileListenerAttestor
   readonly readyTimeoutMs?: number
   readonly abortTimeoutMs?: number
@@ -130,7 +132,8 @@ async function exchangeBootstrap(
 export class DshWebProfileWorkerFactory {
   private generation = 0
   constructor(private readonly options: DshWebProfileWorkerFactoryOptions) {
-    if (!isAbsolute(options.nodeExecutablePath) || !isAbsolute(options.dshEntrypointPath)) throw new HostAuthorityError('invalid_input')
+    if (!isAbsolute(options.nodeExecutablePath) || !isAbsolute(options.dshEntrypointPath)
+      || options.pnpmEntrypointPath !== undefined && !isAbsolute(options.pnpmEntrypointPath)) throw new HostAuthorityError('invalid_input')
   }
 
   /**
@@ -167,6 +170,8 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_DELIVERY_TOKEN: deliveryToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
         DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
+        ...(this.options.pnpmEntrypointPath === undefined
+          ? {} : { DSH_PROFILE_PNPM_ENTRYPOINT: this.options.pnpmEntrypointPath }),
         DSH_SLARK_EMBEDDED: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -355,6 +355,24 @@ describe('profile worker child process', () => {
 })
 
 describe('dsh web Profile worker', () => {
+  it('passes only the configured pnpm entrypoint to the Slark worker', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const executable = fixture(`
+      import { writeFileSync } from 'node:fs'
+      writeFileSync('worker-env.json', JSON.stringify({ pnpm: process.env.DSH_PROFILE_PNPM_ENTRYPOINT,
+        embedded: process.env.DSH_SLARK_EMBEDDED, path: process.env.PATH }))
+    `)
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: executable,
+      pnpmEntrypointPath: join(root, 'pnpm.mjs'),
+    })
+    await expect(factory.create(spec(root))).rejects.toMatchObject({ code: 'unavailable' })
+    expect(JSON.parse(readFileSync(join(root, 'worker-env.json'), 'utf8'))).toEqual({
+      pnpm: join(root, 'pnpm.mjs'), embedded: '1',
+    })
+  })
+
   it('refuses caller overrides of the private collaboration delivery token before launching a worker', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
     onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
@@ -368,6 +386,10 @@ describe('dsh web Profile worker', () => {
     })).toThrow(expect.objectContaining({ code: 'invalid_input' }))
     expect(() => new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: 'worker.mjs',
+    })).toThrow(expect.objectContaining({ code: 'invalid_input' }))
+    expect(() => new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+      pnpmEntrypointPath: 'pnpm.mjs',
     })).toThrow(expect.objectContaining({ code: 'invalid_input' }))
 
     const root = mkdtempSync(join(tmpdir(), 'dsh-profile-web-'))
@@ -819,6 +841,8 @@ describe('dsh web Profile worker', () => {
     await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_WORKSPACE_MODEL_TOKEN: 'attacker' } }))
       .rejects.toMatchObject({ code: 'invalid_input' })
     await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_REMOTE_UI_TOKEN: 'attacker' } }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_PNPM_ENTRYPOINT: '/tmp/attacker' } }))
       .rejects.toMatchObject({ code: 'invalid_input' })
   })
 
