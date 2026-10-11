@@ -147,13 +147,14 @@ describe.skipIf(!isWin32 || !pwshAvailable())('diagnose-windows-sandbox-acl scri
   function withholdWriteOwner(path: string): void {
     // Fresh directories can carry explicit FullControl ACEs on Windows runners.
     // Keep WRITE_DAC so repair is authorized, and remove grants that mask missing WRITE_OWNER.
-    icacls(path, '/inheritance:r')
-    const allowSids = pwsh(
-      `(Get-Acl -LiteralPath ${quote(path)}).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ` +
-      'Where-Object { $_.AccessControlType -eq \'Allow\' } | ForEach-Object { $_.IdentityReference.Value }',
-    ).trim().split(/\r?\n/u).filter(sid => sid !== '' && sid !== meSid)
-    icacls(path, '/grant:r', `*${meSid}:(M,WDAC)`)
-    for (const sid of new Set(allowSids)) icacls(path, '/remove:g', `*${sid}`)
+    pwsh(
+      `$acl = Get-Acl -LiteralPath ${quote(path)}; $acl.SetAccessRuleProtection($true, $false); ` +
+      '$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])); ' +
+      'foreach ($rule in $rules) { $acl.RemoveAccessRuleSpecific($rule) }; ' +
+      `$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(${quote(meSid)}, ` +
+      '[System.Security.AccessControl.FileSystemRights]::Modify -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions, ' +
+      `[System.Security.AccessControl.AccessControlType]::Allow)); Set-Acl -LiteralPath ${quote(path)} -AclObject $acl`,
+    )
   }
 
   function stamp(path: string, sid: string, type: 'grant' | 'deny' = 'grant'): void {
