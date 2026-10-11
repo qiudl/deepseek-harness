@@ -292,7 +292,6 @@ export class OfflineProfileRecoveryInspector {
       const profileComposition = await checkedDirectory(join(profileRoot, 'profiles'), this.options.expectedUid)
       const webComposition = await checkedDirectory(join(profileComposition, 'web'), this.options.expectedUid)
       const manifest = await checkedFile(join(webComposition, 'package.json'), this.options.expectedUid)
-      const lockfile = await checkedFile(join(webComposition, 'pnpm-lock.yaml'), this.options.expectedUid)
       let manifestValue: unknown
       try { manifestValue = JSON.parse(manifest.toString('utf8')) } catch { throw new HostAuthorityError('profile_integrity_failed') }
       if (typeof manifestValue !== 'object' || manifestValue === null || Array.isArray(manifestValue)) {
@@ -301,6 +300,18 @@ export class OfflineProfileRecoveryInspector {
       const dependencies = (manifestValue as { dependencies?: unknown }).dependencies
       if (typeof dependencies !== 'object' || dependencies === null || Array.isArray(dependencies)) {
         throw new HostAuthorityError('profile_integrity_failed')
+      }
+      let lockfile: Buffer | null
+      try {
+        lockfile = await checkedFile(join(webComposition, 'pnpm-lock.yaml'), this.options.expectedUid)
+      } catch (error) {
+        // Released empty Profiles have no package-manager installation or lockfile.
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT'
+          || Object.keys(dependencies).length !== 0
+          || (await readdir(webComposition)).some(name => name === 'node_modules' || name === '.bundled-plugins')) {
+          throw error
+        }
+        lockfile = null
       }
       const pluginCount = Object.keys(dependencies).length
       const links = await linkFacts(profileComposition, this.options.expectedUid)
@@ -370,7 +381,7 @@ export class OfflineProfileRecoveryInspector {
         ownerStateGeneration: ownerPaths.generation,
         patchDigest: hash(patch),
         manifestDigest: hash(manifest),
-        lockfileDigest: hash(lockfile),
+        lockfileDigest: lockfile === null ? null : hash(lockfile),
         links: links.map(link => ({
           path: link.path, target: link.target, kind: link.kind, size: link.size,
         })),

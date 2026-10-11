@@ -199,6 +199,8 @@ it.skipIf(webSnapshotMode() === 'record').each(['ABC', 'ACB', 'BAC', 'BCA', 'CAB
     const gate = new HistoryDeliveryGate()
     let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined
     let scaffold: Awaited<ReturnType<typeof launchWebScaffold>> | undefined
+    let phase = 'setup'
+    const failures: unknown[] = []
     try {
       const fixture = await readFile(FIXTURE, 'utf8')
       const recorded = deriveReplayScript(parseSessionLog(fixture))
@@ -235,28 +237,36 @@ it.skipIf(webSnapshotMode() === 'record').each(['ABC', 'ACB', 'BAC', 'BCA', 'CAB
       }
       const entered: string[] = []
       for (const id of hostOrder) {
+        phase = `${id}: release prompt`
         const settled = scaffold.whenTurnSettled()
         releases.get(id)!.resolve(undefined)
+        phase = `${id}: turn start`
         await expect.poll(() => gate.turnStartDelivery()).toBeDefined()
         gate.releaseThrough(gate.turnStartDelivery()!)
+        phase = `${id}: admission`
         await expect.poll(() => gate.admissionDelivery(text(id))).toBeDefined()
         gate.releaseThrough(gate.admissionDelivery(text(id))!)
         entered.push(id)
         for (const candidate of releases.keys()) {
+          phase = `${id}: placement ${candidate}`
           const admitted = entered.includes(candidate)
           await expect.poll(() => placement(page, text(candidate))).toMatchObject({
             echo: admitted ? 0 : 1, dock: 0, durable: admitted ? 1 : 0,
           })
         }
+        phase = `${id}: queued inbox`
         await expect.poll(() => gate.inboxDelivery(true, text(id))).toBeDefined()
         gate.releaseThrough(gate.inboxDelivery(true, text(id))!)
         await expect.poll(() => placement(page, text(id))).toMatchObject({ echo: 0, dock: 0, durable: 1 })
+        phase = `${id}: claimed inbox`
         await expect.poll(() => gate.inboxDelivery(false, text(id))).toBeDefined()
         gate.releaseThrough(gate.inboxDelivery(false, text(id))!)
+        phase = `${id}: turn end`
         await expect.poll(() => gate.turnEndDelivery()).toBeDefined()
         gate.releaseThrough(gate.turnEndDelivery()!)
         await settled
       }
+      phase = 'final transcript'
       gate.releaseAll()
       const actual = await page.locator('[data-chat-flow-kind="user"]').allTextContents()
       expect(actual.filter(value => value.includes('RAPID_INPUT_')).map(value =>
@@ -264,12 +274,16 @@ it.skipIf(webSnapshotMode() === 'record').each(['ABC', 'ACB', 'BAC', 'BCA', 'CAB
       expect(await page.locator('[data-submission-echo]').count()).toBe(0)
       expect(await page.locator('[data-queue-dock]').count()).toBe(0)
       expect(tripwire.pageErrors).toEqual([])
+    } catch (error) {
+      failures.push(new Error(`rapid submission handoff ${hostOrder} failed at ${phase}`, { cause: error }))
     } finally {
       for (const release of releases.values()) release.resolve(undefined)
       gate.releaseAll()
-      try { await browser?.close() } finally {
-        try { await scaffold?.close() } finally { await rm(root, { recursive: true, force: true }) }
-      }
+      await browser?.close().catch((error: unknown) => failures.push(error))
+      await scaffold?.close().catch((error: unknown) => failures.push(error))
+      await rm(root, { recursive: true, force: true }).catch((error: unknown) => failures.push(error))
     }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, `rapid submission handoff ${hostOrder} failed`)
   },
 )
