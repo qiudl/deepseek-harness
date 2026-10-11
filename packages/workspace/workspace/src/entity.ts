@@ -32,6 +32,12 @@ export class WorkspaceMoveInvalidError extends Error {
  * index backing the `sessionIds` projection, and attach-time header reads.
  */
 export interface WorkspaceEntityHost {
+  /** Serialize entity mutations with Registry archive intent and deletion writes. */
+  serializeMutation<T>(operation: () => Promise<T>): Promise<T>
+
+  /** Refuse to discard membership needed to recover an outstanding archive token. */
+  assertCanDropSession(id: WorkspaceId, sessionId: SessionId): void
+
   /**
    * Resolve the open `workspaces` table.
    * @returns the table; throws while the registry has not started yet.
@@ -200,22 +206,27 @@ export class WorkspaceEntity implements Workspace {
    * rewrites the medium nor emits a change event.
    */
   private async mutate(fn: (record: WorkspaceRecord) => WorkspaceRecord): Promise<void> {
-    let next: WorkspaceRecord
-    try {
-      next = await this.host.table().update(this.id, (current) => {
-        const changed = fn(current)
-        const sessionIds = changed.sessionIds.filter(
-          id => this.host.sessionPath(id) === changed.path,
-        )
-        if (changed === current && sessionIds.length === current.sessionIds.length) {
-          throw unchangedSentinel
-        }
-        return { ...changed, sessionIds, updatedAt: new Date().toISOString() }
-      })
-    } catch (error) {
-      if (error === unchangedSentinel) return
-      throw error
-    }
-    this.record = next
+    await this.host.serializeMutation(async () => {
+      let next: WorkspaceRecord
+      try {
+        next = await this.host.table().update(this.id, (current) => {
+          const changed = fn(current)
+          const sessionIds = changed.sessionIds.filter(
+            id => this.host.sessionPath(id) === changed.path,
+          )
+          for (const id of current.sessionIds) {
+            if (!sessionIds.includes(id)) this.host.assertCanDropSession(this.id, id)
+          }
+          if (changed === current && sessionIds.length === current.sessionIds.length) {
+            throw unchangedSentinel
+          }
+          return { ...changed, sessionIds, updatedAt: new Date().toISOString() }
+        })
+      } catch (error) {
+        if (error === unchangedSentinel) return
+        throw error
+      }
+      this.record = next
+    })
   }
 }

@@ -155,6 +155,7 @@ describe('Workspace state stream', () => {
       { type: 'remove', workspaceId: view.workspaceId },
       { type: 'order', workspaceIds: [view.workspaceId] },
       { type: 'archived', archivedSessionIds: [sid('session-one')] },
+      { type: 'dedicatedCollaboration', sessionIds: [sid('session-one')] },
       { type: 'pinned', pinnedSessionIds: [sid('session-two')] },
     ]
     mock.stream(FOLLOW, openStream([opening, ...increments]))
@@ -163,9 +164,11 @@ describe('Workspace state stream', () => {
     const removeView = vi.fn<WorkspaceFollowSink['removeView']>()
     const replaceOrder = vi.fn<WorkspaceFollowSink['replaceOrder']>()
     const replaceArchived = vi.fn<WorkspaceFollowSink['replaceArchived']>()
+    const replaceDedicatedCollaboration = vi.fn<NonNullable<WorkspaceFollowSink['replaceDedicatedCollaboration']>>()
     const replacePinned = vi.fn<WorkspaceFollowSink['replacePinned']>()
     const stream = createWorkspaceStateStream(remote, {
-      accept: accepts({ replaceBaseline, upsertView, removeView, replaceOrder, replaceArchived, replacePinned }),
+      accept: accepts({ replaceBaseline, upsertView, removeView, replaceOrder, replaceArchived,
+        replaceDedicatedCollaboration, replacePinned }),
       failed: vi.fn(),
     })
 
@@ -178,6 +181,7 @@ describe('Workspace state stream', () => {
     expect(removeView).toHaveBeenCalledWith(view.workspaceId)
     expect(replaceOrder).toHaveBeenCalledWith([view.workspaceId])
     expect(replaceArchived).toHaveBeenCalledWith(['session-one'])
+    expect(replaceDedicatedCollaboration).toHaveBeenCalledWith(['session-one'])
     expect(replacePinned).toHaveBeenCalledWith(['session-two'])
     await stream.dispose()
     expect(streamStates(mock)).toEqual(['cancelled'])

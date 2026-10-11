@@ -14,6 +14,8 @@ Client 插件应用前，载体通过端口读取 `/__collaboration__`。父页�
 
 仅支持范围的父页面不暴露执行方法。父页面准确声明 `workspace`、`submit`、`pending` 和 `deliveries` 四个方法时，还会安装原始 Source 提交与状态、结果读取方法。这些调用使用同一认证端口、捕获的原始坐标、38 秒期限以及最多800 KiB 的响应数据。提交必须包含明确的 Agent 提及；坐标变化、身份注入和无效 RPC 信封均被拒绝。发送后的取消保留不确定状态，不自动重新提交。父页面校验完整结果投影与持久化投递；Client 插件校验并显示原消息分组。普通任务分配使用聊天中的明确 Agent 提及。父页面声明执行能力前必须提供所属运行时的原始 Source 列表；仅支持范围不代表 Agent 执行验收通过。
 
+父页面还可分别声明 `conversations` 和 `archive`。`archive` 只接受工作区 ID、会话 ID 以及“归档”或“恢复”动作。父页面经加密的 Daemon 连接转发动作；Daemon 持有持久令牌、当前 Account 租约、Native 阶段证明和云端挑战。子页面不会取得令牌或证明。结果不确定时，可沿原 Native 意图重试。
+
 ## 验证
 
 [远程载体测试](tests/remote-boot.spec.ts) 覆盖认证握手和安装顺序。[范围消费者测试](tests/remote-collaboration.spec.ts) 使用真实 WorkerTunnel 和 MessagePort，覆盖拒绝、取消和期限。这些隔离测试不代表真实 Account、provider 或独立 Agent 执行验收通过。

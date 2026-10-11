@@ -111,6 +111,7 @@ export function workspaceSnapshot(): WorkspaceSnapshot {
   return {
     items: [],
     archivedSessionIds: [],
+    dedicatedCollaborationSessionIds: [],
     pinnedSessionIds: [],
     state: 'idle',
     phase: 'ready',

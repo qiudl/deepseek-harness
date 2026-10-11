@@ -307,6 +307,22 @@ export interface SessionListValue {
   readonly items: readonly SessionSummary[]
 }
 
+/** Bounded current ownership check for a Host-side collaboration index page. */
+export interface SessionCollaborationMembershipRequest {
+  readonly entries: readonly { readonly workspaceId: string; readonly sessionId: string }[]
+}
+
+/** Host-verified membership and display flags for one bounded index page. */
+export interface SessionCollaborationMembershipValue {
+  readonly entries: readonly {
+    readonly workspaceId: string
+    readonly sessionId: string
+    readonly owned: boolean
+    readonly pinned: boolean
+    readonly archived: boolean
+  }[]
+}
+
 /** Read original collaboration messages for one Session; exact lookup and pagination are mutually exclusive. */
 export interface SessionCollaborationSourcesRequest {
   readonly sessionId: SessionId
@@ -359,6 +375,7 @@ export interface SessionCreateRequest {
   readonly cwd?: string
   readonly sessionId?: SessionId
   readonly agentPreset?: string
+  readonly dedicatedCollaboration?: true
 }
 
 /** Session creation response value. */

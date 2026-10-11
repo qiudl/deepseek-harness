@@ -50,7 +50,9 @@ function bridge(): {
   collaborationWorkspace(value: unknown): Promise<unknown>
   collaborationSubmit(value: unknown): Promise<unknown>
   collaborationPending(value: unknown): Promise<unknown>
-  collaborationDeliveries(value: unknown): Promise<unknown> } {
+  collaborationDeliveries(value: unknown): Promise<unknown>
+  collaborationConversations?(): Promise<unknown>
+  collaborationArchive?(value: unknown): Promise<unknown> } {
   const host: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
   if (typeof host !== 'object' || host === null || !('collaborationWorkspace' in host)) throw Error('bridge is missing')
   return host as ReturnType<typeof bridge>
@@ -251,6 +253,45 @@ it('REQ-20260930-0004: execution consumer refuses injected authority and altered
   expect(await bridge().collaborationSubmit(originalRequest)).toMatchObject({ ok:false,reconciliationRequired:true })
   expect(requests).toHaveLength(1)
   expect(await bridge().collaborationDeliveries({ source:original,namespace_id:'other' })).toMatchObject({ ok:false })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261011-0002: reads only Main-clipped conversation summaries and checks the global count', async () => {
+  const advertised = { ...capability, methods: ['workspace', 'conversations'] }
+  const page = { items: [{ workspace_id: workspace, session_id: 'session-1', first_source_at: '1',
+    last_activity_at: '2', source_count: 1, pending_count: 2, planning_count: 0, running_count: 0, issue_count: 0,
+    first_pending_digest: 'a'.repeat(64), pinned: false, archived: false }], global_pending_count: 2 }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { ok: true, value: page }) }
+  })
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationConversations?.()).toEqual({ ok: true, value: page })
+  expect(requests[0]?.method).toBe('collaboration/conversations')
+  expect(requests[0]?.payload.args.request).toEqual({})
+  page.items[0]!.archived = true
+  expect(await bridge().collaborationConversations?.()).toEqual({ ok: true, value: page })
+  page.global_pending_count = 1
+  expect(await bridge().collaborationConversations?.()).toMatchObject({ ok: false })
+})
+it('REQ-20261011-0002: archive capability sends only action coordinates over the parent port', async () => {
+  const advertised = { ...capability, methods: ['workspace', 'archive'] }
+  const request = { workspace_id: workspace, session_id: 'session-1', action: 'archive' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'archived' }) }
+  })
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationArchive?.(request)).toEqual({ state: 'archived' })
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.method).toBe('collaboration/archive')
+  expect(requests[0]?.payload.args.request).toEqual(request)
+  expect(await bridge().collaborationArchive?.({ ...request, archive_token: 'forged' })).toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })
 it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pagehide without resubmitting the Agent', async () => {

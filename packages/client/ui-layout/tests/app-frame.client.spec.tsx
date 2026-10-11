@@ -3,7 +3,7 @@
 import type { GlobalStandardProps, RenderOpts } from '@deepseek-ai/dsh-client-ui-slots'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { AppFrame } from '../src/client/AppFrame.tsx'
 import type { AppFrameProps } from '../src/client/AppFrame.tsx'
 import type { MainPanelId, RightbarOwnerProps, SidebarOwnerProps } from '../src/client/index.ts'
@@ -183,6 +183,37 @@ afterEach(() => {
 })
 
 describe('AppFrame', () => {
+  it('shows phone Web lists and chat as separate full-screen layers', () => {
+    const { frame, instance, sidebarOwner, getByRole } = mountFrame(390)
+    resize(390)
+    expect(frame.dataset.phoneWeb).toBe('true')
+    expect(sidebarOwner()).toMatchObject({ collapsed: false, width: 390, mobileSection: 'chat' })
+    fireEvent.click(getByRole('button', { name: 'mobile.conversations' }))
+    expect(frame.dataset.mobileSection).toBe('ordinary')
+    expect(sidebarOwner().mobileSection).toBe('ordinary')
+    act(() => { instance.actions.selectPanel('settings' as MainPanelId) })
+    expect(frame.dataset.mobileSection).toBe('chat')
+    fireEvent.click(getByRole('button', { name: 'mobile.backToList' }))
+    expect(frame.dataset.mobileSection).toBe('ordinary')
+    act(() => {
+      instance.actions.showMobileSection('collaboration')
+      instance.actions.showMobileChat()
+    })
+    fireEvent.click(getByRole('button', { name: 'mobile.backToList' }))
+    expect(frame.dataset.mobileSection).toBe('collaboration')
+  })
+
+  it('fits the phone frame to the visual viewport when the keyboard opens', () => {
+    const visual = new EventTarget() as VisualViewport & { height: number }
+    Object.defineProperty(visual, 'height', { value: 520, writable: true })
+    vi.stubGlobal('visualViewport', visual)
+    const { frame } = mountFrame(390)
+    resize(390)
+    expect(frame.style.height).toBe('520px')
+    visual.height = 320
+    act(() => { visual.dispatchEvent(new Event('resize')) })
+    expect(frame.style.height).toBe('320px')
+  })
   it('localizes the product title without a configured build title', () => {
     mountFrame()
     expect(document.title).toBe('DSH Local Build')

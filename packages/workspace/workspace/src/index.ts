@@ -16,15 +16,15 @@ import type { WorkspaceEntityHost } from './entity.ts'
 
 export { WorkspaceMoveInvalidError } from './entity.ts'
 import { defaultWorkspaceTitle, fullyQualifiedWorkspacePath, realpathNormalize } from './paths.ts'
-import { workspaceDomainSpec } from './spec.ts'
-import type { WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
+import { collaborationArchiveIntent, workspaceDomainSpec } from './spec.ts'
+import type { CollaborationArchiveIntent, WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
 import type { SessionActivity, Workspace, WorkspaceId as WorkspaceIdBrand } from './types.ts'
 
 export type {
   SessionActivity, SessionActivityItem, SessionActivityKind, SessionActivityKindMap, Workspace,
 } from './types.ts'
-export { workspaceDomainState, workspaceRecord, workspaceDomainSpec } from './spec.ts'
-export type { WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
+export { collaborationArchiveIntent, workspaceDomainState, workspaceRecord, workspaceDomainSpec } from './spec.ts'
+export type { CollaborationArchiveIntent, WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
 export { realpathNormalize } from './paths.ts'
 
 /** Identifies one workspace record (see `src/types.ts` for the brand rationale). */
@@ -49,7 +49,7 @@ export class WorkspaceUnknownSessionError extends Error {
    * @param sessionId - The unknown session id.
    * @param verb - The registry operation that named the session.
    */
-  constructor(readonly sessionId: SessionId, verb: 'archive' | 'pin') {
+  constructor(readonly sessionId: SessionId, verb: 'archive' | 'pin' | 'collaboration') {
     super(`cannot ${verb} session '${sessionId}': live sessions and session persistence hold no such session`)
     this.name = 'WorkspaceUnknownSessionError'
   }
@@ -79,6 +79,30 @@ export class WorkspaceArchivedSessionPinError extends Error {
   constructor(readonly sessionId: SessionId) {
     super(`cannot pin session '${sessionId}': the session is archived`)
     this.name = 'WorkspaceArchivedSessionPinError'
+  }
+}
+
+/** A collaboration Session cannot use the ordinary stop-and-archive shortcut. */
+export class WorkspaceCollaborationStopArchiveError extends Error {
+  constructor(readonly sessionId: SessionId) {
+    super(`cannot force archive collaboration session '${sessionId}'`)
+    this.name = 'WorkspaceCollaborationStopArchiveError'
+  }
+}
+
+/** Slark archive fencing is required before an accepted collaboration can be hidden. */
+export class WorkspaceCollaborationArchiveUnavailableError extends Error {
+  constructor(readonly sessionId: SessionId) {
+    super(`collaboration archive coordinator is unavailable for session '${sessionId}'`)
+    this.name = 'WorkspaceCollaborationArchiveUnavailableError'
+  }
+}
+
+/** Existing token, Account or phase cannot satisfy a requested transition. */
+export class WorkspaceCollaborationArchiveIntentConflictError extends Error {
+  constructor(readonly sessionId: SessionId) {
+    super(`collaboration archive intent conflicts for session '${sessionId}'`)
+    this.name = 'WorkspaceCollaborationArchiveIntentConflictError'
   }
 }
 
@@ -116,6 +140,14 @@ declare module '@deepseek-ai/cordis' {
   }
 
   interface Events {
+    /** Source journal owners classify older Sessions before the archive write.
+     * @mode waterfall
+     * @param request - Session to classify.
+     */
+    'workspace/session-collaboration'(
+      request: SessionActivityRequest,
+      next: () => Promise<boolean>,
+    ): Promise<boolean>
     /**
      * Ask the composed providers what still runs for a session before it is
      * archived. A listener prepends its own {@link SessionActivity} entries to
@@ -180,6 +212,13 @@ export class WorkspaceRegistry extends Service {
   private operationTail: Promise<void> = Promise.resolve()
 
   private readonly host: WorkspaceEntityHost = {
+    serializeMutation: operation => this.enqueueOperation(operation),
+    assertCanDropSession: (workspaceId, sessionId) => {
+      if (this.requireState().collaborationArchiveIntents.some(item =>
+        item.workspaceId === workspaceId && item.sessionId === sessionId)) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(sessionId)
+      }
+    },
     table: () => this.requireTable(),
     sessionPath: id => this.sessionPaths.get(id),
     readSessionHeader: id => this.readSessionHeader(id),
@@ -343,9 +382,238 @@ export class WorkspaceRegistry extends Service {
     return this.requireState().archivedSessionIds
   }
 
+  /** Session ids created expressly for collaboration. */
+  get dedicatedCollaborationSessionIds(): readonly SessionId[] {
+    return this.requireState().dedicatedCollaborationSessionIds
+  }
+
+  /** Ordinary Sessions with durably accepted collaboration Sources. */
+  get collaborationSessionIds(): readonly SessionId[] {
+    return this.requireState().collaborationSessionIds
+  }
+
+  /** Outstanding durable retry tokens. */
+  get collaborationArchiveIntents(): readonly CollaborationArchiveIntent[] {
+    return this.requireState().collaborationArchiveIntents
+  }
+
+  /** Find the original retry token under the Registry queue after Main or Host restarts.
+   * @param raw - Current Account and Workspace membership without a caller token.
+   * @returns Bound token and phase, or null when this Session has no outstanding intent.
+   */
+  findCollaborationArchiveIntent(raw: Omit<CollaborationArchiveIntent, 'token' | 'phase'>): Promise<
+    Readonly<{ token: string; phase: 'staged' | 'prepared' | 'archived' | 'restored' }> | null
+  > {
+    const request = collaborationArchiveIntent.omit({ token: true, phase: true }).parse(raw)
+    return this.enqueueOperation(() => {
+      const state = this.requireState()
+      if (!this.requireTable().get(request.workspaceId)?.sessionIds.includes(request.sessionId)) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(request.sessionId)
+      }
+      const intent = state.collaborationArchiveIntents.find(item => item.sessionId === request.sessionId)
+      if (!intent) return null
+      if (intent.workspaceId !== request.workspaceId || intent.environmentId !== request.environmentId
+        || intent.accountIssuer !== request.accountIssuer || intent.accountSubject !== request.accountSubject) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(request.sessionId)
+      }
+      return Object.freeze({ token: intent.token, phase: intent.phase ?? 'staged' })
+    })
+  }
+
+  /** Read only the bound, durable phase in the Registry queue for Host-side signing.
+   * @param raw - Exact Account, Session and token identity.
+   * @returns Current persisted phase and its original identity.
+   */
+  inspectCollaborationArchiveState(raw: Omit<CollaborationArchiveIntent, 'phase'>): Promise<
+    Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; token: string; phase: 'staged' | 'prepared' | 'archived' | 'restored' }>
+  > {
+    const request = collaborationArchiveIntent.parse(raw)
+    if (request.phase !== undefined) throw new WorkspaceCollaborationArchiveIntentConflictError(request.sessionId)
+    return this.enqueueOperation(() => {
+      const state = this.requireState()
+      const intent = this.requireCollaborationArchiveIntent(state, request)
+      if (!this.requireTable().get(intent.workspaceId)?.sessionIds.includes(intent.sessionId)) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(intent.sessionId)
+      }
+      return Object.freeze({ workspaceId: intent.workspaceId, sessionId: intent.sessionId,
+        token: intent.token, phase: intent.phase ?? 'staged' })
+    })
+  }
+
+  /** Persist an owner-bound retry token before a trusted coordinator requests Slark prepare.
+   * @param raw - Current Account and original Session with a new token.
+   * @returns The persisted token, including any phase reached by a same-token retry.
+   */
+  stageCollaborationArchive(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent> {
+    const intent = collaborationArchiveIntent.parse(raw)
+    if (intent.phase !== undefined) throw new WorkspaceCollaborationArchiveIntentConflictError(intent.sessionId)
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      const previous = state.collaborationArchiveIntents.find(item => item.sessionId === intent.sessionId)
+      if (previous) {
+        if (previous.workspaceId === intent.workspaceId && previous.token === intent.token
+          && previous.environmentId === intent.environmentId && previous.accountIssuer === intent.accountIssuer
+          && previous.accountSubject === intent.accountSubject) return previous
+        throw new WorkspaceCollaborationArchiveIntentConflictError(intent.sessionId)
+      }
+      if (state.collaborationArchiveIntents.some(item => item.token === intent.token)) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(intent.sessionId)
+      }
+      const workspace = this.get(intent.workspaceId)
+      if (!workspace?.sessionIds.includes(intent.sessionId) || !(await this.sessionKnown(intent.sessionId))) {
+        throw new WorkspaceUnknownSessionError(intent.sessionId, 'collaboration')
+      }
+      if (state.archivedSessionIds.includes(intent.sessionId)) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(intent.sessionId)
+      }
+      const collaboration = state.dedicatedCollaborationSessionIds.includes(intent.sessionId)
+        || state.collaborationSessionIds.includes(intent.sessionId)
+        || await this.ctx.waterfall('workspace/session-collaboration', { sessionId: intent.sessionId }, () => Promise.resolve(false))
+      if (!collaboration) throw new WorkspaceCollaborationArchiveIntentConflictError(intent.sessionId)
+      const activity = await this.ctx.waterfall(
+        'workspace/session-activity', { sessionId: intent.sessionId }, () => Promise.resolve([]),
+      )
+      if (activity.length > 0) throw new WorkspaceActiveSessionError(intent.sessionId, activity)
+      await this.setState({ ...state, collaborationArchiveIntents: [...state.collaborationArchiveIntents, intent] })
+      return intent
+    })
+  }
+
+  /** Record a successful Slark prepare before writing the local archive set.
+   * @param raw - Existing Account-bound token.
+   * @returns The prepared durable intent.
+   */
+  recordCollaborationArchivePrepared(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent> {
+    const request = collaborationArchiveIntent.parse(raw)
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      const intent = this.requireCollaborationArchiveIntent(state, request)
+      if (intent.phase === 'prepared') return intent
+      if (intent.phase !== undefined) throw new WorkspaceCollaborationArchiveIntentConflictError(request.sessionId)
+      const prepared = { ...intent, phase: 'prepared' as const }
+      await this.setState({ ...state, collaborationArchiveIntents: state.collaborationArchiveIntents.map(item =>
+        item.sessionId === intent.sessionId ? prepared : item) })
+      return prepared
+    })
+  }
+
+  /** Persist the original Session archive and its token phase in one Registry write.
+   * @param raw - Existing prepared Account-bound token.
+   * @returns The archived durable intent.
+   */
+  archivePreparedCollaborationSession(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent> {
+    const request = collaborationArchiveIntent.parse(raw)
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      const intent = this.requireCollaborationArchiveIntent(state, request)
+      if (intent.phase === 'archived' && state.archivedSessionIds.includes(intent.sessionId)) return intent
+      if (intent.phase !== 'prepared' || state.archivedSessionIds.includes(intent.sessionId)) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(request.sessionId)
+      }
+      const workspace = this.get(intent.workspaceId)
+      if (!workspace?.sessionIds.includes(intent.sessionId) || !(await this.sessionKnown(intent.sessionId))) {
+        throw new WorkspaceUnknownSessionError(intent.sessionId, 'collaboration')
+      }
+      const activity = await this.ctx.waterfall(
+        'workspace/session-activity', { sessionId: intent.sessionId }, () => Promise.resolve([]),
+      )
+      if (activity.length > 0) throw new WorkspaceActiveSessionError(intent.sessionId, activity)
+      const archived = { ...intent, phase: 'archived' as const }
+      await this.setState({
+        ...state,
+        archivedSessionIds: [...state.archivedSessionIds, intent.sessionId],
+        pinnedSessionIds: state.pinnedSessionIds.filter(id => id !== intent.sessionId),
+        collaborationArchiveIntents: state.collaborationArchiveIntents.map(item =>
+          item.sessionId === intent.sessionId ? archived : item),
+      })
+      return archived
+    })
+  }
+
+  /** Restore the local Session first; the same token remains until Slark releases its fence.
+   * @param raw - Existing archived Account-bound token.
+   * @returns The restored durable intent.
+   */
+  restoreCollaborationSession(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent> {
+    const request = collaborationArchiveIntent.parse(raw)
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      const intent = this.requireCollaborationArchiveIntent(state, request)
+      if (intent.phase === 'restored' && !state.archivedSessionIds.includes(intent.sessionId)) return intent
+      if (intent.phase !== 'archived' || !state.archivedSessionIds.includes(intent.sessionId)) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(request.sessionId)
+      }
+      const restored = { ...intent, phase: 'restored' as const }
+      await this.setState({
+        ...state,
+        archivedSessionIds: state.archivedSessionIds.filter(id => id !== intent.sessionId),
+        collaborationArchiveIntents: state.collaborationArchiveIntents.map(item =>
+          item.sessionId === intent.sessionId ? restored : item),
+      })
+      return restored
+    })
+  }
+
+  /** Forget the token only after the trusted coordinator has confirmed Slark release.
+   * @param raw - Restored token whose cloud fence was released.
+   */
+  finishCollaborationArchiveRelease(raw: CollaborationArchiveIntent): Promise<void> {
+    const request = collaborationArchiveIntent.parse(raw)
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      const intent = this.requireCollaborationArchiveIntent(state, request)
+      if (intent.phase !== 'restored' || state.archivedSessionIds.includes(intent.sessionId)) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(request.sessionId)
+      }
+      await this.setState({ ...state, collaborationArchiveIntents: state.collaborationArchiveIntents.filter(item =>
+        item.sessionId !== intent.sessionId) })
+    })
+  }
+
+  private requireCollaborationArchiveIntent(
+    state: WorkspaceDomainState, request: CollaborationArchiveIntent,
+  ): CollaborationArchiveIntent {
+    const intent = state.collaborationArchiveIntents.find(item => item.sessionId === request.sessionId)
+    if (!intent || intent.workspaceId !== request.workspaceId || intent.token !== request.token
+      || intent.environmentId !== request.environmentId || intent.accountIssuer !== request.accountIssuer
+      || intent.accountSubject !== request.accountSubject) {
+      throw new WorkspaceCollaborationArchiveIntentConflictError(request.sessionId)
+    }
+    return intent
+  }
+
+  /** Guard an original Session before Source capture can write either journal.
+   * @param sessionId - Existing original Session.
+   */
+  markCollaborationSession(sessionId: SessionId): Promise<void> {
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      if (state.collaborationSessionIds.includes(sessionId)) return
+      if (!(await this.sessionKnown(sessionId))) throw new WorkspaceUnknownSessionError(sessionId, 'collaboration')
+      await this.setState({ ...state,
+        collaborationSessionIds: [...state.collaborationSessionIds, sessionId] })
+    })
+  }
+
+  /** Retain a dedicated Session's collaboration origin before the first Source.
+   * @param sessionId - Existing dedicated Session.
+   */
+  markDedicatedCollaborationSession(sessionId: SessionId): Promise<void> {
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      if (state.dedicatedCollaborationSessionIds.includes(sessionId)) return
+      if (!(await this.sessionKnown(sessionId))) throw new WorkspaceUnknownSessionError(sessionId, 'collaboration')
+      await this.setState({ ...state,
+        dedicatedCollaborationSessionIds: [...state.dedicatedCollaborationSessionIds, sessionId] })
+    })
+  }
+
   /**
    * Archive one session durably. The session must exist (live or in session
    * persistence); its workspace accounting — or lack of one — is irrelevant.
+   * A collaboration Session is refused until the durable Slark archive
+   * coordinator is installed. Source journal providers classify older entries
+   * before any archive write, including the force-stop path.
    * Without `stopActivity` the session must also be inactive: the
    * `workspace/session-activity` waterfall is asked once, and any reported
    * activity rejects with {@link WorkspaceActiveSessionError} before anything
@@ -367,6 +635,13 @@ export class WorkspaceRegistry extends Service {
       if (this.requireState().archivedSessionIds.includes(sessionId)) return
       if (!(await this.sessionKnown(sessionId))) {
         throw new WorkspaceUnknownSessionError(sessionId, 'archive')
+      }
+      const collaboration = this.requireState().dedicatedCollaborationSessionIds.includes(sessionId)
+        || this.requireState().collaborationSessionIds.includes(sessionId)
+        || await this.ctx.waterfall('workspace/session-collaboration', { sessionId }, () => Promise.resolve(false))
+      if (collaboration) {
+        if (options.stopActivity === true) throw new WorkspaceCollaborationStopArchiveError(sessionId)
+        throw new WorkspaceCollaborationArchiveUnavailableError(sessionId)
       }
       if (options.stopActivity !== true) {
         const activity = await this.ctx.waterfall(
@@ -400,6 +675,9 @@ export class WorkspaceRegistry extends Service {
       // check-then-write pair cannot interleave with a concurrent archive.
       const state = this.requireState()
       if (!state.archivedSessionIds.includes(sessionId)) return
+      if (state.collaborationArchiveIntents.some(item => item.sessionId === sessionId)) {
+        throw new WorkspaceCollaborationArchiveUnavailableError(sessionId)
+      }
       await this.setState({
         ...state,
         archivedSessionIds: state.archivedSessionIds.filter(id => id !== sessionId),
@@ -584,6 +862,8 @@ export class WorkspaceRegistry extends Service {
     const entity = this.entities.get(id)
     if (entity === undefined) return false
     const state = this.requireState()
+    const outstanding = state.collaborationArchiveIntents.find(item => item.workspaceId === id)
+    if (outstanding) throw new WorkspaceCollaborationArchiveIntentConflictError(outstanding.sessionId)
     const nextState = {
       ...state,
       pendingMutation: undefined,
@@ -729,6 +1009,9 @@ export class WorkspaceRegistry extends Service {
         workspaceIds,
         archivedSessionIds: state.archivedSessionIds,
         pinnedSessionIds: state.pinnedSessionIds,
+        dedicatedCollaborationSessionIds: state.dedicatedCollaborationSessionIds,
+        collaborationSessionIds: state.collaborationSessionIds,
+        collaborationArchiveIntents: state.collaborationArchiveIntents,
       })
     }
     await this.setState({
@@ -736,11 +1019,30 @@ export class WorkspaceRegistry extends Service {
       workspaceIds,
       archivedSessionIds: state.archivedSessionIds,
       pinnedSessionIds: state.pinnedSessionIds,
+      dedicatedCollaborationSessionIds: state.dedicatedCollaborationSessionIds,
+      collaborationSessionIds: state.collaborationSessionIds,
+      collaborationArchiveIntents: state.collaborationArchiveIntents,
     })
   }
 
   private validateStoredState(state: WorkspaceDomainState): void {
     const table = this.requireTable()
+    if (new Set(state.dedicatedCollaborationSessionIds).size !== state.dedicatedCollaborationSessionIds.length) {
+      throw new Error('workspace domain is inconsistent: dedicated collaboration Session repeats')
+    }
+    if (new Set(state.collaborationSessionIds).size !== state.collaborationSessionIds.length) {
+      throw new Error('workspace domain is inconsistent: collaboration Session repeats')
+    }
+    if (new Set(state.collaborationArchiveIntents.map(item => item.sessionId)).size !== state.collaborationArchiveIntents.length
+      || new Set(state.collaborationArchiveIntents.map(item => item.token)).size !== state.collaborationArchiveIntents.length) {
+      throw new Error('workspace domain is inconsistent: collaboration archive intent repeats')
+    }
+    for (const intent of state.collaborationArchiveIntents) {
+      const archived = state.archivedSessionIds.includes(intent.sessionId)
+      if (archived !== (intent.phase === 'archived')) {
+        throw new Error(`workspace domain is inconsistent: collaboration archive phase for session '${intent.sessionId}'`)
+      }
+    }
     const order = new Set<WorkspaceId>()
     for (const id of state.workspaceIds) {
       if (order.has(id)) {
@@ -883,7 +1185,7 @@ export class WorkspaceRegistry extends Service {
     this.state = state
   }
 
-  private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
+  private enqueueOperation<T>(operation: () => T | Promise<T>): Promise<T> {
     const result = this.operationTail.then(async () => {
       // A committed delete may leave only its marker cleanup pending. Retry
       // recovery before another create/delete can overwrite that pending operation record.

@@ -211,7 +211,9 @@ export function ciWorkerEnvironment(
   setDefault('DSH_PUBLINT_CONCURRENCY', shared)
   setDefault('DSH_SNAPSHOT_MAX_WORKERS', 1)
   setDefault('DSH_SNAPSHOT_MAX_CONCURRENCY', shared)
-  setDefault('DSH_WEB_SNAPSHOT_WORKERS', env.DSH_GATE_CONCURRENCY === '1' ? 1 : available)
+  // Browser tests keep several Host/WebSocket processes alive per worker. Bound
+  // the hosted lane so layout and transport assertions retain CPU headroom.
+  setDefault('DSH_WEB_SNAPSHOT_WORKERS', env.DSH_GATE_CONCURRENCY === '1' ? 1 : Math.min(available, 2))
   setDefault('DSH_COVERAGE_MAX_WORKERS', available)
   const coverageBudget = env.DSH_COVERAGE_MAX_WORKERS || String(available)
   const total = Number(coverageBudget)

@@ -19,6 +19,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** No registration carries that Workspace identity. */
     'workspace/not-found': { readonly workspaceId: WorkspaceId }
+    /** Collaboration archive requires the guarded handshake; forced stop is unavailable. */
+    'workspace/collaboration-force-archive-forbidden': { readonly sessionId: SessionId }
+    /** Host has not installed the durable Slark archive handshake. */
+    'workspace/collaboration-archive-unavailable': { readonly sessionId: SessionId }
   }
 }
 

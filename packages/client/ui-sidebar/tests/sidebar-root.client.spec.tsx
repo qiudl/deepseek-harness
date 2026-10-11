@@ -52,7 +52,8 @@ function mountShell({ collapsed = false, width = 300, shortcuts = [] }: {
     <SidebarRoot
       collapsed={current.collapsed} width={current.width}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
-      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector(shortcuts)}
+      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
+      useShortcuts={selector => selector(shortcuts)} useCollaborationAvailable={selector => selector(false)}
       useResource={useResource} useWorkspaces={neverHook}
       startSession={startSession} toggleSidebar={toggleSidebar} t={t}
       renderSlot={((
@@ -99,6 +100,42 @@ function mountShell({ collapsed = false, width = 300, shortcuts = [] }: {
 }
 
 describe('SidebarRoot shell', () => {
+  it('switches the desktop browser tab and follows the mobile collaboration section', () => {
+    const rendered: string[] = []
+    const toggleSidebar = vi.fn()
+    let collaborationOwner: SidebarSectionOwnerProps | undefined
+    const props = { collapsed: false, width: 300, mobileSection: undefined as 'collaboration' | 'ordinary' | undefined,
+      useSessions: neverHook, useSessionStatus, useSessionRetainInfo: neverHook,
+      usePanelInfo, selectPanel: () => {}, usePanels: (select: (rows: never[]) => unknown) => select([]),
+      useShortcuts: (select: (rows: never[]) => unknown) => select([]),
+      useCollaborationAvailable: (select: (available: boolean) => unknown) => select(true),
+      useResource, useWorkspaces: neverHook, startSession: vi.fn(), toggleSidebar, t,
+      renderSlot: (key: string, owner: unknown) => {
+        rendered.push(key)
+        if (key === 'sidebar.collaboration') collaborationOwner = owner as SidebarSectionOwnerProps
+        return <span data-testid={key}>{key}</span>
+      },
+    } as SidebarRootComponentProps
+    const view = render(<SidebarRoot {...props} />)
+    expect(screen.getByRole('tab', { name: /Collaboration/ }).getAttribute('aria-selected')).toBe('false')
+    expect(screen.getByTestId('sidebar.workspaces')).toBeTruthy()
+    expect(screen.getByTestId('sidebar.collaboration.badge')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: /Collaboration/ }))
+    expect(screen.getByRole('tab', { name: /Collaboration/ }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('sidebar.collaboration')).toBeTruthy()
+    collaborationOwner?.expandSidebar()
+    expect(toggleSidebar).not.toHaveBeenCalled()
+    view.rerender(<SidebarRoot {...{ ...props, collapsed: true }} />)
+    collaborationOwner?.expandSidebar()
+    expect(toggleSidebar).toHaveBeenCalledOnce()
+    view.rerender(<SidebarRoot {...props} />)
+    fireEvent.click(screen.getByRole('tab', { name: /Conversations/ }))
+    expect(screen.getByTestId('sidebar.workspaces')).toBeTruthy()
+    view.rerender(<SidebarRoot {...{ ...props, mobileSection: 'collaboration' }} />)
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.getByTestId('sidebar.collaboration')).toBeTruthy()
+    expect(rendered).toContain('sidebar.collaboration.badge')
+  })
   it('advertises the effective new-session binding', () => {
     const shortcut: ShortcutCatalogEntry = { id: 'session.new' as ShortcutCommandId, label: 'New', aliases: [],
       binding: null, modified: true, conflicts: [], issue: null, keys: ['Ctrl', 'N'], aria: 'Control+N' }
@@ -115,7 +152,7 @@ describe('SidebarRoot shell', () => {
     render(<HeaderLeadingControls toggleSidebar={vi.fn()} startSession={vi.fn()} selectPanel={vi.fn()} t={t}
       usePanelInfo={neverHook} useSessions={neverHook} useSessionStatus={neverHook}
       useSessionRetainInfo={neverHook} useResource={useResource} useWorkspaces={neverHook}
-      usePanels={select => select([])} useShortcuts={select => select([shortcut])} />)
+      usePanels={select => select([])} useShortcuts={select => select([shortcut])} useCollaborationAvailable={select => select(false)} />)
     const button = screen.getByRole('button', { name: 'New session' })
     expect(button.getAttribute('aria-keyshortcuts')).toBe('Control+N')
     fireEvent.focus(button)
@@ -141,7 +178,8 @@ describe('SidebarRoot shell', () => {
     const { container } = render(<SidebarRoot
       collapsed={false} width={300}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
-      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector([])}
+      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
+      useShortcuts={selector => selector([])} useCollaborationAvailable={selector => selector(false)}
       useResource={useResource} useWorkspaces={neverHook}
       startSession={vi.fn()} toggleSidebar={vi.fn()} t={t}
       renderSlot={((_key: string, _owner: unknown, options?: { fallback?: ReactNode }) =>
@@ -161,7 +199,8 @@ describe('SidebarRoot shell', () => {
     render(<SidebarRoot
       collapsed={false} width={300}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
-      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector([])}
+      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
+      useShortcuts={selector => selector([])} useCollaborationAvailable={selector => selector(false)}
       useResource={useResource} useWorkspaces={neverHook}
       startSession={vi.fn()} toggleSidebar={vi.fn()} t={t}
       renderSlot={((_key: string, _owner: unknown, options?: { fallback?: ReactNode }) =>
@@ -176,7 +215,8 @@ describe('SidebarRoot shell', () => {
     render(<SidebarRoot
       collapsed={false} width={300}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
-      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector([])}
+      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
+      useShortcuts={selector => selector([])} useCollaborationAvailable={selector => selector(false)}
       useResource={useResource} useWorkspaces={neverHook}
       startSession={vi.fn()} toggleSidebar={vi.fn()} t={t}
       renderSlot={((_key: string, _owner: unknown, options?: { fallback?: ReactNode }) =>
@@ -223,7 +263,8 @@ describe('SidebarRoot shell', () => {
     render(<SidebarRoot
       collapsed width={56}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
-      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector([])}
+      usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
+      useShortcuts={selector => selector([])} useCollaborationAvailable={selector => selector(false)}
       useResource={useResource} useWorkspaces={neverHook}
       startSession={vi.fn()} toggleSidebar={vi.fn()} t={t}
       renderSlot={((key: string) => key === 'sidebar.toggle.badge'

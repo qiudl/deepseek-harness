@@ -171,6 +171,20 @@ function baseline(
 }
 
 describe('ClientWorkspaceModel', () => {
+  it('updates dedicated collaboration membership only when the Host set changes', () => {
+    const model = modelFor(new FakeWorkspaceRemote())
+    const initial = model.getSnapshot()
+    model.replaceDedicatedCollaboration([])
+    expect(model.getSnapshot()).toBe(initial)
+    model.replaceDedicatedCollaboration([sid('one')])
+    expect(model.getSnapshot().dedicatedCollaborationSessionIds).toEqual(['one'])
+    const confirmed = model.getSnapshot()
+    model.replaceDedicatedCollaboration([sid('one')])
+    expect(model.getSnapshot()).toBe(confirmed)
+    model.replaceDedicatedCollaboration([sid('two')])
+    expect(model.getSnapshot().dedicatedCollaborationSessionIds).toEqual(['two'])
+  })
+
   it('publishes the prepared Workspace and leaves the list unchanged on refusal', async () => {
     const remote = new FakeWorkspaceRemote()
     const model = modelFor(remote)

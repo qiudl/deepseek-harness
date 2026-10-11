@@ -38,6 +38,126 @@ it('discards a result from a disposed or replaced worker generation', async () =
   await workers.disposeAll()
 })
 
+it('discards archive phase reads from a replaced Profile worker', async () => {
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const archiveTarget = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
+    environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'issuer', account_subject: 'alice' }
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    inspectCollaborationArchiveState: async () => { await pending; return { archive_phase: 'archived' } },
+  }))
+  await workers.start(input)
+  const read = workers.inspectCollaborationArchiveState(input.profileId, archiveTarget, new AbortController().signal)
+  const rejected = expect(read).rejects.toMatchObject({ code: 'stale' })
+  await workers.dispose(input.profileId)
+  await workers.start(input)
+  release()
+  await rejected
+  await workers.disposeAll()
+})
+
+it('reports an uncertain archive write after its Profile worker is replaced', async () => {
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const transitionTarget = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
+    environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'issuer', account_subject: 'alice', action: 'stage' as const }
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    transitionCollaborationArchive: async () => { await pending; return { archive_phase: 'staged' } },
+  }))
+  await workers.start(input)
+  const write = workers.transitionCollaborationArchive(input.profileId, transitionTarget, new AbortController().signal)
+  const rejected = expect(write).rejects.toMatchObject({ code: 'stale' })
+  await workers.dispose(input.profileId)
+  await workers.start(input)
+  release()
+  await rejected
+  await workers.disposeAll()
+})
+
+it('discards a recovered archive token from a replaced Profile worker', async () => {
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const intentTarget = { ...target, environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'issuer', account_subject: 'alice' }
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    inspectCollaborationArchiveIntent: async () => {
+      await pending
+      return { archive_phase: 'prepared', archive_token: '70000000-0000-4000-8000-000000000007' }
+    },
+  }))
+  await workers.start(input)
+  const read = workers.inspectCollaborationArchiveIntent(input.profileId, intentTarget, new AbortController().signal)
+  const rejected = expect(read).rejects.toMatchObject({ code: 'stale' })
+  await workers.dispose(input.profileId)
+  await workers.start(input)
+  release()
+  await rejected
+  await workers.disposeAll()
+})
+
+it('returns archive replies from the current Profile worker', async () => {
+  const identity = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
+    environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'issuer', account_subject: 'alice' }
+  const signal = new AbortController().signal
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    inspectCollaborationArchiveState: async (received, receivedSignal) => {
+      expect(received).toEqual(identity)
+      expect(receivedSignal).toBe(signal)
+      return { archive_phase: 'archived' }
+    },
+    inspectCollaborationArchiveIntent: async (received, receivedSignal) => {
+      expect(received).toEqual(identity)
+      expect(receivedSignal).toBe(signal)
+      return { archive_phase: 'prepared', archive_token: identity.archive_token }
+    },
+    transitionCollaborationArchive: async (received, receivedSignal) => {
+      expect(received).toEqual({ ...identity, action: 'stage' })
+      expect(receivedSignal).toBe(signal)
+      return { archive_phase: 'staged' }
+    },
+  }))
+  await workers.start(input)
+  try {
+    await expect(workers.inspectCollaborationArchiveState(input.profileId, identity, signal))
+      .resolves.toEqual({ archive_phase: 'archived' })
+    await expect(workers.inspectCollaborationArchiveIntent(input.profileId, identity, signal))
+      .resolves.toEqual({ archive_phase: 'prepared', archive_token: identity.archive_token })
+    await expect(workers.transitionCollaborationArchive(input.profileId, { ...identity, action: 'stage' }, signal))
+      .resolves.toEqual({ archive_phase: 'staged' })
+  } finally {
+    await workers.disposeAll()
+  }
+})
+
+it('refuses archive reads and writes before a capable Profile worker exists', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+  }))
+  const identity = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
+    environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'issuer', account_subject: 'alice' }
+  const signal = new AbortController().signal
+  const denied = async () => {
+    await expect(workers.inspectCollaborationArchiveState(input.profileId, identity, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(workers.inspectCollaborationArchiveIntent(input.profileId, identity, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(workers.transitionCollaborationArchive(input.profileId, { ...identity, action: 'stage' }, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  }
+  await denied()
+  await workers.start(input)
+  await denied()
+  await workers.disposeAll()
+})
+
 it('discards cancellation and wrong-target replies', async () => {
   const controller = new AbortController()
   const workers = new ProfileWorkerSupervisor(async () => ({
