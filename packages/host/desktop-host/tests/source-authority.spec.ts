@@ -37,6 +37,7 @@ async function fixture(
   sourceAnalysisRecoverySupported = false,
   sourceLiveResumeSupported = false,
   rootContinuationSupported = false,
+  rootCaptureSupported = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
@@ -127,6 +128,7 @@ async function fixture(
     rootFeedbackSupported,
     rootContinuationSupported,
     rootAnalysisSupported,
+    rootCaptureSupported,
     rootAnalysisRecoverySupported,
     sourceAnalysisRecoverySupported,
     sourceLiveResumeSupported,
@@ -1267,6 +1269,33 @@ it.each(['foreign','revoked','cancelled','peer'] as const)('root journal rejects
   await expect(f.client.rootJournal({ ...f.account,command:parseHostRootJournalCommand({ action:'read',target }),signal:controller.signal })).rejects.toThrow()
 })
 
+it.each(['capture_root', 'start_captured_root', 'release_captured_root'] as const)('capture-only command %s requires current Account and its own rollout capability', async (action) => {
+  const { parseHostRootAnalysisInput } = await import('@deepseek-ai/dsh-host-control-protocol')
+  const f = await fixture(false, false, false, false, false, false, false, false, true, false,
+    false, false, false, false, false, false, true)
+  const c = f.challenge, descriptor = { workspace_id: c.workspace_id, session_id: c.session_id,
+    source_message_id: c.source_message_id, source_revision: c.source_revision,
+    snapshot_digest: c.snapshot_digest }
+  const input = parseHostRootAnalysisInput({ namespace_id: 'n2_' + 'b'.repeat(64), continuation_policy: 'follow_authorized_plan', source: {
+    workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id, source_revision: c.source_revision } })
+  const root = { namespace_id: input.namespace_id, command_id: randomUUID(), root_task_id: randomUUID(),
+    root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64), source_descriptor: descriptor }
+  const value = action === 'release_captured_root' ? root : action === 'capture_root' ? { kind: 'captured', descriptor, root }
+    : { kind: 'prepared', descriptor, root, attempt_request_id: randomUUID(), input_manifest_digest: 'd'.repeat(64), source_digest: descriptor.snapshot_digest }
+  let calls = 0
+  f.setAnalysis(async () => { calls++; return value })
+  const request = { ...f.account, command: { action, input } }
+  await expect(f.client.collaborationAnalysis(request)).rejects.toThrow()
+  expect(calls).toBe(0)
+  await f.grant()
+  expect((await f.client.collaborationAnalysis(request)).kind).toBe(action === 'capture_root' ? 'root_captured'
+    : action === 'release_captured_root' ? 'root_capture_released' : 'root_prepared')
+  const foreign = { ...root, namespace_id: 'n2_' + 'c'.repeat(64) }
+  f.setAnalysis(async () => action === 'release_captured_root' ? foreign : { ...value, root: foreign })
+  await expect(f.client.collaborationAnalysis(request)).rejects.toThrow()
+  f.setAnalysis(async () => { f.host.revokeOwner(f.ownerId); return value })
+  await expect(f.client.collaborationAnalysis(request)).rejects.toThrow()
+})
 it('root preparation requires its own capability and current Account, and rejects Source-only downgrades', async()=>{
   const { parseHostRootAnalysisInput }=await import('@deepseek-ai/dsh-host-control-protocol')
   const input=parseHostRootAnalysisInput({ namespace_id:'n2_'+'b'.repeat(64),continuation_policy:'follow_authorized_plan',source:{ text:'original' } })
@@ -1551,7 +1580,7 @@ it('enforces root rollout capabilities on the server even if the client advertis
   const target = { namespace_id: 'n2_' + 'a'.repeat(64), command_id: randomUUID(),
     workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id, source_revision: c.source_revision }
   const input = { namespace_id: target.namespace_id, continuation_policy: 'follow_authorized_plan', source: {} }
-  const caps = ['root_continuation', 'source_analysis_recovery', 'root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
+  const caps = ['root_capture', 'root_continuation', 'source_analysis_recovery', 'root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
   Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, ...caps.map(c => 'profile.' + c)])
   const commands = [
     { action: 'read_source_output', target: { workspace_id: c.workspace_id, session_id: c.session_id,
@@ -1559,7 +1588,7 @@ it('enforces root rollout capabilities on the server even if the client advertis
     { action: 'root_feedback', operation: { action: 'continuation_read' } },
     ...['root_feedback', 'root_execution_journal'].map(action => ({ action, operation: { action: 'read' } })),
     ...['prepare_root_attempt', 'read_root_attempt', 'read_root_output'].map(action => ({ action, target })),
-    ...['resume_root', 'reconcile_root', 'recover_root', 'prepare_root'].map(action => ({ action, input })),
+    ...['capture_root', 'start_captured_root', 'release_captured_root', 'resume_root', 'reconcile_root', 'recover_root', 'prepare_root'].map(action => ({ action, input })),
   ]
   for (const command of commands)
     await expect(f.client.collaborationAnalysis({ ...f.account, command: parseHostCollaborationAnalysisCommand(command) })).rejects.toMatchObject({ code: 'upgrade_required' })

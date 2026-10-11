@@ -45,8 +45,8 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['root-analysis-budget', 'root-analysis-failure', 'root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
-  const rootAnalysis = mode === 'root-analysis' || mode === 'root-analysis-failure' || mode === 'root-analysis-budget'
+it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+  const rootAnalysis = mode === 'root-capture' || mode === 'root-analysis' || mode === 'root-analysis-failure' || mode === 'root-analysis-budget'
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
   const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
@@ -223,7 +223,7 @@ it.each(['root-analysis-budget', 'root-analysis-failure', 'root-analysis', 'root
       ? ((await factory['collaborationAnalysis'](
         origin,
         'B'.repeat(43),
-        { action: rootAnalysis ? 'prepare_root' : 'prepare', ...((rootAnalysis || mode === 'analysis-profile') ? { resume_binding_key: 'f'.repeat(64) } : {}), binding_key: 'd'.repeat(64), input: rootAnalysis ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
+        { action: mode === 'root-capture' ? 'capture_root' : rootAnalysis ? 'prepare_root' : 'prepare', ...(((rootAnalysis && mode !== 'root-capture') || mode === 'analysis-profile') ? { resume_binding_key: 'f'.repeat(64) } : {}), binding_key: 'd'.repeat(64), input: rootAnalysis ? { source, namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' } : source },
         new AbortController().signal,
         () => false,
       )) as {
@@ -235,6 +235,39 @@ it.each(['root-analysis-budget', 'root-analysis-failure', 'root-analysis', 'root
         root?: unknown
       })
       : undefined
+  if (mode === 'root-capture') {
+    expect(preparation?.kind).toBe('captured')
+    expect(preparation).not.toHaveProperty('attempt_request_id')
+    expect(providerRequests).toBe(0)
+    const root = parseHostRootSubmissionDescriptor(preparation?.root)
+    const original = { source, namespace_id: root.namespace_id, continuation_policy: 'follow_authorized_plan' }
+    const command = { action: 'capture_root', binding_key: 'd'.repeat(64), input: original }
+    const disk = join(directory, 'state', 'collaboration_analysis_v2.json')
+    await expect(readFile(disk)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await postAnalysis(command, `Bearer ${token}`)).status).toBe(403)
+    expect((await postAnalysis({ ...command, attempt_request_id: randomUUID() })).status).toBe(400)
+    const repeat = await postAnalysis(command)
+    expect(repeat.status).toBe(200)
+    expect((await repeat.json() as { value: unknown }).value).toEqual(preparation)
+    const target = { workspace_id: source.workspace_id, session_id: source.session_id,
+      source_message_id: source.source_message_id, source_revision: source.source_revision,
+      namespace_id: root.namespace_id, command_id: root.command_id }
+    await ctx.sessionController.acceptCollaborationRoot(target, { root_task_id: root.root_task_id,
+      root_trace_id: root.root_trace_id, admission_id: root.command_id, task_revision: 1, state_version: 1, state: 'active' },
+    new AbortController().signal)
+    const start = { ...command, action: 'start_captured_root' }
+    expect((await postAnalysis({ ...start, binding_key: 'e'.repeat(64) })).status).toBe(422)
+    const planned = await postAnalysis(start)
+    expect(planned.status).toBe(200)
+    const result = (await planned.json() as { value: typeof preparation }).value
+    expect(result).toMatchObject({ kind: 'prepared', root, descriptor: root.source_descriptor })
+    expect(result?.source_digest).toBe(root.source_descriptor.snapshot_digest)
+    expect((await readFile(disk, 'utf8'))).toContain(source.original_message)
+    expect(providerRequests).toBe(0)
+    expect((await postAnalysis(start)).status).toBe(422)
+    expect(session.seq).toBe(seq)
+    return
+  }
   const first =
     (mode === 'analysis-profile' || rootAnalysis)
       ? {

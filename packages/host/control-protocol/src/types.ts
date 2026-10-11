@@ -1,7 +1,7 @@
 import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
 import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
 import type { HostSavedAnalysisFields, HostRootAnalysisOutput } from './root-analysis-output.ts'
-import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJournalCommand, HostRootJournalMetadata, HostRootAnalysisInput, HostRootSubmissionTarget } from './root-authority.ts'
+import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJournalCommand, HostRootJournalMetadata, HostRootAnalysisInput, HostRootSubmissionTarget, HostRootSubmissionDescriptor } from './root-authority.ts'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
 
@@ -603,6 +603,9 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'read_source_output'; target: HostCollaborationSourceTarget }>
   | Readonly<{ action: 'read_root_output'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'prepare_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'capture_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'start_captured_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'release_captured_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'recover_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'reconcile_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'resume_root'; input: HostRootAnalysisInput }>
@@ -619,6 +622,8 @@ export type HostCollaborationAnalysisResult =
   | Readonly<{ kind: 'source_output'; evidence: HostSourceAnalysisOutput }>
   | Readonly<{ kind: 'root_output'; evidence: HostRootAnalysisOutput }>
   | Readonly<{ kind: 'root_prepared'; preparation: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'root_captured'; capture: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'root_capture_released'; root: HostRootSubmissionDescriptor }>
   | Readonly<{ kind: 'prepared'; preparation: HostRemoteSessionJson }>
   | Readonly<{ kind: 'reply_source'; capture: HostRemoteSessionJson }>
   | Readonly<{ kind: 'output'; json_base64url: string; analysis_receipt?: HostCollaborationAnalysisReceipt }>

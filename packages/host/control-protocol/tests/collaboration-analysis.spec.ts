@@ -3,6 +3,26 @@ import { expect, it } from 'vitest'
 import { parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult, encodeHostControlFrame, decodeHostControlFrame } from '../src/index.ts'
 import type { HostControlFrame } from '../src/index.ts'
 const uid = '40000000-0000-4000-8000-000000000004'
+it('keeps capture-only Root metadata separate from model preparation', () => {
+  const descriptor = { workspace_id: uid, session_id: 's', source_message_id: 'm', source_revision: '1', snapshot_digest: 'a'.repeat(64) }
+  const root = { namespace_id: 'n2_' + 'a'.repeat(64), command_id: uid, root_task_id: uid,
+    root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64), source_descriptor: descriptor }
+  for (const action of ['capture_root', 'start_captured_root', 'release_captured_root']) {
+    const command = { action, input: { namespace_id: root.namespace_id, continuation_policy: 'follow_authorized_plan', source: {} } }
+    expect(parseHostCollaborationAnalysisCommand(command)).toEqual(command)
+    expect(() => parseHostCollaborationAnalysisCommand({ ...command, binding_key: 'a'.repeat(64) })).toThrow()
+  }
+  for (const kind of ['captured', 'recovered']) {
+    const result = { kind: 'root_captured', capture: { kind, descriptor, root } }
+    expect(parseHostCollaborationAnalysisResult(result)).toEqual(result)
+    if (kind === 'captured')
+      expect(() => parseHostCollaborationAnalysisResult({ kind: 'root_prepared', preparation: result.capture })).toThrow()
+    for (const capture of [ { ...result.capture, kind: 'prepared' }, { ...result.capture, attempt_request_id: uid },
+      { ...result.capture, root: { ...root, source_descriptor: { ...descriptor, snapshot_digest: 'd'.repeat(64) } } } ])
+      expect(() => parseHostCollaborationAnalysisResult({ ...result, capture })).toThrow()
+  }
+  expect(parseHostCollaborationAnalysisResult({ kind: 'root_capture_released', root })).toEqual({ kind: 'root_capture_released', root })
+})
 it('detaches bounded prepare/dispatch commands and forbids caller binding or models at the command level', () => {
   const input = { source_message_id: 'original' }
   const parsed = parseHostCollaborationAnalysisCommand({ action: 'prepare', input })
