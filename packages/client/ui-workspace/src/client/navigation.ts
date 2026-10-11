@@ -32,6 +32,14 @@ export type StartSessionOptions = DraftInitializationOptions
 
 /** Workspace archive and directory operations consumed by Client UI domains. */
 export interface UiWorkspace {
+  /** Session currently displayed in the main conversation pane.
+   * @returns Selected Session or undefined.
+   */
+  currentSessionId(): SessionId | undefined
+  /** Workspace of the currently selected main Session, when one is selected.
+   * @returns Selected Workspace or undefined.
+   */
+  currentWorkspaceId(): WorkspaceId | undefined
   /**
    * Select a Session and show its Conversation as one UI navigation action.
    * @param target - known Session identity or durable direct-parent subagent address to display.
@@ -72,6 +80,10 @@ export interface UiWorkspace {
    * @param options - initial content; existing text or attachments are preserved unless clearPreviousDraft is true.
    */
   startSession(workspaceId?: WorkspaceId, options?: StartSessionOptions): void
+  /** Create a dedicated collaboration Session and open it.
+   * @param workspaceId - Explicit target, or the current/recent Workspace.
+   */
+  startCollaborationSession(workspaceId?: WorkspaceId): void
   /**
    * Archive a Session and clear it when it is the current selection.
    * @param sessionId - Session to archive.
@@ -143,6 +155,16 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   )
   private mainReference: SessionReference | undefined
 
+  currentSessionId(): SessionId | undefined {
+    return this.mainReference?.sessionId
+  }
+
+  currentWorkspaceId(): WorkspaceId | undefined {
+    const sessionId = this.mainReference?.sessionId
+    return sessionId === undefined ? undefined : this.workspaces.list.getSnapshot().items
+      .find(item => item.sessionIds.includes(sessionId))?.workspaceId
+  }
+
   /**
    * @param ctx - Client root Context.
    * @param directoryPicker - the directory-picking Remote namespace.
@@ -194,11 +216,12 @@ class UiWorkspaceService extends Service implements UiWorkspace {
 
   private reuseOrCreateBlank(workspace: WorkspaceView): Promise<SessionId> {
     const archived = this.workspaces.list.getSnapshot().archivedSessionIds
+    const dedicated = this.workspaces.list.getSnapshot().dedicatedCollaborationSessionIds ?? []
     const sessions = this.sessions.list.getSnapshot()
     for (const id of sessions.ids) {
       const summary = sessions.byId[id]
       if (summary === undefined || !summary.blank || summary.cwd !== workspace.path
-        || !workspace.sessionIds.includes(id) || archived.includes(id)) continue
+        || !workspace.sessionIds.includes(id) || archived.includes(id) || dedicated.includes(id)) continue
       return this.reuseBlank(workspace.workspaceId, id)
     }
     return this.sessions.create({ workspaceId: workspace.workspaceId })
@@ -271,6 +294,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
         return
       }
       this.clearMain()
+      this.ctx.layout.showMobileChat()
       return
     }
     const opening = draftOptions === undefined
@@ -295,6 +319,27 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     const message = this.ctx.locale.bind('workspace')('draft.initializationFailed')
     this.notify({ kind: 'createFailed', message })
     throw new Error(message)
+  }
+
+  startCollaborationSession(workspaceId?: WorkspaceId): void {
+    const snapshot = this.workspaces.list.getSnapshot()
+    const sessions = this.sessions.list.getSnapshot()
+    const current = this.mainReference?.sessionId
+    const currentWorkspaceId = current === undefined ? undefined
+      : snapshot.items.find(item => item.sessionIds.includes(current))?.workspaceId
+    const recent = snapshot.phase === 'ready' && sessions.phase === 'ready'
+      ? recentWorkspace(snapshot.items, sessions.byId) : undefined
+    const target = workspaceId ?? currentWorkspaceId ?? recent
+    if (target === undefined) {
+      this.notify({ kind: 'createFailed', message: 'A workspace is required for collaboration.' })
+      return
+    }
+    const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal])
+    void this.sessions.create({ workspaceId: target, dedicatedCollaboration: true }).then((sessionId) => {
+      if (!navigation.aborted) this.replaceMain(sessionId, navigation, 'reveal')
+    }).catch((error: unknown) => {
+      if (!navigation.aborted) this.notify({ kind: 'createFailed', message: creationFailureMessage(error) })
+    })
   }
 
   async archiveSession(sessionId: SessionId, options: { readonly stopActivity?: boolean } = {}): Promise<void> {
@@ -458,7 +503,10 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     const previous = this.mainReference
     this.mainReference = reference
     previous?.release()
-    if (panel === 'reveal') this.ctx.layout.selectPanel(null)
+    if (panel === 'reveal') {
+      this.ctx.layout.selectPanel(null)
+      this.ctx.layout.showMobileChat()
+    }
   }
 
 }

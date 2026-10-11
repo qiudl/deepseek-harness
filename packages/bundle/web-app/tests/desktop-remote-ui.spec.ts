@@ -421,6 +421,60 @@ describe('Desktop remote UI read-only bridge', () => {
       .rejects.toThrow('endpoint denied')
     expect(invoke).toHaveBeenCalledTimes(6)
   })
+  it('REQ-20261011-0002 validates membership replies before passing them to Main', async () => {
+    const entry = { workspaceId: '11111111-1111-4111-8111-111111111111', sessionId: 'session-1' }
+    const invoke = vi.fn(async () => ({ entries: [{ ...entry, owned: true, pinned: false, archived: false }] }))
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+    const signal = new AbortController().signal
+    const payload = { args: { request: { entries: [entry] } } }
+    await expect(executor.execute('session/collaborationMembership', payload, signal))
+      .resolves.toEqual({ entries: [{ ...entry, owned: true, pinned: false, archived: false }] })
+    expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'collaborationMembership', args: payload.args, signal })
+    await expect(executor.execute('session/collaborationMembership', { args: { request: { entries: [entry, entry] } } }, signal))
+      .rejects.toThrow('invalid membership payload')
+    invoke.mockResolvedValue({ entries: [{ ...entry, owned: false, pinned: true, archived: false }] })
+    await expect(executor.execute('session/collaborationMembership', payload, signal))
+      .rejects.toThrow('invalid membership result')
+    const invalidRequests: unknown[] = [
+      { args: { request: { entries: [] } } },
+      { args: { request: { entries: Array.from({ length: 51 }, () => entry) } } },
+      { args: { request: null } },
+      { args: { request: { entries: [null] } } },
+      { args: { request: { entries: [{ ...entry, path: '/tmp' }] } } },
+      { args: { request: { entries: [{ ...entry, workspaceId: 'bad' }] } } },
+      ...['', '.', '..', 'bad/id', 'bad\\id', 'x'.repeat(257)].map(sessionId =>
+        ({ args: { request: { entries: [{ ...entry, sessionId }] } } })),
+      { args: { request: { entries: [entry] }, path: '/tmp' } },
+      { args: { request: { entries: [entry] }, extra: true } },
+    ]
+    for (const invalid of invalidRequests) {
+      await expect(executor.execute('session/collaborationMembership', invalid, signal))
+        .rejects.toThrow('invalid membership payload')
+    }
+    const invalidResults: unknown[] = [
+      null, {}, { entries: null }, { entries: [] }, { entries: [{ ...entry, owned: true, pinned: false, archived: false }], extra: true },
+      { entries: [null] },
+      { entries: [{ ...entry, owned: true, pinned: false, archived: false, extra: true }] },
+      { entries: [{ ...entry, workspaceId: '22222222-2222-4222-8222-222222222222', owned: true, pinned: false, archived: false }] },
+      { entries: [{ ...entry, sessionId: 'different', owned: true, pinned: false, archived: false }] },
+      { entries: [{ ...entry, owned: 'yes', pinned: false, archived: false }] },
+      { entries: [{ ...entry, owned: true, pinned: 'yes', archived: false }] },
+      { entries: [{ ...entry, owned: true, pinned: false, archived: 'yes' }] },
+      { entries: [{ ...entry, owned: true, pinned: true, archived: true }] },
+      { entries: [{ ...entry, owned: false, pinned: false, archived: true }] },
+    ]
+    for (const invalid of invalidResults) {
+      invoke.mockResolvedValueOnce(invalid as never)
+      await expect(executor.execute('session/collaborationMembership', payload, signal))
+        .rejects.toThrow('invalid membership result')
+    }
+    invoke.mockResolvedValueOnce({ entries: [{ ...entry, owned: true, pinned: true, archived: false }] })
+    await expect(executor.execute('session/collaborationMembership', payload, signal))
+      .resolves.toEqual({ entries: [{ ...entry, owned: true, pinned: true, archived: false }] })
+    invoke.mockResolvedValueOnce({ entries: [{ ...entry, owned: true, pinned: false, archived: true }] })
+    await expect(executor.execute('session/collaborationMembership', payload, signal))
+      .resolves.toEqual({ entries: [{ ...entry, owned: true, pinned: false, archived: true }] })
+  })
 
   it('requires a private token, rejects forbidden endpoints and bounds input', async () => {
     const token = 'A'.repeat(43)

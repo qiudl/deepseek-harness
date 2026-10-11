@@ -174,14 +174,14 @@ describe('CI worker allocation', () => {
     if (cpus <= 2) expect(env.DSH_COVERAGE_PARTITIONS).toBeUndefined()
   })
 
-  it('bounds overlapping readers and lets the isolated browser pool use the runner', () => {
+  it('bounds overlapping readers and reserves CPU for browser Host processes', () => {
     const env = ciWorkerEnvironment('ci-consumers', {}, 16)
     expect(env).toMatchObject({
       DSH_OXLINT_THREADS: '8',
       DSH_PUBLINT_CONCURRENCY: '8',
       DSH_SNAPSHOT_MAX_WORKERS: '1',
       DSH_SNAPSHOT_MAX_CONCURRENCY: '8',
-      DSH_WEB_SNAPSHOT_WORKERS: '16',
+      DSH_WEB_SNAPSHOT_WORKERS: '2',
     })
   })
 

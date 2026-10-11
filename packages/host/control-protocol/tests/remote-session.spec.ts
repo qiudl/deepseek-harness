@@ -209,6 +209,15 @@ describe('Profile remote UI read wire commands', () => {
       expect(() => decode(readFrame('session/collaborationSources', { args: { request: invalid } }))).toThrow()
     }
   })
+  it('REQ-20261011-0002 bounds exact Host membership checks', () => {
+    const entry = { workspaceId: '11111111-1111-4111-8111-111111111111', sessionId: 'session-1' }
+    const frame = readFrame('session/collaborationMembership', { args: { request: { entries: [entry] } } })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    for (const entries of [[], Array(51).fill(entry), [{ ...entry, owner: 'other' }],
+      [{ ...entry, sessionId: '../other' }], [entry, entry]]) {
+      expect(() => decode(readFrame('session/collaborationMembership', { args: { request: { entries } } }))).toThrow()
+    }
+  })
   it('carries explicit display-position opt-in without accepting caller positions or disabling it silently', () => {
     for (const selector of [{}, { cursor: 'a'.repeat(64) }, { snapshotDigest: 'b'.repeat(64) }]) {
       const request = { sessionId: 'session-1', ...selector, includeTimeline: true }

@@ -302,6 +302,10 @@ function PanelChrome({ sessionId, fullscreen, actions, t, shortcuts, toggleFulls
 function SidebarPanel(panel: PanelProps & { width: number; panelRef: RefObject<HTMLDivElement> }): ReactNode {
   const { sessionId, surface, actions, t, renderSlot, openTab, width, reportRoom, fullscreen, panelRef } = panel
   const { expanded } = surface.layout
+  const activeNode = surface.layout.nodes[surface.layout.activePaneId]
+  const activeTab = activeNode?.kind === 'pane' && activeNode.activeTabId !== undefined
+    ? surface.layout.tabs[activeNode.activeTabId] : undefined
+  const collaborationSheet = activeTab?.kind === 'slark-collaboration'
   const types = panel.useTabTypes(value => value)
   return (
     <div
@@ -311,6 +315,7 @@ function SidebarPanel(panel: PanelProps & { width: number; panelRef: RefObject<H
         '--dsh-sidebar-width': fullscreen ? '100vw' : `${width}px` } as CSSProperties}
       data-sidebar-right-session={sessionId}
       data-sidebar-right-panel={fullscreen ? 'fullscreen' : 'push'}
+      data-sidebar-right-collaboration={collaborationSheet || undefined}
       data-sidebar-right-open={expanded || undefined}
       // Dockkit hides individual docked hosts; floating descendants remain accessible.
       aria-hidden={(!expanded && surface.layout.floats.length === 0) || undefined}

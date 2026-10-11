@@ -5,6 +5,8 @@ import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import {
   WorkspaceActiveSessionError,
   WorkspaceArchivedSessionPinError,
+  WorkspaceCollaborationArchiveUnavailableError,
+  WorkspaceCollaborationStopArchiveError,
   WorkspaceId,
   WorkspaceMoveInvalidError,
   WorkspaceOrderInvalidError,
@@ -176,6 +178,14 @@ export class WorkspaceCommands {
           { sessionId: request.sessionId, activity: error.activity },
           { cause: error },
         )
+      }
+      if (error instanceof WorkspaceCollaborationStopArchiveError) {
+        throw new RemoteError('workspace/collaboration-force-archive-forbidden',
+          error.message, { sessionId: request.sessionId }, { cause: error })
+      }
+      if (error instanceof WorkspaceCollaborationArchiveUnavailableError) {
+        throw new RemoteError('workspace/collaboration-archive-unavailable',
+          error.message, { sessionId: request.sessionId }, { cause: error })
       }
       throw error
     }

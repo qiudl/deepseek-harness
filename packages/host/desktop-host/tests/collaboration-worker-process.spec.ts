@@ -14,6 +14,11 @@ import type { ProfileWorkerHandle } from '../src/types.ts'
 
 const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
   session_id: 'session', source_message_id: 'message', source_revision: '1' })
+const archiveTarget = { workspace_id: target.workspace_id, session_id: target.session_id,
+  archive_token: '70000000-0000-4000-8000-000000000007',
+  environment_id: '20000000-0000-4000-8000-000000000002',
+  account_issuer: 'https://accounts.example.test',
+  account_subject: '30000000-0000-4000-8000-000000000003' }
 const descriptor = { ...target, snapshot_digest: 'a'.repeat(64) }
 const rootTarget = parseHostRootSubmissionTarget({ ...target, namespace_id: 'n2_' + 'b'.repeat(64), command_id: '10000000-0000-4000-8000-000000000001' })
 const rootDescriptor = { namespace_id: rootTarget.namespace_id, command_id: rootTarget.command_id,
@@ -43,7 +48,7 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
   delivery_state: 'pending', delivery_state_version: '1',
 } })
 
-async function harness(selectionRedirect?: string) {
+async function harness(selectionRedirect?: string, archiveStagePhase = 'staged') {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -60,6 +65,9 @@ async function harness(selectionRedirect?: string) {
     const selectionRedirect = ${JSON.stringify(selectionRedirect ?? null)}
     const tokens = {
       '/internal/desktop-workspace-model-selection': 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN',
+      '/internal/desktop-collaboration-archive-state': 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN',
+      '/internal/desktop-collaboration-archive-intent': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
+      '/internal/desktop-collaboration-archive-transition': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -98,6 +106,10 @@ async function harness(selectionRedirect?: string) {
           : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
+          : url.pathname.endsWith('archive-state') ? { archive_phase: 'archived' }
+          : url.pathname.endsWith('archive-intent') ? { archive_phase: 'prepared', archive_token: ${JSON.stringify(archiveTarget.archive_token)} }
+          : url.pathname.endsWith('archive-transition') ? { archive_phase: ({ stage: ${JSON.stringify(archiveStagePhase)}, prepared: 'prepared',
+              archive: 'archived', restore: 'restored', finish_release: 'released' })[input.action] }
           : input.action === 'read_source_output' ? { value: ${JSON.stringify(sourceOutput)} }
           : url.pathname.endsWith('analysis') ? { value: input }
           : { delivery_id: input.projection.delivery_id }
@@ -124,14 +136,52 @@ async function harness(selectionRedirect?: string) {
   acquired.worker = worker
   const { inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant,
-    captureCollaborationReferenceSelection, readCollaborationReferenceContent } = worker
+    captureCollaborationReferenceSelection, readCollaborationReferenceContent,
+    inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
-    || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent) throw new Error('missing private worker capability')
+    || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
+    || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive)
+    throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
-    readCollaborationReferenceContent }
+    readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
+    transitionCollaborationArchive }
 }
+
+it('routes account-bound archive inspection and every transition through separate worker tokens', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  for (const route of ['archive-state', 'archive-intent', 'archive-transition']) {
+    expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-collaboration-${route}`, {
+      method: 'POST', body: JSON.stringify(archiveTarget),
+    })).status).toBe(403)
+  }
+  expect(await h.inspectCollaborationArchiveState(archiveTarget, signal)).toEqual({ archive_phase: 'archived' })
+  const { archive_token: _token, ...intent } = archiveTarget
+  expect(await h.inspectCollaborationArchiveIntent(intent, signal)).toEqual({
+    archive_phase: 'prepared', archive_token: archiveTarget.archive_token,
+  })
+  for (const [action, archive_phase] of [
+    ['stage', 'staged'], ['prepared', 'prepared'], ['archive', 'archived'],
+    ['restore', 'restored'], ['finish_release', 'released'],
+  ] as const) {
+    expect(await h.transitionCollaborationArchive({ ...archiveTarget, action }, signal)).toEqual({ archive_phase })
+  }
+  h.worker.abort()
+  await expect(h.inspectCollaborationArchiveState(archiveTarget, signal)).rejects.toThrow('unavailable')
+  await expect(h.inspectCollaborationArchiveIntent(intent, signal)).rejects.toThrow('unavailable')
+  await expect(h.transitionCollaborationArchive({ ...archiveTarget, action: 'stage' }, signal)).rejects.toThrow('unavailable')
+})
+
+it('rejects a released stage and accepts an existing staged archive', async () => {
+  const signal = new AbortController().signal
+  const released = await harness(undefined, 'released')
+  await expect(released.transitionCollaborationArchive({ ...archiveTarget, action: 'stage' }, signal))
+    .rejects.toThrow('unavailable')
+  const archived = await harness(undefined, 'archived')
+  expect(await archived.transitionCollaborationArchive({ ...archiveTarget, action: 'stage' }, signal))
+    .toEqual({ archive_phase: 'archived' })
+})
 
 it('authenticates each original-Profile route and refuses private operations after worker shutdown', async () => {
   const h = await harness(), signal = new AbortController().signal

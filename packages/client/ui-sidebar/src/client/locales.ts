@@ -7,6 +7,9 @@ export const zh = {
   'toggle.open': '打开侧边栏',
   'toggle.collapse': '收起侧边栏',
   'panels.label': '全局面板',
+  'conversations.label': '会话分类',
+  'conversations.ordinary': '普通会话',
+  'conversations.collaboration': '协同',
 } satisfies Record<string, string>
 
 /** The sidebar namespace key union. */
@@ -19,4 +22,7 @@ export const en = {
   'toggle.open': 'Open sidebar',
   'toggle.collapse': 'Collapse sidebar',
   'panels.label': 'Global panels',
+  'conversations.label': 'Conversation categories',
+  'conversations.ordinary': 'Conversations',
+  'conversations.collaboration': 'Collaboration',
 } satisfies Record<SidebarKey, string>

@@ -541,9 +541,63 @@ delete(id: WorkspaceId): Promise<boolean>
  */
 insertBefore(id: WorkspaceId, beforeId?: WorkspaceId): Promise<readonly WorkspaceId[]>
 
+/** Find the original retry token under the Registry queue after Main or Host restarts.
+ * @param raw - Current Account and Workspace membership without a caller token.
+ * @returns Bound token and phase, or null when this Session has no outstanding intent.
+ */
+findCollaborationArchiveIntent(raw: Omit<CollaborationArchiveIntent, 'token' | 'phase'>): Promise< Readonly<{ token: string; phase: 'staged' | 'prepared' | 'archived' | 'restored' }> | null >
+
+/** Read only the bound, durable phase in the Registry queue for Host-side signing.
+ * @param raw - Exact Account, Session and token identity.
+ * @returns Current persisted phase and its original identity.
+ */
+inspectCollaborationArchiveState(raw: Omit<CollaborationArchiveIntent, 'phase'>): Promise< Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; token: string; phase: 'staged' | 'prepared' | 'archived' | 'restored' }> >
+
+/** Persist an owner-bound retry token before a trusted coordinator requests Slark prepare.
+ * @param raw - Current Account and original Session with a new token.
+ * @returns The persisted token, including any phase reached by a same-token retry.
+ */
+stageCollaborationArchive(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent>
+
+/** Record a successful Slark prepare before writing the local archive set.
+ * @param raw - Existing Account-bound token.
+ * @returns The prepared durable intent.
+ */
+recordCollaborationArchivePrepared(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent>
+
+/** Persist the original Session archive and its token phase in one Registry write.
+ * @param raw - Existing prepared Account-bound token.
+ * @returns The archived durable intent.
+ */
+archivePreparedCollaborationSession(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent>
+
+/** Restore the local Session first; the same token remains until Slark releases its fence.
+ * @param raw - Existing archived Account-bound token.
+ * @returns The restored durable intent.
+ */
+restoreCollaborationSession(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent>
+
+/** Forget the token only after the trusted coordinator has confirmed Slark release.
+ * @param raw - Restored token whose cloud fence was released.
+ */
+finishCollaborationArchiveRelease(raw: CollaborationArchiveIntent): Promise<void>
+
+/** Guard an original Session before Source capture can write either journal.
+ * @param sessionId - Existing original Session.
+ */
+markCollaborationSession(sessionId: SessionId): Promise<void>
+
+/** Retain a dedicated Session's collaboration origin before the first Source.
+ * @param sessionId - Existing dedicated Session.
+ */
+markDedicatedCollaborationSession(sessionId: SessionId): Promise<void>
+
 /**
  * Archive one session durably. The session must exist (live or in session
  * persistence); its workspace accounting — or lack of one — is irrelevant.
+ * A collaboration Session is refused until the durable Slark archive
+ * coordinator is installed. Source journal providers classify older entries
+ * before any archive write, including the force-stop path.
  * Without `stopActivity` the session must also be inactive: the
  * `workspace/session-activity` waterfall is asked once, and any reported
  * activity rejects with {@link WorkspaceActiveSessionError} before anything
@@ -627,6 +681,22 @@ Ask the composed providers what still runs for a session before it is archived. 
  * @mode waterfall
  */
 'workspace/session-activity'( request: SessionActivityRequest, next: () => Promise<readonly SessionActivity[]>, ): Promise<readonly SessionActivity[]>
+```
+
+Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
+
+<a id="workspacesession-collaboration--waterfall"></a>
+
+#### `workspace/session-collaboration` — waterfall
+
+Source journal owners classify older Sessions before the archive write.
+
+```ts cordis-catalog
+/** Source journal owners classify older Sessions before the archive write.
+ * @mode waterfall
+ * @param request - Session to classify.
+ */
+'workspace/session-collaboration'( request: SessionActivityRequest, next: () => Promise<boolean>, ): Promise<boolean>
 ```
 
 Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)

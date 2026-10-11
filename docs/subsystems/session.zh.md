@@ -1033,6 +1033,13 @@ async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise
  */
 @Remote('list') async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>
 
+/** Check current native ownership of one bounded cloud-index page without opening or changing a Session.
+ * @param request - Workspace and Session pairs from one index page.
+ * @param signal - Cancellation of the caller's read.
+ * @returns Current ownership, pin and archive flags for each pair.
+ */
+@Remote('collaborationMembership') async collaborationMembership(request: SessionCollaborationMembershipRequest, signal: AbortSignal): Promise<SessionCollaborationMembershipValue>
+
 /**
  * Search visible Session content without resuming an Agent.
  * @param request - literal message-content query.

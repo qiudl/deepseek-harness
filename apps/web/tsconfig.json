@@ -172,6 +172,7 @@
     "tests/agent-team-panel.e2e.ts",
     "tests/sidebar-right.e2e.ts",
     "tests/slark-collaboration-sidebar.e2e.ts",
+    "tests/slark-collaboration-conversations.e2e.ts",
     "tests/sidebar-terminal.e2e.ts",
     "tests/startup-auto-selection.e2e.ts",
     "tests/changed-files-turn.e2e.ts",

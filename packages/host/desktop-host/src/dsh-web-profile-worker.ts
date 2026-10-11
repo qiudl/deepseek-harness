@@ -15,6 +15,12 @@ import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
 import { parseHostRemoteSessionJson, parseHostWorkspaceModelSelection, parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationArchiveStateValue,
+  parseHostCollaborationArchiveIntentTarget, parseHostCollaborationArchiveIntentValue,
+  parseHostCollaborationArchiveTransitionTarget, parseHostCollaborationArchiveTransitionResult,
+  type HostCollaborationArchiveIntentTarget, type HostCollaborationArchiveIntentValue,
+  type HostCollaborationArchiveStateTarget, type HostCollaborationArchiveTransitionTarget,
+  type HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
@@ -25,7 +31,7 @@ const REMOTE_UI_ASSET_CHUNK_BYTES = 24 * 1024
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
-  'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
+  'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
   'DSH_PROFILE_ANALYSIS_TOKEN', 'DSH_PROFILE_REFERENCE_TOKEN',
   'DSH_PROFILE_DELIVERY_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
@@ -149,6 +155,7 @@ export class DshWebProfileWorkerFactory {
     const analysisToken = randomBytes(32).toString('base64url')
     const deliveryToken = randomBytes(32).toString('base64url')
     const workspaceModelToken = randomBytes(32).toString('base64url')
+    const archiveTransitionToken = randomBytes(32).toString('base64url')
     const modelToken = randomBytes(32).toString('base64url')
     const remoteSessionToken = randomBytes(32).toString('base64url')
     const remoteUiToken = randomBytes(32).toString('base64url')
@@ -164,6 +171,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
         DSH_PROFILE_MODEL_TOKEN: modelToken,
         DSH_PROFILE_WORKSPACE_MODEL_TOKEN: workspaceModelToken,
+        DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN: archiveTransitionToken,
         DSH_PROFILE_SOURCE_TOKEN: sourceToken,
         DSH_PROFILE_REFERENCE_TOKEN: referenceToken,
         DSH_PROFILE_ANALYSIS_TOKEN: analysisToken,
@@ -179,7 +187,8 @@ export class DshWebProfileWorkerFactory {
     const activated = await this.waitForOrigin(child)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
-      modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, sourceToken, analysisToken, deliveryToken, referenceToken)
+      modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, archiveTransitionToken,
+      sourceToken, analysisToken, deliveryToken, referenceToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -239,6 +248,7 @@ export class DshWebProfileWorkerFactory {
     remoteSessionToken: string,
     remoteUiToken: string,
     workspaceModelToken: string,
+    archiveTransitionToken: string,
     sourceToken: string,
     analysisToken: string,
     deliveryToken: string,
@@ -327,6 +337,15 @@ export class DshWebProfileWorkerFactory {
       inspectWorkspaceModelSelection: (target, signal) => this.inspectWorkspaceModelSelection(
         viewOrigin, workspaceModelToken, target, signal, () => requestedStop || settled,
       ),
+      inspectCollaborationArchiveState: (target, signal) => this.inspectCollaborationArchiveState(
+        viewOrigin, workspaceModelToken, target, signal, () => requestedStop || settled,
+      ),
+      inspectCollaborationArchiveIntent: (target, signal) => this.inspectCollaborationArchiveIntent(
+        viewOrigin, archiveTransitionToken, target, signal, () => requestedStop || settled,
+      ),
+      transitionCollaborationArchive: (target, signal) => this.transitionCollaborationArchive(
+        viewOrigin, archiveTransitionToken, target, signal, () => requestedStop || settled,
+      ),
       remoteSession: (command, signal) => this.remoteSession(
         viewOrigin, remoteSessionToken, command, signal, () => requestedStop || settled,
       ),
@@ -370,6 +389,63 @@ export class DshWebProfileWorkerFactory {
       }
       return result
     }, 'await')
+  }
+
+  private async inspectCollaborationArchiveState(
+    viewOrigin: string, token: string, target: HostCollaborationArchiveStateTarget,
+    signal: AbortSignal, stopped: () => boolean,
+  ) {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    const response = await fetch(`${viewOrigin}/internal/desktop-collaboration-archive-state`, {
+      method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 2048,
+      bytes => parseHostCollaborationArchiveStateValue(JSON.parse(bytes.toString('utf8'))), 'await')
+  }
+
+  private async transitionCollaborationArchive(
+    viewOrigin: string, token: string,
+    target: HostCollaborationArchiveTransitionTarget,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostCollaborationArchiveTransitionResult> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    const response = await fetch(`${viewOrigin}/internal/desktop-collaboration-archive-transition`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(parseHostCollaborationArchiveTransitionTarget(target)), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 2048, (bytes) => {
+      const value = parseHostCollaborationArchiveTransitionResult(JSON.parse(bytes.toString('utf8')))
+      const expected = ({ stage: 'staged', prepared: 'prepared', archive: 'archived',
+        restore: 'restored', finish_release: 'released' } as const)[target.action]
+      if (target.action === 'stage'
+        ? value.archive_phase === 'released'
+        : value.archive_phase !== expected) {
+        throw new HostAuthorityError('unavailable')
+      }
+      return value
+    }, 'await')
+  }
+
+  private async inspectCollaborationArchiveIntent(
+    viewOrigin: string, token: string, target: HostCollaborationArchiveIntentTarget,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostCollaborationArchiveIntentValue> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    const response = await fetch(`${viewOrigin}/internal/desktop-collaboration-archive-intent`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(parseHostCollaborationArchiveIntentTarget(target)), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 2048,
+      bytes => parseHostCollaborationArchiveIntentValue(JSON.parse(bytes.toString('utf8'))), 'await')
   }
 
   private async collaborationAnalysis(

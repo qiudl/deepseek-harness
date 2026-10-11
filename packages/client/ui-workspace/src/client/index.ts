@@ -125,7 +125,8 @@ export function apply(ctx: Context): void {
   const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
     const result = await sessions.search(query, signal)
     if (!result.ok) throw new Error(result.error.message)
-    return result.value
+    const dedicated = new Set(workspaces.list.getSnapshot().dedicatedCollaborationSessionIds)
+    return { ...result.value, items: result.value.items.filter(item => !dedicated.has(item.sessionId)) }
   }
 
   // Stable per-surface occupancy sources (the renderer's hook cache keys by

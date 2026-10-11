@@ -487,6 +487,10 @@
   margin-bottom: 8px;
 }
 
+.conversationTabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; margin: 0 2px 10px; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-interactive-bg-hover); }
+.conversationTab { display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.conversationTabActive { background: var(--dsw-specific-sidebar-fill); color: var(--dsw-alias-label-primary); font-weight: 600; box-shadow: 0 1px 3px rgb(0 0 0 / 0.08); }
+
 /* Panel entries share the New Session bar's 12px radius and 2px inset, the
    session rows' hover/selected surface, and the primary ink. */
 .panelRow {

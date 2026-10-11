@@ -6,6 +6,9 @@ import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } fro
 import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection,
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationArchiveStateTarget, HostCollaborationArchiveStateValue,
+  HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
+  HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
 import type { HostControlAuthorityOptions } from './unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
@@ -23,6 +26,10 @@ export class ProfileWorkerSupervisor {
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
+
+  private assertCurrentWorker(profileId: string, worker: ProfileWorkerHandle): void {
+    if (this.closed || this.workers.get(profileId) !== worker) throw new HostAuthorityError('stale')
+  }
 
   /**
    * Start one Profile worker with an explicit, non-ambient environment.
@@ -111,6 +118,61 @@ export class ProfileWorkerSupervisor {
     if (result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
       throw new HostAuthorityError('profile_mismatch')
     }
+    return result
+  }
+
+  /** Read only the currently selected Account Profile's durable archive phase.
+   * @param profileId - Authorized Profile identity.
+   * @param target - Exact token and Account tuple.
+   * @param signal - Owning connection cancellation.
+   * @returns Current worker's persisted phase.
+   */
+  async inspectCollaborationArchiveState(
+    profileId: string, target: HostCollaborationArchiveStateTarget, signal: AbortSignal,
+  ): Promise<HostCollaborationArchiveStateValue> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.inspectCollaborationArchiveState) throw new HostAuthorityError('unavailable')
+    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const result = await worker.inspectCollaborationArchiveState(target, signal)
+    signal.throwIfAborted()
+    if (!current()) throw new HostAuthorityError('stale')
+    return result
+  }
+
+  /** Discard a recovered token from a worker replaced while the lookup was pending.
+   * @param profileId - Authorized Account Profile.
+   * @param target - Session and Account tuple without a caller token.
+   * @param signal - Owning control connection cancellation.
+   * @returns Current worker's original token or explicit absence.
+   */
+  async inspectCollaborationArchiveIntent(
+    profileId: string, target: HostCollaborationArchiveIntentTarget, signal: AbortSignal,
+  ): Promise<HostCollaborationArchiveIntentValue> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.inspectCollaborationArchiveIntent) throw new HostAuthorityError('unavailable')
+    const result = await worker.inspectCollaborationArchiveIntent(target, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
+  /** An uncertain reply after a worker replacement must be reconciled by the durable token.
+   * @param profileId - Authorized Profile identity.
+   * @param target - Exact token and phase action.
+   * @param signal - Owning connection cancellation.
+   * @returns Current worker's persisted phase.
+   */
+  async transitionCollaborationArchive(
+    profileId: string, target: HostCollaborationArchiveTransitionTarget, signal: AbortSignal,
+  ): Promise<HostCollaborationArchiveTransitionResult> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.transitionCollaborationArchive) throw new HostAuthorityError('unavailable')
+    const result = await worker.transitionCollaborationArchive(target, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
     return result
   }
 
@@ -418,10 +480,13 @@ export class ProfileWorkerSupervisor {
  * @returns Source and reference readers with their supervisor receiver retained; cloud transfer requires separate authority.
  */
 export function collaborationWorkerReaders(workers: ProfileWorkerSupervisor): Pick<HostControlAuthorityOptions,
-  'inspectWorkspaceModelSelection' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'readCollaborationReferenceGrant'
+  'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'readCollaborationReferenceGrant'
   | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent'> {
   return {
     inspectWorkspaceModelSelection: workers.inspectWorkspaceModelSelection.bind(workers),
+    inspectCollaborationArchiveState: workers.inspectCollaborationArchiveState.bind(workers),
+    inspectCollaborationArchiveIntent: workers.inspectCollaborationArchiveIntent.bind(workers),
+    transitionCollaborationArchive: workers.transitionCollaborationArchive.bind(workers),
     inspectCollaborationSource: workers.inspectCollaborationSource.bind(workers),
     readCollaborationSourceSnapshot: workers.readCollaborationSourceSnapshot.bind(workers),
     readCollaborationReferenceGrant: workers.readCollaborationReferenceGrant.bind(workers),

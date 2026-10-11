@@ -2095,6 +2095,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'visible Session summaries ordered by activity.',
       },
       {
+        signature: '@Remote(\'collaborationMembership\') async collaborationMembership(request: SessionCollaborationMembershipRequest, signal: AbortSignal): Promise<SessionCollaborationMembershipValue>',
+        description: 'Check current native ownership of one bounded cloud-index page without opening or changing a Session.',
+        parameters: [{ name: 'request', description: 'Workspace and Session pairs from one index page.' }, { name: 'signal', description: 'Cancellation of the caller\'s read.' }],
+        returns: 'Current ownership, pin and archive flags for each pair.',
+      },
+      {
         signature: '@Remote(\'search\') search(request: SessionSearchRequest, signal: AbortSignal): Promise<SessionSearchValue>',
         description: 'Search visible Session content without resuming an Agent.',
         parameters: [{ name: 'request', description: 'literal message-content query.' }, { name: 'signal', description: 'cancellation for list and search reads.' }],
@@ -3987,8 +3993,59 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the complete committed workspace order.',
       },
       {
+        signature: 'findCollaborationArchiveIntent(raw: Omit<CollaborationArchiveIntent, \'token\' | \'phase\'>): Promise< Readonly<{ token: string; phase: \'staged\' | \'prepared\' | \'archived\' | \'restored\' }> | null >',
+        description: 'Find the original retry token under the Registry queue after Main or Host restarts.',
+        parameters: [{ name: 'raw', description: 'Current Account and Workspace membership without a caller token.' }],
+        returns: 'Bound token and phase, or null when this Session has no outstanding intent.',
+      },
+      {
+        signature: 'inspectCollaborationArchiveState(raw: Omit<CollaborationArchiveIntent, \'phase\'>): Promise< Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; token: string; phase: \'staged\' | \'prepared\' | \'archived\' | \'restored\' }> >',
+        description: 'Read only the bound, durable phase in the Registry queue for Host-side signing.',
+        parameters: [{ name: 'raw', description: 'Exact Account, Session and token identity.' }],
+        returns: 'Current persisted phase and its original identity.',
+      },
+      {
+        signature: 'stageCollaborationArchive(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent>',
+        description: 'Persist an owner-bound retry token before a trusted coordinator requests Slark prepare.',
+        parameters: [{ name: 'raw', description: 'Current Account and original Session with a new token.' }],
+        returns: 'The persisted token, including any phase reached by a same-token retry.',
+      },
+      {
+        signature: 'recordCollaborationArchivePrepared(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent>',
+        description: 'Record a successful Slark prepare before writing the local archive set.',
+        parameters: [{ name: 'raw', description: 'Existing Account-bound token.' }],
+        returns: 'The prepared durable intent.',
+      },
+      {
+        signature: 'archivePreparedCollaborationSession(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent>',
+        description: 'Persist the original Session archive and its token phase in one Registry write.',
+        parameters: [{ name: 'raw', description: 'Existing prepared Account-bound token.' }],
+        returns: 'The archived durable intent.',
+      },
+      {
+        signature: 'restoreCollaborationSession(raw: CollaborationArchiveIntent): Promise<CollaborationArchiveIntent>',
+        description: 'Restore the local Session first; the same token remains until Slark releases its fence.',
+        parameters: [{ name: 'raw', description: 'Existing archived Account-bound token.' }],
+        returns: 'The restored durable intent.',
+      },
+      {
+        signature: 'finishCollaborationArchiveRelease(raw: CollaborationArchiveIntent): Promise<void>',
+        description: 'Forget the token only after the trusted coordinator has confirmed Slark release.',
+        parameters: [{ name: 'raw', description: 'Restored token whose cloud fence was released.' }],
+      },
+      {
+        signature: 'markCollaborationSession(sessionId: SessionId): Promise<void>',
+        description: 'Guard an original Session before Source capture can write either journal.',
+        parameters: [{ name: 'sessionId', description: 'Existing original Session.' }],
+      },
+      {
+        signature: 'markDedicatedCollaborationSession(sessionId: SessionId): Promise<void>',
+        description: 'Retain a dedicated Session\'s collaboration origin before the first Source.',
+        parameters: [{ name: 'sessionId', description: 'Existing dedicated Session.' }],
+      },
+      {
         signature: 'archiveSession(sessionId: SessionId, options: ArchiveSessionOptions = {}): Promise<void>',
-        description: 'Archive one session durably. The session must exist (live or in session persistence); its workspace accounting — or lack of one — is irrelevant. Without `stopActivity` the session must also be inactive: the `workspace/session-activity` waterfall is asked once, and any reported activity rejects with WorkspaceActiveSessionError before anything is written. With `stopActivity` the archive is written without an activity check, and the `workspace/session-stop` providers are then asked to stop the session\'s work: the durable archive set is what a provider\'s `agent/pre-step` gate reads, so every wake the stops induce is already blocked. Archiving drops the session\'s pin in the same durable write (pinning and archival are mutually exclusive). An already archived id resolves without writing, asking, or stopping.',
+        description: 'Archive one session durably. The session must exist (live or in session persistence); its workspace accounting — or lack of one — is irrelevant. A collaboration Session is refused until the durable Slark archive coordinator is installed. Source journal providers classify older entries before any archive write, including the force-stop path. Without `stopActivity` the session must also be inactive: the `workspace/session-activity` waterfall is asked once, and any reported activity rejects with WorkspaceActiveSessionError before anything is written. With `stopActivity` the archive is written without an activity check, and the `workspace/session-stop` providers are then asked to stop the session\'s work: the durable archive set is what a provider\'s `agent/pre-step` gate reads, so every wake the stops induce is already blocked. Archiving drops the session\'s pin in the same durable write (pinning and archival are mutually exclusive). An already archived id resolves without writing, asking, or stopping.',
         parameters: [{ name: 'sessionId', description: 'The session to archive.' }, { name: 'options', description: 'Whether running work is stopped instead of refusing.' }],
         returns: 'resolution after durability and, with `stopActivity`, after every stop request was issued.',
       },
@@ -4676,6 +4733,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'request', description: 'the session about to be archived.' }, { name: 'next', description: 'delegate to the remaining providers.' }],
   },
   {
+    name: 'workspace/session-collaboration',
+    mode: 'waterfall',
+    signature: '\'workspace/session-collaboration\'( request: SessionActivityRequest, next: () => Promise<boolean>, ): Promise<boolean>',
+    summary: 'Source journal owners classify older Sessions before the archive write.',
+    description: 'Source journal owners classify older Sessions before the archive write.',
+    parameters: [{ name: 'request', description: 'Session to classify.' }],
+  },
+  {
     name: 'workspace/session-stop',
     mode: 'parallel',
     signature: '\'workspace/session-stop\'(request: SessionActivityRequest): Promise<void> | void',
@@ -5034,6 +5099,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CollaborationAnalysisResult',
     declaration: 'export interface CollaborationAnalysisResult {\n    readonly jsonText: string;\n}',
+  },
+  {
+    name: 'CollaborationArchiveIntent',
+    declaration: 'export type CollaborationArchiveIntent = z.infer<typeof collaborationArchiveIntent>;',
   },
   {
     name: 'CollaborationClarificationInput',
@@ -7044,6 +7113,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionCancelValue {\n    readonly accepted: true;\n}',
   },
   {
+    name: 'SessionCollaborationMembershipRequest',
+    declaration: 'export interface SessionCollaborationMembershipRequest {\n    readonly entries: readonly {\n        readonly workspaceId: string;\n        readonly sessionId: string;\n    }[];\n}',
+  },
+  {
+    name: 'SessionCollaborationMembershipValue',
+    declaration: 'export interface SessionCollaborationMembershipValue {\n    readonly entries: readonly {\n        readonly workspaceId: string;\n        readonly sessionId: string;\n        readonly owned: boolean;\n        readonly pinned: boolean;\n        readonly archived: boolean;\n    }[];\n}',
+  },
+  {
     name: 'SessionCollaborationSourceItem',
     declaration: 'export interface SessionCollaborationSourceItem {\n    readonly source: {\n        readonly workspace_id: string;\n        readonly session_id: string;\n        readonly source_message_id: string;\n        readonly source_revision: string;\n    };\n    readonly snapshot_digest: string;\n    readonly original_message: string;\n    readonly timeline_position?: SessionCollaborationTimelinePosition | null;\n}',
   },
@@ -7077,7 +7154,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionCreateRequest',
-    declaration: 'export interface SessionCreateRequest {\n    readonly workspaceId?: WorkspaceId;\n    readonly cwd?: string;\n    readonly sessionId?: SessionId;\n    readonly agentPreset?: string;\n}',
+    declaration: 'export interface SessionCreateRequest {\n    readonly workspaceId?: WorkspaceId;\n    readonly cwd?: string;\n    readonly sessionId?: SessionId;\n    readonly agentPreset?: string;\n    readonly dedicatedCollaboration?: true;\n}',
   },
   {
     name: 'SessionCreateValue',
@@ -8733,7 +8810,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WorkspaceBaseline',
-    declaration: 'export interface WorkspaceBaseline {\n    readonly items: readonly WorkspaceView[];\n    readonly archivedSessionIds: readonly SessionId[];\n    readonly pinnedSessionIds: readonly SessionId[];\n}',
+    declaration: 'export interface WorkspaceBaseline {\n    readonly items: readonly WorkspaceView[];\n    readonly archivedSessionIds: readonly SessionId[];\n    readonly dedicatedCollaborationSessionIds?: readonly SessionId[];\n    readonly pinnedSessionIds: readonly SessionId[];\n}',
   },
   {
     name: 'WorkspaceByteRange',
@@ -8817,7 +8894,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WorkspaceFollowIncrement',
-    declaration: 'export type WorkspaceFollowIncrement = {\n    readonly type: \'upsert\';\n    readonly workspace: WorkspaceView;\n} | {\n    readonly type: \'remove\';\n    readonly workspaceId: WorkspaceId;\n} | {\n    readonly type: \'order\';\n    readonly workspaceIds: readonly WorkspaceId[];\n} | {\n    readonly type: \'archived\';\n    readonly archivedSessionIds: readonly SessionId[];\n} | {\n    readonly type: \'pinned\';\n    readonly pinnedSessionIds: readonly SessionId[];\n};',
+    declaration: 'export type WorkspaceFollowIncrement = {\n    readonly type: \'upsert\';\n    readonly workspace: WorkspaceView;\n} | {\n    readonly type: \'remove\';\n    readonly workspaceId: WorkspaceId;\n} | {\n    readonly type: \'order\';\n    readonly workspaceIds: readonly WorkspaceId[];\n} | {\n    readonly type: \'archived\';\n    readonly archivedSessionIds: readonly SessionId[];\n} | {\n    readonly type: \'dedicatedCollaboration\';\n    readonly sessionIds: readonly SessionId[];\n} | {\n    readonly type: \'pinned\';\n    readonly pinnedSessionIds: readonly SessionId[];\n};',
   },
   {
     name: 'WorkspaceInsertBeforeRequest',

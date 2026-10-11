@@ -15,6 +15,7 @@ import type { WorkspaceId } from './types.ts'
 const workspaceId = z.string().transform(value => value as WorkspaceId)
 
 const sessionId = z.string().transform(value => brandString<SessionId>(value))
+const archiveToken = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u)
 
 /**
  * Durable shape of one workspace record. `path` is the `fs.realpath` canon
@@ -42,6 +43,20 @@ const workspacePendingMutation = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('delete'), workspaceId }),
 ])
 
+/** Retained before the cloud prepare call so a restarted Host can reuse its token. */
+export const collaborationArchiveIntent = z.object({
+  workspaceId,
+  sessionId,
+  token: archiveToken,
+  environmentId: z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/u),
+  accountIssuer: z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/u),
+  accountSubject: z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/u),
+  /** Older stored intents have no phase and are treated as staged. */
+  phase: z.enum(['prepared', 'archived', 'restored']).optional(),
+}).strict()
+/** Persisted Account-bound retry token for one collaboration Session archive. */
+export type CollaborationArchiveIntent = z.infer<typeof collaborationArchiveIntent>
+
 /**
  * Durable registry state. `initialized` distinguishes a valid empty registry
  * from one that still needs the header-only history bootstrap;
@@ -61,6 +76,11 @@ export const workspaceDomainState = z.object({
   workspaceIds: z.array(workspaceId),
   archivedSessionIds: z.array(sessionId).default([]),
   pinnedSessionIds: z.array(sessionId).default([]),
+  /** Sessions created from the dedicated collaboration entry point. */
+  dedicatedCollaborationSessionIds: z.array(sessionId).default([]),
+  /** Sessions with a durable Source capture, including promoted ordinary chats. */
+  collaborationSessionIds: z.array(sessionId).default([]),
+  collaborationArchiveIntents: z.array(collaborationArchiveIntent).default([]),
   pendingMutation: workspacePendingMutation.optional(),
 })
 
@@ -78,7 +98,8 @@ export const workspaceDomainSpec = defineDomain({
   version: 2,
   global: {
     schema: workspaceDomainState,
-    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [] },
+    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
+      dedicatedCollaborationSessionIds: [], collaborationSessionIds: [], collaborationArchiveIntents: [] },
   },
   tables: { workspaces: domainTable<WorkspaceId, WorkspaceRecord>(workspaceRecord) },
 })

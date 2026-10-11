@@ -27,7 +27,7 @@ import css from './AppFrame.module.css'
 /** Full composed props: runtime share + child-slot render share + store share. */
 export type AppFrameProps =
   & PropsRuntime<'root'>
-  & PropsRenderSlots<'sidebar' | 'main' | 'rightbar' | 'shell.bottom' | 'shell.overlay' | 'shell.leading'>
+  & PropsRenderSlots<'sidebar' | 'main' | 'rightbar' | 'shell.bottom' | 'shell.overlay' | 'shell.leading' | 'shell.mobile.collaboration'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
   & PropsLocale<'common'>
 
@@ -169,6 +169,19 @@ export function AppFrame({
   }, [actions])
 
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
+  const phoneWeb = viewport <= 640
+  const mobileSection = layoutInfo.mobileSection
+  // VisualViewport shrinks for the phone keyboard even when the layout
+  // viewport does not; keep chat input and bottom navigation above it.
+  useEffect(() => {
+    if (!phoneWeb || !window.visualViewport) return
+    const visual = window.visualViewport, frame = frameRef.current
+    if (!frame) return
+    const fit = () => { if (visual.height > 0) frame.style.height = `${visual.height}px` }
+    fit()
+    visual.addEventListener('resize', fit)
+    return () => { visual.removeEventListener('resize', fit); frame.style.height = '' }
+  }, [phoneWeb])
   const sidebarCollapsed = narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0
   const sidebarPreference = sidebarCollapsed
     ? 0
@@ -251,9 +264,10 @@ export function AppFrame({
   // the discrete decisions (track present, collapse state) and the drag base.
   const rightbarMax = cols.rightbar === 0 ? 0 : clampWidth(rightbarPreference, RIGHTBAR_MIN, viewport * RIGHTBAR_MAX_RATIO)
   const sidebar = useMemo(() => renderSlot('sidebar', {
-    collapsed: sidebarCollapsed,
-    width: cols.sidebar,
-  }), [renderSlot, sidebarCollapsed, cols.sidebar])
+    collapsed: phoneWeb ? false : sidebarCollapsed,
+    width: phoneWeb ? viewport : cols.sidebar,
+    ...(phoneWeb ? { mobileSection } : {}),
+  }), [renderSlot, sidebarCollapsed, cols.sidebar, phoneWeb, viewport, mobileSection])
   const main = useMemo(() => (
     <MainPanel usePanelInfo={usePanelInfo} renderSlot={renderSlot} />
   ), [usePanelInfo, renderSlot])
@@ -264,7 +278,7 @@ export function AppFrame({
   // row (ui-sidebar). AppFrame.module.css publishes the matching
   // --dsh-frame-leading-clearance under the same collapsed condition.
   const leading = useMemo(() => renderSlot('shell.leading', {}), [renderSlot])
-  const leadingMounted = darwin && sidebarCollapsed
+  const leadingMounted = darwin && sidebarCollapsed && !phoneWeb
 
   return (
     <div
@@ -282,6 +296,8 @@ export function AppFrame({
       data-rightbar-instant={layoutInfo.rightbarInstant || undefined}
       data-dragging={dragging || undefined}
       data-animating={animating > 0 || undefined}
+      data-phone-web={phoneWeb || undefined}
+      data-mobile-section={phoneWeb ? mobileSection : undefined}
     >
       <DocumentTitle
         productTitle={productTitle}
@@ -303,14 +319,28 @@ export function AppFrame({
       <div className={css.overlayLayer} data-shell-overlay>
         {overlays}
       </div>
+      {phoneWeb && <>
+        {mobileSection === 'chat' && <button type="button" className={css.mobileBack}
+          onClick={() => { actions.showMobileList() }} aria-label={t('mobile.backToList')}>‹ {t('mobile.backToList')}</button>}
+        <nav className={css.mobileNav} aria-label={t('mobile.navigation')}>
+          <button type="button" aria-current={mobileSection === 'ordinary' ? 'page' : undefined}
+            onClick={() => { actions.showMobileSection('ordinary') }}>{t('mobile.conversations')}</button>
+          <button type="button" aria-current={mobileSection === 'chat' ? 'page' : undefined}
+            onClick={() => { actions.showMobileSection('chat') }}>{t('mobile.chat')}</button>
+          {renderSlot('shell.mobile.collaboration', {
+            active: mobileSection === 'collaboration',
+            open: () => { actions.showMobileSection('collaboration') },
+          })}
+        </nav>
+      </>}
       {leadingMounted && (
         <div className={css.leadingSeat} data-shell-leading>
           {leading}
         </div>
       )}
       {/* The collapsed rail is fixed-width: no resize handle while closed. */}
-      {!sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
-      {layoutInfo.rightbarShown && !layoutInfo.rightbarFullscreen && normal.rightbar > 0 && (
+      {!phoneWeb && !sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
+      {!phoneWeb && layoutInfo.rightbarShown && !layoutInfo.rightbarFullscreen && normal.rightbar > 0 && (
         <DragHandle side="rightbar" left={viewport - normal.rightbar} onStart={onRightbarStart} onDrag={onRightbarDrag} onEnd={onDragEnd} />
       )}
     </div>

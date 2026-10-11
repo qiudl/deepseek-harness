@@ -160,6 +160,8 @@ The analysis prompt supplies the frozen original message’s complete UTF-16 evi
 
 `session.collaborationSources({ sessionId, snapshotDigest })` instead locates one existing immutable original, including a message already routed to ordinary discussion. The exact digest and pagination cursor are mutually exclusive; an absent or unauthorized original rejects. This read returns one complete record without a continuation and retains the same membership and cancellation checks.
 
+`session.collaborationMembership({ entries })` checks at most 50 Workspace/Session pairs against the current registry and the same cold Session ownership proof used for Source reads. It returns ordered owned/pinned booleans without messages or account identifiers. An invalid owned Session fails the whole batch, so the Host cannot turn an uncertain check into an empty collaboration count.
+
 `analyzeClarification` uses the captured reply call and validates detached original/reply snapshots, selected pending items, related prior replies, frozen task IDs and original mention order. Source parsing requires well-formed Unicode; each pending item has a nonempty mention list, and evidence spans cannot split a surrogate pair. It rereads every supplied Source from this Profile before and after committing the complete prompt-version-2 manifest and rechecks current model selection and ownership. Original and reply use the same provider, model, reasoning effort and adapter registration; preparation generations may differ. Both analysis methods share one call and cannot execute twice. Recovery reads either manifest version without rewriting or restoring calls; version-2 dispatch also binds the original plan and revision.
 
 <a id="model-experience"></a>

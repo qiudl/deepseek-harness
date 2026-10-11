@@ -14,8 +14,10 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { IconQueueOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
@@ -34,6 +36,8 @@ import type { CollaborationResultsBridge } from './collaboration-results.ts'
 import { CollaborationResultsDock } from './CollaborationResultsDock.tsx'
 import { CollaborationTimeline } from './CollaborationTimeline.tsx'
 import type { CollaborationResultsInjected } from './CollaborationResultsDock.tsx'
+import { CollaborationBadge, CollaborationBrowser, CollaborationMobileTab } from './CollaborationBrowser.tsx'
+import type { ConversationIndex, ConversationRow } from './CollaborationBrowser.tsx'
 
 /** Required client services. */
 export const inject = ['inputTriggers', 'locale', 'sessions', 'conversation', 'slots']
@@ -42,6 +46,7 @@ declare module '@deepseek-ai/dsh-api-session-controller/client' {
   interface SessionReferenceSourceMap {
     /** Temporary original-Session ownership while a readonly history locator prepares navigation. */
     collaborationLocator: unknown
+    collaborationBrowserOperation: unknown
   }
 }
 
@@ -57,6 +62,11 @@ interface AgentItem {
 }
 
 interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge {
+  collaborationArchive?(input: { workspace_id: string; session_id: string; action: 'archive' | 'restore' }):
+  Promise<{ state: 'archived' | 'restored' | 'retry_required' | 'conflict' }>
+  collaborationConversations?(): Promise<
+    { ok: true; value: { items: ConversationRow[]; global_pending_count: number } } |
+    { ok: false; errorCode: string }>
   conversationDraft?: DraftBridge
   collaborationScopeAvailable?: boolean
   collaborationExecutionAvailable?: boolean
@@ -145,6 +155,116 @@ function agentLabel(item: Pick<AgentItem, 'name'> & { project_name?: unknown }):
 /** Register a stable-reference source; ordinary model serialization refuses the Agent chip. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-slark-agent: dictionaries')
+  let focusPending: ((row: ConversationRow & { first_pending_digest: string }) => Promise<void>) | undefined
+  ctx.inject(['uiWorkspace', 'workspaces'], (browserCtx) => {
+    if (typeof window === 'undefined' || typeof window.__DSH_DESKTOP_HOST__?.collaborationConversations !== 'function') return
+    const index = createSnapshotStore<ConversationIndex>({ state: 'loading', items: [], global_pending_count: 0 })
+    browserCtx.effect(() => {
+      const lifetime = new AbortController()
+      const isActive = (): boolean => !lifetime.signal.aborted
+      let busy = false
+      const refresh = async (): Promise<void> => {
+        if (busy || !isActive()) return
+        busy = true
+        try {
+          const result = await window.__DSH_DESKTOP_HOST__?.collaborationConversations?.()
+          if (!isActive()) return
+          index.set(result?.ok ? { state: 'ready', ...result.value }
+            : { state: 'unavailable', items: [], global_pending_count: 0 })
+        } catch {
+          if (isActive()) index.set({ state: 'unavailable', items: [], global_pending_count: 0 })
+        } finally { busy = false }
+      }
+      void refresh()
+      const timer = window.setInterval(() => { void refresh() }, 20_000)
+      return () => { lifetime.abort(); window.clearInterval(timer) }
+    }, 'ui-slark-agent: collaboration conversation index')
+    const ownedSession = (sessionId: SessionId, workspaceId?: string): boolean =>
+      browserCtx.workspaces.list.getSnapshot().items.some(workspace =>
+        (workspaceId === undefined || workspace.workspaceId === workspaceId) && workspace.sessionIds.includes(sessionId))
+    const requireOwnedSession = (sessionId: SessionId): void => {
+      if (!ownedSession(sessionId)) throw Error('collaboration_membership_changed')
+    }
+    const injected = () => ({ hooks: { collaborationIndex: index },
+      openConversation: (row: ConversationRow) => {
+        const sessionId = SessionId(row.session_id)
+        if (!ownedSession(sessionId, row.workspace_id)) return
+        browserCtx.uiWorkspace.openSession(sessionId)
+        if (row.pending_count > 0 && row.first_pending_digest && focusPending) {
+          void focusPending({ ...row, first_pending_digest: row.first_pending_digest }).catch(() => undefined)
+        }
+      },
+      startConversation: () => { browserCtx.uiWorkspace.startCollaborationSession() },
+      currentWorkspaceId: () => browserCtx.uiWorkspace.currentWorkspaceId(),
+      togglePin: async (sessionId: SessionId, pinned: boolean) => {
+        requireOwnedSession(sessionId)
+        if (pinned) await browserCtx.uiWorkspace.unpinSession(sessionId)
+        else await browserCtx.uiWorkspace.pinSession(sessionId)
+        const current = index.getSnapshot()
+        if (current.state === 'ready') index.set({ ...current, items: current.items.map(item =>
+          item.session_id === sessionId ? { ...item, pinned: !pinned } : item) })
+      },
+      renameConversation: async (sessionId: SessionId, title: string) => {
+        requireOwnedSession(sessionId)
+        const result = await browserCtx.sessions.using(sessionId, { source: 'collaborationBrowserOperation' },
+          reference => reference.binding.session.rename(title))
+        if (!result.ok) throw Error(result.error.message)
+      },
+      archiveConversation: async (sessionId: SessionId) => {
+        requireOwnedSession(sessionId)
+        const host = window.__DSH_DESKTOP_HOST__
+        if (!host?.collaborationArchive) throw Error('collaboration_archive_unavailable')
+        const latest = await host.collaborationConversations?.()
+        requireOwnedSession(sessionId)
+        const row = latest?.ok ? latest.value.items.find(item => item.session_id === sessionId) : undefined
+        const dedicated = browserCtx.workspaces.list.getSnapshot().dedicatedCollaborationSessionIds?.includes(sessionId) ?? false
+        if (!latest?.ok || (!row && !dedicated) || row?.archived || (row?.pending_count ?? 0) > 0 || (row?.planning_count ?? 0) > 0
+          || (row?.running_count ?? 0) > 0 || (row?.issue_count ?? 0) > 0) {
+          throw Error('collaboration_archive_unavailable')
+        }
+        const workspaceId = row?.workspace_id ?? browserCtx.workspaces.list.getSnapshot().items
+          .find(workspace => workspace.sessionIds.includes(sessionId))?.workspaceId
+        if (!workspaceId) throw Error('collaboration_archive_unavailable')
+        const result = await host.collaborationArchive({ workspace_id: workspaceId, session_id: sessionId,
+          action: 'archive' })
+        if (window.__DSH_DESKTOP_HOST__ !== host || result.state !== 'archived')
+          throw Error('collaboration_archive_unavailable')
+        const current = index.getSnapshot()
+        if (current.state === 'ready') {
+          const items = current.items.map(item => item.session_id === sessionId
+            ? { ...item, archived: true, pinned: false } : item)
+          index.set({ state: 'ready', items,
+            global_pending_count: items.reduce((count, item) => count + item.pending_count, 0) })
+        }
+      },
+      restoreConversation: async (sessionId: SessionId) => {
+        requireOwnedSession(sessionId)
+        const host = window.__DSH_DESKTOP_HOST__
+        if (!host?.collaborationArchive) throw Error('collaboration_archive_unavailable')
+        const row = index.getSnapshot().items.find(item => item.session_id === sessionId)
+        if (!row) throw Error('collaboration_archive_unavailable')
+        const result = await host.collaborationArchive({ workspace_id: row.workspace_id, session_id: sessionId,
+          action: 'restore' })
+        if (window.__DSH_DESKTOP_HOST__ !== host || result.state !== 'restored')
+          throw Error('collaboration_archive_unavailable')
+        const current = index.getSnapshot()
+        if (current.state === 'ready') {
+          const items = current.items.map(item => item.session_id === sessionId ? { ...item, archived: false } : item)
+          index.set({ state: 'ready', items,
+            global_pending_count: items.reduce((count, item) => count + item.pending_count, 0) })
+        }
+      },
+    })
+    browserCtx.slots.inject('sidebar.collaboration', () => browserCtx.slots.register({
+      name: 'sidebar.collaboration', inject: injected, locale: NS,
+    }, CollaborationBrowser))
+    browserCtx.slots.inject('sidebar.collaboration.badge', () => browserCtx.slots.register({
+      name: 'sidebar.collaboration.badge', inject: injected, locale: NS,
+    }, CollaborationBadge))
+    browserCtx.slots.inject('shell.mobile.collaboration', () => browserCtx.slots.register({
+      name: 'shell.mobile.collaboration', inject: injected, locale: NS,
+    }, CollaborationMobileTab))
+  })
   ctx.slots.inject('conversation.input.dock', () => {
     const bridge = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__?.conversationDraft
     if (!bridge) return () => {}
@@ -165,6 +285,7 @@ export function apply(ctx: ClientContext): void {
     const readBridge = shareCollaborationReads(() => window.__DSH_DESKTOP_HOST__, connection.generation)
     const models = new Map<string, ResultsEntry>()
     resultsCtx.effect(() => () => {
+      focusPending = undefined
       models.forEach(({ release }) => { release() })
       models.clear()
     },
@@ -255,6 +376,26 @@ export function apply(ctx: ClientContext): void {
         models.set(sessionId, entry)
       }
       return entry
+    }
+    focusPending = async (row) => {
+      const sessionId = SessionId(row.session_id)
+      const reference = ctx.sessions.retain(sessionId, { source: 'collaborationLocator' })
+      try {
+        const result = await resultsCtx.remote.session.collaborationSources({
+          sessionId, snapshotDigest: row.first_pending_digest, includeTimeline: true,
+        }, AbortSignal.timeout(30_000))
+        const original = result.ok ? result.value.items[0] : undefined
+        if (!original || original.snapshot_digest !== row.first_pending_digest
+          || original.source.workspace_id !== row.workspace_id || original.source.session_id !== row.session_id) return
+        // A slow locator must not reopen a conversation after the user has navigated away.
+        if (resultsCtx.uiWorkspace.currentSessionId() !== sessionId) return
+        if (!resultsCtx.workspaces.list.getSnapshot().items.some(workspace =>
+          workspace.workspaceId === row.workspace_id && workspace.sessionIds.includes(sessionId))) return
+        const target = entryFor(sessionId)
+        if (!target.timelineModel.revealOriginal(original) || !target.model.revealOriginal(original)) return
+        void target.model.refresh()
+        void target.timelineModel.refresh()
+      } finally { reference.release() }
     }
     resultsCtx.slots.inject('conversation.input.dock', () => resultsCtx.slots.register({
       name: 'conversation.input.dock', id: 'slark-collaboration-activity',
