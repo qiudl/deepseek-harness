@@ -26,6 +26,7 @@
     "packages/host/desktop-host/hub-upstream/mcp.ts", // Pinned upstream bytes; bundle runs sync.mjs hash checks.
     "packages/host/desktop-host/hub-upstream/plugins.ts",
     "packages/host/desktop-host/hub-upstream/skills.ts",
+    "packages/experimental/claude-code-mods/examples/*/{hooks,tests,types}/**", // Claude Code's published example mods and their tests keep the upstream style; see the headers.
     "native/**", // The imported landlock-run subtree has its own gates; see native/README.md.
     "**/*.js",
     "**/*.mjs",

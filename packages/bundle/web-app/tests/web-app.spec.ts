@@ -1,9 +1,4 @@
-/**
- * Web runtime glue behavior: dist resolution through the bundle's own hook,
- * the frontend-static child claiming the fallback seat, the web-surface
- * prompt section and bash runtime variables, and readiness publication through
- * the URL line and default-browser handoff.
- */
+/** Web runtime URL publication, exposure warnings, and Loader/browser handoff readiness. */
 
 import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
@@ -28,14 +23,6 @@ import { apply, Config, internals } from '../src/index.ts'
 vi.mock('node:child_process', async importOriginal => ({
   ...await importOriginal<typeof import('node:child_process')>(),
   spawn: vi.fn(),
-}))
-
-vi.mock('node:os', async importOriginal => ({
-  ...await importOriginal<typeof import('node:os')>(),
-  networkInterfaces: () => ({
-    lo0: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }],
-    en0: [{ family: 'IPv4', internal: false, address: '192.168.1.5' }],
-  }),
 }))
 
 let dist: string | undefined
@@ -76,7 +63,7 @@ function stageDist(): string {
 }
 
 /** A fake webServer capturing the fallback seat and index taps. */
-function fakeHttpServer(host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1'): { server: WebServer; seat: () => unknown; routes: Map<string, WebRoute> } {
+function fakeHttpServer(host = '127.0.0.1'): { server: WebServer; seat: () => unknown; routes: Map<string, WebRoute> } {
   let fallback: unknown
   const routes = new Map<string, WebRoute>()
   const serviceCtx = new Context()
@@ -99,9 +86,10 @@ function fakeHttpServer(host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1'): { server: 
 /** Deterministic Host Connection face for URL publication and frontend injection. */
 function provideConnection(ctx: Context): void {
   ctx.provide('connection', {
+    // Adds the process token to the given canonical root, preserving any
+    // public mount prefix the caller passed.
     authenticatedUrl(baseUrl: string) {
       const url = new URL(baseUrl)
-      url.pathname = '/'
       url.searchParams.set('token', 'test-token')
       return url.href
     },
@@ -155,7 +143,7 @@ describe('web-app runtime glue', () => {
     })
     await liveConfig(ctx, AgentDefaultModel, { provider: 'fixture', model: 'fixture-model' })
     const selection = vi.spyOn(ctx.agentDefaultModel, 'currentSelection').mockReturnValue({ provider: 'fixture', model: 'fixture-model' })
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false }))
     await ctx.fiber.await()
     if (token.length !== 43) {
       expect(routes.size).toBe(0)
@@ -205,15 +193,20 @@ describe('web-app runtime glue', () => {
     expect(routes.size).toBe(0)
     expect(selection).toHaveBeenCalledOnce()
   })
-  it('mounts dist serving, prompt section, bash variables, and publishes the URL with the LAN snapshot', async () => {
+  it.each([
+    '127.0.0.1',
+    '::ffff:127.0.0.1',
+    '::ffff:7f00:1',
+  ])('publishes the URL and surface context for %s before handing it to the browser', async (bind) => {
     stageDist()
     const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
     // Editor markers and a project .env SSH value do not establish a remote launch.
     ctx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, createLaunchEnvironmentSnapshot([
       { source: 'process', values: { VSCODE_IPC_HOOK_CLI: '/tmp/local-vscode-ipc' } },
       { source: 'project-env', path: '/work/.env', values: { SSH_CONNECTION: 'stale-project-value' } },
     ]))
-    const { server, seat } = fakeHttpServer('0.0.0.0')
+    const { server } = fakeHttpServer(bind)
     ctx.provide('webServer', server)
     provideConnection(ctx)
     const contributions: BashContribution[] = []
@@ -228,21 +221,15 @@ describe('web-app runtime glue', () => {
     const log = vi.spyOn(console, 'log').mockImplementation((message) => { lifecycle.push(String(message)) })
     const openBrowser = vi.fn(async (url: string) => { lifecycle.push(`open:${url}`) })
     internals.openBrowser = openBrowser
-    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: ['lab.internal'] }))
+    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: true }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
-    // Settle the injected registrations.
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await vi.waitFor(() => { expect(openBrowser).toHaveBeenCalled() })
 
-    expect(seat()).toBeDefined() // frontend-static claimed the fallback
-    expect(ctx.get('webRuntime')).toEqual({
-      lanAddresses: ['192.168.1.5'],
-      trustedHosts: ['192.168.1.5', 'lab.internal'],
-    })
-    expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567/?token=test-token (LAN: http://192.168.1.5:4567/?token=test-token)')
+    expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567/?token=test-token')
     expect(log).toHaveBeenCalledWith('dsh web: opening the default browser; pass --no-open to disable')
     expect(openBrowser).toHaveBeenCalledWith('http://127.0.0.1:4567/?token=test-token')
     expect(lifecycle).toEqual([
-      'dsh web: http://127.0.0.1:4567/?token=test-token (LAN: http://192.168.1.5:4567/?token=test-token)',
+      'dsh web: http://127.0.0.1:4567/?token=test-token',
       'dsh web: opening the default browser; pass --no-open to disable',
       'open:http://127.0.0.1:4567/?token=test-token',
     ])
@@ -255,7 +242,47 @@ describe('web-app runtime glue', () => {
     expect(section?.text).toContain('pnpm run dev:web')
     const webRuntime = contributions.find(contribution => contribution.name === 'web-runtime')
     expect(webRuntime?.resolve()).toEqual({ DSH_WEB_URL: 'http://127.0.0.1:4567' })
-    await ctx.fiber.dispose()
+  })
+
+  it('advertises and opens the configured public root behind a prefix-stripping proxy', async () => {
+    stageDist()
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    const { server } = fakeHttpServer()
+    ctx.provide('webServer', server)
+    provideConnection(ctx)
+    const contributions: BashContribution[] = []
+    ctx.provide('shellEnv', {
+      register: (contribution: BashContribution) => {
+        contributions.push(contribution)
+        return () => {}
+      },
+    } as never)
+    provideLoader(ctx)
+    const lifecycle: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((message) => { lifecycle.push(String(message)) })
+    const openBrowser = vi.fn(async (url: string) => { lifecycle.push(`open:${url}`) })
+    internals.openBrowser = openBrowser
+    apply(ctx, new Config({
+      openBrowser: true,
+      printUrl: true,
+      surfaceContext: true,
+      publicUrl: 'https://proxy.example:8443/web',
+    }))
+    await ctx.plugin(SystemPrompt, { personaPrefix: '' })
+    await vi.waitFor(() => { expect(openBrowser).toHaveBeenCalled() })
+
+    expect(lifecycle).toEqual([
+      'dsh web: https://proxy.example:8443/web/?token=test-token',
+      'dsh web: opening the default browser; pass --no-open to disable',
+      'open:https://proxy.example:8443/web/?token=test-token',
+    ])
+    const assembly = await ctx.systemPrompt.assemble()
+    const section = assembly.sections.find(entry => entry.name === 'app:web-surface')
+    expect(section?.text).toContain('https://proxy.example:8443/web/')
+    expect(section?.text).not.toContain('127.0.0.1')
+    const urlContribution = contributions.find(contribution => contribution.name === 'web-runtime')
+    expect(urlContribution?.resolve()).toEqual({ DSH_WEB_URL: 'https://proxy.example:8443/web/' })
   })
 
   it('publishes no readiness side effect when printing and browser opening are disabled', async () => {
@@ -266,7 +293,7 @@ describe('web-app runtime glue', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const openBrowser = vi.fn(async () => {})
     internals.openBrowser = openBrowser
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).not.toHaveBeenCalled()
@@ -289,7 +316,7 @@ describe('web-app runtime glue', () => {
         return () => {}
       },
     } as never)
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     const assembly = await ctx.systemPrompt.assemble()
@@ -299,17 +326,99 @@ describe('web-app runtime glue', () => {
     await ctx.fiber.dispose()
   })
 
-  it('prints the loopback-only URL line when no LAN snapshot exists', async () => {
+  it.each([
+    { bind: '127.0.0.1', printed: '127.0.0.1' },
+    { bind: '::1', printed: '[::1]' },
+    { bind: '0:0:0:0:0:ffff:7f08:a', printed: '127.8.0.10' },
+    { bind: '::ffff:127.0.0.1%lo', printed: '127.0.0.1' },
+    { bind: '::0.0.0.1', printed: '[::1]' },
+    { bind: '::0.0.0.1%lo', printed: '[::1]' },
+  ])('prints the $bind loopback address without warning or opening a browser', async ({ bind, printed }) => {
     stageDist()
     const ctx = new Context()
-    ctx.provide('webServer', fakeHttpServer().server)
+    onTestFinished(() => ctx.fiber.dispose())
+    ctx.provide('webServer', fakeHttpServer(bind).server)
     provideConnection(ctx)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true, trustedHosts: [] }))
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567/?token=test-token')
-    await ctx.fiber.dispose()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const openBrowser = vi.fn(async () => {})
+    internals.openBrowser = openBrowser
+    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true }))
+    await vi.waitFor(() => { expect(log).toHaveBeenCalledWith(`dsh web: http://${printed}:4567/?token=test-token`) })
+    expect(warn).not.toHaveBeenCalled()
+    expect(openBrowser).not.toHaveBeenCalled()
   })
+
+  it.each([
+    { bind: '10.1.2.3', printed: '10.1.2.3' },
+    // `::127.0.0.1` names the IPv6 address `::7f00:1`, so the tail spelling an
+    // IPv4 loopback address makes it no loopback bind.
+    { bind: '::127.0.0.1', printed: '[::7f00:1]' },
+  ])('warns and advertises the $bind bind address when the listener is not loopback', async ({ bind, printed }) => {
+    stageDist()
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    ctx.provide('webServer', fakeHttpServer(bind).server)
+    provideConnection(ctx)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const openBrowser = vi.fn(async () => {})
+    internals.openBrowser = openBrowser
+    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false }))
+    await vi.waitFor(() => { expect(openBrowser).toHaveBeenCalled() })
+
+    // A non-loopback bind has no loopback listener, so the printed and opened
+    // root names the bind address; startup warns that the port is plain HTTP.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(
+      `dsh web: listening on ${bind} over plain HTTP; restrict this port to a trusted proxy or network`,
+    )
+    expect(log).toHaveBeenCalledWith(`dsh web: http://${printed}:4567/?token=test-token`)
+    expect(openBrowser).toHaveBeenCalledWith(`http://${printed}:4567/?token=test-token`)
+  })
+
+
+  it('drops an IPv6 zone id from the advertised URL', async () => {
+    stageDist()
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    // `::1%lo` listens on IPv6 loopback, but a zone id cannot appear in a URL;
+    // the advertised form must stay a parseable address.
+    ctx.provide('webServer', fakeHttpServer('::1%lo').server)
+    provideConnection(ctx)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: false }))
+    await vi.waitFor(() => { expect(log).toHaveBeenCalled() })
+
+    expect(log).toHaveBeenCalledWith('dsh web: http://[::1]:4567/?token=test-token')
+  })
+
+  it.each(['fe80::1%lo', '::127.0.0.1%lo'])('refuses its own activation when %s carries an interface zone id', async (bind) => {
+    stageDist()
+    // A zone id cannot appear in a URL, and a non-loopback bind that names one
+    // has no root this runtime can prove reachable: this row must fail rather
+    // than let a boot continue without an advertised entry point.
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    ctx.provide('webServer', fakeHttpServer(bind).server)
+    expect(() => { apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: false })) })
+      .toThrow(/carries an interface zone id, which no URL can express; pass --public-url/u)
+
+    // A declared root makes the same bind usable.
+    const declared = new Context()
+    onTestFinished(() => declared.fiber.dispose())
+    declared.provide('webServer', fakeHttpServer(bind).server)
+    provideConnection(declared)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    apply(declared, new Config({
+      openBrowser: false, printUrl: true, surfaceContext: false, publicUrl: 'https://app.example/ui/',
+    }))
+    await vi.waitFor(() => { expect(log).toHaveBeenCalled() })
+    expect(log).toHaveBeenCalledWith('dsh web: https://app.example/ui/?token=test-token')
+  })
+
 
   it('does not publish readiness again when Connection reloads', async () => {
     stageDist()
@@ -318,7 +427,7 @@ describe('web-app runtime glue', () => {
     const first = ctx.plugin((connectionCtx: Context) => { provideConnection(connectionCtx) })
     await first
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledTimes(1)
 
@@ -327,6 +436,17 @@ describe('web-app runtime glue', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledTimes(1)
     await ctx.fiber.dispose()
+  })
+
+  it('advertises the loopback URL when the composition sets publicUrl to null', async () => {
+    stageDist()
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    ctx.provide('webServer', fakeHttpServer().server)
+    provideConnection(ctx)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    apply(ctx, new Config({ openBrowser: false, printUrl: true, surfaceContext: false, publicUrl: null as never }))
+    await vi.waitFor(() => { expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567/?token=test-token') })
   })
 
   it.each([
@@ -341,7 +461,7 @@ describe('web-app runtime glue', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const openBrowser = vi.fn(async () => {})
     internals.openBrowser = openBrowser
-    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567/?token=test-token')
     expect(openBrowser).not.toHaveBeenCalled()
@@ -361,7 +481,7 @@ describe('web-app runtime glue', () => {
     const settlement = new Promise<void>((resolve) => { release = resolve })
     provideLoader(settled, () => settlement)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    apply(settled, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [] }))
+    apply(settled, new Config({ openBrowser: true, printUrl: true, surfaceContext: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).not.toHaveBeenCalled()
     expect(openBrowser).not.toHaveBeenCalled()
@@ -379,7 +499,7 @@ describe('web-app runtime glue', () => {
     failed.provide('webServer', fakeHttpServer().server)
     provideConnection(failed)
     provideLoader(failed, async () => { throw new Error('boot failed') })
-    apply(failed, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [] }))
+    apply(failed, new Config({ openBrowser: true, printUrl: true, surfaceContext: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).not.toHaveBeenCalled()
     expect(openBrowser).not.toHaveBeenCalled()
@@ -398,7 +518,7 @@ describe('web-app runtime glue', () => {
     let releaseTorn: () => void
     const tornSettlement = new Promise<void>((resolve) => { releaseTorn = resolve })
     provideLoader(torn, () => tornSettlement)
-    apply(torn, new Config({ openBrowser: true, printUrl: true, surfaceContext: true, trustedHosts: [] }))
+    apply(torn, new Config({ openBrowser: true, printUrl: true, surfaceContext: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
     await child.dispose() // the webServer service goes away
     releaseTorn!()
@@ -429,7 +549,7 @@ describe('web-app runtime glue', () => {
     const openBrowser = vi.fn(async () => {})
     internals.openBrowser = openBrowser
     const audit = vi.spyOn(AppBoot, 'auditStartupEntries')
-    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: true, printUrl: true, surfaceContext: false }))
     await vi.waitFor(() => { expect(audit).toHaveBeenCalledOnce() })
     await Promise.allSettled(audit.mock.results.map(result => result.value as Promise<void>))
     if (announces) {
@@ -450,7 +570,7 @@ describe('web-app runtime glue', () => {
     Object.defineProperty(server, 'port', { get: () => undefined })
     ctx.provide('webServer', server)
     provideConnection(ctx)
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true }))
     await ctx.plugin(SystemPrompt, { personaPrefix: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     await expect(ctx.systemPrompt.assemble()).rejects.toThrow('webServer service missing')
@@ -476,7 +596,7 @@ describe('web-app runtime glue', () => {
     internals.openBrowser = vi.fn(async () => { throw failure })
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {})
-    apply(ctx, new Config({ openBrowser: true, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+    apply(ctx, new Config({ openBrowser: true, printUrl: false, surfaceContext: false }))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(log).toHaveBeenCalledWith('dsh web: opening the default browser; pass --no-open to disable')
     expect(diagnostic).toHaveBeenCalledWith(
