@@ -8,8 +8,10 @@
 
 import { getDshRuntimeVersion, loadLayeredEnv, StartupError } from '@deepseek-ai/dsh-app-boot'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { homedir } from 'node:os'
 import { parseDshArgs } from './args.ts'
 import { reportStartupFailure } from './startup-diagnostics.ts'
+import { slarkProfilePackageManager } from './slark-profile-package-manager.ts'
 import type { RunProfileOptions } from './profile-boot.ts'
 
 /** Installation-owned dependencies supplied by a packaged CLI launcher. */
@@ -17,6 +19,7 @@ export type RunCliOptions = Pick<RunProfileOptions, 'packageManager'> & {
   /** Permit plugin commands for Desktop's existing profile; reserved for its installed carrier. */
   manageDesktopProfile?: boolean
 }
+
 
 /**
  * Run the public dsh command-line interface.
@@ -39,6 +42,8 @@ export async function runCli(options: RunCliOptions = {}): Promise<void> {
           patchFiles: invocation.patches,
           args: invocation.args,
           ...profileOptions,
+          packageManager: profileOptions.packageManager
+            ?? slarkProfilePackageManager(invocation.profile, process.env, process.execPath, homedir()),
         })
       } catch (error) {
         if (!(error instanceof StartupError)) throw error
