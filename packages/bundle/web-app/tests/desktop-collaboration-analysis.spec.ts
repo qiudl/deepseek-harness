@@ -660,6 +660,165 @@ async function admittedRootFixture() {
     session_id: root.source.session_id, source_message_id: root.source.source_message_id, source_revision: root.source.source_revision }
   return { h, root, reader, owner, target, input: { namespace_id: root.namespace_id, source: input(), continuation_policy: 'follow_authorized_plan' } }
 }
+async function captureOnlyFixture(expectedCloseError?: string) {
+  const h = await harness(), roots = await openCollaborationRootJournal(h.facility)
+  let entry: Awaited<ReturnType<typeof roots.capture>> | undefined
+  const reader = vi.fn<SessionController['readCollaborationRoot']>(async () => {
+    if (!entry) throw Error('membership')
+    return entry
+  })
+  const captureRoot = vi.fn<SessionController['captureCollaborationRoot']>(async (value, active) => {
+    const captured = await h.capture(value.source, active)
+    entry = await roots.capture({ ...value, source: captured.snapshot, objective_ref: 'o', task_grant_ref: 'g' }, active)
+    return { ...captured, submission: entry }
+  })
+  const owner = new DesktopCollaborationAnalysis(h.capture, h.open, h.lifetime.signal, captureRoot, reader)
+  onTestFinished(async () => {
+    try {
+      if (expectedCloseError) await expect(owner.close()).rejects.toThrow(expectedCloseError)
+      else await owner.close()
+    } finally { await roots.close() }
+  })
+  const request = { source: input(), namespace_id: 'n2_' + 'a'.repeat(64), continuation_policy: 'follow_authorized_plan' }
+  return { h, owner, reader, captureRoot, request, admit: async () => {
+    if (!entry) throw Error('missing root')
+    entry = await roots.accept(entry.command_id, { root_task_id: entry.root_task_id, root_trace_id: entry.root_trace_id,
+      admission_id: entry.command_id, task_revision: 1, state_version: 1, state: 'active' }, signal())
+  } }
+}
+it('capture-only retains the original Root without opening a planning journal or starting analysis', async () => {
+  const f = await captureOnlyFixture()
+  const first = await f.owner.captureRootOnly(f.request, binding, signal())
+  expect(first.kind).toBe('captured')
+  expect(first).not.toHaveProperty('attempt_request_id')
+  expect(f.h.open).not.toHaveBeenCalled()
+  expect(f.h.calls()).toBe(0)
+  expect(await f.owner.captureRootOnly(f.request, binding, signal())).toEqual(first)
+  expect(f.captureRoot).toHaveBeenCalledTimes(1)
+  await f.admit()
+  await f.owner.releaseCapturedRoot(f.request, binding, signal())
+  await expect(f.owner.startCapturedRootAnalysis(f.request, binding, signal())).rejects.toThrow()
+  expect((await f.owner.captureRootOnly(f.request, binding, signal())).kind).toBe('recovered')
+  expect(f.h.open).not.toHaveBeenCalled()
+  expect(f.h.calls()).toBe(0)
+})
+it('capture-only rejects an absent Root capture owner without starting a provider', async () => {
+  const f = await captureOnlyFixture()
+  await expect(f.h.owner.captureRootOnly(f.request, binding, signal())).rejects.toThrow('collaboration_root_capture_unavailable')
+  expect(f.h.open).not.toHaveBeenCalled()
+  expect(f.h.calls()).toBe(0)
+})
+it('capture-only request cancellation aborts and drains the accepted capture', async () => {
+  const f = await captureOnlyFixture(), original = f.captureRoot.getMockImplementation()!
+  const entered = Promise.withResolvers<undefined>(), released = Promise.withResolvers<undefined>(), controller = new AbortController()
+  f.captureRoot.mockImplementationOnce(async (...args) => {
+    entered.resolve(undefined)
+    await released.promise
+    args[1].throwIfAborted()
+    return original(...args)
+  })
+  const work = f.owner.captureRootOnly(f.request, binding, controller.signal), rejected = expect(work).rejects.toThrow()
+  try { await entered.promise; controller.abort(Error('request closed')) }
+  finally { released.resolve(undefined); await rejected }
+  expect(f.h.open).not.toHaveBeenCalled()
+  expect(f.h.calls()).toBe(0)
+  expect((await f.owner.captureRootOnly(f.request, binding, signal())).kind).toBe('captured')
+})
+it.each(['failure', 'cancelled'] as const)('capture-only planner preparation drains a failed journal: %s', async (mode) => {
+  const f = await captureOnlyFixture(mode === 'failure' ? 'journal unavailable' : undefined), open = f.h.open.getMockImplementation()!
+  await f.owner.captureRootOnly(f.request, binding, signal())
+  await f.admit()
+  const entered = Promise.withResolvers<undefined>(), released = Promise.withResolvers<Awaited<ReturnType<typeof open>>>()
+  const controller = new AbortController()
+  if (mode === 'failure') f.h.open.mockRejectedValueOnce(Error('journal unavailable'))
+  else f.h.open.mockImplementationOnce(() => { entered.resolve(undefined); return released.promise })
+  const work = f.owner.startCapturedRootAnalysis(f.request, binding, controller.signal), rejected = expect(work).rejects.toThrow()
+  try {
+    if (mode === 'cancelled') { await entered.promise; controller.abort(Error('request closed')) }
+  } finally {
+    if (mode === 'cancelled') released.resolve(await open())
+    await rejected
+  }
+  expect(f.h.calls()).toBe(0)
+  await expect(f.owner.startCapturedRootAnalysis(f.request, binding, signal())).rejects.toThrow()
+})
+it('private HTTP releases only the admitted captured Root without preparing analysis', async () => {
+  const f = await captureOnlyFixture(), http = await httpFixture({ ...f.h, owner: f.owner })
+  const capture = await http.post({ action: 'capture_root', input: f.request, binding_key: binding })
+  expect(capture.status).toBe(200)
+  const original = await capture.json() as { value: { root: unknown } }
+  await f.admit()
+  const release = await http.post({ action: 'release_captured_root', input: f.request, binding_key: binding })
+  expect(release.status).toBe(200)
+  expect(await release.json()).toEqual({ value: original.value.root })
+  expect(f.h.open).not.toHaveBeenCalled()
+  expect(f.h.calls()).toBe(0)
+})
+it('planner fallback uses the original captured call once, only after Root admission', async () => {
+  const f = await captureOnlyFixture()
+  const captured = await f.owner.captureRootOnly(f.request, binding, signal())
+  await expect(f.owner.startCapturedRootAnalysis(f.request, binding, signal())).rejects.toThrow()
+  await f.admit()
+  await expect(f.owner.startCapturedRootAnalysis(f.request, 'b'.repeat(64), signal())).rejects.toThrow()
+  const prepared = receipt(await f.owner.startCapturedRootAnalysis(f.request, binding, signal()))
+  expect(prepared).toMatchObject({ root: captured.root, descriptor: captured.descriptor })
+  expect(f.captureRoot).toHaveBeenCalledTimes(1)
+  expect(f.h.capture).toHaveBeenCalledTimes(1)
+  expect(f.h.calls()).toBe(0)
+  await expect(f.owner.startCapturedRootAnalysis(f.request, binding, signal())).rejects.toThrow()
+  await f.owner.dispatch(prepared.attempt_request_id, binding, permission(prepared), signal())
+  expect(f.h.calls()).toBe(1)
+})
+it.each(['expired', 'closed', 'membership', 'changed_source'] as const)('capture-only refuses stale planner fallback: %s', async (mode) => {
+  const f = await captureOnlyFixture()
+  vi.useFakeTimers()
+  try {
+    await f.owner.captureRootOnly(f.request, binding, signal())
+    await f.admit()
+    if (mode === 'expired') await vi.advanceTimersByTimeAsync(30001)
+    if (mode === 'closed') await f.owner.close()
+    if (mode === 'membership') f.reader.mockRejectedValueOnce(Error('membership'))
+    const request = mode === 'changed_source' ? { ...f.request, source: { ...f.request.source, original_message: 'different' } } : f.request
+    await expect(f.owner.startCapturedRootAnalysis(request, binding, signal())).rejects.toThrow()
+    expect(f.h.open).not.toHaveBeenCalled()
+    expect(f.h.calls()).toBe(0)
+  } finally { vi.useRealTimers() }
+})
+it('a repeated capture cannot publish a live capability after planner fallback consumes it', async () => {
+  const f = await captureOnlyFixture()
+  await f.owner.captureRootOnly(f.request, binding, signal())
+  await f.admit()
+  const reader = f.reader.getMockImplementation()!
+  const entered = Promise.withResolvers<undefined>(), released = Promise.withResolvers<undefined>()
+  f.reader.mockImplementationOnce(async (...args) => { entered.resolve(undefined); await released.promise; return reader(...args) })
+  const duplicate = f.owner.captureRootOnly(f.request, binding, signal())
+  const rejected = expect(duplicate).rejects.toThrow('preparation_unavailable')
+  await entered.promise
+  await f.owner.startCapturedRootAnalysis(f.request, binding, signal())
+  released.resolve(undefined)
+  await rejected
+  expect(f.captureRoot).toHaveBeenCalledTimes(1)
+  expect(f.h.calls()).toBe(0)
+})
+it('capture-only disposal waits for its accepted capture and returns no late acknowledgement', async () => {
+  const f = await captureOnlyFixture(), capture = f.captureRoot.getMockImplementation()!
+  const entered = Promise.withResolvers<undefined>(), released = Promise.withResolvers<undefined>()
+  f.captureRoot.mockImplementationOnce(async (...args) => {
+    entered.resolve(undefined); await released.promise
+    return capture(...args)
+  })
+  const work = f.owner.captureRootOnly(f.request, binding, signal())
+  const rejected = expect(work).rejects.toThrow()
+  await entered.promise
+  let closed = false
+  const closing = f.owner.close().then(() => { closed = true })
+  try {
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    expect(closed).toBe(false)
+  } finally { released.resolve(undefined); await rejected; await closing }
+  expect(f.h.open).not.toHaveBeenCalled()
+  expect(f.h.calls()).toBe(0)
+})
 it('reports missing original output without starting a model, and rejects closure during its final read', async () => {
   const f = await admittedRootFixture()
   expect(await f.owner.readRootOutput(f.target, signal())).toMatchObject({ state: 'missing' })

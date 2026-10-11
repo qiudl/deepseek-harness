@@ -53,6 +53,18 @@ it('renders complete originals and target-qualified replies by stable record ide
   expect(screen.queryByRole('textbox')).toBeNull()
 })
 
+it('shows the first Agent body in the original chat and replaces it with the final delivery', async () => {
+  const a = group(), body = { source: a.original.source, sourceDigest: a.original.snapshot_digest, invocationId: 'a', taskId: 'task',
+    seq: '1', fence: '1', text: '首段正文🙂', textDigest: 'e'.repeat(64), agentName: 'Guide', projectName: 'Project' }
+  const f = fixture([{ ...a, replies: [], provisionalResponses: [body] }])
+  expect(screen.getByTestId('slark-timeline-response').textContent).toContain(body.text)
+  expect(screen.queryByRole('textbox')).toBeNull()
+  await act(async () => { f.state.set({ phase: 'ready', groups: [{ ...a, replies: [], provisionalResponses: [{ ...body, seq: '2', text: '完整正文🙂' }] }] }) })
+  expect(screen.queryByText(body.text)).toBeNull(); expect(screen.getByText('完整正文🙂')).toBeTruthy()
+  await act(async () => { f.state.set({ phase: 'ready', groups: [a] }) })
+  expect(screen.queryByTestId('slark-timeline-response')).toBeNull(); expect(screen.getByText('answer-a')).toBeTruthy()
+})
+
 it('labels legacy positions separately and excludes another Session without treating it as current chat', () => {
   const legacy = { ...group(), original: { ...group().original, timeline_position: null } }
   const foreign = { ...group('b'), original: { ...group('b').original, source: { ...source, session_id: 'foreign' } } }

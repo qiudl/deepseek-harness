@@ -5,6 +5,7 @@ import type { CollaborationDialogueBridge, CollaborationPendingPage } from './co
 import type { WorkspaceSource } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionCollaborationSourceItem, SessionCollaborationSourcesValue } from '@deepseek-ai/dsh-api-session-controller/types'
+import { CollaborationResponseProjection, type ResponseSubscribe, type ProvisionalCollaborationResponse } from './collaboration-response.ts'
 
 type Source = SessionCollaborationSourceItem['source']
 const RESULT_READ_WINDOW_MS = 180_000
@@ -24,6 +25,8 @@ export interface ScopedCollaborationReply {
 }
 /** Page methods cannot select Account, Host, Computer or authorization proof. */
 export interface CollaborationResultsBridge extends CollaborationDialogueBridge {
+  readonly collaborationResponseAvailable?: boolean
+  collaborationResponse?: ResponseSubscribe
   readonly collaborationScopeAvailable?: boolean
   readonly collaborationPlanningAvailable?: boolean
   collaborationRootExecution?(request: { action: 'trace'; source: Source; cursor: { after_seq: number; limit: number; evidence?: { event_id: string; after_sequence: number } } } | { action: 'preview'; source: Source } |
@@ -44,6 +47,7 @@ export interface CollaborationExecutionView {
 }
 /** One original message and the readable results obtained for that exact snapshot. */
 export interface CollaborationResultGroup {
+  readonly provisionalResponses?: readonly ProvisionalCollaborationResponse[]
   readonly original: SessionCollaborationSourceItem
   readonly replies: readonly ScopedCollaborationReply[]
   readonly phase: 'ready' | 'loading' | 'error'
@@ -150,6 +154,24 @@ export class CollaborationResultsModel {
   private again = false
   private closed = false
   private timer: ReturnType<typeof setInterval> | undefined
+  private responses: CollaborationResponseProjection | undefined
+  private responseEvent = (event: Event): void => {
+    this.bind()
+    const request = (event as CustomEvent<{ source?: Source } | undefined>).detail
+    const host = this.boundBridge
+    if (!request?.source || request.source.workspace_id !== this.workspaceId ||
+      !this.sessionIds.includes(SessionId(request.source.session_id)) ||
+      !host?.collaborationResponseAvailable || !host.collaborationResponse) return
+    if (!this.responses) {
+      const generation = this.generation
+      this.responses = new CollaborationResponseProjection(host.collaborationResponse.bind(host),
+        () => this.current(generation) && this.observers.size > 0, (terminal) => {
+          this.publish(this.state)
+          if (terminal) void this.refresh()
+        })
+    }
+    this.responses.admit(request)
+  }
   private unsubscribe: (() => void)[]
   private refreshEvent = (event: Event): void => {
     this.bind()
@@ -179,6 +201,7 @@ export class CollaborationResultsModel {
     this.sessionIds = sessionIds; this.sourceCursors.clear()
     this.locatedOriginal = undefined; this.location = undefined
     this.workspaceId = workspaceId; this.boundBridge = host; this.connectionGeneration = connection
+    this.responses?.stop(); this.responses = undefined
     this.executions.clear(); this.traces.clear(); this.tracePages.clear()
     this.generation++; this.sourcePages = 1; this.replyPages.clear(); this.controller?.abort(); this.publish(empty())
     return true
@@ -199,9 +222,11 @@ export class CollaborationResultsModel {
       groups: state.groups.map((group) => {
         const execution = this.executions.get(group.original.snapshot_digest)
         const trace = this.traces.get(group.original.snapshot_digest)
-        if (group.execution === execution && group.trace === trace) return group
-        const { execution: _old, trace: _trace, ...original } = group
-        return { ...original, ...(execution ? { execution } : {}), ...(trace ? { trace } : {}) }
+        if (!this.responses && !group.provisionalResponses && group.execution === execution && group.trace === trace) return group
+        const provisionalResponses = this.responses?.read(group.original, group.replies.map(reply => reply.invocation_id)) ?? []
+        const { execution: _old, trace: _trace, provisionalResponses: _provisional, ...original } = group
+        return { ...original, ...(execution ? { execution } : {}), ...(trace ? { trace } : {}),
+          ...(provisionalResponses.length ? { provisionalResponses } : {}) }
       }) }
     if (!this.closed) this.observers.forEach((fn) => { fn() })
   }
@@ -220,6 +245,7 @@ export class CollaborationResultsModel {
     this.observers.add(fn)
     if (this.observers.size === 1) {
       if (typeof window !== 'undefined') window.addEventListener('dsh-slark-collaboration-admitted', this.refreshEvent)
+      if (typeof window !== 'undefined') window.addEventListener('dsh-slark-response-admitted', this.responseEvent)
       this.timer = setInterval(() => { if (!this.pending) void this.refresh() }, 3_000)
       void this.refresh()
     }
@@ -232,6 +258,8 @@ export class CollaborationResultsModel {
     if (this.timer !== undefined) clearInterval(this.timer)
     this.timer = undefined
     if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-collaboration-admitted', this.refreshEvent)
+    if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-response-admitted', this.responseEvent)
+    this.responses?.stop(); this.responses = undefined
     this.controller?.abort(); this.generation++; this.executions.clear()
     this.traces.clear(); this.tracePages.clear(); this.publish(this.state)
     if (this.location?.status === 'loading') this.location = undefined

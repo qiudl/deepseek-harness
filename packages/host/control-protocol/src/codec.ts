@@ -1,3 +1,4 @@
+import { parseHostRootTextContextReceipt } from './root-text-context.ts'
 import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
 import { parseHostRootPlanningEvidence } from './root-planning-evidence.ts'
 import { parseHostRootPlanningAttemptDescriptor, parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
@@ -1445,7 +1446,7 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
     exactKeys(row, ['action','target'])
     return { action: 'read_root_output', target: parseHostRootSubmissionTarget(row.target) }
   }
-  if (row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root') {
+  if (row.action === 'capture_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root') {
     exactKeys(row, ['action', 'input'])
     return { action: row.action, input: parseHostRootAnalysisInput(row.input) }
   }
@@ -1469,6 +1470,26 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
  */
 export function parseHostCollaborationAnalysisResult(value: unknown): HostCollaborationAnalysisResult {
   const row = registrationRecord(value)
+  if (row.kind === 'root_capture_released') {
+    exactKeys(row, ['kind', 'root'])
+    return { kind: row.kind, root: parseHostRootSubmissionDescriptor(row.root) }
+  }
+  if (row.kind === 'root_captured') {
+    exactKeys(row, ['kind', 'capture', ...(Object.hasOwn(row, 'context_receipt') ? ['context_receipt'] : [])])
+    const capture = registrationRecord(row.capture)
+    exactKeys(capture, ['kind', 'descriptor', 'root'])
+    if (capture.kind !== 'captured' && capture.kind !== 'recovered') reject()
+    const descriptor = parseHostCollaborationSourceDescriptor(capture.descriptor)
+    const root = parseHostRootSubmissionDescriptor(capture.root)
+    if (JSON.stringify(descriptor) !== JSON.stringify(root.source_descriptor)) reject()
+    const receipt = Object.hasOwn(row, 'context_receipt') ? parseHostRootTextContextReceipt(row.context_receipt) : undefined
+    if (receipt && (capture.kind !== 'captured' || receipt.root.namespace_id !== root.namespace_id
+      || receipt.root.command_id !== root.command_id || receipt.root.root_task_id !== root.root_task_id
+      || receipt.root.root_trace_id !== root.root_trace_id || receipt.root.payload_digest !== root.payload_digest
+      || receipt.root.source_digest !== descriptor.snapshot_digest)) reject()
+    return { kind: row.kind, capture: remoteSessionJson({ kind: capture.kind, descriptor, root }),
+      ...(receipt ? { context_receipt: receipt } : {}) }
+  }
   if (row.kind === 'reply_source') {
     exactKeys(row, ['kind', 'capture'])
     const capture = registrationRecord(row.capture)
