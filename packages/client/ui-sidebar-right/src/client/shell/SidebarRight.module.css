@@ -65,6 +65,20 @@
   --dsh-dockkit-dock-layer: 40;
 }
 
+/* Phone collaboration details rise over the full-screen chat as a sheet. */
+@media (max-width: 640px) {
+  .panel[data-sidebar-right-panel='fullscreen'][data-sidebar-right-collaboration][data-sidebar-right-open] {
+    top: 24%;
+    bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+    width: 100vw !important;
+    border-radius: var(--dsw-radius-lg) var(--dsw-radius-lg) 0 0;
+    overflow: hidden;
+    box-shadow: 0 -12px 35px rgb(0 0 0 / 0.18);
+    background: var(--dsw-alias-bg-base);
+  }
+  .panel[data-sidebar-right-collaboration] [data-sidebar-right-mode] { display: none; }
+}
+
 /* No whole-box subtraction here: Electron drag regions are window geometry,
    not stacking, so a strip row inside this fullscreen content that marks itself
    `data-window-drag` (ui-dockkit) still owns the drag over its own box, and

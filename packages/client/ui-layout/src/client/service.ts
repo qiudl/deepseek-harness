@@ -51,6 +51,14 @@ export interface ILayout {
   openRightbar(track: boolean, fullscreen: boolean): void
   /** Report the right panel as hidden: no track, no handle. */
   closeRightbar(): void
+  /** Navigate phone Web between chat and the two list surfaces.
+   * @param section - Surface to display.
+   */
+  showMobileSection(section: 'chat' | 'ordinary' | 'collaboration'): void
+  /** Show full-screen chat after a list item opens. */
+  showMobileChat(): void
+  /** Return from chat to the most recently used list. */
+  showMobileList(): void
 }
 
 /** Cross-plugin panel-action face (ctx.layout). */
@@ -103,4 +111,12 @@ export class LayoutController implements ILayout {
   closeRightbar(): void {
     this.panels.closeRightbar()
   }
+
+  showMobileSection(section: 'chat' | 'ordinary' | 'collaboration'): void {
+    this.panels.showMobileSection(section)
+  }
+
+  showMobileChat(): void { this.panels.showMobileChat() }
+
+  showMobileList(): void { this.panels.showMobileList() }
 }

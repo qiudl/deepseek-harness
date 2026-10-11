@@ -13,6 +13,7 @@ function fakePanels(): PanelActions {
     setRightbar: vi.fn(),
     openRightbar: vi.fn(),
     closeRightbar: vi.fn(),
+    showMobileSection: vi.fn(), showMobileChat: vi.fn(), showMobileList: vi.fn(),
   }
 }
 

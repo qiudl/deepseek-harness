@@ -88,16 +88,21 @@ function PanelRow({ id, label, wide, usePanelInfo, selectPanel, renderSlot }: Pa
 export function SidebarRoot({
   collapsed,
   width,
+  mobileSection,
   startSession,
   toggleSidebar,
   selectPanel,
   usePanels,
   useShortcuts,
   usePanelInfo,
+  useCollaborationAvailable,
   t,
   renderSlot,
 }: SidebarRootComponentProps) {
   const panels = usePanels(snapshot => snapshot)
+  const collaborationAvailable = useCollaborationAvailable(value => value)
+  const [browser, setBrowser] = useState<'ordinary' | 'collaboration'>('ordinary')
+  const activeBrowser = mobileSection && mobileSection !== 'chat' ? mobileSection : browser
   const shortcut = useShortcuts(rows => rows.find(row => row.id === 'sidebar.left.toggle'))
   const newShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.new'))
   const toggleLabel = collapsed ? t('toggle.open') : t('toggle.collapse')
@@ -297,9 +302,21 @@ export function SidebarRoot({
       {/* The browsing region fills the column between the controls and the
           foot in both states; its rail icon column rides the same slot. */}
       <div className={css.regionArea}>
-        {renderSlot('sidebar.workspaces', {
+        {wide && collaborationAvailable && !mobileSection && <div className={css.conversationTabs} role="tablist" aria-label={t('conversations.label')}>
+          <button type="button" role="tab" aria-selected={activeBrowser === 'ordinary'}
+            className={clsx(css.conversationTab, activeBrowser === 'ordinary' && css.conversationTabActive)}
+            onClick={() => { setBrowser('ordinary') }}>{t('conversations.ordinary')}</button>
+          <button type="button" role="tab" aria-selected={activeBrowser === 'collaboration'}
+            className={clsx(css.conversationTab, activeBrowser === 'collaboration' && css.conversationTabActive)}
+            onClick={() => { setBrowser('collaboration') }}>{t('conversations.collaboration')}
+            {renderSlot('sidebar.collaboration.badge', {})}</button>
+        </div>}
+        {(activeBrowser === 'ordinary' || !wide || !collaborationAvailable) && renderSlot('sidebar.workspaces', {
           wide,
           expandSidebar: () => { if (collapsed) toggleSidebar() },
+        })}
+        {activeBrowser === 'collaboration' && wide && collaborationAvailable && renderSlot('sidebar.collaboration', {
+          wide, expandSidebar: () => { if (collapsed) toggleSidebar() },
         })}
       </div>
 

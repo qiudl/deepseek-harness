@@ -46,6 +46,11 @@ export function apply(ctx: ClientContext): void {
   const workspaceNavigation = ctx.get('uiWorkspace') as unknown as WorkspaceNavigation
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-sidebar: dictionaries')
   const panels = createSnapshotStore<readonly SidebarPanelMetadata[]>([])
+  const collaborationAvailable = createSnapshotStore(false)
+  const syncCollaboration = (): void => {
+    collaborationAvailable.set(ctx.slots.entriesOfSlot('sidebar.collaboration').length > 0)
+  }
+  ctx.effect(() => ctx.slots.subscribe('sidebar.collaboration', syncCollaboration), 'ui-sidebar: collaboration entry')
   const syncPanels = (): void => {
     const next = ctx.slots.entriesOfSlot('sidebar.panellist').map(({ options }) => {
       // The list registration requires an id; StoredEntry erases the slot kind.
@@ -71,7 +76,7 @@ export function apply(ctx: ClientContext): void {
       if (id === 'plugins' || id === 'schedules') ctx.get('productAnalytics')?.track('sidebar_menu_click', { menu_name: id === 'plugins' ? 'plugin' : 'cron' })
       ctx.layout.selectPanel(id)
     },
-    hooks: { panels, shortcuts: ctx.shortcuts.catalog },
+    hooks: { panels, shortcuts: ctx.shortcuts.catalog, collaborationAvailable },
   })
   ctx.slots.inject('sidebar', () => ctx.slots.register({
     name: 'sidebar',
@@ -82,6 +87,8 @@ export function apply(ctx: ClientContext): void {
       'sidebar.toggle.badge': { kind: 'single', scope: 'root' },
       'sidebar.panellist': { kind: 'list', scope: 'root' },
       'sidebar.workspaces': { kind: 'single', scope: 'root' },
+      'sidebar.collaboration': { kind: 'single', scope: 'root' },
+      'sidebar.collaboration.badge': { kind: 'single', scope: 'root' },
       'sidebar.settings': { kind: 'single', scope: 'root' },
       'sidebar.footer.action': { kind: 'list', scope: 'root' },
     },
@@ -97,4 +104,5 @@ export function apply(ctx: ClientContext): void {
     inject: injectProps,
   }, HeaderLeadingControls))
   syncPanels()
+  syncCollaboration()
 }

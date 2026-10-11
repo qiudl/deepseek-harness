@@ -42,6 +42,8 @@ kind: "package-reference"
 
 `session/collaborationSources` 的远程 UI 请求还支持使用精确的 `snapshotDigest` 替代 `cursor`。摘要必须为 64 位小写十六进制字符串，同时携带两个字段时拒绝。所属 Session 的读取在现有控制帧预算内返回完整原消息。
 
+`session/collaborationMembership` 在同一视图租约上接受 1 至 50 组准确的工作区与会话身份。Profile 核对当前归属并按原顺序返回归属、置顶布尔值；格式错误、重复或超限的批次在 Gateway 调用前拒绝。Host 用这项私有读取裁剪云端协同索引，随后才向远端浏览器展示。
+
 `profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。`turnWindow` 保留原生历史分页：`minMessages` 必须为正安全整数且不超过 `maxMessages`（省略时为 50），`minTurns` 必须为正安全整数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
 
 `profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
@@ -61,6 +63,12 @@ kind: "package-reference"
 `profile.collaboration_registration` 在核验同一连接的 Account 绑定后，签署服务器登记请求/challenge ID、规范 nonce、有效期、HTTPS audience、environment UUID 和 Account issuer/subject。证明包含安装 UUID/公钥及当前 Host instance/process nonce。Ed25519 签名正文是 UTF-8 域 `dsh-collaboration-host-registration/v2`、NUL 与固定顺序 JSON 元组，不包含签名本身。解析器冻结精确字段并拒绝凭据。挑战须仍有效，且在五分钟内过期。服务器须另行信任安装公钥、持久保存并消费挑战、提交登记回执；此签名不授权 Source 或任务。
 
 `profile.workspace_authority` 仅在授权 Profile 读取器确认归属后，签署服务器 nonce、Account/environment 及注册表工作区/Session 目标。读取后再次核验 Account 授权和五分钟有效期。独立签名域 `dsh-collaboration-workspace-authority/v1` 绑定完整目标及当前安装/进程，登记签名不能替代。此证明仅说明读取时的归属，不证明 Source 内容、journal 持久性或 prepared 模型配置。服务器必须认证其挑战，并在重新核验当前 Host/Account 的同一事务中消费。
+
+REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号的 Host 从当前 Profile worker 读取 Registry 中持久的工作区、会话、token、环境和账号阶段；仅当读取结果等于服务器挑战要求的阶段时签名。独立签名域 `dsh-collaboration-archive-state/v1` 绑定 token 与 `staged`、`prepared`、`archived` 或 `restored` 阶段。私有 worker token 保护读取端点，浏览器视图 cookie 无法调用。此证明只表示一次阶段观察；Slark 仍须认证挑战并协调每次状态转移。
+
+`profile.collaboration_archive_transition` 允许已授权账号的 Main 或 Daemon 连接在当前 Profile worker 中推进同一持久 token，动作依次为 `stage`、`prepared`、`archive`、`restore` 和 `finish_release`。请求在已认证控制参数及精确目标中分别绑定账号与环境，字段不一致时不会调用 worker。Host 在 worker 返回后重新核验账号授权，并拒绝已替换 worker 代际的响应。重复 `stage` 返回实际持久阶段，可能已是 `prepared`、`archived` 或 `restored`。失败或取消的响应可能发生在本地写入已提交之后，调用方须用原 token 对账后重试。
+
+`profile.collaboration_archive_intent` 按精确账号、环境、工作区和 Session 找回原 token 与阶段，调用者无需提供 token。只有当前 Registry 中该归属 Session 没有意图时，才返回 `{archive_phase:"missing",archive_token:null}`。私有 worker 入口、当前 Host 账号授权和 worker 代际共同约束读取；浏览器视图租约不具备此能力。查询结果不确定时，Main 或 Daemon 不得生成替代 token。
 
 `profile.source_snapshot` 在已验证的 Account 绑定下私有读取已有 Source，接受精确工作区/Session/消息/版本，另带 issuer/subject 与字节偏移。每次响应包含原描述符、偏移、总字节数（最多 1 MiB）及规范 base64url 分块；分块恰为剩余字节数与 32 KiB 中的较小值。现有 64 KiB 单帧上限保持不变。客户端限制全程 15 秒，跨块固定当前 peer 与描述符，完成严格 UTF-8 解码后校验含八字段的不透明 Source 封装。消费者校验嵌套内容；云端 seal 与 Native 签名验证完整摘要。读取不准备模型或返回可执行调用。
 

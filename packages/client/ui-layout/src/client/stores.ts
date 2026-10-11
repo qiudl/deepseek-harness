@@ -22,6 +22,9 @@ type LayoutState = {
 }
 
 type LayoutInfo = {
+  /** Phone Web shows one surface at a time; the last list is the chat back target. */
+  mobileSection: 'chat' | 'ordinary' | 'collaboration'
+  mobileLastList: 'ordinary' | 'collaboration'
   sidebar: number
   /** Last positive frame measurement; window width bootstraps the first render. */
   viewportWidth: number
@@ -64,6 +67,9 @@ type LayoutActions = {
   setRightbar: (draft: LayoutState, px: number) => void
   openRightbar: (draft: LayoutState, track: boolean, fullscreen: boolean) => void
   closeRightbar: (draft: LayoutState) => void
+  showMobileSection: (draft: LayoutState, section: 'chat' | 'ordinary' | 'collaboration') => void
+  showMobileChat: (draft: LayoutState) => void
+  showMobileList: (draft: LayoutState) => void
 }
 
 /**
@@ -80,6 +86,8 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
     init: (): LayoutState => ({
       panelInfo: { activePanelId: null },
       layoutInfo: {
+        mobileSection: 'chat',
+        mobileLastList: 'ordinary',
         sidebar: SIDEBAR_DEFAULT,
         viewportWidth: window.innerWidth,
         narrowExpanded: false,
@@ -93,7 +101,16 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
     actions: {
       selectPanel: (d, panelId: MainPanelId | null) => {
         d.panelInfo.activePanelId = panelId
+        if (panelId !== null && d.layoutInfo.mobileSection !== 'chat') {
+          d.layoutInfo.mobileSection = 'chat'
+        }
       },
+      showMobileSection: (d, section: 'chat' | 'ordinary' | 'collaboration') => {
+        d.layoutInfo.mobileSection = section
+        if (section !== 'chat') d.layoutInfo.mobileLastList = section
+      },
+      showMobileChat: (d) => { d.layoutInfo.mobileSection = 'chat' },
+      showMobileList: (d) => { d.layoutInfo.mobileSection = d.layoutInfo.mobileLastList },
       retainMainPanels: (d, panelIds: readonly string[]) => {
         if (d.panelInfo.activePanelId !== null && !panelIds.includes(d.panelInfo.activePanelId)) {
           d.panelInfo.activePanelId = null

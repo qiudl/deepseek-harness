@@ -47,6 +47,13 @@ import type {
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
+  HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
+  HostCollaborationArchiveStateTarget, HostCollaborationArchiveStateValue,
+  ProfileCollaborationArchiveStateRequest, ProfileCollaborationArchiveStateResult,
+  HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
+  ProfileCollaborationArchiveIntentRequest, ProfileCollaborationArchiveIntentResult,
+  HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult,
+  ProfileCollaborationArchiveTransitionRequest, ProfileCollaborationArchiveTransitionResult,
   HostSourceAnalysisOutput, HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult,
   ProfileCollaborationAnalysisRequest, ProfileCollaborationAnalysisResult,
   HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
@@ -944,6 +951,134 @@ export function encodeHostWorkspaceAuthorityPayload(value: HostWorkspaceAuthorit
     'utf8',
   )
 }
+/** Exact, phase-bound challenge; membership assertions cannot satisfy it.
+ * @param value - Untrusted server challenge.
+ * @returns Validated archive challenge.
+ */
+export function parseHostCollaborationArchiveStateChallenge(value: unknown): HostCollaborationArchiveStateChallenge {
+  const r = registrationRecord(value)
+  exactKeys(r, ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
+    'account_issuer', 'account_subject', 'workspace_id', 'session_id', 'archive_token', 'archive_phase'])
+  const base = parseHostWorkspaceAuthorityChallenge(Object.fromEntries(
+    ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
+      'account_issuer', 'account_subject', 'workspace_id', 'session_id'].map(key => [key, r[key]])))
+  if (typeof r.archive_token !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(r.archive_token)
+    || !['staged', 'prepared', 'archived', 'restored'].includes(r.archive_phase as string)) reject()
+  return Object.freeze({ ...base, archive_token: r.archive_token,
+    archive_phase: r.archive_phase }) as HostCollaborationArchiveStateChallenge
+}
+
+/** Parse signed archive state fields; installation trust is checked by the caller.
+ * @param value - Untrusted Host assertion.
+ * @returns Validated assertion fields.
+ */
+export function parseHostCollaborationArchiveStateAssertion(value: unknown): HostCollaborationArchiveStateAssertion {
+  const r = registrationRecord(value)
+  exactKeys(r, ['schema_version', 'challenge', 'installation_id', 'installation_public_key',
+    'host_instance_id', 'process_nonce', 'signature'])
+  if (r.schema_version !== 1) reject()
+  const challenge = parseHostCollaborationArchiveStateChallenge(r.challenge)
+  const identity = parseHostWorkspaceAuthorityAssertion({ ...r, challenge: Object.fromEntries(
+    ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
+      'account_issuer', 'account_subject', 'workspace_id', 'session_id'].map(key => [key, challenge[key as keyof typeof challenge]])) })
+  return Object.freeze({ ...identity, challenge })
+}
+
+/** Separate Ed25519 domain with token and observed local phase in the signed tuple.
+ * @param value - Valid archive assertion.
+ * @returns Canonical bytes to sign or verify.
+ */
+export function encodeHostCollaborationArchiveStatePayload(value: HostCollaborationArchiveStateAssertion): Buffer {
+  const r = parseHostCollaborationArchiveStateAssertion(value), c = r.challenge
+  return Buffer.from(`dsh-collaboration-archive-state/v1\0${JSON.stringify([
+    1, c.request_id, c.challenge_nonce, c.expires_at, c.audience, c.environment_id,
+    c.account_issuer, c.account_subject, c.workspace_id, c.session_id,
+    c.archive_token, c.archive_phase, r.installation_id, r.installation_public_key,
+    r.host_instance_id, r.process_nonce,
+  ])}`, 'utf8')
+}
+/** Bounded private worker lookup with no caller-selected phase.
+ * @param value - Untrusted worker target.
+ * @returns Validated Account-bound token target.
+ */
+export function parseHostCollaborationArchiveStateTarget(value: unknown): HostCollaborationArchiveStateTarget {
+  const r = registrationRecord(value)
+  exactKeys(r, ['workspace_id', 'session_id', 'archive_token', 'environment_id',
+    'account_issuer', 'account_subject'])
+  const target = parseHostWorkspaceModelSelectionTarget({ workspace_id: r.workspace_id, session_id: r.session_id })
+  if (typeof r.archive_token !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(r.archive_token)
+    || typeof r.account_issuer !== 'string' || typeof r.account_subject !== 'string'
+    || ![r.account_issuer, r.account_subject].every(item => item.length >= 1 && item.length <= 512
+      && !/[\x00-\x1f\x7f]/u.test(item))) reject()
+  return Object.freeze({ ...target, archive_token: r.archive_token,
+    environment_id: uuid(r.environment_id), account_issuer: r.account_issuer,
+    account_subject: r.account_subject })
+}
+/** Decode the durable phase returned by the Profile worker.
+ * @param value - Untrusted worker response.
+ * @returns Validated persisted phase.
+ */
+export function parseHostCollaborationArchiveStateValue(value: unknown): HostCollaborationArchiveStateValue {
+  const r = registrationRecord(value)
+  exactKeys(r, ['archive_phase'])
+  if (!['staged', 'prepared', 'archived', 'restored'].includes(r.archive_phase as string)) reject()
+  return Object.freeze({ archive_phase: r.archive_phase as HostCollaborationArchiveStateValue['archive_phase'] })
+}
+/** Parse the Account-bound Session used to recover an original token.
+ * @param value - Untrusted Host or worker target.
+ * @returns Bounded Session and Account tuple.
+ */
+export function parseHostCollaborationArchiveIntentTarget(value: unknown): HostCollaborationArchiveIntentTarget {
+  const r = registrationRecord(value)
+  exactKeys(r, ['workspace_id', 'session_id', 'environment_id', 'account_issuer', 'account_subject'])
+  const target = parseHostWorkspaceModelSelectionTarget({ workspace_id: r.workspace_id, session_id: r.session_id })
+  if (typeof r.account_issuer !== 'string' || typeof r.account_subject !== 'string'
+    || ![r.account_issuer, r.account_subject].every(item => item.length >= 1 && item.length <= 512
+      && !/[\x00-\x1f\x7f]/u.test(item))) reject()
+  return Object.freeze({ ...target, environment_id: uuid(r.environment_id),
+    account_issuer: r.account_issuer, account_subject: r.account_subject })
+}
+/** Decode explicit absence or the Registry's original token and phase.
+ * @param value - Untrusted worker response.
+ * @returns Validated recovery result.
+ */
+export function parseHostCollaborationArchiveIntentValue(value: unknown): HostCollaborationArchiveIntentValue {
+  const r = registrationRecord(value)
+  exactKeys(r, ['archive_phase', 'archive_token'])
+  if (r.archive_phase === 'missing' && r.archive_token === null)
+    return Object.freeze({ archive_phase: 'missing', archive_token: null })
+  if (typeof r.archive_phase !== 'string' ||
+    !['staged', 'prepared', 'archived', 'restored'].includes(r.archive_phase)) reject()
+  return Object.freeze({ archive_phase: r.archive_phase as Exclude<HostCollaborationArchiveIntentValue['archive_phase'], 'missing'>,
+    archive_token: uuid(r.archive_token) })
+}
+/** Capture a bounded token, Account tuple and mutation before Profile I/O.
+ * @param value - Untrusted transition target.
+ * @returns Validated target and action.
+ */
+export function parseHostCollaborationArchiveTransitionTarget(value: unknown): HostCollaborationArchiveTransitionTarget {
+  const r = registrationRecord(value)
+  exactKeys(r, ['workspace_id', 'session_id', 'archive_token', 'environment_id',
+    'account_issuer', 'account_subject', 'action'])
+  if (typeof r.action !== 'string' ||
+    !['stage', 'prepared', 'archive', 'restore', 'finish_release'].includes(r.action)) reject()
+  const { action, ...identity } = r
+  return Object.freeze({ ...parseHostCollaborationArchiveStateTarget(identity),
+    action: action as HostCollaborationArchiveTransitionTarget['action'] })
+}
+/** Decode the phase written by the Profile worker.
+ * @param value - Untrusted worker response.
+ * @returns Validated durable transition result.
+ */
+export function parseHostCollaborationArchiveTransitionResult(value: unknown): HostCollaborationArchiveTransitionResult {
+  const r = registrationRecord(value)
+  exactKeys(r, ['archive_phase'])
+  if (typeof r.archive_phase !== 'string' ||
+    !['staged', 'prepared', 'archived', 'restored', 'released'].includes(r.archive_phase)) reject()
+  return Object.freeze({ archive_phase: r.archive_phase as HostCollaborationArchiveTransitionResult['archive_phase'] })
+}
 const SOURCE_TARGET_KEYS = ['workspace_id', 'session_id', 'source_message_id', 'source_revision'] as const
 function sourceVersion(value: unknown): string {
   if (typeof value !== 'string' || !/^[1-9][0-9]{0,18}$/.test(value) || BigInt(value) > 9223372036854775807n) reject()
@@ -1425,6 +1560,9 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
   | ProfileWorkspaceAuthorityRequest
+  | ProfileCollaborationArchiveStateRequest
+  | ProfileCollaborationArchiveIntentRequest
+  | ProfileCollaborationArchiveTransitionRequest
   | ProfileSourceAuthorityRequest
   | ProfileReferenceAuthorityRequest
   | ProfileReferenceCaptureRequest
@@ -1518,6 +1656,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
+      && params.endpoint !== 'session/collaborationMembership'
       && params.endpoint !== 'settings/describe'
       && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
       && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog') reject()
@@ -1542,6 +1681,24 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         || (Object.hasOwn(request, 'snapshotDigest')
           && (typeof request.snapshotDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(request.snapshotDigest)))
         || (Object.hasOwn(request, 'includeTimeline') && request.includeTimeline !== true)) reject()
+    }
+    if (params.endpoint === 'session/collaborationMembership') {
+      const membershipArgs = args as Record<string, unknown>
+      exactKeys(membershipArgs, ['request'])
+      const request = record(membershipArgs.request)
+      exactKeys(request, ['entries'])
+      if (!Array.isArray(request.entries) || request.entries.length < 1 || request.entries.length > 50) reject()
+      const seen = new Set<string>()
+      for (const value of request.entries) {
+        const entry = record(value)
+        exactKeys(entry, ['workspaceId', 'sessionId'])
+        if (typeof entry.workspaceId !== 'string'
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(entry.workspaceId)
+          || typeof entry.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(entry.sessionId)
+          || /[/\\]/u.test(entry.sessionId) || entry.sessionId === '.' || entry.sessionId === '..'
+          || seen.has(entry.workspaceId + '\0' + entry.sessionId)) reject()
+        seen.add(entry.workspaceId + '\0' + entry.sessionId)
+      }
     }
     if (params.endpoint === 'credentials/describe') {
       const credentialArgs = args as Record<string, unknown>
@@ -1853,6 +2010,26 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       },
     }
   }
+  if (frame.method === 'profile.collaboration_archive_state') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...accountChallengeParams(params),
+        challenge: parseHostCollaborationArchiveStateChallenge(params.challenge) } }
+  }
+  if (frame.method === 'profile.collaboration_archive_intent') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...collaborationAccountParams(params),
+        target: parseHostCollaborationArchiveIntentTarget(params.target) } }
+  }
+  if (frame.method === 'profile.collaboration_archive_transition') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...collaborationAccountParams(params),
+        target: parseHostCollaborationArchiveTransitionTarget(params.target) } }
+  }
   if (frame.method === 'profile.root_planning_attempt_authority') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
     return {
@@ -1940,6 +2117,9 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
   | ProfileWorkspaceAuthorityResult
+  | ProfileCollaborationArchiveStateResult
+  | ProfileCollaborationArchiveIntentResult
+  | ProfileCollaborationArchiveTransitionResult
   | ProfileSourceAuthorityResult
   | ProfileReferenceAuthorityResult
   | ProfileReferenceCaptureResult
@@ -2192,6 +2372,18 @@ function decodeProfileResult(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.workspace_authority') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostWorkspaceAuthorityAssertion(result) }
+  }
+  if (frame.method === 'profile.collaboration_archive_state') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostCollaborationArchiveStateAssertion(result) }
+  }
+  if (frame.method === 'profile.collaboration_archive_intent') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostCollaborationArchiveIntentValue(result) }
+  }
+  if (frame.method === 'profile.collaboration_archive_transition') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostCollaborationArchiveTransitionResult(result) }
   }
   if (frame.method === 'profile.root_journal') {
     return { version: 1, type: 'result', request_id, method: frame.method, result: parseHostRootJournalMetadata(result) }

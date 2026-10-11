@@ -261,10 +261,17 @@ describe('WorkspaceController commands', () => {
     stopListening()
     await expect(controller.unarchiveSession({ sessionId: session.id }))
       .resolves.toEqual({ archivedSessionIds: [] })
+    await ctx.workspaceRegistry.markCollaborationSession(session.id)
+    await expect(controller.archiveSession({ sessionId: session.id, stopActivity: true }))
+      .rejects.toMatchObject({ code: 'workspace/collaboration-force-archive-forbidden',
+        details: { sessionId: session.id } })
+    expect([...ctx.workspaceRegistry.archivedSessionIds]).toEqual([])
     stopReporting()
 
     await expect(controller.archiveSession({ sessionId: session.id }))
-      .resolves.toEqual({ archivedSessionIds: [session.id] })
+      .rejects.toMatchObject({ code: 'workspace/collaboration-archive-unavailable',
+        details: { sessionId: session.id } })
+    expect([...ctx.workspaceRegistry.archivedSessionIds]).toEqual([])
     await expect(controller.archiveSession({ sessionId: SessionId('unknown') }))
       .rejects.toMatchObject({ code: 'session/not-found' })
     await expect(controller.unarchiveSession({ sessionId: session.id }))
@@ -346,13 +353,34 @@ describe('WorkspaceController follow', () => {
     }
   })
 
+  it('publishes a dedicated collaboration Session in the live Workspace feed', async () => {
+    const { controller, ctx, root } = await harness()
+    const created = await controller.create({ path: stageDir(root, 'dedicated-feed') })
+    const session = ctx.sessions.create(SessionId('dedicated-feed-session'), { meta: { cwd: created.workspace.path } })
+    const workspace = ctx.workspaceRegistry.get(created.workspace.workspaceId)
+    if (!workspace) throw Error('Workspace missing')
+    await workspace.attachSession(session.id)
+    const feed = new WorkspaceFeed(ctx)
+    const abort = new AbortController()
+    const iterator = feed.follow(abort.signal)[Symbol.asyncIterator]()
+    try {
+      await expect(nextFrame(iterator)).resolves.toMatchObject({ type: 'baseline',
+        value: { dedicatedCollaborationSessionIds: [] } })
+      await ctx.workspaceRegistry.markDedicatedCollaborationSession(session.id)
+      await expect(nextFrame(iterator)).resolves.toEqual({ type: 'dedicatedCollaboration', sessionIds: [session.id] })
+    } finally {
+      abort.abort()
+      await iterator.return?.()
+    }
+  })
+
   it('starts with a complete baseline and emits committed increments in domain order', async () => {
     const { controller, ctx, root } = await harness()
     const abort = new AbortController()
     const iterator = controller.follow(abort.signal)[Symbol.asyncIterator]()
     await expect(nextFrame(iterator)).resolves.toEqual({
       type: 'baseline',
-      value: { items: [], archivedSessionIds: [], pinnedSessionIds: [] },
+      value: { items: [], archivedSessionIds: [], dedicatedCollaborationSessionIds: [], pinnedSessionIds: [] },
     })
 
     const first = await controller.create({ path: stageDir(root, 'first') })

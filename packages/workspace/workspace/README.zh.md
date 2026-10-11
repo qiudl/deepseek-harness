@@ -101,6 +101,14 @@ ctx.workspaceRegistry.list() // shows the project, newest first
 
 归档准入是本包声明并派发的两个宿主事件之上的能力接缝：`workspace/session-activity`（waterfall）向已组合的提供方询问某会话还有什么在跑，`workspace/session-stop`（parallel）请它们停止这些工作。`archiveSession(sessionId)` 只询问一次活动 waterfall，对非空答案以 `WorkspaceActiveSessionError` 拒绝，其 `activity` 按族列出各项——键由各提供方自己合并进本包留空的 `SessionActivityKindMap`；`archiveSession(sessionId, { stopActivity: true })` 跳过活动检查，先写入归档，再派发停止事件，因此持久化的归档集合已经拦住停止所引发的每一次唤醒；提供方抛错只记日志，归档保留。调用在每个提供方的停止请求都已发出后返回，被停止的工作自行收敛。两种询问都在存在性检查之后进行，对已归档 id 从不发生。随附的提供方是 Agent 注册表（运行中的回合）、任务注册表接缝（所属任务）、Subagent runtime（运行中的子孙）与 Schedule 插件（活跃提醒）；没有提供方的组合可自由归档。
 
+REQ-20261011-0002 在归档前增加 `workspace/session-collaboration` journal 判定。专属或已有 Source 的协同会话在两条普通归档路径写入前均被拒绝：普通归档返回 `WorkspaceCollaborationArchiveUnavailableError`，强制停止归档返回 `WorkspaceCollaborationStopArchiveError`。已认证的 Slark 归档协调器使用下述独立的持久意图路径。
+
+`stageCollaborationArchive` 在云端准备前持久保存与原工作区、会话、环境和账号绑定的重试 token，核验当前归属与本地活动，并拒绝 token 或归属冲突。Registry 随后记录 `prepared`，在同一次持久写入中更新本地归档与 `archived` 阶段；恢复时同样一起更新本地归档与 `restored` 阶段，云端释放成功后才移除 token。旧记录没有阶段时仍按已登记意图读取。存在未完成 token 时，删除所属工作区、移除会话成员关系和普通恢复入口均被拒绝。Workspace 实体写入与 Registry 共用变更队列，成员移除无法与 token 登记竞态。Main 和 Daemon 通过当前 Host 授权及 Slark 云端协调器执行这些状态转移。
+
+私有 Host 控制链路通过 Registry 队列内的 `inspectCollaborationArchiveState` 读取精确的账号绑定阶段；浏览器不能向该链路指定阶段或自行提供 token。只有当前账号授权的 Host 连接会签署读取结果，Slark 协调器在每次云端状态转移前校验它。
+
+`findCollaborationArchiveIntent` 在 Registry 队列内按精确账号、工作区和 Session 读取原 token 与阶段。确认工作区成员关系后才报告无意图；已有意图的账号不匹配会被拒绝。Main 和 Daemon 重启后先调用此读取，再决定是否生成新 token。
+
 ### 源码地图
 
 | 文件 | 职责 |

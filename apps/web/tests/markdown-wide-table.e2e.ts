@@ -65,11 +65,13 @@ const TABLE_NAMES = ['fill', 'wide', 'long-cell']
  * Viewport sweep. The wide stops leave the transcript far wider than the
  * 748px message column, so the breakout relation holds with a fat margin on
  * every platform; the narrow stop drops the transcript below the message
- * column, which must clamp the breakout to neutral. The sidebar is collapsed
+ * column, which must clamp the breakout to neutral. Keep it above the 640px
+ * phone-Web breakpoint because this test measures the desktop rail grid.
+ * The sidebar is collapsed
  * for the whole sweep (see beforeAll), so the transcript width follows the
  * viewport identically on overlay- and classic-scrollbar platforms.
  */
-const WIDTHS = [1680, 1100, 640]
+const WIDTHS = [1680, 1100, 641]
 
 /** A sentence long enough that three of them cannot sit unwrapped in the 748px column. */
 const SENTENCE = 'This cell carries one full sentence so the unwrapped table is far wider than the message column.'

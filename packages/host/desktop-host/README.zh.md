@@ -57,6 +57,10 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `profile.workspace_authority` 使用同一授权读取器签发安装级归属证明，不打开视图、不追加 Session 事件、不发送模型请求。客户端核验准确挑战、当前安装/进程、有效期和签名。未安装读取器时不发布此能力。服务器的 nonce、消费及 Source 校验仍须独立完成，见[协议](../control-protocol/README.zh.md#challenge-authentication)。
 
+`profile.collaboration_archive_transition` 核验当前账号绑定，将一个精确 token 动作转交选定的 Profile worker，并在返回前再次核验账号授权。worker supervisor 拒绝已替换代际的响应；在拒绝前本地写入仍可能已提交。因此调用方保留原 token，并在回包不确定时对账持久阶段。只有启动组合提供 worker 阶段转移函数时才声明此能力。
+
+`profile.collaboration_archive_intent` 使用同一账号授权及当前 worker 代际，按 Session 找回未完成归档的 token。Host 在 worker 读取前后核验账号授权，并拒绝已替换 worker 的结果；只有 Registry 确认工作区成员关系后，无意图结果才有效。
+
 `profile.collaboration_registration` 使用当前连接已验证的 Account grant 和安装私钥，将服务器挑战与当前 Host 进程一起签名。客户端按已核验的安装身份验证签名，检查全部挑战/进程字段及有效期，返回冻结证明。Unix 与 Windows 共用这套 authority/client 方法。它不启动 worker、不打开视图租约、不修改 Profile/Session 数据。Slark 私有 Host broker 持有独立连接并负责取消；服务器挑战持久层、公钥登记及操作对账不属于该方法。
 
 仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
@@ -104,7 +108,7 @@ Markdown 文件导入接受 `{ name, markdown }`，保留原始字节、元数�
 
 内部[插件执行器](src/profile-plugin-executor.ts) 将不可变来源与包名绑定到所选 Profile，拒绝替换已声明的包，并对主目录和 Profile 的清单、锁文件、构建策略、仓库配置及补丁计算指纹。只有 Host 提供的组合包加载确认完成且安装后版本指纹未变化，才记录成功。部分安装和激活失败保留为结果未知，不自动回滚或重放包管理器文件。启动流程重启所选 worker，并通过其经过认证的插件清单检查发生变化的已启用根条目。空贡献、被覆盖、被移除、分组或条件条目无法建立此加载确认，会保留结果未知回执。
 
-可选启动字段 `pnpmEntrypointPath` 通过 `DSH_HOST_PNPM_ENTRYPOINT` 接收打包后的命令路径。启动流程校验此文件，并仅在字段存在时注册插件操作；旧版集成继续提供 MCP 和 Skill 操作。
+可选启动字段 `pnpmEntrypointPath` 通过 `DSH_HOST_PNPM_ENTRYPOINT` 接收打包后的命令路径。启动流程校验此文件，并仅在字段存在时注册插件操作；旧版集成继续提供 MCP 和 Skill 操作。Host 只向 Slark Web Profile Worker 传递同一已校验路径作为 `DSH_PROFILE_PNPM_ENTRYPOINT`，使页面内插件管理器通过打包 Node 调用打包 pnpm，无需继承外部 `PATH`。
 
 可选启动字段 `bundledPluginsRoot` 通过 `DSH_HOST_BUNDLED_PLUGINS_ROOT` 接收嵌入应用提供的目录，其中包含 `catalog.v1.json` 与插件安装包。清单使用精确结构，固定每个安装包的名称、版本、SHA-256、来源提交及其插入的根条目 ID；嵌入文件须归 Host 用户或 root 所有，且不得对同组或其他用户可写。清单缺失或损坏时只停用 `bundled:<名称>@<版本>` 来源，不会阻止启动。[内置来源](src/bundled-plugins.ts) 与其他插件来源一样经过确认、回执和加载确认。校验会拒绝清单中不存在的版本，以及条目 ID 已出现在 Profile 当前组合结果中的安装包。安装时重新计算摘要，并以不覆盖的方式复制到按内容寻址的 `profiles/web/.bundled-plugins/<sha256>.tgz`。随后以离线优先、不运行生命周期脚本的方式安装这个 Profile 内的相对路径文件，因此依赖记录为 `file:.bundled-plugins/<sha256>.tgz`，在 Profile 迁移和应用替换后仍然有效。
 

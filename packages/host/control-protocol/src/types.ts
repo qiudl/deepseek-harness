@@ -562,6 +562,113 @@ export interface ProfileWorkspaceAuthorityResult {
   readonly result: HostWorkspaceAuthorityAssertion
 }
 
+/** Server challenge for one durable Registry archive phase, separate from membership proof. */
+export interface HostCollaborationArchiveStateChallenge extends HostWorkspaceAuthorityChallenge {
+  readonly archive_token: string
+  readonly archive_phase: 'staged' | 'prepared' | 'archived' | 'restored'
+}
+/** Installation signature over one observed Registry phase. */
+export interface HostCollaborationArchiveStateAssertion extends Omit<HostWorkspaceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostCollaborationArchiveStateChallenge
+}
+/** Private parent-to-worker lookup target; desired phase is deliberately absent. */
+export interface HostCollaborationArchiveStateTarget extends HostWorkspaceModelSelectionTarget {
+  readonly archive_token: string
+  readonly environment_id: string
+  readonly account_issuer: string
+  readonly account_subject: string
+}
+/** Local phase observed without a caller-selected expectation. */
+export interface HostCollaborationArchiveStateValue {
+  readonly archive_phase: 'staged' | 'prepared' | 'archived' | 'restored'
+}
+/** Account-verified private control read; browser view leases cannot invoke it. */
+export interface ProfileCollaborationArchiveStateRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_state'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostCollaborationArchiveStateChallenge
+  }
+}
+/** Signed read response from the current Account Profile. */
+export interface ProfileCollaborationArchiveStateResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_state'
+  readonly result: HostCollaborationArchiveStateAssertion
+}
+
+/** Exact Account and Session identity used to recover a persisted archive token. */
+export interface HostCollaborationArchiveIntentTarget extends HostWorkspaceModelSelectionTarget {
+  readonly environment_id: string
+  readonly account_issuer: string
+  readonly account_subject: string
+}
+/** A missing intent never carries a token; existing intents reveal the original token only to Main/Daemon. */
+export type HostCollaborationArchiveIntentValue =
+  | Readonly<{ archive_phase: 'missing'; archive_token: null }>
+  | Readonly<{ archive_phase: 'staged' | 'prepared' | 'archived' | 'restored'; archive_token: string }>
+/** Account-bound recovery lookup, separate from browser view reads. */
+export interface ProfileCollaborationArchiveIntentRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_intent'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly target: HostCollaborationArchiveIntentTarget
+  }
+}
+/** Original durable token or explicit absence from the selected Account Profile. */
+export interface ProfileCollaborationArchiveIntentResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_intent'
+  readonly result: HostCollaborationArchiveIntentValue
+}
+
+/** Main/Daemon-owned durable mutation against the current Account Profile worker. */
+export interface HostCollaborationArchiveTransitionTarget extends HostCollaborationArchiveStateTarget {
+  readonly action: 'stage' | 'prepared' | 'archive' | 'restore' | 'finish_release'
+}
+/** Durable phase returned after a worker mutation or same-token retry. */
+export interface HostCollaborationArchiveTransitionResult {
+  readonly archive_phase: 'staged' | 'prepared' | 'archived' | 'restored' | 'released'
+}
+/** Account-bound control frame for one Registry mutation. */
+export interface ProfileCollaborationArchiveTransitionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_transition'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly target: HostCollaborationArchiveTransitionTarget
+  }
+}
+/** Current Profile worker's durable phase after that mutation. */
+export interface ProfileCollaborationArchiveTransitionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_transition'
+  readonly result: HostCollaborationArchiveTransitionResult
+}
+
 /** Persistent Source identity within one Profile; no caller model or journal metadata. */
 export interface HostCollaborationSourceTarget extends HostWorkspaceModelSelectionTarget {
   readonly source_message_id: string
@@ -1342,7 +1449,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources'
+    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog'
     readonly payload: { readonly args: HostRemoteSessionJson }
@@ -1645,6 +1752,12 @@ export type HostControlFrame =
   | ProfileCollaborationRegistrationResult
   | ProfileWorkspaceAuthorityRequest
   | ProfileWorkspaceAuthorityResult
+  | ProfileCollaborationArchiveStateRequest
+  | ProfileCollaborationArchiveStateResult
+  | ProfileCollaborationArchiveIntentRequest
+  | ProfileCollaborationArchiveIntentResult
+  | ProfileCollaborationArchiveTransitionRequest
+  | ProfileCollaborationArchiveTransitionResult
   | ProfileRootJournalRequest
   | ProfileRootJournalResult
   | ProfileRootPlanningAttemptAuthorityRequest
