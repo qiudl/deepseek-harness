@@ -92,17 +92,18 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   } as never)
   const sidebarTabs = new SidebarRightTabRegistry(ctx)
   sidebarTabs.register({ id: 'fixture/guide', kind: 'guide', title: () => 'Guide' })
-  const { controller: sidebar, adopt } = createSidebarRightController(sidebarTabs, () => {})
+  const { controller: sidebar, adopt, show: showSidebar, measure } = createSidebarRightController(sidebarTabs, () => {}, {
+    autoFullscreen: () => false,
+    openWithFocus: (_sessionId, open) => { open() },
+    closeWithFocus: (_sessionId, _paneId, close) => { close() },
+  })
   const sidebarStore = createSidebarRightStore(() => ({ kind: 'guide', title: 'Guide' })).create()
   const releaseSidebar = adopt(id, sidebarStore)
-  const publishSidebar = () => sidebar.bind({ sessionId: id, actions: sidebarStore.actions,
-    surfaces: sidebarStore.getSnapshot().bySession, canSplitPane: () => true,
-    closeWithFocus: (_pane, close) => { close() }, openWithFocus: (open) => { open() } })
-  let unbindSidebar = publishSidebar()
-  const stopSidebar = sidebarStore.subscribe(() => { unbindSidebar(); unbindSidebar = publishSidebar() })
+  showSidebar(id)
+  measure(id, () => true)
   ctx.provide('sidebarRightTabs', sidebarTabs)
   ctx.provide('sidebarRight', sidebar)
-  ctx.effect(() => () => { stopSidebar(); unbindSidebar(); releaseSidebar(); sidebar.tabDomain.dispose() })
+  ctx.effect(() => () => { releaseSidebar(); sidebar.tabDomain.dispose() })
   new UiConversation(ctx, ctx.sessions)
   const chatTimeline = new ChatTimelineRegistry()
   ctx.provide('chatTimeline', chatTimeline)
@@ -262,7 +263,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     binding = { ...binding, ctx: createScope(ctx, id).ctx, eventSource: new MutableSessionEventSource() }
     return () => previous.ctx.fiber.dispose()
   }, releaseLocator, chatTimeline, ctx, composer, controller, invoke, sink, pick, submit, prompt, sessionOf,
-  scopeDirectory, workspace, sourceReads,
+  scopeDirectory, workspace, sourceReads, showSidebar,
   workspaceChanged: () => { workspaceListeners.forEach((listener) => { listener() }) },
   connectionChanged: () => { connectionListeners.forEach((listener) => { listener() }) },
   deliveries, pending, clarify, originals, openSession, closeSession: () => scope.fiber.dispose() }
@@ -2006,8 +2007,7 @@ it('does not open another Session from a stale collaboration launcher', async ()
   if (!entry?.inject) throw Error('missing scope launcher')
   const bindings = Reflect.apply(entry.inject, undefined, [id]) as ScopeLauncherInjected
   const opened = vi.spyOn(f.ctx.sidebarRight, 'openTab')
-  f.ctx.sidebarRight.bind({ sessionId: SessionId('other'), actions: {} as never, surfaces: {},
-    closeWithFocus: () => {}, openWithFocus: () => {}, canSplitPane: () => true })
+  f.showSidebar(SessionId('other'))
   bindings.openCollaboration()
   expect(opened).not.toHaveBeenCalled()
 })

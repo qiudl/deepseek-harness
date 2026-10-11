@@ -328,6 +328,12 @@ interface TypertGateway {
   }): () => void
   /** Settle one forwarded waterfall event from an authenticated in-process carrier. */
   respondRemoteEvent(result: RemoteEventResult): void
+
+  /**
+   * Check for an active Client event stream.
+   * @returns whether a stream is open and has not been cancelled.
+   */
+  hasLiveClient(): boolean
   /**
    * Register the application-selected forwarded-event source.
    * @param source - stream factory installed by the Remote assembly.
@@ -467,6 +473,12 @@ Resolve strict generated definitions or conservative SRC markers against current
  * @returns disposer removing this exact policy.
  */
 registerBrowserAdmission(admission: { readonly invoke: (endpoint: string, args: Readonly<Record<string, unknown>>) => (() => void) | undefined readonly eventResult: (sessionId: string) => (() => void) | undefined readonly localControlStatus?: (sessionId: string) => unknown readonly localControlTakeover?: (sessionId: string, expectedEpoch: number) => unknown }): () => void
+
+/**
+ * Check for an active Client event stream.
+ * @returns whether a stream is open and has not been cancelled.
+ */
+hasLiveClient(): boolean
 
 /**
  * Register the sole application-selected forwarded-event source.
