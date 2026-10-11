@@ -33,7 +33,7 @@ afterEach(() => {
 function registration(withFocus = false) {
   let refreshTick: (() => void) | undefined
   vi.spyOn(window, 'setInterval').mockImplementation((callback) => {
-    refreshTick = callback as () => void
+    refreshTick = callback
     return 1 as never
   })
   const captured = new Map<string, () => Bindings>()
@@ -105,7 +105,7 @@ function registration(withFocus = false) {
 
 it('registers one original Session and delegates pin, rename, archive and restore through owned bridges', async () => {
   const f = registration(), b = f.bindings
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   expect(b.currentWorkspaceId()).toBe(workspaceId)
   b.startConversation()
   expect(f.startCollaborationSession).toHaveBeenCalledOnce()
@@ -134,42 +134,42 @@ it('registers one original Session and delegates pin, rename, archive and restor
 
 it('locates a pending original only while its digest and active Session still match', async () => {
   const f = registration(true), b = f.bindings
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   const pending = { ...row, pending_count: 1, first_pending_digest: 'a'.repeat(64) }
   b.openConversation(pending)
-  await vi.waitFor(() => expect(f.sourceReads).toHaveBeenCalledOnce())
+  await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalledOnce() })
   expect(f.release).toHaveBeenCalledOnce()
   f.sourceReads.mockImplementationOnce(async () => ({ ok: true, value: { items: [{
     snapshot_digest: 'b'.repeat(64), source: { workspace_id: workspaceId, session_id: sessionId },
   }] } } as never))
   b.openConversation(pending)
-  await vi.waitFor(() => expect(f.sourceReads).toHaveBeenCalledTimes(2))
+  await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalledTimes(2) })
   f.sourceReads.mockImplementationOnce(async () => ({ ok: true, value: { items: [{
     snapshot_digest: pending.first_pending_digest, source: { workspace_id: workspaceId, session_id: sessionId },
   }] } } as never))
   b.openConversation(pending)
-  await vi.waitFor(() => expect(f.sourceReads).toHaveBeenCalledTimes(3))
+  await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalledTimes(3) })
   expect(f.release).toHaveBeenCalledTimes(3)
   f.setActiveSession(sessionId)
   f.sourceReads.mockImplementationOnce(async () => ({ ok: true, value: { items: [{
     snapshot_digest: pending.first_pending_digest, source: { workspace_id: 'other', session_id: sessionId },
   }] } } as never))
   b.openConversation(pending)
-  await vi.waitFor(() => expect(f.release).toHaveBeenCalledTimes(4))
+  await vi.waitFor(() => { expect(f.release).toHaveBeenCalledTimes(4) })
 })
 
 it('keeps the index available only while the Host read succeeds and ignores revoked membership', async () => {
   const f = registration(), b = f.bindings
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   f.conversations.mockImplementationOnce(async () => ({ ok: false, errorCode: 'unavailable' } as never))
   f.refresh()
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable') })
   f.conversations.mockImplementationOnce(async () => { throw Error('offline') })
   f.refresh()
-  await vi.waitFor(() => expect(f.conversations).toHaveBeenCalledTimes(3))
+  await vi.waitFor(() => { expect(f.conversations).toHaveBeenCalledTimes(3) })
   expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable')
   f.refresh()
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   f.state.items.splice(0)
   b.openConversation(row)
   expect(f.openSession).not.toHaveBeenCalled()
@@ -179,7 +179,7 @@ it('keeps the index available only while the Host read succeeds and ignores revo
 
 it('rejects stale archive and restore authority before updating the visible index', async () => {
   const f = registration(), b = f.bindings
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   f.conversations.mockImplementationOnce(async () => ({ ok: false, errorCode: 'offline' } as never))
   await expect(b.archiveConversation(sessionId)).rejects.toThrow('collaboration_archive_unavailable')
   for (const blocked of [
@@ -202,7 +202,7 @@ it('rejects stale archive and restore authority before updating the visible inde
 
 it('rechecks archive eligibility and handles Host replacement without optimistic state', async () => {
   const f = registration(), b = f.bindings
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   f.using.mockResolvedValueOnce({ ok: false, error: { message: 'rename denied' } } as never)
   await expect(b.renameConversation(sessionId, 'Denied')).rejects.toThrow('rename denied')
   Reflect.deleteProperty(f.host, 'collaborationArchive')
@@ -232,14 +232,14 @@ it('rechecks archive eligibility and handles Host replacement without optimistic
 
 it('keeps index state fail closed when refresh and archive reads race', async () => {
   const f = registration(), b = f.bindings
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   const pending = Promise.withResolvers<Awaited<ReturnType<typeof f.conversations>>>()
   f.conversations.mockImplementationOnce(() => pending.promise)
   f.refresh()
   f.refresh()
   expect(f.conversations).toHaveBeenCalledTimes(2)
   pending.resolve({ ok: false, errorCode: 'offline' } as never)
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable') })
   await b.togglePin(sessionId, false)
   expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable')
   await expect(b.restoreConversation(sessionId)).rejects.toThrow('collaboration_archive_unavailable')
@@ -250,7 +250,7 @@ it('keeps index state fail closed when refresh and archive reads race', async ()
 it('drops a late Host refresh after its sidebar owner has disposed', async () => {
   for (const mode of ['resolve', 'reject'] as const) {
     const f = registration(), b = f.bindings
-    await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+    await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
     const pending = Promise.withResolvers<Awaited<ReturnType<typeof f.conversations>>>()
     f.conversations.mockImplementationOnce(() => pending.promise)
     f.refresh()
@@ -260,13 +260,13 @@ it('drops a late Host refresh after its sidebar owner has disposed', async () =>
     expect(f.conversations).toHaveBeenCalledTimes(2)
     if (mode === 'resolve') pending.resolve({ ok: false, errorCode: 'offline' } as never)
     else pending.reject(Error('offline'))
-    await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+    await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   }
 })
 
 it('checks the fallback Workspace and avoids restoring into a stale visible index', async () => {
   const f = registration(), b = f.bindings
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   Reflect.deleteProperty(f.state, 'dedicatedCollaborationSessionIds')
   await b.archiveConversation(sessionId)
   f.conversations.mockResolvedValueOnce({ ok: true, value: { items: [{ ...row, workspace_id: '' }],
@@ -275,7 +275,7 @@ it('checks the fallback Workspace and avoids restoring into a stale visible inde
   f.archive.mockImplementationOnce(async () => {
     f.conversations.mockResolvedValueOnce({ ok: false, errorCode: 'offline' } as never)
     f.refresh()
-    await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable'))
+    await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('unavailable') })
     return { state: 'restored' as const }
   })
   await b.restoreConversation(sessionId)
@@ -284,7 +284,7 @@ it('checks the fallback Workspace and avoids restoring into a stale visible inde
 
 it('reveals a verified pending original only after the active Session and membership still match', async () => {
   const f = registration(true), b = f.bindings
-  await vi.waitFor(() => expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready'))
+  await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   const digest = 'a'.repeat(64)
   const pending = { ...row, pending_count: 1, first_pending_digest: digest }
   const original = { snapshot_digest: digest, source: { workspace_id: workspaceId,
@@ -294,32 +294,32 @@ it('reveals a verified pending original only after the active Session and member
   const refresh = vi.spyOn(CollaborationResultsModel.prototype, 'refresh')
   f.sourceReads.mockResolvedValueOnce({ ok: true, value: { items: [original] } } as never)
   b.openConversation(pending)
-  await vi.waitFor(() => expect(f.release).toHaveBeenCalledOnce())
+  await vi.waitFor(() => { expect(f.release).toHaveBeenCalledOnce() })
   expect(reveal).not.toHaveBeenCalled()
   f.setActiveSession(sessionId)
   f.sourceReads.mockResolvedValueOnce({ ok: true, value: { items: [original] } } as never)
   b.openConversation(pending)
-  await vi.waitFor(() => expect(reveal).toHaveBeenCalledTimes(2))
+  await vi.waitFor(() => { expect(reveal).toHaveBeenCalledTimes(2) })
   expect(refresh).toHaveBeenCalledTimes(2)
   expect(f.release).toHaveBeenCalledTimes(2)
   reveal.mockImplementationOnce(() => false)
   f.sourceReads.mockResolvedValueOnce({ ok: true, value: { items: [original] } } as never)
   b.openConversation(pending)
-  await vi.waitFor(() => expect(f.release).toHaveBeenCalledTimes(3))
+  await vi.waitFor(() => { expect(f.release).toHaveBeenCalledTimes(3) })
   expect(reveal).toHaveBeenCalledTimes(3)
   reveal.mockImplementationOnce(() => true).mockImplementationOnce(() => false)
   f.sourceReads.mockResolvedValueOnce({ ok: true, value: { items: [original] } } as never)
   b.openConversation(pending)
-  await vi.waitFor(() => expect(f.release).toHaveBeenCalledTimes(4))
+  await vi.waitFor(() => { expect(f.release).toHaveBeenCalledTimes(4) })
   expect(reveal).toHaveBeenCalledTimes(5)
   f.sourceReads.mockRejectedValueOnce(Error('read failed'))
   b.openConversation(pending)
-  await vi.waitFor(() => expect(f.release).toHaveBeenCalledTimes(5))
+  await vi.waitFor(() => { expect(f.release).toHaveBeenCalledTimes(5) })
   f.sourceReads.mockImplementationOnce(async () => {
     f.state.items.splice(0)
     return { ok: true, value: { items: [original] } } as never
   })
   b.openConversation(pending)
-  await vi.waitFor(() => expect(f.release).toHaveBeenCalledTimes(6))
+  await vi.waitFor(() => { expect(f.release).toHaveBeenCalledTimes(6) })
   expect(reveal).toHaveBeenCalledTimes(5)
 })

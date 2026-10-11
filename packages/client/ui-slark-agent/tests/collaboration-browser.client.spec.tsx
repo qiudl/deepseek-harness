@@ -195,13 +195,13 @@ it('groups owned work, filters by workspace and title, and completes rename and 
   fireEvent.click(within(shell).getByRole('button', { name: 'Rename' }))
   fireEvent.change(within(shell).getByRole('textbox', { name: 'Rename' }), { target: { value: '  Updated topic  ' } })
   fireEvent.click(within(shell).getByRole('button', { name: 'Save' }))
-  await waitFor(() => expect(renameConversation).toHaveBeenCalledWith(SessionId('finished'), 'Updated topic'))
-  await waitFor(() => expect(within(shell).queryByRole('textbox', { name: 'Rename' })).toBeNull())
+  await waitFor(() => { expect(renameConversation).toHaveBeenCalledWith(SessionId('finished'), 'Updated topic') })
+  await waitFor(() => { expect(within(shell).queryByRole('textbox', { name: 'Rename' })).toBeNull() })
   fireEvent.click(within(shell).getByRole('button', { name: 'Archive' }))
   expect(within(shell).getByText('You can restore this conversation from search. Archiving waits until work is finished.')).toBeTruthy()
   fireEvent.click(within(shell).getAllByRole('button', { name: 'Archive' })[1]!)
-  await waitFor(() => expect(archiveConversation).toHaveBeenCalledWith(SessionId('finished')))
-  await waitFor(() => expect(within(shell).queryByText('You can restore this conversation from search. Archiving waits until work is finished.')).toBeNull())
+  await waitFor(() => { expect(archiveConversation).toHaveBeenCalledWith(SessionId('finished')) })
+  await waitFor(() => { expect(within(shell).queryByText('You can restore this conversation from search. Archiving waits until work is finished.')).toBeNull() })
 })
 
 it('bounds mobile and desktop badges, exposes unavailable states, and starts from the mobile tab', () => {
@@ -255,7 +255,7 @@ it('handles empty, fallback, cancel, and failed actions without losing the list'
   expect(screen.getByText('Untitled collaboration conversation')).toBeTruthy()
   const shell = screen.getByRole('button', { name: /Untitled collaboration conversation/ }).parentElement!
   fireEvent.click(within(shell).getByRole('button', { name: 'Pin' }))
-  await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Action failed'))
+  await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('Action failed') })
   fireEvent.click(within(shell).getByRole('button', { name: 'Rename' }))
   expect(within(shell).getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true)
   fireEvent.change(within(shell).getByRole('textbox', { name: 'Rename' }), { target: { value: '  ' } })

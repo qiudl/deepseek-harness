@@ -328,7 +328,7 @@ it('rejects archive requests for changed Account identity and mismatched result 
   await expect(f.client.attestCollaborationArchiveState({ ...state,
     challenge: { ...challenge, environment_id: randomUUID() as never } })).rejects.toMatchObject({ code: 'profile_mismatch' })
   await expect(f.client.inspectCollaborationArchiveIntent({ ...intent, target: { ...target,
-    environment_id: randomUUID() as never } })).rejects.toMatchObject({ code: 'profile_mismatch' })
+    environment_id: randomUUID() } })).rejects.toMatchObject({ code: 'profile_mismatch' })
   await expect(f.client.transitionCollaborationArchive({ ...transition, target: { ...transition.target,
     account_issuer: 'https://other.example.test' } })).rejects.toThrow()
   f.setTransitionArchive(async () => ({ archive_phase: 'staged' }))

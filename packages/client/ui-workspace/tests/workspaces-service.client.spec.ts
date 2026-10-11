@@ -707,19 +707,19 @@ describe('UiWorkspaceService', () => {
     expect(b.uiWorkspace.currentSessionId()).toBeUndefined()
     expect(b.uiWorkspace.currentWorkspaceId()).toBeUndefined()
     b.uiWorkspace.startCollaborationSession()
-    await vi.waitFor(() => expect(b.sessions.create).toHaveBeenCalledWith({
+    await vi.waitFor(() => { expect(b.sessions.create).toHaveBeenCalledWith({
       workspaceId: wid('recent'), dedicatedCollaboration: true,
-    }))
+    }) })
     b.uiWorkspace.openSession(current.id)
     expect(b.uiWorkspace.currentWorkspaceId()).toBe(wid('current'))
     b.uiWorkspace.startCollaborationSession()
-    await vi.waitFor(() => expect(b.sessions.create).toHaveBeenCalledWith({
+    await vi.waitFor(() => { expect(b.sessions.create).toHaveBeenCalledWith({
       workspaceId: wid('current'), dedicatedCollaboration: true,
-    }))
+    }) })
     const refused = new Error('create failed')
     b.sessions.create.mockRejectedValueOnce(refused)
     b.uiWorkspace.startCollaborationSession(wid('recent'))
-    await vi.waitFor(() => expect(b.notify).toHaveBeenCalledWith({ kind: 'createFailed', message: 'create failed' }))
+    await vi.waitFor(() => { expect(b.notify).toHaveBeenCalledWith({ kind: 'createFailed', message: 'create failed' }) })
     const empty = bench({ sessions: sessionState(), workspaces: workspaceState() })
     empty.uiWorkspace.startCollaborationSession()
     expect(empty.notify).toHaveBeenCalledWith({
@@ -737,7 +737,7 @@ describe('UiWorkspaceService', () => {
     b.layout.beginNavigation()
     const retainedBefore = b.sessions.retain.mock.calls.length
     first.resolve(sid('late-collaboration'))
-    await vi.waitFor(() => expect(b.sessions.create).toHaveBeenCalledOnce())
+    await vi.waitFor(() => { expect(b.sessions.create).toHaveBeenCalledOnce() })
     await setImmediate()
     expect(b.sessions.retain.mock.calls.length).toBe(retainedBefore)
     b.sessions.create.mockImplementationOnce(async () => second.promise)
@@ -748,9 +748,9 @@ describe('UiWorkspaceService', () => {
     expect(b.notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'createFailed' }))
     const pending = bench()
     pending.uiWorkspace.startCollaborationSession(wid('explicit'))
-    await vi.waitFor(() => expect(pending.sessions.create).toHaveBeenCalledWith({
+    await vi.waitFor(() => { expect(pending.sessions.create).toHaveBeenCalledWith({
       workspaceId: wid('explicit'), dedicatedCollaboration: true,
-    }))
+    }) })
   })
 
   it('uses only an explicit Workspace or the recent-Workspace policy for new Sessions', async () => {
