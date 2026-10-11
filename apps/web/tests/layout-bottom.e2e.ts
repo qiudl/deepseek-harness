@@ -72,7 +72,8 @@ it('reserves bottom content height without remounting it on main-panel navigatio
         }, platform)
         expected.push(`${platform}: ${JSON.stringify(await check(360, platform === 'windows' ? 40 : 0))}`)
       }
-      await page.setViewportSize({ width: 520, height: 600 })
+      // Keep this column-layout case above the phone breakpoint while forcing sidebar collapse.
+      await page.setViewportSize({ width: 700, height: 600 })
       await expect.poll(() => page.locator('[data-shell-bottom]').locator('..').getAttribute('data-sidebar-collapsed')).toBe('true')
       expected.push(`narrow: ${JSON.stringify(await check(360))}`)
       scaffold.ctx.loader.remove(entryId)
