@@ -10,11 +10,12 @@ import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
 import { ProfilePluginExecutor } from './profile-plugin-executor.ts'
 import { runProfilePluginCommand } from './plugin-command.ts'
+import { runProfilePluginInstall } from './profile-plugin-install.ts'
 import { inspectPluginScripts } from './plugin-script-preflight.ts'
 import { planPluginToggle } from './plugin-toggle-plan.ts'
 import { composedEntryIds, pluginBundleEntries } from './plugin-bundle-entries.ts'
 import { BundledPluginCatalog, bundledDependencySpec } from './bundled-plugins.ts'
-import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
+import { createPluginRuntimeAcknowledgements } from './plugin-runtime-acknowledgements.ts'
 import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
 import { WindowsMcpStorage } from './windows-mcp-storage.ts'
 import { WindowsExtensionReceipts } from './windows-extension-receipts.ts'
@@ -469,22 +470,6 @@ async function startWindowsDesktopHostApplicationWithTrust(
             pnpmEntrypointPath, profileRoot: root, controlRoot, uid: 0, windows: windowsFiles,
             spec: packageName, action: 'remove', signal: context.signal, guard: context.guard,
           }),
-          acknowledgeRemoval: async (profileId, ids, context) => {
-            context.guard(); context.signal.throwIfAborted()
-            const profile = requiredProfile(profileId)
-            await workers.dispose(profileId)
-            context.guard(); await ensureWorker(profile); context.guard()
-            await waitForPluginRuntime(await workers.activate(profileId), [], context.signal, ids)
-          },
-          acknowledgeToggle: async (profileId, plan, context) => {
-            context.guard(); context.signal.throwIfAborted()
-            const profile = requiredProfile(profileId)
-            await workers.dispose(profileId)
-            context.guard(); context.signal.throwIfAborted()
-            await ensureWorker(profile)
-            context.guard(); context.signal.throwIfAborted()
-            await waitForPluginRuntime(await workers.activate(profileId), plan.expected, context.signal, [], plan.disabled)
-          },
           resolve: profileRoot,
           ...(bundledCatalog === undefined ? {} : {
             bundledPlugin: (name: string, version: string) => {
@@ -496,29 +481,19 @@ async function startWindowsDesktopHostApplicationWithTrust(
               return composedEntryIds(loaded.layers, [...loaded.patches, ...overlays])
             },
           }),
-          install: async (root, spec, context) => {
-            context.guard(); context.signal.throwIfAborted()
-            // A `bundled:` source requires the embedding catalog that validated it; other sources never yield an archive.
-            const archivePath = bundledCatalog?.archiveFor(spec, webRoot(root))
-            return runProfilePluginCommand({
-              nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
-              pnpmEntrypointPath, profileRoot: root, controlRoot, uid: 0, windows: windowsFiles, spec,
-              signal: context.signal, guard: context.guard,
-              ...(archivePath ? { archivePath } : {}),
-              ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
-            })
-          },
-          acknowledge: async (profileId, packageName, context) => {
-            context.guard(); context.signal.throwIfAborted()
-            const profile = requiredProfile(profileId)
-            const { loaded, overlays } = loadComposition(win32.join(config.root, 'profiles', profileId))
-            const expected = pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
-            await workers.dispose(profileId)
-            context.guard(); context.signal.throwIfAborted()
-            await ensureWorker(profile)
-            context.guard(); context.signal.throwIfAborted()
-            await waitForPluginRuntime(await workers.activate(profileId), expected, context.signal)
-          },
+          install: (root, spec, context) => runProfilePluginInstall({
+            nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+            pnpmEntrypointPath, profileRoot: root, controlRoot, uid: 0, windows: windowsFiles, spec,
+            signal: context.signal, guard: context.guard,
+            ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
+          }, bundledCatalog),
+          ...createPluginRuntimeAcknowledgements({
+            workers, ensureWorker, requiredProfile,
+            expected: (profileId, packageName) => {
+              const { loaded, overlays } = loadComposition(win32.join(config.root, 'profiles', profileId))
+              return pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
+            },
+          }),
         })
       }
       const extensionExecutor = mcp === undefined

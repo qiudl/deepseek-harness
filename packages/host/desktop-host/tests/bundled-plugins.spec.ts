@@ -1,3 +1,4 @@
+import { runProfilePluginInstall } from '../src/profile-plugin-install.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -112,7 +113,7 @@ function commandFixture() {
 
 it('installs a bundled source only from its Profile-owned archive, offline-first and without scripts', async () => {
   const f = commandFixture()
-  await runProfilePluginCommand({ ...f.options, spec: 'bundled:dsh-duet@0.3.0', archivePath: f.archivePath })
+  await runProfilePluginInstall({ ...f.options, spec: 'bundled:dsh-duet@0.3.0' }, BundledPluginCatalog.load(embedding(), uid))
   expect(JSON.parse(readFileSync(join(f.profile, 'observed.json'), 'utf8')))
     .toEqual(['add', `file:.bundled-plugins/${digest}.tgz`, '--save-exact', '--ignore-scripts', '--prefer-offline'])
 })

@@ -29,11 +29,12 @@ import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
 import { ProfileSkillExecutor } from './profile-skill-executor.ts'
 import { ProfilePluginExecutor } from './profile-plugin-executor.ts'
 import { runProfilePluginCommand } from './plugin-command.ts'
+import { runProfilePluginInstall } from './profile-plugin-install.ts'
 import { inspectPluginScripts } from './plugin-script-preflight.ts'
 import { planPluginToggle } from './plugin-toggle-plan.ts'
 import { composedEntryIds, pluginBundleEntries } from './plugin-bundle-entries.ts'
 import { BundledPluginCatalog, bundledDependencySpec } from './bundled-plugins.ts'
-import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
+import { createPluginRuntimeAcknowledgements } from './plugin-runtime-acknowledgements.ts'
 import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { readProfileSkillCatalog, readProfileSkillRuntime } from './skill-worker-client.ts'
 import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
@@ -621,22 +622,6 @@ export async function startDesktopHostApplication(
         pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec: packageName, action: 'remove',
         signal: context.signal, guard: context.guard,
       }),
-      acknowledgeRemoval: async (profileId, ids, context) => {
-        context.guard(); context.signal.throwIfAborted()
-        const profile = requiredProfile(registry, profileId)
-        await workers.dispose(profileId)
-        context.guard(); await ensureWorker(profile); context.guard()
-        await waitForPluginRuntime(await workers.activate(profileId), [], context.signal, ids)
-      },
-      acknowledgeToggle: async (profileId, plan, context) => {
-        context.guard(); context.signal.throwIfAborted()
-        const profile = requiredProfile(registry, profileId)
-        await workers.dispose(profileId)
-        context.guard(); context.signal.throwIfAborted()
-        await ensureWorker(profile)
-        context.guard(); context.signal.throwIfAborted()
-        await waitForPluginRuntime(await workers.activate(profileId), plan.expected, context.signal, [], plan.disabled)
-      },
       resolve: (profileId) => {
         requiredProfile(registry, profileId)
         return join(root, 'profiles', profileId)
@@ -655,33 +640,23 @@ export async function startDesktopHostApplication(
           return composedEntryIds(loaded.layers, [...loaded.patches, ...(existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [])])
         },
       }),
-      install: async (profileRoot, spec, context) => {
-        context.guard(); context.signal.throwIfAborted()
-        // A `bundled:` source requires the embedding catalog that validated it; other sources never yield an archive.
-        const archivePath = bundledCatalog?.archiveFor(spec, join(profileRoot, 'profiles/web'))
-        return runProfilePluginCommand({
-          nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
-          pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec,
-          signal: context.signal, guard: context.guard,
-          ...(archivePath ? { archivePath } : {}),
-          ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
-        })
-      },
-      acknowledge: async (profileId, packageName, context) => {
-        context.guard(); context.signal.throwIfAborted()
-        const profile = requiredProfile(registry, profileId)
-        const profileRoot = join(root, 'profiles', profileId)
-        const loaded = loadProfileDirectory('dsh', join(profileRoot, 'profiles/web'), config.dshEntrypointPath)
-        const homePatch = join(profileRoot, 'cordis.patch.yml')
-        /* v8 ignore next -- ensureWorker materializes homePatch before plugin acknowledgement. */
-        const overrides = [...loaded.patches, ...(existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [])]
-        const expected = pluginBundleEntries(loaded.layers, overrides, packageName)
-        await workers.dispose(profileId)
-        context.guard(); context.signal.throwIfAborted()
-        await ensureWorker(profile)
-        context.guard(); context.signal.throwIfAborted()
-        await waitForPluginRuntime(await workers.activate(profileId), expected, context.signal)
-      },
+      install: (profileRoot, spec, context) => runProfilePluginInstall({
+        nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+        pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec,
+        signal: context.signal, guard: context.guard,
+        ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
+      }, bundledCatalog),
+      ...createPluginRuntimeAcknowledgements({
+        workers, ensureWorker, requiredProfile: profileId => requiredProfile(registry, profileId),
+        expected: (profileId, packageName) => {
+          const profileRoot = join(root, 'profiles', profileId)
+          const loaded = loadProfileDirectory('dsh', join(profileRoot, 'profiles/web'), config.dshEntrypointPath)
+          const homePatch = join(profileRoot, 'cordis.patch.yml')
+          /* v8 ignore next -- ensureWorker materializes homePatch before plugin acknowledgement. */
+          const overrides = [...loaded.patches, ...(existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [])]
+          return pluginBundleEntries(loaded.layers, overrides, packageName)
+        },
+      }),
     })
     const executor = new ProfileExtensionExecutor(mcpExecutor, skillExecutor, pluginExecutor)
     const extensionOperations = new ProfileExtensionOperations(
