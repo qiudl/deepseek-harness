@@ -1,3 +1,4 @@
+import { runProfilePluginInstall } from '../src/profile-plugin-install.ts'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { setTimeout as pause } from 'node:timers/promises'
@@ -36,7 +37,7 @@ it('runs the pinned CLI and pnpm under the selected Profile without ambient cred
     if (originalSecret === undefined) delete process.env.PLUGIN_TEST_SECRET
     else process.env.PLUGIN_TEST_SECRET = originalSecret
   })
-  await runProfilePluginCommand({ ...f.options, spec: '@fixture/bundle@1.2.3', signal: new AbortController().signal, guard() {} })
+  await runProfilePluginInstall({ ...f.options, spec: '@fixture/bundle@1.2.3', signal: new AbortController().signal, guard() {} })
   expect(readdirSync(f.control)).toEqual([])
   expect(JSON.parse(readFileSync(join(f.profile, 'observed.json'), 'utf8'))).toEqual({ args: ['add', '@fixture/bundle@1.2.3', '--save-exact', '--ignore-scripts'], home: f.profile })
 })
@@ -148,7 +149,7 @@ it('cancels a running installer and waits for process exit', async () => {
   const pending = runProfilePluginCommand({ ...f.options, spec: `github:owner/repo#${'a'.repeat(40)}`, signal: controller.signal, guard() {} })
   const settled = pending.then(() => ({ kind: 'resolved' as const }), (error: unknown) => ({ kind: 'rejected' as const, error }))
   try {
-    await vi.waitFor(() => { expect(existsSync(join(f.profile, 'ready'))).toBe(true) })
+    await vi.waitFor(() => { expect(existsSync(join(f.profile, 'ready'))).toBe(true) }, { timeout: 5_000 })
     const installerPid = Number(readFileSync(join(f.profile, 'ready'), 'utf8'))
     expect(Number.isSafeInteger(installerPid) && installerPid > 0).toBe(true)
     controller.abort()

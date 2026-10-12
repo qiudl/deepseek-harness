@@ -181,6 +181,8 @@ REQ-20260911-0004 的原生存储证据仅来自 Windows 11 x64 管理员环境�
 
 内部[插件包启停规划器](src/plugin-toggle-plan.ts) 使用 app-boot 配置组合控制独立插入的根条目，拒绝共享配置修改、分组或条件贡献、缺失插件包及后续覆盖冲突。插件执行器仅在配置了规划及生效确认时接受经确认的 `{ action: "toggle", packageName, enabled }`。它原子发布 Profile 补丁，保留标签值和注释；确认失败且修订与授权仍有效时恢复原补丁。启动组合重启 worker；停用确认要求精确模块处于 `enabled: false` 且没有 fiber。包依赖仍保留安装。Desktop 使用显式 plugin_toggle 能力与逐条目的配置状态开放经系统确认的启停按钮。
 
+Unix 和 Windows 插件操作共用归档落地及 worker 确认回调。回调在销毁、worker 准备和运行态观察之间重新检查权限；取消会在确认前终止切换与安装的激活流程。
+
 插件清单通过可选 `plugin_state` 返回 `enabled`、`disabled`、`mixed` 或 `unsupported`，描述组合后的配置，不代表当前 fiber 健康。启用与停用两个方向都必须可以独立规划，才开放条目操作；旧版和不支持的条目保持按钮禁用。真实 CLI/worker/Slark 夹具安装一次并停用、再启用，通过三次新 worker 代际验证回执查询及清单状态变化。Electron 夹具另以注入 provider 验证 renderer/preload/dispatcher 行为。
 
 经确认的插件更新使用 `{ action: "update", packageName, spec }` 和现有精确来源 add 命令。仅允许由依赖管理、可独立且全部启用的插件包更新，避免停用、混合或不支持的组合意外增加启用功能。Main 通过 Hub 预检锁定所选来源，并要求包名匹配已有条目。CLI 必须发布请求版本，新 worker 确认贡献后才成功；依赖部分变更保留未知回执，不假装已经回滚。

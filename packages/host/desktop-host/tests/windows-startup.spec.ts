@@ -14,13 +14,46 @@ import { WindowsHostCarrier } from '../src/windows-host-carrier.ts'
 import { acquireWindowsSingleHostLock } from '../src/windows-single-instance.ts'
 import { UnixHostClient } from '../src/unix-transport.ts'
 
+type PluginOptions = ConstructorParameters<typeof import('../src/profile-plugin-executor.ts').ProfilePluginExecutor>[0]
+let registeredPlugin: PluginOptions | undefined
+const pluginWiring = vi.hoisted(() => ({
+  active: false, homePresent: false,
+  command: vi.fn<(input: import('../src/plugin-command.ts').ProfilePluginCommand) => Promise<void>>(async () => {}),
+  load: vi.fn<typeof import('@deepseek-ai/dsh-app-boot').loadProfileDirectory>(),
+  overlay: vi.fn<typeof import('@deepseek-ai/dsh-app-boot').loadOverlayPatches>(() => []),
+}))
+vi.mock('../src/profile-plugin-executor.ts', async (original) => {
+  const actual = await original<typeof import('../src/profile-plugin-executor.ts')>()
+  return { ...actual, ProfilePluginExecutor: class extends actual.ProfilePluginExecutor {
+    constructor(options: PluginOptions) { super(options); registeredPlugin = options }
+  } }
+})
+vi.mock('../src/plugin-command.ts', async original => ({
+  ...await original<typeof import('../src/plugin-command.ts')>(), runProfilePluginCommand: pluginWiring.command,
+}))
+vi.mock('@deepseek-ai/dsh-app-boot', async (original) => {
+  const actual = await original<typeof import('@deepseek-ai/dsh-app-boot')>()
+  return { ...actual,
+    loadProfileDirectory: (...args: Parameters<typeof actual.loadProfileDirectory>) =>
+      pluginWiring.active ? pluginWiring.load(...args) : actual.loadProfileDirectory(...args),
+    loadOverlayPatches: (...args: Parameters<typeof actual.loadOverlayPatches>) =>
+      pluginWiring.active ? pluginWiring.overlay(...args) : actual.loadOverlayPatches(...args),
+  }
+})
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, existsSync: (path: import('node:fs').PathLike) =>
+    pluginWiring.active && typeof path === 'string' && path.startsWith('C:') && path.endsWith('cordis.patch.yml')
+      ? pluginWiring.homePresent : actual.existsSync(path) }
+})
+
 const root = String.raw`C:\Users\alice\AppData\Local\Slark\DSH`
 const userSid = 'S-1-5-21-1000-2000-3000-1001'
 const unlockMaterial = Buffer.alloc(32, 9).toString('base64url')
 const issuer = 'https://accounts.dsh.colorbuyai.com'
 const accountId = '30000000-0000-4000-8000-000000000003'
 
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => { vi.restoreAllMocks(); registeredPlugin = undefined; pluginWiring.active = false; pluginWiring.command.mockClear() })
 
 function accountToken(key: KeyObject, now: number): string {
   const issuedAt = Math.floor(now / 1_000)
@@ -392,6 +425,10 @@ describe('Windows Desktop Host startup', () => {
       { registrationRoot: String.raw`C:\Users\alice\.dsh\host` },
       { nodeExecutablePath: 'node.exe' },
       { dshEntrypointPath: 'dsh.js' },
+      { pnpmEntrypointPath: 'pnpm.mjs' },
+      { pnpmEntrypointPath: `C:\\runtime\\${String.fromCharCode(1)}pnpm.mjs` },
+      { bundledPluginsRoot: String.raw`C:\Program Files\Slark\plugins` },
+      { pnpmEntrypointPath: String.raw`C:\runtime\pnpm\bin\pnpm.mjs`, bundledPluginsRoot: 'plugins' },
       { workerEntry: new URL('https://example.com/worker.js') },
       { nativeModule: { ...fixture().options.nativeModule, path: 'koffi.node' } },
       { nativeModule: { ...fixture().options.nativeModule, path: String.raw`C:\native\..\koffi.node` } },
@@ -579,4 +616,81 @@ describe('Windows Desktop Host startup', () => {
       expect(close).toHaveBeenCalledOnce()
     }
   })
+})
+
+it.each([false, true])('wires sealed Windows plugin operations, reloads owned workers and checks runtime inventory (catalog=%s)', async (withCatalog) => {
+  const state = fixture()
+  pluginWiring.active = true
+  pluginWiring.homePresent = withCatalog
+  pluginWiring.load.mockReturnValue({ name: 'web', dir: 'virtual', patchPath: 'virtual/patch', skippedBundles: [], patches: [],
+    layers: [{ packageName: '@fixture/bundle', packageDir: 'virtual/bundle', patchPaths: [],
+      patches: [{ insert: [{ id: 'fixture', name: 'fixture-tool' }] }] }] })
+  const { BundledPluginCatalog } = await import('../src/bundled-plugins.ts')
+  const fs = await import('node:fs'), path = await import('node:path'), os = await import('node:os')
+  const catalogRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'windows-startup-catalog-'))
+  onTestFinished(() => { fs.rmSync(catalogRoot, { recursive: true, force: true }) })
+  fs.writeFileSync(path.join(catalogRoot, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1, plugins: [{
+    name: '@fixture/bundle', version: '1.2.3', file: 'bundle.tgz', sha256: 'a'.repeat(64),
+    repository: 'https://example.com/bundle', sourceSha: 'b'.repeat(40), entryIds: ['fixture'],
+  }] }))
+  const catalog = BundledPluginCatalog.load(catalogRoot, process.getuid?.() ?? 0)
+  vi.spyOn(BundledPluginCatalog, 'tryLoad').mockReturnValue(withCatalog ? catalog : undefined)
+  const archiveFor = vi.spyOn(catalog, 'archiveFor').mockReturnValue(undefined)
+  const application = await startWindowsDesktopHostApplication({ ...state.options, maximumExtensionReceiptBytes: 131072,
+    pnpmEntrypointPath: String.raw`C:\runtime\pnpm.mjs` }, undefined, state.dependencies)
+  onTestFinished(async () => { await application.close() })
+  const lifetime = new AbortController(), session = state.transportOptions()?.openSession(randomUUID(), lifetime.signal)
+  if (!session) throw Error('missing plugin control session')
+  const client = await UnixHostClient.connectAuthenticatedTransport({
+    trustedInstallationId: state.options.installationId, trustedInstallationPublicKey: state.options.installationPublicKey,
+    trustedExecutableSignatureDigest: state.options.executableSignatureDigest,
+  }, { call: async (frame, signal) => session.handleRequest(frame, signal ?? lifetime.signal),
+    isConnected: () => !lifetime.signal.aborted, close: () => { lifetime.abort() } })
+  onTestFinished(async () => { client.close(); lifetime.abort(); await session.close() })
+  const local = await client.bootstrapLocalProfile({ keyHandle: 'windows-credential:plugin', unlockMaterial })
+  const lease = await client.openLocalProfile({ profileSelector: local.profileSelector })
+  expect(await client.extensions({ ...lease, command: { action: 'inventory', kind: 'mcp' } }))
+    .toMatchObject({ state: 'inventory', entries: [] })
+  const options = registeredPlugin
+  if (!options) throw Error('missing Windows plugin executor')
+  const profileRoot = options.resolve(local.profileId)
+  expect(() => options.resolve(randomUUID())).toThrow('stale')
+  const context = { kind: 'plugin' as const, signal: lifetime.signal, guard: vi.fn() }
+  await options.repair!(profileRoot, '@fixture/bundle', context)
+  await options.remove!(profileRoot, '@fixture/bundle', context)
+  await options.install(profileRoot, '@fixture/bundle@1.2.3', context)
+  await options.install(profileRoot, '@fixture/bundle@1.2.3', { ...context,
+    buildApproval: { buildKey: '@fixture/bundle@1.2.3', digest: 'c'.repeat(64) } })
+  expect(pluginWiring.command.mock.calls.map(([input]) => input.action)).toEqual(['repair', 'remove', undefined, undefined])
+  const installed = pluginWiring.command.mock.lastCall?.[0]
+  expect(installed?.allowBuild).toBe('@fixture/bundle@1.2.3')
+  expect(installed?.windows?.userSid).toBe(userSid)
+  if (withCatalog) {
+    archiveFor.mockReturnValue('fixture-bundle.tgz')
+    await options.install(profileRoot, '@fixture/bundle@1.2.3', context)
+    expect(pluginWiring.command.mock.lastCall?.[0].archivePath).toBe('fixture-bundle.tgz')
+  }
+  let entries: { entryId: string; moduleName: string; enabled: boolean; fiberPhase: string | null }[] = []
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    const address = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url
+    if (address.startsWith('https://registry.npmjs.org/')) return Response.json({ name: '@fixture/bundle', version: '1.2.3' })
+    if (typeof init?.body !== 'string') throw Error('missing inventory body')
+    const request = JSON.parse(init.body) as { rpcId: string }
+    return Response.json({ type: 'server-response', rpcId: request.rpcId, result: { ok: true, value: { entries } } })
+  })
+  await expect(options.inspectScripts!('@fixture/bundle', '@fixture/bundle@1.2.3')).resolves.toBeUndefined()
+  const plan = options.togglePlan!(local.profileId, '@fixture/bundle', false, '[]')
+  entries = plan.disabled.map(row => ({ ...row, enabled: false, fiberPhase: null }))
+  await options.acknowledgeToggle!(local.profileId, plan, context)
+  entries = []
+  await options.acknowledgeRemoval!(local.profileId, ['include:fixture'], context)
+  entries = [{ entryId: 'include:fixture', moduleName: 'fixture-tool', enabled: true, fiberPhase: 'active' }]
+  await options.acknowledge(local.profileId, '@fixture/bundle', context)
+  expect(state.createProfileWorker).toHaveBeenCalledTimes(4)
+  if (withCatalog) {
+    expect(options.bundledPlugin!('@fixture/bundle', '1.2.3')).toMatchObject({ entryIds: ['fixture'] })
+    expect(options.bundledPlugin!('missing', '1.2.3')).toBeUndefined()
+    expect(options.composedEntryIds!(local.profileId)).toEqual(new Set(['fixture']))
+    expect(pluginWiring.overlay).toHaveBeenCalled()
+  } else expect(options.bundledPlugin).toBeUndefined()
 })

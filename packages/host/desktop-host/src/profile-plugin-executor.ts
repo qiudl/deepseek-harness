@@ -1,4 +1,11 @@
 import { readExtensionStateFile, readExtensionBackupFile } from './posix-extension-files.ts'
+import {
+  assertWindowsExtensionDirectory,
+  readWindowsExtensionBackupFile,
+  readWindowsExtensionStateFile,
+  writeWindowsExtensionStateFile,
+  type WindowsExtensionFiles,
+} from './windows-extension-files.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fsyncSync, lstatSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
@@ -19,6 +26,8 @@ interface BundledPluginIdentity { readonly entryIds: readonly string[]; readonly
 interface ProfilePluginExecutorOptions {
   resolve(profileId: string): string
   uid: number
+  /** Windows ACL channel replacing every uid/mode check; required on win32, absent elsewhere. */
+  windows?: WindowsExtensionFiles
   togglePlan?(this: void, profileId: string, packageName: string, enabled: boolean, patch: string): PluginTogglePlan
   acknowledgeToggle?(this: void, profileId: string, plan: PluginTogglePlan, context: Lifetime): Promise<void>
   repair?(this: void, profileRoot: string, packageName: string, context: Lifetime): Promise<void>
@@ -71,13 +80,20 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   private root(profileId: string): string {
     const root = this.options.resolve(profileId)
     if (!isAbsolute(root)) throw Error('unsafe_profile')
+    const windows = this.options.windows
     for (const path of [root, join(root, 'profiles'), join(root, 'profiles/web')]) {
-      const stat = lstatSync(path)
-      if (!stat.isDirectory() || stat.uid !== this.options.uid || (stat.mode & 0o022) !== 0) throw Error('unsafe_profile')
+      if (windows) assertWindowsExtensionDirectory(windows, path)
+      else {
+        const stat = lstatSync(path)
+        if (!stat.isDirectory() || stat.uid !== this.options.uid || (stat.mode & 0o022) !== 0) throw Error('unsafe_profile')
+      }
     }
     return root
   }
   private read(root: string, path: string): string | null {
+    if (this.options.windows) {
+      return readWindowsExtensionStateFile(this.options.windows, join(root, path), 16_777_216, 'unsafe_plugin_state')
+    }
     return readExtensionStateFile(join(root, path), this.options.uid, 16_777_216, 'unsafe_plugin_state')
   }
 
@@ -177,7 +193,9 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     guard()
     this.root(profileId)
     if (this.read(root, relative) !== previous) throw Error('plugin_state_changed')
+    const windows = this.options.windows
     if (next === null) unlinkSync(file)
+    else if (windows) writeWindowsExtensionStateFile(windows, file, next)
     else {
       const temporary = join(parent, `.plugin-toggle-${randomUUID()}`)
       const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
@@ -187,8 +205,11 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
         renameSync(temporary, file); published = true
       } finally { if (!published) unlinkSync(temporary) }
     }
-    const directory = openSync(parent, constants.O_RDONLY | constants.O_NOFOLLOW)
-    try { fsyncSync(directory) } finally { closeSync(directory) }
+    // Windows replacePrivateFile is already durable through the native handle; posix fsyncs the directory.
+    if (!windows) {
+      const directory = openSync(parent, constants.O_RDONLY | constants.O_NOFOLLOW)
+      try { fsyncSync(directory) } finally { closeSync(directory) }
+    }
     return this.revision(profileId)
   }
   private async remove(profileId: string, input: PluginRemoveInput, context: Lifetime): Promise<{ state: 'succeeded' }> {
@@ -242,9 +263,15 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   }
   private backupToggle(profileId: string, operationId: string, patch: string | null): void {
     if (patch !== null && Buffer.byteLength(patch) > 1_048_576) throw Error('invalid_patch')
+    const contents = patch === null ? '0' : `1${patch}`
+    const windows = this.options.windows
+    if (windows) {
+      writeWindowsExtensionStateFile(windows, this.backupPath(profileId, operationId), contents)
+      return
+    }
     const fd = openSync(this.backupPath(profileId, operationId),
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    try { writeFileSync(fd, patch === null ? '0' : `1${patch}`); fsyncSync(fd) } finally { closeSync(fd) }
+    try { writeFileSync(fd, contents); fsyncSync(fd) } finally { closeSync(fd) }
     const parent = openSync(join(this.root(profileId), 'profiles/web'), constants.O_RDONLY | constants.O_NOFOLLOW)
     try { fsyncSync(parent) } finally { closeSync(parent) }
   }
@@ -259,7 +286,10 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   } {
     const evidence = receipt.pluginToggleRecovery
     if (receipt.profileId !== profileId || receipt.kind !== 'plugin' || !evidence) throw Error('invalid_recovery')
-    const text = readExtensionBackupFile(this.backupPath(profileId, receipt.operationId), this.options.uid)
+    const windows = this.options.windows
+    const text = windows
+      ? readWindowsExtensionBackupFile(windows, this.backupPath(profileId, receipt.operationId))
+      : readExtensionBackupFile(this.backupPath(profileId, receipt.operationId), this.options.uid)
     if (text !== '0' && !text.startsWith('1')) throw Error('invalid_backup')
     const patch = text === '0' ? null : text.slice(1)
     if (this.patchDigest(patch) !== evidence.backupDigest) throw Error('invalid_backup')
