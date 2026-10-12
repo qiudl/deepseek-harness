@@ -284,6 +284,7 @@ describe('Unix transport authority failures', () => {
     const value = { bytes: 'eA', total: 1, uncompressedBytes: 1, encoding: 'gzip' }
     const execute = vi.fn(async () => value)
     const enabled = await authorityClient({ remoteUiRead: execute, remoteUiAssetGzipSupported: true })
+    expect(enabled.client.remoteUiAssetGzipSupported).toBe(true)
     expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_asset_gzip')
     await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(value)
     expect(execute).toHaveBeenCalledOnce()

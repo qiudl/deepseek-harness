@@ -2298,6 +2298,9 @@ interface HandshakeState {
 
 /** Connected Main-only SDK matching Slark's `DshPersonalHostAdapter`. */
 export class UnixHostClient {
+  /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
+  readonly remoteUiAssetGzipSupported = true
+
   private constructor(
     private readonly channel: HostClientFrameTransport,
     private readonly state: HandshakeState,
