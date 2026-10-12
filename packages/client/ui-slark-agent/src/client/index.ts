@@ -9,6 +9,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-api-session-controller/remote'
 import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -194,7 +195,7 @@ export function apply(ctx: ClientContext): void {
           void focusPending({ ...row, first_pending_digest: row.first_pending_digest }).catch(() => undefined)
         }
       },
-      startConversation: () => { browserCtx.uiWorkspace.startCollaborationSession() },
+      startConversation: (workspaceId: string) => { browserCtx.uiWorkspace.startCollaborationSession(workspaceId as WorkspaceId) },
       currentWorkspaceId: () => browserCtx.uiWorkspace.currentWorkspaceId(),
       togglePin: async (sessionId: SessionId, pinned: boolean) => {
         requireOwnedSession(sessionId)

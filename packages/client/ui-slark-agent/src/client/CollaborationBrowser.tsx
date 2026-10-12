@@ -30,7 +30,7 @@ export interface ConversationIndex {
 export interface BrowserInjected {
   hooks: { collaborationIndex: ObservableSnapshot<ConversationIndex> }
   openConversation(row: ConversationRow): void
-  startConversation(): void
+  startConversation(workspaceId: string): void
   currentWorkspaceId(): string | undefined
   togglePin(sessionId: SessionId, pinned: boolean): Promise<void>
   renameConversation(sessionId: SessionId, title: string): Promise<void>
@@ -78,6 +78,16 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
   const [archiving, setArchiving] = useState<string | null>(null)
   const [actionError, setActionError] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [workspaceRequired, setWorkspaceRequired] = useState(false)
+  const start = (): void => {
+    const workspaceId = scope === 'all' ? currentWorkspaceId() : scope
+    if (!workspaceId || !workspaces.some(item => item.workspaceId === workspaceId)) {
+      setWorkspaceRequired(true)
+      return
+    }
+    setWorkspaceRequired(false)
+    startConversation(workspaceId)
+  }
   const run = async (action: () => Promise<void>, done: () => void): Promise<void> => {
     setBusy(true); setActionError(false)
     try { await action(); done() } catch { setActionError(true) } finally { setBusy(false) }
@@ -125,8 +135,8 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
   const headings = [t('browser.pending'), t('browser.issues'), t('browser.running'), t('browser.drafts'),
     t('browser.completed'), t('browser.archived')] as const
   return <section className={css.root} aria-label={t('browser.title')}>
-    <div className={css.top}><strong>{t('browser.title')}</strong><button type="button" onClick={startConversation}>{t('browser.new')}</button></div>
-    <select className={css.scope} value={scope} onChange={(event) => { setScope(event.target.value) }} aria-label={t('browser.scope')}>
+    <div className={css.top}><strong>{t('browser.title')}</strong><button type="button" onClick={start}>{t('browser.new')}</button></div>
+    <select className={css.scope} value={scope} onChange={(event) => { setScope(event.target.value); setWorkspaceRequired(false) }} aria-label={t('browser.scope')}>
       <option value="all">{t('browser.all', { count: index.state === 'ready' && workspacesState.phase === 'ready' ? visiblePendingCount : '—' })}</option>
       {workspaces.map((workspace) => {
         const count = index.state === 'ready' && workspacesState.phase === 'ready'
@@ -135,6 +145,7 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
         return <option key={workspace.workspaceId} value={workspace.workspaceId}>{t('browser.workspace', { name: workspace.title, count })}</option>
       })}
     </select>
+    {workspaceRequired && <p className={css.note} role="alert">{t('browser.chooseWorkspace')}</p>}
     <input className={css.search} type="search" value={query} onChange={(event) => { setQuery(event.target.value) }} placeholder={t('browser.search')} aria-label={t('browser.search')} />
     {actionError && <p className={css.note} role="alert">{t('browser.actionFailed')}</p>}
     {(index.state === 'loading' || workspacesState.phase !== 'ready') && <p className={css.note}>{t('browser.loading')}</p>}
