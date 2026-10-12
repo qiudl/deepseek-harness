@@ -37,8 +37,10 @@ export function parseBundledPluginSpec(spec: string): { name: string; version: s
 
 function trustedEmbeddingPath(path: string, directory: boolean, uid: number): void {
   const stat = lstatSync(path)
-  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())
-    || (stat.uid !== uid && stat.uid !== 0) || (stat.mode & 0o022) !== 0) throw Error('unsafe_bundled_plugins')
+  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) throw Error('unsafe_bundled_plugins')
+  // POSIX ownership and mode evidence; Windows embedding roots are ACL-protected install directories.
+  if (process.platform !== 'win32'
+    && ((stat.uid !== uid && stat.uid !== 0) || (stat.mode & 0o022) !== 0)) throw Error('unsafe_bundled_plugins')
 }
 
 function parse(value: unknown): BundledPlugin[] {

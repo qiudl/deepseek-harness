@@ -262,6 +262,9 @@ export function windowsDesktopHostConfig(config: Config): WindowsDesktopHostPriv
     registrationRoot: config.registrationRoot,
     nodeExecutablePath: config.nodeExecutablePath,
     dshEntrypointPath: config.dshEntrypointPath,
+    // REQ-20261010-0013: optional sealed pnpm and bundled-plugin catalog for the Windows plugin channel.
+    ...(config.pnpmEntrypointPath === undefined ? {} : { pnpmEntrypointPath: config.pnpmEntrypointPath }),
+    ...(config.bundledPluginsRoot === undefined ? {} : { bundledPluginsRoot: config.bundledPluginsRoot }),
     deviceIndexKeyPath: config.deviceIndexKeyPath,
     accountKeyringPath: config.accountKeyringPath,
     accountKeyringSha256: config.accountKeyringSha256,
