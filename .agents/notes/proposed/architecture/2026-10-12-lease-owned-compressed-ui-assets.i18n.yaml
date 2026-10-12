@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-10-12-lease-owned-compressed-ui-assets.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-10-12-lease-owned-compressed-ui-assets.md
+/agent-note-lease-owned-compressed-ui-assets:
+  en: 34ba01d6f41561b1
+  zh: 4789ebf44d3adb47
+/agent-note-lease-owned-compressed-ui-assets/problem:
+  en: 18d3d540516d5e75
+  zh: 4391b2c2b5127127
+/agent-note-lease-owned-compressed-ui-assets/proposal:
+  en: e42938662737d5bd
+  zh: 44012f14fff5f27c
+/agent-note-lease-owned-compressed-ui-assets/alternatives-considered:
+  en: 37bde25cfee95b72
+  zh: 9e927a4bd10424ed
+/agent-note-lease-owned-compressed-ui-assets/acceptance-criteria:
+  en: 6fdccb1fe65fa7ae
+  zh: 613d57d3d2a3bef5
+/agent-note-lease-owned-compressed-ui-assets/risks:
+  en: f8cb3df9f26b57c0
+  zh: ab285591d3d244c0

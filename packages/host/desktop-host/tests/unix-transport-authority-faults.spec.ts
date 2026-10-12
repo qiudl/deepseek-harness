@@ -272,6 +272,27 @@ describe('Unix transport authority failures', () => {
     client.close()
   })
 
+  it('negotiates gzip through signed inspection and rejects unsupported chunks without execution', async () => {
+    const input = { ...opened, endpoint: 'asset/read-gzip-chunk' as const,
+      payload: { args: { url: '/plugins/a.js', offset: 0 } } }
+    const oldRead = vi.fn(async () => ({ bytes: '', total: 0 }))
+    const old = await authorityClient({ remoteUiRead: oldRead })
+    expect(old.client.inspection.capabilities).not.toContain('profile.remote_ui_asset_gzip')
+    await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(oldRead).not.toHaveBeenCalled()
+    old.client.close()
+    const value = { bytes: 'eA', total: 1, uncompressedBytes: 1, encoding: 'gzip' }
+    const execute = vi.fn(async () => value)
+    const enabled = await authorityClient({ remoteUiRead: execute, remoteUiAssetGzipSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_asset_gzip')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(value)
+    expect(execute).toHaveBeenCalledOnce()
+    enabled.client.close()
+    const missing = await authorityClient({ remoteUiAssetGzipSupported: true })
+    expect(missing.client.inspection.capabilities).not.toContain('profile.remote_ui_asset_gzip')
+    missing.client.close()
+  })
+
   it('drops a remote UI response when the lease is revoked during worker execution', async () => {
     const host = fakeHost()
     vi.mocked(host).authorizeExtensionView.mockReturnValueOnce(profileId as never)

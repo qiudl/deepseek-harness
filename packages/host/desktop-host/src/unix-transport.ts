@@ -325,6 +325,8 @@ export interface UnixHostServerOptions {
     profileId: string, endpoint: ProfileRemoteUiReadRequest['params']['endpoint'],
     payload: ProfileRemoteUiReadRequest['params']['payload'], signal: AbortSignal,
   ) => Promise<unknown>
+  /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
+  readonly remoteUiAssetGzipSupported?: boolean
   /** Open only native read streams in the lease-selected worker. */
   readonly remoteUiStream?: (
     profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
@@ -483,7 +485,7 @@ export type HostControlAuthorityOptions = Pick<
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
-    | 'remoteUiStream'
+    | 'remoteUiStream' | 'remoteUiAssetGzipSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1546,7 +1548,9 @@ export class HostControlAuthority {
             value = await execute(profileId, frame.params.command, context.signal)
           } else {
             const execute = this.options.remoteUiRead
-            if (!execute) throw new HostAuthorityError('upgrade_required')
+            if (!execute || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
+              throw new HostAuthorityError('upgrade_required')
+            }
             value = await execute(profileId, frame.params.endpoint, frame.params.payload, context.signal) as HostRemoteSessionJson
           }
           if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
@@ -2157,6 +2161,7 @@ export class HostControlAuthority {
             'profile.remote_session.workspace_create', 'profile.remote_session.directory_picker', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
             'profile.remote_session.control_lease'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
             'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events'] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
@@ -3556,7 +3561,9 @@ export class UnixHostClient {
     readonly payload: ProfileRemoteUiReadRequest['params']['payload']
     readonly signal?: AbortSignal
   }): Promise<HostRemoteSessionJson> {
-    if (!this.inspection.capabilities.includes('profile.remote_ui_read' as HostControlCapability)) {
+    if (!this.inspection.capabilities.includes('profile.remote_ui_read' as HostControlCapability)
+      || (input.endpoint === 'asset/read-gzip-chunk'
+        && !this.inspection.capabilities.includes('profile.remote_ui_asset_gzip' as HostControlCapability))) {
       throw new HostAuthorityError('upgrade_required')
     }
     const request: ProfileRemoteUiReadRequest = {

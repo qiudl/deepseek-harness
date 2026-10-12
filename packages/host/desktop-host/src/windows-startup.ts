@@ -433,6 +433,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         ...rootWorkerOperations(workers),
         collaborationDeliveryReceiver: profileId => workers.collaborationDeliveryReceiver(profileId),
         remoteSession,
+        remoteUiAssetGzipSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
         remoteUiStream: (profileId, endpoint, payload, signal) => workers.remoteUiStream(profileId, endpoint, payload, signal),
         ...(mcp && extensionOperations ? { extensions: { operations: extensionOperations, kinds: ['mcp'] as const,

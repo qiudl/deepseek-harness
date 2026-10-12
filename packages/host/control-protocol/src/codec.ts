@@ -1653,7 +1653,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.remote_ui_read') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
-    if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/describe'
+    if (params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/read-gzip-chunk' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
       && params.endpoint !== 'session/collaborationMembership'
@@ -1706,12 +1706,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       if (!Array.isArray(credentialArgs.refs) || credentialArgs.refs.length > 64
         || !credentialArgs.refs.every((ref: unknown) => typeof ref === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(ref))) reject()
     }
-    if (params.endpoint === 'asset/read' || params.endpoint === 'asset/describe') {
+    if (params.endpoint === 'asset/read' || params.endpoint === 'asset/read-gzip-chunk' || params.endpoint === 'asset/describe') {
       const assetArgs = args as Record<string, unknown>
-      exactKeys(assetArgs, params.endpoint === 'asset/read' ? ['url', 'offset'] : ['url'])
+      exactKeys(assetArgs, params.endpoint !== 'asset/describe' ? ['url', 'offset'] : ['url'])
       if (typeof assetArgs.url !== 'string' || assetArgs.url.length > 4096 || assetArgs.url.length === 0
-        || (params.endpoint === 'asset/read' &&
-          (!Number.isSafeInteger(assetArgs.offset) || (assetArgs.offset as number) < 0))) reject()
+        || (params.endpoint !== 'asset/describe' &&
+          (!Number.isSafeInteger(assetArgs.offset) || (assetArgs.offset as number) < 0))
+        || (params.endpoint === 'asset/read-gzip-chunk'
+          && (assetArgs.offset as number) > 8 * 1024 * 1024 + 64 * 1024)) reject()
     }
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
