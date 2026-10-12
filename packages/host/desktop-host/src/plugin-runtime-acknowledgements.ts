@@ -11,8 +11,8 @@ import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
  */
 export function createPluginRuntimeAcknowledgements(options: {
   workers: Pick<ProfileWorkerSupervisor, 'dispose' | 'activate'>
-  requiredProfile(profileId: string): PersonProfileRecord
-  ensureWorker(profile: PersonProfileRecord): Promise<void>
+  requiredProfile(this: void, profileId: string): PersonProfileRecord
+  ensureWorker(this: void, profile: PersonProfileRecord): Promise<void>
   expected(profileId: string, packageName: string): Parameters<typeof waitForPluginRuntime>[1]
 }) {
   type Lifetime = Parameters<ExtensionExecutor['execute']>[2]

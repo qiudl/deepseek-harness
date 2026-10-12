@@ -66,6 +66,17 @@ function commandFixture() {
     dshEntrypointPath: cli, pnpmEntrypointPath: pnpm, profileRoot: profile, controlRoot: control, uid: 0, windows } }
 }
 
+interface ObservedCommand {
+  args: string[]
+  home: string
+  secret: string | null
+  path: string
+  pathext: string | null
+}
+function readObserved(profile: string): ObservedCommand {
+  return JSON.parse(readFileSync(join(profile, 'observed.json'), 'utf8')) as ObservedCommand
+}
+
 const onWindows = it.runIf(process.platform === 'win32')
 const offWindows = it.runIf(process.platform !== 'win32')
 
@@ -78,7 +89,7 @@ onWindows('runs the pinned CLI through the pnpm.cmd shim with a scrubbed environ
     else process.env.PLUGIN_TEST_SECRET = originalSecret
   })
   await runProfilePluginCommand({ ...f.options, spec: '@fixture/bundle@1.2.3', signal: new AbortController().signal, guard() {} })
-  const observed = JSON.parse(readFileSync(join(f.profile, 'observed.json'), 'utf8'))
+  const observed = readObserved(f.profile)
   expect(observed.args).toEqual(['add', '@fixture/bundle@1.2.3', '--save-exact', '--ignore-scripts'])
   expect(observed.home).toBe(f.profile)
   expect(observed.secret).toBeNull()
@@ -92,13 +103,13 @@ onWindows('removes and repairs with fixed arguments and disabled lifecycle scrip
   const removed = commandFixture()
   await runProfilePluginCommand({ ...removed.options, action: 'remove', spec: '@fixture/bundle',
     signal: new AbortController().signal, guard() {} })
-  expect(JSON.parse(readFileSync(join(removed.profile, 'observed.json'), 'utf8')).args)
+  expect(readObserved(removed.profile).args)
     .toEqual(['remove', '@fixture/bundle', '--config.ignore-scripts=true'])
 
   const repaired = commandFixture()
   await runProfilePluginCommand({ ...repaired.options, action: 'repair', spec: '@fixture/bundle',
     signal: new AbortController().signal, guard() {} })
-  expect(JSON.parse(readFileSync(join(repaired.profile, 'observed.json'), 'utf8')).args)
+  expect(readObserved(repaired.profile).args)
     .toEqual(['install', '--no-frozen-lockfile', '--ignore-scripts'])
   expect(readdirSync(repaired.control)).toEqual([])
 })
@@ -108,7 +119,7 @@ onWindows('persists the exact build approval through the ACL channel before runn
   writeFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'packages:\n  - profiles/*\nallowBuilds:\n  unrelated: false\n')
   await runProfilePluginCommand({ ...f.options, spec: '@fixture/bundle@1.2.3', allowBuild: '@fixture/bundle@1.2.3',
     signal: new AbortController().signal, guard() {} })
-  expect(JSON.parse(readFileSync(join(f.profile, 'observed.json'), 'utf8')).args)
+  expect(readObserved(f.profile).args)
     .toEqual(['add', '@fixture/bundle@1.2.3', '--save-exact'])
   const policy = readFileSync(join(f.profile, 'pnpm-workspace.yaml'), 'utf8')
   expect(policy).toContain('"@fixture/bundle@1.2.3": true')
@@ -133,7 +144,7 @@ onWindows('rejects unsafe inputs and missing channels before launching', async (
   const f = commandFixture()
   const signal = new AbortController().signal
   const request = { ...f.options, spec: 'bundle@1.0.0', signal, guard() {} }
-  const { windows, ...withoutChannel } = request
+  const { windows: _windows, ...withoutChannel } = request
   await expect(runProfilePluginCommand(withoutChannel)).rejects.toThrow('invalid_plugin_command')
   await expect(runProfilePluginCommand({ ...request, profileRoot: 'relative' })).rejects.toThrow('unsafe_plugin_directory')
   await expect(runProfilePluginCommand({ ...request, pnpmEntrypointPath: `${f.pnpm}"&whoami"` }))

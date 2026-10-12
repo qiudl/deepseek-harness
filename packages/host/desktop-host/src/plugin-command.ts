@@ -152,11 +152,11 @@ export async function runProfilePluginCommand(input: ProfilePluginCommand): Prom
         windowsHide: true,
         env: input.windows
           ? {
-              PATH: [shim, dirname(input.nodeExecutablePath), `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32`].join(';'),
-              PATHEXT: '.COM;.EXE;.BAT;.CMD',
-              SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
-              USERPROFILE: homedir(), HOME: homedir(), DSH_HOME: input.profileRoot, CI: '1',
-            }
+            PATH: [shim, dirname(input.nodeExecutablePath), `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32`].join(';'),
+            PATHEXT: '.COM;.EXE;.BAT;.CMD',
+            SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
+            USERPROFILE: homedir(), HOME: homedir(), DSH_HOME: input.profileRoot, CI: '1',
+          }
           : { PATH: `${shim}:${dirname(input.nodeExecutablePath)}:/usr/bin:/bin`, HOME: homedir(), DSH_HOME: input.profileRoot, CI: '1' },
       })
       let failure: string | undefined; let killTimer: ReturnType<typeof setTimeout> | undefined
