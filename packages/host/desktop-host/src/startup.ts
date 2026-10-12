@@ -733,6 +733,7 @@ export async function startDesktopHostApplication(
       ...collaborationWorkerReaders(workers),
       ...rootWorkerOperations(workers),
       rootAnalysisSupported: true,
+      rootCaptureSupported: true,
       rootAnalysisRecoverySupported: true,
       sourceAnalysisRecoverySupported: true,
       sourceLiveResumeSupported: true,

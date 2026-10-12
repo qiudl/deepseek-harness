@@ -422,6 +422,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         host,
         ...collaborationWorkerReaders(workers),
         rootAnalysisSupported: true,
+        rootCaptureSupported: true,
         rootAnalysisRecoverySupported: true,
         sourceAnalysisRecoverySupported: true,
         sourceLiveResumeSupported: true,

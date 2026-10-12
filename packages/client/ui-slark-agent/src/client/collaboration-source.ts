@@ -268,7 +268,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
             const current = () => window.__DSH_DESKTOP_HOST__ === host && host.collaborationRootExecution === execute && available()
                 && ctx.sessions.scopeOf(actx) === session.sessionId && ctx.sessions.scope(session.sessionId) !== undefined
                 && workspaceOf(ctx, session.sessionId) === first.r.workspace_id
-            const state = await dispatchPlannedSource(execute.bind(host), original, result.value.root_trace_id, signal, current)
+            const state = await dispatchPlannedSource(execute.bind(host), original, result.value.root_trace_id, signal, current,
+              (request) => { window.dispatchEvent(new CustomEvent('dsh-slark-response-admitted', { detail: request })) })
             signal.throwIfAborted()
             if (current()) window.dispatchEvent(new CustomEvent('dsh-slark-collaboration-admitted', { detail: original }))
             const copy = state === 'recorded' ? 'submit.dispatchedV2'

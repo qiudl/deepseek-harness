@@ -23,10 +23,12 @@ function wait(promise: Promise<unknown>, signal: AbortSignal): Promise<unknown> 
  * @param rootTraceId - Root trace returned by the successful planning receipt.
  * @param signal - Composer lifetime cancellation.
  * @param current - Check current Session, workspace and bridge before each operation.
+ * @param admitted - Optional readonly notification after the original execution receipt is recorded.
  * @returns Aggregate admission state within two 35-second Main requests; recorded never asserts execution completion.
  */
 export async function dispatchPlannedSource(execute: Execute, source: Source, rootTraceId: string,
-  signal: AbortSignal, current: () => boolean): Promise<'recorded' | 'not_admitted' | 'uncertain'> {
+  signal: AbortSignal, current: () => boolean,
+  admitted?: (request: { source: Source; previewId: string; taskId: string }) => void): Promise<'recorded' | 'not_admitted' | 'uncertain'> {
   const previewSignal = AbortSignal.any([signal, AbortSignal.timeout(35_000)])
   const coordinates = { workspace_id: source.workspace_id, session_id: source.session_id,
     source_message_id: source.source_message_id, source_revision: source.source_revision }
@@ -59,6 +61,9 @@ export async function dispatchPlannedSource(execute: Execute, source: Source, ro
         if (!outcome || typeof outcome !== 'object' || !('ok' in outcome) || outcome.ok !== true
           || !('status' in outcome) || (outcome.status !== 'recorded' && outcome.status !== 'not_admitted'))
           return 'uncertain'
+        if (outcome.status === 'recorded') {
+          try { admitted?.({ source: coordinates, previewId, taskId }) } catch { /* projection cannot change recorded admission */ }
+        }
         return outcome.status
       } catch { return 'uncertain' }
     }))

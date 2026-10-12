@@ -31,6 +31,8 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'
+export type { HostRootTextContextReceipt } from './root-text-context.js'
 export {
   parseHostCollaborationDeliveryChunk, parseHostCollaborationDeliveryCapsule,
   parseHostCollaborationDeliveryCommit, matchesHostCollaborationDeliveryCommit,

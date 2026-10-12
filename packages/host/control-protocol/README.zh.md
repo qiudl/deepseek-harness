@@ -179,6 +179,8 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 
 `profile.root_analysis` 能力允许在既有分析方法上使用 `prepare_root`。输入只包含 namespace、续接策略和原 Source 输入；`root_prepared` 回复将 prepared 或 recovered 元数据绑定到已持久化根描述。仅含 Source 的回复或不同 Source 描述都会被拒绝。派发仍绑定原存活尝试，恢复出的根元数据不能创建新调用。
 
+`profile.root_capture` 独立启用 `capture_root`、`start_captured_root` 和 `release_captured_root`，输入均为不变的原始 Root。捕获返回 `root_captured`，包含 captured/recovered Source 与 Root 描述符，拒绝 attempt 字段。可选的 `context_receipt` 通过 `dsh-root-text-context/v1` 签名绑定完整严格六字段文本入口摘要、原 Root 和当前 Account/Native 进程；恢复或扩展输入不获得回执。客户端验证签名和准确的入口摘要；服务端仍须核对密封 Source、注册 peer 和当前权限，回执不声明普通 Session 历史的状态。启动保留调用返回既有的 `root_prepared` 元数据，释放返回 `root_capture_released`。这些操作不授予云端路线或执行权限。
+
 `profile.root_analysis_recovery` 单独启用 `read_root_output`。响应绑定原根、已消费的派发元数据与保存的 JSON 摘要，或明确报告输出缺失。已保存响应携带安装签名回执；客户端必须按当前 Account 和 Host 身份验证。历史租约到期不会删除证据，也不会授予派发权限。输出解码后仍限制为 32 KiB，完整控制帧维持 64 KiB 上限；不返回提示词或可执行 handle。
 
 独立能力 `profile.root_lookup` 允许 `recover_root` 携带原 namespace、策略和 Source 输入。响应必须为包含不可执行 `recovered` 元数据的 `root_prepared`；不能回退到 `prepare_root` 或返回存活尝试。

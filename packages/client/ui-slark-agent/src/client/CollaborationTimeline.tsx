@@ -64,12 +64,17 @@ function SourceRecord({ group, t, loadReplies, busy, bind }: {
       <small>{t('task.question')}</small><div className={css.text}>{group.original.original_message}</div>
     </article>
     {group.phase === 'error' || group.pendingUnavailable ? <p role="status">{t('task.readUnavailable')}</p>
-      : group.replies.length === 0 && !group.pending?.length && <p className={css.status} role="status">
+      : group.replies.length === 0 && !group.pending?.length && !group.provisionalResponses?.length && <p className={css.status} role="status">
         {t(planningStatus[group.planningState ?? ''] ?? 'task.awaitingResult')}</p>}
     {group.pending?.map(item => <article key={item.pending_item_id} className={css.reply}
       data-row-id={`slark-clarification:${digest}:${item.pending_item_id}`}>
       <strong>{item.mentions.map(mention => `${mention.agent_name}${mention.project_name === null ? '' : ` · ${mention.project_name}`}`).join(', ')}</strong>
       <div className={css.text}>{item.question}</div>
+    </article>)}
+    {group.phase !== 'error' && !group.pendingUnavailable && group.provisionalResponses?.map(reply => <article key={reply.invocationId} className={css.reply}
+      data-testid="slark-timeline-response" data-provisional="true" data-response-seq={reply.seq}>
+      <strong>{reply.agentName}{reply.projectName !== null && <> · {reply.projectName}</>}</strong>
+      <div className={css.text}>{reply.text}</div>
     </article>)}
     {group.replies.map(reply => <article key={reply.delivery_id} className={css.reply} data-testid="slark-timeline-reply"
       data-row-id={`slark-reply:${reply.delivery_id}`}>

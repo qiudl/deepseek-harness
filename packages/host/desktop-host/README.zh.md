@@ -239,6 +239,8 @@ Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后
 
 `sourceLiveResumeSupported` 独立声明 `profile.source_live_resume`。Host 为普通 Source 的 prepare 与 resume 派生稳定的 Account/Profile/安装/进程摘要，派发权仍绑定当前连接。访问 worker 前后均检查授权与能力。交接成功保留原 attempt 和期限，并使旧连接失去派发权；不支持的 worker 在访问前拒绝。
 
+仅支持先捕获、后准备规划输入的 worker 才公布 `profile.root_capture`。Host 和客户端均要求该能力才能捕获、延后规划或释放调用；操作保留当前 Account/Profile 授权，并拒绝 Root 或 Source 响应坐标变化。私有文本捕获成功后，Host 对完整入口元数据签名，客户端验证原入口摘要、当前 Account/Native 身份与签名。[Control Protocol](../control-protocol/README.zh.md) 定义字段与限制。Unix 与 Windows 启动安装相同的 worker 操作。[Web App](../../bundle/web-app/README.zh.md) 定义捕获保留、受理、超时和销毁行为。
+
 读取已保存输出要求独立的 `profile.root_analysis_recovery` 能力。访问 worker 前后均检查当前 Account/Profile 授权，并使用私有分析 token。Host 按当前 Account 和安装/进程身份签署匹配的原派发记录及保存输出摘要。客户端必须取得该回执，并核验原始字节和当前 Host 身份。旧 worker 拒绝该命令；保存的派发元数据不会触发第二次模型调用。
 
 `rootLookupSupported` 独立于准备能力公布 `profile.root_lookup`。`recover_root` 复用当前 Account/Profile 校验及私有 worker token，但只接受 recovered 元数据；旧端在查询前拒绝。
