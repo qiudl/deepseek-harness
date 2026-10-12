@@ -35,6 +35,32 @@ it('shows a Host-marked dedicated Session before its first accepted Source', () 
   expect(screen.getByRole('option', { name: 'North · — pending' })).toBeTruthy()
 })
 
+it('starts a mobile collaboration in the workspace selected from the sidebar', () => {
+  const first = 'a15fc774-6fae-4795-9f55-f4be65e06846'
+  const second = 'b15fc774-6fae-4795-9f55-f4be65e06846'
+  const startConversation = vi.fn()
+  render(<CollaborationBrowser {...({
+    useCollaborationIndex: bindSnapshotSelector(createSnapshotStore<ConversationIndex>({
+      state: 'ready', global_pending_count: 0, items: [],
+    })),
+    useSessions: (select: (value: unknown) => unknown) => select({ byId: {} }),
+    useWorkspaces: (select: (value: unknown) => unknown) => select({ phase: 'ready', items: [
+      { workspaceId: first, title: 'First', sessionIds: [] },
+      { workspaceId: second, title: 'Second', sessionIds: [] },
+    ], dedicatedCollaborationSessionIds: [], archivedSessionIds: [], pinnedSessionIds: [] }),
+    openConversation: vi.fn(), startConversation, currentWorkspaceId: () => undefined,
+    togglePin: vi.fn(), renameConversation: vi.fn(), archiveConversation: vi.fn(), restoreConversation: vi.fn(),
+    t: makeTranslate(en),
+  } as Parameters<typeof CollaborationBrowser>[0])} />)
+  fireEvent.click(screen.getByRole('button', { name: '＋ New' }))
+  expect(startConversation).not.toHaveBeenCalled()
+  expect(screen.getByRole('alert').textContent).toContain('Choose a workspace')
+  fireEvent.change(screen.getByRole('combobox', { name: 'Collaboration workspace' }), { target: { value: second } })
+  fireEvent.click(screen.getByRole('button', { name: '＋ New' }))
+  expect(startConversation).toHaveBeenCalledWith(second)
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
 it('shows the global pending badge, groups one conversation once, and opens its original Session', async () => {
   const sessionId = SessionId('source-session')
   const index = createSnapshotStore<ConversationIndex>({ state: 'ready', global_pending_count: 2, items: [{

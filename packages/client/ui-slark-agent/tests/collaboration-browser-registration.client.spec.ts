@@ -15,7 +15,7 @@ const row: ConversationRow = {
 type Bindings = {
   hooks: { collaborationIndex: { getSnapshot(): ConversationIndex } }
   openConversation(value: ConversationRow): void
-  startConversation(): void
+  startConversation(workspaceId: string): void
   currentWorkspaceId(): string | undefined
   togglePin(id: SessionId, pinned: boolean): Promise<void>
   renameConversation(id: SessionId, title: string): Promise<void>
@@ -107,8 +107,8 @@ it('registers one original Session and delegates pin, rename, archive and restor
   const f = registration(), b = f.bindings
   await vi.waitFor(() => { expect(b.hooks.collaborationIndex.getSnapshot().state).toBe('ready') })
   expect(b.currentWorkspaceId()).toBe(workspaceId)
-  b.startConversation()
-  expect(f.startCollaborationSession).toHaveBeenCalledOnce()
+  b.startConversation(workspaceId)
+  expect(f.startCollaborationSession).toHaveBeenCalledWith(workspaceId)
   b.openConversation(row)
   expect(f.openSession).toHaveBeenCalledWith(sessionId)
   b.openConversation({ ...row, workspace_id: 'other' })
