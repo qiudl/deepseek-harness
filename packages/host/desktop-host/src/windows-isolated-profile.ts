@@ -39,7 +39,7 @@ const BUILTIN_ADMINISTRATORS_SID = 'S-1-5-32-544'
  * @param evidence - Handle-derived facts about the existing file.
  * @param userSid - Expected owner and private DACL principal.
  */
-function assertWindowsWorkerMutableFileEvidence(
+export function assertWindowsWorkerMutableFileEvidence(
   evidence: WindowsHostPrivatePathEvidence, userSid: string,
 ): void {
   if (evidence.kind !== 'file' || evidence.reparsePoint || evidence.linkCount !== 1

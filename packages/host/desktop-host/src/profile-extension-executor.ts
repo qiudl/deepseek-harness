@@ -6,13 +6,16 @@ import type { ProfileSkillExecutor } from './profile-skill-executor.ts'
 
 /** Serial operation dispatcher with a revision spanning every configured installation store. */
 export class ProfileExtensionExecutor implements ExtensionExecutor {
-  /** @param mcp Host-owned MCP installer. @param skill Host-owned Skill installer. @param plugin Optional bundle installer. */
+  /** @param mcp Host-owned MCP installer. @param skill Host-owned Skill installer, when the platform ships one. @param plugin Optional bundle installer. */
   constructor(
-    private readonly mcp: ProfileMcpExecutor, private readonly skill: ProfileSkillExecutor, private readonly plugin?: ProfilePluginExecutor,
+    private readonly mcp: ProfileMcpExecutor, private readonly skill: ProfileSkillExecutor | undefined, private readonly plugin?: ProfilePluginExecutor,
   ) {}
   private executor(kind: ExtensionKind): ProfileMcpExecutor | ProfileSkillExecutor | ProfilePluginExecutor {
     if (kind === 'mcp') return this.mcp
-    if (kind === 'skill') return this.skill
+    if (kind === 'skill') {
+      if (this.skill) return this.skill
+      throw new Error('upgrade_required')
+    }
     if (this.plugin) return this.plugin
     throw new Error('upgrade_required')
   }
@@ -26,7 +29,10 @@ export class ProfileExtensionExecutor implements ExtensionExecutor {
   }
   /** @param profileId Authorized Profile. @returns Revision covering every configured installer. */
   async revision(profileId: string): Promise<string> {
-    const revisions = await Promise.all([this.mcp.revision(profileId), this.skill.revision(profileId)])
+    const revisions = await Promise.all([
+      this.mcp.revision(profileId),
+      ...(this.skill ? [this.skill.revision(profileId)] : []),
+    ])
     if (this.plugin) revisions.push(await this.plugin.revision(profileId))
     return createHash('sha256').update(JSON.stringify(revisions)).digest('hex')
   }
@@ -38,7 +44,10 @@ export class ProfileExtensionExecutor implements ExtensionExecutor {
    */
   inventory(profileId: string, kind: ExtensionKind, signal?: AbortSignal):
   Promise<readonly { id: string; name: string; transport: string }[]> {
-    if (kind === 'skill') return this.skill.inventory(profileId, signal)
+    if (kind === 'skill') {
+      if (!this.skill) return Promise.reject(Error('upgrade_required'))
+      return this.skill.inventory(profileId, signal)
+    }
     return this.executor(kind).inventory(profileId)
   }
   /** @param profileId Authorized Profile. @param original Package receipt. @returns Completion validation. */
@@ -89,6 +98,7 @@ export class ProfileExtensionExecutor implements ExtensionExecutor {
   }
   /** @param profileId Authorized Profile. @param original Removal receipt. @returns Recovery validation. */
   validateSkillRestore(profileId: string, original: ExtensionReceipt): Promise<void> {
+    if (!this.skill) return Promise.reject(Error('upgrade_required'))
     return this.skill.validateSkillRestore(profileId, original)
   }
   /**
@@ -99,6 +109,7 @@ export class ProfileExtensionExecutor implements ExtensionExecutor {
    */
   restoreSkillRemoval(profileId: string, original: ExtensionReceipt,
     context: Parameters<ExtensionExecutor['execute']>[2]): ReturnType<ExtensionExecutor['execute']> {
+    if (!this.skill) return Promise.reject(Error('upgrade_required'))
     return this.skill.restoreSkillRemoval(profileId, original, context)
   }
   /**

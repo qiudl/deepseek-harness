@@ -1,10 +1,20 @@
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { win32 } from 'node:path'
+import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { DesktopHost } from './desktop-host.ts'
 import { ProfileExtensionOperations } from './extension-operations.ts'
+import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
+import { ProfilePluginExecutor } from './profile-plugin-executor.ts'
+import { runProfilePluginCommand } from './plugin-command.ts'
+import { inspectPluginScripts } from './plugin-script-preflight.ts'
+import { planPluginToggle } from './plugin-toggle-plan.ts'
+import { composedEntryIds, pluginBundleEntries } from './plugin-bundle-entries.ts'
+import { BundledPluginCatalog, bundledDependencySpec } from './bundled-plugins.ts'
+import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
 import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
 import { WindowsMcpStorage } from './windows-mcp-storage.ts'
 import { WindowsExtensionReceipts } from './windows-extension-receipts.ts'
@@ -19,6 +29,7 @@ import { executeRemoteSessionCommand, SessionCommandAuthority } from './session-
 import type { HostClock, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import { HostControlAuthority } from './unix-transport.ts'
+import type { HostExtensionKind } from '@deepseek-ai/dsh-host-control-protocol'
 import { loadWindowsCurrentUserSid } from './windows-current-user-native.ts'
 import { WindowsHostJournal } from './windows-host-journal.ts'
 import { loadWindowsHostRegistrationFileBindings } from './windows-host-registration-native.ts'
@@ -60,6 +71,10 @@ export interface WindowsDesktopHostBaseConfig extends Omit<
   readonly root: string
   readonly nodeExecutablePath: string
   readonly dshEntrypointPath: string
+  /** REQ-20261010-0013: sealed bundled pnpm entrypoint; presence enables the Windows plugin channel. */
+  readonly pnpmEntrypointPath?: string
+  /** REQ-20261010-0013: embedding catalog root for `bundled:` plugin sources; requires pnpmEntrypointPath. */
+  readonly bundledPluginsRoot?: string
   readonly accountKeyringSha256: string
   readonly hostInstanceId: string
   readonly runtimeGeneration: number
@@ -134,6 +149,10 @@ function validatePublicConfig(config: WindowsDesktopHostBaseConfig): void {
     || win32.dirname(config.root) === config.root
     || config.registrationRoot !== win32.join(config.root, 'host')
     || !win32.isAbsolute(config.nodeExecutablePath) || !win32.isAbsolute(config.dshEntrypointPath)
+    || (config.pnpmEntrypointPath !== undefined
+      && (!win32.isAbsolute(config.pnpmEntrypointPath) || CONTROL_CHARACTER.test(config.pnpmEntrypointPath)))
+    || (config.bundledPluginsRoot !== undefined
+      && (config.pnpmEntrypointPath === undefined || !windowsRoot(config.bundledPluginsRoot)))
     || config.workerEntry.protocol !== 'file:'
     || !win32.isAbsolute(config.nativeModule.path)
     || win32.normalize(config.nativeModule.path) !== config.nativeModule.path
@@ -407,10 +426,108 @@ async function startWindowsDesktopHostApplicationWithTrust(
           ensureWorker,
         }, profileId, signal, entryIds, guard, removedIds),
       })
-      const extensionOperations = mcp && config.maximumExtensionReceiptBytes !== undefined
+      // REQ-20261010-0013: the sealed bundled pnpm enables the Windows plugin channel; the native
+      // ACL channel (userSid + bindings) replaces every posix uid/mode check in the executors.
+      const pnpmEntrypointPath = config.pnpmEntrypointPath
+      let plugin: ProfilePluginExecutor | undefined
+      if (mcp !== undefined && pnpmEntrypointPath !== undefined) {
+        const windowsFiles = { userSid, bindings }
+        const requiredProfile = (profileId: string): PersonProfileRecord => {
+          const profile = registry.resolveProfile(profileId as never)
+          if (!profile) throw new HostAuthorityError('stale')
+          return profile
+        }
+        const profileRoot = (profileId: string): string => {
+          requiredProfile(profileId)
+          return win32.join(config.root, 'profiles', profileId)
+        }
+        const controlRoot = win32.join(config.root, 'control')
+        const webRoot = (root: string): string => win32.join(root, 'profiles', 'web')
+        const loadComposition = (root: string) => {
+          const loaded = loadProfileDirectory('dsh', webRoot(root), config.dshEntrypointPath)
+          const homePatch = win32.join(root, 'cordis.patch.yml')
+          /* v8 ignore next -- ensureWorker materializes homePatch before any authorized extension operation. */
+          const overlays = existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : []
+          return { loaded, overlays }
+        }
+        const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, 0)
+        plugin = new ProfilePluginExecutor({
+          uid: 0,
+          windows: windowsFiles,
+          inspectScripts: (packageName, spec) => inspectPluginScripts({ packageName, spec }),
+          togglePlan: (profileId, packageName, enabled, patch) => {
+            const { loaded, overlays } = loadComposition(profileRoot(profileId))
+            return planPluginToggle(loaded.layers, patch, overlays, packageName, enabled)
+          },
+          repair: (root, packageName, context) => runProfilePluginCommand({
+            nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+            pnpmEntrypointPath, profileRoot: root, controlRoot, uid: 0, windows: windowsFiles,
+            spec: packageName, action: 'repair', signal: context.signal, guard: context.guard,
+          }),
+          remove: (root, packageName, context) => runProfilePluginCommand({
+            nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+            pnpmEntrypointPath, profileRoot: root, controlRoot, uid: 0, windows: windowsFiles,
+            spec: packageName, action: 'remove', signal: context.signal, guard: context.guard,
+          }),
+          acknowledgeRemoval: async (profileId, ids, context) => {
+            context.guard(); context.signal.throwIfAborted()
+            const profile = requiredProfile(profileId)
+            await workers.dispose(profileId)
+            context.guard(); await ensureWorker(profile); context.guard()
+            await waitForPluginRuntime(await workers.activate(profileId), [], context.signal, ids)
+          },
+          acknowledgeToggle: async (profileId, plan, context) => {
+            context.guard(); context.signal.throwIfAborted()
+            const profile = requiredProfile(profileId)
+            await workers.dispose(profileId)
+            context.guard(); context.signal.throwIfAborted()
+            await ensureWorker(profile)
+            context.guard(); context.signal.throwIfAborted()
+            await waitForPluginRuntime(await workers.activate(profileId), plan.expected, context.signal, [], plan.disabled)
+          },
+          resolve: profileRoot,
+          ...(bundledCatalog === undefined ? {} : {
+            bundledPlugin: (name: string, version: string) => {
+              const entry = bundledCatalog.get(name, version)
+              return entry && { entryIds: entry.entryIds, dependency: bundledDependencySpec(entry.sha256) }
+            },
+            composedEntryIds: (profileId: string) => {
+              const { loaded, overlays } = loadComposition(profileRoot(profileId))
+              return composedEntryIds(loaded.layers, [...loaded.patches, ...overlays])
+            },
+          }),
+          install: async (root, spec, context) => {
+            context.guard(); context.signal.throwIfAborted()
+            // A `bundled:` source requires the embedding catalog that validated it; other sources never yield an archive.
+            const archivePath = bundledCatalog?.archiveFor(spec, webRoot(root))
+            return runProfilePluginCommand({
+              nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+              pnpmEntrypointPath, profileRoot: root, controlRoot, uid: 0, windows: windowsFiles, spec,
+              signal: context.signal, guard: context.guard,
+              ...(archivePath ? { archivePath } : {}),
+              ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
+            })
+          },
+          acknowledge: async (profileId, packageName, context) => {
+            context.guard(); context.signal.throwIfAborted()
+            const profile = requiredProfile(profileId)
+            const { loaded, overlays } = loadComposition(win32.join(config.root, 'profiles', profileId))
+            const expected = pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
+            await workers.dispose(profileId)
+            context.guard(); context.signal.throwIfAborted()
+            await ensureWorker(profile)
+            context.guard(); context.signal.throwIfAborted()
+            await waitForPluginRuntime(await workers.activate(profileId), expected, context.signal)
+          },
+        })
+      }
+      const extensionExecutor = mcp === undefined
+        ? undefined
+        : new ProfileExtensionExecutor(mcp, undefined, plugin)
+      const extensionOperations = extensionExecutor && config.maximumExtensionReceiptBytes !== undefined
         ? new ProfileExtensionOperations(new WindowsExtensionReceipts({
           root: win32.join(config.root, 'control'), userSid, bindings, maximumBytes: config.maximumExtensionReceiptBytes,
-        }), mcp, clock) : undefined
+        }), extensionExecutor, clock) : undefined
       const remoteSession = (profileId: string, command: Parameters<typeof executeRemoteSessionCommand>[0]['command'], signal: AbortSignal) =>
         executeRemoteSessionCommand({ authority: commandAuthority, workers, profileId, command, signal })
       const authority = new HostControlAuthority({
@@ -437,8 +554,14 @@ async function startWindowsDesktopHostApplicationWithTrust(
         remoteSession,
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
         remoteUiStream: (profileId, endpoint, payload, signal) => workers.remoteUiStream(profileId, endpoint, payload, signal),
-        ...(mcp && extensionOperations ? { extensions: { operations: extensionOperations, kinds: ['mcp'] as const,
-          mcpRemove: true, mcpUpdate: true, inventory: (profileId: string) => mcp.inventory(profileId) } } : {}),
+        ...(mcp && extensionOperations && extensionExecutor ? { extensions: {
+          operations: extensionOperations,
+          kinds: plugin ? ['plugin', 'mcp'] as const : ['mcp'] as const,
+          ...(plugin ? { pluginRemove: true, pluginUpdate: true, pluginToggle: true } : {}),
+          mcpRemove: true, mcpUpdate: true,
+          inventory: (profileId: string, kind: HostExtensionKind, signal?: AbortSignal) =>
+            extensionExecutor.inventory(profileId, kind, signal),
+        } } : {}),
         profilePersistenceGeneration: () => 1,
         now: () => clock.now(),
       })

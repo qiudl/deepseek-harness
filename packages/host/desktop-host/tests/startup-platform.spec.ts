@@ -121,6 +121,19 @@ describe('Desktop Host platform startup', () => {
     )).toThrow()
   })
 
+  it('forwards the optional pnpm entrypoint and bundled-plugin catalog only when configured', () => {
+    const pnpmEntrypointPath = String.raw`C:\Program Files\Slark\resources\dsh-runtime\pnpm\bin\pnpm.mjs`
+    const bundledPluginsRoot = String.raw`C:\Program Files\Slark\resources\dsh-default-plugins`
+    const resolved = windowsDesktopHostConfig(Object.assign({}, config(), {
+      pnpmEntrypointPath, bundledPluginsRoot,
+    }))
+    expect(resolved.pnpmEntrypointPath).toBe(pnpmEntrypointPath)
+    expect(resolved.bundledPluginsRoot).toBe(bundledPluginsRoot)
+    const minimal = windowsDesktopHostConfig(config())
+    expect(minimal).not.toHaveProperty('pnpmEntrypointPath')
+    expect(minimal).not.toHaveProperty('bundledPluginsRoot')
+  })
+
   it.each([
     'root', 'registrationRoot', 'windowsWorkerEntryPath', 'windowsNativeModulePath', 'windowsNativeModuleSha256',
   ] as const)('rejects a missing Windows private-file setting: %s', (key) => {
