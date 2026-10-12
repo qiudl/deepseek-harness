@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { waitForPluginRuntime } from '../src/plugin-runtime-ack.ts'
 import { createPluginRuntimeAcknowledgements } from '../src/plugin-runtime-acknowledgements.ts'
-const worker = { origin: 'http://127.0.0.1:12345', bootstrapCookie: { name: 'fixture', value: 'private' } }
+const worker = { generation: 1, origin: 'http://127.0.0.1:12345', bootstrapCookie: { name: 'fixture', value: 'private' } }
 const expected = [{ entryId: 'demo', moduleName: '@fixture/plugin' }]
 afterEach(() => { vi.unstubAllGlobals() })
 function response(entries: unknown[]) {
