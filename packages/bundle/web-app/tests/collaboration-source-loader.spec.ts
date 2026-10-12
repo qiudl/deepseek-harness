@@ -23,6 +23,7 @@ import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepsee
 import { DshWebProfileWorkerFactory } from '@deepseek-ai/dsh-slark-desktop-host'
 import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { mkdtemp, realpath, rm, writeFile, readFile } from 'node:fs/promises'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -639,11 +640,19 @@ it.each(['root-analysis', 'root-submission', 'source-only', 'analysis', 'analysi
     const sourceBytes = await readFile(sourcePath)
     const rootPath = join(directory, 'state', 'collaboration_root_submission_v1.json'), rootBytes = await readFile(rootPath)
     const signal = new AbortController().signal, privateToken = 'B'.repeat(43)
-    const registry = new ProfileRegistry({ root: join(directory, 'authority'), deviceIndexKey: Buffer.alloc(32, 7), clock: { now: Date.now } })
+    // Fixture file authority is portable; native ACL enforcement has its own Host tests.
+    const registryOptions = {
+      root: join(directory, 'authority'), deviceIndexKey: Buffer.alloc(32, 7), clock: { now: Date.now },
+      prepareRoot: (root: string) => { mkdirSync(root, { recursive: true }) },
+      loadSnapshot: (path: string): unknown => existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : undefined,
+      persistSnapshot: (path: string, _root: string, snapshot: unknown) => { writeFileSync(path, JSON.stringify(snapshot)) },
+    }
+    const registry = new ProfileRegistry(registryOptions)
     const account = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:loader', authorityBindingVersion: 1,
       issuer: 'https://accounts.example.test', subject: randomUUID(), keyHandle: 'keychain:loader',
       unlockMaterial: Buffer.alloc(32, 9).toString('base64url') }
-    await registry.registerAccount(account)
+    const registered = await registry.registerAccount(account)
+    expect(new ProfileRegistry(registryOptions).resolveProfile(registered.profileId)).toEqual(registered)
     const host = new DesktopHost({ registry, clock: { now: Date.now }, runtimeGeneration: 5, ensureProfileWorker: async () => undefined,
       verifyAccountAccessToken: () => ({ issuer: account.issuer, subject: account.subject }) })
     const privateKey = createPrivateKey({ format: 'der', type: 'pkcs8', key: Buffer.from(
