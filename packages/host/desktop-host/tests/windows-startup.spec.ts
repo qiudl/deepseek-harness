@@ -635,7 +635,7 @@ it.each([false, true])('wires sealed Windows plugin operations, reloads owned wo
   }] }))
   const catalog = BundledPluginCatalog.load(catalogRoot, process.getuid?.() ?? 0)
   vi.spyOn(BundledPluginCatalog, 'tryLoad').mockReturnValue(withCatalog ? catalog : undefined)
-  vi.spyOn(catalog, 'archiveFor').mockReturnValue(undefined)
+  const archiveFor = vi.spyOn(catalog, 'archiveFor').mockReturnValue(undefined)
   const application = await startWindowsDesktopHostApplication({ ...state.options, maximumExtensionReceiptBytes: 131072,
     pnpmEntrypointPath: String.raw`C:\runtime\pnpm.mjs` }, undefined, state.dependencies)
   onTestFinished(async () => { await application.close() })
@@ -665,6 +665,11 @@ it.each([false, true])('wires sealed Windows plugin operations, reloads owned wo
   const installed = pluginWiring.command.mock.lastCall?.[0]
   expect(installed?.allowBuild).toBe('@fixture/bundle@1.2.3')
   expect(installed?.windows?.userSid).toBe(userSid)
+  if (withCatalog) {
+    archiveFor.mockReturnValue('fixture-bundle.tgz')
+    await options.install(profileRoot, '@fixture/bundle@1.2.3', context)
+    expect(pluginWiring.command.mock.lastCall?.[0].archivePath).toBe('fixture-bundle.tgz')
+  }
   let entries: { entryId: string; moduleName: string; enabled: boolean; fiberPhase: string | null }[] = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
     const address = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url

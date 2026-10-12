@@ -12,7 +12,8 @@ import {
 
 vi.mock('node:fs', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs')>()
-  return { ...original, readFileSync: vi.fn(original.readFileSync) }
+  const { posixFileFixture } = await import('./posix-file-fixture.ts')
+  return { ...posixFileFixture(original), readFileSync: vi.fn(original.readFileSync) }
 })
 
 function fixture() {
@@ -23,10 +24,7 @@ function fixture() {
   return { dir, path }
 }
 
-// Windows has no POSIX UID/mode checks; this owner-file mode is used by the macOS embedding.
-const nativeIt = it.skipIf(process.platform === 'win32')
-
-nativeIt('rejects a settings file modified between the descriptor reads', async () => {
+it('rejects a settings file modified between the descriptor reads', async () => {
   const { path } = fixture()
   const { readFileSync: read } = await vi.importActual<typeof import('node:fs')>('node:fs')
   vi.mocked(fs.readFileSync).mockImplementationOnce((...args: Parameters<typeof read>) => {
@@ -37,7 +35,7 @@ nativeIt('rejects a settings file modified between the descriptor reads', async 
   expect(() => readOwnerSettings(path)).toThrow('changed during reading')
 })
 
-nativeIt('refuses links, shared files, oversized files, and unreadable or malformed documents', () => {
+it('refuses links, shared files, oversized files, and unreadable or malformed documents', () => {
   const { dir, path } = fixture()
   expect(readOwnerSettings(path).sections).toEqual({ first: { count: 4 } })
   const alias = join(dir, 'alias')
