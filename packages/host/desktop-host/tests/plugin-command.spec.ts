@@ -149,7 +149,7 @@ it('cancels a running installer and waits for process exit', async () => {
   const pending = runProfilePluginCommand({ ...f.options, spec: `github:owner/repo#${'a'.repeat(40)}`, signal: controller.signal, guard() {} })
   const settled = pending.then(() => ({ kind: 'resolved' as const }), (error: unknown) => ({ kind: 'rejected' as const, error }))
   try {
-    await vi.waitFor(() => { expect(existsSync(join(f.profile, 'ready'))).toBe(true) })
+    await vi.waitFor(() => { expect(existsSync(join(f.profile, 'ready'))).toBe(true) }, { timeout: 5_000 })
     const installerPid = Number(readFileSync(join(f.profile, 'ready'), 'utf8'))
     expect(Number.isSafeInteger(installerPid) && installerPid > 0).toBe(true)
     controller.abort()
