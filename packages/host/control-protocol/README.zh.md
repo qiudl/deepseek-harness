@@ -40,6 +40,8 @@ kind: "package-reference"
 
 `profile.remote_ui_read` 将启动、资源、Session 和五种精确的启动元数据读取绑定到同一有效视图租约。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
 
+`profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。
+
 `session/collaborationSources` 的远程 UI 请求还支持使用精确的 `snapshotDigest` 替代 `cursor`。摘要必须为 64 位小写十六进制字符串，同时携带两个字段时拒绝。所属 Session 的读取在现有控制帧预算内返回完整原消息。
 
 `session/collaborationMembership` 在同一视图租约上接受 1 至 50 组准确的工作区与会话身份。Profile 核对当前归属并按原顺序返回归属、置顶布尔值；格式错误、重复或超限的批次在 Gateway 调用前拒绝。Host 用这项私有读取裁剪云端协同索引，随后才向远端浏览器展示。

@@ -745,6 +745,7 @@ export async function startDesktopHostApplication(
       remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({
         authority: commandAuthority, workers, profileId, command, signal,
       }),
+      remoteUiAssetGzipSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
       remoteUiStream: (profileId, endpoint, payload, signal) => workers.remoteUiStream(profileId, endpoint, payload, signal),
       extensions: { operations: extensionOperations, kinds: pluginExecutor ? ['plugin', 'mcp', 'skill'] : ['mcp', 'skill'],

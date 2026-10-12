@@ -1439,7 +1439,9 @@ export interface ProfileRemoteSessionResult {
   readonly result: { readonly value: HostRemoteSessionJson }
 }
 
-/** Exact read RPC carried only by a live Host-owned Profile view lease. */
+/** Exact read RPC carried only by a live Host-owned Profile view lease.
+ * Gzip asset offsets address compressed bytes and require signed `profile.remote_ui_asset_gzip` capability.
+ */
 export interface ProfileRemoteUiReadRequest {
   readonly version: 1
   readonly type: 'request'
@@ -1449,7 +1451,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog'
     readonly payload: { readonly args: HostRemoteSessionJson }

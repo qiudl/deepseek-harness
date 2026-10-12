@@ -13,6 +13,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
+import { gzip } from 'node:zlib'
 import { parseHostRemoteSessionJson, parseHostWorkspaceModelSelection, parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationArchiveStateValue,
@@ -26,8 +27,11 @@ import { HostAuthorityError } from './types.ts'
 import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
 
 const execFileAsync = promisify(execFile)
+const gzipAsync = promisify(gzip)
 const REMOTE_UI_ASSET_MAX_BYTES = 8 * 1024 * 1024
 const REMOTE_UI_ASSET_CHUNK_BYTES = 24 * 1024
+const REMOTE_UI_GZIP_MAX_BYTES = REMOTE_UI_ASSET_MAX_BYTES + 64 * 1024
+type RemoteUiAssetCache = { current?: { readonly url: string; readonly bytes: Buffer; gzip?: Promise<Buffer> } }
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
@@ -256,7 +260,7 @@ export class DshWebProfileWorkerFactory {
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
-    const assetCache: { current?: { readonly url: string; readonly bytes: Buffer } } = {}
+    const assetCache: RemoteUiAssetCache = {}
     let resolveDone!: () => void
     let rejectDone!: (error: Error) => void
     const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject })
@@ -349,7 +353,7 @@ export class DshWebProfileWorkerFactory {
       remoteSession: (command, signal) => this.remoteSession(
         viewOrigin, remoteSessionToken, command, signal, () => requestedStop || settled,
       ),
-      remoteUiRead: (endpoint, payload, signal) => endpoint === 'asset/read' || endpoint === 'asset/describe'
+      remoteUiRead: (endpoint, payload, signal) => endpoint === 'asset/read' || endpoint === 'asset/read-gzip-chunk' || endpoint === 'asset/describe'
         ? this.remoteUiAssetRead(viewOrigin, bootstrapCookie, remoteUiToken, endpoint, payload, signal,
           () => requestedStop || settled, assetCache)
         : this.remoteUiRead(viewOrigin, remoteUiToken, endpoint, payload, signal,
@@ -722,21 +726,21 @@ export class DshWebProfileWorkerFactory {
     viewOrigin: string,
     cookie: { readonly name: string; readonly value: string },
     token: string,
-    endpoint: 'asset/read' | 'asset/describe',
+    endpoint: 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe',
     payload: unknown,
     signal: AbortSignal,
     stopped: () => boolean,
-    cache: { current?: { readonly url: string; readonly bytes: Buffer } },
-  ): Promise<{ readonly bytes: string; readonly total: number } | { readonly sha256: string; readonly total: number }> {
+    cache: RemoteUiAssetCache,
+  ): Promise<{ readonly bytes: string; readonly total: number; readonly encoding?: 'gzip'; readonly uncompressedBytes?: number } | { readonly sha256: string; readonly total: number }> {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new HostAuthorityError('invalid_input')
     const args = (payload as { args?: unknown }).args
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new HostAuthorityError('invalid_input')
     const selected = args as Record<string, unknown>
-    if (Object.keys(selected).length !== (endpoint === 'asset/read' ? 2 : 1)
+    if (Object.keys(selected).length !== (endpoint === 'asset/describe' ? 1 : 2)
       || typeof selected.url !== 'string'
-      || (endpoint === 'asset/read' && (!Number.isSafeInteger(selected.offset)
+      || (endpoint !== 'asset/describe' && (!Number.isSafeInteger(selected.offset)
         || (selected.offset as number) < 0
-        || (selected.offset as number) > REMOTE_UI_ASSET_MAX_BYTES))) throw new HostAuthorityError('invalid_input')
+        || (selected.offset as number) > (endpoint === 'asset/read-gzip-chunk' ? REMOTE_UI_GZIP_MAX_BYTES : REMOTE_UI_ASSET_MAX_BYTES)))) throw new HostAuthorityError('invalid_input')
     let url: URL
     try { url = new URL(selected.url, viewOrigin) } catch { throw new HostAuthorityError('invalid_input') }
     if (url.origin !== viewOrigin || url.hash !== '' || !url.pathname.startsWith('/plugins/')
@@ -749,8 +753,8 @@ export class DshWebProfileWorkerFactory {
       && ((row as { kind?: unknown }).kind === 'script-src' || (row as { kind?: unknown }).kind === 'script-preload')
       && (row as { src?: unknown }).src === selected.url)) throw new HostAuthorityError('invalid_input')
     if (stopped()) throw new HostAuthorityError('unavailable')
-    let body = cache.current?.url === selected.url ? cache.current.bytes : undefined
-    if (body === undefined) {
+    let entry = cache.current?.url === selected.url ? cache.current : undefined
+    if (entry === undefined) {
       const response = await fetch(url, {
         headers: { cookie: `${cookie.name}=${cookie.value}` }, redirect: 'manual',
         signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
@@ -769,13 +773,31 @@ export class DshWebProfileWorkerFactory {
         await response.body.cancel().catch(() => {})
         throw error
       }
-      body = Buffer.concat(chunks, size)
+      const body = Buffer.concat(chunks, size)
       if (stopped() || signal.aborted) throw new HostAuthorityError('unavailable')
-      cache.current = { url: selected.url, bytes: body }
+      entry = { url: selected.url, bytes: body }
+      cache.current = entry
     }
-    if (stopped() || signal.aborted) throw new HostAuthorityError('unavailable')
+    const inactive = () => stopped() || signal.aborted
+    if (inactive()) throw new HostAuthorityError('unavailable')
+    const body = entry.bytes
     if (endpoint === 'asset/describe') {
       return { sha256: createHash('sha256').update(body).digest('hex'), total: body.byteLength }
+    }
+    if (endpoint === 'asset/read-gzip-chunk') {
+      const pending = entry.gzip ??= gzipAsync(body)
+      let compressed: Buffer
+      try { compressed = await pending } catch (error) {
+        if (entry.gzip === pending) delete entry.gzip
+        throw error
+      }
+      if (inactive() || compressed.byteLength > REMOTE_UI_GZIP_MAX_BYTES) {
+        throw new HostAuthorityError('unavailable')
+      }
+      if ((selected.offset as number) > compressed.byteLength) throw new HostAuthorityError('invalid_input')
+      return { bytes: compressed.subarray(selected.offset as number,
+        (selected.offset as number) + REMOTE_UI_ASSET_CHUNK_BYTES).toString('base64url'),
+      total: compressed.byteLength, uncompressedBytes: body.byteLength, encoding: 'gzip' }
     }
     if ((selected.offset as number) > body.byteLength) throw new HostAuthorityError('invalid_input')
     const bytes = body.subarray(selected.offset as number,
