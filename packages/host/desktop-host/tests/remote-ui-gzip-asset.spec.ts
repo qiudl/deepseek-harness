@@ -11,7 +11,10 @@ describe('lease-owned compressed plugin assets', () => {
       let authorized = true
       let assetReads = 0
       let bootReads = 0
+      // Each authorization probe uses a fresh fixture socket: exhaustive CI may
+      // pause beyond the HTTP server idle timeout between gzip fault assertions.
       const server = createServer((request, response) => {
+        response.setHeader('connection', 'close')
         if (request.url === '/internal/desktop-remote-ui') {
           bootReads += 1
           response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
