@@ -1,11 +1,16 @@
 import type * as Fs from 'node:fs'
 import { vi } from 'vitest'
 
+type FixtureFiles = Omit<typeof Fs, 'fstatSync' | 'statSync'> & {
+  fstatSync(fd: number): Fs.Stats
+  statSync(path: Fs.PathLike): Fs.Stats
+}
+
 /** Simulate POSIX metadata on Windows while retaining real file bytes and Loader composition.
  * @param fs Original filesystem bindings; POSIX hosts retain every native check.
  * @returns Test-only bindings for the legacy POSIX settings owner.
  */
-export function posixFileFixture(fs: typeof Fs) {
+export function posixFileFixture(fs: typeof Fs): FixtureFiles {
   if (process.platform !== 'win32') return fs
   const descriptors = new Map<number, string>(), modes = new Map<string, number>()
   const fixtureUid = process.getuid?.() ?? 0
@@ -22,7 +27,7 @@ export function posixFileFixture(fs: typeof Fs) {
   })
   return {
     ...fs,
-    openSync(path: Fs.PathLike, flags: string | number, mode?: Fs.Mode) {
+    openSync(path: Fs.PathLike, flags: Fs.OpenMode, mode?: Fs.Mode | null) {
       if (flags === fs.constants.O_RDONLY && fs.lstatSync(path).isSymbolicLink()) throw Error('POSIX no-follow fixture')
       const fd = fs.openSync(path, flags, mode)
       descriptors.set(fd, String(path))
