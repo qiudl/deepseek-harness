@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { ExtensionKind, ExtensionReceipt } from '../src/extension-operations.ts'
 import { ProfileExtensionExecutor } from '../src/profile-extension-executor.ts'
-import type { ProfileMcpExecutor } from '../src/profile-mcp-executor.ts'
+import { ProfileMcpExecutor } from '../src/profile-mcp-executor.ts'
 import type { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
 import type { ProfileSkillExecutor } from '../src/profile-skill-executor.ts'
 
@@ -110,4 +110,16 @@ describe('ProfileExtensionExecutor', () => {
     await expect(combined.validatePluginRestore('profile', receipt)).rejects.toThrow('upgrade_required')
     await expect(combined.restorePluginToggle('profile', receipt, context('plugin'))).rejects.toThrow('upgrade_required')
   })
+})
+
+it('keeps the Windows MCP-only dispatcher usable without advertising skill operations', async () => {
+  const mcp = new ProfileMcpExecutor({ storage: {
+    snapshot: () => null, backup() {}, readBackup: () => '0', publish() {},
+  }, reload: async () => {} })
+  const combined = new ProfileExtensionExecutor(mcp, undefined)
+  expect(await combined.revision('profile')).toBe(createHash('sha256').update(JSON.stringify([await mcp.revision('profile')])).digest('hex'))
+  expect(() => { combined.validate('profile', 'skill', '{}') }).toThrow('upgrade_required')
+  await expect(combined.inventory('profile', 'skill')).rejects.toThrow('upgrade_required')
+  await expect(combined.validateSkillRestore('profile', receipt)).rejects.toThrow('upgrade_required')
+  await expect(combined.restoreSkillRemoval('profile', receipt, context('skill'))).rejects.toThrow('upgrade_required')
 })

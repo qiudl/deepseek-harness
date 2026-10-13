@@ -107,7 +107,7 @@ describe('Desktop remote UI read-only bridge', () => {
     const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))
     const signal = new AbortController().signal
     const payload = { args: { request: { address: { kind: 'session', sessionId: 'session-1' },
-      maxMessages: 50, assistantStream: true } } }
+      maxMessages: 500, assistantStream: true, turnWindow: { minMessages: 50, minTurns: 2 } } } }
     const opened = await executor.open('session/follow', payload, signal)
     const iterator = opened[Symbol.asyncIterator]()
     await expect(iterator.next()).resolves.toEqual({ value: { type: 'snapshot' }, done: false })
@@ -117,6 +117,14 @@ describe('Desktop remote UI read-only bridge', () => {
       kind: 'session', sessionId: '' } } } }, signal)).rejects.toThrow('invalid payload')
     expect(stream).toHaveBeenCalledOnce()
     for (const invalid of [null, {}, { args: null }, { args: {} }, { args: { request: null } },
+      ...[null, [], {}, { minMessages: 50 }, { minMessages: 0, minTurns: 2 },
+        { minMessages: 501, minTurns: 2 }, { minMessages: 50, minTurns: 0 },
+        { minMessages: 50, minTurns: 1.5 }, { minMessages: 50, minTurns: Number.MAX_SAFE_INTEGER + 1 },
+        { minMessages: 50, minTurns: 2, path: '/tmp' }].map(turnWindow => ({ args: { request: {
+        ...payload.args.request, turnWindow,
+      } } })),
+      { args: { request: { address: payload.args.request.address,
+        turnWindow: { minMessages: 51, minTurns: 2 } } } },
       { args: { request: { address: { kind: 'session', sessionId: 'session-1' }, extra: true } } },
       { args: { request: { address: null } } },
       { args: { request: { address: { kind: 'session', sessionId: 1 } } } },
