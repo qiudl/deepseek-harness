@@ -1,5 +1,6 @@
 import { win32 } from 'node:path'
 import type { ProfileMcpStorage } from './profile-mcp-storage.ts'
+import { assertWindowsWorkerMutableFileEvidence } from './windows-isolated-profile.ts'
 import { assertWindowsHostPrivatePathEvidence, windowsHostPrivateSecurityDescriptor,
   type WindowsHostRegistrationFileBindings } from './windows-host-registration.ts'
 
@@ -39,7 +40,13 @@ export class WindowsMcpStorage implements ProfileMcpStorage {
   private read(path: string, maximumBytes: number): string | null {
     const file = this.options.bindings.readPrivateFile(path, maximumBytes)
     if (file === undefined) return null
-    assertWindowsHostPrivatePathEvidence(file.evidence, 'file', this.options.userSid)
+    // cordis.patch.yml is a Profile-worker-maintained document: accept the Host's explicit private
+    // descriptor or the worker-rewritten inherited-DACL evidence, as the plugin channel does.
+    try {
+      assertWindowsHostPrivatePathEvidence(file.evidence, 'file', this.options.userSid)
+    } catch {
+      assertWindowsWorkerMutableFileEvidence(file.evidence, this.options.userSid)
+    }
     if (file.contents.length > maximumBytes) throw Error('unsafe_patch')
     return UTF8.decode(file.contents)
   }
