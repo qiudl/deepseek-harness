@@ -36,7 +36,7 @@ describe('Desktop remote UI read-only bridge', () => {
     })
     const running = handleDesktopRemoteUiStreamRequest(req, responseFixture(res), token,
       async (_endpoint, _payload, signal) => (async function* () {
-        await new Promise<void>((resolve) => { signal.addEventListener('abort', () => resolve(), { once: true }) })
+        await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
       })())
     try {
       await opened
