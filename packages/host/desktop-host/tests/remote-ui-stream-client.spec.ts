@@ -13,6 +13,14 @@ async function serve(lines: string, status = 200, contentType = 'application/x-n
 }
 
 describe('Host worker follow stream client', () => {
+  it('discards private heartbeats without yielding Session data', async () => {
+    const origin = await serve('{"type":"heartbeat"}\n{"type":"item","value":1}\n{"type":"heartbeat"}\n{"type":"end"}\n')
+    const values: unknown[] = []
+    for await (const value of openRemoteUiWorkerStream(origin, 'private', 'session/follow',
+      { args: {} }, new AbortController().signal, () => false)) values.push(value)
+    expect(values).toEqual([1])
+  })
+
   it('projects only bounded item frames until an explicit end', async () => {
     const origin = await serve('{"type":"item","value":{"cursor":1}}\n{"type":"end"}\n')
     const values: unknown[] = []
@@ -23,6 +31,8 @@ describe('Host worker follow stream client', () => {
   })
 
   it.each([
+    '{"type":"heartbeat","value":1}\n{"type":"end"}\n',
+    '{"type":"heartbeat"}\n',
     '{"type":"item","value":1}\n',
     '{"type":"error","code":"dsh_host_unavailable"}\n',
     '{"type":"item","value":1,"extra":true}\n{"type":"end"}\n',
