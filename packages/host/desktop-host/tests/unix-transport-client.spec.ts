@@ -568,4 +568,19 @@ describe('Unix Host client protocol projections', () => {
     }, transport)).rejects.toMatchObject({ code: 'unavailable' })
     expect(close).toHaveBeenCalled()
   })
+
+  it('propagates the decided extension refusal code instead of collapsing it to unavailable', async () => {
+    const refuse: HostControlErrorCode = 'extension_refused'
+    const { client } = await makeClient(frame => ({
+      version: 1,
+      type: 'error',
+      request_id: frame.request_id,
+      method: frame.method,
+      error: { code: refuse },
+    } as HostControlFrame))
+    await expect(client.extensions({ ...lease, command: { action: 'inventory', kind: 'skill' } }))
+      .rejects.toMatchObject({ code: 'extension_refused' })
+    await expect(client.extensions({ ...lease, command: { action: 'prepare', kind: 'plugin', payload: '{}' } }))
+      .rejects.toMatchObject({ code: 'extension_refused' })
+  })
 })
