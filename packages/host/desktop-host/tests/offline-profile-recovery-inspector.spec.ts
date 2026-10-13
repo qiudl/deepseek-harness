@@ -117,7 +117,7 @@ const bundledFiles = {
   'node_modules/nested/index.js': 'export const nested = true\n',
 }
 
-async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles) {
+async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles, withNewerVersion = false) {
   const value = await fixture()
   const installed = join(value.web, 'node_modules', 'fixture-plugin')
   await unlink(installed)
@@ -134,10 +134,20 @@ async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles) {
   if (archiveBytes) await writeFile(archive, archiveBytes)
   else await createArchive({ gzip: true, cwd: source, file: archive }, ['package'])
   const digest = createHash('sha256').update(await readFile(archive)).digest('hex')
-  await writeFile(join(embedding, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1, plugins: [{
+  const historical = {
     name: 'fixture-plugin', version: '1.0.0', file: 'fixture.tgz', sha256: digest,
     repository: 'https://example.com/fixture', sourceSha: 'a'.repeat(40), entryIds: [],
-  }] }))
+  }
+  let newer: typeof historical | undefined
+  if (withNewerVersion) {
+    await writeFile(join(source, 'package', 'package.json'), JSON.stringify({ name: 'fixture-plugin', version: '2.0.0' }))
+    const currentArchive = join(embedding, 'fixture-2.tgz')
+    await createArchive({ gzip: true, cwd: source, file: currentArchive }, ['package'])
+    newer = { ...historical, version: '2.0.0', file: 'fixture-2.tgz',
+      sha256: createHash('sha256').update(await readFile(currentArchive)).digest('hex') }
+  }
+  await writeFile(join(embedding, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1,
+    plugins: newer ? [newer, historical] : [historical] }))
   await mkdir(join(value.web, '.bundled-plugins'), { mode: 0o700 })
   await writeFile(join(value.web, '.bundled-plugins', `${digest}.tgz`), await readFile(archive), { mode: 0o600 })
   await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': bundledDependencySpec(digest) } }))
@@ -295,6 +305,15 @@ describe('offline Profile existing-only inspector', () => {
     }
     await expect(readFile(join(value.profileRoot, 'runtime-compat', 'journals', `${inspected.preflightDigest}.json`)))
       .rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('recovers the historical archive when the catalog also ships a newer version', async () => {
+    const value = await bundledFixture(undefined, bundledFiles, true)
+    const before = await treeInventory(value.profileRoot)
+    const inspected = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(inspected).toMatchObject({ state: 'recoverable', compatibility: 'current', pluginCount: 1 })
+    await value.inspector.prepareConfirmedProfile(profile(), inspected)
     expect(await treeInventory(value.profileRoot)).toEqual(before)
   })
 

@@ -46,20 +46,21 @@ function parse(value: unknown): BundledPlugin[] {
   const catalog = value as Record<string, unknown>
   if (Object.keys(catalog).sort().join(',') !== 'plugins,schemaVersion' || catalog.schemaVersion !== 1
     || !Array.isArray(catalog.plugins) || !catalog.plugins.length || catalog.plugins.length > 16) throw Error('invalid_bundled_plugins')
-  const names = new Set<string>(); const files = new Set<string>()
+  const identities = new Set<string>(); const files = new Set<string>(); const digests = new Set<string>()
   return catalog.plugins.map((raw: unknown) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_bundled_plugins')
     const row = raw as Record<string, unknown>
     if (Object.keys(row).sort().join(',') !== 'entryIds,file,name,repository,sha256,sourceSha,version'
-      || typeof row.name !== 'string' || row.name.length > 214 || !packageName.test(row.name) || names.has(row.name)
+      || typeof row.name !== 'string' || row.name.length > 214 || !packageName.test(row.name)
       || typeof row.version !== 'string' || !version.test(row.version)
+      || identities.has(`${row.name}@${row.version}`)
       || typeof row.file !== 'string' || !archiveName.test(row.file) || files.has(row.file)
-      || typeof row.sha256 !== 'string' || !sha256.test(row.sha256)
+      || typeof row.sha256 !== 'string' || !sha256.test(row.sha256) || digests.has(row.sha256)
       || typeof row.repository !== 'string' || !row.repository.startsWith('https://')
       || typeof row.sourceSha !== 'string' || !/^[0-9a-f]{40}$/u.test(row.sourceSha)
       || !Array.isArray(row.entryIds) || row.entryIds.length > 32
       || row.entryIds.some(id => typeof id !== 'string' || !entryId.test(id))) throw Error('invalid_bundled_plugins')
-    names.add(row.name); files.add(row.file)
+    identities.add(`${row.name}@${row.version}`); files.add(row.file); digests.add(row.sha256)
     return { name: row.name, version: row.version, file: row.file, sha256: row.sha256, entryIds: [...row.entryIds as string[]] }
   })
 }
