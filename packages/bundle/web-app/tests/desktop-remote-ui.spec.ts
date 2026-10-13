@@ -19,6 +19,46 @@ function responseFixture<T extends object>(value: T): T & ServerResponse {
 }
 
 describe('Desktop remote UI read-only bridge', () => {
+  it.each(['close', 'write-failure', 'server-ended'])('keeps an idle private stream alive and releases its timer on settlement (%s)', async (settlement) => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const token = 'A'.repeat(43)
+    const body = Buffer.from(JSON.stringify({ endpoint: 'workspace/follow', payload: { args: {} } }))
+    const req = { method: 'POST', headers: { authorization: `Bearer ${token}` },
+      async *[Symbol.asyncIterator]() { yield body } } as IncomingMessage
+    let ready!: () => void
+    const opened = new Promise<void>((resolve) => { ready = resolve })
+    const res = Object.assign(new EventEmitter(), {
+      destroyed: false, writableEnded: false, headersSent: false, writableNeedDrain: true,
+      write: vi.fn(() => true),
+      writeHead() { this.headersSent = true; ready(); return this },
+      end() { this.writableEnded = true; return this },
+      destroy() { this.destroyed = true; return this },
+    })
+    const running = handleDesktopRemoteUiStreamRequest(req, responseFixture(res), token,
+      async (_endpoint, _payload, signal) => (async function* () {
+        await new Promise<void>((resolve) => { signal.addEventListener('abort', () => resolve(), { once: true }) })
+      })())
+    try {
+      await opened
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(res.write).not.toHaveBeenCalled()
+      res.writableNeedDrain = false
+      if (settlement === 'write-failure') res.write.mockImplementation(() => { throw new Error('closed transport') })
+      if (settlement === 'server-ended') res.end()
+      await vi.advanceTimersByTimeAsync(30_000)
+      if (settlement === 'server-ended') expect(res.write).not.toHaveBeenCalled()
+      else expect(res.write).toHaveBeenCalledWith('{"type":"heartbeat"}\n')
+      if (settlement === 'write-failure') expect(res.destroyed).toBe(true)
+      else res.emit('close')
+      await running
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      res.emit('close')
+      await running
+      vi.useRealTimers()
+    }
+  })
+
   it('does not rewrite ended private responses and bounds JSON results', () => {
     const open = { writableEnded: false, destroyed: false, writeHead: vi.fn().mockReturnThis(), end: vi.fn() }
     rejectDesktopRemotePrivateRequest(responseFixture(open))

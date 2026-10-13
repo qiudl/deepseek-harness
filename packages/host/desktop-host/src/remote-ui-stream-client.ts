@@ -15,7 +15,7 @@ function record(value: unknown): value is Record<string, unknown> {
  * @param payload - Validated follow arguments.
  * @param signal - Host-owned cancellation signal.
  * @param stopped - Whether the selected Profile worker has stopped.
- * @returns Session events until the worker sends an explicit end frame.
+ * @returns Native events until an explicit end; private HTTP heartbeats are discarded.
  */
 export async function* openRemoteUiWorkerStream(
   origin: string, token: string, endpoint: string, payload: unknown,
@@ -52,6 +52,9 @@ export async function* openRemoteUiWorkerStream(
         if (!record(frame)) throw new HostAuthorityError('unavailable')
         if (frame.type === 'item' && Object.keys(frame).length === 2 && Object.hasOwn(frame, 'value')) {
           yield frame.value
+        } else if (frame.type === 'heartbeat' && Object.keys(frame).length === 1) {
+          // Private HTTP liveness never becomes a native Session or Workspace event.
+          continue
         } else if (frame.type === 'end' && Object.keys(frame).length === 1 && pending.length === 0) {
           return
         } else throw new HostAuthorityError('unavailable')

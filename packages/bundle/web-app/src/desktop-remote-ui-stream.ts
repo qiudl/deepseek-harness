@@ -139,7 +139,7 @@ export async function writeDesktopRemoteUiStreamLine(res: ServerResponse, value:
 }
 
 /**
- * Serve one private, bounded NDJSON Session stream; closing the HTTP response cancels the Gateway iterator.
+ * Serve bounded native NDJSON with private 30-second heartbeats; response closure cancels the Gateway iterator.
  * @param req - Host worker's token-authenticated HTTP request.
  * @param res - Streaming HTTP response.
  * @param token - Profile worker's private bearer token.
@@ -153,6 +153,12 @@ export async function handleDesktopRemoteUiStreamRequest(
 ): Promise<void> {
   const controller = openDesktopRemotePrivateRequest(req, res, token)
   if (!controller) return
+  let heartbeat: ReturnType<typeof setInterval> | undefined
+  const stopHeartbeat = () => {
+    if (heartbeat === undefined) return
+    clearInterval(heartbeat)
+    heartbeat = undefined
+  }
   try {
     const request = await readDesktopRemotePrivateBody(req)
     if (!record(request) || Object.keys(request).length !== 2 ||
@@ -164,6 +170,15 @@ export async function handleDesktopRemoteUiStreamRequest(
     const stream = await open(request.endpoint, request.payload, controller.signal)
     controller.signal.throwIfAborted()
     res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
+    // Keep this private hop below Node fetch's idle body timeout without forwarding empty events.
+    heartbeat = setInterval(() => {
+      if (controller.signal.aborted || res.destroyed || res.writableEnded) { stopHeartbeat(); return }
+      if (res.writableNeedDrain) return
+      try { res.write('{"type":"heartbeat"}\n') }
+      catch (error) { controller.abort(error); res.destroy() }
+    }, 30_000)
+    heartbeat.unref()
+    controller.signal.addEventListener('abort', stopHeartbeat, { once: true })
     for await (const value of stream) {
       controller.signal.throwIfAborted()
       await writeDesktopRemoteUiStreamLine(res, { type: 'item', value })
@@ -176,5 +191,8 @@ export async function handleDesktopRemoteUiStreamRequest(
       try { await writeDesktopRemoteUiStreamLine(res, { type: 'error', code: 'dsh_host_unavailable' }); res.end() }
       catch { res.destroy() }
     }
+  } finally {
+    controller.signal.removeEventListener('abort', stopHeartbeat)
+    stopHeartbeat()
   }
 }
