@@ -14,7 +14,7 @@ vi.mock('node:fs', async (importOriginal) => {
   const readSync = (...args: Parameters<typeof actual.readSync>) => fsFaults.shortRead ? 0 : actual.readSync(...args)
   return { ...actual, renameSync, readSync }
 })
-import { BUNDLED_ARCHIVE_DIRECTORY, BundledPluginCatalog, parseBundledPluginSpec } from '../src/bundled-plugins.ts'
+import { BUNDLED_ARCHIVE_DIRECTORY, BundledPluginCatalog, bundledDependencySpec, parseBundledPluginSpec } from '../src/bundled-plugins.ts'
 import { isPinnedPluginSpec, runProfilePluginCommand } from '../src/plugin-command.ts'
 import { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
 
@@ -71,6 +71,19 @@ it('loads the exact catalog schema and rejects unknown or unsafe embeddings', ()
   writeFileSync(target, JSON.stringify({ schemaVersion: 1, plugins: [row] }))
   rmSync(join(linked, 'catalog.v1.json')); symlinkSync(target, join(linked, 'catalog.v1.json'))
   expect(() => BundledPluginCatalog.load(linked, uid)).toThrow('unsafe_bundled_plugins')
+})
+
+it('keeps historical signed versions addressable by exact archive digest', () => {
+  const current = { ...row, version: '0.3.1', file: 'dsh-duet-0.3.1.tgz', sha256: 'b'.repeat(64) }
+  const catalog = BundledPluginCatalog.load(embedding({ schemaVersion: 1, plugins: [current, row] }), uid)
+  expect(catalog.get('dsh-duet', '0.3.0')?.sha256).toBe(digest)
+  expect(catalog.getForDependency('dsh-duet', bundledDependencySpec(digest))?.version).toBe('0.3.0')
+  expect(catalog.getForDependency('dsh-duet', bundledDependencySpec(current.sha256))?.version).toBe('0.3.1')
+  expect(catalog.getForDependency('other', bundledDependencySpec(digest))).toBeUndefined()
+  for (const duplicate of [{ ...row, file: 'other.tgz' }, { ...current, sha256: digest }]) {
+    expect(() => BundledPluginCatalog.load(embedding({ schemaVersion: 1, plugins: [row, duplicate] }), uid))
+      .toThrow('invalid_bundled_plugins')
+  }
 })
 
 it('materializes verified archives into a content-addressed Profile directory without replacing content', () => {
