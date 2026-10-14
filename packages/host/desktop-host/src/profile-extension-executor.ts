@@ -6,9 +6,15 @@ import type { ProfileSkillExecutor } from './profile-skill-executor.ts'
 
 /** Serial operation dispatcher with a revision spanning every configured installation store. */
 export class ProfileExtensionExecutor implements ExtensionExecutor {
-  /** @param mcp Host-owned MCP installer. @param skill Host-owned Skill installer, when the platform ships one. @param plugin Optional bundle installer. */
+  /**
+   * @param mcp Host-owned MCP installer.
+   * @param skill Host-owned Skill installer, when the platform ships one.
+   * @param plugin Optional bundle installer.
+   */
   constructor(
-    private readonly mcp: ProfileMcpExecutor, private readonly skill: ProfileSkillExecutor | undefined, private readonly plugin?: ProfilePluginExecutor,
+    private readonly mcp: ProfileMcpExecutor,
+    private readonly skill: ProfileSkillExecutor | undefined,
+    private readonly plugin?: ProfilePluginExecutor,
   ) {}
   private executor(kind: ExtensionKind): ProfileMcpExecutor | ProfileSkillExecutor | ProfilePluginExecutor {
     if (kind === 'mcp') return this.mcp

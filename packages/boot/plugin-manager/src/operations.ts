@@ -369,7 +369,8 @@ export async function runProfilePnpm(
   // run is killed: a lifecycle script outlives the pnpm process that started it.
   // The CLI keeps the caller's process group, so an interrupt still reaches it.
   const grouped = leadsOwnGroup(options.execution)
-  const child = execa(resolveOperationCommand(options.command), [...options.args ?? [], ...args.map(arg => anchorPathSpec(arg, context.cwd))], {
+  const commandArgs = [...options.args ?? [], ...args.map(arg => anchorPathSpec(arg, context.cwd))]
+  const child = execa(resolveOperationCommand(options.command), commandArgs, {
     cwd: dir, env: environment, extendEnv: false, reject: false,
     stdout: options.execution === 'cli' ? 'inherit' : 'pipe',
     stderr: options.execution === 'cli' ? 'inherit' : 'pipe',
