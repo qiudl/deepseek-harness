@@ -5,7 +5,7 @@ import { win32 } from 'node:path'
 import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { DesktopHost } from './desktop-host.ts'
-import { ProfileExtensionOperations } from './extension-operations.ts'
+import { ProfileExtensionOperations, type ExtensionExecutionContext } from './extension-operations.ts'
 import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
 import { ProfilePluginExecutor } from './profile-plugin-executor.ts'
@@ -451,6 +451,43 @@ async function startWindowsDesktopHostApplicationWithTrust(
           return { loaded, overlays }
         }
         const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, 0)
+        const commandBase = {
+          nodeExecutablePath: config.nodeExecutablePath,
+          dshEntrypointPath: config.dshEntrypointPath,
+          pnpmEntrypointPath,
+          controlRoot,
+          uid: 0,
+          windows: windowsFiles,
+        }
+        const runPlugin = (
+          root: string, spec: string, context: ExtensionExecutionContext,
+          action?: 'repair' | 'remove',
+        ): Promise<void> => {
+          if (action === undefined) { context.guard(); context.signal.throwIfAborted() }
+          const archivePath = action === undefined ? bundledCatalog?.archiveFor(spec, webRoot(root)) : undefined
+          return runProfilePluginCommand({
+            ...commandBase, profileRoot: root, spec,
+            signal: context.signal, guard: context.guard,
+            ...(action ? { action } : {}),
+            ...(archivePath ? { archivePath } : {}),
+            ...(action === undefined && context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
+          })
+        }
+        const reactivatePlugin = async (
+          profileId: string,
+          expected: Parameters<typeof waitForPluginRuntime>[1],
+          context: ExtensionExecutionContext,
+          absent: Parameters<typeof waitForPluginRuntime>[3] = [],
+          disabled: Parameters<typeof waitForPluginRuntime>[4] = [],
+        ): Promise<void> => {
+          context.guard(); context.signal.throwIfAborted()
+          const profile = requiredProfile(profileId)
+          await workers.dispose(profileId)
+          context.guard(); context.signal.throwIfAborted()
+          await ensureWorker(profile)
+          context.guard(); context.signal.throwIfAborted()
+          await waitForPluginRuntime(await workers.activate(profileId), expected, context.signal, absent, disabled)
+        }
         plugin = new ProfilePluginExecutor({
           uid: 0,
           windows: windowsFiles,
@@ -459,32 +496,11 @@ async function startWindowsDesktopHostApplicationWithTrust(
             const { loaded, overlays } = loadComposition(profileRoot(profileId))
             return planPluginToggle(loaded.layers, patch, overlays, packageName, enabled)
           },
-          repair: (root, packageName, context) => runProfilePluginCommand({
-            nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
-            pnpmEntrypointPath, profileRoot: root, controlRoot, uid: 0, windows: windowsFiles,
-            spec: packageName, action: 'repair', signal: context.signal, guard: context.guard,
-          }),
-          remove: (root, packageName, context) => runProfilePluginCommand({
-            nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
-            pnpmEntrypointPath, profileRoot: root, controlRoot, uid: 0, windows: windowsFiles,
-            spec: packageName, action: 'remove', signal: context.signal, guard: context.guard,
-          }),
-          acknowledgeRemoval: async (profileId, ids, context) => {
-            context.guard(); context.signal.throwIfAborted()
-            const profile = requiredProfile(profileId)
-            await workers.dispose(profileId)
-            context.guard(); await ensureWorker(profile); context.guard()
-            await waitForPluginRuntime(await workers.activate(profileId), [], context.signal, ids)
-          },
-          acknowledgeToggle: async (profileId, plan, context) => {
-            context.guard(); context.signal.throwIfAborted()
-            const profile = requiredProfile(profileId)
-            await workers.dispose(profileId)
-            context.guard(); context.signal.throwIfAborted()
-            await ensureWorker(profile)
-            context.guard(); context.signal.throwIfAborted()
-            await waitForPluginRuntime(await workers.activate(profileId), plan.expected, context.signal, [], plan.disabled)
-          },
+          repair: (root, packageName, context) => runPlugin(root, packageName, context, 'repair'),
+          remove: (root, packageName, context) => runPlugin(root, packageName, context, 'remove'),
+          acknowledgeRemoval: (profileId, ids, context) => reactivatePlugin(profileId, [], context, ids),
+          acknowledgeToggle: (profileId, plan, context) =>
+            reactivatePlugin(profileId, plan.expected, context, [], plan.disabled),
           resolve: profileRoot,
           ...(bundledCatalog === undefined ? {} : {
             bundledPlugin: (name: string, version: string) => {
@@ -496,28 +512,12 @@ async function startWindowsDesktopHostApplicationWithTrust(
               return composedEntryIds(loaded.layers, [...loaded.patches, ...overlays])
             },
           }),
-          install: async (root, spec, context) => {
-            context.guard(); context.signal.throwIfAborted()
-            // A `bundled:` source requires the embedding catalog that validated it; other sources never yield an archive.
-            const archivePath = bundledCatalog?.archiveFor(spec, webRoot(root))
-            return runProfilePluginCommand({
-              nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
-              pnpmEntrypointPath, profileRoot: root, controlRoot, uid: 0, windows: windowsFiles, spec,
-              signal: context.signal, guard: context.guard,
-              ...(archivePath ? { archivePath } : {}),
-              ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
-            })
-          },
+          install: (root, spec, context) => runPlugin(root, spec, context),
           acknowledge: async (profileId, packageName, context) => {
             context.guard(); context.signal.throwIfAborted()
-            const profile = requiredProfile(profileId)
-            const { loaded, overlays } = loadComposition(win32.join(config.root, 'profiles', profileId))
+            const { loaded, overlays } = loadComposition(profileRoot(profileId))
             const expected = pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
-            await workers.dispose(profileId)
-            context.guard(); context.signal.throwIfAborted()
-            await ensureWorker(profile)
-            context.guard(); context.signal.throwIfAborted()
-            await waitForPluginRuntime(await workers.activate(profileId), expected, context.signal)
+            await reactivatePlugin(profileId, expected, context)
           },
         })
       }
