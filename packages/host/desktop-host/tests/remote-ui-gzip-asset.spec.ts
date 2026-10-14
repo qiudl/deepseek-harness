@@ -35,7 +35,7 @@ describe('lease-owned compressed plugin assets', () => {
         endpoint: string, payload: unknown, signal: AbortSignal, stopped: () => boolean,
         cache: object,
       ) => Promise<{ bytes: string; total: number; uncompressedBytes: number; encoding: string }>
-      const cache: { current?: { url: string; bytes: Buffer; gzip?: Promise<Buffer> } } = {}
+      const cache: { entries?: Map<string, Promise<{ url: string; bytes: Buffer; gzip?: Promise<Buffer> }>> } = {}
       const signal = new AbortController().signal
       const chunk = (offset: number, stopped = () => false, selectedSignal = signal) => read.call(factory,
         `http://127.0.0.1:${address.port}`, { name: 'cookie', value: 'private' }, 'token',
@@ -67,8 +67,8 @@ describe('lease-owned compressed plugin assets', () => {
       authorized = true
       let stopCalls = 0
       await expect(chunk(0, () => ++stopCalls >= 4)).rejects.toMatchObject({ code: 'unavailable' })
-      const entry = cache.current
-      if (!entry) throw new Error('Expected a current asset')
+      const entry = await cache.entries?.get(asset)
+      if (!entry) throw new Error('Expected a cached asset')
       const failed = Promise.reject<Buffer>(new Error('compression failed'))
       void failed.catch(() => {}) // The fault is consumed after asynchronous boot authorization.
       entry.gzip = failed
