@@ -53,6 +53,11 @@ export type HostAuthorityErrorCode =
   | 'scope_mismatch'
   | 'selector_stale'
   | 'lease_conflict'
+  | 'identity_mismatch'
+  | 'installation_mismatch'
+  | 'material_invalid'
+  | 'legacy_verifier_unsupported'
+  | 'schema_unsupported'
 
 /** Typed failure that Desktop maps onto the Host control protocol vocabulary. */
 export class HostAuthorityError extends Error {

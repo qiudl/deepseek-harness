@@ -756,6 +756,12 @@ export async function startDesktopHostApplication(
         skillArchives: true, skillRemove: true, skillReplace: true, skillFiles: true, skillInvocation: true,
         mcpRemove: true, mcpUpdate: true,
         inventory: (profileId, kind, signal) => executor.inventory(profileId, kind, signal) },
+      recoveryMaterialsPersistenceGeneration: async (profileId, signal) => {
+        signal.throwIfAborted()
+        const existing = await targetFor(profileId).inspectExistingPersistence()
+        signal.throwIfAborted()
+        return existing.generation
+      },
       profilePersistenceGeneration: async profileId => (await targetFor(profileId).activePersistenceConfig()).generation,
       modelClaimRecovery: {
         pendingReceipts: (input: Parameters<LegacyClaimCoordinator['pendingReceipts']>[0]) =>

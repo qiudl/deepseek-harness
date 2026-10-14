@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign } from 'node:crypto'
 import {
-  encodeHostInspectSignaturePayload,
+  encodeHostInspectSignaturePayload, parseRecoveryDescribeInput, parseRecoveryValidateInput,
   type HostControlCapability,
   type HostControlErrorCode,
   type HostControlFrame,
@@ -583,4 +583,25 @@ describe('Unix Host client protocol projections', () => {
     await expect(client.extensions({ ...lease, command: { action: 'prepare', kind: 'plugin', payload: '{}' } }))
       .rejects.toMatchObject({ code: 'extension_refused' })
   })
+})
+
+it('requires explicit recovery-material capabilities without sending secrets to an older Host', async () => {
+  const respond = vi.fn(() => { throw new Error('no recovery request may be sent') })
+  const { client } = await makeClient(respond, [...baseCapabilities].sort())
+  try {
+    await expect(client.describeRecoveryMaterials(parseRecoveryDescribeInput({
+      challenge: 'A'.repeat(43), issuer: 'https://accounts.example.com', subject: 'subject',
+      profile_key_handle: 'A'.repeat(43), unlock_proof: 'A'.repeat(43),
+    }))).rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.validateRecoveryMaterials(parseRecoveryValidateInput({
+      challenge: 'A'.repeat(43), descriptor: {
+        version: 1, type: 'dsh.host-access-recovery', installationId,
+        installationKeyFingerprint: '1'.repeat(64), profileId: installationId,
+        issuer: 'https://accounts.example.com', subject: 'subject', profileKeyHandle: 'A'.repeat(43),
+        materialCommitment: '2'.repeat(64), bindingGeneration: 0, schemaGeneration: 1,
+        persistenceGeneration: 1, challenge: 'A'.repeat(43),
+      }, signature: 'A'.repeat(86), unlock_proof: 'A'.repeat(43),
+    }))).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(respond).not.toHaveBeenCalled()
+  } finally { client.close() }
 })

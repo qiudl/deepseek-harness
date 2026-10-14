@@ -125,6 +125,10 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 
 远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
 
+仅供 Main 使用的 `profile.recovery_materials.describe` 和 `profile.recovery_materials.validate` 沿用既有连接认证字段，完整帧上限为 16 KiB。[严格字段与固定顺序签名载荷](src/recovery-materials.ts) 绑定规范 issuer/subject、安装实例、Profile 和材料承诺。安装签名使用独立的 `DSH-RECOVERY-DESCRIPTOR-v1` 域；恢复包附带的公钥不能作为信任锚。
+
+描述和校验仅证明历史材料属于原 Host，不授予 Account 会话、当前绑定、云权限或 worker 访问。写入材料前，Main 必须比对独立可信的所选身份与操作，核对同一连接上的新挑战以及描述符和材料摘要，并使用本进程的单调时钟限制往返时长。
+
 ## 模型体验
 
 无，因为这个本地 Host 控制编解码器不注册任何面向模型的内容。
