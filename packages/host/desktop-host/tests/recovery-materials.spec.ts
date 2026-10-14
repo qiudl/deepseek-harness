@@ -43,10 +43,10 @@ async function fixture(pem = false, legacy = false, beforeRead?: () => Promise<v
   }
   let persistence = 11
   const generationReader = async () => { await beforeRead?.(); return persistence }
-  let reader: typeof generationReader | undefined = generationReader
-  const authority = new HostControlAuthority({ identity, host,
-    get recoveryMaterialsPersistenceGeneration() { return reader },
-    profilePersistenceGeneration: () => persistence, now: () => 1000 })
+  const options: ConstructorParameters<typeof HostControlAuthority>[0] = { identity, host,
+    recoveryMaterialsPersistenceGeneration: generationReader,
+    profilePersistenceGeneration: () => persistence, now: () => 1000 }
+  const authority = new HostControlAuthority(options)
   const lifetime = new AbortController()
   const session = authority.openSession(randomUUID(), lifetime.signal)
   const client = await UnixHostClient.connectAuthenticatedTransport({
@@ -63,7 +63,7 @@ async function fixture(pem = false, legacy = false, beforeRead?: () => Promise<v
   }))
   return { root, registry, profile, before, worker, host, keys, identity, client, describe, session, lifetime,
     setPersistence: (value: number) => { persistence = value },
-    removeGenerationReader: () => { reader = undefined } }
+    removeGenerationReader: () => { delete options.recoveryMaterialsPersistenceGeneration } }
 }
 
 describe.skipIf(process.platform === 'win32')('read-only original Host recovery materials', () => {
