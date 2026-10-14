@@ -1,9 +1,13 @@
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { runProfilePluginCommand } from '../src/plugin-command.ts'
 import { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
+import { assertWindowsExtensionDirectory, readWindowsExtensionStateFile, readWindowsExtensionBackupFile } from '../src/windows-extension-files.ts'
+import { assertWindowsWorkerMutableFileEvidence } from '../src/windows-isolated-profile.ts'
+import type { ExtensionReceipt, PluginToggleRecovery } from '../src/extension-operations.ts'
 import type { PluginTogglePlan } from '../src/plugin-toggle-plan.ts'
 import type {
   WindowsHostPrivatePathEvidence,
@@ -240,4 +244,59 @@ it('rejects foreign-owned or reparse-backed Profile evidence on the Windows chan
     contents: Buffer.from('{}'), evidence: { ...mutableEvidence(), ownerSid: 'S-1-5-21-1000-2000-3000-1002' },
   })
   await expect(f.executor.revision('profile')).rejects.toThrow()
+})
+
+it('refuses missing native directory inspection, oversize state, and invalid backup evidence', () => {
+  const bindings = diskBindings()
+  const { inspectExistingDirectory: _inspect, ...withoutInspection } = bindings
+  expect(() => { assertWindowsExtensionDirectory({ userSid: sid, bindings: withoutInspection }, 'profile') })
+    .toThrow('upgrade_required')
+  bindings.readPrivateFile.mockReturnValue({ contents: Buffer.alloc(2), evidence: mutableEvidence() })
+  const channel = { userSid: sid, bindings }
+  expect(() => readWindowsExtensionStateFile(channel, 'state', 1, 'oversize')).toThrow('oversize')
+  for (const contents of [undefined, Buffer.alloc(0), Buffer.alloc(1_048_578)]) {
+    bindings.readPrivateFile.mockReturnValue(contents === undefined ? undefined : { contents, evidence: evidence('file') })
+    expect(() => readWindowsExtensionBackupFile(channel, 'backup')).toThrow('unsafe_backup')
+  }
+  bindings.readPrivateFile.mockReturnValue({ contents: Buffer.from('0'), evidence: evidence('file') })
+  expect(readWindowsExtensionBackupFile(channel, 'backup')).toBe('0')
+  bindings.readPrivateFile.mockReturnValue({ contents: Buffer.from('1before'), evidence: mutableEvidence() })
+  expect(() => readWindowsExtensionBackupFile(channel, 'backup')).toThrow()
+})
+
+it('refuses worker files with denied, incomplete, or duplicated ACL principals', () => {
+  for (const access of [
+    [{ ...mutableEvidence().access[0]!, type: 'deny' as const }, ...mutableEvidence().access.slice(1)],
+    mutableEvidence().access.map(entry => ({ ...entry, mask: 1 })),
+    mutableEvidence().access.map(entry => ({ ...entry, sid })),
+  ]) {
+    expect(() => { assertWindowsWorkerMutableFileEvidence({ ...mutableEvidence(), access }, sid) }).toThrow()
+  }
+  // Duplicate expected principals cannot satisfy the complete three-principal set.
+  expect(() => { assertWindowsWorkerMutableFileEvidence(mutableEvidence(), 'S-1-5-18') }).toThrow()
+})
+
+it('backs up and validates Windows plugin toggles through private native files', async () => {
+  const f = executorFixture()
+  const patchPath = join(f.root, 'profiles/web/cordis.patch.yml')
+  f.files.set(patchPath, '[]\n')
+  const operationId = randomUUID()
+  let recovery: PluginToggleRecovery | undefined
+  await f.executor.execute('profile', JSON.stringify({ action: 'toggle', packageName: '@fixture/bundle', enabled: false }), {
+    kind: 'plugin', signal: new AbortController().signal, guard() {}, operationId,
+    checkpointPluginToggle(value) { recovery = value },
+  })
+  const backup = join(f.root, 'profiles/web', `.plugin-before-${operationId}`)
+  expect(f.files.get(backup)).toBe('1[]\n')
+  expect(recovery?.backupDigest).toBe(createHash('sha256').update(JSON.stringify('[]\n')).digest('hex'))
+  f.bindings.readPrivateFile.mockImplementation((path) => {
+    const text = f.files.get(path)
+    return text === undefined ? undefined : { contents: Buffer.from(text), evidence: evidence('file') }
+  })
+  const receipt = { profileId: 'profile', kind: 'plugin', operationId, pluginToggleRecovery: recovery } as ExtensionReceipt
+  await expect(f.executor.validatePluginRestore('profile', receipt)).resolves.toBeUndefined()
+  await expect(f.executor.restorePluginToggle('profile', receipt, {
+    kind: 'plugin', signal: new AbortController().signal, guard() {},
+  })).resolves.toEqual({ state: 'succeeded' })
+  expect(f.files.get(patchPath)).toBe('[]\n')
 })

@@ -1,3 +1,12 @@
+import * as appBoot from '@deepseek-ai/dsh-app-boot'
+import * as pluginExecutors from '../src/profile-plugin-executor.ts'
+import * as pluginCommands from '../src/plugin-command.ts'
+import * as pluginScripts from '../src/plugin-script-preflight.ts'
+import * as pluginRuntime from '../src/plugin-runtime-ack.ts'
+import * as fs from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
@@ -13,6 +22,11 @@ import { WindowsHostTransport, type StartWindowsHostTransportOptions } from '../
 import { WindowsHostCarrier } from '../src/windows-host-carrier.ts'
 import { acquireWindowsSingleHostLock } from '../src/windows-single-instance.ts'
 import { UnixHostClient } from '../src/unix-transport.ts'
+
+vi.mock('node:fs', async (load) => {
+  const actual = await load<typeof import('node:fs')>()
+  return { ...actual, existsSync: vi.fn(actual.existsSync) }
+})
 
 const root = String.raw`C:\Users\alice\AppData\Local\Slark\DSH`
 const userSid = 'S-1-5-21-1000-2000-3000-1001'
@@ -583,4 +597,82 @@ describe('Windows Desktop Host startup', () => {
       expect(close).toHaveBeenCalledOnce()
     }
   })
+})
+
+it('wires Windows plugin commands, catalog lookup, and worker acknowledgement under one Profile', async () => {
+  type Options = ConstructorParameters<typeof pluginExecutors.ProfilePluginExecutor>[0]
+  const Original = pluginExecutors.ProfilePluginExecutor
+  let callbacks: Options | undefined
+  vi.spyOn(pluginExecutors, 'ProfilePluginExecutor').mockImplementation(class extends Original {
+    constructor(options: Options) { super(options); callbacks = options }
+  })
+  const invoke = vi.spyOn(pluginCommands, 'runProfilePluginCommand').mockResolvedValue(undefined)
+  const inspect = vi.spyOn(pluginScripts, 'inspectPluginScripts').mockResolvedValue(undefined)
+  const acknowledge = vi.spyOn(pluginRuntime, 'waitForPluginRuntime').mockResolvedValue(undefined)
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true)
+  vi.spyOn(appBoot, 'loadOverlayPatches').mockReturnValue([])
+  vi.spyOn(appBoot, 'loadProfileDirectory').mockReturnValue({
+    name: 'web', dir: 'web', patchPath: 'patch', patches: [], skippedBundles: [],
+    layers: [{ packageName: 'fixture', packageDir: 'fixture', patchPaths: [], patches: [{ insert: [{ id: 'fixture', name: 'fixture' }] }] }],
+  })
+  const directory = fs.mkdtempSync(join(tmpdir(), 'windows-startup-catalog-'))
+  onTestFinished(() => { fs.rmSync(directory, { recursive: true, force: true }) })
+  fs.writeFileSync(join(directory, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1, plugins: [{
+    name: 'fixture', version: '1.0.0', file: 'fixture.tgz', sha256: 'a'.repeat(64), entryIds: ['fixture'],
+    repository: 'https://example.com/fixture', sourceSha: 'b'.repeat(40),
+  }] }), { mode: 0o600 })
+  const catalog = BundledPluginCatalog.load(directory, process.getuid?.() ?? 0)
+  const catalogLookup = vi.spyOn(BundledPluginCatalog, 'tryLoad').mockReturnValue(catalog)
+  vi.spyOn(catalog, 'archiveFor').mockImplementation(spec => spec.startsWith('bundled:') ? 'fixture.tgz' : undefined)
+  const state = fixture()
+  const application = await startWindowsDesktopHostApplication({
+    ...state.options, maximumExtensionReceiptBytes: 131072,
+    pnpmEntrypointPath: String.raw`C:\runtime\pnpm.mjs`, bundledPluginsRoot: String.raw`C:\runtime\plugins`,
+  }, undefined, state.dependencies)
+  onTestFinished(async () => { await application.close() })
+  const local = await application.host.bootstrapLocalProfile({
+    keyHandle: 'windows-credential:local', unlockMaterial, ownerId: 'desktop-owner',
+  })
+  if (!callbacks) throw Error('missing Windows plugin composition')
+  const context = { kind: 'plugin' as const, signal: new AbortController().signal, guard: vi.fn() }
+  const profile = callbacks.resolve(local.profileId)
+  expect(() => callbacks?.resolve('missing')).toThrow('stale')
+  await callbacks.inspectScripts?.('fixture', 'fixture@1.0.0')
+  expect(inspect).toHaveBeenCalledWith({ packageName: 'fixture', spec: 'fixture@1.0.0' })
+  expect(callbacks.bundledPlugin?.('fixture', '1.0.0')).toMatchObject({ entryIds: ['fixture'] })
+  expect(callbacks.bundledPlugin?.('missing', '1.0.0')).toBeUndefined()
+  expect(callbacks.composedEntryIds?.(local.profileId)).toEqual(new Set(['fixture']))
+  const plan = callbacks.togglePlan?.(local.profileId, 'fixture', false, '[]')
+  if (!plan) throw Error('missing toggle plan')
+  await callbacks.repair?.(profile, 'fixture', context)
+  expect(invoke).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'repair', windows: expect.any(Object) as object }))
+  await callbacks.remove?.(profile, 'fixture', context)
+  expect(invoke).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'remove' }))
+  await callbacks.install(profile, 'bundled:fixture@1.0.0', context)
+  expect(invoke).toHaveBeenLastCalledWith(expect.objectContaining({ archivePath: 'fixture.tgz' }))
+  await callbacks.install(profile, 'fixture@1.0.0', context)
+  expect(invoke.mock.lastCall?.[0]).not.toHaveProperty('allowBuild')
+  await callbacks.install(profile, 'fixture@1.0.0', { ...context,
+    buildApproval: { buildKey: 'fixture@1.0.0', digest: 'a'.repeat(64) },
+  })
+  expect(invoke).toHaveBeenLastCalledWith(expect.objectContaining({ allowBuild: 'fixture@1.0.0' }))
+  await callbacks.acknowledgeRemoval?.(local.profileId, ['include:fixture'], context)
+  expect(acknowledge.mock.lastCall?.slice(1)).toEqual([[], context.signal, ['include:fixture'], []])
+  await callbacks.acknowledgeToggle?.(local.profileId, plan, context)
+  expect(acknowledge.mock.lastCall?.slice(1)).toEqual([plan.expected, context.signal, [], plan.disabled])
+  await callbacks.acknowledge(local.profileId, 'fixture', context)
+  expect(acknowledge.mock.lastCall?.[1]).toEqual([{ entryId: 'include:fixture', moduleName: 'fixture' }])
+  await application.close()
+  catalogLookup.mockReturnValue(undefined)
+  callbacks = undefined
+  const second = fixture()
+  const noCatalog = await startWindowsDesktopHostApplication({
+    ...second.options, maximumExtensionReceiptBytes: 131072, pnpmEntrypointPath: String.raw`C:\runtime\pnpm.mjs`,
+  }, undefined, second.dependencies)
+  onTestFinished(async () => { await noCatalog.close() })
+  const noCatalogOptions = callbacks as Options | undefined
+  if (!noCatalogOptions) throw Error('missing uncatalogued plugin composition')
+  expect(noCatalogOptions.bundledPlugin).toBeUndefined()
+  await noCatalogOptions.install(profile, 'fixture@1.0.0', context)
+  expect(invoke.mock.lastCall?.[0]).not.toHaveProperty('archivePath')
 })

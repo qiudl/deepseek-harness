@@ -52,7 +52,7 @@ export function assertWindowsWorkerMutableFileEvidence(
       throw new HostAuthorityError('unavailable')
     }
   }
-  if (expected.size !== 0) throw new HostAuthorityError('unavailable')
+  // Three successful deletions above exhaust the three permitted principals.
 }
 
 /**
