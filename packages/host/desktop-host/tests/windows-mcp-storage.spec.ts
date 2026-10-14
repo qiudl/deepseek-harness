@@ -115,6 +115,16 @@ it('rejects unsafe paths, directory evidence, invalid UTF-8 and invalid YAML bef
   expect(() => unsafe.snapshot(f.profileId)).toThrow()
 })
 
+it('accepts worker-rewritten patch documents with inherited DACL evidence on read', async () => {
+  const f = fixture('[]')
+  const workerRewritten: WindowsHostPrivatePathEvidence = { ...evidence('file'), daclProtected: false,
+    access: evidence('file').access.map(entry => ({ ...entry, inherited: true })) }
+  f.bindings.readPrivateFile.mockReturnValue({ contents: Buffer.from('[]'), evidence: workerRewritten })
+  const executor = new ProfileMcpExecutor({ storage: f.storage, reload: async () => {} })
+  await expect(executor.revision(f.profileId)).resolves.toBeTruthy()
+  await expect(executor.inventory(f.profileId)).resolves.toEqual([])
+})
+
 it('rejects incomplete bindings and every untrusted persistence representation', () => {
   const f = fixture('[]')
   for (const missing of ['inspectExistingDirectory', 'createPrivateFile', 'removePrivateFile'] as const) {

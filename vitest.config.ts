@@ -43,9 +43,10 @@ const windowsUnsupportedPackages = process.platform === 'win32'
 // The POSIX owner plane proves uid/mode-bit, Unix-socket, and macOS signing
 // boundaries. Windows composes the separately covered stable-handle, ACL,
 // named-pipe, registry, and storage owners instead of executing these suites.
+// bundled-plugins.spec.ts is dual-platform: POSIX uid/mode semantics skip there,
+// and the Windows install path runs natively.
 const windowsUnsupportedOwnerTests = process.platform === 'win32'
   ? [
-      'packages/host/desktop-host/tests/bundled-plugins.spec.ts',
       'packages/host/desktop-host/tests/desktop-host-lease-fences.spec.ts',
       'packages/host/desktop-host/tests/desktop-host.spec.ts',
       'packages/host/desktop-host/tests/extension-operations.spec.ts',

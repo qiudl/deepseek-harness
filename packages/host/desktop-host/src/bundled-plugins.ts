@@ -37,8 +37,10 @@ export function parseBundledPluginSpec(spec: string): { name: string; version: s
 
 function trustedEmbeddingPath(path: string, directory: boolean, uid: number): void {
   const stat = lstatSync(path)
-  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())
-    || (stat.uid !== uid && stat.uid !== 0) || (stat.mode & 0o022) !== 0) throw Error('unsafe_bundled_plugins')
+  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) throw Error('unsafe_bundled_plugins')
+  // POSIX ownership and mode evidence; Windows embedding roots are ACL-protected install directories.
+  if (process.platform !== 'win32'
+    && ((stat.uid !== uid && stat.uid !== 0) || (stat.mode & 0o022) !== 0)) throw Error('unsafe_bundled_plugins')
 }
 
 function parse(value: unknown): BundledPlugin[] {
@@ -112,7 +114,10 @@ export class BundledPluginCatalog {
     const fd = openSync(source, constants.O_RDONLY | constants.O_NOFOLLOW)
     try {
       const before = fstatSync(fd)
-      if (!before.isFile() || ![this.uid, 0].includes(before.uid) || (before.mode & 0o022) !== 0
+      // POSIX ownership and mode evidence; the embedding root is an ACL-protected install
+      // directory on Windows, where libuv reports every writable file as mode 0666.
+      if (!before.isFile() || (process.platform !== 'win32'
+        && (![this.uid, 0].includes(before.uid) || (before.mode & 0o022) !== 0))
         || before.size < 1 || before.size > MAX_ARCHIVE_BYTES) throw Error('unsafe_bundled_plugins')
       const bytes = Buffer.alloc(before.size)
       let offset = 0
@@ -161,11 +166,15 @@ export class BundledPluginCatalog {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     }
     const stat = lstatSync(directory)
-    if (stat.isSymbolicLink() || !stat.isDirectory() || stat.uid !== this.uid || (stat.mode & 0o022) !== 0) throw Error('unsafe_bundled_plugins')
+    // The destination lives under the Host-verified private web root; Windows reports mode 0666
+    // for writable directories, so ownership and mode bits are POSIX-only evidence there.
+    if (stat.isSymbolicLink() || !stat.isDirectory() || (process.platform !== 'win32'
+      && (stat.uid !== this.uid || (stat.mode & 0o022) !== 0))) throw Error('unsafe_bundled_plugins')
     const target = join(directory, `${plugin.sha256}.tgz`)
     try {
       const existing = lstatSync(target)
-      if (existing.isSymbolicLink() || !existing.isFile() || existing.uid !== this.uid
+      if (existing.isSymbolicLink() || !existing.isFile()
+        || (process.platform !== 'win32' && existing.uid !== this.uid)
         || createHash('sha256').update(readFileSync(target)).digest('hex') !== plugin.sha256) throw Error('bundled_plugin_conflict')
       return target
     } catch (error) {
@@ -177,8 +186,12 @@ export class BundledPluginCatalog {
     try {
       try { writeFileSync(fd, bytes); fsyncSync(fd) } finally { closeSync(fd) }
       renameSync(temporary, target); published = true
-      const handle = openSync(directory, constants.O_RDONLY | constants.O_NOFOLLOW)
-      try { fsyncSync(handle) } finally { closeSync(handle) }
+      // Directory fsync orders the durable rename on POSIX filesystems; Windows has no
+      // directory-handle fsync, and the ACL-anchored parent chain covers the publication.
+      if (process.platform !== 'win32') {
+        const handle = openSync(directory, constants.O_RDONLY | constants.O_NOFOLLOW)
+        try { fsyncSync(handle) } finally { closeSync(handle) }
+      }
     } finally { if (!published) unlinkSync(temporary) }
     return target
   }

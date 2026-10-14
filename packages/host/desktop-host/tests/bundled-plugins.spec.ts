@@ -18,7 +18,8 @@ import { BUNDLED_ARCHIVE_DIRECTORY, BundledPluginCatalog, bundledDependencySpec,
 import { isPinnedPluginSpec, runProfilePluginCommand } from '../src/plugin-command.ts'
 import { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
 
-const uid = process.getuid!()
+// POSIX uid evidence; on Windows the uid is only consulted behind platform gates.
+const uid = process.getuid?.() ?? 0
 const archive = Buffer.from('fixture archive bytes')
 const digest = createHash('sha256').update(archive).digest('hex')
 const row = { name: 'dsh-duet', version: '0.3.0', file: 'dsh-duet-0.3.0.tgz', sha256: digest,
@@ -53,7 +54,8 @@ it('parses only exact bundled identities and treats them as pinned sources', () 
   expect(isPinnedPluginSpec('bundled:dsh-duet@latest')).toBe(false)
 })
 
-it('loads the exact catalog schema and rejects unknown or unsafe embeddings', () => {
+// POSIX uid/mode security semantics; Windows anchors ownership in the ACL-verified parent chain.
+it.runIf(process.platform !== 'win32')('loads the exact catalog schema and rejects unknown or unsafe embeddings', () => {
   const catalog = BundledPluginCatalog.load(embedding(), uid)
   expect(catalog.get('dsh-duet', '0.3.0')?.entryIds).toEqual(['duplex-harness-control'])
   expect(catalog.get('dsh-duet', '0.2.7')).toBeUndefined()
@@ -93,14 +95,33 @@ it('materializes verified archives into a content-addressed Profile directory wi
   const path = catalog.materialize(plugin, web)
   expect(path).toBe(join(web, BUNDLED_ARCHIVE_DIRECTORY, `${digest}.tgz`))
   expect(readFileSync(path)).toEqual(archive)
-  expect(lstatSync(path).mode & 0o777).toBe(0o600)
-  expect(lstatSync(join(web, BUNDLED_ARCHIVE_DIRECTORY)).mode & 0o777).toBe(0o700)
+  if (process.platform !== 'win32') {
+    expect(lstatSync(path).mode & 0o777).toBe(0o600)
+    expect(lstatSync(join(web, BUNDLED_ARCHIVE_DIRECTORY)).mode & 0o777).toBe(0o700)
+  }
   expect(catalog.materialize(plugin, web)).toBe(path)
   expect(readdirSync(join(web, BUNDLED_ARCHIVE_DIRECTORY))).toEqual([`${digest}.tgz`])
   writeFileSync(path, 'tampered')
   expect(() => catalog.materialize(plugin, web)).toThrow('bundled_plugin_conflict')
   expect(readFileSync(path, 'utf8')).toBe('tampered')
   expect(() => catalog.materialize({ ...plugin }, web)).toThrow('invalid_bundled_plugins')
+})
+
+it('anchors materialization in the ACL-protected parent chain where Windows reports mode 0666', () => {
+  const root = embedding()
+  // libuv reports every Windows-writable file as mode 0666; the POSIX mode-bit refusal must be
+  // Windows-only, with ownership anchored by the verified private parent ACL chain instead.
+  chmodSync(join(root, row.file), 0o666)
+  chmodSync(root, 0o777)
+  const { web } = webRoot()
+  if (process.platform === 'win32') {
+    const catalog = BundledPluginCatalog.load(root, uid)
+    const path = catalog.materialize(catalog.get(row.name, row.version)!, web)
+    expect(readFileSync(path)).toEqual(archive)
+  } else {
+    // On POSIX the permissive embedding root is refused at load time, before any copy runs.
+    expect(() => BundledPluginCatalog.load(root, uid)).toThrow('unsafe_bundled_plugins')
+  }
 })
 
 it('refuses an embedding archive whose bytes do not match the catalog and writes nothing', () => {
@@ -141,7 +162,8 @@ function commandFixture() {
     profileRoot: profile, controlRoot: control, uid, signal: new AbortController().signal, guard() {} } }
 }
 
-it('installs a bundled source only from its Profile-owned archive, offline-first and without scripts', async () => {
+// POSIX uid/mode security semantics; Windows anchors ownership in the ACL-verified parent chain.
+it.runIf(process.platform !== 'win32')('installs a bundled source only from its Profile-owned archive, offline-first and without scripts', async () => {
   const f = commandFixture()
   await runProfilePluginCommand({ ...f.options, spec: 'bundled:dsh-duet@0.3.0', archivePath: f.archivePath })
   expect(JSON.parse(readFileSync(join(f.profile, 'observed.json'), 'utf8')))
@@ -183,7 +205,8 @@ function executorFixture(options: { catalog?: boolean; composed?: string[] } = {
 }
 const bundledPayload = JSON.stringify({ packageName: 'dsh-duet', spec: 'bundled:dsh-duet@0.3.0' })
 
-it('validates bundled installs against the embedding catalog and composed entry IDs', async () => {
+// POSIX uid/mode security semantics; Windows anchors ownership in the ACL-verified parent chain.
+it.runIf(process.platform !== 'win32')('validates bundled installs against the embedding catalog and composed entry IDs', async () => {
   const ok = executorFixture()
   expect(() => { ok.executor.validate(ok.profileId, 'plugin', bundledPayload) }).not.toThrow()
   await expect(ok.executor.preflight(ok.profileId, 'plugin', bundledPayload)).resolves.toBeUndefined()
@@ -198,7 +221,8 @@ it('validates bundled installs against the embedding catalog and composed entry 
   expect(ok.install).not.toHaveBeenCalled()
 })
 
-it('accepts root-owned embeddings and refuses files owned by another user', () => {
+// POSIX uid/mode security semantics; Windows anchors ownership in the ACL-verified parent chain.
+it.runIf(process.platform !== 'win32')('accepts root-owned embeddings and refuses files owned by another user', () => {
   expect(() => BundledPluginCatalog.load('/usr', uid + 1)).toThrow(/ENOENT/u)
   expect(() => BundledPluginCatalog.load(embedding(), uid + 1)).toThrow('unsafe_bundled_plugins')
 })
@@ -225,7 +249,8 @@ it('resolves only exact bundled sources to materialized archives', () => {
   expect(catalog.archiveFor('bundled:dsh-duet@0.3.0', web)).toBe(join(web, BUNDLED_ARCHIVE_DIRECTORY, `${digest}.tgz`))
 })
 
-it('refuses missing or unsafe Profile archive directories and leaves no partial archive', () => {
+// POSIX uid/mode security semantics; Windows anchors ownership in the ACL-verified parent chain.
+it.runIf(process.platform !== 'win32')('refuses missing or unsafe Profile archive directories and leaves no partial archive', () => {
   const catalog = BundledPluginCatalog.load(embedding(), uid)
   const plugin = catalog.get('dsh-duet', '0.3.0')!
   expect(() => catalog.materialize(plugin, join(temp('bundled-missing-'), 'absent', 'web'))).toThrow(/ENOENT/u)
@@ -239,7 +264,8 @@ it('refuses missing or unsafe Profile archive directories and leaves no partial 
   expect(readdirSync(join(faulty.web, BUNDLED_ARCHIVE_DIRECTORY))).toEqual([])
 })
 
-it('allows bundled updates only for archives the embedding ships', () => {
+// POSIX uid/mode security semantics; Windows anchors ownership in the ACL-verified parent chain.
+it.runIf(process.platform !== 'win32')('allows bundled updates only for archives the embedding ships', () => {
   const { profile, web } = webRoot()
   writeFileSync(join(web, 'package.json'), JSON.stringify({ dependencies: { 'dsh-duet': '0.2.7' }, dsh: { profile: { bundles: ['dsh-duet'] } } }), { mode: 0o600 })
   const executor = new ProfilePluginExecutor({ resolve: () => profile, uid, install: async () => {}, acknowledge: async () => {},

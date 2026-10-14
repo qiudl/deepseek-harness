@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { ExtensionKind, ExtensionReceipt } from '../src/extension-operations.ts'
 import { ProfileExtensionExecutor } from '../src/profile-extension-executor.ts'
-import type { ProfileMcpExecutor } from '../src/profile-mcp-executor.ts'
+import { ProfileMcpExecutor } from '../src/profile-mcp-executor.ts'
 import type { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
 import type { ProfileSkillExecutor } from '../src/profile-skill-executor.ts'
 
@@ -110,4 +110,12 @@ describe('ProfileExtensionExecutor', () => {
     await expect(combined.validatePluginRestore('profile', receipt)).rejects.toThrow('upgrade_required')
     await expect(combined.restorePluginToggle('profile', receipt, context('plugin'))).rejects.toThrow('upgrade_required')
   })
+})
+
+it('refuses Skill operations on a Windows composition without a Skill installer', async () => {
+  const combined = new ProfileExtensionExecutor(new ProfileMcpExecutor({ profileRoot: () => 'unused', uid: 0, reload: async () => {} }), undefined)
+  expect(() => { combined.validate('profile', 'skill', '{}') }).toThrow('upgrade_required')
+  await expect(combined.inventory('profile', 'skill')).rejects.toThrow('upgrade_required')
+  await expect(combined.validateSkillRestore('profile', receipt)).rejects.toThrow('upgrade_required')
+  await expect(combined.restoreSkillRemoval('profile', receipt, context('skill'))).rejects.toThrow('upgrade_required')
 })
