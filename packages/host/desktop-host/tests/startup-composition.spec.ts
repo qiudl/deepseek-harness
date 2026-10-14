@@ -1,9 +1,10 @@
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationSourceTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
 import type { Config } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
@@ -263,7 +264,39 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     ...opened,
     ownerId: 'owner',
   })).origin).toBe('http://127.0.0.1:43123')
+  const tree = (directory: string): unknown[] => readdirSync(directory).sort().map((name) => {
+    const path = join(directory, name), metadata = lstatSync(path)
+    return [name, metadata.mode, metadata.size, metadata.mtimeMs, metadata.ctimeMs,
+      metadata.isSymbolicLink() ? readlinkSync(path)
+        : metadata.isDirectory() ? tree(path) : createHash('sha256').update(readFileSync(path)).digest('hex')]
+  })
+  const beforeMissing = tree(root)
+  expect(serverOptions.recoveryMaterialsPersistenceGeneration).toBeDefined()
+  await expect(serverOptions.recoveryMaterialsPersistenceGeneration?.(randomUUID(), new AbortController().signal))
+    .rejects.toThrow()
+  expect(tree(root)).toEqual(beforeMissing)
+  const aborted = new AbortController()
+  aborted.abort()
+  await expect(serverOptions.recoveryMaterialsPersistenceGeneration?.(profile.profileId, aborted.signal)).rejects.toThrow()
+  expect(tree(root)).toEqual(beforeMissing)
   expect(await serverOptions.profilePersistenceGeneration(profile.profileId)).toBe(1)
+  const beforeExisting = tree(root)
+  await expect(serverOptions.recoveryMaterialsPersistenceGeneration?.(profile.profileId, new AbortController().signal))
+    .resolves.toBe(1)
+  expect(tree(root)).toEqual(beforeExisting)
+  const cancelledRead = new AbortController()
+  const inspect = vi.spyOn(FileOwnerJsonlMigrationGenerationTarget.prototype, 'inspectExistingPersistence')
+  inspect.mockImplementationOnce(async function (this: FileOwnerJsonlMigrationGenerationTarget) {
+    // The one-shot hook is consumed before this call, so it reaches the original disk reader.
+    const existing = await this.inspectExistingPersistence()
+    cancelledRead.abort()
+    return existing
+  })
+  try {
+    await expect(serverOptions.recoveryMaterialsPersistenceGeneration?.(profile.profileId, cancelledRead.signal))
+      .rejects.toThrow(expect.objectContaining({ name: 'AbortError' }))
+  } finally { inspect.mockRestore() }
+  expect(tree(root)).toEqual(beforeExisting)
   await expect(serverOptions.generateModelText?.(profile.profileId, 'question', new AbortController().signal))
     .resolves.toEqual({ provider: 'deepseek', model: 'deepseek-chat', text: 'answer: question' })
   expect(generateText).toHaveBeenCalledWith('question', expect.any(AbortSignal))

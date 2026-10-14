@@ -195,3 +195,10 @@ export type { HostCollaborationConsumptionReceipt, HostCollaborationConsumptionC
 
 export { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from './collaboration-continuation.js'
 export type { HostCollaborationContinuationReceipt, HostCollaborationContinuationCommit } from './collaboration-continuation.js'
+
+export { parseRecoveryDescriptor, parseRecoveryDescribeInput, parseRecoveryValidateInput,
+  parseRecoveryValidation, encodeRecoveryDescriptorPayload } from './recovery-materials.ts'
+export type { RecoveryProfileKeyHandle, RecoveryDescriptor, RecoveryDescribeInput,
+  RecoveryValidateInput, RecoveryValidation } from './recovery-materials.ts'
+export type { ProfileRecoveryMaterialsDescribeRequest, ProfileRecoveryMaterialsDescribeResult,
+  ProfileRecoveryMaterialsValidateRequest, ProfileRecoveryMaterialsValidateResult } from './types.ts'

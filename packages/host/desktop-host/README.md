@@ -144,6 +144,10 @@ The Web worker factory separately generates and reserves `DSH_PROFILE_DELIVERY_T
 
 The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
 
+The Host advertises `profile.recovery_materials.describe` and `profile.recovery_materials.validate` only with an explicit existing-only persistence reader. macOS composition uses existing-generation inspection; it refuses missing or unsafe persistence instead of initializing it, and starts no worker. The asynchronous read is followed by connection and registry identity/generation checks before signing or returning an observation. Windows composition does not install this reader and omits both capabilities; clients refuse unsupported Hosts before sending material proofs.
+
+These [Main-only recovery methods](../control-protocol/README.md#wire-contract) verify a unique Account handle, issuer-qualified registry identity and unlock verifier without changing registry rows, bindings, grants or Profile files. A historical null verifier requires a supported upgrade path; it is never accepted or rewritten by recovery. Binding and persistence generations are observations, not current online authority. The importing Main owns selected-identity checks, operation freshness, safeStorage commit and later offline worker recovery.
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.

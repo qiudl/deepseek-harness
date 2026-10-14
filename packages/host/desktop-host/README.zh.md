@@ -143,6 +143,10 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
 
+Host 仅在具备明确的 existing-only 持久化读取器时声明 `profile.recovery_materials.describe` 和 `profile.recovery_materials.validate`。macOS 组合使用已有代次检查；持久化数据缺失或不安全时拒绝，不执行初始化，也不启动 worker。异步读取结束后，在签名或返回观察结果前再次核对连接及注册表身份/代次。Windows 组合未安装此读取器，因此省略两项能力；客户端在发送材料证明前拒绝不支持的 Host。
+
+这些[仅供 Main 使用的恢复方法](../control-protocol/README.zh.md#wire-contract) 校验唯一 Account handle、包含 issuer 的注册表身份及解锁校验器，不改注册表记录、绑定、授权或 Profile 文件。历史 null 校验器需要受支持的升级路径，恢复不会接受或重写它。绑定与持久化代次只是观察值，不是当前在线权限。导入方 Main 负责所选身份检查、操作时效、safeStorage 提交以及后续离线 worker 恢复。
+
 ## 模型体验
 
 无，因为本包没有面向模型的注册。

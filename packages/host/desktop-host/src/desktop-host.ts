@@ -295,6 +295,28 @@ export class DesktopHost {
   }
 
   /**
+   * Verify historical Account identity and material ownership without changing registry or grants.
+   * @param input - Trusted Main-selected identity and the exact existing vault proof.
+   * @returns Existing Profile id and observed binding generation; no worker is started.
+   */
+  verifyRecoveryMaterials(input: {
+    readonly issuer: string
+    readonly subject: string
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+  }): { readonly profileId: PersonProfileId; readonly bindingGeneration: number } {
+    const profile = this.options.registry.resolveUniqueAccountByKeyHandle(input.keyHandle)
+    if (!this.options.registry.matchesAccountIdentity(profile, input)) throw new HostAuthorityError('identity_mismatch')
+    if (profile.unlockVerifier === null) throw new HostAuthorityError('legacy_verifier_unsupported')
+    try { this.options.registry.verifyUnlock(profile, input.keyHandle, input.unlockMaterial) }
+    catch (error) {
+      if (error instanceof HostAuthorityError && error.code === 'unauthorized') throw new HostAuthorityError('material_invalid')
+      throw error
+    }
+    return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
+  }
+
+  /**
    * Inspect only the Account Profiles named by trusted Main-vault key handles.
    * No unlock proof is read and no Profile worker or plugin is started.
    * @param input - bounded opaque handles and packaged runtime/schema expectations.

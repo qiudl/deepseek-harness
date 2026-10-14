@@ -117,6 +117,10 @@ No runtime invariant companion is published: the codec validates the complete wi
 
 The remote directory chooser runs on the Host display. A selected directory receives a Profile-local confirmation bound to the paired client; `workspace.create` consumes it once within 60 seconds and refuses a different path or client. Cancellation returns no confirmation, and picker confirmations are not journaled. The Host advertises `profile.remote_session.directory_picker` only with the worker command executor installed.
 
+The Main-only `profile.recovery_materials.describe` and `profile.recovery_materials.validate` methods retain the existing authenticated connection tuple and limit complete frames to 16 KiB. Their [strict fields and fixed-order signing payload](src/recovery-materials.ts) bind canonical issuer/subject, installation, Profile and material commitment. The installation signature uses the separate `DSH-RECOVERY-DESCRIPTOR-v1` domain; package-supplied public keys are never trust anchors.
+
+Description and validation certify historical original-Host material ownership only. They grant no Account session, current binding, cloud permission or worker access. Main must compare its independently trusted selected identity and operation, verify the fresh challenge and descriptor/material digests on the same connection, and enforce its own monotonic round-trip deadline before writing materials.
+
 ## Model Experience
 
 None, as this local Host control codec registers nothing model-facing.

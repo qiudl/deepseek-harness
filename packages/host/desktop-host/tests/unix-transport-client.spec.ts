@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign } from 'node:crypto'
 import {
-  encodeHostInspectSignaturePayload,
+  encodeHostInspectSignaturePayload, parseRecoveryDescriptor, parseRecoveryDescribeInput, parseRecoveryValidateInput,
   type HostControlCapability,
   type HostControlErrorCode,
   type HostControlFrame,
@@ -583,4 +583,81 @@ describe('Unix Host client protocol projections', () => {
     await expect(client.extensions({ ...lease, command: { action: 'prepare', kind: 'plugin', payload: '{}' } }))
       .rejects.toMatchObject({ code: 'extension_refused' })
   })
+})
+
+it('requires explicit recovery-material capabilities without sending secrets to an older Host', async () => {
+  const respond = vi.fn(() => { throw new Error('no recovery request may be sent') })
+  const { client } = await makeClient(respond, [...baseCapabilities].sort())
+  try {
+    await expect(client.describeRecoveryMaterials(parseRecoveryDescribeInput({
+      challenge: 'A'.repeat(43), issuer: 'https://accounts.example.com', subject: 'subject',
+      profile_key_handle: 'A'.repeat(43), unlock_proof: 'A'.repeat(43),
+    }))).rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.validateRecoveryMaterials(parseRecoveryValidateInput({
+      challenge: 'A'.repeat(43), descriptor: {
+        version: 1, type: 'dsh.host-access-recovery', installationId,
+        installationKeyFingerprint: '1'.repeat(64), profileId: installationId,
+        issuer: 'https://accounts.example.com', subject: 'subject', profileKeyHandle: 'A'.repeat(43),
+        materialCommitment: '2'.repeat(64), bindingGeneration: 0, schemaGeneration: 1,
+        persistenceGeneration: 1, challenge: 'A'.repeat(43),
+      }, signature: 'A'.repeat(86), unlock_proof: 'A'.repeat(43),
+    }))).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(respond).not.toHaveBeenCalled()
+  } finally { client.close() }
+})
+
+it.each(['describe', 'validate'] as const)('rejects mismatched %s response kinds and fresh challenges', async (method) => {
+  const nonce = 'A'.repeat(43)
+  const descriptor = parseRecoveryDescriptor({
+    version: 1, type: 'dsh.host-access-recovery', installationId,
+    installationKeyFingerprint: '1'.repeat(64), profileId: installationId,
+    issuer: 'https://accounts.example.com', subject: 'subject', profileKeyHandle: nonce,
+    materialCommitment: '2'.repeat(64), bindingGeneration: 0, schemaGeneration: 1,
+    persistenceGeneration: 1, challenge: nonce,
+  })
+  const signed = { descriptor, signature: 'A'.repeat(86) }
+  const describeInput = parseRecoveryDescribeInput({ challenge: nonce, issuer: descriptor.issuer,
+    subject: descriptor.subject, profile_key_handle: nonce, unlock_proof: nonce })
+  const validateInput = parseRecoveryValidateInput({ challenge: nonce, ...signed, unlock_proof: nonce })
+  const validation = { valid: true, challenge: nonce, descriptorDigest: '3'.repeat(64),
+    materialCommitment: descriptor.materialCommitment, currentInstallationId: installationId,
+    currentProfileId: installationId, currentBindingGeneration: 0, currentPersistenceGeneration: 1 }
+  const caps = [...baseCapabilities, 'profile.recovery_materials.describe',
+    'profile.recovery_materials.validate'].sort() as HostControlCapability[]
+  for (const failure of ['request', 'other_result', 'opposite_method', 'challenge'] as const) {
+    const { client } = await makeClient((frame) => {
+      if (failure === 'request') return frame
+      if (failure === 'other_result') return { version: 1, type: 'result', request_id: frame.request_id,
+        method: 'profile.status', result: { state: 'unbound' } }
+      if (failure === 'opposite_method') return method === 'describe'
+        ? { version: 1, type: 'result', request_id: frame.request_id,
+          method: 'profile.recovery_materials.validate', result: validation } as HostControlFrame
+        : { version: 1, type: 'result', request_id: frame.request_id,
+          method: 'profile.recovery_materials.describe', result: signed } as HostControlFrame
+      const other = Buffer.alloc(32, 1).toString('base64url')
+      return method === 'describe'
+        ? result(frame, { ...signed, descriptor: { ...descriptor, challenge: other } })
+        : result(frame, { ...validation, challenge: other })
+    }, caps)
+    try {
+      const operation = method === 'describe'
+        ? client.describeRecoveryMaterials(describeInput) : client.validateRecoveryMaterials(validateInput)
+      await expect(operation).rejects.toMatchObject({ code: failure === 'challenge' ? 'stale' : 'unavailable' })
+    } finally { client.close() }
+  }
+  const lifetime = new AbortController()
+  const original = lifetime.signal.throwIfAborted.bind(lifetime.signal)
+  let checks = 0
+  const check = vi.spyOn(lifetime.signal, 'throwIfAborted').mockImplementation(() => {
+    original()
+    checks += 1
+    if (checks === 2) queueMicrotask(() => { lifetime.abort() })
+  })
+  const { client } = await makeClient(frame => result(frame, method === 'describe' ? signed : validation), caps)
+  try {
+    const operation = method === 'describe'
+      ? client.describeRecoveryMaterials(describeInput, lifetime.signal)
+      : client.validateRecoveryMaterials(validateInput, lifetime.signal)
+    await expect(operation).rejects.toMatchObject({ name: 'AbortError' })
+  } finally { check.mockRestore(); client.close() }
 })
