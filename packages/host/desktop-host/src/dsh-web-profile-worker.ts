@@ -791,22 +791,24 @@ export class DshWebProfileWorkerFactory {
         if (entries.get(assetUrl) === loading) entries.delete(assetUrl)
       })
       if (entries.size > REMOTE_UI_ASSET_CACHE_ENTRIES) {
-        const oldest = entries.keys().next().value
-        if (oldest !== undefined) entries.delete(oldest)
+        for (const oldest of entries.keys()) {
+          entries.delete(oldest)
+          break
+        }
       }
     } else {
       entries.delete(assetUrl)
       entries.set(assetUrl, pending)
     }
     let entry: RemoteUiAssetEntry
-    let onAbort: (() => void) | undefined
+    let onAbort!: () => void
     const cancelled = new Promise<never>((_resolve, reject) => {
       onAbort = () => { reject(new HostAuthorityError('unavailable')) }
       if (signal.aborted) onAbort()
       else signal.addEventListener('abort', onAbort, { once: true })
     })
     try { entry = await Promise.race([pending, cancelled]) } finally {
-      if (onAbort) signal.removeEventListener('abort', onAbort)
+      signal.removeEventListener('abort', onAbort)
     }
     const inactive = () => stopped() || signal.aborted
     if (inactive()) throw new HostAuthorityError('unavailable')

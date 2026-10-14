@@ -69,6 +69,25 @@ describe('lease-owned compressed plugin assets', () => {
       await expect(chunk(0, () => ++stopCalls >= 4)).rejects.toMatchObject({ code: 'unavailable' })
       const entry = await cache.entries?.get(asset)
       if (!entry) throw new Error('Expected a cached asset')
+      const entries = cache.entries!
+      const getEntry = entries.get.bind(entries)
+      type CachedEntry = NonNullable<typeof entry>
+      let releaseCached!: (value: CachedEntry) => void
+      const heldEntry = new Promise<CachedEntry>((resolve) => { releaseCached = resolve })
+      let joinedCached!: () => void
+      const joined = new Promise<void>((resolve) => { joinedCached = resolve })
+      entries.get = (url) => {
+        if (url !== asset) return getEntry(url)
+        joinedCached()
+        return heldEntry
+      }
+      let workerClosed = false
+      const closedRead = expect(chunk(0, () => workerClosed)).rejects.toMatchObject({ code: 'unavailable' })
+      await joined
+      workerClosed = true
+      releaseCached(entry)
+      await closedRead
+      entries.get = getEntry
       const failed = Promise.reject<Buffer>(new Error('compression failed'))
       void failed.catch(() => {}) // The fault is consumed after asynchronous boot authorization.
       entry.gzip = failed

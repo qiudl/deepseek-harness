@@ -1,9 +1,116 @@
 import { createServer } from 'node:http'
 import { gunzipSync } from 'node:zlib'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 
 describe('lease-owned plugin asset caching', () => {
+  it('rejects cancellation during fetch creation before the shared download finishes', async () => {
+    let releaseAsset!: () => void
+    const held = new Promise<void>((resolve) => { releaseAsset = resolve })
+    let assetStarted!: () => void
+    const started = new Promise<void>((resolve) => { assetStarted = resolve })
+    const server = createServer((request, response) => {
+      response.setHeader('connection', 'close')
+      if (request.url === '/internal/desktop-remote-ui') {
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          value: { injections: [{ kind: 'script-src', src: '/plugins/cancelled.js' }] },
+        }))
+        return
+      }
+      assetStarted()
+      void held.then(() => { response.writeHead(200, { 'content-type': 'text/javascript' }).end('cached();') })
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    onTestFinished(async () => {
+      releaseAsset()
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
+    })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
+    const originalFetch = globalThis.fetch
+    const controller = new AbortController()
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const response = originalFetch(input, init)
+      if (input instanceof URL && input.pathname === '/plugins/cancelled.js') controller.abort()
+      return response
+    })
+    onTestFinished(() => { spy.mockRestore() })
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+    const read = Reflect.get(factory, 'remoteUiAssetRead') as (
+      origin: string, cookie: { name: string; value: string }, token: string,
+      endpoint: string, payload: unknown, signal: AbortSignal, stopped: () => boolean,
+      cache: object,
+    ) => Promise<unknown>
+    let outcome = 'pending'
+    const pending = read.call(factory, `http://127.0.0.1:${address.port}`,
+      { name: 'cookie', value: 'private' }, 'token', 'asset/read',
+      { args: { url: '/plugins/cancelled.js', offset: 0 } }, controller.signal, () => false, {})
+      .then(() => { outcome = 'returned' }, (error: unknown) => {
+        expect(error).toMatchObject({ code: 'unavailable' })
+        outcome = 'cancelled'
+      })
+    await started
+    expect(outcome).toBe('cancelled')
+    releaseAsset()
+    await pending
+  })
+
+  it('retains a replacement entry when an evicted older download fails', async () => {
+    let releaseFirst!: () => void
+    const held = new Promise<void>((resolve) => { releaseFirst = resolve })
+    let firstStarted!: () => void
+    const started = new Promise<void>((resolve) => { firstStarted = resolve })
+    const urls = ['a', 'b', 'c', 'd', 'e'].map(name => `/plugins/${name}.js`)
+    const downloads = new Map<string, number>()
+    const server = createServer((request, response) => {
+      response.setHeader('connection', 'close')
+      if (request.url === '/internal/desktop-remote-ui') {
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          value: { injections: urls.map(src => ({ kind: 'script-src', src })) },
+        }))
+        return
+      }
+      const url = request.url!
+      const count = (downloads.get(url) ?? 0) + 1
+      downloads.set(url, count)
+      if (url === '/plugins/a.js' && count === 1) {
+        firstStarted()
+        void held.then(() => { response.writeHead(503).end() })
+        return
+      }
+      response.writeHead(200, { 'content-type': 'text/javascript' }).end('cached();')
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    onTestFinished(async () => {
+      releaseFirst()
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
+    })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+    const read = Reflect.get(factory, 'remoteUiAssetRead') as (
+      origin: string, cookie: { name: string; value: string }, token: string,
+      endpoint: string, payload: unknown, signal: AbortSignal, stopped: () => boolean,
+      cache: object,
+    ) => Promise<{ bytes: string }>
+    const cache: { entries?: Map<string, Promise<object>> } = {}
+    const chunk = (url: string) => read.call(factory, `http://127.0.0.1:${address.port}`,
+      { name: 'cookie', value: 'private' }, 'token', 'asset/read',
+      { args: { url, offset: 0 } }, new AbortController().signal, () => false, cache)
+    const first = expect(chunk('/plugins/a.js')).rejects.toMatchObject({ code: 'unavailable' })
+    await started
+    for (const url of urls.slice(1)) await chunk(url)
+    expect(cache.entries?.has('/plugins/a.js')).toBe(false)
+    await chunk('/plugins/a.js')
+    releaseFirst()
+    await first
+    expect(cache.entries?.has('/plugins/a.js')).toBe(true)
+    await expect(chunk('/plugins/a.js')).resolves.toHaveProperty('bytes', Buffer.from('cached();').toString('base64url'))
+    expect(downloads.get('/plugins/a.js')).toBe(2)
+  })
+
   it('keeps a shared download alive when its first reader is cancelled', async () => {
     let releaseAsset!: () => void
     const held = new Promise<void>((resolve) => { releaseAsset = resolve })
