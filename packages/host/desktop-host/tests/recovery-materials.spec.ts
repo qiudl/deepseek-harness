@@ -63,7 +63,7 @@ async function fixture(pem = false, legacy = false, beforeRead?: () => Promise<v
   }))
   return { root, registry, profile, before, worker, host, keys, identity, client, describe, session, lifetime,
     setPersistence: (value: number) => { persistence = value },
-    removeGenerationReader: () => { delete options.recoveryMaterialsPersistenceGeneration } }
+    removeGenerationReader: () => { Reflect.deleteProperty(options, 'recoveryMaterialsPersistenceGeneration') } }
 }
 
 describe.skipIf(process.platform === 'win32')('read-only original Host recovery materials', () => {
