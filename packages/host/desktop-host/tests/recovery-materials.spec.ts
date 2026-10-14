@@ -42,8 +42,10 @@ async function fixture(pem = false, legacy = false, beforeRead?: () => Promise<v
     executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1,
   }
   let persistence = 11
+  const generationReader = async () => { await beforeRead?.(); return persistence }
+  let reader: typeof generationReader | undefined = generationReader
   const authority = new HostControlAuthority({ identity, host,
-    recoveryMaterialsPersistenceGeneration: async () => { await beforeRead?.(); return persistence },
+    get recoveryMaterialsPersistenceGeneration() { return reader },
     profilePersistenceGeneration: () => persistence, now: () => 1000 })
   const lifetime = new AbortController()
   const session = authority.openSession(randomUUID(), lifetime.signal)
@@ -60,7 +62,8 @@ async function fixture(pem = false, legacy = false, beforeRead?: () => Promise<v
     challenge: challenge(), issuer, subject, profile_key_handle: handle, unlock_proof: proof,
   }))
   return { root, registry, profile, before, worker, host, keys, identity, client, describe, session, lifetime,
-    setPersistence: (value: number) => { persistence = value } }
+    setPersistence: (value: number) => { persistence = value },
+    removeGenerationReader: () => { reader = undefined } }
 }
 
 describe.skipIf(process.platform === 'win32')('read-only original Host recovery materials', () => {
@@ -86,6 +89,14 @@ describe.skipIf(process.platform === 'win32')('read-only original Host recovery 
     expect(f.worker).not.toHaveBeenCalled()
     await expect(f.host.openOfflineAccountProfile({ profileId: f.profile.profileId, bindingGeneration: 0,
       ownerId: 'different-owner' })).rejects.toMatchObject({ code: 'profile_locked' })
+  })
+  it('rejects cached recovery capability when its read-only persistence provider is no longer available', async () => {
+    const f = await fixture()
+    await f.describe()
+    f.removeGenerationReader()
+    await expect(f.describe()).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(readFileSync(join(f.root, 'profiles.json'))).toEqual(f.before)
+    expect(f.worker).not.toHaveBeenCalled()
   })
   it('rejects wrong issuer, subject, handle and proof without provisioning', async () => {
     const f = await fixture()
