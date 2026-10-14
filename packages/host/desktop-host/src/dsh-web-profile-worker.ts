@@ -755,7 +755,7 @@ export class DshWebProfileWorkerFactory {
       row && typeof row === 'object' && !Array.isArray(row)
       && ((row as { kind?: unknown }).kind === 'script-src' || (row as { kind?: unknown }).kind === 'script-preload')
       && (row as { src?: unknown }).src === selected.url)) throw new HostAuthorityError('invalid_input')
-    if (stopped()) throw new HostAuthorityError('unavailable')
+    if (stopped() || signal.aborted) throw new HostAuthorityError('unavailable')
     const assetUrl = selected.url
     const entries = cache.entries ??= new Map<string, Promise<RemoteUiAssetEntry>>()
     let pending = entries.get(assetUrl)
@@ -763,7 +763,8 @@ export class DshWebProfileWorkerFactory {
       const load = async (): Promise<RemoteUiAssetEntry> => {
         const response = await fetch(url, {
           headers: { cookie: `${cookie.name}=${cookie.value}` }, redirect: 'manual',
-          signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
+          // The download belongs to this worker's cache, rather than its first reader.
+          signal: AbortSignal.timeout(40_000),
         })
         if (response.status !== 200 || response.headers.get('content-type')?.split(';')[0] !== 'text/javascript'
           || !response.body) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
@@ -780,11 +781,15 @@ export class DshWebProfileWorkerFactory {
           throw error
         }
         const body = Buffer.concat(chunks, size)
-        if (stopped() || signal.aborted) throw new HostAuthorityError('unavailable')
+        if (stopped()) throw new HostAuthorityError('unavailable')
         return { url: assetUrl, bytes: body }
       }
       pending = load()
       entries.set(assetUrl, pending)
+      const loading = pending
+      void loading.catch(() => {
+        if (entries.get(assetUrl) === loading) entries.delete(assetUrl)
+      })
       if (entries.size > REMOTE_UI_ASSET_CACHE_ENTRIES) {
         const oldest = entries.keys().next().value
         if (oldest !== undefined) entries.delete(oldest)
@@ -794,9 +799,14 @@ export class DshWebProfileWorkerFactory {
       entries.set(assetUrl, pending)
     }
     let entry: RemoteUiAssetEntry
-    try { entry = await pending } catch (error) {
-      if (entries.get(assetUrl) === pending) entries.delete(assetUrl)
-      throw error
+    let onAbort: (() => void) | undefined
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => { reject(new HostAuthorityError('unavailable')) }
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    })
+    try { entry = await Promise.race([pending, cancelled]) } finally {
+      if (onAbort) signal.removeEventListener('abort', onAbort)
     }
     const inactive = () => stopped() || signal.aborted
     if (inactive()) throw new HostAuthorityError('unavailable')

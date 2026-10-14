@@ -4,6 +4,65 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 
 describe('lease-owned plugin asset caching', () => {
+  it('keeps a shared download alive when its first reader is cancelled', async () => {
+    let releaseAsset!: () => void
+    const held = new Promise<void>((resolve) => { releaseAsset = resolve })
+    let assetStarted!: () => void
+    const started = new Promise<void>((resolve) => { assetStarted = resolve })
+    let secondJoined!: () => void
+    const joined = new Promise<void>((resolve) => { secondJoined = resolve })
+    let downloads = 0
+    const server = createServer((request, response) => {
+      response.setHeader('connection', 'close')
+      if (request.url === '/internal/desktop-remote-ui') {
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          value: { injections: [{ kind: 'script-src', src: '/plugins/shared.js' }] },
+        }))
+        return
+      }
+      downloads += 1
+      assetStarted()
+      void held.then(() => { response.writeHead(200, { 'content-type': 'text/javascript' }).end('shared();') })
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    onTestFinished(async () => {
+      releaseAsset()
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
+    })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+    const read = Reflect.get(factory, 'remoteUiAssetRead') as (
+      origin: string, cookie: { name: string; value: string }, token: string,
+      endpoint: string, payload: unknown, signal: AbortSignal, stopped: () => boolean,
+      cache: object,
+    ) => Promise<{ bytes: string }>
+    const entries = new Map<string, Promise<object>>()
+    const getEntry = entries.get.bind(entries)
+    entries.get = (key) => {
+      const entry = getEntry(key)
+      if (entry) secondJoined()
+      return entry
+    }
+    const cache = { entries }
+    const chunk = (signal: AbortSignal) => read.call(factory, `http://127.0.0.1:${address.port}`,
+      { name: 'cookie', value: 'private' }, 'token', 'asset/read',
+      { args: { url: '/plugins/shared.js', offset: 0 } }, signal, () => false, cache)
+    const firstController = new AbortController()
+    const first = chunk(firstController.signal)
+    const rejected = expect(first).rejects.toBeDefined()
+    await started
+    const second = chunk(new AbortController().signal)
+    const secondResult = second.then(value => ({ value }), (error: unknown) => ({ error }))
+    await joined
+    firstController.abort()
+    releaseAsset()
+    await rejected
+    await expect(secondResult).resolves.toHaveProperty('value.bytes', Buffer.from('shared();').toString('base64url'))
+    expect(downloads).toBe(1)
+  })
+
   it('shares concurrent reads across assets and rechecks revoked injections', async () => {
     const bodies = new Map([
       ['/plugins/a.js', Buffer.from('a();'.repeat(10_000))],

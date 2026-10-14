@@ -69,7 +69,7 @@ Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的
 
 远程 Session 执行是可选的 Host 依赖。安装执行器后，Host 才会广告 `profile.remote_session`，并只通过有效且绑定 owner 的 view lease 接受控制协议定义的封闭命令联合。Host 从该 lease 解出 Profile，转发连接取消，在异步执行完成后重新校验同一 lease，并让有界结果通过规范 wire codec 后才返回。没有执行器的 Host 不发布 capability，客户端会在发送命令前返回 `upgrade_required`。该执行缝不暴露浏览器 cookie、启动 token、Profile 路径或通用 HTTP 代理。
 
-远程 Web DSH 读取使用 `profile.remote_ui_read`，在调用 worker 前后校验同一绑定 owner 的租约。macOS 和 Windows Host 启动入口安装精确端点的 worker 执行器，worker 私有 Bearer token 始终留在 Host 内。对于 `asset/read`，Host 校验当前启动注入表，只用私有 cookie 读取其中列出的同源 `/plugins/` 脚本，要求 JavaScript 响应，将完整资源限制在 8 MiB，并从同一 Profile worker 本机至多缓存四份资源的缓存返回 24 KiB 分块。同一 URL 的并发读取共享下载；最近最少读取的条目会被移除，下载失败的条目会被清除，以便后续重试。超过 64 KiB 的结果会被控制帧拒绝。这只是有界读取通道，不是流或通用 Web API 隧道。
+远程 Web DSH 读取使用 `profile.remote_ui_read`，在调用 worker 前后校验同一绑定 owner 的租约。macOS 和 Windows Host 启动入口安装精确端点的 worker 执行器，worker 私有 Bearer token 始终留在 Host 内。对于 `asset/read`，Host 校验当前启动注入表，只用私有 cookie 读取其中列出的同源 `/plugins/` 脚本，要求 JavaScript 响应，将完整资源限制在 8 MiB，并从同一 Profile worker 本机至多缓存四份资源的缓存返回 24 KiB 分块。取消读取只停止该调用的等待；共享下载限制为 40 秒，其他已授权读取仍可使用下载结果。同一 URL 的并发读取共享下载；最近最少读取的条目会被移除，下载失败的条目会被清除，以便后续重试。超过 64 KiB 的结果会被控制帧拒绝。这只是有界读取通道，不是流或通用 Web API 隧道。
 
 `profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对每份缓存的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。 消费方还必须检查本机客户端 SDK 标志 `remoteUiAssetGzipSupported`，不能只依据 Host 签名能力；旧客户端编码器保留原始读取。
 
