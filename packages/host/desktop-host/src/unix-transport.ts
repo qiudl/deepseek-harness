@@ -3,7 +3,7 @@ import {
   parseRecoveryDescribeInput, parseRecoveryValidateInput,
   type RecoveryDescribeInput, type RecoveryValidateInput, type RecoveryValidation,
   type ProfileRecoveryMaterialsDescribeRequest, type ProfileRecoveryMaterialsDescribeResult,
-  type ProfileRecoveryMaterialsValidateRequest,
+  type ProfileRecoveryMaterialsValidateRequest, type ProfileRecoveryMaterialsValidateResult,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
@@ -2570,10 +2570,8 @@ export class UnixHostClient {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_materials.describe',
       params: { ...this.auth(), ...business },
     }
-    const frame = await this.call(request, signal)
+    const frame = await this.callRecoveryMaterials(request, business.challenge, signal)
     signal?.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    if (frame.result.descriptor.challenge !== business.challenge) throw new HostAuthorityError('stale')
     return frame.result
   }
 
@@ -2594,10 +2592,8 @@ export class UnixHostClient {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_materials.validate',
       params: { ...this.auth(), ...business },
     }
-    const frame = await this.call(request, signal)
+    const frame = await this.callRecoveryMaterials(request, business.challenge, signal)
     signal?.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    if (frame.result.challenge !== business.challenge) throw new HostAuthorityError('stale')
     return frame.result
   }
 
@@ -4335,6 +4331,32 @@ export class UnixHostClient {
       issued_at: issuedAt,
       expires_at: issuedAt + lifetimeMs,
     }
+  }
+
+  private callRecoveryMaterials(
+    request: ProfileRecoveryMaterialsDescribeRequest, challenge: HostControlNonce, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsDescribeResult>
+  private callRecoveryMaterials(
+    request: ProfileRecoveryMaterialsValidateRequest, challenge: HostControlNonce, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsValidateResult>
+  private async callRecoveryMaterials(
+    request: ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest,
+    challenge: HostControlNonce, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult> {
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result') throw new HostAuthorityError('unavailable')
+    if (frame.method === 'profile.recovery_materials.describe') {
+      if (request.method !== frame.method) throw new HostAuthorityError('unavailable')
+      if (frame.result.descriptor.challenge !== challenge) throw new HostAuthorityError('stale')
+      return frame
+    }
+    if (frame.method === 'profile.recovery_materials.validate') {
+      if (request.method !== frame.method) throw new HostAuthorityError('unavailable')
+      if (frame.result.challenge !== challenge) throw new HostAuthorityError('stale')
+      return frame
+    }
+    throw new HostAuthorityError('unavailable')
   }
 
   private async call(
