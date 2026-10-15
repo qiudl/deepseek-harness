@@ -70,6 +70,7 @@
     "picomatch": "^4.0.7",
     "clsx": "^2.0.0",
     "@deepseek-ai/dsh-util-crypto": "workspace:*",
+    "@deepseek-ai/dsh-util-values": "workspace:*",
     "zod": "^4.4.3",
     "@deepseek-ai/dsh-client-shortcuts": "workspace:*",
     "@deepseek-ai/dsh-brand": "workspace:*"

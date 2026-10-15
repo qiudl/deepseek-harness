@@ -114,8 +114,21 @@ describe('SidebarRightController — opening', () => {
     h.controller.openTab('terminal', { params: { url: 'https://a.example/' } as never, reuseMatchingParams: true })
     expect(Object.values(h.layout().tabs).filter(tab => tab.kind === 'terminal')).toHaveLength(1)
     expect(h.controller.tabDomain.occurrence(SESSION, first).navigation.getSnapshot().revision).toBe(before)
-    h.controller.openTab('terminal', { params: { url: 'https://b.example/' } as never, reuseMatchingParams: true })
+    const beforeNested = new Set(Object.values(h.layout().tabs).map(tab => tab.id))
+    h.controller.openTab('terminal', {
+      params: { nested: { second: 2, first: 1 }, url: 'https://a.example/' } as never,
+      reuseMatchingParams: true,
+    })
+    const nested = Object.values(h.layout().tabs).find(tab => !beforeNested.has(tab.id))!
+    const nestedRevision = h.controller.tabDomain.occurrence(SESSION, nested).navigation.getSnapshot().revision
+    h.controller.openTab('terminal', {
+      params: { url: 'https://a.example/', nested: { first: 1, second: 2 } } as never,
+      reuseMatchingParams: true,
+    })
     expect(Object.values(h.layout().tabs).filter(tab => tab.kind === 'terminal')).toHaveLength(2)
+    expect(h.controller.tabDomain.occurrence(SESSION, nested).navigation.getSnapshot().revision).toBe(nestedRevision)
+    h.controller.openTab('terminal', { params: { url: 'https://b.example/' } as never, reuseMatchingParams: true })
+    expect(Object.values(h.layout().tabs).filter(tab => tab.kind === 'terminal')).toHaveLength(3)
   })
 
   it('reuses a matching page from an adopted background session through tab actions', () => {

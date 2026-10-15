@@ -35,6 +35,7 @@
  */
 import { sidebarTargetFromElement, type SidebarRightTarget } from './focus.ts'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
+import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { createSnapshotStore, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { FloatRect, PaneId, TabId, TabRecord } from '@deepseek-ai/dsh-client-ui-dockkit'
 import { activeDockPaneId, canSplit, findContentTab, findPaneContentTab, dockPaneIds, findTabPane, getPane } from '@deepseek-ai/dsh-client-ui-dockkit'
@@ -408,9 +409,8 @@ export class SidebarRightController implements ISidebarRight {
     if (definition.multiple === true && options.reuseMatchingParams === true && options.params !== undefined
       && options.replaceTab === undefined) {
       const surface = this.adopted.get(sessionId)?.store.getSnapshot().bySession[sessionId]
-      const requested = JSON.stringify(options.params)
       const existing = Object.values(surface?.layout.tabs ?? {}).find(tab => tab.kind === kind
-        && JSON.stringify(this.tabDomain.occurrence(sessionId, tab).navigation.getSnapshot().params) === requested)
+        && deepEqualJson(this.tabDomain.occurrence(sessionId, tab).navigation.getSnapshot().params, options.params))
       if (existing !== undefined) {
         actions.setExpanded(sessionId, true)
         actions.focusTab(sessionId, existing.id)
