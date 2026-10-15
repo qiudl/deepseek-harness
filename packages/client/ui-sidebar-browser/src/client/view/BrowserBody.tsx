@@ -63,7 +63,7 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
     const hide = mount({
       tabId: tab.id, signal: tab.signal, viewportId, applicationOrigin: window.location.origin,
       initial: initial.current, initialUrl: initialUrl.current,
-      openTab: (url) => { tab.actions.openTab('browser', { params: { url }, revealIfOpened: false }) },
+      openTab: (url) => { tab.actions.openTab('browser', { params: { url }, reuseMatchingParams: true }) },
     })
     setMountEpoch(value => value + 1)
     return hide
@@ -113,6 +113,10 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
         ? t('load.failed.detail', { code: String(error.code), description: error.description })
         : t('load.failed')}</div>}
       {failure !== undefined && <div className={css.failure} role="alert">{t(`error.${failure}`)}</div>}
+      {sandboxed !== undefined && externalUrl !== undefined && <div className={css.embedFallback} role="note">
+        <span>{t('web.embedHint')}</span>
+        <button type="button" onClick={() => { window.open(externalUrl, '_blank', 'noopener,noreferrer') }}>{t('external')}</button>
+      </div>}
       <div className={css.content} aria-busy={frame.loading}>
         <div id={viewportId} className={css.viewport} aria-label={t('type.label')} />
         {restoreTarget !== undefined && <section className={css.restore} aria-label={t('restore.previous')}>

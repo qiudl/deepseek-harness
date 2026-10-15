@@ -35,6 +35,7 @@
  */
 import { sidebarTargetFromElement, type SidebarRightTarget } from './focus.ts'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
+import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { createSnapshotStore, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { FloatRect, PaneId, TabId, TabRecord } from '@deepseek-ai/dsh-client-ui-dockkit'
 import { activeDockPaneId, canSplit, findContentTab, findPaneContentTab, dockPaneIds, findTabPane, getPane } from '@deepseek-ai/dsh-client-ui-dockkit'
@@ -174,6 +175,8 @@ export interface SidebarRightOpenResourceOptions extends SidebarRightPlacement {
 export interface SidebarRightOpenTabOptions<K extends string = string> extends SidebarRightPlacement {
   /** That kind's navigation parameters, typed by kind; delivered as `navigation.params`. */
   readonly params?: SidebarRightTabParamsFor<K>
+  /** Reveal a matching multi-instance page in this Session instead of opening another. */
+  readonly reuseMatchingParams?: boolean
 }
 
 /** The scheme every resource address carries; anything else is not a resource this face opens. */
@@ -403,6 +406,17 @@ export class SidebarRightController implements ISidebarRight {
   ): void {
     const definition = this.tabs.get(kind)
     if (definition === undefined) throw new Error(`sidebarRight: no tab type is registered as "${kind}"`)
+    if (definition.multiple === true && options.reuseMatchingParams === true && options.params !== undefined
+      && options.replaceTab === undefined) {
+      const surface = this.adopted.get(sessionId)?.store.getSnapshot().bySession[sessionId]
+      const existing = Object.values(surface?.layout.tabs ?? {}).find(tab => tab.kind === kind
+        && deepEqualJson(this.tabDomain.occurrence(sessionId, tab).navigation.getSnapshot().params, options.params))
+      if (existing !== undefined) {
+        actions.setExpanded(sessionId, true)
+        actions.focusTab(sessionId, existing.id)
+        return
+      }
+    }
     const address = definition.multiple === true ? `${pageAddress(kind)}/${randomUUID()}` : pageAddress(kind)
     this.place(sessionId, actions, { kind, contentId: address, title: definition.title(address) }, address, options, options.params)
   }
