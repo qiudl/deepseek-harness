@@ -40,7 +40,7 @@ Status: implemented
 
 ## 无企业运行器的 fork
 
-`DSH_CI_FAILOVER_LINUX=github` 将 `ci.yml` 中三个企业 Linux worker 路由到 GitHub 标准 `ubuntu-24.04` 镜像，`DSH_CI_FAILOVER_WINDOWS=github` 则将四个原生 Windows 作业路由到 `windows-2025`。这两个由写者显式选择的取值使 fork 无需上游私有 runner 标签也能执行必需的平台检查。命令、阈值、超时与依赖汇总结论保持原样；Windows 覆盖率作业会降低 worker、分区和门禁并发度以适配标准运行器，基准作业保留既有主机，不借此重新定义性能基线。两个平台开关仍彼此独立。标准机器可能耗时更长或资源不足，这些仍然是失败，调整调度预算前必须有证据。删除变量即可恢复默认企业标签；已排队作业需要新运行。
+`DSH_CI_FAILOVER_LINUX=github` 将 `ci.yml` 的三个企业 Linux worker 路由到标准 `ubuntu-24.04`；`DSH_CI_FAILOVER_WINDOWS=github` 将三个原生 Windows 作业路由到 `windows-2025`。两项显式选择仅适用于 `qiudl/deepseek-harness`，其他仓库保留既有路由。标准 Windows 覆盖率在两个门禁间共用两个 worker，不覆盖分区设置，使用一个 instrumented worker及门禁并发度二。命令、阈值、超时和依赖汇总结论保持原样，基准主机不变。删除变量恢复企业标签。已排队作业需要新运行；分配到运行器不等于门禁通过。
 
 ## 切换期间的容量
 
