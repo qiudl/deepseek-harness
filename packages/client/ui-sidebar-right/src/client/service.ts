@@ -408,7 +408,6 @@ export class SidebarRightController implements ISidebarRight {
     if (definition.multiple === true && options.reuseMatchingParams === true && options.params !== undefined
       && options.replaceTab === undefined) {
       const surface = this.adopted.get(sessionId)?.store.getSnapshot().bySession[sessionId]
-        ?? (this.binding?.sessionId === sessionId ? this.binding.surfaces[sessionId] : undefined)
       const requested = JSON.stringify(options.params)
       const existing = Object.values(surface?.layout.tabs ?? {}).find(tab => tab.kind === kind
         && JSON.stringify(this.tabDomain.occurrence(sessionId, tab).navigation.getSnapshot().params) === requested)
