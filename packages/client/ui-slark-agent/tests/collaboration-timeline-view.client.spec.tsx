@@ -87,11 +87,12 @@ it('keeps plain text complete and safe, renders pending questions and exposes di
   await act(async () => { f.state.set({ phase: 'error', groups: [], location: { snapshotDigest: 'a'.repeat(64), status: 'unavailable' } }) })
   expect(screen.getByText(zh['task.readUnavailable'])).toBeTruthy()
   expect(screen.getByText(zh['task.sourceUnavailable'])).toBeTruthy()
-  for (const execution_state of ['indeterminate', 'failed']) {
+  for (const execution_state of ['indeterminate', 'failed', 'accepted', 'running']) {
     await act(async () => { f.state.set({ phase: 'ready', groups: [{ ...original, replies: [{
       ...original.replies[0]!, execution_state, target_display_snapshot: { agent_name: 'Guide', project_name: null },
     }] }] }) })
-    expect(within(screen.getByTestId('slark-timeline-reply')).getByText(zh[execution_state === 'indeterminate' ? 'task.indeterminate' : 'task.failed'])).toBeTruthy()
+    expect(within(screen.getByTestId('slark-timeline-reply')).getByText(zh[execution_state === 'indeterminate'
+      ? 'task.indeterminate' : execution_state === 'failed' ? 'task.failed' : 'task.background'])).toBeTruthy()
   }
   const { target_display_snapshot: _display, answer: _answer, ...restricted } = original.replies[0]!
   await act(async () => { f.state.set({ phase: 'ready', groups: [{ ...original, replies: [{
@@ -163,4 +164,24 @@ it('keeps distinct tasks visible when their Agent display names match', () => {
   const assignment = screen.getByTestId('slark-timeline-assignment')
   expect(within(assignment).getAllByText('Guide')).toHaveLength(2)
   expect(within(assignment).getByText('Second task')).toBeTruthy()
+})
+
+it('replaces provisional assignments by delivery identity and keeps uncertain tasks distinct', () => {
+  const a = group(), body = { source, sourceDigest: a.original.snapshot_digest, invocationId: 'a', taskId: 'done',
+    seq: '1', fence: 'fence', text: 'Working', textDigest: 'b'.repeat(64), agentName: 'Earlier reply', projectName: 'Project' }
+  fixture([{ ...a, replies: [{ ...a.replies[0]!, task_id: 'done' }],
+    provisionalResponses: [body, { ...body, invocationId: 'live', taskId: 'live', agentName: 'Live reply' }],
+    execution: { phase: 'ready', tasks: [
+      { taskId: 'done', agentName: 'Earlier completed task', projectName: 'Project', question: 'Done' },
+      { taskId: 'live', agentName: 'Earlier live task', projectName: 'Project', question: 'Live' },
+      { taskId: 'uncertain', agentName: 'Uncertain task', projectName: 'Project', question: 'Check original receipt' },
+    ], outcomes: { uncertain: 'uncertain' } } }])
+  const assignment = within(screen.getByTestId('slark-timeline-assignment'))
+  expect(assignment.getByText('Guide a')).toBeTruthy()
+  expect(assignment.getByText('Live reply')).toBeTruthy()
+  expect(assignment.getByText('Uncertain task')).toBeTruthy()
+  expect(assignment.queryByText('Earlier reply')).toBeNull()
+  expect(assignment.queryByText('Earlier completed task')).toBeNull()
+  expect(assignment.queryByText('Earlier live task')).toBeNull()
+  expect(assignment.getByText(zh['execution.uncertain'])).toBeTruthy()
 })

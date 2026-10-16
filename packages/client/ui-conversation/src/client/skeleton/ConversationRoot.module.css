@@ -517,10 +517,6 @@ button.crumb:hover {
   z-index: 1;
 }
 
-.heroWorkspaceRow[data-hero='false']:not(:has(> :global([data-slot='conversation.input.toolbar']):not(:empty))) {
-  display: none;
-}
-
 .heroWorkspaceRow {
   display: flex;
   align-items: center;

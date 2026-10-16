@@ -21,12 +21,13 @@ type Props = PropsRuntime<'settings.launcher'> & PropsLocale<'slarkAgent'> & Inj
  */
 export function SlarkAccountLauncher({ wide, openSettings, settingsOpen, settingsShortcut, useSlarkAccount, refreshAccount, t }: Props) {
   const account = useSlarkAccount(value => value)
+  const avatarUrl = account?.avatarUrl
   const [failedUrl, setFailedUrl] = useState<string>()
   useEffect(() => { void refreshAccount() }, [refreshAccount])
   return <div className={css.row} data-collapsed={!wide} data-testid="slark-account-row">
     {wide && <><span className={css.avatar} aria-hidden="true">
-      {account?.avatarUrl && account.avatarUrl !== failedUrl
-        ? <img src={account.avatarUrl} alt="" referrerPolicy="no-referrer" onError={() => { setFailedUrl(account.avatarUrl ?? undefined) }} />
+      {avatarUrl && avatarUrl !== failedUrl
+        ? <img src={avatarUrl} alt="" referrerPolicy="no-referrer" onError={() => { setFailedUrl(avatarUrl) }} />
         : <IconUserOutlineMedium size={16} />}
     </span><span className={css.identity}><strong>{account?.name ?? t('account.unavailable')}</strong><small>{t('account.profile')}</small></span></>}
     <button type="button" className={css.settings} data-testid="slark-account-settings" aria-label={t('account.settings')}

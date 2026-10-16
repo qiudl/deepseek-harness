@@ -5,6 +5,16 @@ import { SlarkAccountLauncher } from '../src/client/SlarkAccountLauncher.tsx'
 import { dockRuntime, dockTranslate } from './fixture-state.client.ts'
 
 afterEach(cleanup)
+it('keeps Settings available with the localized account fallback while identity is unavailable', () => {
+  const props: Parameters<typeof SlarkAccountLauncher>[0] = { ...dockRuntime(), wide: true, settingsOpen: false,
+    openSettings: vi.fn(), openOnboarding: () => {}, refreshAccount: vi.fn(async () => {}), t: dockTranslate,
+    useSlarkAccount: selector => selector(null) }
+  const f = render(<SlarkAccountLauncher {...props} />)
+  expect(screen.getByText(dockTranslate('account.unavailable'))).toBeTruthy()
+  expect(f.container.querySelector('img')).toBeNull()
+  expect(screen.getByTestId('slark-account-settings')).toBeTruthy()
+})
+
 it('keeps the authenticated Slark name and avatar beside the rightmost Settings action', () => {
   const openSettings = vi.fn(), refreshAccount = vi.fn(async () => {})
   const props: Parameters<typeof SlarkAccountLauncher>[0] = { ...dockRuntime(), wide: true, settingsOpen: false,
