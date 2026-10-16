@@ -282,6 +282,9 @@ describe('Profile remote UI stream wire commands', () => {
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'subagent', parentSessionId: 'parent-1', childSessionId: 'child-1', mode: 'continuable' },
       } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' },
+      } } }, item_chunks: true },
       { action: 'poll', stream_id }, { action: 'close', stream_id },
     ]) {
       const value = streamFrame(command)

@@ -15,11 +15,12 @@ function record(value: unknown): value is Record<string, unknown> {
  * @param payload - Validated follow arguments.
  * @param signal - Host-owned cancellation signal.
  * @param stopped - Whether the selected Profile worker has stopped.
+ * @param itemChunks - Explicitly negotiated source-side history fragmentation.
  * @returns Native events until an explicit end; private HTTP heartbeats are discarded.
  */
 export async function* openRemoteUiWorkerStream(
   origin: string, token: string, endpoint: string, payload: unknown,
-  signal: AbortSignal, stopped: () => boolean,
+  signal: AbortSignal, stopped: () => boolean, itemChunks = false,
 ): AsyncGenerator {
   if (stopped() || (endpoint !== 'session/follow' && endpoint !== 'workspace/follow' && endpoint !== '$events'))
     throw new HostAuthorityError('unavailable')
@@ -27,7 +28,7 @@ export async function* openRemoteUiWorkerStream(
   try {
     const response = await fetch(`${origin}/internal/desktop-remote-ui-stream`, {
       method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ endpoint, payload }), signal,
+      body: JSON.stringify({ endpoint, payload, ...(itemChunks ? { itemChunks: true } : {}) }), signal,
     })
     if (!response.ok || !response.body ||
       !response.headers.get('content-type')?.startsWith('application/x-ndjson')) {

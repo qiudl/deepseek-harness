@@ -819,3 +819,24 @@ describe('Unix transport authority failures', () => {
     client.close()
   })
 })
+
+
+it('REQ-20260930-0015: only a capable Host admits source-side history chunk requests', async () => {
+  for (const supported of [false, true]) {
+    const remoteUiStream = vi.fn(async function* () { yield { type: 'event', seq: 1 } })
+    const { client } = await authorityClient({ remoteUiStream, remoteUiItemChunksSupported: supported })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    expect(client.inspection.capabilities.includes('profile.remote_ui_stream.item_chunks' as HostControlCapability)).toBe(supported)
+    const command = { action: 'open' as const, stream_id: randomUUID(), endpoint: 'session/follow' as const,
+      payload: { args: { request: { address: { kind: 'session' as const, sessionId: 'session-1' } } } }, item_chunks: true as const }
+    if (!supported) {
+      await expect(client.remoteUiStream({ ...lease, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+      expect(remoteUiStream).not.toHaveBeenCalled()
+    } else {
+      await expect(client.remoteUiStream({ ...lease, command })).resolves.toEqual({ type: 'opened' })
+      expect(remoteUiStream).toHaveBeenCalledWith(profileId, 'session/follow', command.payload, expect.any(AbortSignal), true)
+      await client.remoteUiStream({ ...lease, command: { action: 'close', stream_id: command.stream_id } })
+    }
+  }
+})

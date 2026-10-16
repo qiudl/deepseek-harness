@@ -46,7 +46,7 @@ kind: "package-reference"
 
 `session/collaborationMembership` 在同一视图租约上接受 1 至 50 组准确的工作区与会话身份。Profile 核对当前归属并按原顺序返回归属、置顶布尔值；格式错误、重复或超限的批次在 Gateway 调用前拒绝。Host 用这项私有读取裁剪云端协同索引，随后才向远端浏览器展示。
 
-`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。`turnWindow` 保留原生历史分页：`minMessages` 必须为正安全整数且不超过 `maxMessages`（省略时为 50），`minTurns` 必须为正安全整数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
+`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。`turnWindow` 保留原生历史分页：`minMessages` 必须为正安全整数且不超过 `maxMessages`（省略时为 50），`minTurns` 必须为正安全整数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。 只有声明 `profile.remote_ui_stream.item_chunks` 的 Host 才接受 `session/follow` 打开命令上的 `item_chunks: true`。消费方还必须检查本机客户端 SDK 标志 `remoteUiItemChunksSupported`。此时 worker 在现有传输限制之前，把最多 8 MiB 的完整历史项编码为压缩或原始字节分片；未协商的请求保留原事件上限。每个游标仍最多缓存一个 512 KiB 传输项，每次轮询仍执行相同的 owner 与租约校验。
 
 `profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
 

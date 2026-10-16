@@ -361,8 +361,8 @@ export class DshWebProfileWorkerFactory {
           () => requestedStop || settled, assetCache)
         : this.remoteUiRead(viewOrigin, remoteUiToken, endpoint, payload, signal,
           () => requestedStop || settled),
-      remoteUiStream: (endpoint, payload, signal) => openRemoteUiWorkerStream(
-        viewOrigin, remoteUiToken, endpoint, payload, signal, () => requestedStop || settled),
+      remoteUiStream: (endpoint, payload, signal, itemChunks) => openRemoteUiWorkerStream(
+        viewOrigin, remoteUiToken, endpoint, payload, signal, () => requestedStop || settled, itemChunks),
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
         if (requestedStop || settled) return
