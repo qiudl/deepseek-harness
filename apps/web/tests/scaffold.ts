@@ -1571,8 +1571,6 @@ export function normalizeAria(snapshot: string, workspaceCwd: string, age: boole
     .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, '{{timestamp}}')
     .replace(/\d{4}年\d{1,2}月\d{1,2}日 \d{2}:\d{2}/g, '{{clock}}')
     .replace(/\d{1,2}月\d{1,2}日 \d{2}:\d{2}/g, '{{clock}}')
-    .replace(/\b\d{4}-\d{1,2}-\d{1,2} \d{2}:\d{2}\b/g, '{{clock}}')
-    .replace(/\b\d{1,2}\/\d{1,2} \d{2}:\d{2}\b/g, '{{clock}}')
     .replace(/(?<!\d)\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:\s*[AP]M)?(?!\d)/gi, '{{clock}}')
     .replace(/(?<!\d)\d{2}:\d{2}(?!\d)/g, '{{clock}}')
 }
