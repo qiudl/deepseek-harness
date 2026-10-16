@@ -1,13 +1,13 @@
 .original { align-self: flex-end; justify-self: end; margin-left: auto; width: fit-content; max-width: 88%; padding: 12px 16px; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-interactive-bg-hover); }
 .original:focus { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 4px; }
-.reply { display: grid; gap: 10px; padding: 16px; min-width: 0; margin-block: 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+.reply { display: grid; gap: 10px; padding: 16px; min-width: 0; margin-block: 12px; border: 0.5px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
 .original small, .reply small, .status, .legacy > small { color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
 .earlier { display: flex; justify-content: center; }
 .legacy { display: grid; gap: 8px; padding-block: 12px; }
-.assignment { min-width: 0; margin-block: 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); overflow: hidden; }
+.assignment { min-width: 0; margin-block: 12px; border: 0.5px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); overflow: hidden; }
 .assignmentHeader { padding: 10px 14px; background: var(--dsw-alias-interactive-bg-hover); font-size: 12px; font-weight: 500; }
-.assignmentRow { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--dsw-alias-border-l1); min-width: 0; }
+.assignmentRow { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-top: 0.5px solid var(--dsw-alias-border-l1); min-width: 0; }
 .avatar { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-state-business-primary); background: var(--dsw-alias-interactive-bg-hover); font-size: 12px; }
 .identity { display: grid; gap: 4px; flex: 1; min-width: 0; }
 .identity strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
