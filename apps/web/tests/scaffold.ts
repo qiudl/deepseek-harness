@@ -1537,7 +1537,13 @@ export async function readPersistedEvents(scaffold: WebScaffold, id: SessionId):
 const ARIA_AGE =
   /(?:now|\d+min|\d+h|\d+d|\d+mo|\d+y|刚刚|\d+分钟|\d+小时|\d+天|\d+个月|\d+年)(?=")/g
 
-function normalizeAria(snapshot: string, workspaceCwd: string, age: boolean): string {
+/** Normalize dynamic values in browser golden captures.
+ * @param snapshot - Rendered accessibility tree.
+ * @param workspaceCwd - Scenario workspace to replace with a stable token.
+ * @param age - Whether relative ages are part of the normalization.
+ * @returns The deterministic accessibility tree.
+ */
+export function normalizeAria(snapshot: string, workspaceCwd: string, age: boolean): string {
   // The session heading renders the workspace's basename, not the full
   // path, so both spellings must collapse to the token.
   const base = workspaceCwd.split('/').pop()!
@@ -1565,6 +1571,8 @@ function normalizeAria(snapshot: string, workspaceCwd: string, age: boolean): st
     .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, '{{timestamp}}')
     .replace(/\d{4}年\d{1,2}月\d{1,2}日 \d{2}:\d{2}/g, '{{clock}}')
     .replace(/\d{1,2}月\d{1,2}日 \d{2}:\d{2}/g, '{{clock}}')
+    .replace(/\b\d{4}-\d{1,2}-\d{1,2} \d{2}:\d{2}\b/g, '{{clock}}')
+    .replace(/\b\d{1,2}\/\d{1,2} \d{2}:\d{2}\b/g, '{{clock}}')
     .replace(/(?<!\d)\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:\s*[AP]M)?(?!\d)/gi, '{{clock}}')
     .replace(/(?<!\d)\d{2}:\d{2}(?!\d)/g, '{{clock}}')
 }
