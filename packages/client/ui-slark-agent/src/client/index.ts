@@ -1,3 +1,4 @@
+import { SlarkAccountLauncher, type SlarkAccountIdentity } from './SlarkAccountLauncher.tsx'
 import { DraftPersistence } from './DraftPersistence.tsx'
 import type { DraftBridge } from './draft-persistence.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-trajectory/client'
@@ -63,6 +64,7 @@ interface AgentItem {
 }
 
 interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge {
+  accountIdentity?: () => Promise<SlarkAccountIdentity | null>
   collaborationArchive?(input: { workspace_id: string; session_id: string; action: 'archive' | 'restore' }):
   Promise<{ state: 'archived' | 'restored' | 'retry_required' | 'conflict' }>
   collaborationConversations?(): Promise<
@@ -156,6 +158,29 @@ function agentLabel(item: Pick<AgentItem, 'name'> & { project_name?: unknown }):
 /** Register a stable-reference source; ordinary model serialization refuses the Agent chip. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-slark-agent: dictionaries')
+  const accountHost = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
+  const readAccountIdentity = accountHost?.accountIdentity
+  if (readAccountIdentity) {
+    const account = createSnapshotStore<SlarkAccountIdentity | null>(null)
+    let active = true
+    let generation = 0
+    ctx.effect(() => () => { active = false; generation++ }, 'ui-slark-agent: account lifetime')
+    const refreshAccount = async (): Promise<void> => {
+      const current = ++generation
+      account.set(null)
+      try {
+        const value = await readAccountIdentity()
+        if (active && generation === current) account.set(value)
+      } catch (_error) {
+        // The launcher keeps an unnamed account when the authenticated carrier cannot read it.
+      }
+    }
+    ctx.slots.inject('settings.launcher', () => ctx.slots.register({
+      name: 'settings.launcher', priority: 10, locale: NS,
+      inject: () => ({ hooks: { slarkAccount: account }, refreshAccount }),
+    }, SlarkAccountLauncher))
+  }
+
   let focusPending: ((row: ConversationRow & { first_pending_digest: string }) => Promise<void>) | undefined
   ctx.inject(['uiWorkspace', 'workspaces'], (browserCtx) => {
     if (typeof window === 'undefined' || typeof window.__DSH_DESKTOP_HOST__?.collaborationConversations !== 'function') return
@@ -491,8 +516,8 @@ export function apply(ctx: ClientContext): void {
     scopeCtx.slots.inject('sidebar.right.pane.tab.title', () => scopeCtx.slots.register({
       name: 'sidebar.right.pane.tab.title', key: tabId, locale: NS,
     }, CollaborationTabTitle))
-    scopeCtx.slots.inject('conversation.input.dock', () => scopeCtx.slots.register({
-      name: 'conversation.input.dock', id: 'slark-project-scope', order: 20, locale: NS,
+    scopeCtx.slots.inject('conversation.input.toolbar', () => scopeCtx.slots.register({
+      name: 'conversation.input.toolbar', id: 'slark-project-scope', order: 20, locale: NS,
       inject: bindingsFor,
     }, ProjectScopeDock))
   })

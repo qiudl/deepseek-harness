@@ -21,13 +21,13 @@
   gap: 4px;
   min-width: 0;
   max-width: min(100%, 240px);
-  min-height: 28px;
+  min-height: 26px;
   padding: 0 8px;
   border: none;
   border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-primary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
   font-weight: 500;
   white-space: nowrap;

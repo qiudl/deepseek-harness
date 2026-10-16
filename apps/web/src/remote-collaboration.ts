@@ -154,6 +154,20 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
     const bridge = {
+      async accountIdentity(): Promise<{ name: string; avatarUrl: string | null } | null> {
+        const controller = new AbortController()
+        const timer = setTimeout(() => { controller.abort() }, 10_000)
+        const signal = AbortSignal.any([controller.signal, lifetime.signal])
+        try {
+          const response = await exchange(fetch, '/__account__', { method: 'GET' }, signal)
+          if (!response.ok) { void response.body?.cancel().catch(() => undefined); return null }
+          const value = await readJson(response, signal, 400 * 1024)
+          if (!exact(value, ['name', 'avatarUrl']) || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 512
+            || value.avatarUrl !== null && (typeof value.avatarUrl !== 'string'
+              || !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/u.test(value.avatarUrl))) return null
+          return { name: value.name, avatarUrl: value.avatarUrl }
+        } finally { clearTimeout(timer) }
+      },
       collaborationScopeAvailable: true,
       collaborationExecutionAvailable: execution,
       ...((execution || conversations || archive) ? (() => {

@@ -1,3 +1,4 @@
+import type { SlarkAccountInjected } from '../src/client/SlarkAccountLauncher.tsx'
 // @vitest-environment jsdom
 import { UiConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { ChatTimelineRegistry } from '@deepseek-ai/dsh-client-ui-chat/src/client/timeline.ts'
@@ -49,7 +50,8 @@ const agent = { assignment_id: 'assignment-1', project_id: 'project-1', agent_id
 type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST__']>['invokeEnterpriseAgent']>>[0]
 
 async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration,
-  executionAvailable = collaboration, navigationAvailable = true, pluginRemote = false, conversationDraft?: DraftBridge) {
+  executionAvailable = collaboration, navigationAvailable = true, pluginRemote = false, conversationDraft?: DraftBridge,
+  accountIdentity?: NonNullable<Window['__DSH_DESKTOP_HOST__']>['accountIdentity']) {
   vi.stubGlobal('crypto', webcrypto)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
   const ctx = new Context(), id = SessionId('session-1')
@@ -189,7 +191,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     } }
   })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {
-    conversationDraft,
+    conversationDraft, ...(accountIdentity ? { accountIdentity } : {}),
     collaborationScopeAvailable: collaboration, collaborationExecutionAvailable: executionAvailable,
     collaborationWorkspace: scopeDirectory, collaborationSubmit: submit,
     collaborationDeliveries: deliveries, collaborationPending: pending, collaborationClarify: clarify,
@@ -205,8 +207,10 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     slots: SlotRegistry,
     anchor: { inject: ['slots'], apply(c: Context) {
       c.slots.register({ name: 'root', children: {
+        'settings.launcher': { kind: 'single', scope: 'root' },
         'conversation.input.overlay': { kind: 'list', scope: 'session' },
         'conversation.input.dock': { kind: 'list', scope: 'session' },
+        'conversation.input.toolbar': { kind: 'list', scope: 'session' },
         'conversation.trajectory.external': { kind: 'list', scope: 'session' },
         'conversation.chat.timeline': { kind: 'single', scope: 'session' },
         'sidebar.right.pane.tab': { kind: 'keyed', scope: 'session' },
@@ -1193,7 +1197,7 @@ it.each(['args', 'scope', 'draft', 'abort'] as const)('refuses a captured scoped
 it('registers scope management without result polling or submission for a scope-only bridge', async () => {
   const f = await bench(true, true, true, false)
   const entries = f.ctx.slots.entries('conversation.input.dock').map(entry => entry.options.id)
-  expect(entries).toContain('slark-project-scope')
+  expect(f.ctx.slots.entries('conversation.input.toolbar').map(entry => entry.options.id)).toContain('slark-project-scope')
   expect(entries).not.toContain('slark-collaboration-results')
   expect(entries).not.toContain('slark-agent-tasks')
   f.composer.setDraft('@Gui')
@@ -1206,7 +1210,7 @@ it('registers scope management without result polling or submission for a scope-
 
 it('uses the YAML-registered project panel commands and disposes its cached Session model on unload', async () => {
   const f = await bench(true)
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  const entry = f.ctx.slots.entries('conversation.input.toolbar').find(item => item.options.id === 'slark-project-scope')
   if (!entry?.inject) throw Error('missing project scope registration')
   const value: unknown = Reflect.apply(entry.inject, undefined, [SessionId('session-1')])
   if (!value || typeof value !== 'object' || !('hooks' in value) || !value.hooks || typeof value.hooks !== 'object'
@@ -1230,7 +1234,7 @@ it('uses the YAML-registered project panel commands and disposes its cached Sess
   const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
   if (!plugin?.fiber) throw Error('missing loaded Slark source')
   await plugin.fiber.dispose()
-  expect(f.ctx.slots.entries('conversation.input.dock').some(item => item.options.id === 'slark-project-scope')).toBe(false)
+  expect(f.ctx.slots.entries('conversation.input.toolbar').some(item => item.options.id === 'slark-project-scope')).toBe(false)
   const before = f.scopeDirectory.mock.calls.length
   await bindings.refreshScope(); await bindings.applyScope(['other'])
   expect(f.scopeDirectory).toHaveBeenCalledTimes(before)
@@ -1876,7 +1880,7 @@ it('YAML-loaded trajectory and dock share the original Source model and unload t
 
 it('inserts a directory-selected scoped Agent into the existing composer without sending', async () => {
   const f = await bench(true)
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  const entry = f.ctx.slots.entries('conversation.input.toolbar').find(item => item.options.id === 'slark-project-scope')
   if (!entry?.inject) throw Error('missing scope panel')
   const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as ProjectScopeInjected
   await bindings.refreshScope()
@@ -1912,7 +1916,7 @@ it('inserts a directory-selected scoped Agent into the existing composer without
 it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'stale-draft', 'archived', 'moved', 'bridge-changed', 'session-closed', 'scope-missing', 'plugin-closed', 'claimed', 'scope-only', 'mode-closed', 'invalid-span'] as const)(
   'directory insertion preserves the draft and never sends when %s', async (mode) => {
     const f = await bench(true, true, true, mode !== 'scope-only')
-    const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+    const entry = f.ctx.slots.entries('conversation.input.toolbar').find(item => item.options.id === 'slark-project-scope')
     if (!entry?.inject) throw Error('missing scope panel')
     const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as ProjectScopeInjected
     await bindings.refreshScope()
@@ -1954,7 +1958,7 @@ it.each(['unknown-project', 'unknown-agent', 'unavailable', 'scope-cleared', 'st
 it('directory picks share the original Source with an existing structured Agent mention', async () => {
   const f = await bench(true)
   await f.pick('', '检查交互；')
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  const entry = f.ctx.slots.entries('conversation.input.toolbar').find(item => item.options.id === 'slark-project-scope')
   if (!entry?.inject) throw Error('missing scope panel')
   const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as ProjectScopeInjected
   await bindings.refreshScope()
@@ -1968,7 +1972,7 @@ it('directory picks share the original Source with an existing structured Agent 
 
 it('opens one real sidebar page from the YAML launcher and removes its type and history slot on unload', async () => {
   const f = await bench(true), id = SessionId('session-1')
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  const entry = f.ctx.slots.entries('conversation.input.toolbar').find(item => item.options.id === 'slark-project-scope')
   if (!entry?.inject) throw Error('missing scope launcher')
   const bindings = Reflect.apply(entry.inject, undefined, [id]) as ProjectScopeInjected & ScopeLauncherInjected
   f.composer.setDraft('保留聊天草稿')
@@ -1983,7 +1987,7 @@ it('opens one real sidebar page from the YAML launcher and removes its type and 
   expect(guide.title()).toBe('Slark 协同')
   expect(guide.description()).toContain('@Agent')
   expect(f.ctx.slots.entries('conversation.input.dock').map(item => item.options.id)).toEqual([
-    'slark-collaboration-activity', 'slark-project-scope',
+    'slark-collaboration-activity',
   ])
   expect(f.ctx.slots.entries('slark.collaboration.history')).toHaveLength(1)
   const panel = f.ctx.slots.entries('sidebar.right.pane.tab').find(item => item.options.key === definition?.id)
@@ -2003,7 +2007,7 @@ it('opens one real sidebar page from the YAML launcher and removes its type and 
 
 it('does not open another Session from a stale collaboration launcher', async () => {
   const f = await bench(true), id = SessionId('session-1')
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  const entry = f.ctx.slots.entries('conversation.input.toolbar').find(item => item.options.id === 'slark-project-scope')
   if (!entry?.inject) throw Error('missing scope launcher')
   const bindings = Reflect.apply(entry.inject, undefined, [id]) as ScopeLauncherInjected
   const opened = vi.spyOn(f.ctx.sidebarRight, 'openTab')
@@ -2014,7 +2018,7 @@ it('does not open another Session from a stale collaboration launcher', async ()
 
 it.each(['missing', 'closed'] as const)('refuses a collaboration page without a live Session owner (%s)', async (mode) => {
   const f = await bench(true)
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  const entry = f.ctx.slots.entries('conversation.input.toolbar').find(item => item.options.id === 'slark-project-scope')
   if (!entry?.inject) throw Error('missing scope launcher')
   const injectLauncher = entry.inject
   const bindings = Reflect.apply(injectLauncher, undefined, [SessionId('session-1')]) as ProjectScopeInjected
@@ -2031,7 +2035,7 @@ it.each(['missing', 'closed'] as const)('refuses a collaboration page without a 
 
 it.each([false, true])('replaces the sidebar scope model when the same Session receives a new Controller owner (previous live=%s)', async (keepPrevious) => {
   const f = await bench(true), id = SessionId('session-1')
-  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-project-scope')
+  const entry = f.ctx.slots.entries('conversation.input.toolbar').find(item => item.options.id === 'slark-project-scope')
   if (!entry?.inject) throw Error('missing scope launcher')
   const first = Reflect.apply(entry.inject, undefined, [id]) as ProjectScopeInjected
   await first.refreshScope()
@@ -2173,7 +2177,7 @@ it.each(['source', 'empty', 'read-error'] as const)('loads %s collaboration hist
   const off = conversation.snapshot.subscribe(() => {})
   onTestFinished(off)
   // A blank Conversation mounts its composer but refuses the Chat view until an independent activity is observed.
-  for (const entry of f.ctx.slots.entries('conversation.input.dock')) {
+  for (const entry of [...f.ctx.slots.entries('conversation.input.dock'), ...f.ctx.slots.entries('conversation.input.toolbar')]) {
     if (entry.inject) Reflect.apply(entry.inject, undefined, [id])
     if (entry.options.id === 'slark-collaboration-activity') {
       const component = entry.component
@@ -2221,7 +2225,7 @@ it('releases composer-initialized history observers when its Session Controller 
   const conversation = f.ctx.uiConversation.binding(id)
   const off = conversation.snapshot.subscribe(() => {})
   onTestFinished(off)
-  for (const entry of f.ctx.slots.entries('conversation.input.dock')) {
+  for (const entry of [...f.ctx.slots.entries('conversation.input.dock'), ...f.ctx.slots.entries('conversation.input.toolbar')]) {
     if (entry.inject) Reflect.apply(entry.inject, undefined, [id])
   }
   await vi.waitFor(() => { expect(f.sourceReads).toHaveBeenCalled() })
@@ -2289,4 +2293,23 @@ it('YAML-loaded draft slot restores plain text, persists editor changes and disp
   const slots = f.ctx.slots
   await f.ctx.fiber.dispose()
   expect(slots.entries('conversation.input.dock')).toEqual([])
+})
+
+
+it('loads the Slark identity through the YAML launcher and ignores late account reads after disposal', async () => {
+  const pending = Promise.withResolvers<{ name: string; avatarUrl: null } | null>()
+  const accountIdentity = vi.fn(() => pending.promise)
+  const f = await bench(false, true, false, false, true, false, undefined, accountIdentity)
+  const slots = f.ctx.slots
+  const entry = slots.entries('settings.launcher')[0]
+  if (!entry?.inject) throw Error('missing account launcher')
+  const injected = Reflect.apply(entry.inject, undefined, []) as Partial<SlarkAccountInjected>
+  if (!injected.hooks || !injected.refreshAccount) throw Error('missing account bindings')
+  const reading = injected.refreshAccount()
+  expect(accountIdentity).toHaveBeenCalledOnce()
+  await f.ctx.fiber.dispose()
+  pending.resolve({ name: 'Late account', avatarUrl: null })
+  await reading
+  expect(injected.hooks.slarkAccount.getSnapshot()).toBeNull()
+  expect(slots.entries('settings.launcher')).toEqual([])
 })
