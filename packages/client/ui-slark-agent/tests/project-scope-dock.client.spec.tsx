@@ -222,7 +222,7 @@ it.each([false, true])('the composer launcher opens the existing sidebar without
   const f = fixture(grouped, true, ['one']), openCollaboration = vi.fn()
   const view = render(<ProjectScopeDock {...dockRuntime()} useSlarkScope={f.props.useSlarkScope}
     refreshScope={f.props.refreshScope} openCollaboration={openCollaboration} t={dockTranslate} />)
-  if (grouped) await screen.findByText(dockTranslate('scope.count', { count: 1 }))
+  if (grouped) await screen.findByText('1')
   else expect(f.call).not.toHaveBeenCalled()
   expect(screen.queryByRole('checkbox')).toBeNull()
   expect(screen.queryByRole('textbox')).toBeNull()

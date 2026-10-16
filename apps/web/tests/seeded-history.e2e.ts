@@ -433,6 +433,8 @@ describe('web e2e: seeded history renders through cold resume', () => {
     // the routed id and the seat resolves it against an advertised row.
     await page.getByRole('button', { name: /^Select model, current/ })
       .waitFor({ timeout: 10_000 })
+    await page.getByRole('button', { name: 'Jump to turn 1', exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Jump to turn 2', exact: true }).waitFor()
     const snapshot = (await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd))
       .split(SEED_ID).join('{{seededId}}')
     await compareOrRefreshGolden(UI_EXPECTED, snapshot, MODE)
@@ -853,7 +855,12 @@ describe('web e2e: seeded history renders through cold resume', () => {
     await expect.poll(() => terminals().length).toBe(1)
     expect(terminals()[0]!.id).not.toBe(previous)
     await terminal.getByRole('status').waitFor({ state: 'hidden' })
-    await terminal.getByRole('textbox', { name: 'Terminal', exact: true }).waitFor()
+    // xterm keeps its internal input zero-sized; readiness is a visible screen with input focus.
+    await terminal.locator('.xterm-screen').waitFor()
+    await expect.poll(() => terminals()[0]!.state).toBe('running')
+    await terminal.locator('.xterm-screen').click()
+    await expect.poll(() => terminal.getByRole('textbox', { name: 'Terminal', exact: true })
+      .evaluate(node => node === node.ownerDocument.activeElement)).toBe(true)
   })
 
   it.skipIf(MODE === 'record')('issued zero model calls and stayed clean', async () => {

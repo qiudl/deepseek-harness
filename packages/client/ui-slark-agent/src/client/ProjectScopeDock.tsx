@@ -36,7 +36,7 @@ export interface ScopeLauncherInjected {
   refreshScope(): Promise<void>
   openCollaboration(): void
 }
-type LauncherProps = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & SlotInjectFace<ScopeLauncherInjected>
+type LauncherProps = PropsRuntime<'conversation.input.toolbar'> & PropsLocale<'slarkAgent'> & SlotInjectFace<ScopeLauncherInjected>
 type Props = PropsRuntime<'sidebar.right.pane.tab'> & PropsLocale<'slarkAgent'> & SlotInjectFace<ProjectScopeInjected>
   & PropsRenderSlots<'slark.collaboration.history'>
 
@@ -48,9 +48,9 @@ type Props = PropsRuntime<'sidebar.right.pane.tab'> & PropsLocale<'slarkAgent'> 
 export function ProjectScopeDock({ useSlarkScope, refreshScope, openCollaboration, t }: LauncherProps) {
   const state = useSlarkScope(x => x)
   useEffect(() => { if (state.workspaceId) void refreshScope() }, [state.workspaceId, refreshScope])
-  return <Button size="sm" variant="toolbar" data-testid="slark-scope-toggle" onClick={openCollaboration}>
-    <IconQueueOutlineRegular size={16} />{t('scope.title')}
-    {state.scope && <span className={css.count}>{t('scope.count', { count: state.scope.selected_project_ids.length })}</span>}
+  return <Button size="sm" variant="toolbar" className={css.launcher} data-testid="slark-scope-toggle" onClick={openCollaboration}>
+    <IconQueueOutlineRegular size={14} />{t('scope.title')}
+    {state.scope && <span className={css.count}>{state.scope.selected_project_ids.length}</span>}
   </Button>
 }
 
