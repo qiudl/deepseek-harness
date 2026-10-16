@@ -433,6 +433,8 @@ describe('web e2e: seeded history renders through cold resume', () => {
     // the routed id and the seat resolves it against an advertised row.
     await page.getByRole('button', { name: /^Select model, current/ })
       .waitFor({ timeout: 10_000 })
+    await page.getByRole('button', { name: 'Jump to turn 1', exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Jump to turn 2', exact: true }).waitFor()
     const snapshot = (await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd))
       .split(SEED_ID).join('{{seededId}}')
     await compareOrRefreshGolden(UI_EXPECTED, snapshot, MODE)

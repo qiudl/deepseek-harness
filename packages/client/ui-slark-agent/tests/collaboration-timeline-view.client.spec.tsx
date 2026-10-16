@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { useSyncExternalStore } from 'react'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { CollaborationTimeline } from '../src/client/CollaborationTimeline.tsx'
@@ -87,11 +87,12 @@ it('keeps plain text complete and safe, renders pending questions and exposes di
   await act(async () => { f.state.set({ phase: 'error', groups: [], location: { snapshotDigest: 'a'.repeat(64), status: 'unavailable' } }) })
   expect(screen.getByText(zh['task.readUnavailable'])).toBeTruthy()
   expect(screen.getByText(zh['task.sourceUnavailable'])).toBeTruthy()
-  for (const execution_state of ['indeterminate', 'failed']) {
+  for (const execution_state of ['indeterminate', 'failed', 'accepted', 'running']) {
     await act(async () => { f.state.set({ phase: 'ready', groups: [{ ...original, replies: [{
       ...original.replies[0]!, execution_state, target_display_snapshot: { agent_name: 'Guide', project_name: null },
     }] }] }) })
-    expect(screen.getByText(zh[execution_state === 'indeterminate' ? 'task.indeterminate' : 'task.failed'])).toBeTruthy()
+    expect(within(screen.getByTestId('slark-timeline-reply')).getByText(zh[execution_state === 'indeterminate'
+      ? 'task.indeterminate' : execution_state === 'failed' ? 'task.failed' : 'task.background'])).toBeTruthy()
   }
   const { target_display_snapshot: _display, answer: _answer, ...restricted } = original.replies[0]!
   await act(async () => { f.state.set({ phase: 'ready', groups: [{ ...original, replies: [{
@@ -127,4 +128,60 @@ it('paginates Sources and replies independently and focuses a locator once witho
   await act(async () => { f.state.set({ ...f.state.getSnapshot(), phase: 'ready', groups: [] }) })
   expect(screen.queryByTestId('slark-timeline-original')).toBeNull()
   expect(scroll).toHaveBeenCalledOnce()
+})
+
+
+it('separates assignment, clarification and completed result without adding another composer', () => {
+  const a = group()
+  fixture([{ ...a, pending: [{ pending_item_id: 'pending', revision: '1', reason: 'question',
+    question: 'Which layout should I use?', mentions: [{ mention_id: 'mention', agent_name: 'Designer', project_name: 'Project' }] }] }])
+  expect(screen.getByTestId('slark-timeline-assignment').textContent).toContain('Guide a')
+  expect(screen.getByTestId('slark-timeline-assignment').textContent).toContain('Designer')
+  const pending = screen.getByTestId('slark-timeline-pending')
+  expect(pending.textContent).toContain('Which layout should I use?')
+  expect(pending.textContent).toContain(zh['task.replyInChat'])
+  expect(screen.getByTestId('slark-timeline-reply').textContent).toContain('answer-a')
+  expect(screen.queryByRole('textbox')).toBeNull()
+})
+
+it('shows accepted work as waiting and unsubmitted plans separately from completed deliveries', () => {
+  fixture([{ ...group(), replies: [], execution: { phase: 'ready', enabled: true,
+    tasks: [{ taskId: 'waiting', agentName: 'Writer', projectName: 'Project', question: 'Draft copy' },
+      { taskId: 'planned', agentName: 'Reviewer', projectName: 'Project', question: 'Review copy' }],
+    outcomes: { waiting: 'recorded' } } }])
+  const assignment = screen.getByTestId('slark-timeline-assignment')
+  expect(within(assignment).getByText(zh['task.waiting'])).toBeTruthy()
+  expect(within(assignment).getByText(zh['task.planned'])).toBeTruthy()
+  expect(within(assignment).queryByText(zh['task.done'])).toBeNull()
+})
+
+it('keeps distinct tasks visible when their Agent display names match', () => {
+  fixture([{ ...group(), replies: [], execution: { phase: 'ready', enabled: true,
+    tasks: [{ taskId: 'first', agentName: 'Guide', projectName: 'Project', question: 'First task' },
+      { taskId: 'second', agentName: 'Guide', projectName: 'Project', question: 'Second task' }] },
+  provisionalResponses: [{ source, sourceDigest: 'a'.repeat(64), invocationId: 'invocation', taskId: 'first',
+    seq: '1', fence: 'fence', text: 'Working', textDigest: 'b'.repeat(64), agentName: 'Guide', projectName: 'Project' }] }])
+  const assignment = screen.getByTestId('slark-timeline-assignment')
+  expect(within(assignment).getAllByText('Guide')).toHaveLength(2)
+  expect(within(assignment).getByText('Second task')).toBeTruthy()
+})
+
+it('replaces provisional assignments by delivery identity and keeps uncertain tasks distinct', () => {
+  const a = group(), body = { source, sourceDigest: a.original.snapshot_digest, invocationId: 'a', taskId: 'done',
+    seq: '1', fence: 'fence', text: 'Working', textDigest: 'b'.repeat(64), agentName: 'Earlier reply', projectName: 'Project' }
+  fixture([{ ...a, replies: [{ ...a.replies[0]!, task_id: 'done' }],
+    provisionalResponses: [body, { ...body, invocationId: 'live', taskId: 'live', agentName: 'Live reply' }],
+    execution: { phase: 'ready', tasks: [
+      { taskId: 'done', agentName: 'Earlier completed task', projectName: 'Project', question: 'Done' },
+      { taskId: 'live', agentName: 'Earlier live task', projectName: 'Project', question: 'Live' },
+      { taskId: 'uncertain', agentName: 'Uncertain task', projectName: 'Project', question: 'Check original receipt' },
+    ], outcomes: { uncertain: 'uncertain' } } }])
+  const assignment = within(screen.getByTestId('slark-timeline-assignment'))
+  expect(assignment.getByText('Guide a')).toBeTruthy()
+  expect(assignment.getByText('Live reply')).toBeTruthy()
+  expect(assignment.getByText('Uncertain task')).toBeTruthy()
+  expect(assignment.queryByText('Earlier reply')).toBeNull()
+  expect(assignment.queryByText('Earlier completed task')).toBeNull()
+  expect(assignment.queryByText('Earlier live task')).toBeNull()
+  expect(assignment.getByText(zh['execution.uncertain'])).toBeTruthy()
 })

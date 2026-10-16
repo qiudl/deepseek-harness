@@ -145,6 +145,22 @@ async function bench() {
 }
 
 describe('Conversation inject API', () => {
+  it('publishes toolbar availability only while an extension contributes its entry', async () => {
+    const b = await bench()
+    onTestFinished(() => b.runtime.dispose())
+    const source = b.residentApi(ROOT).hooks.inputToolbar
+    const changed = vi.fn(), unsubscribe = source.subscribe(changed)
+    expect(source.getSnapshot()).toBe(false)
+    const remove = b.slots.register({ name: 'conversation.input.toolbar', id: 'test-control' }, () => null)
+    await b.runtime.flush()
+    expect(source.getSnapshot()).toBe(true)
+    expect(changed).toHaveBeenCalled()
+    remove()
+    await b.runtime.flush()
+    expect(source.getSnapshot()).toBe(false)
+    unsubscribe()
+  })
+
   it('owns the File action, reads its mounted composer availability, and unregisters on disposal', async () => {
     const b = await bench()
     onTestFinished(() => b.runtime.dispose())

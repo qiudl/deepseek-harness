@@ -45,6 +45,7 @@ function harness(reply: Reply) {
   return { fetch: tunnel.fetch, frames }
 }
 function bridge(): {
+  accountIdentity(): Promise<{ name: string; avatarUrl: string | null } | null>
   collaborationScopeAvailable: boolean
   collaborationExecutionAvailable: boolean
   collaborationWorkspace(value: unknown): Promise<unknown>
@@ -307,4 +308,17 @@ it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pa
   expect(Reflect.get(window,'__DSH_DESKTOP_HOST__')).toBeUndefined()
   expect(h.frames.filter(frame => frame.t === 'req')).toHaveLength(2)
   expect(await host.collaborationDeliveries({ source:original })).toMatchObject({ ok:false })
+})
+
+
+it.each([
+  [{ name: 'Alice', avatarUrl: 'data:image/png;base64,AQID' }, true],
+  [{ name: 'Alice', avatarUrl: 'data:image/png;base64,' + 'A'.repeat(699048) + 'AAA=' }, true],
+  [{ name: 'Alice', avatarUrl: 'https://other.test/picture?token=secret' }, false],
+  [{ name: 'Alice', avatarUrl: null, token: 'secret' }, false],
+  [null, false],
+])('reads only credential-free display identity from the parent carrier: %j', async (identity, valid) => {
+  const h = harness(path => ({ status: 200, value: path === '/__collaboration__' ? capability : identity }))
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().accountIdentity()).toEqual(valid ? identity : null)
 })

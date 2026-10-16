@@ -1537,7 +1537,13 @@ export async function readPersistedEvents(scaffold: WebScaffold, id: SessionId):
 const ARIA_AGE =
   /(?:now|\d+min|\d+h|\d+d|\d+mo|\d+y|刚刚|\d+分钟|\d+小时|\d+天|\d+个月|\d+年)(?=")/g
 
-function normalizeAria(snapshot: string, workspaceCwd: string, age: boolean): string {
+/** Normalize dynamic values in browser golden captures.
+ * @param snapshot - Rendered accessibility tree.
+ * @param workspaceCwd - Scenario workspace to replace with a stable token.
+ * @param age - Whether relative ages are part of the normalization.
+ * @returns The deterministic accessibility tree.
+ */
+export function normalizeAria(snapshot: string, workspaceCwd: string, age: boolean): string {
   // The session heading renders the workspace's basename, not the full
   // path, so both spellings must collapse to the token.
   const base = workspaceCwd.split('/').pop()!
