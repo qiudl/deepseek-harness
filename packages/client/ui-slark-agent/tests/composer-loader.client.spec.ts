@@ -2313,3 +2313,26 @@ it('loads the Slark identity through the YAML launcher and ignores late account 
   expect(injected.hooks.slarkAccount.getSnapshot()).toBeNull()
   expect(slots.entries('settings.launcher')).toEqual([])
 })
+
+
+it('publishes the current Slark identity, discards superseded reads and clears it when refresh fails', async () => {
+  type Identity = { name: string; avatarUrl: null } | null
+  const first = Promise.withResolvers<Identity>(), second = Promise.withResolvers<Identity>()
+  const accountIdentity = vi.fn<() => Promise<Identity>>()
+    .mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+    .mockRejectedValueOnce(Error('account unavailable'))
+  const f = await bench(false, true, false, false, true, false, undefined, accountIdentity)
+  const entry = f.ctx.slots.entries('settings.launcher')[0]
+  if (!entry?.inject) throw Error('missing account launcher')
+  const injected = Reflect.apply(entry.inject, undefined, []) as Partial<SlarkAccountInjected>
+  if (!injected.hooks || !injected.refreshAccount) throw Error('missing account bindings')
+  const earlier = injected.refreshAccount(), current = injected.refreshAccount()
+  second.resolve({ name: 'Current account', avatarUrl: null })
+  await current
+  expect(injected.hooks.slarkAccount.getSnapshot()).toEqual({ name: 'Current account', avatarUrl: null })
+  first.resolve({ name: 'Earlier account', avatarUrl: null })
+  await earlier
+  expect(injected.hooks.slarkAccount.getSnapshot()).toEqual({ name: 'Current account', avatarUrl: null })
+  await injected.refreshAccount()
+  expect(injected.hooks.slarkAccount.getSnapshot()).toBeNull()
+})
