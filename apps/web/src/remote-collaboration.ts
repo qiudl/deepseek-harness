@@ -161,7 +161,7 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
         try {
           const response = await exchange(fetch, '/__account__', { method: 'GET' }, signal)
           if (!response.ok) { void response.body?.cancel().catch(() => undefined); return null }
-          const value = await readJson(response, signal, 400 * 1024)
+          const value = await readJson(response, signal, 800 * 1024)
           if (!exact(value, ['name', 'avatarUrl']) || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 512
             || value.avatarUrl !== null && (typeof value.avatarUrl !== 'string'
               || !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/u.test(value.avatarUrl))) return null

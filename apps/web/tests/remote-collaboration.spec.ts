@@ -313,6 +313,7 @@ it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pa
 
 it.each([
   [{ name: 'Alice', avatarUrl: 'data:image/png;base64,AQID' }, true],
+  [{ name: 'Alice', avatarUrl: 'data:image/png;base64,' + 'A'.repeat(699048) + 'AAA=' }, true],
   [{ name: 'Alice', avatarUrl: 'https://other.test/picture?token=secret' }, false],
   [{ name: 'Alice', avatarUrl: null, token: 'secret' }, false],
   [null, false],
