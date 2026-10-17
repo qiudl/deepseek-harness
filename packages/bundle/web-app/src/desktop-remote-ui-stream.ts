@@ -95,12 +95,23 @@ export class DesktopRemoteUiStreamExecutor {
 
   /**
    * Open the selected Profile's native Session event stream without granting another Gateway endpoint.
-   * @param endpoint - `session/follow`, `workspace/follow`, or `$events`.
+   * @param endpoint - `session/list`, `session/follow`, `workspace/follow`, or `$events`.
    * @param payload - Validated arguments for the selected stream.
    * @param signal - Host-owned cancellation signal.
    * @returns Gateway events until cancellation or normal completion.
    */
   async open(endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
+    if (endpoint === 'session/list') {
+      if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args) ||
+        Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
+      const gateway = this.gateway
+      return (async function* () {
+        signal.throwIfAborted()
+        const value = await gateway.invoke({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
+        signal.throwIfAborted()
+        yield value
+      })()
+    }
     if (endpoint === '$events') {
       if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args) ||
         Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')

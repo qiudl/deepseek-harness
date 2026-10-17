@@ -196,3 +196,5 @@ The separate `profile.root_feedback` capability permits bounded `root_feedback` 
 Consumption receipts use the independent `dsh-collaboration-consumption-receipt-v1` signing domain. The commit binds the original root trace, execution command, consumer attempt and logical step to the actual Session event coordinates, first persisted prefix and local journal commit. Delivery signatures cannot substitute for consumption evidence. These codecs establish syntax, not authority.
 
 First-reply receipts use `dsh-collaboration-continuation-observation-v1`. Their commit nests the unchanged consumption commit and separately binds an observation ID, `assistant_message_committed`, assistant event sequence and observed durable prefix. Consumption signatures cannot certify this domain. Neither reply content nor a completion claim appears in the receipt.
+
+`profile.remote_ui_stream.session_list` advertises the `session/list` cursor with empty `args`. Every open, poll, and close remains authorized by its owning view lease; results cross the existing 16 KiB chunks without increasing the 64 KiB control-frame limit.

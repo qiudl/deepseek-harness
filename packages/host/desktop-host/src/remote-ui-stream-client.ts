@@ -21,7 +21,7 @@ export async function* openRemoteUiWorkerStream(
   origin: string, token: string, endpoint: string, payload: unknown,
   signal: AbortSignal, stopped: () => boolean,
 ): AsyncGenerator {
-  if (stopped() || (endpoint !== 'session/follow' && endpoint !== 'workspace/follow' && endpoint !== '$events'))
+  if (stopped() || (endpoint !== 'session/follow' && endpoint !== 'workspace/follow' && endpoint !== '$events' && endpoint !== 'session/list'))
     throw new HostAuthorityError('unavailable')
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {

@@ -142,6 +142,24 @@ describe('Desktop remote UI read-only bridge', () => {
     expect(writer.listenerCount('drain')).toBe(0)
   })
 
+  it('streams one complete large Session list and rejects extra selectors', async () => {
+    const value = { items: Array.from({ length: 94 }, (_, i) => ({
+      sessionId: `session-${i}`, updatedAt: 1, projections: { values: { title: '摘要🌟'.repeat(300) } },
+    })) }
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeGreaterThan(64 * 1024)
+    const invoke = vi.fn(async () => value)
+    const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ invoke }))
+    const signal = new AbortController().signal
+    const values = []
+    for await (const item of await executor.open('session/list', { args: {} }, signal)) values.push(item)
+    expect(values).toEqual([value])
+    expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
+    for (const invalid of [null, {}, { args: null }, { args: [] }, { args: { path: '/other' } }, { args: {}, extra: true }]) {
+      await expect(executor.open('session/list', invalid, signal)).rejects.toThrow('invalid payload')
+    }
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
   it('opens only a bounded native Session follow request', async () => {
     const stream = vi.fn(async () => (async function* () { yield { type: 'snapshot' } })())
     const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))

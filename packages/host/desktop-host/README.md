@@ -263,3 +263,5 @@ For persisted consumer evidence returned by `root_feedback`, the Host verifies t
 macOS and Windows bind root journal, source inspection and planning-attempt inspection through the same worker operations, while each authority protocol retains its own signed payload.
 
 `profile.root_continuation` gates `continuation_read` independently on the client and Host. After the original Profile returns a committed observation, Host verifies its nested consumption namespace, delivery and Source coordinates and signs the independent observation domain using the current Account and installation/process binding. Account revocation before the reply prevents signing.
+
+A complete Session-list snapshot uses the existing remote UI cursor when `profile.remote_ui_stream.session_list` is advertised. The cursor preserves all list projections within its 512 KiB item bound; older Hosts retain direct reads.

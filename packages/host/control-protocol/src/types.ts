@@ -1533,6 +1533,10 @@ export type ProfileRemoteUiStreamCommand =
     readonly stream_id: string
     readonly endpoint: '$events'
     readonly payload: { readonly args: Record<string, never> } }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'session/list'
+    readonly payload: { readonly args: Record<string, never> } }
   | { readonly action: 'poll' | 'close'; readonly stream_id: string }
 
 /** One short, lease-authorized stream control RPC. */
