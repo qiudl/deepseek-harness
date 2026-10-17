@@ -534,6 +534,16 @@ button.crumb:hover {
   padding: 0 16px 0 20px;
 }
 
+/* Leave the contributed toolbar and preset visible when a workspace has a long name. */
+.heroWorkspaceRow[data-has-toolbar] button {
+  flex-shrink: 0;
+}
+
+.heroWorkspaceRow[data-has-toolbar] > button:first-child {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
 /* Hero: the composer sits inside the session scroll body; center there so
    the tree seat matches active (sticky footer) without a Root remount. */
 .root[data-phase='hero'] .scrollBody,
