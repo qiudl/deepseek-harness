@@ -1745,7 +1745,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       const payload = record(command.payload)
       exactKeys(payload, ['args'])
       const args = record(payload.args)
-      if (command.endpoint === 'workspace/follow' || command.endpoint === '$events') {
+      if (command.endpoint === 'workspace/follow' || command.endpoint === '$events' || command.endpoint === 'session/list') {
         exactKeys(args, [])
         parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: { args: {} } }
       } else if (command.endpoint === 'session/follow') {

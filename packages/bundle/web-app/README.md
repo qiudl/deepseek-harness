@@ -267,3 +267,5 @@ The analysis-token `root_feedback` operation delegates private read/enqueue comm
 The same private `root_feedback` carrier also routes `consumer_prepare`, `consumer_start` and `consumer_read` to the durable consumer owner. Only a first current grant may wake the original Agent; the start request retains its cancellation lifetime through Agent settlement. Historical reads never restore a wake handle. Browser result controls send only a retained preview, task and delivery identity through authenticated Desktop Main.
 
 The private feedback carrier also routes `continuation_read` to the original Session Controller. It returns either no committed observation or immutable first-reply coordinates; repeated reads preserve the original trace and never start another model request.
+
+The private NDJSON route also accepts `session/list` with empty `args` and emits one complete Session-list snapshot, including projections. It uses the same 512 KiB item limit and cancellation as the existing streams.

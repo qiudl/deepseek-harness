@@ -41,6 +41,7 @@ describe('REQ-20260930-0015 complete history transport', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const payload = { args: { request: { address: { kind: 'session', sessionId: 'original-test-session' } } } }
     for (const body of [{ endpoint: 'workspace/follow', payload: { args: {} }, itemChunks: true },
+      { endpoint: 'session/list', payload: { args: {} }, itemChunks: true },
       { endpoint: 'session/follow', payload, itemChunks: false },
       { endpoint: 'session/follow', payload, itemChunks: true, path: '/private' }]) {
       const refused = await fetch(origin, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(body) })
