@@ -1,5 +1,5 @@
 /** Host-verified collaboration conversation index in the left sidebar. */
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -77,7 +77,6 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
   const { query, scope: savedScope, scrollTop } = useStore(value => value)
   const [initialScope] = useState(() => currentWorkspaceId() ?? 'all')
   const scope = savedScope ?? initialScope
-  const scrollRef = useRef<HTMLElement>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
   const [archiving, setArchiving] = useState<string | null>(null)
@@ -137,12 +136,9 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
     return [pending.sort(sort), issues.sort(sort), running.sort(sort), drafts.sort(sort),
       completed.sort(sort), archived.sort(sort)] as const
   }, [displayItems, sessions, workspaceNames, query, scope])
-  useLayoutEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollTop
-  }, [scrollTop, groups])
   const headings = [t('browser.pending'), t('browser.issues'), t('browser.running'), t('browser.drafts'),
     t('browser.completed'), t('browser.archived')] as const
-  return <section ref={scrollRef} className={css.root} aria-label={t('browser.title')}
+  return <section ref={(element) => { if (element) element.scrollTop = scrollTop }} className={css.root} aria-label={t('browser.title')}
     onScroll={(event) => { actions.setScrollTop(event.currentTarget.scrollTop) }}>
     <div className={css.top}><strong>{t('browser.title')}</strong><button type="button" onClick={start}>{t('browser.new')}</button></div>
     <select className={css.scope} value={scope} onChange={(event) => { actions.setScope(event.target.value); setWorkspaceRequired(false) }} aria-label={t('browser.scope')}>
