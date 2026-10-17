@@ -334,10 +334,12 @@ export interface UnixHostServerOptions {
   ) => Promise<unknown>
   /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
   readonly remoteUiAssetGzipSupported?: boolean
+  /** Advertise source-side history fragmentation only when the worker implements it. */
+  readonly remoteUiItemChunksSupported?: boolean
   /** Open only native read streams in the lease-selected worker. */
   readonly remoteUiStream?: (
     profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events' | 'session/list', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
-      { action: 'open' }>['payload'], signal: AbortSignal,
+      { action: 'open' }>['payload'], signal: AbortSignal, itemChunks?: boolean,
   ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
   readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
@@ -494,7 +496,7 @@ export type HostControlAuthorityOptions = Pick<
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
-    | 'remoteUiStream' | 'remoteUiAssetGzipSupported'
+    | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1522,13 +1524,17 @@ export class HostControlAuthority {
           const profileId = authority()
           let result: ProfileRemoteUiStreamResult['result']
           if (command.action === 'open') {
+            if (command.endpoint === 'session/follow' && command.item_chunks && !this.options.remoteUiItemChunksSupported)
+              throw new HostAuthorityError('upgrade_required')
             const execute = this.options.remoteUiStream
             if (!execute) throw new HostAuthorityError('upgrade_required')
             if (remoteUiStreams.has(command.stream_id) || remoteUiStreams.size >= 8) {
               throw new HostAuthorityError('conflict')
             }
             const cursor = await RemoteUiStreamCursor.open(
-              cursorSignal => execute(profileId, command.endpoint, command.payload, cursorSignal), signal)
+              cursorSignal => command.endpoint === 'session/follow' && command.item_chunks === true
+                ? execute(profileId, command.endpoint, command.payload, cursorSignal, true)
+                : execute(profileId, command.endpoint, command.payload, cursorSignal), signal)
             try {
               if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
               remoteUiStreams.set(command.stream_id, { cursor, profileId,
@@ -2193,7 +2199,8 @@ export class HostControlAuthority {
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
-            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list'] : []),
+            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list',
+            ...(this.options.remoteUiItemChunksSupported ? ['profile.remote_ui_stream.item_chunks'] : [])] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
             ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
@@ -2332,6 +2339,8 @@ interface HandshakeState {
 export class UnixHostClient {
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
+  /** This SDK accepts opted-in history fragments; the current Host must also advertise its signed capability. */
+  readonly remoteUiItemChunksSupported = true
 
   private constructor(
     private readonly channel: HostClientFrameTransport,

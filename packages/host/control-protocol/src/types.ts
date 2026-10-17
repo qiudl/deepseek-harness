@@ -1512,6 +1512,7 @@ export type ProfileRemoteUiStreamCommand =
     readonly action: 'open'
     readonly stream_id: string
     readonly endpoint: 'session/follow'
+    readonly item_chunks?: true
     readonly payload: { readonly args: { readonly request: {
       readonly address: { readonly kind: 'session'; readonly sessionId: string }
         | {

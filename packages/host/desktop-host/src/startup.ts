@@ -750,7 +750,9 @@ export async function startDesktopHostApplication(
       }),
       remoteUiAssetGzipSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
-      remoteUiStream: (profileId, endpoint, payload, signal) => workers.remoteUiStream(profileId, endpoint, payload, signal),
+      remoteUiItemChunksSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiStream: (profileId, endpoint, payload, signal, itemChunks) =>
+        workers.remoteUiStream(profileId, endpoint, payload, signal, itemChunks),
       extensions: { operations: extensionOperations, kinds: pluginExecutor ? ['plugin', 'mcp', 'skill'] : ['mcp', 'skill'],
         pluginRemove: pluginExecutor !== undefined, pluginUpdate: pluginExecutor !== undefined, pluginToggle: pluginExecutor !== undefined,
         skillArchives: true, skillRemove: true, skillReplace: true, skillFiles: true, skillInvocation: true,

@@ -283,12 +283,19 @@ describe('Profile remote UI stream wire commands', () => {
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'subagent', parentSessionId: 'parent-1', childSessionId: 'child-1', mode: 'continuable' },
       } } } },
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' },
+      } } }, item_chunks: true },
       { action: 'poll', stream_id }, { action: 'close', stream_id },
     ]) {
       const value = streamFrame(command)
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
     }
     for (const command of [
+      { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
+        address: { kind: 'session', sessionId: 'session-1' },
+      } } }, item_chunks: false },
+      { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: {} }, item_chunks: true },
       ...[null, [], {}, { minMessages: 50 }, { minMessages: 0, minTurns: 2 },
         { minMessages: 501, minTurns: 2 }, { minMessages: 50, minTurns: 0 },
         { minMessages: 50, minTurns: 1.5 }, { minMessages: 50, minTurns: Number.MAX_SAFE_INTEGER + 1 },

@@ -1739,7 +1739,9 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       exactKeys(command, ['action', 'stream_id'])
       parsed = { action: command.action, stream_id }
     } else if (command.action === 'open') {
-      exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload'])
+      exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload',
+        ...(command.item_chunks === undefined ? [] : ['item_chunks'])])
+      if (command.item_chunks !== undefined && (command.item_chunks !== true || command.endpoint !== 'session/follow')) reject()
       const payload = record(command.payload)
       exactKeys(payload, ['args'])
       const args = record(payload.args)
@@ -1782,7 +1784,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
           ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages as number }),
           ...(request.assistantStream === undefined ? {} : { assistantStream: true as const }),
           ...(turnWindow === undefined ? {} : { turnWindow }),
-        } } } }
+        } } }, ...(command.item_chunks === true ? { item_chunks: true as const } : {}) }
       } else reject()
     } else reject()
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
