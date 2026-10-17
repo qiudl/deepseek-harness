@@ -406,7 +406,7 @@ describe('ConversationRoot resident composer', () => {
     expect(ordinary.view.container.querySelector('[class*="heroWorkspaceRow"]')).toBeNull()
     ordinary.view.unmount()
     const extended = mount(sessionSnapshotOf({ blank: false }), undefined, undefined, { inputToolbar: true })
-    expect(extended.view.container.querySelector('[class*="heroWorkspaceRow"]')).not.toBeNull()
+    expect(extended.view.container.querySelector('[class*="heroWorkspaceRow"]')?.getAttribute('data-has-toolbar')).toBe('true')
   })
 
   it('keeps global header navigation without selecting a Session', () => {

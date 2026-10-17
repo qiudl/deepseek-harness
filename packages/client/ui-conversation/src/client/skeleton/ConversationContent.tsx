@@ -109,7 +109,7 @@ export function ConversationContent(props: ConversationContentProps) {
     : workspaceDisplayTitle(storedChipTitle, t('workspace.defaultName'))
 
   const heroWorkspaceRow = (
-    <div className={css.heroWorkspaceRow}>
+    <div className={css.heroWorkspaceRow} data-has-toolbar={hasInputToolbar || undefined}>
       <WorkspaceChip
         buttonRef={pickerAnchor}
         label={chipTitle}
