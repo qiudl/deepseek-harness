@@ -269,6 +269,7 @@ describe('Profile remote UI stream wire commands', () => {
     const stream_id = randomUUID()
     for (const command of [
       { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: {} } },
+      { action: 'open', stream_id, endpoint: 'session/list', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: '$events', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: 'session-1' }, maxMessages: 500, assistantStream: true, turnWindow: { minMessages: 50, minTurns: 2 },
@@ -300,6 +301,7 @@ describe('Profile remote UI stream wire commands', () => {
         address: { kind: 'session', sessionId: 'session-1' }, turnWindow: { minMessages: 51, minTurns: 2 },
       } } } },
       { action: 'open', stream_id, endpoint: 'workspace/follow', payload: { args: { path: '/tmp' } } },
+      { action: 'open', stream_id, endpoint: 'session/list', payload: { args: { path: '/tmp' } } },
       { action: 'open', stream_id, endpoint: '$events', payload: { args: { all: true } } },
       { action: 'open', stream_id, endpoint: 'asset/read', payload: { args: {} } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {

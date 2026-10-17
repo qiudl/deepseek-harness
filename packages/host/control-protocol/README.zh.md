@@ -208,3 +208,5 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 消费回执采用独立的 `dsh-collaboration-consumption-receipt-v1` 签名域。提交将原根 trace、执行命令、消费尝试和逻辑步骤绑定到实际 Session 事件坐标、首次持久化前缀及本地 journal 提交。投递签名不能替代消费证据。这些编解码器仅确立语法，不授予权限。
 
 首条回复凭据使用 `dsh-collaboration-continuation-observation-v1` 签名域。commit 嵌套原消费 commit，并独立绑定观察 ID、`assistant_message_committed`、助手事件序号和观察到的持久前缀。消费签名不能证明此域；凭据不包含回复正文或完成声明。
+
+`profile.remote_ui_stream.session_list` 声明支持 `args` 为空的 `session/list` 游标。每次打开、轮询和关闭仍由所属视图租约授权；结果通过现有的 16 KiB 分块传输，不提高 64 KiB 控制帧上限。

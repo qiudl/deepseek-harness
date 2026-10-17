@@ -29,7 +29,7 @@ describe('Host remote UI stream cursor', () => {
 
   it('splits a large multibyte item below the control frame limit', async () => {
     const cursor = await RemoteUiStreamCursor.open(async function* () {
-      yield { text: '🌟'.repeat(10_000) }
+      yield { text: '🌟'.repeat(70_000) }
     })
     await settle()
     const parts: Buffer[] = []
@@ -43,7 +43,7 @@ describe('Host remote UI stream cursor', () => {
       parts.push(bytes)
       if (part.final) break
     }
-    expect(JSON.parse(Buffer.concat(parts).toString('utf8'))).toEqual({ text: '🌟'.repeat(10_000) })
+    expect(JSON.parse(Buffer.concat(parts).toString('utf8'))).toEqual({ text: '🌟'.repeat(70_000) })
     await cursor.close()
   })
 
