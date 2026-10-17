@@ -382,7 +382,10 @@ describe('Desktop remote UI read-only bridge', () => {
         + JSON.stringify({ type: 'end' }) + '\n')
       expect(invoke).toHaveBeenCalledOnce()
     } finally {
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
     }
   })
 
