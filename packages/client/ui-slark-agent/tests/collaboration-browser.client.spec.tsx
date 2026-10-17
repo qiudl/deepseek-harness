@@ -48,8 +48,8 @@ it('retains the all-workspace filter, search and scroll when returning from a mo
   view.unmount()
   const returned = render(<CollaborationBrowser {...props} />)
   expect({
-    scope: (screen.getByRole('combobox') as HTMLSelectElement).value,
-    query: (screen.getByRole('searchbox') as HTMLInputElement).value,
+    scope: screen.getByRole<HTMLSelectElement>('combobox').value,
+    query: screen.getByRole<HTMLInputElement>('searchbox').value,
     scrollTop: screen.getByRole('region').scrollTop,
   }).toMatchInlineSnapshot(`
     {
@@ -62,8 +62,8 @@ it('retains the all-workspace filter, search and scroll when returning from a mo
   expect(props.currentWorkspaceId()).toBe(first)
   returned.unmount()
   render(<CollaborationBrowser {...props} {...viewingProps()} />)
-  expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe(first)
-  expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('')
+  expect(screen.getByRole<HTMLSelectElement>('combobox').value).toBe(first)
+  expect(screen.getByRole<HTMLInputElement>('searchbox').value).toBe('')
   expect(screen.getByRole('region').scrollTop).toBe(0)
   expect(screen.queryByRole('button', { name: /Review/ })).toBeNull()
 })
