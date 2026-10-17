@@ -1,11 +1,12 @@
 /** Host-verified collaboration conversation index in the left sidebar. */
-import { useMemo, useState } from 'react'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { InjectFace, PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
+import type { createCollaborationBrowserStore } from './collaboration-browser-store.ts'
 import css from './CollaborationBrowser.module.css'
 
 export interface ConversationRow {
@@ -65,14 +66,18 @@ export function CollaborationMobileTab({ active, open, useCollaborationIndex, us
 }
 
 export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWorkspaces,
-  openConversation, startConversation, currentWorkspaceId, togglePin, renameConversation, archiveConversation, restoreConversation, t }:
-  PropsRuntime<'sidebar.collaboration'> & PropsLocale<'slarkAgent'> & InjectFace<BrowserInjected>) {
+  openConversation, startConversation, currentWorkspaceId, togglePin, renameConversation,
+  archiveConversation, restoreConversation, useStore, actions, t }:
+  PropsRuntime<'sidebar.collaboration'> & PropsLocale<'slarkAgent'> & InjectFace<BrowserInjected>
+  & PropsStore<ReturnType<typeof createCollaborationBrowserStore>>) {
   const index = useCollaborationIndex(value => value)
   const sessions = useSessions(value => value)
   const workspacesState = useWorkspaces(value => value)
   const workspaces = workspacesState.items
-  const [query, setQuery] = useState('')
-  const [scope, setScope] = useState(() => currentWorkspaceId() ?? 'all')
+  const { query, scope: savedScope, scrollTop } = useStore(value => value)
+  const [initialScope] = useState(() => currentWorkspaceId() ?? 'all')
+  const scope = savedScope ?? initialScope
+  const scrollRef = useRef<HTMLElement>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
   const [archiving, setArchiving] = useState<string | null>(null)
@@ -132,11 +137,15 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
     return [pending.sort(sort), issues.sort(sort), running.sort(sort), drafts.sort(sort),
       completed.sort(sort), archived.sort(sort)] as const
   }, [displayItems, sessions, workspaceNames, query, scope])
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollTop
+  }, [scrollTop, groups])
   const headings = [t('browser.pending'), t('browser.issues'), t('browser.running'), t('browser.drafts'),
     t('browser.completed'), t('browser.archived')] as const
-  return <section className={css.root} aria-label={t('browser.title')}>
+  return <section ref={scrollRef} className={css.root} aria-label={t('browser.title')}
+    onScroll={(event) => { actions.setScrollTop(event.currentTarget.scrollTop) }}>
     <div className={css.top}><strong>{t('browser.title')}</strong><button type="button" onClick={start}>{t('browser.new')}</button></div>
-    <select className={css.scope} value={scope} onChange={(event) => { setScope(event.target.value); setWorkspaceRequired(false) }} aria-label={t('browser.scope')}>
+    <select className={css.scope} value={scope} onChange={(event) => { actions.setScope(event.target.value); setWorkspaceRequired(false) }} aria-label={t('browser.scope')}>
       <option value="all">{t('browser.all', { count: index.state === 'ready' && workspacesState.phase === 'ready' ? visiblePendingCount : '—' })}</option>
       {workspaces.map((workspace) => {
         const count = index.state === 'ready' && workspacesState.phase === 'ready'
@@ -146,7 +155,7 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
       })}
     </select>
     {workspaceRequired && <p className={css.note} role="alert">{t('browser.chooseWorkspace')}</p>}
-    <input className={css.search} type="search" value={query} onChange={(event) => { setQuery(event.target.value) }} placeholder={t('browser.search')} aria-label={t('browser.search')} />
+    <input className={css.search} type="search" value={query} onChange={(event) => { actions.setQuery(event.target.value) }} placeholder={t('browser.search')} aria-label={t('browser.search')} />
     {actionError && <p className={css.note} role="alert">{t('browser.actionFailed')}</p>}
     {(index.state === 'loading' || workspacesState.phase !== 'ready') && <p className={css.note}>{t('browser.loading')}</p>}
     {index.state === 'unavailable' && <p className={css.note}>{t('browser.unavailable')}</p>}
