@@ -173,7 +173,8 @@ export async function handleDesktopRemoteUiStreamRequest(
   try {
     const request = await readDesktopRemotePrivateBody(req)
     if (!record(request) || Object.keys(request).length !== 2 ||
-      (request.endpoint !== 'session/follow' && request.endpoint !== 'workspace/follow' && request.endpoint !== '$events') ||
+      (request.endpoint !== 'session/list' && request.endpoint !== 'session/follow' &&
+        request.endpoint !== 'workspace/follow' && request.endpoint !== '$events') ||
       (request.endpoint === 'session/follow' ? !followPayload(request.payload) :
         !record(request.payload) || Object.keys(request.payload).length !== 1 ||
         !record(request.payload.args) || Object.keys(request.payload.args).length !== 0))

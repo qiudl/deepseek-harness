@@ -359,7 +359,34 @@ describe('Desktop remote UI read-only bridge', () => {
     }
   })
 
-  it('rejects malformed Workspace and event stream requests before opening a native stream', async () => {
+  it('serves a complete Session list through the private HTTP stream and executor', async () => {
+    const token = 'L'.repeat(43)
+    const value = { items: Array.from({ length: 94 }, (_, index) => ({
+      sessionId: `session-${index}`, title: '摘要🌟'.repeat(300),
+    })) }
+    const invoke = vi.fn(async () => value)
+    const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ invoke }))
+    const server = createServer((req, res) => {
+      void handleDesktopRemoteUiStreamRequest(req, res, token, executor.open.bind(executor))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const body = JSON.stringify({ endpoint: 'session/list', payload: { args: {} } })
+      const denied = await fetch(origin, { method: 'POST', headers: { cookie: 'dsh-auth=fake' }, body })
+      expect(denied.status).toBe(403)
+      expect(invoke).not.toHaveBeenCalled()
+      const response = await fetch(origin, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body })
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe(JSON.stringify({ type: 'item', value }) + '\n'
+        + JSON.stringify({ type: 'end' }) + '\n')
+      expect(invoke).toHaveBeenCalledOnce()
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    }
+  })
+
+  it('rejects malformed Session list, Workspace and event stream requests before opening a native stream', async () => {
     const token = 'A'.repeat(43)
     const open = vi.fn(async () => (async function* () {})())
     const server = createServer((req, res) => {
@@ -368,7 +395,7 @@ describe('Desktop remote UI read-only bridge', () => {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     try {
       const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
-      for (const endpoint of ['workspace/follow', '$events']) {
+      for (const endpoint of ['session/list', 'workspace/follow', '$events']) {
         for (const payload of [null, [], {}, { args: null }, { args: [] }, { args: { all: true } }]) {
           const response = await fetch(origin, { method: 'POST',
             headers: { authorization: `Bearer ${token}` },
