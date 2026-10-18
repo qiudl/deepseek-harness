@@ -56,6 +56,10 @@ type StoredReceipt = Omit<SkillHubPackageReceipt, 'readiness' | 'loadEvidenceId'
   & { readiness: string; loadEvidenceId: unknown }
 type SkillHubPackageInstallationStore = Readonly<{
   current(packageId: string): Promise<SkillHubPackageReceipt | null>
+  snapshot(packageId: string): Promise<Readonly<{
+    receipt: SkillHubPackageReceipt
+    readFile(path: string): Promise<Buffer>
+  }>>
   prepare(plan: SkillHubPackagePlan, archive: Buffer): Promise<void>
   activate(operationId: string, bindingGeneration: string, expectedRevision: string,
     assertCurrent?: () => void): Promise<SkillHubPackageReceipt>
@@ -264,8 +268,38 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     await verifiedFiles(plan, join(versions, receipt.operationId))
     return receipt as SkillHubPackageReceipt
   }
+  async function readFixedFile(receipt: SkillHubPackageReceipt, path: string): Promise<Buffer> {
+    await checkRoot()
+    if (!safePath(path)) fail()
+    const base = join(versions, receipt.operationId)
+    const plan = await storedJson<SkillHubPackagePlan>(join(base, 'plan.json'))
+    if (!plan) throw Error('skillhub_package_unavailable')
+    planValid(plan, profileId, hostKeyId, bindingGeneration)
+    if (plan.operationId !== receipt.operationId || plan.packageId !== receipt.packageId
+      || plan.versionId !== receipt.versionId || plan.archiveSha256 !== receipt.archiveSha256
+      || plan.manifestSha256 !== receipt.manifestSha256
+      || (BigInt(plan.expectedRevision) + 1n).toString() !== receipt.revision) fail()
+    const files = await verifiedFiles(plan, base)
+    const evidence = files.find(file => file.path === path)
+    if (!evidence) throw Error('skillhub_package_unavailable')
+    const file = await open(join(base, 'files', ...path.split('/')),
+      constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      const stat = await file.stat()
+      if (!stat.isFile() || stat.size !== evidence.size) fail()
+      const bytes = await file.readFile()
+      if (digest(bytes) !== evidence.sha256) fail()
+      return bytes
+    } finally { await file.close() }
+  }
   return Object.freeze({
     current,
+    async snapshot(packageId: string) {
+      const receipt = await current(packageId)
+      if (!receipt) throw Error('skillhub_package_unavailable')
+      return Object.freeze({ receipt: Object.freeze({ ...receipt }),
+        readFile: (path: string) => readFixedFile(receipt, path) })
+    },
     async prepare(plan: SkillHubPackagePlan, archive: Buffer): Promise<void> {
       await checkRoot(); planValid(plan, profileId, hostKeyId, bindingGeneration)
       const files = inspectArchive(Buffer.from(archive), plan)
@@ -341,28 +375,9 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       })
     },
     async readFile(packageId: string, path: string): Promise<Buffer> {
-      if (!safePath(path)) fail()
       const receipt = await current(packageId)
       if (!receipt) throw Error('skillhub_package_unavailable')
-      const base = join(versions, receipt.operationId)
-      const plan = await storedJson<SkillHubPackagePlan>(join(base, 'plan.json'))
-      /* v8 ignore next 2 -- current() verified this same plan and receipt; only a concurrent disk rewrite can change them here. */
-      if (!plan || plan.manifestSha256 !== receipt.manifestSha256)
-        throw Error('skillhub_package_unavailable')
-      const files = await verifiedFiles(plan, base)
-      const evidence = files.find(file => file.path === path)
-      if (!evidence) throw Error('skillhub_package_unavailable')
-      const file = await open(join(base, 'files', ...path.split('/')),
-        constants.O_RDONLY | constants.O_NOFOLLOW)
-      try {
-        const stat = await file.stat()
-        /* v8 ignore next -- verifiedFiles checked size moments earlier; this catches only a concurrent file replacement. */
-        if (!stat.isFile() || stat.size !== evidence.size) fail()
-        const bytes = await file.readFile()
-        /* v8 ignore next -- verifiedFiles checked this digest moments earlier; this catches only a concurrent file rewrite. */
-        if (digest(bytes) !== evidence.sha256) fail()
-        return bytes
-      } finally { await file.close() }
+      return readFixedFile(receipt, path)
     },
   })
 }
