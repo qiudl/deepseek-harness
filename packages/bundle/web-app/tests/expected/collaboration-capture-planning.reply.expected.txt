@@ -1,0 +1,29 @@
+{
+  "capture": "captured",
+  "preparation": "prepared",
+  "output": {
+    "intent": "delegate",
+    "task_candidates": [
+      {
+        "mention_ids": [
+          "mention-1"
+        ],
+        "question": "@Guide 请分析",
+        "source_evidence_spans": [
+          {
+            "source_message_id": "message-1",
+            "source_revision": "1",
+            "start": 0,
+            "end": 10
+          }
+        ],
+        "reference_ids": [],
+        "independent": true,
+        "dependency_candidate_indices": []
+      }
+    ],
+    "pending_candidates": []
+  },
+  "provider_requests": 1,
+  "session_events_added": 0
+}

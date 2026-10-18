@@ -769,6 +769,51 @@ it('planner fallback uses the original captured call once, only after Root admis
   await f.owner.dispatch(prepared.attempt_request_id, binding, permission(prepared), signal())
   expect(f.h.calls()).toBe(1)
 })
+it('planner fallback grants preparation its own bounded interval after consuming a live capture', async () => {
+  const f = await captureOnlyFixture()
+  vi.useFakeTimers()
+  try {
+    const captured = await f.owner.captureRootOnly(f.request, binding, signal())
+    await f.admit()
+    await vi.advanceTimersByTimeAsync(25000)
+    const prepared = receipt(await f.owner.startCapturedRootAnalysis(f.request, binding, signal()))
+    expect(prepared).toMatchObject({ root: captured.root, descriptor: captured.descriptor })
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(f.h.calls()).toBe(0)
+    await expect(f.owner.dispatch(prepared.attempt_request_id, binding, permission(prepared), signal()))
+      .resolves.toEqual({ jsonText: '{"intent":"discuss"}' })
+    await expect(f.owner.dispatch(prepared.attempt_request_id, binding, permission(prepared), signal())).rejects.toThrow()
+    expect(f.captureRoot).toHaveBeenCalledTimes(1)
+    expect(f.h.capture).toHaveBeenCalledTimes(1)
+    expect(f.h.calls()).toBe(1)
+  } finally {
+    try { await f.owner.close() } finally { vi.useRealTimers() }
+  }
+})
+it.each(['expired', 'duplicate', 'closed', 'profile_closed'] as const)(
+  'captured planner preparation remains bounded and revocable: %s', async (mode) => {
+    const f = await captureOnlyFixture()
+    vi.useFakeTimers()
+    try {
+      await f.owner.captureRootOnly(f.request, binding, signal())
+      await f.admit()
+      await vi.advanceTimersByTimeAsync(25000)
+      const prepared = receipt(await f.owner.startCapturedRootAnalysis(f.request, binding, signal()))
+      await vi.advanceTimersByTimeAsync(10000)
+      if (mode === 'duplicate')
+        await expect(f.owner.startCapturedRootAnalysis(f.request, binding, signal())).rejects.toThrow()
+      if (mode === 'closed') await f.owner.close()
+      if (mode === 'profile_closed') f.h.lifetime.abort(Error('profile_closed'))
+      if (mode === 'expired' || mode === 'duplicate') await vi.advanceTimersByTimeAsync(20001)
+      await expect(f.owner.dispatch(prepared.attempt_request_id, binding, permission(prepared), signal())).rejects.toThrow()
+      expect(f.captureRoot).toHaveBeenCalledTimes(1)
+      expect(f.h.capture).toHaveBeenCalledTimes(1)
+      expect(f.h.calls()).toBe(0)
+    } finally {
+      try { await f.owner.close() } finally { vi.useRealTimers() }
+    }
+  },
+)
 it.each(['expired', 'closed', 'membership', 'changed_source'] as const)('capture-only refuses stale planner fallback: %s', async (mode) => {
   const f = await captureOnlyFixture()
   vi.useFakeTimers()
