@@ -28,7 +28,7 @@ export function CollaborationTimeline({ recordId, sessionId, useSlarkResults, lo
   const groups = state.groups.filter(group => group.original.source.session_id === sessionId)
   const legacy = groups.filter(group => group.original.timeline_position == null)
   const original = (group: CollaborationResultGroup) => <SourceRecord key={group.original.snapshot_digest}
-    group={group} t={t} loadReplies={loadReplies} busy={state.phase === 'loading'}
+    group={group} t={t} loadReplies={loadReplies} busy={state.historyReadPending === true}
     bind={(node) => {
       if (node) originals.current.set(group.original.snapshot_digest, node)
       else originals.current.delete(group.original.snapshot_digest)
@@ -41,7 +41,7 @@ export function CollaborationTimeline({ recordId, sessionId, useSlarkResults, lo
     {state.phase === 'error' && <p role="status">{t('task.readUnavailable')}</p>}
     {state.location?.status === 'unavailable' && <p role="status">{t('task.sourceUnavailable')}</p>}
     {state.nextCursor && <div className={css.earlier}>
-      <Button size="sm" disabled={state.phase === 'loading'} data-testid="slark-timeline-more"
+      <Button size="sm" disabled={state.historyReadPending === true} data-testid="slark-timeline-more"
         onClick={() => { void loadSources() }}>{t('task.moreMessages')}</Button>
     </div>}
     {legacy.length > 0 && <section className={css.legacy} aria-label={t('task.unpositionedHistory')}>

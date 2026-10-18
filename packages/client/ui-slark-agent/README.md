@@ -55,6 +55,8 @@ The collaboration browser sends archive and restore actions through `collaborati
 
 Source navigation freshly checks the displayed immutable snapshot before opening its original Session and focusing that exact record with the shared focus-ring color. Older located records remain visible across paging and refresh, with fresh authorization on refresh; revoked originals disappear. Failed navigation is explained in the collaboration area. Plugin disposal removes navigation ownership. Locating never sends chat, submits a task or activates a model.
 
+History navigation and paging take priority over automatic refresh. They stop the current view's background observation and discard its late results; each requested read still checks current access. Other views and accepted Agent tasks continue independently. Repeated history actions coalesce while an explicit lookup or page is pending; Account, workspace, Session or Connection changes discard the pending action.
+
 </details>
 
 -----
