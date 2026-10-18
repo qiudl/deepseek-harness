@@ -245,6 +245,7 @@ export class DesktopCollaborationAnalysis {
     }
   }
   /** Prepare the same captured call only after Main has selected the planning route.
+   * Consuming a live capture starts a separate 30-second preparation deadline; repeats cannot renew it.
    * @param value - Unchanged original Root input; durable admission and current membership are required.
    * @param binding - Original current Account/Host connection digest.
    * @param signal - Preparation cancellation, detached only after full-input acknowledgement.
@@ -255,6 +256,7 @@ export class DesktopCollaborationAnalysis {
     const p = this.pendingCapture(recovered.root, binding)
     const captured = p.capturedRoot
     delete (p as Pending).capturedRoot
+    p.timer.refresh()
     const cancel = () => { p.controller.abort(signal.reason) }
     signal.addEventListener('abort', cancel, { once: true })
     try {
