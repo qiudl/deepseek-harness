@@ -9,6 +9,7 @@ import { CollaborationResponseProjection, type ResponseSubscribe, type Provision
 
 type Source = SessionCollaborationSourceItem['source']
 const RESULT_READ_WINDOW_MS = 180_000
+const HISTORY_READ_PRIORITY = Symbol()
 /** Main's readable result projection; transport delivery and execution have separate states. */
 export interface ScopedCollaborationReply {
   readonly delivery_id: string
@@ -62,6 +63,8 @@ export interface CollaborationResultGroup {
 export interface CollaborationResultsSnapshot {
   readonly phase: 'idle' | 'loading' | 'ready' | 'error'
   readonly workspaceHistory?: true
+  /** An explicit Source lookup or history page is queued or reading. */
+  readonly historyReadPending?: true
   readonly locatorAvailable?: true
   readonly focus?: { readonly snapshotDigest: string; readonly sequence: number }
   readonly location?: { readonly snapshotDigest: string; readonly status: 'loading' | 'opened' | 'unavailable' }
@@ -146,6 +149,8 @@ export class CollaborationResultsModel {
   private connectionGeneration: unknown
   private boundBridge: CollaborationResultsBridge | undefined
   private controller: AbortController | undefined
+  private automaticRead: AbortController | undefined
+  private historyRead: AbortController | undefined
   private pending = false
   private readonly traceQueries = new Set<string>()
   private readonly readWaiters: (() => boolean)[] = []
@@ -203,16 +208,18 @@ export class CollaborationResultsModel {
     this.workspaceId = workspaceId; this.boundBridge = host; this.connectionGeneration = connection
     this.responses?.stop(); this.responses = undefined
     this.executions.clear(); this.traces.clear(); this.tracePages.clear()
-    this.generation++; this.sourcePages = 1; this.replyPages.clear(); this.controller?.abort(); this.publish(empty())
+    this.generation++; this.sourcePages = 1; this.replyPages.clear()
+    this.controller?.abort(); this.automaticRead?.abort(); this.historyRead?.abort(); this.publish(empty())
     return true
   }
   private current(generation: number): boolean { this.bind(); return !this.closed && generation === this.generation }
   private readCurrent(generation: number, controller: AbortController): boolean {
-    return this.current(generation) && this.controller === controller
+    return this.current(generation) && this.controller === controller && !controller.signal.aborted
   }
   private publish(state: CollaborationResultsSnapshot): void {
-    const { executionAvailable: _available, focus: _focus, location: _location, ...base } = state
+    const { executionAvailable: _available, focus: _focus, location: _location, historyReadPending: _historyReadPending, ...base } = state
     this.state = { ...base,
+      ...(this.historyRead && !this.historyRead.signal.aborted ? { historyReadPending: true as const } : {}),
       ...(this.history === 'workspace' ? { workspaceHistory: true as const } : {}),
       ...(this.readOriginal ? { locatorAvailable: true as const } : {}),
       ...(this.locatedOriginal ? { focus: { snapshotDigest: this.locatedOriginal.snapshot_digest, sequence: this.focusSequence } } : {}),
@@ -260,7 +267,7 @@ export class CollaborationResultsModel {
     if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-collaboration-admitted', this.refreshEvent)
     if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-response-admitted', this.responseEvent)
     this.responses?.stop(); this.responses = undefined
-    this.controller?.abort(); this.generation++; this.executions.clear()
+    this.controller?.abort(); this.automaticRead?.abort(); this.historyRead?.abort(); this.generation++; this.executions.clear()
     this.traces.clear(); this.tracePages.clear(); this.publish(this.state)
     if (this.location?.status === 'loading') this.location = undefined
     this.publish(this.state)
@@ -322,6 +329,25 @@ export class CollaborationResultsModel {
       || item.original_message !== original.original_message || !samePosition(item, original)) throw Error('source_substituted')
     return item
   }
+  private async historyQuery(run: (generation: number, controller: AbortController) => Promise<void>): Promise<void> {
+    if (this.closed || this.historyRead && !this.historyRead.signal.aborted) return
+    const generation = this.generation, controller = new AbortController()
+    this.historyRead = controller
+    this.publish(this.state)
+    const acquired = this.acquireTraceQuery(generation)
+    this.automaticRead?.abort(HISTORY_READ_PRIORITY)
+    const ownsQuery = await acquired
+    try {
+      if (!ownsQuery || !this.current(generation) || controller.signal.aborted) return
+      this.controller = controller
+      await run(generation, controller)
+    } finally {
+      controller.abort()
+      if (this.historyRead === controller) this.historyRead = undefined
+      if (this.current(generation)) this.publish(this.state)
+      if (ownsQuery) this.finishQuery()
+    }
+  }
   /**
    * Revalidate one displayed original before the owning plugin navigates to it.
    * @param digest - Existing displayed Source snapshot digest.
@@ -331,25 +357,23 @@ export class CollaborationResultsModel {
   async locateOriginal(digest: string, open: (original: SessionCollaborationSourceItem) => void): Promise<void> {
     this.bind()
     const original = this.state.groups.find(group => group.original.snapshot_digest === digest)?.original
-    if (this.closed || this.pending || !this.workspaceId || !this.readOriginal || !original) return
-    this.pending = true; this.again = false
-    const generation = this.generation, controller = new AbortController()
-    this.controller = controller
-    this.location = { snapshotDigest: digest, status: 'loading' }
-    this.publish({ ...this.state, phase: 'loading' })
-    try {
-      const item = await this.lookupOriginal(original, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]))
-      if (!this.readCurrent(generation, controller)) return
-      open(item)
-      if (!this.current(generation)) return
-      this.location = { snapshotDigest: digest, status: 'opened' }
-    } catch {
-      if (!this.readCurrent(generation, controller)) return
-      this.location = { snapshotDigest: digest, status: 'unavailable' }
-    } finally {
-      if (this.readCurrent(generation, controller)) this.publish({ ...this.state, phase: 'ready' })
-      this.finishQuery()
-    }
+    if (this.closed || !this.workspaceId || !this.readOriginal || !original) return
+    await this.historyQuery(async (generation, controller) => {
+      this.location = { snapshotDigest: digest, status: 'loading' }
+      this.publish({ ...this.state, phase: 'loading' })
+      try {
+        const item = await this.lookupOriginal(original, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]))
+        if (!this.readCurrent(generation, controller)) return
+        open(item)
+        if (!this.current(generation)) return
+        this.location = { snapshotDigest: digest, status: 'opened' }
+      } catch {
+        if (!this.readCurrent(generation, controller)) return
+        this.location = { snapshotDigest: digest, status: 'unavailable' }
+      } finally {
+        if (this.readCurrent(generation, controller)) this.publish({ ...this.state, phase: 'ready' })
+      }
+    })
   }
   /**
    * Reveal a just-verified original in its owning Session, retaining it beyond the newest history page.
@@ -412,16 +436,22 @@ export class CollaborationResultsModel {
       return { ...group, ...planning }
     } catch { return { original, replies: [], phase: 'error' } }
   }
-  private async query(more: boolean): Promise<void> {
+  private async query(more: boolean, history?: { generation: number; controller: AbortController }): Promise<void> {
     this.bind()
     if (this.closed || !this.workspaceId) return
-    if (this.pending) { if (!more) this.again = true; return }
+    if (more && !history) {
+      if (this.state.nextCursor === undefined) return
+      await this.historyQuery((generation, controller) => this.query(true, { generation, controller }))
+      return
+    }
+    if (!more && this.pending) { this.again = true; return }
     const cursor = more ? this.state.nextCursor : undefined
     if (more && cursor === undefined) return
     this.pending = true; this.again = false
-    let ownsQuery = true
-    const generation = this.generation, controller = new AbortController()
+    let ownsQuery = !more
+    const generation = history?.generation ?? this.generation, controller = history?.controller ?? new AbortController()
     this.controller = controller
+    if (!more) this.automaticRead = controller
     // Budget eight originals per Native page, two workers, retained reply pages and a located original.
     const extraReplyPages = [...this.replyPages.values()].reduce((sum, pages) => sum + pages - 1, 0)
     const queryBudget = 30_000 * (this.sourcePages + 1) + RESULT_READ_WINDOW_MS * (4 * this.sourcePages + extraReplyPages + 1)
@@ -469,7 +499,7 @@ export class CollaborationResultsModel {
         }
         publishProgress()
         for (let offsetIndex = 0; offsetIndex < items.length; offsetIndex += 2) {
-          if (this.readWaiters.length) {
+          if (!more && this.readWaiters.length) {
             const resume = this.acquireTraceQuery(generation)
             ownsQuery = false
             this.finishQuery()
@@ -529,6 +559,7 @@ export class CollaborationResultsModel {
       if (this.readCurrent(generation, controller)) this.publish({ phase: 'error', groups: [] })
     } finally {
       controller.abort()
+      if (this.automaticRead === controller) this.automaticRead = undefined
       if (ownsQuery) this.finishQuery()
     }
   }
@@ -568,12 +599,9 @@ export class CollaborationResultsModel {
   async loadReplies(snapshotDigest: string): Promise<void> {
     this.bind()
     const group = this.state.groups.find(item => item.original.snapshot_digest === snapshotDigest)
-    if (this.closed || this.pending || !group?.nextCursor || !this.workspaceId) return
-    this.pending = true
-    const generation = this.generation, controller = new AbortController()
-    this.controller = controller
-    this.publish({ ...this.state, phase: 'loading' })
-    try {
+    if (this.closed || !group?.nextCursor || !this.workspaceId) return
+    await this.historyQuery(async (generation, controller) => {
+      this.publish({ ...this.state, phase: 'loading' })
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(RESULT_READ_WINDOW_MS)])
       let next = await this.results(group.original, signal, generation, group.nextCursor, group.replies)
       if (this.readCurrent(generation, controller)) {
@@ -585,10 +613,7 @@ export class CollaborationResultsModel {
         this.publish({ ...this.state, phase: 'ready', groups: this.state.groups.map(item =>
           item.original.snapshot_digest === group.original.snapshot_digest ? next : item) })
       }
-    } finally {
-      controller.abort()
-      this.finishQuery()
-    }
+    })
   }
   private retainTrace(digest: string, trace: CollaborationTraceView): void {
     let size = bytes(trace)
@@ -612,7 +637,7 @@ export class CollaborationResultsModel {
       do {
         const response = await wait(bridge.collaborationRootExecution({ action: 'trace', source: original.source,
           cursor: { after_seq: after, limit: 20 } }), signal)
-        if (!this.current(generation)) return
+        if (!this.current(generation) || signal.reason === HISTORY_READ_PRIORITY) return
         const next = readCollaborationTracePage(response, after, page ?? old)
         const events = [...(page?.events ?? []), ...next.events]
         if (events.length > 4096 || new Set(events.map(e => e.event_id)).size !== events.length
@@ -625,7 +650,7 @@ export class CollaborationResultsModel {
       this.retainTrace(digest, { ...this.traces.get(digest), phase: 'ready', page })
       if (append) this.tracePages.set(digest, loadedPages + 1)
     } catch {
-      if (this.current(generation)) this.traces.set(digest, { phase: 'error' })
+      if (this.current(generation) && signal.reason !== HISTORY_READ_PRIORITY) this.traces.set(digest, { phase: 'error' })
     }
   }
   /** Read or page cloud audits for one original Source; queued reads precede automatic refresh.

@@ -62,7 +62,7 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
         }}>
         <small>{t('task.question')}</small>
         <div className={css.text}>{group.original.original_message}</div>
-        {state.locatorAvailable && locateOriginal && <Button size="sm" disabled={state.phase === 'loading'}
+        {state.locatorAvailable && locateOriginal && <Button size="sm" disabled={state.historyReadPending === true}
           data-testid="slark-source-locate" onClick={() => { void locateOriginal(group.original.snapshot_digest) }}>{t('task.viewOriginal')}</Button>}
         {group.phase === 'error' ? <p role="status">{t('task.readUnavailable')}</p>
           : group.replies.length === 0 && !group.pending?.length && !group.pendingUnavailable &&
@@ -110,12 +110,12 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
             </div>}
           </div>
         })}
-        {group.nextCursor && <Button size="sm" disabled={state.phase === 'loading'}
+        {group.nextCursor && <Button size="sm" disabled={state.historyReadPending === true}
           data-testid="slark-collaboration-results-more"
           onClick={() => { void loadReplies(group.original.snapshot_digest) }}>{t('task.moreResults')}</Button>}
       </article>)}
     </div>
-    {state.nextCursor && <Button size="sm" disabled={state.phase === 'loading'}
+    {state.nextCursor && <Button size="sm" disabled={state.historyReadPending === true}
       data-testid="slark-collaboration-messages-more"
       onClick={() => { void loadSources() }}>{t(state.workspaceHistory ? 'task.moreWorkspaceMessages' : 'task.moreMessages')}</Button>}
   </section>
