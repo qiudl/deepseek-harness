@@ -60,6 +60,16 @@ type SkillHubPackageInstallationStore = Readonly<{
   readFile(packageId: string, path: string): Promise<Buffer>
 }>
 
+/** Resolve the current Profile's private package root before opening its store.
+ * @param resolveRoot - platform-owned Profile and private-directory check.
+ * @returns a Host control callback bound to that platform-owned root.
+ */
+export function createSkillHubPackageStoreFactory(resolveRoot: (profileId: string) => string):
+(profileId: string, bindingGeneration: string, hostKeyId: string) => Promise<SkillHubPackageInstallationStore> {
+  return (profileId, bindingGeneration, hostKeyId) => createSkillHubPackageInstallationStore(
+    resolveRoot(profileId), profileId, hostKeyId, bindingGeneration)
+}
+
 function safePath(value: string): boolean {
   return value.length > 0 && value.length <= 500 && value.normalize('NFC') === value
     && !/[\\\u0000-\u001f\u007f-\u009f]/u.test(value)

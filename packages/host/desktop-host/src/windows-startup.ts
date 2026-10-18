@@ -5,7 +5,7 @@ import { win32 } from 'node:path'
 import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { DesktopHost } from './desktop-host.ts'
-import { createSkillHubPackageInstallationStore } from './skillhub-package-install.ts'
+import { createSkillHubPackageStoreFactory } from './skillhub-package-install.ts'
 import { ProfileExtensionOperations, type ExtensionExecutionContext } from './extension-operations.ts'
 import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
@@ -544,13 +544,13 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
-        createSkillHubPackageStore: async (profileId, bindingGeneration, hostKeyId) => {
+        createSkillHubPackageStore: createSkillHubPackageStoreFactory((profileId) => {
           if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
           const packagesRoot = win32.join(config.root, 'profiles', profileId, 'skillhub-packages')
           assertWindowsHostPrivatePathEvidence(bindings.ensurePrivateDirectory(
             packagesRoot, windowsHostPrivateSecurityDescriptor(userSid)), 'directory', userSid)
-          return createSkillHubPackageInstallationStore(packagesRoot, profileId, hostKeyId, bindingGeneration)
-        },
+          return packagesRoot
+        }),
         ...collaborationWorkerReaders(workers),
         rootAnalysisSupported: true,
         rootCaptureSupported: true,
