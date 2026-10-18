@@ -43,6 +43,8 @@ export type {
   HostCollaborationDeliveryReceipt, HostCollaborationDeliveryResult,
 } from './collaboration-delivery.js'
 export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.js'
+export { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from './skillhub-profile-binding.js'
+export type { SkillHubProfileBindingPayload } from './skillhub-profile-binding.js'
 export type { CanonicalMigrationRecord } from './migration-canonical.js'
 export type {
   ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
@@ -93,6 +95,8 @@ export type {
   HostInspectRequest,
   HostInspectResult,
   ProfileOpenRequest,
+  ProfileSkillHubBindingRequest,
+  ProfileSkillHubBindingResult,
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,

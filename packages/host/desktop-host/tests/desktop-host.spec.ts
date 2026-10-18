@@ -1,4 +1,5 @@
-import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
+import { generateKeyPairSync, randomUUID, sign, verify } from 'node:crypto'
+import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -408,6 +409,40 @@ describe('authenticated Unix transport', () => {
     })).resolves.toMatchObject({ profileId: local.profileId, persistenceGeneration: 1 })
     restoredClient.close()
     await server.close()
+  })
+
+  it('signs a separate SkillHub challenge only for a currently authorized Host-local Profile', async () => {
+    const { server, socketPath } = await fixture()
+    const connectionOptions = {
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    }
+    const owner = await UnixHostClient.connect(connectionOptions)
+    const other = await UnixHostClient.connect(connectionOptions)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:skillhub-local', unlockMaterial })
+      const challengeId = randomUUID()
+      const request = { profileSelector: local.profileSelector, actorUserId: 'slark-user',
+        computerId: 'slark-computer', challengeId }
+      const proof = await owner.signSkillHubProfileBinding(request)
+      expect(proof).toMatchObject({
+        version: 1, actorUserId: request.actorUserId, computerId: request.computerId,
+        installationId: identity.installationId, profileId: local.profileId, challengeId,
+        bindingGeneration: '1',
+      })
+      const { signature, ...unsigned } = proof
+      expect(verify(null, Buffer.from(SKILLHUB_PROFILE_BINDING_DOMAIN
+        + encodeSkillHubProfileBindingPayload(unsigned)), keys.publicKey,
+      Buffer.from(signature, 'base64url'))).toBe(true)
+      await expect(other.signSkillHubProfileBinding(request)).rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.signSkillHubProfileBinding({ ...request, profileSelector: local.profileSelector + 'A' }))
+        .rejects.toThrow()
+    } finally {
+      owner.close()
+      other.close()
+      await server.close()
+    }
   })
 
   it('recovers and opens an offline Account Profile through a domain-separated selector', async () => {

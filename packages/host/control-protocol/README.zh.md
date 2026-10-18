@@ -60,6 +60,8 @@ kind: "package-reference"
 
 ## 挑战认证
 
+`profile.skillhub_binding` 使用独立签名域 `SLARK-SKILLHUB-DSH-PROFILE-BINDING/v1` 为一个 Host 本地 Profile 选择器签署 Slark 挑战。固定顺序 JSON 精确绑定 Slark 用户、Computer、Host 安装、本地 Profile、绑定代次和挑战 UUID。Host 根据当前本地 Profile 授权核验选择器；Desktop broker 提供 Slark 用户和 Computer 坐标。Slark 必须再与已认证 daemon 和数据库一次性挑战核对，才能建立 SkillHub 目标绑定。此签名本身不授予安装或执行权限。
+
 `profile.workspace_model_selection` 接受已验证的 Account 绑定、工作区注册表 UUID 和 Session id。精确响应包含这些身份、provider/model（各最多 256 UTF-8 字节），以及可选 reasoning effort（最多 128 字节）。调用方指定的模型、Profile 路径和额外响应字段均被拒绝。结果只是只读选择，不是可执行适配器快照或 Source 凭据；Host 必须发布已安装执行器的能力才可调用。
 
 `profile.collaboration_registration` 在核验同一连接的 Account 绑定后，签署服务器登记请求/challenge ID、规范 nonce、有效期、HTTPS audience、environment UUID 和 Account issuer/subject。证明包含安装 UUID/公钥及当前 Host instance/process nonce。Ed25519 签名正文是 UTF-8 域 `dsh-collaboration-host-registration/v2`、NUL 与固定顺序 JSON 元组，不包含签名本身。解析器冻结精确字段并拒绝凭据。挑战须仍有效，且在五分钟内过期。服务器须另行信任安装公钥、持久保存并消费挑战、提交登记回执；此签名不授权 Source 或任务。

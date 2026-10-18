@@ -44,6 +44,8 @@ import type {
   ProfileLeaseCloseResult,
   ProfileOpenRequest,
   ProfileOpenResult,
+  ProfileSkillHubBindingRequest,
+  ProfileSkillHubBindingResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
@@ -1554,6 +1556,7 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
 }
 
 function decodeProfileRequest(frame: Record<string, unknown>):
+  | ProfileSkillHubBindingRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
@@ -1788,6 +1791,17 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
       lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
       command: extensionCommand(params.command),
+    } }
+  }
+  if (frame.method === 'profile.skillhub_binding') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'actor_user_id', 'computer_id', 'challenge_id'])
+    const actor_user_id = wireText(params.actor_user_id, 200)
+    const computer_id = wireText(params.computer_id, 200)
+    if (actor_user_id.trim() !== actor_user_id || computer_id.trim() !== computer_id) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+      actor_user_id, computer_id,
+      challenge_id: uuid(params.challenge_id),
     } }
   }
   if (frame.method === 'profile.status' || frame.method === 'profile.open') {
@@ -2113,6 +2127,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
 }
 
 function decodeProfileResult(frame: Record<string, unknown>):
+  | ProfileSkillHubBindingResult
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
@@ -2340,6 +2355,19 @@ function decodeProfileResult(frame: Record<string, unknown>):
       version: 1, type: 'result', request_id, method: 'profile.recovery_status',
       result: { state: result.state as 'recovering' | 'offline_ready' | 'unknown' },
     }
+  }
+  if (frame.method === 'profile.skillhub_binding') {
+    exactKeys(result, ['version', 'actorUserId', 'computerId', 'installationId', 'profileId',
+      'bindingGeneration', 'challengeId', 'signature'])
+    if (result.version !== 1 || typeof result.bindingGeneration !== 'string'
+      || !/^[1-9][0-9]{0,15}$/u.test(result.bindingGeneration)
+      || !Number.isSafeInteger(Number(result.bindingGeneration))) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      version: 1, actorUserId: wireText(result.actorUserId, 200), computerId: wireText(result.computerId, 200),
+      installationId: uuid(result.installationId), profileId: uuid(result.profileId),
+      bindingGeneration: result.bindingGeneration, challengeId: uuid(result.challengeId),
+      signature: signature(result.signature),
+    } }
   }
   if (frame.method === 'profile.open' || frame.method === 'profile.open_local') {
     exactKeys(result, ['profile_id', 'view_lease_id', 'view_activation_handle', 'lease_generation', 'expires_at', 'runtime_generation'])
