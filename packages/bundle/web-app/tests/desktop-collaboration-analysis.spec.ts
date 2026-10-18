@@ -658,7 +658,7 @@ async function admittedRootFixture() {
   onTestFinished(() => owner.close())
   const target = { namespace_id: root.namespace_id, command_id: root.command_id, workspace_id: root.source.workspace_id,
     session_id: root.source.session_id, source_message_id: root.source.source_message_id, source_revision: root.source.source_revision }
-  return { h, root, reader, owner, target, input: { namespace_id: root.namespace_id, source: input(), continuation_policy: 'follow_authorized_plan' } }
+  return { h, root, pending, reader, owner, target, input: { namespace_id: root.namespace_id, source: input(), continuation_policy: 'follow_authorized_plan' } }
 }
 async function captureOnlyFixture(expectedCloseError?: string) {
   const h = await harness(), roots = await openCollaborationRootJournal(h.facility)
@@ -1153,4 +1153,65 @@ it('refuses multiple original Source outputs instead of selecting the first save
   await expect(recovered.readSourceOutput(target, signal())).rejects.toThrow('output_ambiguous')
   expect(h.calls()).toBe(0)
   expect(h.capture).toHaveBeenCalledTimes(1)
+})
+
+it('reads original Root diagnostics through private HTTP without planning or dispatch', async () => {
+  const f = await admittedRootFixture()
+  const http = await httpFixture({ ...f.h, owner: f.owner })
+  const response = await http.post({ action: 'read_root_diagnostic', binding_key: binding, target: f.target })
+  expect(response.status).toBe(200)
+  const result: unknown = await response.json()
+  expect(result).toEqual({ value: {
+    root: {
+      namespace_id: f.root.namespace_id, command_id: f.root.command_id,
+      root_task_id: f.root.root_task_id, root_trace_id: f.root.root_trace_id,
+      payload_digest: f.root.payload_digest, source_descriptor: {
+        workspace_id: f.root.source.workspace_id, session_id: f.root.source.session_id,
+        source_message_id: f.root.source.source_message_id, source_revision: f.root.source.source_revision,
+        snapshot_digest: f.root.source_digest,
+      },
+    },
+    model: { provider: f.root.source.model_snapshot.provider, model: f.root.source.model_snapshot.model },
+    failures: [],
+  } })
+  expect(JSON.stringify(result)).not.toContain('original_message')
+  expect(f.h.calls()).toBe(0)
+})
+
+it('reads the original durable failure after reopen without replaying its consumed grant', async () => {
+  const f = await admittedRootFixture(), writer = await openCollaborationAnalysisJournal(f.h.facility)
+  const source = f.root.source
+  const manifest: CollaborationAnalysisManifest = { prompt_version: '1', source, request: {
+    provider: source.model_snapshot.provider, model: source.model_snapshot.model, maxTokens: 8192,
+    purpose: 'collaboration-analysis', tools: [], system: 'Analyze only original user content.',
+    traceparent: '00-' + f.root.root_trace_id + '-' + '1'.repeat(16) + '-01',
+    messages: [createMessage({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: JSON.stringify({
+      source_message_id: source.source_message_id, source_revision: source.source_revision,
+      original_message: source.original_message, active_mentions: source.active_mentions,
+    }) }] })],
+  } }
+  const record = await writer.prepare(manifest, signal())
+  await writer.dispatch(record, grant({ attempt_request_id: record.attempt_request_id,
+    input_manifest_digest: record.input_manifest_digest, source_digest: record.source_digest }), signal())
+  await writer.recordFailure(record, Error('collaboration_analysis_timeout'))
+  await writer.close()
+  const result = await f.owner.readRootDiagnostic(f.target, signal())
+  expect(result.failures).toMatchObject([{ journal: 'original', reason: 'timeout',
+    attempt_request_id: record.attempt_request_id, source_digest: f.root.source_digest,
+    trace_id: f.root.root_trace_id, input_manifest_digest: record.input_manifest_digest }])
+  expect(result.failures).toHaveLength(1)
+  expect(result.model).toEqual({ provider: source.model_snapshot.provider, model: source.model_snapshot.model })
+  expect(f.h.calls()).toBe(0)
+  expect(JSON.stringify(result)).not.toContain('dispatch_granted')
+  expect(JSON.stringify(result)).not.toContain('original_message')
+})
+it.each(['pending', 'membership', 'final_root', 'cancelled', 'closed'] as const)('Root diagnostics stop on %s without planning', async (mode) => {
+  const f = await admittedRootFixture(), cancellation = new AbortController()
+  if (mode === 'pending') f.reader.mockResolvedValueOnce(f.pending)
+  if (mode === 'membership') f.reader.mockRejectedValueOnce(Error('membership'))
+  if (mode === 'final_root') f.reader.mockResolvedValueOnce(f.root).mockResolvedValueOnce({ ...f.root, root_trace_id: 'f'.repeat(32) as typeof f.root.root_trace_id })
+  if (mode === 'cancelled') cancellation.abort()
+  if (mode === 'closed') await f.owner.close()
+  await expect(f.owner.readRootDiagnostic(f.target, cancellation.signal)).rejects.toThrow()
+  expect(f.h.calls()).toBe(0)
 })

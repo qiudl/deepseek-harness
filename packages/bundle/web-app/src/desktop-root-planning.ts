@@ -1,3 +1,4 @@
+import type { CollaborationAnalysisFailure } from '@deepseek-ai/dsh-api-session-controller'
 import type { HostRootPlanningEvidence } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningEvidence } from '@deepseek-ai/dsh-host-control-protocol'
 /** Private Profile owner for newly prepared attempts under an immutable admitted root. */
@@ -200,6 +201,25 @@ export class DesktopRootPlanning {
     active.throwIfAborted(); this.assertOpen()
     return evidence
   }
+
+  /** Read durable failures for one admitted Root without preparation, dispatch or recovery.
+   * @param value - Current parent-authorized original Root target.
+   * @param signal - Caller cancellation retained through storage and membership reads.
+   * @returns Local failure observations only; absence does not authorize retry.
+   */
+  async readFailures(value: unknown, signal: AbortSignal): Promise<readonly CollaborationAnalysisFailure[]> {
+    const target = parseHostRootSubmissionTarget(value), active = AbortSignal.any([signal, this.lifetime])
+    active.throwIfAborted(); this.assertOpen()
+    const root = await this.read(target, active)
+    if (root.state !== 'admitted') throw Error('collaboration_root_not_admitted')
+    const journal = await wait(this.journal ??= this.open(), active)
+    const failures = [...journal.failures()].filter(failure =>
+      failure.source_digest === root.source_digest && failure.trace_id === root.root_trace_id)
+    if (!isDeepStrictEqual(await this.read(target, active), root)) throw Error('collaboration_root_planning_root_changed')
+    active.throwIfAborted(); this.assertOpen()
+    return failures
+  }
+
   /** Consume a matching current grant once; the input writer commits it before the provider call.
    * @param attemptId - Fresh attempt identity returned by prepare.
    * @param binding - Original connection binding.

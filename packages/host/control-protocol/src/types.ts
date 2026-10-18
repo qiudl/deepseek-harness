@@ -1,3 +1,4 @@
+import type { HostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
 import type { RecoveryDescribeInput, RecoveryValidateInput, RecoveryDescriptor, RecoveryValidation } from './recovery-materials.ts'
 import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
 import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
@@ -748,6 +749,7 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'dispatch_root_attempt'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
   | Readonly<{ action: 'read_source_output'; target: HostCollaborationSourceTarget }>
   | Readonly<{ action: 'read_root_output'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'read_root_diagnostic'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'prepare_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'capture_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'start_captured_root'; input: HostRootAnalysisInput }>
@@ -767,6 +769,7 @@ export type HostCollaborationAnalysisResult =
   | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>
   | Readonly<{ kind: 'source_output'; evidence: HostSourceAnalysisOutput }>
   | Readonly<{ kind: 'root_output'; evidence: HostRootAnalysisOutput }>
+  | Readonly<{ kind: 'root_diagnostic'; evidence: HostRootAnalysisDiagnostic }>
   | Readonly<{ kind: 'root_prepared'; preparation: HostRemoteSessionJson }>
   | Readonly<{ kind: 'root_captured'; capture: HostRemoteSessionJson; context_receipt?: import('./root-text-context.ts').HostRootTextContextReceipt }>
   | Readonly<{ kind: 'root_capture_released'; root: HostRootSubmissionDescriptor }>
