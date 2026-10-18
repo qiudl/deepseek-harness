@@ -54,6 +54,7 @@ import type {
   ProfileOpenRequest,
   ProfileSkillHubBindingRequest,
   ProfileSkillHubBindingResult,
+  ProfileSkillHubPackageChunkRequest,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
@@ -131,6 +132,8 @@ import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
 import { CollaborationDeliveryUploads, type CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
+import { SkillHubPackageUploads } from './skillhub-package-uploads.ts'
+import type { createSkillHubPackageInstallationStore } from './skillhub-package-install.ts'
 import { RemoteUiStreamCursor } from './remote-ui-stream-cursor.ts'
 import type { SingleHostLock } from './single-instance.ts'
 
@@ -238,6 +241,9 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** The owning Host creates a private package root for the selected Profile. */
+  readonly createSkillHubPackageStore?: (profileId: string, bindingGeneration: string,
+    hostKeyId: string) => ReturnType<typeof createSkillHubPackageInstallationStore>
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
@@ -496,7 +502,7 @@ async function recheckReferenceSource(
 /** Transport-independent Host account, Profile, and migration authority inputs. */
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
-  'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
+  'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
@@ -949,6 +955,7 @@ class FrameChannel implements HostClientFrameTransport {
 /** Shared post-attestation authority used identically by Unix and Windows carriers. */
 export class HostControlAuthority {
   private readonly deliveryUploads = new CollaborationDeliveryUploads()
+  private readonly packageUploads = new SkillHubPackageUploads()
   constructor(private readonly options: HostControlAuthorityOptions) {}
 
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
@@ -1450,6 +1457,37 @@ export class HostControlAuthority {
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { ...payload, signature },
           })
+        } else if (frame.method === 'profile.skillhub_package_chunk') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+          const generation = String(selector.binding_generation)
+          const profileId = selector.profile_id
+          const hostKeyId = createHash('sha256').update(Buffer.from(
+            this.options.identity.installationPublicKey, 'base64url')).digest('hex')
+          const authorize = () => {
+            context.signal.throwIfAborted()
+            const current = this.options.host.authorizeMigrationProfileSelector({
+              profileId: profileId as never, bindingGeneration: selector.binding_generation, ownerId,
+            })
+            if (current !== profileId || frame.params.plan.profileId !== profileId
+              || frame.params.plan.bindingGeneration !== generation
+              || frame.params.plan.hostKeyId !== hostKeyId) throw new HostAuthorityError('profile_mismatch')
+          }
+          const result = await this.packageUploads.accept({
+            ownerId, bindingKey: JSON.stringify([ownerId, profileId, generation, hostKeyId]),
+            plan: frame.params.plan, totalBytes: frame.params.total_bytes,
+            offset: frame.params.offset, bytes: Buffer.from(frame.params.chunk_base64url, 'base64url'),
+            signal: context.signal, authorize,
+            capture: () => ({ assertCurrent: authorize, prepare: async (plan, archive) => {
+              const store = await createStore(profileId, generation, hostKeyId)
+              authorize()
+              await store.prepare(plan, archive)
+            } }),
+          })
+          context.signal.throwIfAborted()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { next_offset: result.nextOffset, prepared: result.prepared } })
         } else if (frame.method === 'profile.open') {
           const opened = await this.options.host.openProfile({
             authorityEnvironmentId: frame.params.authority_environment_id,
@@ -2189,6 +2227,7 @@ export class HostControlAuthority {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
+          ...(this.options.createSkillHubPackageStore ? ['profile.skillhub_package_chunk'] : []),
           'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
@@ -2867,6 +2906,39 @@ export class UnixHostClient {
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     return frame.result
+  }
+
+  /** Send one complete fixed ZIP through bounded Host frames without activating it.
+   * @param input - current Profile selector, fixed package plan, archive, and cancellation.
+   * @returns when the Host has verified and prepared all package files.
+   */
+  async prepareSkillHubPackage(input: {
+    readonly profileSelector: string
+    readonly plan: ProfileSkillHubPackageChunkRequest['params']['plan']
+    readonly archive: Buffer
+    readonly signal?: AbortSignal
+  }): Promise<void> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package_chunk' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const archive = Buffer.from(input.archive)
+    if (!archive.length || archive.length > 110 * 1024 * 1024
+      || createHash('sha256').update(archive).digest('hex') !== input.plan.archiveSha256)
+      throw new HostAuthorityError('unavailable')
+    let offset = 0
+    while (offset < archive.length) {
+      const bytes = archive.subarray(offset, Math.min(offset + 32768, archive.length))
+      const request: ProfileSkillHubPackageChunkRequest = {
+        version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package_chunk',
+        params: { ...this.auth(), profile_selector: input.profileSelector, plan: input.plan,
+          total_bytes: archive.length, offset, chunk_base64url: bytes.toString('base64url') },
+      }
+      const frame = await this.call(request, input.signal)
+      if (frame.type !== 'result' || frame.method !== request.method
+        || frame.result.next_offset !== offset + bytes.length
+        || frame.result.prepared !== (offset + bytes.length === archive.length))
+        throw new HostAuthorityError('unavailable')
+      offset = frame.result.next_offset
+    }
   }
 
   /**
@@ -4425,7 +4497,7 @@ export class UnixHostClient {
       | ProfileModelClaimRetryRequest
       | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
-      | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest
+      | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest | ProfileSkillHubPackageChunkRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest

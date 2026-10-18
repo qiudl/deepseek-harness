@@ -38,6 +38,7 @@ import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { readProfileSkillCatalog, readProfileSkillRuntime } from './skill-worker-client.ts'
 import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
 import { DesktopHost } from './desktop-host.ts'
+import { createSkillHubPackageInstallationStore } from './skillhub-package-install.ts'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'
 import { DshWebProfileWorkerFactory } from './dsh-web-profile-worker.ts'
@@ -732,6 +733,14 @@ export async function startDesktopHostApplication(
         runtimeGeneration: config.runtimeGeneration, schemaGeneration: config.schemaGeneration,
       },
       host,
+      createSkillHubPackageStore: async (profileId, bindingGeneration, hostKeyId) => {
+        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        const profileRoot = join(root, 'profiles', profileId)
+        ownerDirectory(profileRoot, uid)
+        const packagesRoot = join(profileRoot, 'skillhub-packages')
+        ownerDirectory(packagesRoot, uid)
+        return createSkillHubPackageInstallationStore(packagesRoot, profileId, hostKeyId, bindingGeneration)
+      },
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       ...collaborationWorkerReaders(workers),
       ...rootWorkerOperations(workers),

@@ -1,9 +1,10 @@
-import { generateKeyPairSync, randomUUID, sign, verify } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign, verify } from 'node:crypto'
 import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
+import AdmZip from 'adm-zip'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   ApprovalAuthority,
@@ -20,6 +21,7 @@ import {
   UnixHostClient,
   UnixHostServer,
   acquireSingleHostLock,
+  createSkillHubPackageInstallationStore,
   discoverUnixHost,
   personIndex,
 } from '../src/index.ts'
@@ -230,6 +232,7 @@ describe('authenticated Unix transport', () => {
     createLegacyMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createLegacyMigrationExport']>,
     now: () => number = clock.now,
     offlineRecovery = true,
+    createSkillHubPackageStore?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createSkillHubPackageStore']>,
   ): Promise<{ server: UnixHostServer; host: DesktopHost; socketPath: string }> {
     const root = dir()
     const socketPath = join(root, 'host.sock')
@@ -260,6 +263,7 @@ describe('authenticated Unix transport', () => {
       socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
       attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity, host, now,
       profilePersistenceGeneration: () => 1,
+      ...(createSkillHubPackageStore === undefined ? {} : { createSkillHubPackageStore }),
       ...(createMigrationExport === undefined ? {} : { createMigrationExport }),
       ...(createMigrationImport === undefined ? {} : { createMigrationImport }),
       ...(createLegacyMigrationExport === undefined ? {} : { createLegacyMigrationExport }),
@@ -440,6 +444,58 @@ describe('authenticated Unix transport', () => {
         .rejects.toThrow()
       Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.status' }))
       await expect(owner.signSkillHubProfileBinding(request)).rejects.toMatchObject({ code: 'unavailable' })
+    } finally {
+      owner.close()
+      other.close()
+      await server.close()
+    }
+  })
+
+  it('prepares a complete SkillHub ZIP only on the granted Host connection', async () => {
+    const packagesRoot = dir()
+    let stored: Awaited<ReturnType<typeof createSkillHubPackageInstallationStore>> | undefined
+    const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, true,
+      async (profileId, generation, hostKeyId) => {
+        stored ??= await createSkillHubPackageInstallationStore(packagesRoot, profileId, hostKeyId, generation)
+        return stored
+      })
+    const connectionOptions = {
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    }
+    const owner = await UnixHostClient.connect(connectionOptions)
+    const other = await UnixHostClient.connect(connectionOptions)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:skillhub-zip', unlockMaterial })
+      const markdown = Buffer.from('---\nname: example\ndescription: Example\nversion: 1.0.0\n---\n# Example\n')
+      const reference = randomBytes(70_000)
+      const zip = new AdmZip()
+      zip.addFile('SKILL.md', markdown)
+      zip.addFile('references/data.bin', reference)
+      const archive = zip.toBuffer()
+      expect(archive.length).toBeGreaterThan(32768)
+      const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
+      const hostKeyId = sha(Buffer.from(publicKey, 'base64url'))
+      const plan = {
+        operationId: randomUUID(), packageId: 'package-1', profileId: local.profileId,
+        hostKeyId, bindingGeneration: '1', expectedRevision: '0', versionId: 'version-1',
+        skillSlug: 'example', version: '1.0.0', archiveSha256: sha(archive),
+        manifestSha256: sha(JSON.stringify(['slark-skillhub-manifest-v1',
+          [['SKILL.md', '0644', markdown.length, sha(markdown)],
+            ['references/data.bin', '0644', reference.length, sha(reference)]]])),
+      }
+      await expect(other.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
+        plan: { ...plan, bindingGeneration: '2' }, archive })).rejects.toMatchObject({ code: 'profile_mismatch' })
+      expect(stored).toBeUndefined()
+      await owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive })
+      expect(await stored?.current(plan.packageId)).toBeNull()
+      const receipt = await stored?.activate(plan.operationId, '1', '0')
+      expect(receipt).toMatchObject({ operationId: plan.operationId, profileId: local.profileId, hostKeyId })
+      expect(await stored?.readFile(plan.packageId, 'SKILL.md')).toEqual(markdown)
+      expect(await stored?.readFile(plan.packageId, 'references/data.bin')).toEqual(reference)
     } finally {
       owner.close()
       other.close()

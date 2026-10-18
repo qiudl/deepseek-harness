@@ -454,6 +454,45 @@ export interface ProfileSkillHubBindingResult {
   }
 }
 
+/** Fixed package coordinates carried with every Host-controlled ZIP fragment. */
+export interface HostSkillHubPackagePlan {
+  readonly operationId: string
+  readonly packageId: string
+  readonly profileId: string
+  readonly hostKeyId: string
+  readonly bindingGeneration: string
+  readonly expectedRevision: string
+  readonly versionId: string
+  readonly skillSlug: string
+  readonly version: string
+  readonly archiveSha256: string
+  readonly manifestSha256: string
+}
+
+/** Upload one bounded fragment under the current connection's Profile grant. */
+export interface ProfileSkillHubPackageChunkRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_chunk'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly plan: HostSkillHubPackagePlan
+    readonly total_bytes: number
+    readonly offset: number
+    readonly chunk_base64url: string
+  }
+}
+
+/** Preparation acknowledgment; it is not an activation or load receipt. */
+export interface ProfileSkillHubPackageChunkResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_chunk'
+  readonly result: { readonly next_offset: number; readonly prepared: boolean }
+}
+
 /** Open the same Profile through a Main-only local view lease. */
 export interface ProfileOpenRequest {
   readonly version: 1
@@ -1778,6 +1817,8 @@ export interface ProfileModelClaimRetryResult {
 export type HostControlFrame =
   | ProfileSkillHubBindingRequest
   | ProfileSkillHubBindingResult
+  | ProfileSkillHubPackageChunkRequest
+  | ProfileSkillHubPackageChunkResult
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
   | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest
