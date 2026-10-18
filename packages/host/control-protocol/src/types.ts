@@ -1,3 +1,4 @@
+import type { RecoveryDescribeInput, RecoveryValidateInput, RecoveryDescriptor, RecoveryValidation } from './recovery-materials.ts'
 import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
 import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
 import type { HostSavedAnalysisFields, HostRootAnalysisOutput } from './root-analysis-output.ts'
@@ -88,6 +89,44 @@ export type HostControlErrorCode =
   | 'scope_mismatch'
   | 'selector_stale'
   | 'lease_conflict'
+  | 'identity_mismatch'
+  | 'installation_mismatch'
+  | 'material_invalid'
+  | 'legacy_verifier_unsupported'
+  | 'schema_unsupported'
+
+/** Read-only historical ownership description, authenticated by the existing connection tuple. */
+export interface ProfileRecoveryMaterialsDescribeRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.describe'
+  readonly params: HostAuthorizedParams & RecoveryDescribeInput
+}
+/** Installation-signed historical facts; no worker or binding authority is granted. */
+export interface ProfileRecoveryMaterialsDescribeResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.describe'
+  readonly result: { readonly descriptor: RecoveryDescriptor; readonly signature: HostControlSignature }
+}
+/** Fresh original-Host validation of an imported historical descriptor and material proof. */
+export interface ProfileRecoveryMaterialsValidateRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.validate'
+  readonly params: HostAuthorizedParams & RecoveryValidateInput
+}
+/** Transport-authenticated read-only observation, separately fenced by Main before file commit. */
+export interface ProfileRecoveryMaterialsValidateResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.validate'
+  readonly result: RecoveryValidation
+}
 
 /** Initial challenge request; it is the only payload decoded before negotiation. */
 export interface HostInspectRequest {
@@ -1505,6 +1544,7 @@ export type ProfileRemoteUiStreamCommand =
     readonly action: 'open'
     readonly stream_id: string
     readonly endpoint: 'session/follow'
+    readonly item_chunks?: true
     readonly payload: { readonly args: { readonly request: {
       readonly address: { readonly kind: 'session'; readonly sessionId: string }
         | {
@@ -1525,6 +1565,10 @@ export type ProfileRemoteUiStreamCommand =
   | { readonly action: 'open'
     readonly stream_id: string
     readonly endpoint: '$events'
+    readonly payload: { readonly args: Record<string, never> } }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'session/list'
     readonly payload: { readonly args: Record<string, never> } }
   | { readonly action: 'poll' | 'close'; readonly stream_id: string }
 
@@ -1734,6 +1778,8 @@ export interface ProfileModelClaimRetryResult {
 export type HostControlFrame =
   | ProfileSkillHubBindingRequest
   | ProfileSkillHubBindingResult
+  | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
+  | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest
   | ProfileRemoteSessionResult
   | ProfileRemoteUiReadRequest

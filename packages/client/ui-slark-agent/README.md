@@ -34,6 +34,8 @@ In scope mode, an unclear request displays its retained natural-language questio
 
 -----
 
+The Slark account launcher shows only the authenticated Slark name and avatar, with Settings at the right edge. It does not reuse the DeepSeek account identity. The collaboration launcher shares the compact row above the composer with the workspace and Agent preset. Chat displays assignment summaries, separate result cards, and clarification cards that direct replies to the same composer; provisional text never marks a task complete. Returning from a mobile conversation retains the collaboration list's workspace filter, search and scroll position for the current plugin lifetime; those viewing preferences do not persist across reloads.
+
 <a id="understand-the-implementation"></a>
 
 ## Understand the implementation

@@ -46,7 +46,7 @@ kind: "package-reference"
 
 `session/collaborationMembership` 在同一视图租约上接受 1 至 50 组准确的工作区与会话身份。Profile 核对当前归属并按原顺序返回归属、置顶布尔值；格式错误、重复或超限的批次在 Gateway 调用前拒绝。Host 用这项私有读取裁剪云端协同索引，随后才向远端浏览器展示。
 
-`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。`turnWindow` 保留原生历史分页：`minMessages` 必须为正安全整数且不超过 `maxMessages`（省略时为 50），`minTurns` 必须为正安全整数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
+`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。`turnWindow` 保留原生历史分页：`minMessages` 必须为正安全整数且不超过 `maxMessages`（省略时为 50），`minTurns` 必须为正安全整数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。 只有声明 `profile.remote_ui_stream.item_chunks` 的 Host 才接受 `session/follow` 打开命令上的 `item_chunks: true`。消费方还必须检查本机客户端 SDK 标志 `remoteUiItemChunksSupported`。此时 worker 在现有传输限制之前，把最多 8 MiB 的完整历史项编码为压缩或原始字节分片；未协商的请求保留原事件上限。每个游标仍最多缓存一个 512 KiB 传输项，每次轮询仍执行相同的 owner 与租约校验。
 
 `profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
 
@@ -127,6 +127,10 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 
 远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
 
+仅供 Main 使用的 `profile.recovery_materials.describe` 和 `profile.recovery_materials.validate` 沿用既有连接认证字段，完整帧上限为 16 KiB。[严格字段与固定顺序签名载荷](src/recovery-materials.ts) 绑定规范 issuer/subject、安装实例、Profile 和材料承诺。安装签名使用独立的 `DSH-RECOVERY-DESCRIPTOR-v1` 域；恢复包附带的公钥不能作为信任锚。
+
+描述和校验仅证明历史材料属于原 Host，不授予 Account 会话、当前绑定、云权限或 worker 访问。写入材料前，Main 必须比对独立可信的所选身份与操作，核对同一连接上的新挑战以及描述符和材料摘要，并使用本进程的单调时钟限制往返时长。
+
 ## 模型体验
 
 无，因为这个本地 Host 控制编解码器不注册任何面向模型的内容。
@@ -206,3 +210,5 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 消费回执采用独立的 `dsh-collaboration-consumption-receipt-v1` 签名域。提交将原根 trace、执行命令、消费尝试和逻辑步骤绑定到实际 Session 事件坐标、首次持久化前缀及本地 journal 提交。投递签名不能替代消费证据。这些编解码器仅确立语法，不授予权限。
 
 首条回复凭据使用 `dsh-collaboration-continuation-observation-v1` 签名域。commit 嵌套原消费 commit，并独立绑定观察 ID、`assistant_message_committed`、助手事件序号和观察到的持久前缀。消费签名不能证明此域；凭据不包含回复正文或完成声明。
+
+`profile.remote_ui_stream.session_list` 声明支持 `args` 为空的 `session/list` 游标。每次打开、轮询和关闭仍由所属视图租约授权；结果通过现有的 16 KiB 分块传输，不提高 64 KiB 控制帧上限。

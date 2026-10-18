@@ -71,11 +71,11 @@ Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的
 
 远程 Session 执行是可选的 Host 依赖。安装执行器后，Host 才会广告 `profile.remote_session`，并只通过有效且绑定 owner 的 view lease 接受控制协议定义的封闭命令联合。Host 从该 lease 解出 Profile，转发连接取消，在异步执行完成后重新校验同一 lease，并让有界结果通过规范 wire codec 后才返回。没有执行器的 Host 不发布 capability，客户端会在发送命令前返回 `upgrade_required`。该执行缝不暴露浏览器 cookie、启动 token、Profile 路径或通用 HTTP 代理。
 
-远程 Web DSH 读取使用 `profile.remote_ui_read`，在调用 worker 前后校验同一绑定 owner 的租约。macOS 和 Windows Host 启动入口安装精确端点的 worker 执行器，worker 私有 Bearer token 始终留在 Host 内。对于 `asset/read`，Host 校验当前启动注入表，只用私有 cookie 读取其中列出的同源 `/plugins/` 脚本，要求 JavaScript 响应，将完整资源限制在 8 MiB，并从单个 worker 本机缓存返回 24 KiB 分块。超过 64 KiB 的结果会被控制帧拒绝。这只是有界读取通道，不是流或通用 Web API 隧道。
+远程 Web DSH 读取使用 `profile.remote_ui_read`，在调用 worker 前后校验同一绑定 owner 的租约。macOS 和 Windows Host 启动入口安装精确端点的 worker 执行器，worker 私有 Bearer token 始终留在 Host 内。对于 `asset/read`，Host 校验当前启动注入表，只用私有 cookie 读取其中列出的同源 `/plugins/` 脚本，要求 JavaScript 响应，将完整资源限制在 8 MiB，并从同一 Profile worker 本机至多缓存四份资源的缓存返回 24 KiB 分块。取消读取只停止该调用的等待；共享下载限制为 40 秒，其他已授权读取仍可使用下载结果。同一 URL 的并发读取共享下载；最近最少读取的条目会被移除，下载失败的条目会被清除，以便后续重试。超过 64 KiB 的结果会被控制帧拒绝。这只是有界读取通道，不是流或通用 Web API 隧道。
 
-`profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。 消费方还必须检查本机客户端 SDK 标志 `remoteUiAssetGzipSupported`，不能只依据 Host 签名能力；旧客户端编码器保留原始读取。
+`profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对每份缓存的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。 消费方还必须检查本机客户端 SDK 标志 `remoteUiAssetGzipSupported`，不能只依据 Host 签名能力；旧客户端编码器保留原始读取。
 
-Profile worker 句柄读取其私有 `session/follow`、`workspace/follow` 或 `$events` NDJSON 路由。私有路由在活跃期间每 30 秒发送一个单键保活帧；发生背压时跳过写入，取消或完成时停止。读取端丢弃这些帧，不转发为原生事件。它接受有界事件项和明确的结束帧，调用方释放时取消 HTTP 读取，并拒绝格式错误的保活帧、失败或不完整的流。Host 只通过 `profile.remote_ui_stream` 暴露这个读取端：每次短暂的打开、轮询或关闭请求都校验绑定 owner 的租约；每条连接最多保留八个游标；每个游标最多缓存一个 512 KiB 事件，并以 16 KiB 分块返回，空闲时不阻塞控制通道。租约撤销后的下一次请求或连接断开会取消读取。worker 令牌和通用 Gateway 流都不会通过控制通道。
+Profile worker 句柄读取其私有 `session/follow`、`workspace/follow` 或 `$events` NDJSON 路由。私有路由在活跃期间每 30 秒发送一个单键保活帧；发生背压时跳过写入，取消或完成时停止。读取端丢弃这些帧，不转发为原生事件。它接受有界事件项和明确的结束帧，调用方释放时取消 HTTP 读取，并拒绝格式错误的保活帧、失败或不完整的流。Host 只通过 `profile.remote_ui_stream` 暴露这个读取端：每次短暂的打开、轮询或关闭请求都校验绑定 owner 的租约；每条连接最多保留八个游标；每个游标最多缓存一个 512 KiB 事件，并以 16 KiB 分块返回，空闲时不阻塞控制通道。租约撤销后的下一次请求或连接断开会取消读取。worker 令牌和通用 Gateway 流都不会通过控制通道。 源头历史分片同时要求 `profile.remote_ui_stream.item_chunks` 能力和本机 SDK 标志 `remoteUiItemChunksSupported`。只有显式携带 `item_chunks: true` 的 Session-follow 打开操作，才启用 worker 的私有 `itemChunks: true` 请求。worker 在读取端和游标限制之前，对最多 8 MiB 的完整事件压缩并分片，保留原生历史与分页。未协商请求保留 512 KiB 事件上限，分片仍遵守现有控制帧与游标限制。
 
 账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。期间没有其他注册表写入时，回退恢复原快照及其已发布 schema；POSIX 存储保留原文件字节。该 Profile 出现并发变更时，回退被阻止并返回 `stale`；其他 Profile 的变更会保留。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
 
@@ -144,6 +144,10 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 ### 远端工作区目录
 
 远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
+
+Host 仅在具备明确的 existing-only 持久化读取器时声明 `profile.recovery_materials.describe` 和 `profile.recovery_materials.validate`。macOS 组合使用已有代次检查；持久化数据缺失或不安全时拒绝，不执行初始化，也不启动 worker。异步读取结束后，在签名或返回观察结果前再次核对连接及注册表身份/代次。Windows 组合未安装此读取器，因此省略两项能力；客户端在发送材料证明前拒绝不支持的 Host。
+
+这些[仅供 Main 使用的恢复方法](../control-protocol/README.zh.md#wire-contract) 校验唯一 Account handle、包含 issuer 的注册表身份及解锁校验器，不改注册表记录、绑定、授权或 Profile 文件。历史 null 校验器需要受支持的升级路径，恢复不会接受或重写它。绑定与持久化代次只是观察值，不是当前在线权限。导入方 Main 负责所选身份检查、操作时效、safeStorage 提交以及后续离线 worker 恢复。
 
 ## 模型体验
 
@@ -268,3 +272,5 @@ Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后
 macOS 和 Windows 通过共同的 worker 操作绑定根 journal、Source 检查和规划 attempt 检查；各权限协议继续使用独立的签名载荷。
 
 客户端和 Host 独立检查 `profile.root_continuation` 能力后才接受 `continuation_read`。原 Profile 返回已提交的观察后，Host 校验其中嵌套消费的 namespace、投递和 Source 坐标，并使用当前 Account 与安装/进程绑定签署独立观察域。回复前撤销 Account 权限会阻止签名。
+
+声明 `profile.remote_ui_stream.session_list` 能力时，完整 Session 列表快照使用现有远程 UI 游标。游标在 512 KiB 单项上限内保留所有列表投影；旧版 Host 继续直接读取。

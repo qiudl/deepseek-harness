@@ -21,10 +21,10 @@ describe('Host worker follow stream client', () => {
     expect(values).toEqual([1])
   })
 
-  it('projects only bounded item frames until an explicit end', async () => {
+  it.each(['session/follow', 'session/list'])('projects bounded %s items until an explicit end', async (endpoint) => {
     const origin = await serve('{"type":"item","value":{"cursor":1}}\n{"type":"end"}\n')
     const values: unknown[] = []
-    for await (const value of openRemoteUiWorkerStream(origin, 'private', 'session/follow',
+    for await (const value of openRemoteUiWorkerStream(origin, 'private', endpoint,
       { args: { request: { address: { kind: 'session', sessionId: 'session-1' } } } },
       new AbortController().signal, () => false)) values.push(value)
     expect(values).toEqual([{ cursor: 1 }])

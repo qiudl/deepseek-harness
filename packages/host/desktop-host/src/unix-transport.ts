@@ -1,3 +1,10 @@
+import { HostRecoveryMaterials } from './recovery-materials.ts'
+import {
+  parseRecoveryDescribeInput, parseRecoveryValidateInput,
+  type RecoveryDescribeInput, type RecoveryValidateInput, type RecoveryValidation,
+  type ProfileRecoveryMaterialsDescribeRequest, type ProfileRecoveryMaterialsDescribeResult,
+  type ProfileRecoveryMaterialsValidateRequest, type ProfileRecoveryMaterialsValidateResult,
+} from '@deepseek-ai/dsh-host-control-protocol'
 import { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
@@ -330,10 +337,12 @@ export interface UnixHostServerOptions {
   ) => Promise<unknown>
   /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
   readonly remoteUiAssetGzipSupported?: boolean
+  /** Advertise source-side history fragmentation only when the worker implements it. */
+  readonly remoteUiItemChunksSupported?: boolean
   /** Open only native read streams in the lease-selected worker. */
   readonly remoteUiStream?: (
-    profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
-      { action: 'open' }>['payload'], signal: AbortSignal,
+    profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events' | 'session/list', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
+      { action: 'open' }>['payload'], signal: AbortSignal, itemChunks?: boolean,
   ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
   readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
@@ -366,6 +375,8 @@ export interface UnixHostServerOptions {
     targetProfileId: string,
   ) => MigrationExportService | Promise<MigrationExportService>
   readonly createMigrationImport?: (ownerId: string, profileId: string) => MigrationImportService
+  /** Existing-only inspection: must not provision directories, owner state, workers or bindings. */
+  readonly recoveryMaterialsPersistenceGeneration?: (profileId: string, signal: AbortSignal) => number | Promise<number>
   readonly profilePersistenceGeneration: (profileId: string) => number | Promise<number>
   readonly now?: () => number
 }
@@ -486,9 +497,9 @@ async function recheckReferenceSource(
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
-    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'now' | 'extensions'
+    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
-    | 'remoteUiStream' | 'remoteUiAssetGzipSupported'
+    | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -820,6 +831,11 @@ function authorityCodeFromFrame(code: HostControlErrorCode): HostAuthorityErrorC
     case 'scope_mismatch':
     case 'selector_stale':
     case 'lease_conflict':
+    case 'identity_mismatch':
+    case 'installation_mismatch':
+    case 'material_invalid':
+    case 'legacy_verifier_unsupported':
+    case 'schema_unsupported':
       return code
     default:
       return 'unavailable'
@@ -1279,6 +1295,22 @@ export class HostControlAuthority {
               import_id: stage.importId as never, stage_version: stage.version, aborted: true,
             } })
           } catch (error) { channel.send(safeError(migrationImportCode(error), frame)) }
+        } else if (frame.method === 'profile.recovery_materials.describe'
+          || frame.method === 'profile.recovery_materials.validate') {
+          context.signal.throwIfAborted()
+          const readGeneration = this.options.recoveryMaterialsPersistenceGeneration
+          if (!readGeneration) throw new HostAuthorityError('upgrade_required')
+          const materials = new HostRecoveryMaterials(this.options.identity,
+            input => this.options.host.verifyRecoveryMaterials(input), readGeneration)
+          if (frame.method === 'profile.recovery_materials.describe') {
+            const result = await materials.describe(frame.params, context.signal)
+            context.signal.throwIfAborted()
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+          } else {
+            const result = await materials.validate(frame.params, context.signal)
+            context.signal.throwIfAborted()
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+          }
         } else if (frame.method === 'profile.recovery_inspect') {
           const inspected = await this.options.host.inspectOfflineAccountProfiles({
             keyHandles: frame.params.profile_key_handles,
@@ -1517,13 +1549,17 @@ export class HostControlAuthority {
           const profileId = authority()
           let result: ProfileRemoteUiStreamResult['result']
           if (command.action === 'open') {
+            if (command.endpoint === 'session/follow' && command.item_chunks && !this.options.remoteUiItemChunksSupported)
+              throw new HostAuthorityError('upgrade_required')
             const execute = this.options.remoteUiStream
             if (!execute) throw new HostAuthorityError('upgrade_required')
             if (remoteUiStreams.has(command.stream_id) || remoteUiStreams.size >= 8) {
               throw new HostAuthorityError('conflict')
             }
             const cursor = await RemoteUiStreamCursor.open(
-              cursorSignal => execute(profileId, command.endpoint, command.payload, cursorSignal), signal)
+              cursorSignal => command.endpoint === 'session/follow' && command.item_chunks === true
+                ? execute(profileId, command.endpoint, command.payload, cursorSignal, true)
+                : execute(profileId, command.endpoint, command.payload, cursorSignal), signal)
             try {
               if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
               remoteUiStreams.set(command.stream_id, { cursor, profileId,
@@ -2188,7 +2224,8 @@ export class HostControlAuthority {
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
-            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events'] : []),
+            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list',
+            ...(this.options.remoteUiItemChunksSupported ? ['profile.remote_ui_stream.item_chunks'] : [])] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
             ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
@@ -2198,6 +2235,8 @@ export class HostControlAuthority {
             ? ['profile.model_claim_retry'] : []),
           ...(this.options.extensions ? ['profile.extensions'] : []),
           ...(offlineAccountRecovery ? recoveryCapabilities : []),
+          ...(this.options.recoveryMaterialsPersistenceGeneration
+            ? ['profile.recovery_materials.describe', 'profile.recovery_materials.validate'] : []),
           ...(migrationExport ? [
             'migration.export_snapshot.inventory', 'migration.export_snapshot.begin', 'migration.export_snapshot.read',
           ] : []),
@@ -2325,6 +2364,8 @@ interface HandshakeState {
 export class UnixHostClient {
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
+  /** This SDK accepts opted-in history fragments; the current Host must also advertise its signed capability. */
+  readonly remoteUiItemChunksSupported = true
 
   private constructor(
     private readonly channel: HostClientFrameTransport,
@@ -2543,6 +2584,51 @@ export class UnixHostClient {
       compatibility: candidate.compatibility, preflightDigest: candidate.preflight_digest,
       ...(candidate.reason_code === undefined ? {} : { reasonCode: candidate.reason_code }),
     })) }
+  }
+
+  /**
+   * Describe existing historical materials through this authenticated Host connection.
+   * @param input - Main-only selected identity, vault proof and fresh challenge.
+   * @param signal - Optional caller cancellation.
+   * @returns Signed historical descriptor; it grants no Account or worker access.
+   */
+  async describeRecoveryMaterials(
+    input: RecoveryDescribeInput, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsDescribeResult['result']> {
+    signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.recovery_materials.describe' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const business = parseRecoveryDescribeInput(input)
+    const request: ProfileRecoveryMaterialsDescribeRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_materials.describe',
+      params: { ...this.auth(), ...business },
+    }
+    const frame = await this.callRecoveryMaterials(request, business.challenge, signal)
+    signal?.throwIfAborted()
+    return frame.result
+  }
+
+  /**
+   * Freshly validate imported materials against the original Host registry without mutation.
+   * Main must also check trusted selected identity, operation ownership and its monotonic RTT deadline.
+   * @param input - Historical descriptor, material proof and a new operation challenge.
+   * @param signal - Optional caller cancellation.
+   * @returns Current ownership observation; missing capability requires a Host upgrade.
+   */
+  async validateRecoveryMaterials(input: RecoveryValidateInput, signal?: AbortSignal): Promise<RecoveryValidation> {
+    signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.recovery_materials.validate' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const business = parseRecoveryValidateInput(input)
+    const request: ProfileRecoveryMaterialsValidateRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_materials.validate',
+      params: { ...this.auth(), ...business },
+    }
+    const frame = await this.callRecoveryMaterials(request, business.challenge, signal)
+    signal?.throwIfAborted()
+    return frame.result
   }
 
   /**
@@ -4303,8 +4389,35 @@ export class UnixHostClient {
     }
   }
 
+  private callRecoveryMaterials(
+    request: ProfileRecoveryMaterialsDescribeRequest, challenge: HostControlNonce, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsDescribeResult>
+  private callRecoveryMaterials(
+    request: ProfileRecoveryMaterialsValidateRequest, challenge: HostControlNonce, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsValidateResult>
+  private async callRecoveryMaterials(
+    request: ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest,
+    challenge: HostControlNonce, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult> {
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result') throw new HostAuthorityError('unavailable')
+    if (frame.method === 'profile.recovery_materials.describe') {
+      if (request.method !== frame.method) throw new HostAuthorityError('unavailable')
+      if (frame.result.descriptor.challenge !== challenge) throw new HostAuthorityError('stale')
+      return frame
+    }
+    if (frame.method === 'profile.recovery_materials.validate') {
+      if (request.method !== frame.method) throw new HostAuthorityError('unavailable')
+      if (frame.result.challenge !== challenge) throw new HostAuthorityError('stale')
+      return frame
+    }
+    throw new HostAuthorityError('unavailable')
+  }
+
   private async call(
-    request: ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest
+    request: ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
+      | ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest
       | ProfileRemoteUiStreamRequest | ProfileModelClaimInventoryRequest
       | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
       | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest

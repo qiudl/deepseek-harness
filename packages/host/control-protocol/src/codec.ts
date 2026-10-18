@@ -1,3 +1,4 @@
+import { parseRecoveryDescriptor, parseRecoveryDescribeInput, parseRecoveryValidateInput, parseRecoveryValidation } from './recovery-materials.ts'
 import { parseHostRootTextContextReceipt } from './root-text-context.ts'
 import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
 import { parseHostRootPlanningEvidence } from './root-planning-evidence.ts'
@@ -5,6 +6,8 @@ import { parseHostRootPlanningAttemptDescriptor, parseHostRootPlanningAttemptAut
 import { parseHostSavedAnalysisFields, parseHostRootAnalysisOutput } from './root-analysis-output.ts'
 import { parseHostRootSubmissionTarget, parseHostRootAnalysisInput, parseHostRootSubmissionDescriptor, parseHostRootAuthorityChallenge, parseHostRootAuthorityAssertion, parseHostRootJournalCommand, parseHostRootJournalMetadata } from './root-authority.ts'
 import type {
+  ProfileRecoveryMaterialsDescribeRequest, ProfileRecoveryMaterialsDescribeResult,
+  ProfileRecoveryMaterialsValidateRequest, ProfileRecoveryMaterialsValidateResult,
   ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
   HostExtensionPlanId, HostExtensionOperationId, HostExtensionKind, HostExtensionCommand, HostExtensionResponse,
   ProfileExtensionsRequest, ProfileExtensionsResult,
@@ -183,6 +186,11 @@ const ERROR_CODES: ReadonlySet<string> = new Set<HostControlErrorCode>([
   'scope_mismatch',
   'selector_stale',
   'lease_conflict',
+  'identity_mismatch',
+  'installation_mismatch',
+  'material_invalid',
+  'legacy_verifier_unsupported',
+  'schema_unsupported',
 ])
 
 function reject(code: HostControlProtocolFailure = 'invalid_frame'): never {
@@ -1557,6 +1565,7 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
 
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileSkillHubBindingRequest
+  | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
@@ -1733,11 +1742,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       exactKeys(command, ['action', 'stream_id'])
       parsed = { action: command.action, stream_id }
     } else if (command.action === 'open') {
-      exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload'])
+      exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload',
+        ...(command.item_chunks === undefined ? [] : ['item_chunks'])])
+      if (command.item_chunks !== undefined && (command.item_chunks !== true || command.endpoint !== 'session/follow')) reject()
       const payload = record(command.payload)
       exactKeys(payload, ['args'])
       const args = record(payload.args)
-      if (command.endpoint === 'workspace/follow' || command.endpoint === '$events') {
+      if (command.endpoint === 'workspace/follow' || command.endpoint === '$events' || command.endpoint === 'session/list') {
         exactKeys(args, [])
         parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: { args: {} } }
       } else if (command.endpoint === 'session/follow') {
@@ -1776,7 +1787,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
           ...(request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages as number }),
           ...(request.assistantStream === undefined ? {} : { assistantStream: true as const }),
           ...(turnWindow === undefined ? {} : { turnWindow }),
-        } } } }
+        } } }, ...(command.item_chunks === true ? { item_chunks: true as const } : {}) }
       } else reject()
     } else reject()
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
@@ -1892,6 +1903,20 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       version: 1, type: 'request', request_id: requestId, method: 'profile.open_local',
       params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector) },
     }
+  }
+  if (frame.method === 'profile.recovery_materials.describe') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'challenge', 'issuer', 'subject', 'profile_key_handle', 'unlock_proof'])
+    const business = parseRecoveryDescribeInput({ challenge: params.challenge, issuer: params.issuer,
+      subject: params.subject, profile_key_handle: params.profile_key_handle, unlock_proof: params.unlock_proof })
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), ...business } }
+  }
+  if (frame.method === 'profile.recovery_materials.validate') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'challenge', 'descriptor', 'signature', 'unlock_proof'])
+    const business = parseRecoveryValidateInput({ challenge: params.challenge, descriptor: params.descriptor,
+      signature: params.signature, unlock_proof: params.unlock_proof })
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), ...business } }
   }
   if (frame.method === 'profile.recovery_inspect') {
     exactKeys(params, [
@@ -2128,6 +2153,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
 
 function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileSkillHubBindingResult
+  | ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
@@ -2278,6 +2304,15 @@ function decodeProfileResult(frame: Record<string, unknown>):
   if (frame.method === 'profile.ensure' || frame.method === 'profile.restore'
     || frame.method === 'profile.bootstrap_local' || frame.method === 'profile.restore_local') {
     return profileReadyResult(request_id, frame.method, result)
+  }
+  if (frame.method === 'profile.recovery_materials.describe') {
+    exactKeys(result, ['descriptor', 'signature'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { descriptor: parseRecoveryDescriptor(result.descriptor), signature: signature(result.signature) } }
+  }
+  if (frame.method === 'profile.recovery_materials.validate') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseRecoveryValidation(result) }
   }
   if (frame.method === 'profile.recovery_inspect') {
     exactKeys(result, ['candidates'])
@@ -2841,6 +2876,8 @@ function decodeError(frame: Record<string, unknown>): HostControlErrorFrame {
 
 function decodeObject(value: unknown): HostControlFrame {
   const frame = record(value)
+  if (typeof frame.method === 'string' && frame.method.startsWith('profile.recovery_materials.')
+    && Buffer.byteLength(JSON.stringify(frame)) > 16384) reject('frame_too_large')
   if (frame.version !== 1) reject('unsupported_protocol')
   if (frame.type === 'error') return decodeError(frame)
   if (frame.method === 'host.inspect') {

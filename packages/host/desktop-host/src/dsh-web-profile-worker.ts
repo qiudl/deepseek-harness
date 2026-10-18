@@ -31,7 +31,10 @@ const gzipAsync = promisify(gzip)
 const REMOTE_UI_ASSET_MAX_BYTES = 8 * 1024 * 1024
 const REMOTE_UI_ASSET_CHUNK_BYTES = 24 * 1024
 const REMOTE_UI_GZIP_MAX_BYTES = REMOTE_UI_ASSET_MAX_BYTES + 64 * 1024
-type RemoteUiAssetCache = { current?: { readonly url: string; readonly bytes: Buffer; gzip?: Promise<Buffer> } }
+type RemoteUiAssetEntry = { readonly url: string; readonly bytes: Buffer; gzip?: Promise<Buffer> }
+type RemoteUiAssetCache = { entries?: Map<string, Promise<RemoteUiAssetEntry>> }
+// Each entry is bounded by the existing raw and gzip asset limits.
+const REMOTE_UI_ASSET_CACHE_ENTRIES = 4
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
@@ -358,8 +361,8 @@ export class DshWebProfileWorkerFactory {
           () => requestedStop || settled, assetCache)
         : this.remoteUiRead(viewOrigin, remoteUiToken, endpoint, payload, signal,
           () => requestedStop || settled),
-      remoteUiStream: (endpoint, payload, signal) => openRemoteUiWorkerStream(
-        viewOrigin, remoteUiToken, endpoint, payload, signal, () => requestedStop || settled),
+      remoteUiStream: (endpoint, payload, signal, itemChunks) => openRemoteUiWorkerStream(
+        viewOrigin, remoteUiToken, endpoint, payload, signal, () => requestedStop || settled, itemChunks),
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
         if (requestedStop || settled) return
@@ -752,31 +755,60 @@ export class DshWebProfileWorkerFactory {
       row && typeof row === 'object' && !Array.isArray(row)
       && ((row as { kind?: unknown }).kind === 'script-src' || (row as { kind?: unknown }).kind === 'script-preload')
       && (row as { src?: unknown }).src === selected.url)) throw new HostAuthorityError('invalid_input')
-    if (stopped()) throw new HostAuthorityError('unavailable')
-    let entry = cache.current?.url === selected.url ? cache.current : undefined
-    if (entry === undefined) {
-      const response = await fetch(url, {
-        headers: { cookie: `${cookie.name}=${cookie.value}` }, redirect: 'manual',
-        signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
-      })
-      if (response.status !== 200 || response.headers.get('content-type')?.split(';')[0] !== 'text/javascript'
-        || !response.body) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
-      const chunks: Buffer[] = []
-      let size = 0
-      try {
-        for await (const chunk of response.body) {
-          size += chunk.byteLength
-          if (size > REMOTE_UI_ASSET_MAX_BYTES) throw new HostAuthorityError('unavailable')
-          chunks.push(Buffer.from(chunk))
+    if (stopped() || signal.aborted) throw new HostAuthorityError('unavailable')
+    const assetUrl = selected.url
+    const entries = cache.entries ??= new Map<string, Promise<RemoteUiAssetEntry>>()
+    let pending = entries.get(assetUrl)
+    if (pending === undefined) {
+      const load = async (): Promise<RemoteUiAssetEntry> => {
+        const response = await fetch(url, {
+          headers: { cookie: `${cookie.name}=${cookie.value}` }, redirect: 'manual',
+          // The download belongs to this worker's cache, rather than its first reader.
+          signal: AbortSignal.timeout(40_000),
+        })
+        if (response.status !== 200 || response.headers.get('content-type')?.split(';')[0] !== 'text/javascript'
+          || !response.body) { await response.body?.cancel(); throw new HostAuthorityError('unavailable') }
+        const chunks: Buffer[] = []
+        let size = 0
+        try {
+          for await (const chunk of response.body) {
+            size += chunk.byteLength
+            if (size > REMOTE_UI_ASSET_MAX_BYTES) throw new HostAuthorityError('unavailable')
+            chunks.push(Buffer.from(chunk))
+          }
+        } catch (error) {
+          await response.body.cancel().catch(() => {})
+          throw error
         }
-      } catch (error) {
-        await response.body.cancel().catch(() => {})
-        throw error
+        const body = Buffer.concat(chunks, size)
+        if (stopped()) throw new HostAuthorityError('unavailable')
+        return { url: assetUrl, bytes: body }
       }
-      const body = Buffer.concat(chunks, size)
-      if (stopped() || signal.aborted) throw new HostAuthorityError('unavailable')
-      entry = { url: selected.url, bytes: body }
-      cache.current = entry
+      pending = load()
+      entries.set(assetUrl, pending)
+      const loading = pending
+      void loading.catch(() => {
+        if (entries.get(assetUrl) === loading) entries.delete(assetUrl)
+      })
+      if (entries.size > REMOTE_UI_ASSET_CACHE_ENTRIES) {
+        for (const oldest of entries.keys()) {
+          entries.delete(oldest)
+          break
+        }
+      }
+    } else {
+      entries.delete(assetUrl)
+      entries.set(assetUrl, pending)
+    }
+    let entry: RemoteUiAssetEntry
+    let onAbort!: () => void
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => { reject(new HostAuthorityError('unavailable')) }
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    })
+    try { entry = await Promise.race([pending, cancelled]) } finally {
+      signal.removeEventListener('abort', onAbort)
     }
     const inactive = () => stopped() || signal.aborted
     if (inactive()) throw new HostAuthorityError('unavailable')

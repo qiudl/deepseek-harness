@@ -22,7 +22,7 @@ function NoConversationWidthControls() {
 export function ConversationContent(props: ConversationContentProps) {
   const {
     sessionId, phase, hero, useSession, useSessions, useSessionStatus,
-    useWorkspaces, useInput, useComposerBlock, renderSlot, renderSlotChain,
+    useWorkspaces, useInput, useComposerBlock, useInputToolbar, renderSlot, renderSlotChain,
     selectWorkspace, t, useFactorySlot,
   } = props
   const session = useSession(snapshot => snapshot)
@@ -37,6 +37,7 @@ export function ConversationContent(props: ConversationContentProps) {
   // A plugin this package cannot import (ui-model-selection) says this session cannot
   // send; its reason is already localized by whoever raised it.
   const composerBlock = useComposerBlock(block => block)
+  const hasInputToolbar = useInputToolbar(value => value)
 
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pendingWorkspaceId, setPendingWorkspaceId] = useState<WorkspaceId | undefined>()
@@ -108,7 +109,7 @@ export function ConversationContent(props: ConversationContentProps) {
     : workspaceDisplayTitle(storedChipTitle, t('workspace.defaultName'))
 
   const heroWorkspaceRow = (
-    <div className={css.heroWorkspaceRow}>
+    <div className={css.heroWorkspaceRow} data-has-toolbar={hasInputToolbar || undefined}>
       <WorkspaceChip
         buttonRef={pickerAnchor}
         label={chipTitle}
@@ -130,6 +131,7 @@ export function ConversationContent(props: ConversationContentProps) {
         onClose: () => { setPickerOpen(false) },
       })}
       {renderSlot('conversation.hero.agentPreset', {})}
+      {zone !== undefined && renderSlot('conversation.input.toolbar', zone)}
     </div>
   )
 
@@ -163,7 +165,7 @@ export function ConversationContent(props: ConversationContentProps) {
   const composerBar = (
     <div className={clsx(css.composerStack, hero && css.composerHero)}>
       {hero && <HeroShell t={t} renderSlot={renderSlot} />}
-      {hero && heroWorkspaceRow}
+      {(hero || hasInputToolbar) && heroWorkspaceRow}
       {zone !== undefined && renderSlot('conversation.input.dock', zone)}
       {inputBar}
     </div>

@@ -428,12 +428,13 @@ export class ProfileWorkerSupervisor {
    * @param endpoint - Exact Session-follow endpoint.
    * @param payload - Validated Session-follow arguments.
    * @param signal - Host-owned cancellation signal.
+   * @param itemChunks - Explicitly negotiated source-side history fragmentation.
    * @returns Native Session events until cancellation or end.
    */
-  remoteUiStream(profileId: string, endpoint: string, payload: unknown, signal: AbortSignal): AsyncIterable<unknown> {
+  remoteUiStream(profileId: string, endpoint: string, payload: unknown, signal: AbortSignal, itemChunks = false): AsyncIterable<unknown> {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.remoteUiStream) throw new HostAuthorityError('unavailable')
-    return worker.remoteUiStream(endpoint, payload, signal)
+    return worker.remoteUiStream(endpoint, payload, signal, itemChunks)
   }
 
   /**

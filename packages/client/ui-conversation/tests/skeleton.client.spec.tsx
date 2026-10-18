@@ -138,6 +138,7 @@ function mount(
     nestedSubagent?: boolean
     /** A composer block another plugin raised for this session. */
     composerBlock?: { reason: string }
+    inputToolbar?: boolean
     /** Mutable view ledger used by registration-order regressions. */
     viewTabs?: ViewTab[]
   } = {},
@@ -339,6 +340,7 @@ function mount(
       useWorkspaces: bindSnapshotSelector(workspaces),
       useProjection: (() => undefined),
       useComposerBlock: select => select(options.composerBlock),
+      useInputToolbar: select => select(options.inputToolbar ?? false),
       useInput,
       inputActions,
       renderSlot,
@@ -399,6 +401,14 @@ describe('Hero chrome', () => {
 })
 
 describe('ConversationRoot resident composer', () => {
+  it('does not mount active workspace and preset controls without a toolbar contributor', () => {
+    const ordinary = mount(sessionSnapshotOf({ blank: false }))
+    expect(ordinary.view.container.querySelector('[class*="heroWorkspaceRow"]')).toBeNull()
+    ordinary.view.unmount()
+    const extended = mount(sessionSnapshotOf({ blank: false }), undefined, undefined, { inputToolbar: true })
+    expect(extended.view.container.querySelector('[class*="heroWorkspaceRow"]')?.getAttribute('data-has-toolbar')).toBe('true')
+  })
+
   it('keeps global header navigation without selecting a Session', () => {
     const b = mount(sessionSnapshotOf(), [], undefined, { sessionId: undefined })
     expect(b.view.container.querySelector('header')).not.toBeNull()

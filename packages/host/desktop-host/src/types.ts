@@ -53,6 +53,11 @@ export type HostAuthorityErrorCode =
   | 'scope_mismatch'
   | 'selector_stale'
   | 'lease_conflict'
+  | 'identity_mismatch'
+  | 'installation_mismatch'
+  | 'material_invalid'
+  | 'legacy_verifier_unsupported'
+  | 'schema_unsupported'
 
 /** Typed failure that Desktop maps onto the Host control protocol vocabulary. */
 export class HostAuthorityError extends Error {
@@ -184,7 +189,7 @@ export interface ProfileWorkerHandle {
   /** Host-only, read-only Web DSH RPC; worker token never enters a view lease. */
   readonly remoteUiRead?: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>
   /** Host-only native Session event stream; the reader owns cancellation. */
-  readonly remoteUiStream?: (endpoint: string, payload: unknown, signal: AbortSignal) => AsyncIterable<unknown>
+  readonly remoteUiStream?: (endpoint: string, payload: unknown, signal: AbortSignal, itemChunks?: boolean) => AsyncIterable<unknown>
 }
 
 /** Factory that starts one isolated profile worker. */

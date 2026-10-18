@@ -142,6 +142,24 @@ describe('Desktop remote UI read-only bridge', () => {
     expect(writer.listenerCount('drain')).toBe(0)
   })
 
+  it('streams one complete large Session list and rejects extra selectors', async () => {
+    const value = { items: Array.from({ length: 94 }, (_, i) => ({
+      sessionId: `session-${i}`, updatedAt: 1, projections: { values: { title: '摘要🌟'.repeat(300) } },
+    })) }
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeGreaterThan(64 * 1024)
+    const invoke = vi.fn(async () => value)
+    const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ invoke }))
+    const signal = new AbortController().signal
+    const values = []
+    for await (const item of await executor.open('session/list', { args: {} }, signal)) values.push(item)
+    expect(values).toEqual([value])
+    expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
+    for (const invalid of [null, {}, { args: null }, { args: [] }, { args: { path: '/other' } }, { args: {}, extra: true }]) {
+      await expect(executor.open('session/list', invalid, signal)).rejects.toThrow('invalid payload')
+    }
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
   it('opens only a bounded native Session follow request', async () => {
     const stream = vi.fn(async () => (async function* () { yield { type: 'snapshot' } })())
     const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))
@@ -341,7 +359,37 @@ describe('Desktop remote UI read-only bridge', () => {
     }
   })
 
-  it('rejects malformed Workspace and event stream requests before opening a native stream', async () => {
+  it('serves a complete Session list through the private HTTP stream and executor', async () => {
+    const token = 'L'.repeat(43)
+    const value = { items: Array.from({ length: 94 }, (_, index) => ({
+      sessionId: `session-${index}`, title: '摘要🌟'.repeat(300),
+    })) }
+    const invoke = vi.fn(async () => value)
+    const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ invoke }))
+    const server = createServer((req, res) => {
+      void handleDesktopRemoteUiStreamRequest(req, res, token, executor.open.bind(executor))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const body = JSON.stringify({ endpoint: 'session/list', payload: { args: {} } })
+      const denied = await fetch(origin, { method: 'POST', headers: { cookie: 'dsh-auth=fake' }, body })
+      expect(denied.status).toBe(403)
+      expect(invoke).not.toHaveBeenCalled()
+      const response = await fetch(origin, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body })
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe(JSON.stringify({ type: 'item', value }) + '\n'
+        + JSON.stringify({ type: 'end' }) + '\n')
+      expect(invoke).toHaveBeenCalledOnce()
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
+    }
+  })
+
+  it('rejects malformed Session list, Workspace and event stream requests before opening a native stream', async () => {
     const token = 'A'.repeat(43)
     const open = vi.fn(async () => (async function* () {})())
     const server = createServer((req, res) => {
@@ -350,7 +398,7 @@ describe('Desktop remote UI read-only bridge', () => {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     try {
       const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
-      for (const endpoint of ['workspace/follow', '$events']) {
+      for (const endpoint of ['session/list', 'workspace/follow', '$events']) {
         for (const payload of [null, [], {}, { args: null }, { args: [] }, { args: { all: true } }]) {
           const response = await fetch(origin, { method: 'POST',
             headers: { authorization: `Bearer ${token}` },
