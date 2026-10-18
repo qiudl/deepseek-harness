@@ -968,10 +968,9 @@ export class HostControlAuthority {
       this.options.identity.installationPublicKey, 'base64url')).digest('hex')
     const authorize = () => {
       signal.throwIfAborted()
-      const current = this.options.host.authorizeMigrationProfileSelector({
+      this.options.host.authorizeMigrationProfileSelector({
         profileId: profileId as never, bindingGeneration: selector.binding_generation, ownerId,
       })
-      if (current !== profileId) throw new HostAuthorityError('profile_mismatch')
     }
     return { profileId, generation, hostKeyId, authorize }
   }

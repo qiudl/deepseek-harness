@@ -25,6 +25,10 @@ it('round-trips a bounded fragment and preparation-only acknowledgment', () => {
     method: 'profile.skillhub_package_chunk', result: { next_offset: 14, prepared: false } }
   for (const frame of [request(), reply])
     expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+  for (const changed of [
+    { next_offset: 0 }, { next_offset: 110 * 1024 * 1024 + 1 },
+    { next_offset: 1.5 }, { prepared: 'true' },
+  ]) expect(() => decode({ ...reply, result: { ...reply.result, ...changed } })).toThrow()
 })
 
 it('rejects oversized, ambiguous, or target-mismatched package frames', () => {
@@ -58,6 +62,13 @@ it('round-trips bounded activation and current-receipt commands', () => {
   for (const frame of [activate, current])
     expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
   expect(() => decode({ ...activate, params: { ...activate.params, extra: true } })).toThrow()
+  for (const changed of [
+    { binding_generation: 1 }, { binding_generation: '0' },
+    { expected_revision: 0 }, { expected_revision: '01' },
+  ]) expect(() => decode({ ...activate, params: { ...activate.params, ...changed } })).toThrow()
+  for (const package_id of [1, '', 'bad/name'])
+    expect(() => decode({ ...current, params: { ...current.params, package_id } })).toThrow()
+  expect(() => decode({ ...activate, params: { ...activate.params, action: 'forged' } })).toThrow()
 })
 
 it('accepts only the exact signed storage receipt shape', () => {
@@ -70,6 +81,8 @@ it('accepts only the exact signed storage receipt shape', () => {
   const frame = { version: 1, type: 'result', request_id: randomUUID(),
     method: 'profile.skillhub_package', result: { receipt } }
   expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+  expect(encodeHostControlFrame(decode({ ...frame, result: { receipt: null } })))
+    .toBe(`${JSON.stringify({ ...frame, result: { receipt: null } })}\n`)
   for (const changed of [{ extra: true }, { readiness: 'loaded' }, { revision: '0' },
     { signature: 'bad' }])
     expect(() => decode({ ...frame, result: { receipt: { ...receipt, ...changed } } })).toThrow()

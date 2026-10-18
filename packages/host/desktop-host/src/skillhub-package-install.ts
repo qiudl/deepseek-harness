@@ -112,6 +112,7 @@ function inspectArchive(archive: Buffer, plan: SkillHubPackagePlan): FileEvidenc
         || entry.header.size > MAX_FILE || total + entry.header.size > MAX_TOTAL) fail()
       if (![0, 8].includes(entry.header.method)) fail()
       const compressed = entry.getCompressedData()
+      /* v8 ignore next -- adm-zip derives returned compressed bytes from this header and rejects truncated ZIP data before returning. */
       if (compressed.length !== entry.header.compressedSize) fail()
       const bytes = entry.header.method === 0
         ? compressed : inflateRawSync(compressed, { maxOutputLength: MAX_FILE + 1 })
@@ -131,7 +132,7 @@ function inspectArchive(archive: Buffer, plan: SkillHubPackagePlan): FileEvidenc
     const value = new TextDecoder('utf-8', { fatal: true }).decode(markdown.bytes)
     const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(value)
     if (!match) throw Error('skillhub_package_unavailable')
-    const metadata = parseDocument(match[1] ?? fail(), { uniqueKeys: true, strict: true })
+    const metadata = parseDocument(match[1] as string, { uniqueKeys: true, strict: true })
     if (metadata.errors.length) fail()
     const row: unknown = metadata.toJS({ maxAliasCount: 0 })
     if (!row || typeof row !== 'object' || Array.isArray(row)) fail()
@@ -152,6 +153,7 @@ async function writePrivate(path: string, bytes: Buffer | string, mode = 0o600):
   finally { await file.close() }
 }
 async function directorySync(path: string): Promise<void> {
+  /* v8 ignore next -- the Win32 directory-handle branch runs only on Windows CI; Linux coverage cannot execute it. */
   if (process.platform === 'win32') return
   const dir = await open(path, constants.O_RDONLY)
   try { await dir.sync() } finally { await dir.close() }
@@ -336,6 +338,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       if (!receipt) throw Error('skillhub_package_unavailable')
       const base = join(versions, receipt.operationId)
       const plan = await storedJson<SkillHubPackagePlan>(join(base, 'plan.json'))
+      /* v8 ignore next 2 -- current() verified this same plan and receipt; only a concurrent disk rewrite can change them here. */
       if (!plan || plan.manifestSha256 !== receipt.manifestSha256)
         throw Error('skillhub_package_unavailable')
       const files = await verifiedFiles(plan, base)
@@ -345,8 +348,10 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
         constants.O_RDONLY | constants.O_NOFOLLOW)
       try {
         const stat = await file.stat()
+        /* v8 ignore next -- verifiedFiles checked size moments earlier; this catches only a concurrent file replacement. */
         if (!stat.isFile() || stat.size !== evidence.size) fail()
         const bytes = await file.readFile()
+        /* v8 ignore next -- verifiedFiles checked this digest moments earlier; this catches only a concurrent file rewrite. */
         if (digest(bytes) !== evidence.sha256) fail()
         return bytes
       } finally { await file.close() }

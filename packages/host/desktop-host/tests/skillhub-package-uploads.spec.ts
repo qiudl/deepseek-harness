@@ -102,6 +102,11 @@ it('rejects revocation and a changed archive digest before preparation', async (
 
 it('rejects oversized fragments, gaps, and disconnect during preparation', async () => {
   const h = await harness()
+  await expect(h.uploads.accept(h.input(1, h.archive.subarray(0, 20)))).rejects.toThrow()
+  await expect(h.uploads.accept({ ...h.input(0, h.archive.subarray(0, 20)), ownerId: '' })).rejects.toThrow()
+  await expect(h.uploads.accept({ ...h.input(0, h.archive.subarray(0, 20)), bindingKey: '' })).rejects.toThrow()
+  await expect(h.uploads.accept({ ...h.input(0, h.archive.subarray(0, 20)),
+    plan: { ...h.plan, operationId: '' } })).rejects.toThrow()
   await expect(h.uploads.accept(h.input(0, Buffer.alloc(32 * 1024 + 1)))).rejects.toThrow()
   await expect(h.uploads.accept({ ...h.input(0, h.archive.subarray(0, 20)),
     totalBytes: 110 * 1024 * 1024 + 1 })).rejects.toThrow()
@@ -109,11 +114,14 @@ it('rejects oversized fragments, gaps, and disconnect during preparation', async
   await expect(h.uploads.accept(h.input(21, h.archive.subarray(20, 40)))).rejects.toThrow()
   const next = await harness()
   let finish!: () => void
+  let entered!: () => void
   const held = new Promise<void>((resolve) => { finish = resolve })
+  const preparing = new Promise<void>((resolve) => { entered = resolve })
   const pending = next.uploads.accept({ ...next.input(0, next.archive), capture: () => ({
     assertCurrent: () => undefined,
-    prepare: async () => held,
+    prepare: async () => { entered(); await held },
   }) })
+  await preparing
   next.controller.abort()
   finish()
   await expect(pending).rejects.toThrow()
@@ -135,4 +143,14 @@ it('keeps the owner upload alive when a competing connection arrives during prep
     signal: rival.signal })).rejects.toThrow()
   finish()
   await expect(pending).resolves.toEqual({ nextOffset: h.archive.length, prepared: true })
+})
+
+it('rejects a grant that closes during the final synchronous receiver check', async () => {
+  const h = await harness()
+  let checks = 0
+  await expect(h.uploads.accept({ ...h.input(0, h.archive), capture: () => ({
+    assertCurrent: () => { if (++checks === 2) h.controller.abort() },
+    prepare: h.store.prepare,
+  }) })).rejects.toThrow()
+  expect(existsSync(join(h.root, 'skillhub-prepared', h.plan.operationId))).toBe(false)
 })

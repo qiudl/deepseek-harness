@@ -545,6 +545,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         },
         host,
         createSkillHubPackageStore: createSkillHubPackageStoreFactory((profileId) => {
+          /* v8 ignore next -- authorization just resolved this Profile; only concurrent removal reaches this guard. */
           if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
           const packagesRoot = win32.join(config.root, 'profiles', profileId, 'skillhub-packages')
           assertWindowsHostPrivatePathEvidence(bindings.ensurePrivateDirectory(

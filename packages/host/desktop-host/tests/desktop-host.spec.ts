@@ -503,6 +503,10 @@ describe('authenticated Unix transport', () => {
         operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '1',
         challengeId: randomUUID() }))
         .rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '2', expectedRevision: '0',
+        challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'profile_mismatch' })
       const receipt = await owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
         operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
         challengeId: randomUUID() })
@@ -531,11 +535,83 @@ describe('authenticated Unix transport', () => {
         packageId: plan.packageId, challengeId: randomUUID() })).rejects.toMatchObject({ code: 'unauthorized' })
       expect(await stored?.readFile(plan.packageId, 'SKILL.md')).toEqual(markdown)
       expect(await stored?.readFile(plan.packageId, 'references/data.bin')).toEqual(reference)
+      await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
+        plan, archive: Buffer.alloc(0) })).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
+        plan, archive: Buffer.from('wrong') })).rejects.toMatchObject({ code: 'unavailable' })
+      const originalCall: unknown = Reflect.get(owner, 'call')
+      try {
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package_chunk',
+          result: { next_offset: 1, prepared: false } }))
+        await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package',
+          result: { receipt: null } }))
+        await expect(owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+          operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
+          challengeId: randomUUID() })).rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package',
+          result: { receipt } }))
+        await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+          packageId: plan.packageId, challengeId: randomUUID() }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async (request: { params: { challenge_id: string } }) => ({
+          type: 'result', method: 'profile.skillhub_package', result: { receipt: {
+            ...receipt, challengeId: request.params.challenge_id, packageId: 'other-package',
+          } },
+        }))
+        await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+          packageId: plan.packageId, challengeId: randomUUID() }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+      } finally { Reflect.set(owner, 'call', originalCall) }
+      const originalInspection = Reflect.get(owner, 'inspection')
+      try {
+        Reflect.set(owner, 'inspection', { ...originalInspection, capabilities: [] })
+        await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+          packageId: plan.packageId, challengeId: randomUUID() }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+      } finally { Reflect.set(owner, 'inspection', originalInspection) }
     } finally {
       owner.close()
       other.close()
       await server.close()
     }
+  })
+
+  it('refuses package commands when an older Host has no package store', async () => {
+    const { server, socketPath } = await fixture()
+    const owner = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:skillhub-old-host', unlockMaterial })
+      const markdown = Buffer.from('---\nname: example\ndescription: Example\nversion: 1.0.0\n---\n')
+      const zip = new AdmZip()
+      zip.addFile('SKILL.md', markdown)
+      const archive = zip.toBuffer()
+      const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
+      const plan = {
+        operationId: randomUUID(), packageId: 'package-1', profileId: local.profileId,
+        hostKeyId: sha(Buffer.from(publicKey, 'base64url')), bindingGeneration: '1',
+        expectedRevision: '0', versionId: 'version-1', skillSlug: 'example', version: '1.0.0',
+        archiveSha256: sha(archive), manifestSha256: sha(JSON.stringify(['slark-skillhub-manifest-v1',
+          [['SKILL.md', '0644', markdown.length, sha(markdown)]]])),
+      }
+      const inspection = Reflect.get(owner, 'inspection')
+      Reflect.set(owner, 'inspection', { ...inspection,
+        capabilities: [...inspection.capabilities, 'profile.skillhub_package_chunk', 'profile.skillhub_package'] })
+      try {
+        await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+          packageId: plan.packageId, challengeId: randomUUID() }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+      } finally { Reflect.set(owner, 'inspection', inspection) }
+    } finally { owner.close(); await server.close() }
   })
 
   it('recovers and opens an offline Account Profile through a domain-separated selector', async () => {
