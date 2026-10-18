@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign, verify } from 'node:crypto'
-import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload,
+  SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -492,8 +493,42 @@ describe('authenticated Unix transport', () => {
       expect(stored).toBeUndefined()
       await owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive })
       expect(await stored?.current(plan.packageId)).toBeNull()
-      const receipt = await stored?.activate(plan.operationId, '1', '0')
+      expect(await owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+        packageId: plan.packageId, challengeId: randomUUID() })).toBeNull()
+      await expect(other.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
+        challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '1',
+        challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      const receipt = await owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
+        challengeId: randomUUID() })
       expect(receipt).toMatchObject({ operationId: plan.operationId, profileId: local.profileId, hostKeyId })
+      const { signature, ...unsigned } = receipt
+      expect(verify(null, Buffer.from(SKILLHUB_PACKAGE_RECEIPT_DOMAIN
+        + encodeSkillHubPackageReceiptPayload(unsigned)), keys.publicKey,
+      Buffer.from(signature, 'base64url'))).toBe(true)
+      expect(receipt.revision).toBe('1')
+      expect(receipt.readiness).toBe('prepared')
+      expect(receipt.loadEvidenceId).toBeNull()
+      const repeated = await owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
+        challengeId: randomUUID() })
+      expect(repeated).toMatchObject({ operationId: receipt.operationId, revision: receipt.revision })
+      expect(repeated.signature).not.toBe(receipt.signature)
+      await expect(owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '1',
+        challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      const currentReceipt = await owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+        packageId: plan.packageId, challengeId: randomUUID() })
+      expect(currentReceipt).toMatchObject({ operationId: receipt.operationId, revision: receipt.revision })
+      expect(currentReceipt?.signature).not.toBe(receipt.signature)
+      await expect(other.currentSkillHubPackage({ profileSelector: local.profileSelector,
+        packageId: plan.packageId, challengeId: randomUUID() })).rejects.toMatchObject({ code: 'unauthorized' })
       expect(await stored?.readFile(plan.packageId, 'SKILL.md')).toEqual(markdown)
       expect(await stored?.readFile(plan.packageId, 'references/data.bin')).toEqual(reference)
     } finally {

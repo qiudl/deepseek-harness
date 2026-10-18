@@ -56,7 +56,8 @@ type StoredReceipt = Omit<SkillHubPackageReceipt, 'readiness' | 'loadEvidenceId'
 type SkillHubPackageInstallationStore = Readonly<{
   current(packageId: string): Promise<SkillHubPackageReceipt | null>
   prepare(plan: SkillHubPackagePlan, archive: Buffer): Promise<void>
-  activate(operationId: string, bindingGeneration: string, expectedRevision: string): Promise<SkillHubPackageReceipt>
+  activate(operationId: string, bindingGeneration: string, expectedRevision: string,
+    assertCurrent?: () => void): Promise<SkillHubPackageReceipt>
   readFile(packageId: string, path: string): Promise<Buffer>
 }>
 
@@ -290,7 +291,8 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
         throw error
       }
     },
-    async activate(operationId: string, bindingGeneration: string, expectedRevision: string): Promise<SkillHubPackageReceipt> {
+    async activate(operationId: string, bindingGeneration: string, expectedRevision: string,
+      assertCurrent?: () => void): Promise<SkillHubPackageReceipt> {
       return serializeActivation(async () => {
         await checkRoot()
         if (!UUID.test(operationId) || !REVISION.test(bindingGeneration)
@@ -303,9 +305,10 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
         if (!plan) throw Error('skillhub_package_unavailable')
         planValid(plan, profileId, hostKeyId, bindingGeneration)
         const active = await current(plan.packageId)
+        assertCurrent?.()
+        if (plan.bindingGeneration !== bindingGeneration || plan.expectedRevision !== expectedRevision) fail()
         if (active?.operationId === operationId) return active
-        if (plan.bindingGeneration !== bindingGeneration || plan.expectedRevision !== expectedRevision
-        || (active?.revision ?? '0') !== expectedRevision) fail()
+        if ((active?.revision ?? '0') !== expectedRevision) fail()
         const base = versionPlan ? destination : preparedPath
         await verifiedFiles(plan, base)
         const receipt: SkillHubPackageReceipt = {
@@ -318,8 +321,11 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
           await rename(preparedPath, destination)
         await directorySync(versions)
         const temp = join(root, `skillhub-current-${randomUUID()}.json`)
-        await writePrivate(temp, JSON.stringify(receipt))
-        await rename(temp, join(pointers, `${plan.packageId}.json`))
+        try {
+          await writePrivate(temp, JSON.stringify(receipt))
+          assertCurrent?.()
+          await rename(temp, join(pointers, `${plan.packageId}.json`))
+        } finally { await rm(temp, { force: true }) }
         await directorySync(pointers)
         return receipt
       })

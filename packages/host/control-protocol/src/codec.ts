@@ -52,6 +52,9 @@ import type {
   HostSkillHubPackagePlan,
   ProfileSkillHubPackageChunkRequest,
   ProfileSkillHubPackageChunkResult,
+  HostSkillHubPackageSignedReceipt,
+  ProfileSkillHubPackageRequest,
+  ProfileSkillHubPackageResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
@@ -129,6 +132,7 @@ import type {
   MigrationImportAbortResult,
 } from './types.ts'
 import { parseHostCollaborationDeliveryChunk, parseHostCollaborationDeliveryResult } from './collaboration-delivery.ts'
+import { encodeSkillHubPackageReceiptPayload } from './skillhub-package-receipt.ts'
 
 /** Maximum UTF-8 bytes in one JSON object, excluding its terminating LF. */
 export const HOST_CONTROL_MAX_FRAME_BYTES = 64 * 1024
@@ -252,6 +256,25 @@ function skillHubPackagePlan(value: unknown): HostSkillHubPackagePlan {
     version: wireText(plan.version, 200), archiveSha256: digest(plan.archiveSha256),
     manifestSha256: digest(plan.manifestSha256),
   }
+}
+
+function skillHubPackageReceipt(value: unknown): HostSkillHubPackageSignedReceipt {
+  const receipt = record(value)
+  exactKeys(receipt, ['version', 'installationId', 'challengeId', 'operationId', 'packageId', 'profileId',
+    'hostKeyId', 'bindingGeneration', 'revision', 'versionId', 'archiveSha256',
+    'manifestSha256', 'readiness', 'loadEvidenceId', 'signature'])
+  const parsed = {
+    version: receipt.version, installationId: uuid(receipt.installationId),
+    challengeId: uuid(receipt.challengeId),
+    operationId: uuid(receipt.operationId), packageId: receipt.packageId,
+    profileId: uuid(receipt.profileId), hostKeyId: digest(receipt.hostKeyId),
+    bindingGeneration: receipt.bindingGeneration, revision: receipt.revision,
+    versionId: receipt.versionId, archiveSha256: digest(receipt.archiveSha256),
+    manifestSha256: digest(receipt.manifestSha256), readiness: receipt.readiness,
+    loadEvidenceId: receipt.loadEvidenceId,
+  } as Omit<HostSkillHubPackageSignedReceipt, 'signature'>
+  try { encodeSkillHubPackageReceiptPayload(parsed) } catch { reject() }
+  return { ...parsed, signature: signature(receipt.signature) }
 }
 
 function modelClaimCandidate(value: unknown): string {
@@ -1588,6 +1611,7 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileSkillHubBindingRequest
   | ProfileSkillHubPackageChunkRequest
+  | ProfileSkillHubPackageRequest
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
@@ -1853,6 +1877,31 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
         plan: skillHubPackagePlan(params.plan), total_bytes: params.total_bytes as number,
         offset: params.offset as number, chunk_base64url: params.chunk_base64url } }
+  }
+  if (frame.method === 'profile.skillhub_package') {
+    if (params.action === 'activate') {
+      exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'challenge_id', 'action', 'operation_id',
+        'binding_generation', 'expected_revision'])
+      if (typeof params.binding_generation !== 'string'
+        || !/^[1-9][0-9]{0,17}$/u.test(params.binding_generation)
+        || typeof params.expected_revision !== 'string'
+        || !/^(?:0|[1-9][0-9]{0,17})$/u.test(params.expected_revision)) reject()
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+          challenge_id: uuid(params.challenge_id),
+          action: 'activate', operation_id: uuid(params.operation_id),
+          binding_generation: params.binding_generation, expected_revision: params.expected_revision } }
+    }
+    if (params.action === 'current') {
+      exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'challenge_id', 'action', 'package_id'])
+      if (typeof params.package_id !== 'string'
+        || !/^[A-Za-z0-9_-]{1,100}$/u.test(params.package_id)) reject()
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+          challenge_id: uuid(params.challenge_id),
+          action: 'current', package_id: params.package_id } }
+    }
+    reject()
   }
   if (frame.method === 'profile.status' || frame.method === 'profile.open') {
     exactKeys(params, [
@@ -2193,6 +2242,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
 function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileSkillHubBindingResult
   | ProfileSkillHubPackageChunkResult
+  | ProfileSkillHubPackageResult
   | ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
@@ -2451,6 +2501,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
       || typeof result.prepared !== 'boolean') reject()
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { next_offset: result.next_offset as number, prepared: result.prepared } }
+  }
+  if (frame.method === 'profile.skillhub_package') {
+    exactKeys(result, ['receipt'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { receipt: result.receipt === null ? null : skillHubPackageReceipt(result.receipt) } }
   }
   if (frame.method === 'profile.open' || frame.method === 'profile.open_local') {
     exactKeys(result, ['profile_id', 'view_lease_id', 'view_activation_handle', 'lease_generation', 'expires_at', 'runtime_generation'])

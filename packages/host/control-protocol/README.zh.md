@@ -64,6 +64,8 @@ kind: "package-reference"
 
 `profile.skillhub_package_chunk` 每个规范控制帧最多传输同一固定 ZIP 的 32 KiB。每片重复 Profile 选择器、包计划、总字节数和下一偏移；Host 每次重查当前连接的 Profile 授权，拒绝坐标变化、片段缺口和超限片段。最后的确认只表示完整包已在该 Profile 私有存储中完成验证和准备，不表示已激活、加载或授权。Slark 在单独提交前仍须重查来源和目标权限。
 
+`profile.skillhub_package` 使用固定的 Profile 选择器、绑定代次和预期包 revision 激活已准备的操作，也可读取当前包回执。两种操作均要求当前连接拥有 Profile 授权，并携带调用方提供的挑战 UUID。Host 验证已准备文件并比较 revision 后才替换版本指针；回执在 `SLARK-SKILLHUB-DSH-PACKAGE-RECEIPT/v1` 签名域下绑定该挑战、Host 安装、Profile、公钥、操作、版本和新 revision。当前结果为空表示没有已激活的包。`readiness: prepared` 只证明存储激活；运行时加载需要独立证据，Slark 激活前仍须重查自身的当前来源和目标授权。
+
 `profile.workspace_model_selection` 接受已验证的 Account 绑定、工作区注册表 UUID 和 Session id。精确响应包含这些身份、provider/model（各最多 256 UTF-8 字节），以及可选 reasoning effort（最多 128 字节）。调用方指定的模型、Profile 路径和额外响应字段均被拒绝。结果只是只读选择，不是可执行适配器快照或 Source 凭据；Host 必须发布已安装执行器的能力才可调用。
 
 `profile.collaboration_registration` 在核验同一连接的 Account 绑定后，签署服务器登记请求/challenge ID、规范 nonce、有效期、HTTPS audience、environment UUID 和 Account issuer/subject。证明包含安装 UUID/公钥及当前 Host instance/process nonce。Ed25519 签名正文是 UTF-8 域 `dsh-collaboration-host-registration/v2`、NUL 与固定顺序 JSON 元组，不包含签名本身。解析器冻结精确字段并拒绝凭据。挑战须仍有效，且在五分钟内过期。服务器须另行信任安装公钥、持久保存并消费挑战、提交登记回执；此签名不授权 Source 或任务。

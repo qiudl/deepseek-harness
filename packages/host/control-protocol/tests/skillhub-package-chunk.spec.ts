@@ -40,3 +40,37 @@ it('rejects oversized, ambiguous, or target-mismatched package frames', () => {
     expect(() => decode({ ...frame, params: { ...frame.params, ...changed } })).toThrow()
   }
 })
+
+it('round-trips bounded activation and current-receipt commands', () => {
+  const common = request()
+  const activate = { ...common, method: 'profile.skillhub_package', params: {
+    client_instance_id: common.params.client_instance_id, host_instance_id: common.params.host_instance_id,
+    process_nonce: common.params.process_nonce, jti: common.params.jti,
+    issued_at: common.params.issued_at, expires_at: common.params.expires_at,
+    profile_selector: common.params.profile_selector, challenge_id: randomUUID(), action: 'activate',
+    operation_id: plan.operationId, binding_generation: '1', expected_revision: '0',
+  } }
+  const current = { ...activate, params: { ...activate.params, action: 'current',
+    package_id: plan.packageId } }
+  delete (current.params as Record<string, unknown>).operation_id
+  delete (current.params as Record<string, unknown>).binding_generation
+  delete (current.params as Record<string, unknown>).expected_revision
+  for (const frame of [activate, current])
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+  expect(() => decode({ ...activate, params: { ...activate.params, extra: true } })).toThrow()
+})
+
+it('accepts only the exact signed storage receipt shape', () => {
+  const receipt = { version: 1, installationId: randomUUID(), challengeId: randomUUID(),
+    operationId: plan.operationId,
+    packageId: plan.packageId, profileId: plan.profileId, hostKeyId: plan.hostKeyId,
+    bindingGeneration: '1', revision: '1', versionId: plan.versionId,
+    archiveSha256: plan.archiveSha256, manifestSha256: plan.manifestSha256,
+    readiness: 'prepared', loadEvidenceId: null, signature: 'A'.repeat(86) }
+  const frame = { version: 1, type: 'result', request_id: randomUUID(),
+    method: 'profile.skillhub_package', result: { receipt } }
+  expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+  for (const changed of [{ extra: true }, { readiness: 'loaded' }, { revision: '0' },
+    { signature: 'bad' }])
+    expect(() => decode({ ...frame, result: { receipt: { ...receipt, ...changed } } })).toThrow()
+})

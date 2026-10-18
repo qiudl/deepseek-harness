@@ -6,7 +6,8 @@ import {
   type ProfileRecoveryMaterialsValidateRequest, type ProfileRecoveryMaterialsValidateResult,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from '@deepseek-ai/dsh-host-control-protocol'
-import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload,
+  SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningEvidence } from '@deepseek-ai/dsh-host-control-protocol'
@@ -55,6 +56,8 @@ import type {
   ProfileSkillHubBindingRequest,
   ProfileSkillHubBindingResult,
   ProfileSkillHubPackageChunkRequest,
+  ProfileSkillHubPackageRequest,
+  HostSkillHubPackageSignedReceipt,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
@@ -958,6 +961,21 @@ export class HostControlAuthority {
   private readonly packageUploads = new SkillHubPackageUploads()
   constructor(private readonly options: HostControlAuthorityOptions) {}
 
+  private skillHubPackageGrant(profileSelector: string, ownerId: string, signal: AbortSignal) {
+    const selector = verifyProfileSelector(this.options.identity, profileSelector)
+    const profileId = selector.profile_id, generation = String(selector.binding_generation)
+    const hostKeyId = createHash('sha256').update(Buffer.from(
+      this.options.identity.installationPublicKey, 'base64url')).digest('hex')
+    const authorize = () => {
+      signal.throwIfAborted()
+      const current = this.options.host.authorizeMigrationProfileSelector({
+        profileId: profileId as never, bindingGeneration: selector.binding_generation, ownerId,
+      })
+      if (current !== profileId) throw new HostAuthorityError('profile_mismatch')
+    }
+    return { profileId, generation, hostKeyId, authorize }
+  }
+
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const clock = this.options.now ?? Date.now
@@ -1460,18 +1478,11 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.skillhub_package_chunk') {
           const createStore = this.options.createSkillHubPackageStore
           if (!createStore) throw new HostAuthorityError('upgrade_required')
-          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
-          const generation = String(selector.binding_generation)
-          const profileId = selector.profile_id
-          const hostKeyId = createHash('sha256').update(Buffer.from(
-            this.options.identity.installationPublicKey, 'base64url')).digest('hex')
+          const { profileId, generation, hostKeyId, authorize: assertGrant } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
           const authorize = () => {
-            context.signal.throwIfAborted()
-            const current = this.options.host.authorizeMigrationProfileSelector({
-              profileId: profileId as never, bindingGeneration: selector.binding_generation, ownerId,
-            })
-            if (current !== profileId || frame.params.plan.profileId !== profileId
-              || frame.params.plan.bindingGeneration !== generation
+            assertGrant()
+            if (frame.params.plan.profileId !== profileId || frame.params.plan.bindingGeneration !== generation
               || frame.params.plan.hostKeyId !== hostKeyId) throw new HostAuthorityError('profile_mismatch')
           }
           const result = await this.packageUploads.accept({
@@ -1488,6 +1499,33 @@ export class HostControlAuthority {
           context.signal.throwIfAborted()
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { next_offset: result.nextOffset, prepared: result.prepared } })
+        } else if (frame.method === 'profile.skillhub_package') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          authorize()
+          if (frame.params.action === 'activate' && frame.params.binding_generation !== generation)
+            throw new HostAuthorityError('profile_mismatch')
+          const store = await createStore(profileId, generation, hostKeyId)
+          authorize()
+          let receipt
+          try {
+            receipt = frame.params.action === 'activate'
+              ? await store.activate(frame.params.operation_id, generation, frame.params.expected_revision, authorize)
+              : await store.current(frame.params.package_id)
+          } catch { throw new HostAuthorityError('unavailable') }
+          authorize()
+          const signed = receipt && (() => {
+            const unsigned = { version: 1 as const, installationId: this.options.identity.installationId,
+              challengeId: frame.params.challenge_id,
+              ...receipt }
+            const signature = signAuthorityPayload(this.options.identity, Buffer.from(
+              SKILLHUB_PACKAGE_RECEIPT_DOMAIN + encodeSkillHubPackageReceiptPayload(unsigned)))
+            return { ...unsigned, signature }
+          })()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { receipt: signed || null } })
         } else if (frame.method === 'profile.open') {
           const opened = await this.options.host.openProfile({
             authorityEnvironmentId: frame.params.authority_environment_id,
@@ -2227,7 +2265,8 @@ export class HostControlAuthority {
         process_nonce: identity.processNonce as HostControlNonce,
         capabilities: [
           ...capabilities,
-          ...(this.options.createSkillHubPackageStore ? ['profile.skillhub_package_chunk'] : []),
+          ...(this.options.createSkillHubPackageStore
+            ? ['profile.skillhub_package_chunk', 'profile.skillhub_package'] : []),
           'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
@@ -2939,6 +2978,55 @@ export class UnixHostClient {
         throw new HostAuthorityError('unavailable')
       offset = frame.result.next_offset
     }
+  }
+
+  private async skillHubPackageCommand(params: ProfileSkillHubPackageRequest['params'],
+    signal?: AbortSignal): Promise<HostSkillHubPackageSignedReceipt | null> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubPackageRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package', params,
+    }
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method
+      || (frame.result.receipt && frame.result.receipt.challengeId !== params.challenge_id))
+      throw new HostAuthorityError('unavailable')
+    return frame.result.receipt
+  }
+
+  /** Atomically activate a prepared package under the current Profile grant.
+   * @param input - Authorized selector, fixed CAS coordinates, caller challenge and cancellation.
+   * @returns Host-signed storage activation receipt; it does not attest runtime loading.
+   */
+  async activateSkillHubPackage(input: { readonly profileSelector: string
+    readonly operationId: string
+    readonly bindingGeneration: string
+    readonly expectedRevision: string
+    readonly challengeId: string
+    readonly signal?: AbortSignal }): Promise<HostSkillHubPackageSignedReceipt> {
+    const receipt = await this.skillHubPackageCommand({ ...this.auth(),
+      profile_selector: input.profileSelector, challenge_id: input.challengeId,
+      action: 'activate', operation_id: input.operationId,
+      binding_generation: input.bindingGeneration, expected_revision: input.expectedRevision }, input.signal)
+    if (!receipt || receipt.operationId !== input.operationId
+      || receipt.bindingGeneration !== input.bindingGeneration)
+      throw new HostAuthorityError('unavailable')
+    return receipt
+  }
+
+  /** Read the current signed Host activation fact from this authorized Profile.
+   * @param input - Authorized selector, package identity, caller challenge and cancellation.
+   * @returns A fresh signed receipt, or null when the package has no active version.
+   */
+  async currentSkillHubPackage(input: { readonly profileSelector: string
+    readonly packageId: string
+    readonly challengeId: string
+    readonly signal?: AbortSignal }): Promise<HostSkillHubPackageSignedReceipt | null> {
+    const receipt = await this.skillHubPackageCommand({ ...this.auth(),
+      profile_selector: input.profileSelector, challenge_id: input.challengeId,
+      action: 'current', package_id: input.packageId }, input.signal)
+    if (receipt && receipt.packageId !== input.packageId) throw new HostAuthorityError('unavailable')
+    return receipt
   }
 
   /**
@@ -4497,7 +4585,8 @@ export class UnixHostClient {
       | ProfileModelClaimRetryRequest
       | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
-      | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest | ProfileSkillHubPackageChunkRequest
+      | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest
+      | ProfileSkillHubPackageChunkRequest | ProfileSkillHubPackageRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest

@@ -53,7 +53,7 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `profile.skillhub_binding` 为 Slark SkillHub 单独签署 Host 本地 Profile 事实。当前连接必须拥有该 Profile 授权，签名选择器也必须符合当前绑定代次。证明包含 broker 提供的 Slark 用户与 Computer 坐标；只有 Slark 能认证这些远端坐标并消费一次性挑战。该方法不写入 Profile、Session 或凭据数据。
 
-Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_package_chunk` 片段。它根据固定包和完整清单摘要校验 ZIP，再写入私有准备快照。准备不会改变资产安装 revision；激活和可查询的 Host 回执还需单独授权提交。
+Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_package_chunk` 片段。它根据固定包和完整清单摘要校验 ZIP，再写入私有准备快照。准备不会改变资产安装 revision。单独的 `profile.skillhub_package` 调用检查该授权和预期 revision 后才原子激活；当前回读返回 Host 签名回执。该回执只证明存储激活，不证明运行时加载或 Slark 侧安装授权。
 
 `profile.ensure_binding_scope` 允许可信 broker 传入根据已验证环境与 Slark 登录身份计算的 SHA-256 scope。绑定版本只在同一 scope 内单调递增；另一有效登录可共享同一 Account Profile，而不继承其版本。registry v4 持久化 scope，并拒绝重复 scope 或 handle。读取器接受已发布 v2/v3 记录，加载时不重写；登记带 scope 的绑定时写入 v4。同环境已有带 scope 的绑定后，旧绑定须独立验证并关联 scope 才能离线恢复。旧 broker 可续用已经关联 scope 的 handle，但不能在该环境新增无 scope 的绑定。同一 scope 换绑会使旧 handle 失效。Account 令牌、Profile 解锁和服务器协作鉴权仍须通过；scope 不转移设备所有权。旧 registry 读取器拒绝 v4，因此回退须使用兼容读取器，或在确认不会丢失后续绑定变更后恢复升级前的 registry 快照。
 

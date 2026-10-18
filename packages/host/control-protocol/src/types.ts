@@ -493,6 +493,50 @@ export interface ProfileSkillHubPackageChunkResult {
   readonly result: { readonly next_offset: number; readonly prepared: boolean }
 }
 
+/** Host-signed activation fact; readiness does not attest runtime loading. */
+export interface HostSkillHubPackageSignedReceipt {
+  readonly version: 1
+  readonly installationId: string
+  readonly challengeId: string
+  readonly operationId: string
+  readonly packageId: string
+  readonly profileId: string
+  readonly hostKeyId: string
+  readonly bindingGeneration: string
+  readonly revision: string
+  readonly versionId: string
+  readonly archiveSha256: string
+  readonly manifestSha256: string
+  readonly readiness: 'prepared'
+  readonly loadEvidenceId: null
+  readonly signature: HostControlSignature
+}
+
+/** The same Profile grant gates both CAS activation and receipt readback. */
+export interface ProfileSkillHubPackageRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package'
+  readonly params: HostAuthorizedParams & { readonly profile_selector: string
+    readonly challenge_id: string } & (
+    { readonly action: 'activate'
+      readonly operation_id: string
+      readonly binding_generation: string
+      readonly expected_revision: string }
+    | { readonly action: 'current'
+      readonly package_id: string })
+}
+
+/** Signed activation or current-readback result; null means no active package. */
+export interface ProfileSkillHubPackageResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package'
+  readonly result: { readonly receipt: HostSkillHubPackageSignedReceipt | null }
+}
+
 /** Open the same Profile through a Main-only local view lease. */
 export interface ProfileOpenRequest {
   readonly version: 1
@@ -1819,6 +1863,8 @@ export type HostControlFrame =
   | ProfileSkillHubBindingResult
   | ProfileSkillHubPackageChunkRequest
   | ProfileSkillHubPackageChunkResult
+  | ProfileSkillHubPackageRequest
+  | ProfileSkillHubPackageResult
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
   | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest

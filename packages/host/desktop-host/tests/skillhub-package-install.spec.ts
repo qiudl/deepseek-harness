@@ -1,6 +1,6 @@
 /** REQ-20261013-0021 / 24205. Host facts, never the Server's project-install projection. */
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
@@ -71,6 +71,19 @@ it('rejects the wrong Profile, key, generation and stale revision before activat
   await expect(installation.activate(plan.operationId, '2', '0')).rejects.toThrow()
   await expect(installation.activate(plan.operationId, '1', '1')).rejects.toThrow()
   expect(await installation.current(packageId)).toBeNull()
+})
+
+it('keeps the current pointer unchanged when its grant closes before the atomic switch', async () => {
+  const { root, installation } = await store()
+  const evidence = archive()
+  const plan = target('version-1', evidence)
+  await installation.prepare(plan, evidence.bytes)
+  let checks = 0
+  await expect(installation.activate(plan.operationId, '1', '0', () => {
+    if (++checks === 2) throw new Error('grant closed')
+  })).rejects.toThrow('grant closed')
+  expect(await installation.current(packageId)).toBeNull()
+  expect(readdirSync(root).some(name => name.startsWith('skillhub-current-'))).toBe(false)
 })
 
 it('keeps one immutable receipt for duplicate commits and recovers it after restart', async () => {
