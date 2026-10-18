@@ -66,7 +66,8 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
           data-testid="slark-source-locate" onClick={() => { void locateOriginal(group.original.snapshot_digest) }}>{t('task.viewOriginal')}</Button>}
         {group.phase === 'error' ? <p role="status">{t('task.readUnavailable')}</p>
           : group.replies.length === 0 && !group.pending?.length && !group.pendingUnavailable &&
-            <p role="status">{t(planningStatus[group.planningState ?? ''] ?? 'task.awaitingResult')}</p>}
+            <p role="status">{group.planningFailure ? t('task.localPlanningFailure', { reason: t(`task.planningFailure.${group.planningFailure.reason}`) })
+              : t(planningStatus[group.planningState ?? ''] ?? 'task.awaitingResult')}</p>}
         {group.pendingUnavailable && <p role="status">{t('task.readUnavailable')}</p>}
         {group.pending?.map(item => <div className={css.reply} key={item.pending_item_id}>
           <strong>{item.mentions.map(mention => `${mention.agent_name}${mention.project_name === null ? '' : ` · ${mention.project_name}`}`).join(', ')}</strong>
