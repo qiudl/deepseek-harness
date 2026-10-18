@@ -388,6 +388,33 @@ it('requires a private existing root and rejects a changed root after opening', 
   }
 })
 
+it('rejects a replaced root and non-directory package paths on every platform', async () => {
+  {
+    const { root, installation } = await store()
+    rmSync(root, { recursive: true, force: true })
+    mkdirSync(root, { mode: 0o700 })
+    await expect(installation.current(packageId)).rejects.toThrow()
+  }
+  {
+    const { root, installation } = await store()
+    const prepared = join(root, 'skillhub-prepared')
+    rmSync(prepared, { recursive: true, force: true })
+    writeFileSync(prepared, 'blocked')
+    await expect(installation.current(packageId)).rejects.toThrow()
+  }
+  for (const broken of ['files', 'references'] as const) {
+    const { root, installation } = await store()
+    const evidence = archive(), plan = target('version-1', evidence)
+    await installation.prepare(plan, evidence.bytes)
+    await installation.activate(plan.operationId, '1', '0')
+    const path = join(root, 'skillhub-versions', plan.operationId, 'files',
+      ...(broken === 'references' ? ['references'] : []))
+    rmSync(path, { recursive: true, force: true })
+    writeFileSync(path, 'blocked')
+    await expect(installation.current(packageId)).rejects.toThrow()
+  }
+})
+
 it('rejects malformed manifest evidence even when its persisted digest is internally consistent', async () => {
   for (const change of [
     (file: Record<string, unknown>) => { file.path = '../escape' },
@@ -461,13 +488,12 @@ it('accepts a stored ZIP member with the same verified file manifest', async () 
 })
 
 it('removes staging data when the atomic preparation publish fails', async () => {
-  if (process.platform === 'win32') return
   const { root, installation } = await store()
   const prepared = join(root, 'skillhub-prepared')
   const evidence = archive(), plan = target('version-1', evidence)
-  chmodSync(prepared, 0o500)
-  try {
-    await expect(installation.prepare(plan, evidence.bytes)).rejects.toThrow()
-    expect(readdirSync(join(root, 'skillhub-staging'))).toEqual([])
-  } finally { chmodSync(prepared, 0o700) }
+  const collision = join(prepared, plan.operationId)
+  mkdirSync(collision)
+  writeFileSync(join(collision, 'blocker.txt'), 'blocked')
+  await expect(installation.prepare(plan, evidence.bytes)).rejects.toThrow()
+  expect(readdirSync(join(root, 'skillhub-staging'))).toEqual([])
 })

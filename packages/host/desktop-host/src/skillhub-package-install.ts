@@ -19,6 +19,7 @@ const MAX_FILE = 10 * 1024 * 1024
 const MANIFEST_SCHEMA = 'slark-skillhub-manifest-v1'
 const digest = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
 const fail = (): never => { throw Error('skillhub_package_unavailable') }
+/* v8 ignore next -- POSIX mode bits are not authoritative on Windows; Linux coverage exercises this branch. */
 const privateMode = (mode: number) => process.platform === 'win32' || (mode & 0o077) === 0
 
 /** Fixed package identity and expected Profile revision supplied by the authorized installer. */
@@ -155,6 +156,7 @@ async function writePrivate(path: string, bytes: Buffer | string, mode = 0o600):
 async function directorySync(path: string): Promise<void> {
   /* v8 ignore next -- the Win32 directory-handle branch runs only on Windows CI; Linux coverage cannot execute it. */
   if (process.platform === 'win32') return
+  /* v8 ignore next 2 -- Win32 cannot fsync directory handles; Linux coverage exercises the implementation. */
   const dir = await open(path, constants.O_RDONLY)
   try { await dir.sync() } finally { await dir.close() }
 }
@@ -186,11 +188,13 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
   for (const path of [staging, prepared, versions, pointers]) await mkdir(path, { recursive: true, mode: 0o700 })
   const checkRoot = async () => {
     const current = await lstat(root)
+    /* v8 ignore next -- the privateMode false arm requires POSIX mode bits. */
     if (!current.isDirectory() || current.isSymbolicLink() || current.ino !== inode
       || current.dev !== device || !privateMode(current.mode)
       || await realpath(root) !== canonicalRoot) fail()
     for (const path of [staging, prepared, versions, pointers]) {
       const entry = await lstat(path)
+      /* v8 ignore next -- the privateMode false arm requires POSIX mode bits. */
       if (!entry.isDirectory() || entry.isSymbolicLink() || !privateMode(entry.mode)) fail()
     }
   }
@@ -198,6 +202,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
   async function verifiedFiles(plan: SkillHubPackagePlan, base: string): Promise<StoredFile[]> {
     for (const path of [base, join(base, 'files')]) {
       const info = await lstat(path)
+      /* v8 ignore next -- the privateMode false arm requires POSIX mode bits. */
       if (!info.isDirectory() || info.isSymbolicLink() || !privateMode(info.mode)) fail()
     }
     const files = await storedJson<StoredFile[]>(join(base, 'manifest.json'))
@@ -215,11 +220,13 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       for (const part of parts.slice(0, -1)) {
         parent = join(parent, part)
         const entry = await lstat(parent)
+        /* v8 ignore next -- the privateMode false arm requires POSIX mode bits. */
         if (!entry.isDirectory() || entry.isSymbolicLink() || !privateMode(entry.mode)) fail()
       }
       const file = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW)
       try {
         const stat = await file.stat()
+        /* v8 ignore next 2 -- the mode comparison is POSIX-only; Linux coverage exercises it. */
         if (!stat.isFile() || stat.size !== evidence.size
           || (process.platform !== 'win32' && (stat.mode & 0o777) !== (evidence.mode === '0755' ? 0o755 : 0o644))
           || digest(await file.readFile()) !== evidence.sha256) fail()
