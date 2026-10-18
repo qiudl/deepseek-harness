@@ -273,6 +273,7 @@ it('groups owned work, filters by workspace and title, and completes rename and 
   expect(screen.getByText('Topic archive')).toBeTruthy()
   fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Topic finished' } })
   const shell = screen.getByRole('button', { name: /Topic finished/ }).parentElement!
+  expect(within(shell).getByText('Completed')).toBeTruthy()
   fireEvent.click(within(shell).getByRole('button', { name: 'Rename' }))
   const edit = within(shell).getByRole('textbox', { name: 'Rename' })
   fireEvent.keyDown(edit, { key: 'a' })
@@ -374,4 +375,57 @@ it('uses the fallback workspace label and keeps sorted rows stable for equal act
   expect(screen.getAllByText(/Workspace ·/)).toHaveLength(3)
   fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'one' } })
   expect(screen.getByText('Untitled collaboration conversation')).toBeTruthy()
+})
+
+it('orders pending first, then pinned and recent conversations across execution states', async () => {
+  const workspaceId = 'a15fc774-6fae-4795-9f55-f4be65e06846'
+  const base = { workspace_id: workspaceId, first_source_at: '1', source_count: 1,
+    pending_count: 0, planning_count: 0, running_count: 0, issue_count: 0,
+    first_pending_digest: null, pinned: false, archived: false }
+  const items = [
+    { ...base, session_id: 'finished-pin', last_activity_at: '1', pinned: true },
+    { ...base, session_id: 'running', last_activity_at: '20', running_count: 1 },
+    { ...base, session_id: 'draft-pin', last_activity_at: '2', source_count: 0, pinned: true },
+    { ...base, session_id: 'issue', last_activity_at: '40', issue_count: 1 },
+    { ...base, session_id: 'finished', last_activity_at: '50' },
+    { ...base, session_id: 'planning', last_activity_at: '30', planning_count: 1 },
+    { ...base, session_id: 'draft', last_activity_at: '10', source_count: 0 },
+    { ...base, session_id: 'pending-old', last_activity_at: '90', pending_count: 1 },
+    { ...base, session_id: 'pending-new', last_activity_at: '100', pending_count: 1 },
+    { ...base, session_id: 'pending-pin', last_activity_at: '1', pending_count: 1, pinned: true },
+    { ...base, session_id: 'archived', last_activity_at: '200', pinned: true, archived: true },
+  ]
+  render(<CollaborationBrowser {...({ ...viewingProps(),
+    useCollaborationIndex: bindSnapshotSelector(createSnapshotStore<ConversationIndex>({
+      state: 'ready', items, global_pending_count: 3,
+    })),
+    useSessions: (select: (value: unknown) => unknown) => select({ byId: Object.fromEntries(
+      items.map(row => [row.session_id, { displayTitle: `Order ${row.session_id}` }]),
+    ) }),
+    useWorkspaces: (select: (value: unknown) => unknown) => select({ phase: 'ready', items: [
+      { workspaceId, title: 'Workspace', sessionIds: items.map(row => SessionId(row.session_id)) },
+    ], dedicatedCollaborationSessionIds: [], archivedSessionIds: [], pinnedSessionIds: [] }),
+    currentWorkspaceId: () => workspaceId, openConversation: vi.fn(), startConversation: vi.fn(),
+    togglePin: vi.fn(), renameConversation: vi.fn(), archiveConversation: vi.fn(), restoreConversation: vi.fn(),
+    t: makeTranslate(en),
+  } as Parameters<typeof CollaborationBrowser>[0])} />)
+  const rowTitles = () => screen.getAllByRole('button').flatMap((button) => {
+    const title = button.querySelector('span')?.textContent
+    return title?.includes('Order ') ? [title.replace(/^◆ /u, '')] : []
+  })
+  expect(rowTitles()).toEqual(['Order pending-pin', 'Order pending-new', 'Order pending-old',
+    'Order draft-pin', 'Order finished-pin', 'Order finished', 'Order issue', 'Order planning',
+    'Order running', 'Order draft'])
+  expect(screen.getByText('1 items need review')).toBeTruthy()
+  expect(screen.getAllByText('Task execution or result sync in progress')).toHaveLength(2)
+  for (const id of ['pending-pin', 'issue', 'planning', 'running']) {
+    const row = screen.getByRole('button', { name: new RegExp(`Order ${id}`, 'u') })
+    expect(within(row.parentElement!).getByRole('button', { name: 'Archive' }).hasAttribute('disabled')).toBe(true)
+  }
+  await expect(rowTitles().join('\n') + '\n').toMatchFileSnapshot('./expected/collaboration-browser-order.expected.txt')
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Order' } })
+  expect(rowTitles().at(-1)).toBe('Order archived')
+  const archived = screen.getByRole('button', { name: /Order archived/ })
+  expect(archived.hasAttribute('disabled')).toBe(true)
+  expect(within(archived.parentElement!).getByRole('button', { name: 'Restore' }).hasAttribute('disabled')).toBe(false)
 })

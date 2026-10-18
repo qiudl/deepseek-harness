@@ -1,0 +1,10 @@
+Order pending-pin
+Order pending-new
+Order pending-old
+Order draft-pin
+Order finished-pin
+Order finished
+Order issue
+Order planning
+Order running
+Order draft
