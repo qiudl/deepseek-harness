@@ -142,3 +142,14 @@ it('rejects a forged persisted receipt rather than reporting it as a Host fact',
   writeFileSync(pointer, JSON.stringify({ ...receipt, versionId: 'forged' }))
   await expect(installation.current(packageId)).rejects.toThrow()
 })
+
+it('does not accept a corrupted duplicate prepare as an idempotent package', async () => {
+  const { root, installation } = await store()
+  const evidence = archive()
+  const plan = target('version-1', evidence)
+  await installation.prepare(plan, evidence.bytes)
+  writeFileSync(join(root, 'skillhub-prepared', plan.operationId, 'files', 'SKILL.md'), 'changed')
+  await expect(installation.prepare(plan, evidence.bytes)).rejects.toThrow()
+  await expect(installation.activate(plan.operationId, '1', '0')).rejects.toThrow()
+  expect(await installation.current(packageId)).toBeNull()
+})

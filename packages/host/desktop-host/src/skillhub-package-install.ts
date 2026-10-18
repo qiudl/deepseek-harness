@@ -234,9 +234,17 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     async prepare(plan: SkillHubPackagePlan, archive: Buffer): Promise<void> {
       await checkRoot(); planValid(plan, profileId, hostKeyId, bindingGeneration)
       const files = inspectArchive(Buffer.from(archive), plan)
-      const existing = await storedJson<SkillHubPackagePlan>(join(prepared, plan.operationId, 'plan.json'))
-        ?? await storedJson<SkillHubPackagePlan>(join(versions, plan.operationId, 'plan.json'))
-      if (existing) { if (JSON.stringify(existing) !== JSON.stringify(plan)) fail(); return }
+      const preparedPath = join(prepared, plan.operationId), versionPath = join(versions, plan.operationId)
+      const existingPrepared = await storedJson<SkillHubPackagePlan>(join(preparedPath, 'plan.json'))
+      const existingVersion = await storedJson<SkillHubPackagePlan>(join(versionPath, 'plan.json'))
+      if (existingPrepared || existingVersion) {
+        for (const [existing, path] of [[existingPrepared, preparedPath], [existingVersion, versionPath]] as const) {
+          if (!existing) continue
+          if (JSON.stringify(existing) !== JSON.stringify(plan)) fail()
+          await verifiedFiles(plan, path)
+        }
+        return
+      }
       const stage = join(staging, randomUUID())
       await mkdir(stage, { mode: 0o700 })
       try {
@@ -251,7 +259,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
         await writePrivate(join(stage, 'manifest.json'), JSON.stringify(files.map(
           ({ path, mode, size, sha256 }): StoredFile => ({ path, mode, size, sha256 }))))
         await directorySync(stage)
-        await rename(stage, join(prepared, plan.operationId))
+        await rename(stage, preparedPath)
         await directorySync(prepared)
       } catch (error) {
         await rm(stage, { recursive: true, force: true })
@@ -263,17 +271,18 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
         await checkRoot()
         if (!UUID.test(operationId) || !REVISION.test(bindingGeneration)
         || !REVISION.test(expectedRevision)) fail()
-        const plan = await storedJson<SkillHubPackagePlan>(join(prepared, operationId, 'plan.json'))
-        ?? await storedJson<SkillHubPackagePlan>(join(versions, operationId, 'plan.json'))
+        const preparedPath = join(prepared, operationId), destination = join(versions, operationId)
+        const versionPlan = await storedJson<SkillHubPackagePlan>(join(destination, 'plan.json'))
+        const preparedPlan = await storedJson<SkillHubPackagePlan>(join(preparedPath, 'plan.json'))
+        if (versionPlan && preparedPlan && JSON.stringify(versionPlan) !== JSON.stringify(preparedPlan)) fail()
+        const plan = versionPlan ?? preparedPlan
         if (!plan) throw Error('skillhub_package_unavailable')
         planValid(plan, profileId, hostKeyId, bindingGeneration)
         const active = await current(plan.packageId)
         if (active?.operationId === operationId) return active
         if (plan.bindingGeneration !== bindingGeneration || plan.expectedRevision !== expectedRevision
         || (active?.revision ?? '0') !== expectedRevision) fail()
-        const preparedPath = join(prepared, operationId), destination = join(versions, operationId)
-        const base = await storedJson<SkillHubPackagePlan>(join(preparedPath, 'plan.json'))
-          ? preparedPath : destination
+        const base = versionPlan ? destination : preparedPath
         await verifiedFiles(plan, base)
         const receipt: SkillHubPackageReceipt = {
           operationId, packageId: plan.packageId, profileId, hostKeyId, bindingGeneration,
@@ -281,7 +290,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
           archiveSha256: plan.archiveSha256, manifestSha256: plan.manifestSha256,
           readiness: 'prepared', loadEvidenceId: null,
         }
-        if (!await storedJson<SkillHubPackagePlan>(join(destination, 'plan.json')))
+        if (!versionPlan)
           await rename(preparedPath, destination)
         await directorySync(versions)
         const temp = join(root, `skillhub-current-${randomUUID()}.json`)
