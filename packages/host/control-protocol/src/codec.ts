@@ -1668,14 +1668,16 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       && params.endpoint !== 'session/collaborationMembership'
       && params.endpoint !== 'settings/describe'
       && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
-      && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog') reject()
+      && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog'
+      && params.endpoint !== 'cotTranslation/limits') reject()
     const payload = record(params.payload)
     exactKeys(payload, ['args'])
     const args = remoteSessionJson(payload.args)
     if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()
     if ((params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
-      || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog')
+      || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog'
+      || params.endpoint === 'cotTranslation/limits')
       && Object.keys(args).length !== 0) reject()
     if (params.endpoint === 'session/collaborationSources') {
       const sourceArgs = args as Record<string, unknown>

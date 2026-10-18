@@ -189,7 +189,7 @@ describe('Profile remote UI read wire commands', () => {
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: 0, path: '/' } }))).toThrow()
     for (const endpoint of ['session/list', 'session/page', 'session/modelCatalog',
       'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
-      'credentials/describe', 'permissionPresets/catalog']) {
+      'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits']) {
       const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] }
         : endpoint.startsWith('session/') ? { _request: {} } : {}
       const value = readFrame(endpoint, { args })
@@ -197,7 +197,8 @@ describe('Profile remote UI read wire commands', () => {
     }
     expect(() => decode(readFrame('credentials/describe', { args: { refs: ['bad-ref'] } }))).toThrow()
     expect(() => decode(readFrame('settings/describe', { args: { path: '/private' } }))).toThrow()
-    for (const endpoint of ['session/create', '/api/session/list', 'session/list?all=true',
+    expect(() => decode(readFrame('cotTranslation/limits', { args: { provider: 'other' } }))).toThrow()
+    for (const endpoint of ['cotTranslation/translate', 'cotTranslation/limits?all=true', 'session/create', '/api/session/list', 'session/list?all=true',
       'dynamicCordisRunner/syncInspectManifest']) {
       expect(() => decode(readFrame(endpoint, { args: {} }))).toThrow()
     }
