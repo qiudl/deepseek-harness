@@ -438,6 +438,9 @@ describe('authenticated Unix transport', () => {
       await expect(other.signSkillHubProfileBinding(request)).rejects.toMatchObject({ code: 'unauthorized' })
       await expect(owner.signSkillHubProfileBinding({ ...request, profileSelector: local.profileSelector + 'A' }))
         .rejects.toThrow()
+      vi.spyOn(owner as unknown as { call: (...args: unknown[]) => Promise<unknown> }, 'call')
+        .mockResolvedValue({ type: 'result', method: 'profile.status' })
+      await expect(owner.signSkillHubProfileBinding(request)).rejects.toMatchObject({ code: 'unavailable' })
     } finally {
       owner.close()
       other.close()
