@@ -136,7 +136,7 @@ Config 更新严格验证发生变化的 provider。初始加载将已存储的�
 
 适配器建立在不可变快照与按操作解析之上。每个操作都会在第一次 `await` 前捕获整个快照——profile 加一个持有每条路由所构建 `Provider` 的 `createModels()` 集合——配置变更会构建新集合而非修改使用中的集合，因此在一个配置下开始的请求绝不会在另一个配置下结束。路由自己的凭据引用经 harness seam 解析，并以请求 `apiKey` 选项传入，pi-ai 将其视为优先级最高的 auth 覆盖——这正是明确失败引用语义的所在。该覆盖未覆盖的一切都经集合自身的 auth 到达 pi-ai：凭据存储持有登录写入、刷新轮换的记录（以 `llm-pi-ai/<provider id>` 寻址），auth context 回答提供方解析时提出的 ambient 问题。两者跨快照保持稳定，因此配置变更重建集合时不会忘记谁已登录。运行时 import 使用 pi-ai 的 provider、API 与 utility 入口；`src/models.ts` 提供本适配器所需的少量 model helper，而不会求值 pi-ai 聚合入口。
 
-完整 [LLM 快照准备](../llm/README.zh.md) 支持具有明确解析密钥的 `openai-completions` 路由，包括自定义 provider。它捕获 profile、模型及密钥，经捕获的 provider wire 函数发送，不再次解析原生认证。其他协议、环境凭据及原生 OAuth 以 `PREPARED_SNAPSHOT_UNSUPPORTED` 拒绝；其普通流式行为仍可使用。
+完整 [LLM 快照准备](../llm/README.zh.md) 支持 `openai-completions` 路由，包括自定义提供方。它一次解析请求认证，捕获 profile、模型、标头及认证端点，再经捕获的提供方发送，不再次进行原生查找。已命名的凭据引用缺失时仍会失败。未配置认证及其他协议以 `PREPARED_SNAPSHOT_UNSUPPORTED` 拒绝；其普通流式行为仍可使用。
 
 初始提示词文本和可用工具分别使用 pi-ai 的 `Context.systemPrompt` 与 `Context.tools`；后续系统消息和工具更新保留在 `Context.messages` 中。pi-ai 负责规范化这些字段，并应用所选协议的序列化规则。
 
@@ -231,7 +231,7 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 - **Anthropic 模型发现最多读取 1,000 个模型**——请求使用 API 的最大页大小，但不会遍历 `has_more`；第一页之外的条目需要手工添加。
 - **每条路由一种协议格式**——混合协议目录路由无法承载另一协议格式的模型；把提供方拆到两个路由键是变通办法。
 - **模态声明不受校验**——声明 `image` 而其网关不支持的模型会在提示词准入后被提供方拒绝。持久图片仍留在历史中，同一误声明模型可能再次失败；切换到纯文本模型仍然可行，因为共享 LLM 运行时会针对该请求把图片引用投影为稳定文本。
-- **未认证路由取决于其协议**——不点名凭据的路由解析为已配置但无密钥，但 pi-ai 的 OpenAI 兼容实现仍要求 API 密钥或 `Authorization` 标头，因此无密钥本地服务器需要由 `apiKeyEnv` 引用或 `headers` 中的 `Authorization` 条目提供的占位凭据。
+- **无密钥的补全路由**——没有凭据引用的自定义 `openai-completions` 路由不会发送自动生成的 Authorization 标头。SDK 构造占位值只保留在适配器内，不存为凭据，也不发送给服务器。显式 profile 认证标头和已存储原生凭据保持原有优先级。
 - **不支持 `GenerateOptions.stop`**——pi-ai 的通用流式选项无法跨提供方保证停止序列行为。
 - **对话更新支持只来自已安装的 pi-ai 目录**——只有当路由的目录模型声明了对话中 compat 标志时，该路由才会在历史中接收提示词与工具更新，且 profile 不能设置这些标志；手工声明的路由与未标记的模型会在每次请求开头接收拼接后的系统消息与完整的当前工具列表。
 - **图片只在 user 与工具结果消息中被接受**——system、developer 或 assistant 历史中的图片在两条转换路径上都会以 `UNSUPPORTED_CONTENT` 失败。
