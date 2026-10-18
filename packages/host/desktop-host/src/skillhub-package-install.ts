@@ -21,6 +21,7 @@ const digest = (bytes: Buffer | string) => createHash('sha256').update(bytes).di
 const fail = (): never => { throw Error('skillhub_package_unavailable') }
 const privateMode = (mode: number) => process.platform === 'win32' || (mode & 0o077) === 0
 
+/** Fixed package identity and expected Profile revision supplied by the authorized installer. */
 export interface SkillHubPackagePlan {
   readonly operationId: string
   readonly packageId: string
@@ -34,6 +35,7 @@ export interface SkillHubPackagePlan {
   readonly archiveSha256: string
   readonly manifestSha256: string
 }
+/** Host-local activation fact for one complete package; loading requires separate evidence. */
 export interface SkillHubPackageReceipt {
   readonly operationId: string
   readonly packageId: string
@@ -51,6 +53,12 @@ interface FileEvidence { path: string; mode: '0644' | '0755'; size: number; sha2
 type StoredFile = Omit<FileEvidence, 'bytes' | 'mode'> & { mode: string }
 type StoredReceipt = Omit<SkillHubPackageReceipt, 'readiness' | 'loadEvidenceId'>
   & { readiness: string; loadEvidenceId: unknown }
+type SkillHubPackageInstallationStore = Readonly<{
+  current(packageId: string): Promise<SkillHubPackageReceipt | null>
+  prepare(plan: SkillHubPackagePlan, archive: Buffer): Promise<void>
+  activate(operationId: string, bindingGeneration: string, expectedRevision: string): Promise<SkillHubPackageReceipt>
+  readFile(packageId: string, path: string): Promise<Buffer>
+}>
 
 function safePath(value: string): boolean {
   return value.length > 0 && value.length <= 500 && value.normalize('NFC') === value
@@ -146,9 +154,15 @@ async function storedJson<T>(path: string): Promise<T | null> {
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; return fail() }
 }
 
-/** A single Host process owns this private root under its existing Host lock. */
+/** Create a Profile-owned package store under the existing single-Host lock.
+ * @param root - existing private directory dedicated to this Profile's SkillHub packages.
+ * @param profileId - stable local Profile UUID.
+ * @param hostKeyId - SHA-256 fingerprint of the Host installation public key.
+ * @param bindingGeneration - current local Profile binding generation.
+ * @returns bounded package preparation, activation, current receipt, and file read operations.
+ */
 export async function createSkillHubPackageInstallationStore(root: string, profileId: string,
-  hostKeyId: string, bindingGeneration: string) {
+  hostKeyId: string, bindingGeneration: string): Promise<SkillHubPackageInstallationStore> {
   if (!UUID.test(profileId) || !SHA.test(hostKeyId) || !REVISION.test(bindingGeneration)
     || bindingGeneration === '0') fail()
   const info = await lstat(root)
