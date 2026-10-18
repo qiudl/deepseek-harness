@@ -49,6 +49,12 @@ import type {
   ProfileOpenResult,
   ProfileSkillHubBindingRequest,
   ProfileSkillHubBindingResult,
+  HostSkillHubPackagePlan,
+  ProfileSkillHubPackageChunkRequest,
+  ProfileSkillHubPackageChunkResult,
+  HostSkillHubPackageSignedReceipt,
+  ProfileSkillHubPackageRequest,
+  ProfileSkillHubPackageResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
@@ -126,6 +132,7 @@ import type {
   MigrationImportAbortResult,
 } from './types.ts'
 import { parseHostCollaborationDeliveryChunk, parseHostCollaborationDeliveryResult } from './collaboration-delivery.ts'
+import { encodeSkillHubPackageReceiptPayload } from './skillhub-package-receipt.ts'
 
 /** Maximum UTF-8 bytes in one JSON object, excluding its terminating LF. */
 export const HOST_CONTROL_MAX_FRAME_BYTES = 64 * 1024
@@ -230,6 +237,44 @@ function signature(value: unknown): HostControlSignature {
 function digest(value: unknown): HostControlSha256 {
   if (typeof value !== 'string' || !SHA256.test(value)) reject()
   return value as HostControlSha256
+}
+
+function skillHubPackagePlan(value: unknown): HostSkillHubPackagePlan {
+  const plan = record(value)
+  exactKeys(plan, ['operationId', 'packageId', 'profileId', 'hostKeyId', 'bindingGeneration',
+    'expectedRevision', 'versionId', 'skillSlug', 'version', 'archiveSha256', 'manifestSha256'])
+  if (typeof plan.packageId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/u.test(plan.packageId)
+    || typeof plan.bindingGeneration !== 'string' || !/^[1-9][0-9]{0,17}$/u.test(plan.bindingGeneration)
+    || typeof plan.expectedRevision !== 'string' || !/^(?:0|[1-9][0-9]{0,17})$/u.test(plan.expectedRevision)
+    || typeof plan.skillSlug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(plan.skillSlug)
+    || plan.skillSlug.length > 200) reject()
+  return {
+    operationId: uuid(plan.operationId), packageId: plan.packageId,
+    profileId: uuid(plan.profileId), hostKeyId: digest(plan.hostKeyId),
+    bindingGeneration: plan.bindingGeneration, expectedRevision: plan.expectedRevision,
+    versionId: wireText(plan.versionId, 200), skillSlug: plan.skillSlug,
+    version: wireText(plan.version, 200), archiveSha256: digest(plan.archiveSha256),
+    manifestSha256: digest(plan.manifestSha256),
+  }
+}
+
+function skillHubPackageReceipt(value: unknown): HostSkillHubPackageSignedReceipt {
+  const receipt = record(value)
+  exactKeys(receipt, ['version', 'installationId', 'challengeId', 'operationId', 'packageId', 'profileId',
+    'hostKeyId', 'bindingGeneration', 'revision', 'versionId', 'archiveSha256',
+    'manifestSha256', 'readiness', 'loadEvidenceId', 'signature'])
+  const parsed = {
+    version: receipt.version, installationId: uuid(receipt.installationId),
+    challengeId: uuid(receipt.challengeId),
+    operationId: uuid(receipt.operationId), packageId: receipt.packageId,
+    profileId: uuid(receipt.profileId), hostKeyId: digest(receipt.hostKeyId),
+    bindingGeneration: receipt.bindingGeneration, revision: receipt.revision,
+    versionId: receipt.versionId, archiveSha256: digest(receipt.archiveSha256),
+    manifestSha256: digest(receipt.manifestSha256), readiness: receipt.readiness,
+    loadEvidenceId: receipt.loadEvidenceId,
+  } as Omit<HostSkillHubPackageSignedReceipt, 'signature'>
+  try { encodeSkillHubPackageReceiptPayload(parsed) } catch { reject() }
+  return { ...parsed, signature: signature(receipt.signature) }
 }
 
 function modelClaimCandidate(value: unknown): string {
@@ -1565,6 +1610,8 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
 
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileSkillHubBindingRequest
+  | ProfileSkillHubPackageChunkRequest
+  | ProfileSkillHubPackageRequest
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
@@ -1814,6 +1861,47 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       actor_user_id, computer_id,
       challenge_id: uuid(params.challenge_id),
     } }
+  }
+  if (frame.method === 'profile.skillhub_package_chunk') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'plan', 'total_bytes', 'offset', 'chunk_base64url'])
+    if (!Number.isSafeInteger(params.total_bytes) || (params.total_bytes as number) < 1
+      || (params.total_bytes as number) > 110 * 1024 * 1024
+      || !Number.isSafeInteger(params.offset) || (params.offset as number) < 0
+      || typeof params.chunk_base64url !== 'string' || params.chunk_base64url.length > 43691
+      || !/^[A-Za-z0-9_-]+$/u.test(params.chunk_base64url)) reject()
+    const bytes = Buffer.from(params.chunk_base64url, 'base64url')
+    if (bytes.length < 1 || bytes.length > 32768
+      || bytes.toString('base64url') !== params.chunk_base64url
+      || (params.offset as number) + bytes.length > (params.total_bytes as number)) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        plan: skillHubPackagePlan(params.plan), total_bytes: params.total_bytes as number,
+        offset: params.offset as number, chunk_base64url: params.chunk_base64url } }
+  }
+  if (frame.method === 'profile.skillhub_package') {
+    if (params.action === 'activate') {
+      exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'challenge_id', 'action', 'operation_id',
+        'binding_generation', 'expected_revision'])
+      if (typeof params.binding_generation !== 'string'
+        || !/^[1-9][0-9]{0,17}$/u.test(params.binding_generation)
+        || typeof params.expected_revision !== 'string'
+        || !/^(?:0|[1-9][0-9]{0,17})$/u.test(params.expected_revision)) reject()
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+          challenge_id: uuid(params.challenge_id),
+          action: 'activate', operation_id: uuid(params.operation_id),
+          binding_generation: params.binding_generation, expected_revision: params.expected_revision } }
+    }
+    if (params.action === 'current') {
+      exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'challenge_id', 'action', 'package_id'])
+      if (typeof params.package_id !== 'string'
+        || !/^[A-Za-z0-9_-]{1,100}$/u.test(params.package_id)) reject()
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+          challenge_id: uuid(params.challenge_id),
+          action: 'current', package_id: params.package_id } }
+    }
+    reject()
   }
   if (frame.method === 'profile.status' || frame.method === 'profile.open') {
     exactKeys(params, [
@@ -2153,6 +2241,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
 
 function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileSkillHubBindingResult
+  | ProfileSkillHubPackageChunkResult
+  | ProfileSkillHubPackageResult
   | ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
@@ -2403,6 +2493,19 @@ function decodeProfileResult(frame: Record<string, unknown>):
       bindingGeneration: result.bindingGeneration, challengeId: uuid(result.challengeId),
       signature: signature(result.signature),
     } }
+  }
+  if (frame.method === 'profile.skillhub_package_chunk') {
+    exactKeys(result, ['next_offset', 'prepared'])
+    if (!Number.isSafeInteger(result.next_offset) || (result.next_offset as number) < 1
+      || (result.next_offset as number) > 110 * 1024 * 1024
+      || typeof result.prepared !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { next_offset: result.next_offset as number, prepared: result.prepared } }
+  }
+  if (frame.method === 'profile.skillhub_package') {
+    exactKeys(result, ['receipt'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { receipt: result.receipt === null ? null : skillHubPackageReceipt(result.receipt) } }
   }
   if (frame.method === 'profile.open' || frame.method === 'profile.open_local') {
     exactKeys(result, ['profile_id', 'view_lease_id', 'view_activation_handle', 'lease_generation', 'expires_at', 'runtime_generation'])
