@@ -13,7 +13,7 @@ const REVISION = /^(?:0|[1-9][0-9]{0,17})$/u
  * @returns Canonical JSON text for signing and later independent verification.
  */
 export function encodeSkillHubPackageReceiptPayload(value: Payload): string {
-  const runtime = value as unknown as Record<string, unknown>
+  const runtime: Record<string, unknown> = { ...value }
   if (runtime.version !== 1 || !UUID.test(value.installationId) || !UUID.test(value.challengeId)
     || !UUID.test(value.operationId)
     || !UUID.test(value.profileId) || !/^[A-Za-z0-9_-]{1,100}$/u.test(value.packageId)
