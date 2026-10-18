@@ -117,8 +117,7 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
   }, [index.items, sessions, workspaces, workspacesState])
   const visiblePendingCount = displayItems.reduce((sum, item) => sum + item.pending_count, 0)
   const groups = useMemo(() => {
-    const pending: ConversationRow[] = [], issues: ConversationRow[] = [], running: ConversationRow[] = [], drafts: ConversationRow[] = [],
-      completed: ConversationRow[] = [], archived: ConversationRow[] = []
+    const pending: ConversationRow[] = [], recent: ConversationRow[] = [], archived: ConversationRow[] = []
     for (const item of displayItems) {
       if (scope !== 'all' && scope !== item.workspace_id) continue
       if (item.archived && !hasActiveCollaboration(item) && !query.trim()) continue
@@ -126,18 +125,13 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
       if (query && !`${title} ${workspaceNames.get(item.workspace_id as WorkspaceId) ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) continue
       if (item.archived && !hasActiveCollaboration(item)) archived.push(item)
       else if (item.pending_count > 0) pending.push(item)
-      else if (item.issue_count > 0) issues.push(item)
-      else if (item.planning_count > 0 || item.running_count > 0) running.push(item)
-      else if (item.source_count === 0) drafts.push(item)
-      else completed.push(item)
+      else recent.push(item)
     }
     const sort = (a: ConversationRow, b: ConversationRow) => Number(b.pinned) - Number(a.pinned)
       || (BigInt(b.last_activity_at) > BigInt(a.last_activity_at) ? 1 : BigInt(b.last_activity_at) < BigInt(a.last_activity_at) ? -1 : 0)
-    return [pending.sort(sort), issues.sort(sort), running.sort(sort), drafts.sort(sort),
-      completed.sort(sort), archived.sort(sort)] as const
+    return [pending.sort(sort), recent.sort(sort), archived.sort(sort)] as const
   }, [displayItems, sessions, workspaceNames, query, scope])
-  const headings = [t('browser.pending'), t('browser.issues'), t('browser.running'), t('browser.drafts'),
-    t('browser.completed'), t('browser.archived')] as const
+  const headings = [t('browser.pending'), t('browser.recent'), t('browser.archived')] as const
   return <section ref={(element) => { if (element) element.scrollTop = scrollTop }} className={css.root} aria-label={t('browser.title')}
     onScroll={(event) => { actions.setScrollTop(event.currentTarget.scrollTop) }}>
     <div className={css.top}><strong>{t('browser.title')}</strong><button type="button" onClick={start}>{t('browser.new')}</button></div>
@@ -170,6 +164,8 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
             {item.archived && <span className={css.running}>{t(hasActiveCollaboration(item) ? 'browser.archiveNeedsRestore' : 'browser.archived')}</span>}
             {item.pending_count > 0 && <span className={css.pending}>{t('browser.pendingItems', { count: item.pending_count })}</span>}
             {item.issue_count > 0 && <span className={css.pending}>{t('browser.issueItems', { count: item.issue_count })}</span>}
+            {!item.archived && item.source_count > 0 && !hasActiveCollaboration(item)
+              && <span className={css.rowMeta}>{t('browser.completed')}</span>}
             {item.pending_count === 0 && (item.planning_count > 0 || item.running_count > 0)
               && <span className={css.running}>{t('browser.agentRunning')}</span>}
           </button>
