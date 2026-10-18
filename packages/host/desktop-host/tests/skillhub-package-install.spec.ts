@@ -1,6 +1,6 @@
 /** REQ-20261013-0021 / 24205. Host facts, never the Server's project-install projection. */
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
@@ -152,4 +152,25 @@ it('does not accept a corrupted duplicate prepare as an idempotent package', asy
   await expect(installation.prepare(plan, evidence.bytes)).rejects.toThrow()
   await expect(installation.activate(plan.operationId, '1', '0')).rejects.toThrow()
   expect(await installation.current(packageId)).toBeNull()
+})
+
+it('preserves text, reference, template, and declared executable bytes from one snapshot', async () => {
+  const { root, installation } = await store()
+  const files = [
+    { path: 'SKILL.md', mode: '0644', bytes: markdown },
+    { path: 'references/data.txt', mode: '0644', bytes: resource },
+    { path: 'scripts/run.sh', mode: '0755', bytes: Buffer.from('#!/bin/sh\nprintf ok\\n\n') },
+    { path: 'templates/output.txt', mode: '0644', bytes: Buffer.from('template-value\n') },
+  ] as const
+  const zip = new AdmZip()
+  for (const file of files) zip.addFile(file.path, file.bytes, '', file.mode === '0755' ? 0o755 : 0o644)
+  const bytes = zip.toBuffer()
+  const manifestSha256 = sha(JSON.stringify(['slark-skillhub-manifest-v1', files.map(file =>
+    [file.path, file.mode, file.bytes.length, sha(file.bytes)])]))
+  const plan = target('version-1', { bytes, archiveSha256: sha(bytes), manifestSha256 })
+  await installation.prepare(plan, bytes)
+  await installation.activate(plan.operationId, '1', '0')
+  for (const file of files) expect(await installation.readFile(packageId, file.path)).toEqual(file.bytes)
+  if (process.platform !== 'win32') expect(statSync(join(root, 'skillhub-versions', plan.operationId,
+    'files', 'scripts', 'run.sh')).mode & 0o777).toBe(0o755)
 })
