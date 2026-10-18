@@ -10,6 +10,7 @@ import type {
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, { createToolResultMessage, createUserMessage, CONTEXT_WINDOW_EXCEEDED_CODE, LlmError, ReasoningEffortId, userAgent } from '@deepseek-ai/dsh-llm'
+import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
@@ -115,6 +116,143 @@ describe('PiAiAdapter provider routing', () => {
     expect(second.requests).toHaveLength(0)
   })
 
+
+  it('freezes an unauthenticated local completion route before captured dispatch', async () => {
+    const first = await mockServer([{ events: textEvents }]), second = await mockServer([])
+    let providers: Record<string, LlmPiAi.PiAiProviderProfile> = {
+      'ollama-local': { api: 'openai-completions', baseURL: first.url,
+        models: [{ id: 'qwen3.8-flash-next:125b-mlx', contextWindow: 32768 }] },
+    }
+    let key: string | undefined, reads = 0
+    const auth = memoryAuth()
+    const nativeReads = vi.spyOn(auth.credentials, 'read')
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['ollama-local'], new PiAiAdapter({
+      profiles: () => resolveProfiles(providers),
+      resolveApiKey: () => { reads++; return Promise.resolve(key) },
+      auth,
+    }))
+    try {
+      const prepared = await ctx.llm.prepareSnapshot({
+        provider: 'ollama-local', model: 'qwen3.8-flash-next:125b-mlx', maxTokens: 8192,
+      }, new AbortController().signal)
+      expect(first.requests).toHaveLength(0)
+      const capturedReads = nativeReads.mock.calls.length
+      expect(capturedReads).toBe(1)
+      providers = { 'ollama-local': { api: 'openai-completions', baseURL: second.url,
+        models: [{ id: 'qwen3.8-flash-next:125b-mlx', contextWindow: 65536 }] } }
+      key = 'late-credential'
+      nativeReads.mockRejectedValue(Error('late native authentication read'))
+      for await (const _chunk of prepared.stream({ ...prepared.config, messages: [] })) { /* consume */ }
+      expect(reads).toBe(1)
+      expect(nativeReads.mock.calls).toHaveLength(capturedReads)
+      expect(first.requests).toHaveLength(1)
+      expect(first.requests[0]).toMatchObject({ model: 'qwen3.8-flash-next:125b-mlx' })
+      expect(first.headers[0]?.authorization).toBeUndefined()
+      expect(second.requests).toHaveLength(0)
+      expect(JSON.stringify(prepared.snapshot)).not.toContain('late-credential')
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('streams a custom keyless completion route without an outbound authorization header', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const keyless = new PiAiAdapter({
+      profiles: () => resolveProfiles({ local: { api: 'openai-completions', baseURL: server.url,
+        models: [{ id: 'local-model' }] } }),
+      resolveApiKey: () => Promise.resolve(undefined),
+      auth: memoryAuth(),
+    })
+    const chunks: StreamChunk[] = []
+    for await (const chunk of keyless.stream({ provider: 'local', model: 'local-model', messages: [] })) chunks.push(chunk)
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    expect(server.requests).toHaveLength(1)
+    expect(server.headers[0]?.authorization).toBeUndefined()
+  })
+
+  it('captures native stored authentication once without a named reference', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const auth = memoryAuth()
+    const read = vi.spyOn(auth.credentials, 'read').mockResolvedValue({ type: 'api_key', key: 'native-first-key' })
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['native-custom'], new PiAiAdapter({
+      profiles: () => resolveProfiles({ 'native-custom': { api: 'openai-completions', baseURL: server.url,
+        models: [{ id: 'native-model' }] } }),
+      resolveApiKey: () => Promise.resolve(undefined), auth,
+    }))
+    try {
+      const prepared = await ctx.llm.prepareSnapshot({ provider: 'native-custom', model: 'native-model' }, new AbortController().signal)
+      const reads = read.mock.calls.length
+      read.mockResolvedValue({ type: 'api_key', key: 'native-later-key' })
+      for await (const _chunk of prepared.stream({ ...prepared.config, messages: [] })) { /* consume */ }
+      expect(read.mock.calls).toHaveLength(reads)
+      expect(server.headers[0]?.authorization).toBe('Bearer native-first-key')
+      expect(JSON.stringify(prepared.snapshot)).not.toContain('native-first-key')
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('retains explicit profile authorization headers over keyless SDK options', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const adapter = new PiAiAdapter({
+      profiles: () => resolveProfiles({ local: { api: 'openai-completions', baseURL: server.url,
+        headers: { Authorization: 'Bearer header-owned-key' }, models: [{ id: 'local-model' }] } }),
+      resolveApiKey: () => Promise.resolve(undefined), auth: memoryAuth(),
+    })
+    const prepared = await adapter.prepareSnapshot('local', 'local-model', new AbortController().signal)
+    const chunks: StreamChunk[] = []
+    for await (const chunk of prepared.stream({ provider: 'local', model: 'local-model', messages: [] })) chunks.push(chunk)
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    expect(server.headers[0]?.authorization).toBe('Bearer header-owned-key')
+  })
+
+  it('cancels native snapshot authentication without dispatching or publishing a late call', async () => {
+    const server = await mockServer([])
+    const auth = memoryAuth()
+    let finish: ((value: undefined) => void) | undefined
+    const read = vi.spyOn(auth.credentials, 'read').mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    const adapter = new PiAiAdapter({
+      profiles: () => resolveProfiles({ local: { api: 'openai-completions', baseURL: server.url, models: [{ id: 'local-model' }] } }),
+      resolveApiKey: () => Promise.resolve(undefined), auth,
+    })
+    const controller = new AbortController()
+    const pending = adapter.prepareSnapshot('local', 'local-model', controller.signal)
+    await vi.waitFor(() => { expect(read).toHaveBeenCalledTimes(1) })
+    controller.abort(Error('cancelled during native authentication'))
+    await expect(pending).rejects.toThrow('cancelled during native authentication')
+    finish?.(undefined)
+    expect(server.requests).toHaveLength(0)
+  })
+
+  it('freezes native authentication endpoint and headers before dispatch', async () => {
+    const first = await mockServer([{ events: textEvents }]), second = await mockServer([])
+    const auth = { apiKey: 'native-endpoint-key', baseUrl: first.url,
+      headers: { 'x-captured-auth': 'before' } }
+    const create = PiModels.createModels
+    const collection = vi.spyOn(PiModels, 'createModels').mockImplementation((options) => {
+      const models = create(options)
+      vi.spyOn(models, 'getAuth').mockResolvedValue({ auth, source: 'native-test' })
+      return models
+    })
+    try {
+      const adapter = new PiAiAdapter({
+        profiles: () => resolveProfiles({ local: { api: 'openai-completions', baseURL: second.url,
+          models: [{ id: 'local-model' }] } }),
+        resolveApiKey: () => Promise.resolve(undefined), auth: memoryAuth(),
+      })
+      const prepared = await adapter.prepareSnapshot('local', 'local-model')
+      auth.baseUrl = second.url
+      auth.headers['x-captured-auth'] = 'after'
+      const chunks: StreamChunk[] = []
+      for await (const chunk of prepared.stream({ provider: 'local', model: 'local-model', messages: [] })) chunks.push(chunk)
+      expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+      expect(first.requests).toHaveLength(1)
+      expect(first.headers[0]?.['x-captured-auth']).toBe('before')
+      expect(first.headers[0]?.authorization).toBe('Bearer native-endpoint-key')
+      expect(second.requests).toHaveLength(0)
+    } finally { collection.mockRestore() }
+  })
+
   it('captures a DeepSeek explicit credential without native auth lookups after preparation', async () => {
     const first = await mockServer([{ events: textEvents }]), second = await mockServer([])
     let providers = { deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: first.url } }
@@ -172,7 +310,7 @@ describe('PiAiAdapter provider routing', () => {
     } finally { await ctx.fiber.dispose() }
   })
 
-  it('refuses a complete snapshot when pi-ai would need ambient or native auth', async () => {
+  it('refuses a complete snapshot when native authentication is unconfigured', async () => {
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
     ctx.llm.registerAdapter(['deepseek'], new PiAiAdapter({ profiles: () => resolveProfiles({ deepseek: {} }), resolveApiKey: () => Promise.resolve(undefined), auth: memoryAuth() }))
@@ -181,7 +319,7 @@ describe('PiAiAdapter provider routing', () => {
     } finally { await ctx.fiber.dispose() }
   })
 
-  it('denies snapshot capture for routes outside the audited explicit-credential protocol', async () => {
+  it('denies snapshot capture for routes outside the audited completion protocol', async () => {
     const adapter = adapterOf({ gateway: {
       api: 'anthropic-messages', baseURL: 'https://gateway.example.test/v1', models: [{ id: 'custom' }],
     } })
@@ -189,9 +327,9 @@ describe('PiAiAdapter provider routing', () => {
       .rejects.toMatchObject({ code: 'PREPARED_SNAPSHOT_UNSUPPORTED' })
   })
 
-  it('refuses custom snapshots without an explicit key and honors cancellation around key resolution', async () => {
+  it('refuses missing named snapshot credentials and honors cancellation around key resolution', async () => {
     const providers: Record<string, LlmPiAi.PiAiProviderProfile> = {
-      gateway: { api: 'openai-completions', baseURL: 'https://gateway.example.test/v1', models: [{ id: 'custom' }] },
+      gateway: { api: 'openai-completions', apiKeyEnv: 'PI_TEST_KEY', baseURL: 'https://gateway.example.test/v1', models: [{ id: 'custom' }] },
     }
     for (const key of [undefined, '', '   ']) {
       const adapter = new PiAiAdapter({
