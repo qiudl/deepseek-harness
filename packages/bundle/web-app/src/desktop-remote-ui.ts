@@ -8,9 +8,9 @@ import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.t
 
 const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'session/collaborationSources', 'session/collaborationMembership',
   'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
-  'credentials/describe', 'permissionPresets/catalog'])
+  'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const STARTUP_ZERO_ARG = new Set(['settings/describe', 'agentPresets/list',
-  'dynamicCordisRunner/inventory', 'permissionPresets/catalog'])
+  'dynamicCordisRunner/inventory', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const CREDENTIAL_REF = /^[A-Za-z_][A-Za-z0-9_]*$/u
 
 function record(value: unknown): value is Record<string, unknown> {

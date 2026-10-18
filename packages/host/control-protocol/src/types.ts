@@ -1492,7 +1492,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly runtime_generation: number
     readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
-      | 'credentials/describe' | 'permissionPresets/catalog'
+      | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'
     readonly payload: { readonly args: HostRemoteSessionJson }
   }
 }
