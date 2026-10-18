@@ -39,6 +39,7 @@ import { CollaborationResultsDock } from './CollaborationResultsDock.tsx'
 import { CollaborationTimeline } from './CollaborationTimeline.tsx'
 import type { CollaborationResultsInjected } from './CollaborationResultsDock.tsx'
 import { CollaborationBadge, CollaborationBrowser, CollaborationMobileTab } from './CollaborationBrowser.tsx'
+import { createCollaborationBrowserStore } from './collaboration-browser-store.ts'
 import type { ConversationIndex, ConversationRow } from './CollaborationBrowser.tsx'
 
 /** Required client services. */
@@ -282,7 +283,7 @@ export function apply(ctx: ClientContext): void {
       },
     })
     browserCtx.slots.inject('sidebar.collaboration', () => browserCtx.slots.register({
-      name: 'sidebar.collaboration', inject: injected, locale: NS,
+      name: 'sidebar.collaboration', inject: injected, locale: NS, store: createCollaborationBrowserStore(),
     }, CollaborationBrowser))
     browserCtx.slots.inject('sidebar.collaboration.badge', () => browserCtx.slots.register({
       name: 'sidebar.collaboration.badge', inject: injected, locale: NS,
