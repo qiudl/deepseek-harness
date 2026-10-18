@@ -156,8 +156,9 @@ async function writePrivate(path: string, bytes: Buffer | string, mode = 0o600):
 async function directorySync(path: string): Promise<void> {
   /* v8 ignore next -- the Win32 directory-handle branch runs only on Windows CI; Linux coverage cannot execute it. */
   if (process.platform === 'win32') return
-  /* v8 ignore next 2 -- Win32 cannot fsync directory handles; Linux coverage exercises the implementation. */
+  /* v8 ignore next -- Win32 cannot open directory handles for fsync; Linux coverage exercises this call. */
   const dir = await open(path, constants.O_RDONLY)
+  /* v8 ignore next -- Win32 cannot execute POSIX directory fsync; Linux coverage exercises sync and close. */
   try { await dir.sync() } finally { await dir.close() }
 }
 async function storedJson<T>(path: string): Promise<T | null> {
