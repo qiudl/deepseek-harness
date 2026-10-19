@@ -61,6 +61,8 @@ import type {
   HostSkillHubExecutionReport,
   ProfileSkillHubExecutionReceiptRequest,
   ProfileSkillHubExecutionReceiptResult,
+  HostSkillHubClockAnchorId, HostSkillHubClockWitnessValue, HostSkillHubClockWitnessCommand,
+  ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockWitnessResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
@@ -324,6 +326,13 @@ function modelClaimCandidate(value: unknown): string {
   if (typeof value !== 'string'
     || !/^(?:llm-deepseek|llm-pi-ai|web-search-deepseek):[a-z][a-z0-9-]{0,63}$/u.test(value)) reject()
   return value
+}
+
+function clockWitnessValue(value: unknown): HostSkillHubClockWitnessValue {
+  const row = record(value)
+  exactKeys(row, ['revision', 'digest'])
+  if (typeof row.revision !== 'string' || !/^(0|[1-9][0-9]{0,77})$/u.test(row.revision)) reject()
+  return { revision: row.revision, digest: digest(row.digest) }
 }
 
 function capability(value: unknown): HostControlCapability {
@@ -1657,6 +1666,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileSkillHubPackageRequest
   | ProfileSkillHubPackageSnapshotRequest
   | ProfileSkillHubExecutionReceiptRequest
+  | ProfileSkillHubClockWitnessRequest
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
@@ -1956,6 +1966,27 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
         receipt: skillHubPackageReceipt(params.receipt),
         target: skillHubPackageSnapshotTarget(params.target), offset: params.offset as number } }
+  }
+  if (frame.method === 'profile.skillhub_clock_witness') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'profile_id',
+      'binding_generation', 'host_key_id', 'anchor_id', 'command'])
+    if (typeof params.binding_generation !== 'string'
+      || !/^[1-9][0-9]{0,17}$/u.test(params.binding_generation)) reject()
+    const raw = record(params.command)
+    let command: HostSkillHubClockWitnessCommand
+    if (raw.kind === 'read') {
+      exactKeys(raw, ['kind'])
+      command = { kind: 'read' }
+    } else if (raw.kind === 'compare_and_set') {
+      exactKeys(raw, ['kind', 'previous', 'next'])
+      command = { kind: 'compare_and_set', previous: raw.previous === null ? null
+        : clockWitnessValue(raw.previous), next: clockWitnessValue(raw.next) }
+    } else return reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        profile_id: uuid(params.profile_id) as HostProfileId,
+        binding_generation: params.binding_generation, host_key_id: digest(params.host_key_id),
+        anchor_id: uuid(params.anchor_id) as HostSkillHubClockAnchorId, command } }
   }
   if (frame.method === 'profile.skillhub_execution_receipt') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'package_receipt', 'execution'])
@@ -2306,6 +2337,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileSkillHubPackageResult
   | ProfileSkillHubPackageSnapshotResult
   | ProfileSkillHubExecutionReceiptResult
+  | ProfileSkillHubClockWitnessResult
   | ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
@@ -2596,6 +2628,14 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['receipt'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { receipt: parseSkillHubExecutionReceipt(result.receipt) } }
+  }
+  if (frame.method === 'profile.skillhub_clock_witness') {
+    exactKeys(result, ['anchor_id', 'value', 'applied'])
+    if (result.applied !== null && typeof result.applied !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { anchor_id: uuid(result.anchor_id) as HostSkillHubClockAnchorId,
+        value: result.value === null ? null : clockWitnessValue(result.value),
+        applied: result.applied } }
   }
   if (frame.method === 'profile.open' || frame.method === 'profile.open_local') {
     exactKeys(result, ['profile_id', 'view_lease_id', 'view_activation_handle', 'lease_generation', 'expires_at', 'runtime_generation'])

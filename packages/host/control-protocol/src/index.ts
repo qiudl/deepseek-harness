@@ -113,6 +113,8 @@ export type {
   HostSkillHubExecutionReport,
   ProfileSkillHubExecutionReceiptRequest,
   ProfileSkillHubExecutionReceiptResult,
+  HostSkillHubClockAnchorId, HostSkillHubClockWitnessValue, HostSkillHubClockWitnessCommand,
+  ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockWitnessResult,
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,

@@ -418,6 +418,77 @@ describe('authenticated Unix transport', () => {
     await server.close()
   })
 
+  it('retains a Profile clock witness across granted connections and refuses stale CAS or another target', async () => {
+    const { server, socketPath } = await fixture()
+    const options = { socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now }
+    const owner = await UnixHostClient.connect(options)
+    const other = await UnixHostClient.connect(options)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:clock-witness', unlockMaterial })
+      const target = { profileId: local.profileId, bindingGeneration: '1',
+        hostKeyId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex') }
+      const input = { profileSelector: local.profileSelector, ...target, anchorId: randomUUID() }
+      await expect(other.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      const zero = { revision: '0', digest: 'a'.repeat(64) }
+      expect(await owner.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+        .toEqual({ anchorId: input.anchorId, value: null, applied: null })
+      expect((await owner.skillHubClockWitness({ ...input,
+        command: { kind: 'compare_and_set', previous: null, next: zero } })).applied).toBe(true)
+      for (const change of [{ profileId: randomUUID() }, { hostKeyId: 'b'.repeat(64) },
+        { bindingGeneration: '2' }])
+        await expect(owner.skillHubClockWitness({ ...input, ...change, command: { kind: 'read' } }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+      const next = { revision: '1', digest: 'b'.repeat(64) }
+      const contenders = await Promise.all([0, 1].map(() => owner.skillHubClockWitness({
+        ...input, command: { kind: 'compare_and_set', previous: zero, next },
+      })))
+      expect(contenders.filter(value => value.applied)).toHaveLength(1)
+      expect((await owner.skillHubClockWitness({ ...input,
+        command: { kind: 'compare_and_set', previous: next, next: zero } })).applied).toBe(false)
+      const originalCall: unknown = Reflect.get(owner, 'call')
+      const originalInspection = owner.inspection
+      try {
+        Reflect.set(owner, 'inspection', { ...originalInspection, capabilities: [] })
+        await expect(owner.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        Reflect.set(owner, 'inspection', originalInspection)
+        for (const result of [{ anchor_id: randomUUID(), value: next, applied: null },
+          { anchor_id: input.anchorId, value: next, applied: true }]) {
+          Reflect.set(owner, 'call', async () => ({ type: 'result',
+            method: 'profile.skillhub_clock_witness', result }))
+          await expect(owner.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+            .rejects.toMatchObject({ code: 'unavailable' })
+        }
+        for (const result of [{ anchor_id: input.anchorId, value: next, applied: null },
+          { anchor_id: input.anchorId, value: zero, applied: true },
+          { anchor_id: input.anchorId, value: { ...next, digest: 'c'.repeat(64) }, applied: true },
+          { anchor_id: input.anchorId, value: null, applied: true }]) {
+          Reflect.set(owner, 'call', async () => ({ type: 'result',
+            method: 'profile.skillhub_clock_witness', result }))
+          await expect(owner.skillHubClockWitness({ ...input,
+            command: { kind: 'compare_and_set', previous: zero, next } }))
+            .rejects.toMatchObject({ code: 'unavailable' })
+        }
+        for (const frame of [{ type: 'error' }, { type: 'result', method: 'profile.open' }]) {
+          Reflect.set(owner, 'call', async () => frame)
+          await expect(owner.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+            .rejects.toMatchObject({ code: 'unavailable' })
+        }
+      } finally {
+        Reflect.set(owner, 'call', originalCall)
+        Reflect.set(owner, 'inspection', originalInspection)
+      }
+      owner.close()
+      await other.restoreLocalProfile({ profileSelector: local.profileSelector,
+        keyHandle: 'keychain:clock-witness', unlockMaterial })
+      expect(await other.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+        .toEqual({ anchorId: input.anchorId, value: next, applied: null })
+    } finally { owner.close(); other.close(); await server.close() }
+  })
+
   it('signs a separate SkillHub challenge only for a currently authorized Host-local Profile', async () => {
     const { server, socketPath } = await fixture()
     const connectionOptions = {

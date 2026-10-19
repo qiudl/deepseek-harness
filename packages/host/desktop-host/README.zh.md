@@ -59,6 +59,8 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.skillhub_execution_receipt` 在签署完成的 daemon 报告前，重新检查同一当前 Profile 授权、激活签名和不可变包文件。Host 与包坐标由本地派生；客户端在返回回执前拒绝任何字段变化或无效签名。Host 证明的是已认证 Main 报告与固定包身份，Slark 仍负责核对 effect、Work 权限、Computer 授权和已准备沙箱。
 
+`profile.skillhub_clock_witness` 按当前 Profile、绑定代次和安装密钥独立保存 checkpoint revision。已授权连接可以读取锚或在精确匹配旧值后将 revision 加一，不能替换已有锚或降低 revision。断线不删除当前 Host authority 生命周期内的见证；重启丢失见证后，旧离线资格必须先在线恢复才能运行。固定 4,096 个锚的容量满后拒绝新锚，不驱逐旧记录。该见证只证明 checkpoint 连续性；Slark 仍须验证签名资格、可信时间、当前资产权限和 effect 所有权。
+
 `profile.ensure_binding_scope` 允许可信 broker 传入根据已验证环境与 Slark 登录身份计算的 SHA-256 scope。绑定版本只在同一 scope 内单调递增；另一有效登录可共享同一 Account Profile，而不继承其版本。registry v4 持久化 scope，并拒绝重复 scope 或 handle。读取器接受已发布 v2/v3 记录，加载时不重写；登记带 scope 的绑定时写入 v4。同环境已有带 scope 的绑定后，旧绑定须独立验证并关联 scope 才能离线恢复。旧 broker 可续用已经关联 scope 的 handle，但不能在该环境新增无 scope 的绑定。同一 scope 换绑会使旧 handle 失效。Account 令牌、Profile 解锁和服务器协作鉴权仍须通过；scope 不转移设备所有权。旧 registry 读取器拒绝 v4，因此回退须使用兼容读取器，或在确认不会丢失后续绑定变更后恢复升级前的 registry 快照。
 
 `profile.workspace_model_selection` 从当前连接已验证令牌的 Account 绑定解出 Profile，并在读取后重新校验。监管器丢弃已销毁或替换 worker 的响应。macOS 和 Windows 启动组合安装读取器；旧 Host 不发布此能力。独立随机 worker 令牌授权私有 HTTP 入口，完整响应在流式读取时有上限。请求拒绝重定向，只使用已核验的监听端。15 秒期限覆盖请求和完整响应读取；读取结束后再次检查取消状态，才接纳结果。结果不授权 Source 登记、规划或任务执行。
