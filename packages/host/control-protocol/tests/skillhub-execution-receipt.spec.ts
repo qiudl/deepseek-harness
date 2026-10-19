@@ -2,7 +2,7 @@
 import { createHash, generateKeyPairSync, randomUUID, sign, verify } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { SKILLHUB_EXECUTION_RECEIPT_DOMAIN, encodeSkillHubExecutionReceiptPayload,
-  parseSkillHubExecutionReceipt } from '../src/index.ts'
+  parseSkillHubExecutionReceipt, decodeHostControlFrame, encodeHostControlFrame } from '../src/index.ts'
 
 const keys = generateKeyPairSync('ed25519')
 const publicKey = (keys.publicKey.export({ format: 'der', type: 'spki' }) as Buffer)
@@ -33,4 +33,43 @@ it('round-trips only the exact Host execution receipt and signature payload', ()
     { requestDigest: '0' }, { args: ['forged'] }, { image: 'node:24' }, { readonly: false },
     { signature: 'bad' }])
     expect(() => parseSkillHubExecutionReceipt({ ...receipt, ...change })).toThrow()
+})
+
+it('round-trips only the fixed-package execution signing request and result', () => {
+  const packageReceipt = { version: 1 as const, installationId: unsigned.hostInstallationId,
+    challengeId: randomUUID(), operationId: unsigned.packageOperationId,
+    packageId: unsigned.packageId, profileId: unsigned.profileId, hostKeyId: unsigned.hostKeyId,
+    bindingGeneration: unsigned.bindingGeneration, revision: '3', versionId: unsigned.versionId,
+    archiveSha256: unsigned.archiveSha256, manifestSha256: unsigned.manifestSha256,
+    readiness: 'prepared' as const, loadEvidenceId: null, signature: 'A'.repeat(86) }
+  const execution = { effectId: unsigned.effectId, requestDigest: unsigned.requestDigest,
+    subject: unsigned.subject, registryId: unsigned.registryId, hostId: unsigned.hostId,
+    profileId: unsigned.profileId, bindingGeneration: unsigned.bindingGeneration,
+    equipmentRevision: unsigned.equipmentRevision, hostRevision: unsigned.hostRevision,
+    computerAuthorizationVersion: unsigned.computerAuthorizationVersion,
+    sandboxOperationId: unsigned.sandboxOperationId, containerId: unsigned.containerId,
+    backendId: unsigned.backendId, image: unsigned.image, entry: unsigned.entry, args: unsigned.args,
+    exitCode: unsigned.exitCode, stdoutSha256: unsigned.stdoutSha256,
+    stderrSha256: unsigned.stderrSha256, interrupted: unsigned.interrupted,
+    quiescent: unsigned.quiescent, network: unsigned.network, readonly: unsigned.readonly }
+  const request = { version: 1, type: 'request', request_id: randomUUID(),
+    method: 'profile.skillhub_execution_receipt', params: {
+      client_instance_id: randomUUID(), host_instance_id: randomUUID(), process_nonce: 'A'.repeat(43),
+      jti: randomUUID(), issued_at: 1000, expires_at: 2000,
+      profile_selector: `${'A'.repeat(43)}.${'A'.repeat(86)}`,
+      package_receipt: packageReceipt, execution,
+    } }
+  const signature = sign(null, Buffer.from(SKILLHUB_EXECUTION_RECEIPT_DOMAIN
+    + encodeSkillHubExecutionReceiptPayload(unsigned)), keys.privateKey).toString('base64url')
+  const result = { version: 1, type: 'result', request_id: request.request_id,
+    method: request.method, result: { receipt: { ...unsigned, signature } } }
+  const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
+  for (const frame of [request, result])
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+  expect(() => decode({ ...request, params: { ...request.params,
+    execution: { ...execution, args: ['forged'] } } })).toThrow()
+  expect(() => decode({ ...request, params: { ...request.params,
+    execution: { ...execution, extra: true } } })).toThrow()
+  expect(() => decode({ ...result, result: { receipt: { ...result.result.receipt,
+    signature: 'bad' } } })).toThrow()
 })

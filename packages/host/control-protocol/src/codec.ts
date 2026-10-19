@@ -58,6 +58,9 @@ import type {
   HostSkillHubPackageSnapshotTarget,
   ProfileSkillHubPackageSnapshotRequest,
   ProfileSkillHubPackageSnapshotResult,
+  HostSkillHubExecutionReport,
+  ProfileSkillHubExecutionReceiptRequest,
+  ProfileSkillHubExecutionReceiptResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
@@ -136,6 +139,7 @@ import type {
 } from './types.ts'
 import { parseHostCollaborationDeliveryChunk, parseHostCollaborationDeliveryResult } from './collaboration-delivery.ts'
 import { encodeSkillHubPackageReceiptPayload } from './skillhub-package-receipt.ts'
+import { parseSkillHubExecutionReceipt } from './skillhub-execution-receipt.ts'
 
 /** Maximum UTF-8 bytes in one JSON object, excluding its terminating LF. */
 export const HOST_CONTROL_MAX_FRAME_BYTES = 64 * 1024
@@ -296,6 +300,24 @@ function skillHubPackageSnapshotTarget(value: unknown): HostSkillHubPackageSnaps
     return { kind: 'file', path }
   }
   return reject()
+}
+
+function skillHubExecutionReport(value: unknown): HostSkillHubExecutionReport {
+  const parsed = parseSkillHubExecutionReceipt({
+    schema: 'slark-dsh-profile-execution-receipt/v1',
+    receiptId: '00000000-0000-4000-8000-000000000000',
+    ...record(value),
+    hostInstallationId: '00000000-0000-4000-8000-000000000001',
+    hostKeyId: 'a'.repeat(64),
+    packageOperationId: '00000000-0000-4000-8000-000000000002',
+    packageId: 'package', versionId: 'version', archiveSha256: 'b'.repeat(64),
+    manifestSha256: 'c'.repeat(64), publicKey: 'A'.repeat(43), signature: 'A'.repeat(86),
+  })
+  const { schema: _schema, receiptId: _receiptId, hostInstallationId: _hostInstallationId,
+    hostKeyId: _hostKeyId, packageOperationId: _packageOperationId, packageId: _packageId,
+    versionId: _versionId, archiveSha256: _archiveSha256, manifestSha256: _manifestSha256,
+    publicKey: _publicKey, signature: _signature, ...report } = parsed
+  return report
 }
 
 function modelClaimCandidate(value: unknown): string {
@@ -1634,6 +1656,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileSkillHubPackageChunkRequest
   | ProfileSkillHubPackageRequest
   | ProfileSkillHubPackageSnapshotRequest
+  | ProfileSkillHubExecutionReceiptRequest
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
@@ -1933,6 +1956,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
         receipt: skillHubPackageReceipt(params.receipt),
         target: skillHubPackageSnapshotTarget(params.target), offset: params.offset as number } }
+  }
+  if (frame.method === 'profile.skillhub_execution_receipt') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'package_receipt', 'execution'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        package_receipt: skillHubPackageReceipt(params.package_receipt),
+        execution: skillHubExecutionReport(params.execution) } }
   }
   if (frame.method === 'profile.status' || frame.method === 'profile.open') {
     exactKeys(params, [
@@ -2275,6 +2305,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileSkillHubPackageChunkResult
   | ProfileSkillHubPackageResult
   | ProfileSkillHubPackageSnapshotResult
+  | ProfileSkillHubExecutionReceiptResult
   | ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
@@ -2560,6 +2591,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
       total_bytes: result.total_bytes as number, chunk_base64url: result.chunk_base64url,
       complete: result.complete,
     } }
+  }
+  if (frame.method === 'profile.skillhub_execution_receipt') {
+    exactKeys(result, ['receipt'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { receipt: parseSkillHubExecutionReceipt(result.receipt) } }
   }
   if (frame.method === 'profile.open' || frame.method === 'profile.open_local') {
     exactKeys(result, ['profile_id', 'view_lease_id', 'view_activation_handle', 'lease_generation', 'expires_at', 'runtime_generation'])

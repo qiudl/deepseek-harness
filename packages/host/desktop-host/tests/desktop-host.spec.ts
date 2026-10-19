@@ -1,6 +1,8 @@
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign, verify } from 'node:crypto'
 import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload,
-  SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
+  SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload,
+  SKILLHUB_EXECUTION_RECEIPT_DOMAIN,
+  encodeSkillHubExecutionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -522,6 +524,32 @@ describe('authenticated Unix transport', () => {
       expect(receipt.revision).toBe('1')
       expect(receipt.readiness).toBe('prepared')
       expect(receipt.loadEvidenceId).toBeNull()
+      const execution = { effectId: randomUUID(), requestDigest: '1'.repeat(64),
+        subject: 'human-1', registryId: 'registry-1', hostId: 'host-1', profileId: local.profileId,
+        bindingGeneration: '1', equipmentRevision: '4', hostRevision: '5',
+        computerAuthorizationVersion: '6', sandboxOperationId: randomUUID(),
+        containerId: '2'.repeat(64), backendId: '3'.repeat(64),
+        image: `sha256:${'4'.repeat(64)}`, entry: 'scripts/run.cjs', args: [] as const,
+        exitCode: 0, stdoutSha256: sha('output'), stderrSha256: sha(''), interrupted: false,
+        quiescent: true as const, network: 'none' as const, readonly: true as const }
+      const executionReceipt = await owner.signSkillHubExecutionReceipt({
+        profileSelector: local.profileSelector, packageReceipt: receipt, execution,
+      })
+      expect(executionReceipt).toMatchObject({ ...execution,
+        schema: 'slark-dsh-profile-execution-receipt/v1',
+        hostInstallationId: identity.installationId, hostKeyId,
+        packageOperationId: receipt.operationId, packageId: receipt.packageId,
+        versionId: receipt.versionId, archiveSha256: receipt.archiveSha256,
+        manifestSha256: receipt.manifestSha256, publicKey })
+      const { signature: executionSignature, ...unsignedExecution } = executionReceipt
+      expect(verify(null, Buffer.from(SKILLHUB_EXECUTION_RECEIPT_DOMAIN
+        + encodeSkillHubExecutionReceiptPayload(unsignedExecution)), keys.publicKey,
+      Buffer.from(executionSignature, 'base64url'))).toBe(true)
+      await expect(other.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+        packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+        packageReceipt: { ...receipt, manifestSha256: 'b'.repeat(64) }, execution }))
+        .rejects.toMatchObject({ code: 'unavailable' })
       const repeated = await owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
         operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
         challengeId: randomUUID() })
@@ -655,6 +683,12 @@ describe('authenticated Unix transport', () => {
         await expect(owner.readSkillHubPackageSnapshotChunk({
           profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
         })).rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result',
+          method: 'profile.skillhub_execution_receipt', result: { receipt: {
+            ...executionReceipt, effectId: randomUUID(),
+          } } }))
+        await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+          packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unavailable' })
         Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package',
           result: { receipt: null } }))
         await expect(owner.readSkillHubPackageSnapshotChunk({
@@ -672,6 +706,8 @@ describe('authenticated Unix transport', () => {
         await expect(owner.readSkillHubPackageSnapshotChunk({
           profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
         })).rejects.toMatchObject({ code: 'upgrade_required' })
+        await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+          packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'upgrade_required' })
       } finally { Reflect.set(owner, 'inspection', originalInspection) }
     } finally {
       owner.close()
@@ -704,7 +740,7 @@ describe('authenticated Unix transport', () => {
       const inspection = Reflect.get(owner, 'inspection')
       Reflect.set(owner, 'inspection', { ...inspection,
         capabilities: [...inspection.capabilities, 'profile.skillhub_package_chunk', 'profile.skillhub_package',
-          'profile.skillhub_package_snapshot'] })
+          'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] })
       try {
         await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
           .rejects.toMatchObject({ code: 'upgrade_required' })
@@ -720,6 +756,16 @@ describe('authenticated Unix transport', () => {
         await expect(owner.readSkillHubPackageSnapshotChunk({ profileSelector: local.profileSelector,
           receipt, target: { kind: 'manifest' }, offset: 0 }))
           .rejects.toMatchObject({ code: 'upgrade_required' })
+        const execution = { effectId: randomUUID(), requestDigest: '1'.repeat(64), subject: 'human-1',
+          registryId: 'registry-1', hostId: 'host-1', profileId: local.profileId,
+          bindingGeneration: '1', equipmentRevision: '1', hostRevision: '1',
+          computerAuthorizationVersion: '1', sandboxOperationId: randomUUID(),
+          containerId: '2'.repeat(64), backendId: '3'.repeat(64), image: `sha256:${'4'.repeat(64)}`,
+          entry: 'scripts/run.cjs', args: [] as const, exitCode: 0, stdoutSha256: '5'.repeat(64),
+          stderrSha256: '6'.repeat(64), interrupted: false, quiescent: true as const,
+          network: 'none' as const, readonly: true as const }
+        await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+          packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'upgrade_required' })
       } finally { Reflect.set(owner, 'inspection', inspection) }
     } finally { owner.close(); await server.close() }
   })

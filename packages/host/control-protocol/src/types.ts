@@ -5,6 +5,7 @@ import type { HostSavedAnalysisFields, HostRootAnalysisOutput } from './root-ana
 import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJournalCommand, HostRootJournalMetadata, HostRootAnalysisInput, HostRootSubmissionTarget, HostRootSubmissionDescriptor } from './root-authority.ts'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
+import type { HostSkillHubExecutionReceipt } from './skillhub-execution-receipt.ts'
 
 /** Current on-wire Host control protocol version. */
 export type HostControlProtocolVersion = 1
@@ -571,6 +572,36 @@ export interface ProfileSkillHubPackageSnapshotResult {
     readonly chunk_base64url: string
     readonly complete: boolean
   }
+}
+
+/** Daemon-observed execution fields that the authorized Host binds to one fixed package. */
+export type HostSkillHubExecutionReport = Pick<HostSkillHubExecutionReceipt,
+  'effectId' | 'requestDigest' | 'subject' | 'registryId' | 'hostId' | 'profileId'
+  | 'bindingGeneration' | 'equipmentRevision' | 'hostRevision'
+  | 'computerAuthorizationVersion' | 'sandboxOperationId' | 'containerId' | 'backendId'
+  | 'image' | 'entry' | 'args' | 'exitCode' | 'stdoutSha256' | 'stderrSha256'
+  | 'interrupted' | 'quiescent' | 'network' | 'readonly'>
+
+/** Ask the current Profile-authorized Host to sign one completed sandbox report. */
+export interface ProfileSkillHubExecutionReceiptRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_execution_receipt'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly package_receipt: HostSkillHubPackageSignedReceipt
+    readonly execution: HostSkillHubExecutionReport
+  }
+}
+
+/** Installation-signed execution fact for the exact fixed package and sandbox result. */
+export interface ProfileSkillHubExecutionReceiptResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_execution_receipt'
+  readonly result: { readonly receipt: HostSkillHubExecutionReceipt }
 }
 
 /** Open the same Profile through a Main-only local view lease. */
@@ -1903,6 +1934,8 @@ export type HostControlFrame =
   | ProfileSkillHubPackageResult
   | ProfileSkillHubPackageSnapshotRequest
   | ProfileSkillHubPackageSnapshotResult
+  | ProfileSkillHubExecutionReceiptRequest
+  | ProfileSkillHubExecutionReceiptResult
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
   | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest
