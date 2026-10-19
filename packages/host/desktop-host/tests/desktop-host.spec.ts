@@ -454,9 +454,11 @@ describe('authenticated Unix transport', () => {
 
   it('prepares a complete SkillHub ZIP only on the granted Host connection', async () => {
     const packagesRoot = dir()
+    let rejectSnapshotWithAuthority = false
     let stored: Awaited<ReturnType<typeof createSkillHubPackageInstallationStore>> | undefined
     const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, true,
       async (profileId, generation, hostKeyId) => {
+        if (rejectSnapshotWithAuthority) throw new HostAuthorityError('unauthorized')
         stored ??= await createSkillHubPackageInstallationStore(packagesRoot, profileId, hostKeyId, generation)
         return stored
       })
@@ -573,6 +575,12 @@ describe('authenticated Unix transport', () => {
         ['empty.txt', '0644', 0, sha(Buffer.alloc(0))],
         ['references/data.bin', '0644', reference.length, sha(reference)],
       ]])
+      rejectSnapshotWithAuthority = true
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'file', path: 'SKILL.md' }, offset: 0,
+      })).rejects.toMatchObject({ code: 'unauthorized' })
+      rejectSnapshotWithAuthority = false
       await expect(owner.readSkillHubPackageSnapshotChunk({
         profileSelector: local.profileSelector, receipt,
         target: { kind: 'file', path: 'empty.txt' }, offset: 0,
