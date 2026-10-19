@@ -45,6 +45,9 @@ export type {
 export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.js'
 export { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from './skillhub-profile-binding.js'
 export { SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload } from './skillhub-package-receipt.js'
+export { SKILLHUB_EXECUTION_RECEIPT_DOMAIN, parseSkillHubExecutionReceipt,
+  encodeSkillHubExecutionReceiptPayload } from './skillhub-execution-receipt.js'
+export type { HostSkillHubExecutionReceipt } from './skillhub-execution-receipt.js'
 export type { SkillHubProfileBindingPayload } from './skillhub-profile-binding.js'
 export type { CanonicalMigrationRecord } from './migration-canonical.js'
 export type {
