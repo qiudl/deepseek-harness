@@ -1,3 +1,4 @@
+import { parseHostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
 import { parseRecoveryDescriptor, parseRecoveryDescribeInput, parseRecoveryValidateInput, parseRecoveryValidation } from './recovery-materials.ts'
 import { parseHostRootTextContextReceipt } from './root-text-context.ts'
 import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
@@ -1450,6 +1451,10 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
     exactKeys(row, ['action', 'target'])
     return { action: row.action, target: parseHostCollaborationSourceTarget(row.target) }
   }
+  if (row.action === 'read_root_diagnostic') {
+    exactKeys(row, ['action', 'target'])
+    return { action: 'read_root_diagnostic', target: parseHostRootSubmissionTarget(row.target) }
+  }
   if (row.action === 'read_root_output') {
     exactKeys(row, ['action','target'])
     return { action: 'read_root_output', target: parseHostRootSubmissionTarget(row.target) }
@@ -1523,6 +1528,10 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
   if (row.kind === 'source_output') {
     exactKeys(row, ['kind', 'evidence'])
     return { kind: row.kind, evidence: parseHostSourceAnalysisOutput(row.evidence) }
+  }
+  if (row.kind === 'root_diagnostic') {
+    exactKeys(row, ['kind', 'evidence'])
+    return { kind: 'root_diagnostic', evidence: parseHostRootAnalysisDiagnostic(row.evidence) }
   }
   if (row.kind === 'root_output') {
     exactKeys(row, ['kind','evidence'])

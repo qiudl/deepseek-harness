@@ -1,3 +1,4 @@
+import { CollaborationDiagnosticProjection, type CollaborationPlanningFailure } from './collaboration-diagnostic.ts'
 import { readCollaborationExecutionEvidence, readCollaborationTracePage, type CollaborationTraceView, type CollaborationTracePage } from './collaboration-trace.ts'
 /** Session-owned readonly collaboration messages/results; view lifetimes never cancel accepted work. */
 import { readCollaborationPending } from './collaboration-dialogue.ts'
@@ -29,8 +30,9 @@ export interface CollaborationResultsBridge extends CollaborationDialogueBridge 
   readonly collaborationResponseAvailable?: boolean
   collaborationResponse?: ResponseSubscribe
   readonly collaborationScopeAvailable?: boolean
+  readonly collaborationDiagnosticAvailable?: boolean
   readonly collaborationPlanningAvailable?: boolean
-  collaborationRootExecution?(request: { action: 'trace'; source: Source; cursor: { after_seq: number; limit: number; evidence?: { event_id: string; after_sequence: number } } } | { action: 'preview'; source: Source } |
+  collaborationRootExecution?(request: { action: 'trace'; source: Source; cursor: { after_seq: number; limit: number; evidence?: { event_id: string; after_sequence: number } } } | { action: 'preview' | 'diagnostic'; source: Source } |
     { action: 'confirm' | 'reconcile'; previewId: string; taskId: string } |
     { action: 'consume' | 'consumption-status'; previewId: string; taskId: string; deliveryId: string }): Promise<unknown>
   collaborationDeliveries?(request: { source: Source; limit: number; after_delivery_id?: string }): Promise<
@@ -55,6 +57,7 @@ export interface CollaborationResultGroup {
   readonly pending?: CollaborationPendingPage['pending_items']
   readonly pendingUnavailable?: boolean
   readonly planningState?: string
+  readonly planningFailure?: CollaborationPlanningFailure
   readonly trace?: CollaborationTraceView
   readonly execution?: CollaborationExecutionView
   readonly nextCursor?: string
@@ -135,6 +138,7 @@ function wait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 /** Own readonly paging and refresh through the Session, workspace and Connection generation. */
 export class CollaborationResultsModel {
   private state = empty()
+  private diagnostics: CollaborationDiagnosticProjection | undefined
   private traces = new Map<string, CollaborationTraceView>()
   private tracePages = new Map<string, number>()
   private executions = new Map<string, CollaborationExecutionView>()
@@ -207,16 +211,27 @@ export class CollaborationResultsModel {
     this.locatedOriginal = undefined; this.location = undefined
     this.workspaceId = workspaceId; this.boundBridge = host; this.connectionGeneration = connection
     this.responses?.stop(); this.responses = undefined
+    this.diagnostics?.stop(); this.diagnostics = undefined
     this.executions.clear(); this.traces.clear(); this.tracePages.clear()
     this.generation++; this.sourcePages = 1; this.replyPages.clear()
+    this.setupDiagnostics()
     this.controller?.abort(); this.automaticRead?.abort(); this.historyRead?.abort(); this.publish(empty())
     return true
+  }
+  private setupDiagnostics(): void {
+    const host = this.boundBridge
+    if (!this.diagnostics && host?.collaborationDiagnosticAvailable && host.collaborationRootExecution) {
+      const generation = this.generation, read = host.collaborationRootExecution.bind(host)
+      this.diagnostics = new CollaborationDiagnosticProjection(source => read({ action: 'diagnostic', source }),
+        () => this.current(generation), () =>{  this.publish(this.state) })
+    }
   }
   private current(generation: number): boolean { this.bind(); return !this.closed && generation === this.generation }
   private readCurrent(generation: number, controller: AbortController): boolean {
     return this.current(generation) && this.controller === controller && !controller.signal.aborted
   }
   private publish(state: CollaborationResultsSnapshot): void {
+    this.diagnostics?.retain(new Set(state.groups.map(group => group.original.snapshot_digest)))
     const { executionAvailable: _available, focus: _focus, location: _location, historyReadPending: _historyReadPending, ...base } = state
     this.state = { ...base,
       ...(this.historyRead && !this.historyRead.signal.aborted ? { historyReadPending: true as const } : {}),
@@ -229,11 +244,16 @@ export class CollaborationResultsModel {
       groups: state.groups.map((group) => {
         const execution = this.executions.get(group.original.snapshot_digest)
         const trace = this.traces.get(group.original.snapshot_digest)
-        if (!this.responses && !group.provisionalResponses && group.execution === execution && group.trace === trace) return group
         const provisionalResponses = this.responses?.read(group.original, group.replies.map(reply => reply.invocation_id)) ?? []
-        const { execution: _old, trace: _trace, provisionalResponses: _provisional, ...original } = group
+        const eligible = group.phase !== 'error' && !group.pendingUnavailable &&
+          !group.replies.length && !group.pending?.length && !provisionalResponses.length
+        const planning = group.pending === undefined && group.planningState === undefined ? undefined : group.planningState === 'planning'
+        const planningFailure = this.diagnostics?.observe(group.original, eligible ? planning : false)
+        if (!this.responses && !group.provisionalResponses && group.execution === execution && group.trace === trace &&
+          group.planningFailure === planningFailure) return group
+        const { execution: _old, trace: _trace, provisionalResponses: _provisional, planningFailure: _failure, ...original } = group
         return { ...original, ...(execution ? { execution } : {}), ...(trace ? { trace } : {}),
-          ...(provisionalResponses.length ? { provisionalResponses } : {}) }
+          ...(planningFailure ? { planningFailure } : {}), ...(provisionalResponses.length ? { provisionalResponses } : {}) }
       }) }
     if (!this.closed) this.observers.forEach((fn) => { fn() })
   }
@@ -267,6 +287,7 @@ export class CollaborationResultsModel {
     if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-collaboration-admitted', this.refreshEvent)
     if (typeof window !== 'undefined') window.removeEventListener('dsh-slark-response-admitted', this.responseEvent)
     this.responses?.stop(); this.responses = undefined
+    this.diagnostics?.stop(); this.diagnostics = undefined
     this.controller?.abort(); this.automaticRead?.abort(); this.historyRead?.abort(); this.generation++; this.executions.clear()
     this.traces.clear(); this.tracePages.clear(); this.publish(this.state)
     if (this.location?.status === 'loading') this.location = undefined
@@ -439,6 +460,7 @@ export class CollaborationResultsModel {
   private async query(more: boolean, history?: { generation: number; controller: AbortController }): Promise<void> {
     this.bind()
     if (this.closed || !this.workspaceId) return
+    this.setupDiagnostics()
     if (more && !history) {
       if (this.state.nextCursor === undefined) return
       await this.historyQuery((generation, controller) => this.query(true, { generation, controller }))

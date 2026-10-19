@@ -177,6 +177,8 @@ export { matchHostRootJournalMetadata } from './root-authority.ts'
 export { parseHostRootAnalysisInput } from './root-authority.ts'
 export type { HostRootAnalysisInput } from './root-authority.ts'
 export { parseHostRootAnalysisOutput, matchHostRootAnalysisOutput } from './root-analysis-output.ts'
+export { parseHostRootAnalysisDiagnostic, matchHostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
+export type { HostRootAnalysisDiagnostic, HostRootDiagnosticAttemptId, HostRootDiagnosticProviderId, HostRootDiagnosticModelId } from './root-analysis-diagnostic.ts'
 export type { HostRootAnalysisOutput, HostSavedAnalysisDispatch, HostRootAnalysisPlanId, HostRootAnalysisAttemptId } from './root-analysis-output.ts'
 
 export { parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion, encodeHostRootPlanningAttemptAuthorityPayload } from './root-planning-attempt-authority.ts'
