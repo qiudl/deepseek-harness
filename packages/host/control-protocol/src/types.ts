@@ -1,4 +1,4 @@
-import type { WorkbenchReadPayload } from './workbench-read.js'
+import type { WorkbenchReadPayload, WorkbenchChangesPayload } from './workbench-read.js'
 import type { RecoveryDescribeInput, RecoveryValidateInput, RecoveryDescriptor, RecoveryValidation } from './recovery-materials.ts'
 import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
 import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
@@ -1526,6 +1526,7 @@ export interface ProfileRemoteUiReadResult {
 
 /** Only selected native read streams may cross a live Profile view lease. */
 export type ProfileRemoteUiStreamCommand =
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workspaceFiles/changes'; readonly payload: WorkbenchChangesPayload }
   | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workbench/read'; readonly payload: WorkbenchReadPayload }
   | {
     readonly action: 'open'

@@ -273,3 +273,5 @@ The private NDJSON route also accepts `session/list` with empty `args` and emits
 Remote `session.select_model` and `session.select_agent` reuse the existing Session model selector and Agent preset registry. Both require the addressed Session control claim at the Host before invoking the Gateway; the response preserves the selected model or preset identity. A page cannot choose a Profile, a different Agent address, or a control epoch through the selection payload.
 
 The lease-bound `workbench/read` stream admits only `workspaceFiles/read`, `readBytes`, `stat`, and `list`, with exact workspace scope and path arguments. It uses the Profile's in-process Connection Fetch handler and retains the original JSON or multipart RPC response. Ordered chunks are at most 16 KiB; the complete response is capped at 34 MiB. Cancellation closes the owned reader; unrecognized endpoints and authority selectors are rejected before dispatch.
+
+The same file capability admits the exact `workspaceFiles/changes` stream. Gateway scope lookup and filesystem policy remain authoritative; page cancellation releases its watcher, and every Host poll still requires the original view lease.

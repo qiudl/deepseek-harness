@@ -202,3 +202,5 @@ First-reply receipts use `dsh-collaboration-continuation-observation-v1`. Their 
 The closed Session command set also includes `session.select_model` (provider, model, optional reasoning effort) and `session.select_agent` (preset). Both carry an exact Session ID and required control proof; bounded text fields and unknown-key rejection apply before execution.
 
 The lease-bound `workbench/read` stream admits only `workspaceFiles/read`, `readBytes`, `stat`, and `list`, with exact workspace scope and path arguments. It uses the Profile's in-process Connection Fetch handler and retains the original JSON or multipart RPC response. Ordered chunks are at most 16 KiB; the complete response is capped at 34 MiB. Cancellation closes the owned reader; unrecognized endpoints and authority selectors are rejected before dispatch.
+
+The same file capability admits the exact `workspaceFiles/changes` stream. Gateway scope lookup and filesystem policy remain authoritative; page cancellation releases its watcher, and every Host poll still requires the original view lease.

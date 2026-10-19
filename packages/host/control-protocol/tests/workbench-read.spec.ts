@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { it } from 'vitest'
-import { parseWorkbenchReadPayload } from '../src/workbench-read.ts'
+import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from '../src/workbench-read.ts'
 const request = (endpoint: string, args: object) => ({ args: { endpoint, rpcId: 'rpc-1', args } })
 const base = { workspaceFileScopeId: 'session-1', path: 'file.txt' }
 it('accepts only exact file reads and canonicalizes optional ranges', () => {
@@ -33,4 +33,13 @@ it('rejects selectors, mutations, unsafe ranges, non-JSON shapes and overlong pa
       { range: { length: 0 } }, { range: { length: 1.5 } }]
       .map(options => request('workspaceFiles/readBytes', { ...base, options })),
   ]) assert.equal(parseWorkbenchReadPayload(value), undefined, JSON.stringify(value))
+})
+
+it('admits only exact file observation coordinates', () => {
+  const payload = { args: base }
+  assert.deepEqual(parseWorkbenchChangesPayload(payload), payload)
+  for (const value of [null, [], {}, { args: base, profileId: 'other' }, { args: {} },
+    { args: { ...base, token: 'other' } }, { args: { ...base, workspaceFileScopeId: '../other' } }]) {
+    assert.equal(parseWorkbenchChangesPayload(value), undefined)
+  }
 })

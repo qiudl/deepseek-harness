@@ -214,3 +214,5 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 闭合的会话命令集还包含 `session.select_model`（提供方、模型和可选思考强度）与 `session.select_agent`（预设）。两者均携带精确会话 ID 和必需的控制权证明；执行前校验文本上限并拒绝未知字段。
 
 绑定 view lease 的 `workbench/read` 流只允许 `workspaceFiles/read`、`readBytes`、`stat` 和 `list`，并校验精确的工作区范围与路径参数。它使用 Profile 进程内的 Connection Fetch handler，保留原有 JSON 或 multipart RPC 响应。按序分块不超过 16 KiB，完整响应上限为 34 MiB。取消会关闭所属 reader；未知接口与授权选择字段在派发前被拒绝。
+
+同一文件能力也允许精确的 `workspaceFiles/changes` 流。Gateway 范围查找与文件系统策略继续负责授权；页面取消释放所属 watcher，每次 Host 轮询仍要求原 view lease。

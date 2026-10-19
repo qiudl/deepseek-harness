@@ -1,4 +1,4 @@
-import { parseWorkbenchReadPayload } from './workbench-read.js'
+import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
 import { parseRecoveryDescriptor, parseRecoveryDescribeInput, parseRecoveryValidateInput, parseRecoveryValidation } from './recovery-materials.ts'
 import { parseHostRootTextContextReceipt } from './root-text-context.ts'
 import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
@@ -1776,7 +1776,11 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       const payload = record(command.payload)
       exactKeys(payload, ['args'])
       const args = record(payload.args)
-      if (command.endpoint === 'workbench/read') {
+      if (command.endpoint === 'workspaceFiles/changes') {
+        const parsedPayload = parseWorkbenchChangesPayload(payload)
+        if (!parsedPayload) reject()
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload }
+      } else if (command.endpoint === 'workbench/read') {
         const parsedPayload = parseWorkbenchReadPayload(payload)
         if (!parsedPayload) reject()
         parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload }

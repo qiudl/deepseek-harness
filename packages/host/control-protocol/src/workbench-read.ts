@@ -72,3 +72,19 @@ export function parseWorkbenchReadPayload(input: unknown): WorkbenchReadPayload 
   }
   return { args: { endpoint, rpcId: request.rpcId, args: base } }
 }
+
+/** Exact workspace file observation arguments; the Gateway resolves the scope. */
+export interface WorkbenchChangesPayload {
+  readonly args: { readonly workspaceFileScopeId: string; readonly path: string }
+}
+/**
+ * Admit a read-only file observation without accepting authority selectors.
+ * @param input Decrypted stream arguments.
+ * @returns Canonical watch coordinates or undefined.
+ */
+export function parseWorkbenchChangesPayload(input: unknown): WorkbenchChangesPayload | undefined {
+  if (!record(input) || !keys(input, ['args'])) return undefined
+  const parsed = parseWorkbenchReadPayload({ args: { endpoint: 'workspaceFiles/stat', rpcId: 'watch', args: input.args } })
+  if (!parsed) return undefined
+  return { args: { workspaceFileScopeId: parsed.args.args.workspaceFileScopeId, path: parsed.args.args.path } }
+}

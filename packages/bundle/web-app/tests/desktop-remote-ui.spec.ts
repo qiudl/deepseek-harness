@@ -209,6 +209,18 @@ describe('Desktop remote UI read-only bridge', () => {
     expect(stream).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps file observations scoped and cancellation owned by the caller', async () => {
+    const stream = vi.fn(async () => (async function* () { yield { type: 'ready' } })())
+    const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))
+    const signal = new AbortController().signal
+    const payload = { args: { workspaceFileScopeId: 'session-1', path: 'file.txt' } }
+    const opened = await executor.open('workspaceFiles/changes', payload, signal)
+    await expect(opened[Symbol.asyncIterator]().next()).resolves.toEqual({ done: false, value: { type: 'ready' } })
+    expect(stream).toHaveBeenCalledExactlyOnceWith({ namespace: 'workspaceFiles', method: 'changes', args: payload.args, signal })
+    await expect(executor.open('workspaceFiles/changes', { args: { ...payload.args, profile: 'other' } }, signal)).rejects.toThrow('invalid file observation')
+    expect(stream).toHaveBeenCalledOnce()
+  })
+
   it('forwards only validated file reads to the composed Connection handler', async () => {
     const read = vi.fn(async () => Response.json({ value: 'file' }))
     const gateway = gatewayFixture({})

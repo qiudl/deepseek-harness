@@ -203,5 +203,5 @@ export type { RecoveryProfileKeyHandle, RecoveryDescriptor, RecoveryDescribeInpu
 export type { ProfileRecoveryMaterialsDescribeRequest, ProfileRecoveryMaterialsDescribeResult,
   ProfileRecoveryMaterialsValidateRequest, ProfileRecoveryMaterialsValidateResult } from './types.ts'
 
-export { parseWorkbenchReadPayload } from './workbench-read.js'
-export type { WorkbenchReadPayload, WorkbenchReadEndpoint } from './workbench-read.js'
+export { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
+export type { WorkbenchReadPayload, WorkbenchReadEndpoint, WorkbenchChangesPayload } from './workbench-read.js'

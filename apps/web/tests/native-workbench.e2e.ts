@@ -197,3 +197,22 @@ it('reads actual Host workspace bytes through the native file stream and existin
   } })
   expect(result).toMatchObject({ ok: true, value: { data: binary, bytes: binary.length, eof: true } })
 })
+
+
+it('follows real Host file changes and releases the watcher on page cancellation', async () => {
+  const path = join(scaffold.workspaceCwd, 'native-watch.txt')
+  await writeFile(path, 'before')
+  const controller = new AbortController()
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)])
+  const executor = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway)
+  const stream = await executor.open('workspaceFiles/changes', {
+    args: { workspaceFileScopeId: sessionId, path: 'native-watch.txt' },
+  }, signal)
+  const iterator = stream[Symbol.asyncIterator]()
+  try {
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: { kind: 'ready' } })
+    await writeFile(path, 'updated by Host')
+    await expect(iterator.next()).resolves.toMatchObject({ done: false,
+      value: { kind: 'change', change: { absolutePath: path } } })
+  } finally { controller.abort(); await iterator.return?.() }
+})
