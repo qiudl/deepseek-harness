@@ -340,6 +340,14 @@ async uploadStream(request: { readonly sessionId: SessionId readonly data: Async
 resolve(agent: Agent, receiptId: FileUploadReceiptId): FileAttachmentRef | undefined
 
 /**
+ * Retire one staged receipt without deleting its immutable stored object.
+ * @param sessionId - exact Session that owns the receipt.
+ * @param receiptId - opaque receipt returned by a completed upload.
+ * @returns whether the receipt was still staged for that Session.
+ */
+async discardUpload(sessionId: SessionId, receiptId: FileUploadReceiptId): Promise<boolean>
+
+/**
  * Bind receipts while one prompt enters an Agent inbox.
  * Disposal restores every prior binding unless the caller commits successful delivery.
  * @param agent - receiving Agent.

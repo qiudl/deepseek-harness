@@ -21,14 +21,24 @@ export interface FileUploadValue {
 /** Host-minted authority for one staged file upload in one Agent scope. */
 export type FileUploadReceiptId = Branded<'file-upload-receipt-id'>
 
+/** Monotone byte progress emitted by a page-owned upload carrier. */
+export interface FileUploadCarrierProgress {
+  readonly loaded: number
+  readonly total?: number
+}
+
 /**
- * Fetch-shaped carrier installed by a page that owns its Host transport.
- * @param input - document-relative upload route; a carrier that needs an
- * absolute URL resolves it against its own base.
+ * Sends one upload through a page-owned Host transport.
+ * @param input - document-relative upload route; the carrier resolves it against its own base.
  * @param init - raw request body, headers, and cancellation signal.
+ * @param onProgress - optional observer for monotone uploaded byte counts.
  * @returns the Host response.
  */
-export type FileUploadFetch = (input: string | URL, init: RequestInit) => Promise<Response>
+export type FileUploadFetch = (
+  input: string | URL,
+  init: RequestInit,
+  onProgress?: (progress: FileUploadCarrierProgress) => void,
+) => Promise<Response>
 
 /** Pre-Cordis hook supplied by a page whose Host runs in another execution context. */
 export interface ClientFileUploadHooks {
