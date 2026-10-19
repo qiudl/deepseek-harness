@@ -537,6 +537,42 @@ export interface ProfileSkillHubPackageResult {
   readonly result: { readonly receipt: HostSkillHubPackageSignedReceipt | null }
 }
 
+/** One immutable package object selected by an exact signed activation receipt. */
+export type HostSkillHubPackageSnapshotTarget =
+  | { readonly kind: 'manifest' }
+  | { readonly kind: 'file'; readonly path: string }
+
+/** Read one bounded chunk without following the package's mutable current pointer. */
+export interface ProfileSkillHubPackageSnapshotRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_snapshot'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly receipt: HostSkillHubPackageSignedReceipt
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+  }
+}
+
+/** Exact-operation bytes bounded below the Host frame ceiling. */
+export interface ProfileSkillHubPackageSnapshotResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_snapshot'
+  readonly result: {
+    readonly operation_id: string
+    readonly manifest_sha256: HostControlSha256
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+    readonly total_bytes: number
+    readonly chunk_base64url: string
+    readonly complete: boolean
+  }
+}
+
 /** Open the same Profile through a Main-only local view lease. */
 export interface ProfileOpenRequest {
   readonly version: 1
@@ -1865,6 +1901,8 @@ export type HostControlFrame =
   | ProfileSkillHubPackageChunkResult
   | ProfileSkillHubPackageRequest
   | ProfileSkillHubPackageResult
+  | ProfileSkillHubPackageSnapshotRequest
+  | ProfileSkillHubPackageSnapshotResult
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
   | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest

@@ -55,6 +55,9 @@ import type {
   HostSkillHubPackageSignedReceipt,
   ProfileSkillHubPackageRequest,
   ProfileSkillHubPackageResult,
+  HostSkillHubPackageSnapshotTarget,
+  ProfileSkillHubPackageSnapshotRequest,
+  ProfileSkillHubPackageSnapshotResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
@@ -275,6 +278,24 @@ function skillHubPackageReceipt(value: unknown): HostSkillHubPackageSignedReceip
   } as Omit<HostSkillHubPackageSignedReceipt, 'signature'>
   try { encodeSkillHubPackageReceiptPayload(parsed) } catch { reject() }
   return { ...parsed, signature: signature(receipt.signature) }
+}
+
+function skillHubPackageSnapshotTarget(value: unknown): HostSkillHubPackageSnapshotTarget {
+  const target = record(value)
+  if (target.kind === 'manifest') {
+    exactKeys(target, ['kind'])
+    return { kind: 'manifest' }
+  }
+  if (target.kind === 'file') {
+    exactKeys(target, ['kind', 'path'])
+    const path = wireText(target.path, 500)
+    if (path.normalize('NFC') !== path || /[\\\u0000-\u001f\u007f-\u009f]/u.test(path)
+      || path.startsWith('/') || path.split('/').some(part => part === '' || part === '.' || part === '..'
+        || /[:*?"<>|]/u.test(part) || /[. ]$/u.test(part)
+        || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(part))) reject()
+    return { kind: 'file', path }
+  }
+  return reject()
 }
 
 function modelClaimCandidate(value: unknown): string {
@@ -1612,6 +1633,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileSkillHubBindingRequest
   | ProfileSkillHubPackageChunkRequest
   | ProfileSkillHubPackageRequest
+  | ProfileSkillHubPackageSnapshotRequest
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
@@ -1902,6 +1924,15 @@ function decodeProfileRequest(frame: Record<string, unknown>):
           action: 'current', package_id: params.package_id } }
     }
     reject()
+  }
+  if (frame.method === 'profile.skillhub_package_snapshot') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'receipt', 'target', 'offset'])
+    if (!Number.isSafeInteger(params.offset) || (params.offset as number) < 0
+      || (params.offset as number) > 10 * 1024 * 1024) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        receipt: skillHubPackageReceipt(params.receipt),
+        target: skillHubPackageSnapshotTarget(params.target), offset: params.offset as number } }
   }
   if (frame.method === 'profile.status' || frame.method === 'profile.open') {
     exactKeys(params, [
@@ -2243,6 +2274,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileSkillHubBindingResult
   | ProfileSkillHubPackageChunkResult
   | ProfileSkillHubPackageResult
+  | ProfileSkillHubPackageSnapshotResult
   | ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
@@ -2506,6 +2538,28 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['receipt'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { receipt: result.receipt === null ? null : skillHubPackageReceipt(result.receipt) } }
+  }
+  if (frame.method === 'profile.skillhub_package_snapshot') {
+    exactKeys(result, ['operation_id', 'manifest_sha256', 'target', 'offset', 'total_bytes',
+      'chunk_base64url', 'complete'])
+    if (!Number.isSafeInteger(result.offset) || (result.offset as number) < 0
+      || !Number.isSafeInteger(result.total_bytes) || (result.total_bytes as number) < 0
+      || (result.total_bytes as number) > 10 * 1024 * 1024
+      || (result.offset as number) > (result.total_bytes as number)
+      || typeof result.chunk_base64url !== 'string' || result.chunk_base64url.length > 43691
+      || !/^[A-Za-z0-9_-]*$/u.test(result.chunk_base64url)
+      || typeof result.complete !== 'boolean') reject()
+    const bytes = Buffer.from(result.chunk_base64url, 'base64url')
+    if (bytes.length > 32768 || (bytes.length === 0) !== ((result.total_bytes as number) === 0)
+      || bytes.toString('base64url') !== result.chunk_base64url
+      || (result.offset as number) + bytes.length > (result.total_bytes as number)
+      || result.complete !== ((result.offset as number) + bytes.length === (result.total_bytes as number))) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      operation_id: uuid(result.operation_id), manifest_sha256: digest(result.manifest_sha256),
+      target: skillHubPackageSnapshotTarget(result.target), offset: result.offset as number,
+      total_bytes: result.total_bytes as number, chunk_base64url: result.chunk_base64url,
+      complete: result.complete,
+    } }
   }
   if (frame.method === 'profile.open' || frame.method === 'profile.open_local') {
     exactKeys(result, ['profile_id', 'view_lease_id', 'view_activation_handle', 'lease_generation', 'expires_at', 'runtime_generation'])

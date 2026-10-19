@@ -57,6 +57,8 @@ import type {
   ProfileSkillHubBindingResult,
   ProfileSkillHubPackageChunkRequest,
   ProfileSkillHubPackageRequest,
+  ProfileSkillHubPackageSnapshotRequest,
+  HostSkillHubPackageSnapshotTarget,
   HostSkillHubPackageSignedReceipt,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
@@ -136,6 +138,7 @@ import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
 import { CollaborationDeliveryUploads, type CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 import { SkillHubPackageUploads } from './skillhub-package-uploads.ts'
+import { SkillHubPackageSnapshotReads } from './skillhub-package-snapshot-reads.ts'
 import type { createSkillHubPackageInstallationStore } from './skillhub-package-install.ts'
 import { RemoteUiStreamCursor } from './remote-ui-stream-cursor.ts'
 import type { SingleHostLock } from './single-instance.ts'
@@ -959,6 +962,7 @@ class FrameChannel implements HostClientFrameTransport {
 export class HostControlAuthority {
   private readonly deliveryUploads = new CollaborationDeliveryUploads()
   private readonly packageUploads = new SkillHubPackageUploads()
+  private readonly packageSnapshotReads = new SkillHubPackageSnapshotReads()
   constructor(private readonly options: HostControlAuthorityOptions) {}
 
   private skillHubPackageGrant(profileSelector: string, ownerId: string, signal: AbortSignal) {
@@ -1525,6 +1529,47 @@ export class HostControlAuthority {
           })()
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { receipt: signed || null } })
+        } else if (frame.method === 'profile.skillhub_package_snapshot') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          const { signature, ...unsigned } = frame.params.receipt
+          if (unsigned.installationId !== this.options.identity.installationId
+            || unsigned.profileId !== profileId || unsigned.hostKeyId !== hostKeyId
+            || unsigned.bindingGeneration !== generation
+            || !verify(null, Buffer.from(SKILLHUB_PACKAGE_RECEIPT_DOMAIN
+              + encodeSkillHubPackageReceiptPayload(unsigned)),
+            publicKeyObject(this.options.identity.installationPublicKey), Buffer.from(signature, 'base64url')))
+            throw new HostAuthorityError('unavailable')
+          const { version: _version, installationId: _installationId, challengeId: _challengeId,
+            ...fixedReceipt } = unsigned
+          authorize()
+          let read
+          try {
+            read = await this.packageSnapshotReads.read({ ownerId,
+              bindingKey: JSON.stringify([profileId, generation, hostKeyId, unsigned.operationId,
+                unsigned.manifestSha256, frame.params.target]),
+              offset: frame.params.offset, signal: context.signal, authorize,
+              capture: async () => {
+                const store = await createStore(profileId, generation, hostKeyId)
+                authorize()
+                const snapshot = await store.snapshotFixed(fixedReceipt)
+                return frame.params.target.kind === 'manifest'
+                  ? Buffer.from(JSON.stringify(['slark-skillhub-manifest-v1', snapshot.files.map(file =>
+                    [file.path, file.mode, file.size, file.sha256])]))
+                  : snapshot.readFile(frame.params.target.path)
+              } })
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            throw new HostAuthorityError('unavailable')
+          }
+          authorize(); context.signal.throwIfAborted()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { operation_id: unsigned.operationId,
+              manifest_sha256: unsigned.manifestSha256 as HostControlSha256,
+              target: frame.params.target, offset: frame.params.offset, total_bytes: read.totalBytes,
+              chunk_base64url: read.chunk.toString('base64url'), complete: read.complete } })
         } else if (frame.method === 'profile.open') {
           const opened = await this.options.host.openProfile({
             authorityEnvironmentId: frame.params.authority_environment_id,
@@ -2265,7 +2310,8 @@ export class HostControlAuthority {
         capabilities: [
           ...capabilities,
           ...(this.options.createSkillHubPackageStore
-            ? ['profile.skillhub_package_chunk', 'profile.skillhub_package'] : []),
+            ? ['profile.skillhub_package_chunk', 'profile.skillhub_package',
+              'profile.skillhub_package_snapshot'] : []),
           'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
@@ -3026,6 +3072,44 @@ export class UnixHostClient {
       action: 'current', package_id: input.packageId }, input.signal)
     if (receipt && receipt.packageId !== input.packageId) throw new HostAuthorityError('unavailable')
     return receipt
+  }
+
+  /** Read one bounded immutable package object chunk under the current Profile grant.
+   * @param input - Signed activation receipt, exact object target, byte offset, and cancellation.
+   * @returns Exact-operation bytes and continuity fields checked against the request.
+   */
+  async readSkillHubPackageSnapshotChunk(input: {
+    readonly profileSelector: string
+    readonly receipt: HostSkillHubPackageSignedReceipt
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+    readonly signal?: AbortSignal
+  }): Promise<Readonly<{
+    operationId: string
+    manifestSha256: string
+    target: HostSkillHubPackageSnapshotTarget
+    offset: number
+    totalBytes: number
+    bytes: Buffer
+    complete: boolean
+  }>> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package_snapshot' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubPackageSnapshotRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package_snapshot',
+      params: { ...this.auth(), profile_selector: input.profileSelector, receipt: input.receipt,
+        target: input.target, offset: input.offset },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = frame.result
+    if (result.operation_id !== input.receipt.operationId
+      || result.manifest_sha256 !== input.receipt.manifestSha256
+      || JSON.stringify(result.target) !== JSON.stringify(input.target)
+      || result.offset !== input.offset) throw new HostAuthorityError('unavailable')
+    return { operationId: result.operation_id, manifestSha256: result.manifest_sha256,
+      target: result.target, offset: result.offset, totalBytes: result.total_bytes,
+      bytes: Buffer.from(result.chunk_base64url, 'base64url'), complete: result.complete }
   }
 
   /**
@@ -4586,6 +4670,7 @@ export class UnixHostClient {
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest
       | ProfileSkillHubPackageChunkRequest | ProfileSkillHubPackageRequest
+      | ProfileSkillHubPackageSnapshotRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest

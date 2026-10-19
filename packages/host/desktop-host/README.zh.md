@@ -55,6 +55,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_package_chunk` 片段。它根据固定包和完整清单摘要校验 ZIP，再写入私有准备快照。准备不会改变资产安装 revision。单独的 `profile.skillhub_package` 调用检查该授权和预期 revision 后才原子激活；当前回读返回 Host 签名回执。完整回执可在当前指针前移后重新打开同一不可变 operation，并再次检查全部身份字段和文件。该回执只证明存储激活，不证明运行时加载或 Slark 侧安装授权。
 
+`profile.skillhub_package_snapshot` 通过有界只读控制帧公开固定重开能力。客户端指定 manifest 或一个安全相对文件，并按精确偏移推进；每帧最多 32 KiB。偏移零会验证不可变 operation，并为该认证连接捕获一个对象。后续每帧都重新校验回执与有效 Profile 授权，只接受下一偏移或相同分片重试，并在中止或空闲后释放保留字节。客户端在接收字节前拒绝被修改的 operation、manifest、目标或偏移字段。
+
 `profile.ensure_binding_scope` 允许可信 broker 传入根据已验证环境与 Slark 登录身份计算的 SHA-256 scope。绑定版本只在同一 scope 内单调递增；另一有效登录可共享同一 Account Profile，而不继承其版本。registry v4 持久化 scope，并拒绝重复 scope 或 handle。读取器接受已发布 v2/v3 记录，加载时不重写；登记带 scope 的绑定时写入 v4。同环境已有带 scope 的绑定后，旧绑定须独立验证并关联 scope 才能离线恢复。旧 broker 可续用已经关联 scope 的 handle，但不能在该环境新增无 scope 的绑定。同一 scope 换绑会使旧 handle 失效。Account 令牌、Profile 解锁和服务器协作鉴权仍须通过；scope 不转移设备所有权。旧 registry 读取器拒绝 v4，因此回退须使用兼容读取器，或在确认不会丢失后续绑定变更后恢复升级前的 registry 快照。
 
 `profile.workspace_model_selection` 从当前连接已验证令牌的 Account 绑定解出 Profile，并在读取后重新校验。监管器丢弃已销毁或替换 worker 的响应。macOS 和 Windows 启动组合安装读取器；旧 Host 不发布此能力。独立随机 worker 令牌授权私有 HTTP 入口，完整响应在流式读取时有上限。请求拒绝重定向，只使用已核验的监听端。15 秒期限覆盖请求和完整响应读取；读取结束后再次检查取消状态，才接纳结果。结果不授权 Source 登记、规划或任务执行。

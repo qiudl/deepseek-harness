@@ -274,7 +274,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     return receipt as SkillHubPackageReceipt
   }
   function receiptValid(receipt: StoredReceipt | SkillHubPackageReceipt, expectedPackageId?: string) {
-    if (!receipt || Object.keys(receipt).length !== 11 || !UUID.test(receipt.operationId)
+    if (Object.keys(receipt).length !== 11 || !UUID.test(receipt.operationId)
       || !/^[a-zA-Z0-9_-]{1,100}$/u.test(receipt.packageId)
       || (expectedPackageId !== undefined && receipt.packageId !== expectedPackageId)
       || receipt.profileId !== profileId || receipt.hostKeyId !== hostKeyId

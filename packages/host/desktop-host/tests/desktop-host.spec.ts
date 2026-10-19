@@ -473,6 +473,7 @@ describe('authenticated Unix transport', () => {
       const reference = randomBytes(70_000)
       const zip = new AdmZip()
       zip.addFile('SKILL.md', markdown)
+      zip.addFile('empty.txt', Buffer.alloc(0))
       zip.addFile('references/data.bin', reference)
       const archive = zip.toBuffer()
       expect(archive.length).toBeGreaterThan(32768)
@@ -484,6 +485,7 @@ describe('authenticated Unix transport', () => {
         skillSlug: 'example', version: '1.0.0', archiveSha256: sha(archive),
         manifestSha256: sha(JSON.stringify(['slark-skillhub-manifest-v1',
           [['SKILL.md', '0644', markdown.length, sha(markdown)],
+            ['empty.txt', '0644', 0, sha(Buffer.alloc(0))],
             ['references/data.bin', '0644', reference.length, sha(reference)]]])),
       }
       await expect(other.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
@@ -535,6 +537,81 @@ describe('authenticated Unix transport', () => {
         packageId: plan.packageId, challengeId: randomUUID() })).rejects.toMatchObject({ code: 'unauthorized' })
       expect(await stored?.readFile(plan.packageId, 'SKILL.md')).toEqual(markdown)
       expect(await stored?.readFile(plan.packageId, 'references/data.bin')).toEqual(reference)
+      const upgradedMarkdown = Buffer.from(
+        '---\nname: example\ndescription: Example\nversion: 1.0.1\n---\n# Upgraded\n',
+      )
+      const upgradedZip = new AdmZip()
+      upgradedZip.addFile('SKILL.md', upgradedMarkdown)
+      const upgradedArchive = upgradedZip.toBuffer()
+      const upgradedPlan = {
+        ...plan, operationId: randomUUID(), expectedRevision: '1', versionId: 'version-2',
+        version: '1.0.1', archiveSha256: sha(upgradedArchive),
+        manifestSha256: sha(JSON.stringify(['slark-skillhub-manifest-v1',
+          [['SKILL.md', '0644', upgradedMarkdown.length, sha(upgradedMarkdown)]]])),
+      }
+      await owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
+        plan: upgradedPlan, archive: upgradedArchive })
+      const upgradedReceipt = await owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: upgradedPlan.operationId, bindingGeneration: '1', expectedRevision: '1',
+        challengeId: randomUUID() })
+      expect(upgradedReceipt.operationId).not.toBe(receipt.operationId)
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'file', path: 'references/data.bin' }, offset: 1,
+      })).rejects.toMatchObject({ code: 'unavailable' })
+      const manifestChunk = await owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+      })
+      expect(manifestChunk).toMatchObject({
+        operationId: receipt.operationId, manifestSha256: receipt.manifestSha256,
+        target: { kind: 'manifest' }, offset: 0, complete: true,
+      })
+      expect(sha(manifestChunk.bytes)).toBe(receipt.manifestSha256)
+      const manifest = JSON.parse(manifestChunk.bytes.toString('utf8')) as unknown[]
+      expect(manifest).toEqual(['slark-skillhub-manifest-v1', [
+        ['SKILL.md', '0644', markdown.length, sha(markdown)],
+        ['empty.txt', '0644', 0, sha(Buffer.alloc(0))],
+        ['references/data.bin', '0644', reference.length, sha(reference)],
+      ]])
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'file', path: 'empty.txt' }, offset: 0,
+      })).resolves.toMatchObject({ totalBytes: 0, bytes: Buffer.alloc(0), complete: true })
+      const chunks: Buffer[] = []
+      let readOffset = 0
+      do {
+        const chunk = await owner.readSkillHubPackageSnapshotChunk({
+          profileSelector: local.profileSelector, receipt,
+          target: { kind: 'file', path: 'references/data.bin' }, offset: readOffset,
+        })
+        expect(chunk).toMatchObject({ operationId: receipt.operationId,
+          target: { kind: 'file', path: 'references/data.bin' }, offset: readOffset,
+          totalBytes: reference.length })
+        expect(chunk.bytes.length).toBeLessThanOrEqual(32 * 1024)
+        chunks.push(chunk.bytes)
+        readOffset += chunk.bytes.length
+        if (chunk.complete) break
+      } while (readOffset < reference.length)
+      expect(Buffer.concat(chunks)).toEqual(reference)
+      await expect(other.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+      })).rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt: { ...receipt, manifestSha256: 'b'.repeat(64) },
+        target: { kind: 'manifest' }, offset: 0,
+      })).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'file', path: 'missing.txt' }, offset: 0,
+      })).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'manifest' }, offset: manifestChunk.totalBytes,
+      })).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'manifest' }, offset: manifestChunk.totalBytes + 1,
+      })).rejects.toMatchObject({ code: 'unavailable' })
       await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
         plan, archive: Buffer.alloc(0) })).rejects.toMatchObject({ code: 'unavailable' })
       await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
@@ -563,6 +640,18 @@ describe('authenticated Unix transport', () => {
         await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
           packageId: plan.packageId, challengeId: randomUUID() }))
           .rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package_snapshot',
+          result: { operation_id: upgradedReceipt.operationId, manifest_sha256: receipt.manifestSha256,
+            target: { kind: 'manifest' }, offset: 0, total_bytes: 2,
+            chunk_base64url: Buffer.from('{}').toString('base64url'), complete: true } }))
+        await expect(owner.readSkillHubPackageSnapshotChunk({
+          profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+        })).rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package',
+          result: { receipt: null } }))
+        await expect(owner.readSkillHubPackageSnapshotChunk({
+          profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+        })).rejects.toMatchObject({ code: 'unavailable' })
       } finally { Reflect.set(owner, 'call', originalCall) }
       const originalInspection = Reflect.get(owner, 'inspection')
       try {
@@ -572,6 +661,9 @@ describe('authenticated Unix transport', () => {
         await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
           packageId: plan.packageId, challengeId: randomUUID() }))
           .rejects.toMatchObject({ code: 'upgrade_required' })
+        await expect(owner.readSkillHubPackageSnapshotChunk({
+          profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+        })).rejects.toMatchObject({ code: 'upgrade_required' })
       } finally { Reflect.set(owner, 'inspection', originalInspection) }
     } finally {
       owner.close()
@@ -603,12 +695,22 @@ describe('authenticated Unix transport', () => {
       }
       const inspection = Reflect.get(owner, 'inspection')
       Reflect.set(owner, 'inspection', { ...inspection,
-        capabilities: [...inspection.capabilities, 'profile.skillhub_package_chunk', 'profile.skillhub_package'] })
+        capabilities: [...inspection.capabilities, 'profile.skillhub_package_chunk', 'profile.skillhub_package',
+          'profile.skillhub_package_snapshot'] })
       try {
         await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
           .rejects.toMatchObject({ code: 'upgrade_required' })
         await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
           packageId: plan.packageId, challengeId: randomUUID() }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        const receipt = { version: 1 as const, installationId: identity.installationId,
+          challengeId: randomUUID(), operationId: plan.operationId, packageId: plan.packageId,
+          profileId: plan.profileId, hostKeyId: plan.hostKeyId, bindingGeneration: '1', revision: '1',
+          versionId: plan.versionId, archiveSha256: plan.archiveSha256,
+          manifestSha256: plan.manifestSha256, readiness: 'prepared' as const, loadEvidenceId: null,
+          signature: 'A'.repeat(86) as never }
+        await expect(owner.readSkillHubPackageSnapshotChunk({ profileSelector: local.profileSelector,
+          receipt, target: { kind: 'manifest' }, offset: 0 }))
           .rejects.toMatchObject({ code: 'upgrade_required' })
       } finally { Reflect.set(owner, 'inspection', inspection) }
     } finally { owner.close(); await server.close() }

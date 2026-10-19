@@ -87,3 +87,48 @@ it('accepts only the exact signed storage receipt shape', () => {
     { signature: 'bad' }])
     expect(() => decode({ ...frame, result: { receipt: { ...receipt, ...changed } } })).toThrow()
 })
+
+it('round-trips only bounded exact-operation snapshot chunks', () => {
+  const common = request()
+  const receipt = { version: 1, installationId: randomUUID(), challengeId: randomUUID(),
+    operationId: plan.operationId, packageId: plan.packageId, profileId: plan.profileId,
+    hostKeyId: plan.hostKeyId, bindingGeneration: '1', revision: '1', versionId: plan.versionId,
+    archiveSha256: plan.archiveSha256, manifestSha256: plan.manifestSha256,
+    readiness: 'prepared', loadEvidenceId: null, signature: 'A'.repeat(86) }
+  const snapshot = { ...common, method: 'profile.skillhub_package_snapshot', params: {
+    client_instance_id: common.params.client_instance_id, host_instance_id: common.params.host_instance_id,
+    process_nonce: common.params.process_nonce, jti: common.params.jti,
+    issued_at: common.params.issued_at, expires_at: common.params.expires_at,
+    profile_selector: common.params.profile_selector, receipt,
+    target: { kind: 'file', path: 'references/data.bin' }, offset: 32768,
+  } }
+  const bytes = Buffer.alloc(32768, 7)
+  const result = { version: 1, type: 'result', request_id: snapshot.request_id,
+    method: snapshot.method, result: { operation_id: receipt.operationId,
+      manifest_sha256: receipt.manifestSha256, target: snapshot.params.target,
+      offset: 32768, total_bytes: 65536, chunk_base64url: bytes.toString('base64url'),
+      complete: true } }
+  for (const frame of [snapshot, result]) {
+    const encoded = encodeHostControlFrame(decode(frame))
+    expect(encoded).toBe(`${JSON.stringify(frame)}\n`)
+    expect(Buffer.byteLength(encoded)).toBeLessThan(64 * 1024)
+  }
+  const manifest = { ...snapshot, params: { ...snapshot.params, target: { kind: 'manifest' }, offset: 0 } }
+  expect(encodeHostControlFrame(decode(manifest))).toBe(`${JSON.stringify(manifest)}\n`)
+  const empty = { ...result, result: { ...result.result, target: { kind: 'file', path: 'empty.txt' },
+    offset: 0, total_bytes: 0, chunk_base64url: '', complete: true } }
+  expect(encodeHostControlFrame(decode(empty))).toBe(`${JSON.stringify(empty)}\n`)
+  for (const changed of [
+    { target: { kind: 'file', path: '../secret' } },
+    { target: { kind: 'file', path: 'valid.txt', extra: true } },
+    { target: { kind: 'manifest', path: 'forged' } },
+    { target: { kind: 'archive' } },
+    { offset: 10 * 1024 * 1024 + 1 },
+    { receipt: { ...receipt, extra: true } },
+  ]) expect(() => decode({ ...snapshot, params: { ...snapshot.params, ...changed } })).toThrow()
+  for (const changed of [
+    { complete: false }, { offset: 65536 }, { total_bytes: 32767 },
+    { chunk_base64url: Buffer.alloc(32769).toString('base64url') },
+    { target: { kind: 'file', path: 'bad\\path' } },
+  ]) expect(() => decode({ ...result, result: { ...result.result, ...changed } })).toThrow()
+})
