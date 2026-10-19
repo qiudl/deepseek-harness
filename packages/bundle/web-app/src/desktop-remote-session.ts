@@ -152,6 +152,27 @@ export class DesktopRemoteSessionExecutor {
         return await this.gateway.invoke({ namespace: 'workspace', method: 'create',
           args: { request: { path: grant.path } }, signal }) as HostRemoteSessionJson
       }
+      case 'settings.apply': {
+        try {
+          const value = await this.gateway.invoke({ namespace: 'settings', method: command.request.method,
+            args: command.request.args, signal })
+          return { ok: true, value: value as HostRemoteSessionJson }
+        } catch (error) {
+          if (row(error) && error.isDSHRemoteError === true
+            && (error.code === 'settings/conflict' || error.code === 'settings/rejected')) {
+            const details: Record<string, HostRemoteSessionJson> = { ns: command.request.args.ns }
+            if (error.code === 'settings/conflict') {
+              if (!row(error.details) || typeof error.details.expected !== 'number' || !Number.isSafeInteger(error.details.expected)
+                || typeof error.details.actual !== 'number' || !Number.isSafeInteger(error.details.actual)) throw error
+              details.expected = error.details.expected
+              details.actual = error.details.actual
+            }
+            return { ok: false, error: { code: error.code,
+              message: error.code === 'settings/conflict' ? 'Settings changed; refresh before saving.' : 'Settings update was rejected.', details } }
+          }
+          throw error
+        }
+      }
       case 'session.list':
         return this.invoke('list', { _request: {} }, signal)
       case 'session.create':

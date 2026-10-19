@@ -273,3 +273,5 @@ analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/acce
 绑定 view lease 的 `workbench/read` 流只允许 `workspaceFiles/read`、`readBytes`、`stat` 和 `list`，并校验精确的工作区范围与路径参数。它使用 Profile 进程内的 Connection Fetch handler，保留原有 JSON 或 multipart RPC 响应。按序分块不超过 16 KiB，完整响应上限为 34 MiB。取消会关闭所属 reader；未知接口与授权选择字段在派发前被拒绝。
 
 同一文件能力也允许精确的 `workspaceFiles/changes` 流。Gateway 范围查找与文件系统策略继续负责授权；页面取消释放所属 watcher，每次 Host 轮询仍要求原 view lease。
+
+个人 `settings.apply` 命令只允许原有 update、replace、mutate 表单操作。它保留 provider 的版本校验与脱敏 namespace 响应，意图上限 32 KiB，拒绝授权选择字段和不安全 JSON，并保留类型化冲突/拒绝结果，不返回私有异常文本。它不会改变选中 Profile，也不会获取会话控制权。

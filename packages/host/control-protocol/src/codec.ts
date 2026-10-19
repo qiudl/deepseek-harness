@@ -1,3 +1,4 @@
+import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
 import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
 import { parseRecoveryDescriptor, parseRecoveryDescribeInput, parseRecoveryValidateInput, parseRecoveryValidation } from './recovery-materials.ts'
 import { parseHostRootTextContextReceipt } from './root-text-context.ts'
@@ -536,6 +537,12 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     return { operation: 'session.list', command_id }
   }
 
+  if (command.operation === 'settings.apply') {
+    exactKeys(command, ['operation', 'command_id', 'request'])
+    const request = parseWorkbenchSettingsWrite(command.request)
+    if (!request) reject()
+    return { operation: 'settings.apply', command_id, request }
+  }
   if (command.operation === 'directory.pick') {
     exactKeys(command, ['operation', 'command_id', 'client_id'])
     return { operation: 'directory.pick', command_id, client_id: uuid(command.client_id) }

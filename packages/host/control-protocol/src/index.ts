@@ -205,3 +205,6 @@ export type { ProfileRecoveryMaterialsDescribeRequest, ProfileRecoveryMaterialsD
 
 export { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
 export type { WorkbenchReadPayload, WorkbenchReadEndpoint, WorkbenchChangesPayload } from './workbench-read.js'
+
+export { parseWorkbenchSettingsWrite } from './workbench-settings.js'
+export type { WorkbenchSettingsWrite, WorkbenchSettingsJson } from './workbench-settings.js'

@@ -1,3 +1,4 @@
+import type { WorkbenchSettingsWrite } from './workbench-settings.js'
 import type { WorkbenchReadPayload, WorkbenchChangesPayload } from './workbench-read.js'
 import type { RecoveryDescribeInput, RecoveryValidateInput, RecoveryDescriptor, RecoveryValidation } from './recovery-materials.ts'
 import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
@@ -1370,6 +1371,7 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'settings.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchSettingsWrite }
   | {
     readonly operation: 'control.status'
     readonly command_id: HostControlRequestId

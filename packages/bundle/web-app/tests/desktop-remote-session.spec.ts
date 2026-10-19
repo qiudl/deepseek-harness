@@ -22,6 +22,29 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('preserves settings revisions and bounded business failures without exposing secret diagnostics', async () => {
+    const invoke = vi.fn().mockResolvedValue({ ns: 'general', revision: 2, value: { locale: 'zh' } })
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const command = { operation: 'settings.apply' as const, command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      request: { method: 'update' as const, args: { ns: 'general', patch: { locale: 'zh' }, expectedRevision: 1 } } }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual({ ok: true, value: { ns: 'general', revision: 2, value: { locale: 'zh' } } })
+    expect(invoke).toHaveBeenCalledWith({ namespace: 'settings', method: 'update', args: command.request.args, signal })
+    for (const code of ['settings/conflict', 'settings/rejected']) {
+      invoke.mockRejectedValueOnce({ isDSHRemoteError: true, code, message: 'private-diagnostic', details: { expected: 1, actual: 2, private: 'secret' } })
+      const result = await executor.execute(command, signal)
+      expect(result).toMatchObject({ ok: false, error: { code, details: { ns: 'general' } } })
+      expect(JSON.stringify(result)).not.toContain('private-diagnostic')
+    }
+    for (const error of [null, new Error('transport down'), { isDSHRemoteError: false, code: 'settings/conflict' },
+      { isDSHRemoteError: true, code: 'gateway/internal' },
+      ...[null, {}, { expected: '1', actual: 2 }, { expected: 1.5, actual: 2 }, { expected: 1, actual: '2' }, { expected: 1, actual: 2.5 }]
+        .map(details => ({ isDSHRemoteError: true, code: 'settings/conflict', details }))]) {
+      invoke.mockRejectedValueOnce(error)
+      await expect(executor.execute(command, signal)).rejects.toBe(error)
+    }
+  })
+
   it('keeps model and Agent selection behind the addressed Session control claim', async () => {
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'session-1')
