@@ -1,5 +1,6 @@
 /** REQ-20260930-0004: private Profile preparation waits for the original coordinator grant. */
 import { Context } from '@deepseek-ai/cordis'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import { createHash } from 'node:crypto'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
@@ -8,9 +9,11 @@ import {
   openCollaborationRootJournal,
   openCollaborationSourceJournal,
   openCollaborationAnalysisJournal,
+  openCollaborationRootPlanningJournal,
   parseCollaborationClarificationInput, clarificationAnalysisMessage, collaborationJournalDigest,
 } from '@deepseek-ai/dsh-api-session-controller'
 import type SessionController from '@deepseek-ai/dsh-api-session-controller'
+import type { CollaborationAnalysisFailure } from '@deepseek-ai/dsh-api-session-controller'
 import type { CollaborationAnalysisManifest } from '../../../api/session-controller/src/collaboration-analysis.ts'
 import { createMessage } from '@deepseek-ai/dsh-llm'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -1224,16 +1227,17 @@ it('legacy owners refuse Root diagnostics without opening an analysis journal', 
   expect(f.h.open).not.toHaveBeenCalled()
   expect(f.h.calls()).toBe(0)
 })
-it('diagnostics retain frozen reasoning and only the original recovery failure without preparing a model', async () => {
+it('diagnostics project frozen reasoning and only matching recovery observations without preparing a model', async () => {
   const f = await admittedRootFixture('high')
-  const failure = { attempt_request_id: 'retained-attempt', input_manifest_digest: '1'.repeat(64),
+  const failure: CollaborationAnalysisFailure = { attempt_request_id: brandString<CollaborationAnalysisFailure['attempt_request_id']>('retained-attempt'), input_manifest_digest: '1'.repeat(64),
     source_digest: f.root.source_digest, dispatch_digest: '2'.repeat(64), trace_id: f.root.root_trace_id,
     reason: 'model_failure' as const, observed_at: '2026-10-19T00:00:00.000Z' }
   const prepare = vi.fn<SessionController['prepareCollaborationRootPlanning']>(),
-    close = vi.fn(async () => {}),
-    journal = { failures: () => [failure, { ...failure, source_digest: 'f'.repeat(64) }], close }
+    journal = await openCollaborationRootPlanningJournal(f.h.facility),
+    close = vi.spyOn(journal, 'close')
+  vi.spyOn(journal, 'failures').mockReturnValue([failure, { ...failure, source_digest: 'f'.repeat(64) }])
   const owner = new DesktopCollaborationAnalysis(f.h.capture, f.h.open, f.h.lifetime.signal, undefined, f.reader,
-    { prepare, open: async () => journal as unknown as import('@deepseek-ai/dsh-api-session-controller').CollaborationRootPlanningJournal })
+    { prepare, open: async () => journal })
   onTestFinished(() => owner.close())
   const result = await owner.readRootDiagnostic(f.target, signal())
   expect(result.model).toEqual({ provider: 'fixture', model: 'selected', reasoning_effort: 'high' })
