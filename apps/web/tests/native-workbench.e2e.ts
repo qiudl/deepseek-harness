@@ -1,3 +1,5 @@
+import { DesktopRemoteUiStreamExecutor } from '../../../packages/bundle/web-app/src/desktop-remote-ui-stream.ts'
+import { createWebConnectionRpc } from '@deepseek-ai/dsh-client-connection/src/client/rpc.ts'
 import type {} from '@deepseek-ai/dsh-api-gateway'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 /** Real shipped Web composition inside the App's opaque, bundled document. */
@@ -77,7 +79,8 @@ beforeAll(async () => {
     if (path === '/__boot__') response = Response.json({ injections: scaffold.ctx.webServer.collectIndexInjections() })
     else if (path === '/__native_workbench__') response = Response.json({ schema: 'dsh-native-workbench/v1', duet: true, draft: false })
     else if (path === '/__native_duet__') {
-      duetTargets.push(JSON.parse(Buffer.from(frame.bytes ?? []).toString('utf8')) as unknown)
+      const target: unknown = JSON.parse(Buffer.from(frame.bytes ?? []).toString('utf8'))
+      duetTargets.push(target)
       response = Response.json({ ok: true, value: { accepted: true } })
     }
     else if (path === '/__account__') response = Response.json(null)
@@ -160,4 +163,37 @@ it('mounts shared mobile controls from real Host injections without parent acces
     await mkdir(screenshotDirectory, { recursive: true })
     await page.screenshot({ path: join(screenshotDirectory, 'conversation.png') })
   }
+})
+
+
+it('reads actual Host workspace bytes through the native file stream and existing RPC decoder', async () => {
+  const binary = new Uint8Array(70 * 1024).map((_, index) => index % 256)
+  await writeFile(join(scaffold.workspaceCwd, 'native-fixture.bin'), binary)
+  const handler = scaffold.ctx.connection.createSharedFetchHandler('/api')
+  const executor = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway, undefined, request => handler.fetch(request))
+  const rpc = createWebConnectionRpc(async (_path, init) => {
+    const request = new Request('http://localhost', init)
+    const envelope = await request.json() as { rpcId: string; method: string; payload: { args: object } }
+    const source = await executor.open('workbench/read', { args: {
+      endpoint: envelope.method, rpcId: envelope.rpcId, args: envelope.payload.args,
+    } }, request.signal)
+    let contentType = ''
+    const chunks: Buffer[] = []
+    let length = 0
+    for await (const value of source) {
+      const item = value as { type: string; contentType: string; bytes: string; offset: number; totalBytes: number }
+      if (item.type === 'head') contentType = item.contentType
+      else if (item.type === 'bytes') {
+        expect(item.offset).toBe(length)
+        const chunk = Buffer.from(item.bytes, 'base64url')
+        chunks.push(chunk); length += chunk.length
+      } else expect(item.totalBytes).toBe(length)
+    }
+    expect(contentType).toMatch(/^multipart\/form-data; boundary=/u)
+    return new Response(Buffer.concat(chunks), { headers: { 'content-type': contentType } })
+  })
+  const result = await rpc.call('/api', 'workspaceFiles/readBytes', { args: {
+    workspaceFileScopeId: sessionId, path: 'native-fixture.bin', options: {},
+  } })
+  expect(result).toMatchObject({ ok: true, value: { data: binary, bytes: binary.length, eof: true } })
 })

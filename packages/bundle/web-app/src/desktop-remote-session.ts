@@ -91,6 +91,7 @@ export class DesktopRemoteSessionExecutor {
     let release: (() => void) | undefined
     if (command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
+      command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
       if (!Object.hasOwn(command, 'control')) throw new Error('desktop session control: claim required')
       const proof = command.control
@@ -173,6 +174,16 @@ export class DesktopRemoteSessionExecutor {
           content: command.content,
           ...(command.client_time_zone === undefined ? {} : { clientTimeZone: command.client_time_zone }),
         } }, signal)
+      case 'session.select_model':
+        return this.invoke('selectModel', { request: { sessionId: command.session_id,
+          provider: command.provider, model: command.model,
+          ...(command.reasoning_effort === undefined ? {} : { reasoningEffort: command.reasoning_effort }) } }, signal)
+      case 'session.select_agent': {
+        const value = await this.gateway.invoke({ namespace: 'agentPresets', method: 'select',
+          args: { agent: command.session_id, agentPreset: command.agent_preset }, signal })
+        if (typeof value !== 'string') throw new Error('desktop remote UI: invalid preset result')
+        return { agentPreset: value }
+      }
       case 'session.cancel':
         return this.invoke('cancel', { request: { sessionId: command.session_id } }, signal)
       case 'session.delete':

@@ -198,3 +198,7 @@ Consumption receipts use the independent `dsh-collaboration-consumption-receipt-
 First-reply receipts use `dsh-collaboration-continuation-observation-v1`. Their commit nests the unchanged consumption commit and separately binds an observation ID, `assistant_message_committed`, assistant event sequence and observed durable prefix. Consumption signatures cannot certify this domain. Neither reply content nor a completion claim appears in the receipt.
 
 `profile.remote_ui_stream.session_list` advertises the `session/list` cursor with empty `args`. Every open, poll, and close remains authorized by its owning view lease; results cross the existing 16 KiB chunks without increasing the 64 KiB control-frame limit.
+
+The closed Session command set also includes `session.select_model` (provider, model, optional reasoning effort) and `session.select_agent` (preset). Both carry an exact Session ID and required control proof; bounded text fields and unknown-key rejection apply before execution.
+
+The lease-bound `workbench/read` stream admits only `workspaceFiles/read`, `readBytes`, `stat`, and `list`, with exact workspace scope and path arguments. It uses the Profile's in-process Connection Fetch handler and retains the original JSON or multipart RPC response. Ordered chunks are at most 16 KiB; the complete response is capped at 34 MiB. Cancellation closes the owned reader; unrecognized endpoints and authority selectors are rejected before dispatch.

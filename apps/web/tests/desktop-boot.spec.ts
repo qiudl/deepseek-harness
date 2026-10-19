@@ -69,7 +69,7 @@ it('starts a remote Host through the same Web entry without local Host authority
   expect((globalThis as { __DSH_TRANSPORT__?: unknown }).__DSH_TRANSPORT__).toEqual({
     fetch, openStream, loadBundle, ownsHost: false, remoteHost: true,
   })
-  expect(boot.applyIndexInjections).toHaveBeenCalledWith([], loadBundle)
+  expect(boot.applyIndexInjections).toHaveBeenCalledWith([], loadBundle, undefined)
   expect(boot.run).toHaveBeenCalledWith(undefined)
 })
 

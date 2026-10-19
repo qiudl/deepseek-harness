@@ -209,6 +209,22 @@ describe('Desktop remote UI read-only bridge', () => {
     expect(stream).toHaveBeenCalledTimes(2)
   })
 
+  it('forwards only validated file reads to the composed Connection handler', async () => {
+    const read = vi.fn(async () => Response.json({ value: 'file' }))
+    const gateway = gatewayFixture({})
+    const executor = new DesktopRemoteUiStreamExecutor(gateway, undefined, read)
+    const signal = new AbortController().signal
+    const payload = { args: { endpoint: 'workspaceFiles/stat', rpcId: 'file-rpc',
+      args: { workspaceFileScopeId: 'session-1', path: 'file.txt' } } }
+    const items: unknown[] = []
+    for await (const value of await executor.open('workbench/read', payload, signal)) items.push(value)
+    expect(items[0]).toEqual({ type: 'head', contentType: 'application/json' })
+    expect(items.at(-1)).toEqual({ type: 'complete', totalBytes: 16 })
+    expect(read).toHaveBeenCalledOnce()
+    await expect(executor.open('workbench/read', { args: {} }, signal)).rejects.toThrow('file read unavailable')
+    await expect(new DesktopRemoteUiStreamExecutor(gateway).open('workbench/read', payload, signal)).rejects.toThrow('file read unavailable')
+  })
+
   it('opens a Workspace baseline stream only with empty arguments', async () => {
     const stream = vi.fn(async () => (async function* () { yield { type: 'baseline', value: { items: [] } } })())
     const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))
@@ -478,6 +494,27 @@ describe('Desktop remote UI read-only bridge', () => {
       }))
     }
   })
+  it('reads only exact Session command and skill catalogs', async () => {
+    const invoke = vi.fn(async () => ({ items: [] }))
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+    const signal = new AbortController().signal
+    await executor.execute('commands/list', { args: { agent: 'session-1' } }, signal)
+    await executor.execute('skills/list', { args: { request: { sessionId: 'session-1' } } }, signal)
+    for (const [endpoint, args] of [
+      ['commands/list', {}], ['commands/list', { agent: 1 }],
+      ['commands/list', { agent: 'session-1', profile: 'other' }],
+      ['commands/list', { agent: '../other' }],
+      ['skills/list', {}], ['skills/list', { request: null }],
+      ['skills/list', { request: {} }], ['skills/list', { request: { sessionId: 1 } }],
+      ['skills/list', { request: { sessionId: 'session-1', profile: 'other' } }],
+      ['skills/list', { request: { sessionId: '../other' } }],
+      ['llm/listProviders', { secret: true }],
+    ] as const) await expect(executor.execute(endpoint, { args }, signal)).rejects.toThrow()
+    expect(invoke.mock.calls).toEqual([
+      [{ namespace: 'commands', method: 'list', args: { agent: 'session-1' }, signal }],
+      [{ namespace: 'skills', method: 'list', args: { request: { sessionId: 'session-1' } }, signal }],
+    ])
+  })
   it('dispatches only the exact M1 read endpoints with named Remote arguments', async () => {
     const invoke = vi.fn(async () => ({ items: [] }))
     const boot = vi.fn(() => [{ kind: 'script' as const, placement: 'head' as const, text: 'boot()' }])
@@ -492,7 +529,7 @@ describe('Desktop remote UI read-only bridge', () => {
       .resolves.toEqual({ items: [] })
     expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
     for (const endpoint of ['settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
-      'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits']) {
+      'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits', 'llm/listProviders', 'llm/listConfigurableProviders']) {
       const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] } : {}
       await expect(executor.execute(endpoint, { args }, signal)).resolves.toEqual({ items: [] })
       const [namespace, method] = endpoint.split('/')
@@ -504,12 +541,12 @@ describe('Desktop remote UI read-only bridge', () => {
       .rejects.toThrow('invalid payload')
     await expect(executor.execute('cotTranslation/limits', { args: { provider: 'other' } }, signal))
       .rejects.toThrow('invalid payload')
-    for (const endpoint of ['cotTranslation/translate', 'cotTranslation/limits?all=true', 'session/prompt', 'session/delete', 'workspace/create', 'llm/listProviders', '$events/result']) {
+    for (const endpoint of ['cotTranslation/translate', 'cotTranslation/limits?all=true', 'session/prompt', 'session/delete', 'workspace/create', 'llm/discoverModels', '$events/result']) {
       await expect(executor.execute(endpoint, { args: {} }, signal)).rejects.toThrow('endpoint denied')
     }
     await expect(executor.execute('dynamicCordisRunner/syncInspectManifest', { args: {} }, signal))
       .rejects.toThrow('endpoint denied')
-    expect(invoke).toHaveBeenCalledTimes(7)
+    expect(invoke).toHaveBeenCalledTimes(9)
   })
   it('REQ-20261011-0002 validates membership replies before passing them to Main', async () => {
     const entry = { workspaceId: '11111111-1111-4111-8111-111111111111', sessionId: 'session-1' }

@@ -48,6 +48,9 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'session.rename', command_id: commandId, session_id: sessionId, control,
         title: 'Remote session' },
       { operation: 'session.delete', command_id: commandId, session_id: sessionId, control },
+      { operation: 'session.select_model', command_id: commandId, session_id: sessionId, control, provider: 'deepseek', model: 'deepseek-chat' },
+      { operation: 'session.select_model', command_id: commandId, session_id: sessionId, control, provider: 'deepseek', model: 'deepseek-chat', reasoning_effort: 'high' },
+      { operation: 'session.select_agent', command_id: commandId, session_id: sessionId, control, agent_preset: 'default' },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000 },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000, cursor: 'approval-cursor-1' },
       { operation: 'approval.respond', command_id: commandId, session_id: sessionId,
@@ -67,6 +70,8 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'workspace.create', command_id: id, client_id: randomUUID(), grant_id: 'bad', path: '/tmp/confirmed' },
       { operation: 'workspace.create', command_id: id, client_id: randomUUID(), grant_id: randomUUID(), path: 'bad\0path' },
       { operation: 'api.proxy', command_id: id, path: '/api/settings.describe' },
+      { operation: 'session.select_model', command_id: id, session_id: 'session-1', provider: 'p', model: 'm' },
+      { operation: 'session.select_agent', command_id: id, session_id: 'session-1', agent_preset: 'default' },
       { operation: 'session.list', command_id: id, profile_root: '/another-user' },
       { operation: 'session.create', command_id: id, cwd: '/tmp/escape' },
       { operation: 'session.create', command_id: id, workspace_id: '../escape' },
@@ -189,12 +194,19 @@ describe('Profile remote UI read wire commands', () => {
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: 0, path: '/' } }))).toThrow()
     for (const endpoint of ['session/list', 'session/page', 'session/modelCatalog',
       'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
-      'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits']) {
+      'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits', 'llm/listProviders', 'llm/listConfigurableProviders']) {
       const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] }
         : endpoint.startsWith('session/') ? { _request: {} } : {}
       const value = readFrame(endpoint, { args })
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
     }
+    for (const [endpoint, args] of [
+      ['commands/list', { agent: 'session-1' }], ['skills/list', { request: { sessionId: 'session-1' } }],
+    ] as const) expect(() => decode(readFrame(endpoint, { args }))).not.toThrow()
+    for (const [endpoint, args] of [
+      ['commands/list', { agent: 'session-1', profile: 'other' }],
+      ['skills/list', { request: { sessionId: '../other' } }], ['llm/listProviders', { secret: true }],
+    ] as const) expect(() => decode(readFrame(endpoint, { args }))).toThrow()
     expect(() => decode(readFrame('credentials/describe', { args: { refs: ['bad-ref'] } }))).toThrow()
     expect(() => decode(readFrame('settings/describe', { args: { path: '/private' } }))).toThrow()
     expect(() => decode(readFrame('cotTranslation/limits', { args: { provider: 'other' } }))).toThrow()
@@ -287,6 +299,10 @@ describe('Profile remote UI stream wire commands', () => {
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: 'session-1' },
       } } }, item_chunks: true },
+      { action: 'open', stream_id, endpoint: 'workbench/read', payload: { args: {
+        endpoint: 'workspaceFiles/readBytes', rpcId: 'file-rpc',
+        args: { workspaceFileScopeId: 'session-1', path: 'image.png', options: {} },
+      } } },
       { action: 'poll', stream_id }, { action: 'close', stream_id },
     ]) {
       const value = streamFrame(command)

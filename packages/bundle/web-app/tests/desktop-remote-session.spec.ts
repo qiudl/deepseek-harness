@@ -22,6 +22,37 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('keeps model and Agent selection behind the addressed Session control claim', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'session-1')
+    const invoke = vi.fn().mockResolvedValueOnce({ selected: { provider: 'p', model: 'm', reasoningEffort: 'high' } })
+      .mockResolvedValueOnce('default')
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control)
+    const signal = new AbortController().signal
+    const base = { command_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session-1', control: proof }
+    await expect(executor.execute({ ...base, operation: 'session.select_model', provider: 'p', model: 'm', reasoning_effort: 'high' }, signal))
+      .resolves.toEqual({ selected: { provider: 'p', model: 'm', reasoningEffort: 'high' } })
+    await expect(executor.execute({ ...base, operation: 'session.select_agent', agent_preset: 'default' }, signal))
+      .resolves.toEqual({ agentPreset: 'default' })
+    expect(invoke.mock.calls).toEqual([
+      [{ namespace: 'session', method: 'selectModel', args: { request: { sessionId: 'session-1', provider: 'p', model: 'm', reasoningEffort: 'high' } }, signal }],
+      [{ namespace: 'agentPresets', method: 'select', args: { agent: 'session-1', agentPreset: 'default' }, signal }],
+    ])
+    await expect(executor.execute({ ...base, operation: 'session.select_model', provider: 'p', model: 'm',
+      session_id: 'other-session' }, signal)).rejects.toThrow()
+    control.release('session-1', { kind: 'remote', id: proof.controller_id, generation: proof.generation, epoch: proof.epoch })
+    await expect(executor.execute({ ...base, operation: 'session.select_agent', agent_preset: 'default' }, signal)).rejects.toThrow()
+    expect(invoke).toHaveBeenCalledTimes(2)
+    const nextProof = remoteProof(control, 'session-1')
+    invoke.mockResolvedValueOnce({ selected: { provider: 'p', model: 'm' } })
+    await executor.execute({ ...base, control: nextProof, operation: 'session.select_model', provider: 'p', model: 'm' }, signal)
+    expect(invoke).toHaveBeenLastCalledWith({ namespace: 'session', method: 'selectModel',
+      args: { request: { sessionId: 'session-1', provider: 'p', model: 'm' } }, signal })
+    invoke.mockResolvedValueOnce({ accepted: true })
+    await expect(executor.execute({ ...base, control: nextProof, operation: 'session.select_agent', agent_preset: 'default' }, signal))
+      .rejects.toThrow('invalid preset result')
+  })
+
   it('answers control operations from the selected Profile authority', async () => {
     const gateway = gatewayFixture({ invoke: vi.fn() })
     const control = new DesktopSessionControl(() => 1_000, 5_000)

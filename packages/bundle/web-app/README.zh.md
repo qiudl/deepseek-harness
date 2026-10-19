@@ -267,3 +267,7 @@ analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/acce
 私有反馈通道还将 `continuation_read` 路由到原 Session Controller。它返回尚无已提交观察或不可变的首条回复坐标；重复读取保持原 trace，不会启动新的模型请求。
 
 私有 NDJSON 路由也接受 `args` 为空的 `session/list`，并输出一个包含投影的完整 Session 列表快照。它沿用现有流的 512 KiB 单项上限和取消机制。
+
+远程 `session.select_model` 和 `session.select_agent` 复用现有会话模型选择器与 Agent 预设注册表。Host 在调用 Gateway 前要求目标会话的控制权证明，响应保留已选模型或预设标识。页面不能通过选择参数指定 Profile、其他 Agent 地址或控制权世代。
+
+绑定 view lease 的 `workbench/read` 流只允许 `workspaceFiles/read`、`readBytes`、`stat` 和 `list`，并校验精确的工作区范围与路径参数。它使用 Profile 进程内的 Connection Fetch handler，保留原有 JSON 或 multipart RPC 响应。按序分块不超过 16 KiB，完整响应上限为 34 MiB。取消会关闭所属 reader；未知接口与授权选择字段在派发前被拒绝。

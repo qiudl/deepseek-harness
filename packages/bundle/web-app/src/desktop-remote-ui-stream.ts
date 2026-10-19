@@ -3,6 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+import { parseWorkbenchReadPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { readDesktopWorkbenchResponse } from './desktop-remote-workbench-read.ts'
 import type { HostRemoteSessionCommand } from '@deepseek-ai/dsh-host-control-protocol'
 import { openDesktopRemotePrivateRequest, readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
@@ -93,16 +95,22 @@ export class DesktopRemoteApprovalEvents {
 /** Opens only the selected Profile's native Session, Workspace, and forwarded event streams. */
 export class DesktopRemoteUiStreamExecutor {
   constructor(private readonly gateway: TypertGateway,
-    private readonly approvals?: DesktopRemoteApprovalEvents) {}
+    private readonly approvals?: DesktopRemoteApprovalEvents,
+    private readonly readResponse?: (request: Request) => Promise<Response>) {}
 
   /**
    * Open the selected Profile's native Session event stream without granting another Gateway endpoint.
-   * @param endpoint - `session/list`, `session/follow`, `workspace/follow`, or `$events`.
+   * @param endpoint - `session/list`, `session/follow`, `workspace/follow`, `$events`, or `workbench/read`.
    * @param payload - Validated arguments for the selected stream.
    * @param signal - Host-owned cancellation signal.
    * @returns Gateway events until cancellation or normal completion.
    */
   async open(endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
+    if (endpoint === 'workbench/read') {
+      const request = parseWorkbenchReadPayload(payload)
+      if (!request || !this.readResponse) throw new Error('desktop remote UI: file read unavailable')
+      return readDesktopWorkbenchResponse(this.readResponse, request, signal)
+    }
     if (endpoint === 'session/list') {
       if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args) ||
         Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
@@ -211,8 +219,8 @@ export async function handleDesktopRemoteUiStreamRequest(
       !Object.keys(request).every(key => ['endpoint', 'payload', 'itemChunks'].includes(key)) ||
       (request.itemChunks !== undefined && (request.itemChunks !== true || request.endpoint !== 'session/follow')) ||
       (request.endpoint !== 'session/list' && request.endpoint !== 'session/follow' &&
-        request.endpoint !== 'workspace/follow' && request.endpoint !== '$events') ||
-      (request.endpoint === 'session/follow' ? !followPayload(request.payload) :
+        request.endpoint !== 'workspace/follow' && request.endpoint !== '$events' && request.endpoint !== 'workbench/read') ||
+      (request.endpoint === 'workbench/read' ? !parseWorkbenchReadPayload(request.payload) : request.endpoint === 'session/follow' ? !followPayload(request.payload) :
         !record(request.payload) || Object.keys(request.payload).length !== 1 ||
         !record(request.payload.args) || Object.keys(request.payload.args).length !== 0))
       throw new Error('invalid stream request')

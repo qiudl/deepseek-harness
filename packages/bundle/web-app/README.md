@@ -269,3 +269,7 @@ The same private `root_feedback` carrier also routes `consumer_prepare`, `consum
 The private feedback carrier also routes `continuation_read` to the original Session Controller. It returns either no committed observation or immutable first-reply coordinates; repeated reads preserve the original trace and never start another model request.
 
 The private NDJSON route also accepts `session/list` with empty `args` and emits one complete Session-list snapshot, including projections. It uses the same 512 KiB item limit and cancellation as the existing streams.
+
+Remote `session.select_model` and `session.select_agent` reuse the existing Session model selector and Agent preset registry. Both require the addressed Session control claim at the Host before invoking the Gateway; the response preserves the selected model or preset identity. A page cannot choose a Profile, a different Agent address, or a control epoch through the selection payload.
+
+The lease-bound `workbench/read` stream admits only `workspaceFiles/read`, `readBytes`, `stat`, and `list`, with exact workspace scope and path arguments. It uses the Profile's in-process Connection Fetch handler and retains the original JSON or multipart RPC response. Ordered chunks are at most 16 KiB; the complete response is capped at 34 MiB. Cancellation closes the owned reader; unrecognized endpoints and authority selectors are rejected before dispatch.
