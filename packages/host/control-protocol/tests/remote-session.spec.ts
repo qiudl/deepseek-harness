@@ -156,14 +156,14 @@ describe('Profile remote UI read wire commands', () => {
   })
 
   it('round-trips gzip chunks while rejecting invalid compressed offsets and selectors', () => {
-    for (const offset of [0, 8 * 1024 * 1024 + 64 * 1024]) {
+    for (const offset of [0, 16 * 1024 * 1024 + 64 * 1024]) {
       const input = readFrame('asset/read-gzip-chunk', { args: { url: '/plugins/a.js', offset } })
       expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
     }
     for (const args of [
       { url: '/plugins/a.js', offset: -1 },
       { url: '/plugins/a.js', offset: 0.5 },
-      { url: '/plugins/a.js', offset: 8 * 1024 * 1024 + 64 * 1024 + 1 },
+      { url: '/plugins/a.js', offset: 16 * 1024 * 1024 + 64 * 1024 + 1 },
       { url: '/plugins/a.js' },
       { url: '/plugins/a.js', offset: 0, profile: 'other' },
     ]) expect(() => decode(readFrame('asset/read-gzip-chunk', { args }))).toThrow()

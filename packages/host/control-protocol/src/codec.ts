@@ -1724,7 +1724,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         || (params.endpoint !== 'asset/describe' &&
           (!Number.isSafeInteger(assetArgs.offset) || (assetArgs.offset as number) < 0))
         || (params.endpoint === 'asset/read-gzip-chunk'
-          && (assetArgs.offset as number) > 8 * 1024 * 1024 + 64 * 1024)) reject()
+          && (assetArgs.offset as number) > 16 * 1024 * 1024 + 64 * 1024)) reject()
     }
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,

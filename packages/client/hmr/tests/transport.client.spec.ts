@@ -40,3 +40,17 @@ it('forwards full graphs and rebuilt frames, contains wire errors and closes its
   }
   expect(close).toHaveBeenCalledOnce()
 })
+
+
+it('never opens an unsigned HMR connection from a remote carrier', async () => {
+  vi.stubGlobal('__DSH_TRANSPORT__', { remoteHost: true })
+  const source = vi.fn()
+  vi.stubGlobal('EventSource', source)
+  const ctx = new Context()
+  try {
+    apply(ctx)
+    expect(source).not.toHaveBeenCalled()
+  } finally {
+    await ctx.fiber.dispose()
+  }
+})

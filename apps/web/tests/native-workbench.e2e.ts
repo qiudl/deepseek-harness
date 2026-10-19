@@ -1,0 +1,163 @@
+import type {} from '@deepseek-ai/dsh-api-gateway'
+import type { SessionId } from '@deepseek-ai/dsh-session'
+/** Real shipped Web composition inside the App's opaque, bundled document. */
+import { readFile, writeFile, mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { pathToFileURL, fileURLToPath } from 'node:url'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { join } from 'node:path'
+import { chromium, type Browser, type Page } from 'playwright'
+import { afterAll, beforeAll, expect, it, onTestFailed } from 'vitest'
+import { launchWebScaffold, seedSession, type WebScaffold } from './scaffold.ts'
+
+let scaffold: WebScaffold
+let browser: Browser
+let page: Page
+let sessionId: SessionId
+let buildDirectory: string
+const screenshotDirectory = process.env.DSH_NATIVE_WORKBENCH_SCREENSHOT_DIR
+const duetTargets: unknown[] = []
+const streams = new Map<string | number, AbortController>()
+const failures: string[] = []
+const requests: { path: string; done?: number; bytes?: number }[] = []
+beforeAll(async () => {
+  buildDirectory = await mkdtemp(join(tmpdir(), 'dsh-native-workbench-'))
+  // Exercise this checkout's real App document, including CSP hashes, in clean CI.
+  await promisify(execFile)(process.execPath,
+    [fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url)), 'build',
+      '--config', 'vite.native.config.ts', '--mode', 'native', '--outDir', buildDirectory],
+    { cwd: fileURLToPath(new URL('..', import.meta.url)), timeout: 120000, maxBuffer: 2 * 1024 * 1024 })
+  scaffold = await launchWebScaffold({ deepSeekMissingCredential: true })
+  const fixture = await readFile(new URL('../../../snapshots/web/seeded-history/session.v3.jsonl', import.meta.url), 'utf8')
+  sessionId = await seedSession(scaffold, fixture, 'native-workbench-history')
+  const workspace = await scaffold.ctx.workspaceRegistry.create(scaffold.workspaceCwd, 'iPhone 验收')
+  await workspace.attachSession(sessionId)
+  browser = await chromium.launch()
+  page = await browser.newPage({ viewport: { width: 390, height: 844 }, locale: 'zh-CN' })
+  page.on('pageerror', error => failures.push(error.message))
+  page.on('console', (message) => { if (message.type() === 'error') failures.push(message.text()) })
+  await page.exposeFunction('nativeSend', async (frame: {
+    t: string
+    id: string | number
+    method?: string
+    url?: string
+    headers?: Record<string, string>
+    bytes?: number[]
+    endpoint?: string
+    payload?: unknown
+  }) => {
+    const send = async (value: object, bytes?: Uint8Array): Promise<void> => {
+      await page.evaluate(({ value, encoded }) => {
+        const receiver = Reflect.get(window, 'nativeReceive') as (value: object) => void
+        const body = encoded === undefined ? undefined : Uint8Array.from(atob(encoded), char => char.charCodeAt(0)).buffer
+        receiver({ ...value, ...(body === undefined ? {} : { body }) })
+      }, { value, encoded: bytes && Buffer.from(bytes).toString('base64') })
+    }
+    if (frame.t === 'abort') { streams.get(frame.id)?.abort(); streams.delete(frame.id); return }
+    if (frame.t === 'stream-open' && frame.endpoint) {
+      const abort = new AbortController()
+      streams.set(frame.id, abort)
+      try {
+        const uplink = (async function* () { /* No client stream items in this reading scenario. */ })()
+        const source = await scaffold.ctx.typertGateway.wireStream.open(frame.endpoint, frame.payload, uplink, undefined, abort.signal)
+        for await (const value of source) await send({ t: 'stream-item', id: frame.id, value })
+        if (!abort.signal.aborted) await send({ t: 'stream-end', id: frame.id })
+      } catch (error) {
+        if (!abort.signal.aborted) await send({ t: 'stream-error', id: frame.id,
+          failure: { kind: 'remote', ...scaffold.ctx.typertGateway.wireStream.failure(error) } })
+      } finally { streams.delete(frame.id) }
+      return
+    }
+    if (frame.t !== 'req' || !frame.url) return
+    const path = new URL(frame.url).pathname + new URL(frame.url).search
+    const observed: { path: string; done?: number; bytes?: number } = { path }
+    requests.push(observed)
+    let response: Response
+    if (path === '/__boot__') response = Response.json({ injections: scaffold.ctx.webServer.collectIndexInjections() })
+    else if (path === '/__native_workbench__') response = Response.json({ schema: 'dsh-native-workbench/v1', duet: true, draft: false })
+    else if (path === '/__native_duet__') {
+      duetTargets.push(JSON.parse(Buffer.from(frame.bytes ?? []).toString('utf8')) as unknown)
+      response = Response.json({ ok: true, value: { accepted: true } })
+    }
+    else if (path === '/__account__') response = Response.json(null)
+    // Signed remote assets omit optional development source maps.
+    else if (path.includes('.js.map')) response = new Response(null, { status: 404 })
+    else response = await scaffold.hostFetch(path, { ...(frame.method ? { method: frame.method } : {}),
+      ...(frame.headers ? { headers: frame.headers } : {}),
+      ...(frame.bytes ? { body: Buffer.from(frame.bytes) } : {}) })
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    await send({ t: 'res', id: frame.id, status: response.status, headers: Object.fromEntries(response.headers) }, bytes)
+    observed.done = response.status; observed.bytes = bytes.length
+  })
+  const parentPath = join(scaffold.workspaceCwd, 'native-parent.html')
+  await writeFile(parentPath, '<!doctype html><body></body>')
+  await page.goto(pathToFileURL(parentPath).href)
+  const nativeDocument = await readFile(join(buildDirectory, 'native.html'), 'utf8')
+  await page.evaluate((html) => {
+    const frame = document.createElement('iframe')
+    frame.sandbox.add('allow-scripts')
+    frame.style.cssText = 'border:0;width:100vw;height:100vh'
+    window.addEventListener('message', (event: MessageEvent<unknown>) => {
+      const ready = event.data
+      if (!ready || typeof ready !== 'object' || !('kind' in ready) || !('nonce' in ready) || typeof ready.nonce !== 'string') return
+      if (event.source !== frame.contentWindow || event.origin !== 'null' || ready.kind !== 'ready') return
+      const channel = new MessageChannel()
+      Reflect.set(window, 'nativeReceive', (value: object) => { channel.port1.postMessage(value) })
+      channel.port1.onmessage = (event: MessageEvent<unknown>) => {
+        const value = event.data
+        if (!value || typeof value !== 'object') return
+        const body = 'body' in value ? value.body : undefined
+        const send = Reflect.get(window, 'nativeSend') as (value: object) => Promise<void>
+        void send({ ...value, ...(body instanceof ArrayBuffer ? { bytes: [...new Uint8Array(body)] } : {}) })
+      }
+      frame.contentWindow!.postMessage({ schema: 'dsh-remote-frame/v1', kind: 'connect', nonce: ready.nonce,
+        assetOrigin: 'https://ui.example.test' }, '*', [channel.port2])
+    })
+    document.body.style.margin = '0'
+    frame.srcdoc = html
+    document.body.append(frame)
+  }, nativeDocument)
+}, 120000)
+afterAll(async () => {
+  for (const abort of streams.values()) abort.abort()
+  try { await browser?.close() } finally {
+    try { await scaffold?.close() } finally {
+      if (buildDirectory) await rm(buildDirectory, { recursive: true, force: true })
+    }
+  }
+})
+it('mounts shared mobile controls from real Host injections without parent access', async () => {
+  const frame = page.frameLocator('iframe')
+  onTestFailed(async () => {
+    console.error(failures)
+    console.error(requests)
+    console.error(await frame.locator('body').innerText())
+    if (screenshotDirectory) {
+      await mkdir(screenshotDirectory, { recursive: true })
+      await page.screenshot({ path: join(screenshotDirectory, 'failure.png') })
+    }
+  })
+  await frame.getByRole('button', { name: '继续', exact: true }).click({ timeout: 60000 })
+  await frame.getByText('‹ 返回列表', { exact: true }).click()
+  await frame.locator(`[data-row-key="session:${sessionId}"]`).click()
+  await frame.locator('[data-chat-flow-kind="user"]').first().waitFor()
+  await frame.getByTestId('native-duet-input').click()
+  await expect.poll(() => duetTargets).toEqual([{ sessionId }])
+  expect(await frame.locator('[data-chat-flow-kind="turn-process"]').count()).toBe(0)
+  const input = frame.locator('[contenteditable="true"]').first()
+  await input.fill('返回后保留的草稿')
+  await frame.getByRole('tab', { name: '思考过程', exact: true }).click()
+  await frame.locator('[data-trajectory-scroll]').waitFor()
+  await frame.getByRole('tab', { name: '对话', exact: true }).click()
+  expect(await input.innerText()).toBe('返回后保留的草稿')
+  expect(await frame.locator('[data-chat-flow-kind="user"]').first().innerText()).toContain('你')
+  expect(await frame.locator('[data-chat-flow-kind="assistant-step"]').last().innerText()).toContain('Agent')
+  expect(await frame.locator('html').getAttribute('data-dsh-native')).toBe('true')
+  expect(await frame.locator('body').innerText()).not.toContain('remote web:')
+  expect(failures).toEqual([])
+  if (screenshotDirectory) {
+    await mkdir(screenshotDirectory, { recursive: true })
+    await page.screenshot({ path: join(screenshotDirectory, 'conversation.png') })
+  }
+})

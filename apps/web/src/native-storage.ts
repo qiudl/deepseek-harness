@@ -9,16 +9,16 @@ export function createNativeMemoryStorage(limit = 2 * 1024 * 1024): Storage {
   return {
     get length() { return values.size },
     key(index) { return [...values.keys()][index] ?? null },
-    getItem(key) { return values.get(String(key)) ?? null },
-    setItem(key, value) {
-      key = String(key); value = String(value)
+    getItem(key: unknown) { return values.get(String(key)) ?? null },
+    setItem(rawKey: unknown, rawValue: unknown) {
+      const key = String(rawKey), value = String(rawValue)
       const previous = values.get(key)
       const next = bytes - (previous === undefined ? 0 : size(key, previous)) + size(key, value)
       if (next > limit) throw new DOMException('Native frame preference capacity exceeded', 'QuotaExceededError')
       values.set(key, value); bytes = next
     },
-    removeItem(key) {
-      key = String(key)
+    removeItem(rawKey: unknown) {
+      const key = String(rawKey)
       const previous = values.get(key)
       if (previous !== undefined) { values.delete(key); bytes -= size(key, previous) }
     },

@@ -4,7 +4,7 @@ import { IconMicrophoneOutlineRegular } from '@deepseek-ai/dsh-client-ui-primiti
 import css from './NativeDuetButton.module.css'
 
 type Props = PropsRuntime<'conversation.input.right'> & PropsLocale<'slarkAgent'> & {
-  start(sessionId: string): Promise<void>
+  start: (sessionId: string) => Promise<void>
 }
 /** Composer action for a native-owned call; unmounting never ends an accepted call.
  * @param props Current Session and the advertised native start capability.
@@ -14,14 +14,15 @@ export function NativeDuetButton({ sessionId, start, t }: Props) {
   const owner = useMemo(() => ({ active: false, busy: false }), [sessionId, start])
   const [state, setState] = useState<{ owner: typeof owner; pending: boolean; failed: boolean } | null>(null)
   useEffect(() => { owner.active = true; return () => { owner.active = false } }, [owner])
+  const isActive = (): boolean => owner.active
   const begin = async (): Promise<void> => {
-    if (!owner.active || owner.busy) return
+    if (!isActive() || owner.busy) return
     owner.busy = true; setState({ owner, pending: true, failed: false })
     let failed = false
     try { await start(sessionId) } catch { failed = true }
     finally {
       owner.busy = false
-      if (owner.active) setState({ owner, pending: false, failed })
+      if (isActive()) setState({ owner, pending: false, failed })
     }
   }
   return <span className={css.action}>

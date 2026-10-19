@@ -14,10 +14,12 @@ function assertNever(row: never): never {
  * Execute every row in table order.
  * @param rows - Injection table from the boot payload.
  * @param loadScript - Executes one script-src row through the page owner's asset transport.
+ * @param executeScript - Optional execution of verified classic script text under the page owner's CSP.
  */
 export async function applyIndexInjections(
   rows: readonly IndexInjection[],
   loadScript: (src: string) => Promise<void>,
+  executeScript?: (text: string) => Promise<void>,
 ): Promise<void> {
   for (const row of rows) {
     switch (row.kind) {
@@ -25,6 +27,7 @@ export async function applyIndexInjections(
         (globalThis as Record<string, unknown>)[row.name] = row.value
         break
       case 'script': {
+        if (executeScript !== undefined) { await executeScript(row.text); break }
         const el = document.createElement('script')
         el.textContent = row.text
         ;(row.placement === 'head' ? document.head : document.body).append(el)

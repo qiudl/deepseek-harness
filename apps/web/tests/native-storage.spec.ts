@@ -8,7 +8,7 @@ it('keeps browser preferences only in bounded frame memory', () => {
   expect(storage.length).toBe(1)
   expect(storage.key(0)).toBe('key')
   expect(storage.key(1)).toBeNull()
-  expect(() => storage.setItem('large', '123456789')).toThrow()
+  expect(() => { storage.setItem('large', '123456789') }).toThrow()
   expect(storage.getItem('key')).toBe('draft')
   storage.setItem('key', 'edit')
   expect(storage.length).toBe(1)

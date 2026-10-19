@@ -94,7 +94,13 @@ export class CommandUiRuntime extends Service implements CommandUiContract {
     const locale = ctx.get('locale')
     if (locale === undefined) throw new Error('ui-commands: locale service unavailable')
     this.t = locale.bind('command')
+    const lifetime = new AbortController()
+    ctx.effect(() => () => { lifetime.abort() }, 'command catalog warmup lifetime')
     this.directory = new CommandDirectory(async (sessionId) => {
+      // Input construction may run in a slot render. Acquiring a catalog reference
+      // publishes retention state, so start it after that synchronous render.
+      await Promise.resolve()
+      lifetime.signal.throwIfAborted()
       const sessions = this.sessions()
       if (sessions.subagentAddress(sessionId) !== undefined) return []
       if (sessions.binding(sessionId) === undefined) {
