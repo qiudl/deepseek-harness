@@ -479,6 +479,40 @@ describe('Desktop remote UI read-only bridge', () => {
     }
   })
 
+  it('admits only scoped terminal and file observation streams over private HTTP', async () => {
+    const token = 'A'.repeat(43)
+    const open = vi.fn(async () => (async function* () { yield { type: 'ready' } })())
+    const server = createServer((req, res) => {
+      void handleDesktopRemoteUiStreamRequest(req, res, token, open)
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const cases = [
+        { endpoint: 'terminal/stream', valid: { args: { grantId: '123e4567-e89b-42d3-a456-426614174000' } },
+          invalid: { args: { grantId: 'not-a-grant' } } },
+        { endpoint: 'workspaceFiles/changes', valid: { args: { workspaceFileScopeId: 'session-1', path: 'file.txt' } },
+          invalid: { args: { workspaceFileScopeId: 'session-1', path: 'file.txt', profile: 'other' } } },
+      ]
+      for (const { endpoint, valid, invalid } of cases) {
+        const denied = await fetch(origin, { method: 'POST', headers: { authorization: `Bearer ${token}` },
+          body: JSON.stringify({ endpoint, payload: invalid }) })
+        expect(denied.status).toBe(422)
+        const admitted = await fetch(origin, { method: 'POST', headers: { authorization: `Bearer ${token}` },
+          body: JSON.stringify({ endpoint, payload: valid }) })
+        expect(admitted.status).toBe(200)
+        expect(await admitted.text()).toBe(JSON.stringify({ type: 'item', value: { type: 'ready' } }) + '\n'
+          + JSON.stringify({ type: 'end' }) + '\n')
+      }
+      expect(open).toHaveBeenCalledTimes(cases.length)
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
+    }
+  })
+
   it('ends a Host stream with a bounded error when the Gateway fails after its first item', async () => {
     const token = 'D'.repeat(43)
     const server = createServer((req, res) => {

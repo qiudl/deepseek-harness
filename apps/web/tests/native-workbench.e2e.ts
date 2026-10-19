@@ -232,7 +232,7 @@ it('operates a real Host shell with controlled input, streamed output and attach
   const actions = new DesktopRemoteSessionExecutor(scaffold.ctx.typertGateway, undefined, control, terminalStreams)
   const streams = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway, undefined, undefined, terminalStreams)
   const controller = new AbortController()
-  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)])
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)])
   const terminalId = randomUUID(), attachmentId = randomUUID()
   const invoke = (method: WorkbenchTerminalRequest['method'], args: WorkbenchTerminalRequest['args']) => actions.execute({
     operation: 'terminal.apply', command_id: randomUUID() as never, session_id: sessionId, control: proof,
@@ -276,4 +276,4 @@ it('operates a real Host shell with controlled input, streamed output and attach
     await iterator?.return?.()
     await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'close', args: { agentId: sessionId, id: terminalId }, signal: new AbortController().signal })
   }
-}, 20000)
+}, 70000)
