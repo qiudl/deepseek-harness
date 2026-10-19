@@ -15,6 +15,7 @@ const FIELDS = ['schema', 'receiptId', 'effectId', 'requestDigest', 'subject', '
   'stderrSha256', 'interrupted', 'quiescent', 'network', 'readonly', 'publicKey',
   'signature'] as const
 
+/** Host-signed result for one authorized SkillHub Profile execution. */
 export interface HostSkillHubExecutionReceipt {
   readonly schema: 'slark-dsh-profile-execution-receipt/v1'
   readonly receiptId: string
@@ -61,6 +62,12 @@ const path = (value: unknown): value is string => text(value, 1024)
   && value.normalize('NFC') === value && !/[\\:]/u.test(value)
   && value.split('/').every(part => part && part !== '.' && part !== '..')
 
+/**
+ * Parses one untrusted Host execution receipt.
+ *
+ * @param value Wire value to validate.
+ * @returns The exact signed execution receipt fields.
+ */
 export function parseSkillHubExecutionReceipt(value: unknown): HostSkillHubExecutionReceipt {
   if (!row(value) || Reflect.ownKeys(value).length !== FIELDS.length
     || FIELDS.some(field => !Object.hasOwn(value, field))
@@ -113,7 +120,12 @@ export function parseSkillHubExecutionReceipt(value: unknown): HostSkillHubExecu
   }
 }
 
-/** Exact field order is part of the Host signature protocol. */
+/**
+ * Encodes the exact field order covered by the Host signature.
+ *
+ * @param value Validated receipt fields without the signature.
+ * @returns The canonical JSON payload to sign or verify.
+ */
 export function encodeSkillHubExecutionReceiptPayload(
   value: Omit<HostSkillHubExecutionReceipt, 'signature'>,
 ): string {
