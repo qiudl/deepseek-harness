@@ -274,9 +274,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     await verifiedFiles(plan, join(versions, receipt.operationId))
     return receipt as SkillHubPackageReceipt
   }
-  async function readFixedFile(receipt: SkillHubPackageReceipt, path: string): Promise<Buffer> {
-    await checkRoot()
-    if (!safePath(path)) fail()
+  async function fixedPlan(receipt: SkillHubPackageReceipt) {
     const base = join(versions, receipt.operationId)
     const plan = await storedJson<SkillHubPackagePlan>(join(base, 'plan.json'))
     if (!plan) throw Error('skillhub_package_unavailable')
@@ -285,6 +283,12 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       || plan.versionId !== receipt.versionId || plan.archiveSha256 !== receipt.archiveSha256
       || plan.manifestSha256 !== receipt.manifestSha256
       || (BigInt(plan.expectedRevision) + 1n).toString() !== receipt.revision) fail()
+    return { base, plan }
+  }
+  async function readFixedFile(receipt: SkillHubPackageReceipt, path: string): Promise<Buffer> {
+    await checkRoot()
+    if (!safePath(path)) fail()
+    const { base, plan } = await fixedPlan(receipt)
     const files = await verifiedFiles(plan, base)
     const evidence = files.find(file => file.path === path)
     if (!evidence) throw Error('skillhub_package_unavailable')
@@ -303,13 +307,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     async snapshot(packageId: string) {
       const receipt = await current(packageId)
       if (!receipt) throw Error('skillhub_package_unavailable')
-      const base = join(versions, receipt.operationId)
-      const plan = await storedJson<SkillHubPackagePlan>(join(base, 'plan.json'))
-      if (!plan) throw Error('skillhub_package_unavailable')
-      planValid(plan, profileId, hostKeyId, bindingGeneration)
-      if (plan.operationId !== receipt.operationId || plan.packageId !== receipt.packageId
-        || plan.versionId !== receipt.versionId || plan.archiveSha256 !== receipt.archiveSha256
-        || plan.manifestSha256 !== receipt.manifestSha256) fail()
+      const { base, plan } = await fixedPlan(receipt)
       const files = Object.freeze((await verifiedFiles(plan, base)).map(file => Object.freeze({
         path: file.path, mode: file.mode as '0644' | '0755',
         size: file.size, sha256: file.sha256,
