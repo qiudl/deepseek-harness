@@ -357,6 +357,7 @@ function makeHarness(
   init: HarnessUpdate = {},
   sessionOverrides: Partial<TestSessionSnapshot> = {},
   chatSnapshot?: ChatSnapshot,
+  separateProcess = false,
 ) {
   const {
     chat: initialChat, nodes, partial, runningCalls, turnTimings, turnEnds, turnUsages,
@@ -482,7 +483,7 @@ function makeHarness(
     useStore: bindSnapshotSelector(chat),
     actions: chat.actions,
     useTimeline: bindSnapshotSelector(timeline),
-    usePresentation: bindSnapshotSelector(derivePresentationPolicy(transcriptView, collapseTiming)),
+    usePresentation: bindSnapshotSelector(derivePresentationPolicy(transcriptView, collapseTiming, separateProcess)),
     // The fixture implements the concrete flow dispatch behind the generic slot signature.
     renderSlot: renderSlot as ChatViewSlotProps['renderSlot'],
     SessionProvider: SessionProviderStub,
@@ -539,7 +540,7 @@ function makeHarness(
   }
 }
 
-function makeCompletionHarness(mode: TranscriptViewMode, timing: CollapseTiming = 'completion') {
+function makeCompletionHarness(mode: TranscriptViewMode, timing: CollapseTiming = 'completion', separateProcess = false) {
   const nodes = [
     userInTurn(1, 'old question', 1), reasoningAssistant(2, 'old analysis', 1, 1),
     assistant(3, 'old answer', 1, 2),
@@ -557,7 +558,7 @@ function makeCompletionHarness(mode: TranscriptViewMode, timing: CollapseTiming 
     turnTimings: new Map([[1, { startTime: 0 }], [2, { startTime: 5_000 }], ...nextTurn ? [[3, { startTime: 9_000 }] as const] : []]),
     turnEnds: new Map(closed ? [[1, 4], [2, 8]] : [[1, 4]]),
   }))
-  const h = makeHarness({ chat: project(false) }, { running: true })
+  const h = makeHarness({ chat: project(false) }, { running: true }, undefined, separateProcess)
   h.setGrouped(groups)
   h.setTranscriptView(mode)
   h.setCollapseTiming(timing)
@@ -4339,4 +4340,21 @@ it('inserts independent record slots among ordinary rows and keeps row DOM and g
   act(() => { h.setTimeline([]) })
   expect(view.queryByTestId('independent-row')).toBeNull()
   expect(view.getByText('before')).toBe(before)
+})
+
+it('native conversation keeps both speaker avatars and answers while moving all reasoning groups out', () => {
+  const h = makeCompletionHarness('standard', 'completion', true)
+  const view = render(<h.ChatView {...h.props} />)
+  expect(view.getByText('old question')).toBeTruthy()
+  expect(view.getByText('old answer')).toBeTruthy()
+  expect(view.queryByText('old analysis')).toBeNull()
+  expect(view.queryByText('current analysis')).toBeNull()
+  expect(view.getAllByText('你').length).toBe(2)
+  expect(view.getByText('DSH Agent')).toBeTruthy()
+  expect(view.container.querySelector('[data-step-process]')).toBeNull()
+  act(() => { h.complete() })
+  expect(view.getByText('current answer')).toBeTruthy()
+  expect(view.getAllByText('DSH Agent').length).toBe(2)
+  act(() => { h.setTranscriptView('verbose') })
+  expect(view.queryByText('current analysis')).toBeNull()
 })

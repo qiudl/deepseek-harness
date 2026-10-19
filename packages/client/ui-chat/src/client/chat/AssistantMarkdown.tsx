@@ -64,13 +64,14 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
   const pathImages = useMemo<MarkdownPathImages>(() => {
     return { resolve: value => localPathMediaUrl(document.baseURI, value) }
   }, [])
+  const separateProcess = usePresentation(policy => policy.separateProcess === true)
   const last = blocks.length - 1
   // Tool-call heads render as tool rows in the chat view's grouping pass, so
   // a node that is only those heads (or empty) would paint an empty root
   // between tool groups — skip the shell unless something visible remains.
   const hasVisible = streaming
     || interrupted === true
-    || blocks.some(block => block.kind !== 'tool-call')
+    || blocks.some(block => block.kind !== 'tool-call' && (!separateProcess || block.kind !== 'reasoning'))
   if (!hasVisible) return null
   const rendered: ReactNode[] = []
   for (let i = 0; i < blocks.length; i++) {
@@ -92,6 +93,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
         )
         break
       case 'reasoning':
+        if (separateProcess) break
         rendered.push(
           <ProcessReasoning
             key={i}
