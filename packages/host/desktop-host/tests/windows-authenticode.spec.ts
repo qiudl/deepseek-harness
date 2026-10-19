@@ -5,6 +5,9 @@ import {
 } from '../src/windows-authenticode.ts'
 
 const path = String.raw`C:\Program Files\Slark\slark-daemon-windows-x64.exe`
+const CERT_E_UNTRUSTEDROOT = -2_146_762_487
+const TRUST_E_NOSIGNATURE = -2_146_762_496
+const TRUST_E_BAD_DIGEST = -2_146_869_232
 
 function native(overrides: Record<string, unknown> = {}) {
   return {
@@ -25,15 +28,34 @@ describe('Windows Authenticode stable-handle verifier', () => {
     expect(api.closeFileVerification).toHaveBeenCalledWith(802n, path, 901n)
   })
 
-  it('accepts only WinVerifyTrust status zero and closes any returned state after failure', () => {
-    const api = native({ beginFileVerification: vi.fn(() => ({ status: -2_146_762_496, stateHandle: 901n })) })
+  it('accepts CERT_E_UNTRUSTEDROOT and leaves the pinned publisher thumbprint authoritative', () => {
+    const api = native({ beginFileVerification: vi.fn(() => ({ status: CERT_E_UNTRUSTEDROOT, stateHandle: 901n })) })
+    expect(createWindowsAuthenticodeVerifier(api)(802n, path)).toBe('AB'.repeat(32))
+    expect(api.publisherCertificateSha256).toHaveBeenCalledWith(901n)
+    expect(api.closeFileVerification).toHaveBeenCalledWith(802n, path, 901n)
+  })
+
+  it('keeps every other nonzero WinVerifyTrust status fatal and closes any returned state', () => {
+    for (const trustStatus of [TRUST_E_NOSIGNATURE, TRUST_E_BAD_DIGEST]) {
+      const api = native({ beginFileVerification: vi.fn(() => ({ status: trustStatus, stateHandle: 901n })) })
+      const error = (() => {
+        try { createWindowsAuthenticodeVerifier(api)(802n, path) } catch (caught) { return caught }
+      })()
+      expect(error).toBeInstanceOf(WindowsAuthenticodeError)
+      expect(error).toMatchObject({ api: 'WinVerifyTrust', trustStatus })
+      expect(api.publisherCertificateSha256).not.toHaveBeenCalled()
+      expect(api.closeFileVerification).toHaveBeenCalledWith(802n, path, 901n)
+    }
+  })
+
+  it('reports the untrusted-root status itself when WinTrust retains no state to inspect', () => {
+    const api = native({ beginFileVerification: vi.fn(() => ({ status: CERT_E_UNTRUSTEDROOT, stateHandle: null })) })
     const error = (() => {
       try { createWindowsAuthenticodeVerifier(api)(802n, path) } catch (caught) { return caught }
     })()
-    expect(error).toBeInstanceOf(WindowsAuthenticodeError)
-    expect(error).toMatchObject({ api: 'WinVerifyTrust', trustStatus: -2_146_762_496 })
+    expect(error).toMatchObject({ api: 'WinVerifyTrust', trustStatus: CERT_E_UNTRUSTEDROOT })
     expect(api.publisherCertificateSha256).not.toHaveBeenCalled()
-    expect(api.closeFileVerification).toHaveBeenCalledWith(802n, path, 901n)
+    expect(api.closeFileVerification).not.toHaveBeenCalled()
   })
 
   it('rejects missing state, malformed thumbprints, and invalid caller handles', () => {

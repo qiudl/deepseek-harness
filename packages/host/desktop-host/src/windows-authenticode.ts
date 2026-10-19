@@ -4,6 +4,8 @@ const SHA256_CERTIFICATE_THUMBPRINT = /^[0-9a-f]{64}$/iu
 const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const INVALID_HANDLE_VALUE = 0xFFFF_FFFF_FFFF_FFFFn
+/** WinVerifyTrust HRESULT 0x800B0109: an intact signature whose root chains to no trusted anchor. */
+const CERT_E_UNTRUSTEDROOT = -2_146_762_487
 
 /** WinTrust verification result retaining the state handle needed for mandatory cleanup. */
 export interface WindowsAuthenticodeBeginResult {
@@ -45,8 +47,9 @@ function validCanonicalPath(path: string): boolean {
 
 /**
  * Build the strict stable-handle Authenticode verifier.
- * Only WinVerifyTrust status zero is accepted; every returned state handle is closed,
- * and cleanup failure rejects an otherwise successful verification.
+ * Status zero and CERT_E_UNTRUSTEDROOT proceed to the signer certificate SHA-256, which the caller
+ * pins (REQ-20261019-0004); every other WinVerifyTrust status fails closed. Every returned state
+ * handle is closed, and cleanup failure rejects an otherwise successful verification.
  * @param api - worker-local WinTrust and certificate-chain operations.
  * @returns a publisher certificate SHA-256 verifier for the already-open executable.
  */
@@ -61,10 +64,10 @@ export function createWindowsAuthenticodeVerifier(
     const stateHandle = begun.stateHandle
     let result: string | undefined
     let failure: Error | undefined
-    if (begun.status !== 0) {
+    if (begun.status !== 0 && begun.status !== CERT_E_UNTRUSTEDROOT) {
       failure = new WindowsAuthenticodeError('WinVerifyTrust', begun.status)
     } else if (!validHandle(stateHandle)) {
-      failure = new WindowsAuthenticodeError('WinVerifyTrust', 13)
+      failure = new WindowsAuthenticodeError('WinVerifyTrust', begun.status === 0 ? 13 : begun.status)
     } else {
       try {
         const thumbprint = api.publisherCertificateSha256(stateHandle)
