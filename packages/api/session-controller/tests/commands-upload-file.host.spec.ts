@@ -212,6 +212,9 @@ describe('Session file uploads', () => {
     expect(uploads.resolve(agent, first.receiptId)).toBeUndefined()
     expect(uploads.resolve(agent, second.receiptId)).toEqual(second.file)
     await expect(uploads.discardUpload(SESSION, first.receiptId)).resolves.toBe(false)
+    await expect(uploads.discardUpload(SESSION, second.receiptId)).resolves.toBe(true)
+    expect(uploads.resolve(agent, second.receiptId)).toBeUndefined()
+    await expect(uploads.discardUpload(SESSION, second.receiptId)).resolves.toBe(false)
     expect(saveFile).toHaveBeenCalledTimes(2)
   })
 
