@@ -87,6 +87,22 @@ it('pins every file to the admitted version while a later version activates', as
   await expect(fixed.readFile('references/data.txt')).rejects.toThrow()
 })
 
+it('refuses a missing pointer or changed fixed plan after a snapshot was captured', async () => {
+  const { root, installation } = await store()
+  await expect(installation.snapshot(packageId)).rejects.toThrow()
+  const evidence = archive(), plan = target('version-1', evidence)
+  await installation.prepare(plan, evidence.bytes)
+  await installation.activate(plan.operationId, '1', '0')
+  const fixed = await installation.snapshot(packageId)
+  const path = join(root, 'skillhub-versions', plan.operationId, 'plan.json')
+  unlinkSync(path)
+  await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
+  writeFileSync(path, JSON.stringify({ ...plan, versionId: 'forged' }))
+  await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
+  writeFileSync(path, JSON.stringify(plan))
+  expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
+})
+
 it('rejects the wrong Profile, key, generation and stale revision before activation', async () => {
   const { installation } = await store()
   const evidence = archive()

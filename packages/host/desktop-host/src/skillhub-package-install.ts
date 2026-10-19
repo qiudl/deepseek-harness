@@ -296,8 +296,10 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       constants.O_RDONLY | constants.O_NOFOLLOW)
     try {
       const stat = await file.stat()
+      /* v8 ignore next -- verifiedFiles already checked this file; only a concurrent mutation between two opens reaches this guard. */
       if (!stat.isFile() || stat.size !== evidence.size) fail()
       const bytes = await file.readFile()
+      /* v8 ignore next -- verifiedFiles already hashed this file; only a concurrent mutation between two reads reaches this guard. */
       if (digest(bytes) !== evidence.sha256) fail()
       return bytes
     } finally { await file.close() }
