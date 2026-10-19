@@ -58,6 +58,12 @@ type SkillHubPackageInstallationStore = Readonly<{
   current(packageId: string): Promise<SkillHubPackageReceipt | null>
   snapshot(packageId: string): Promise<Readonly<{
     receipt: SkillHubPackageReceipt
+    files: readonly Readonly<{
+      path: string
+      mode: '0644' | '0755'
+      size: number
+      sha256: string
+    }>[]
     readFile(path: string): Promise<Buffer>
   }>>
   prepare(plan: SkillHubPackagePlan, archive: Buffer): Promise<void>
@@ -297,7 +303,18 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     async snapshot(packageId: string) {
       const receipt = await current(packageId)
       if (!receipt) throw Error('skillhub_package_unavailable')
-      return Object.freeze({ receipt: Object.freeze({ ...receipt }),
+      const base = join(versions, receipt.operationId)
+      const plan = await storedJson<SkillHubPackagePlan>(join(base, 'plan.json'))
+      if (!plan) throw Error('skillhub_package_unavailable')
+      planValid(plan, profileId, hostKeyId, bindingGeneration)
+      if (plan.operationId !== receipt.operationId || plan.packageId !== receipt.packageId
+        || plan.versionId !== receipt.versionId || plan.archiveSha256 !== receipt.archiveSha256
+        || plan.manifestSha256 !== receipt.manifestSha256) fail()
+      const files = Object.freeze((await verifiedFiles(plan, base)).map(file => Object.freeze({
+        path: file.path, mode: file.mode as '0644' | '0755',
+        size: file.size, sha256: file.sha256,
+      })))
+      return Object.freeze({ receipt: Object.freeze({ ...receipt }), files,
         readFile: (path: string) => readFixedFile(receipt, path) })
     },
     async prepare(plan: SkillHubPackagePlan, archive: Buffer): Promise<void> {

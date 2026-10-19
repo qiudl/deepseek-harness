@@ -68,6 +68,10 @@ it('pins every file to the admitted version while a later version activates', as
   await installation.activate(prior.operationId, '1', '0')
   const fixed = await installation.snapshot(packageId)
   expect(fixed.receipt.operationId).toBe(prior.operationId)
+  expect(fixed.files).toEqual([
+    { path: 'SKILL.md', mode: '0644', size: markdown.length, sha256: sha(markdown) },
+    { path: 'references/data.txt', mode: '0644', size: resource.length, sha256: sha(resource) },
+  ])
   expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
 
   const replacement = Buffer.from('replacement\n')
