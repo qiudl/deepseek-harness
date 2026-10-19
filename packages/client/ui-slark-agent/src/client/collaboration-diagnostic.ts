@@ -1,4 +1,5 @@
 /** Read-only local failure observations; neither absence nor presence authorizes replay. */
+import { awaitCollaborationRead as wait } from './collaboration-read.ts'
 import type { SessionCollaborationSourceItem } from '@deepseek-ai/dsh-api-session-controller/types'
 
 type Original = SessionCollaborationSourceItem
@@ -42,14 +43,6 @@ export function readCollaborationPlanningFailure(value: unknown, original: Origi
     if (!latest || row.observed_at > latest.observedAt) latest = { reason, observedAt: row.observed_at }
   }
   return latest
-}
-function wait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const abort = () => { reject(new DOMException('Cancelled', 'AbortError')) }
-    signal.addEventListener('abort', abort, { once: true })
-    promise.then(resolve, reject).finally(() => { signal.removeEventListener('abort', abort) })
-    if (signal.aborted) abort()
-  })
 }
 /** Existing result refreshes drive bounded background reads; successful delivery never waits on them. */
 export class CollaborationDiagnosticProjection {

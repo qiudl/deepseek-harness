@@ -42,7 +42,7 @@ const input = (id = 'message') => ({
     },
   ],
 })
-async function harness(journalOpenFailure?: Error, beforeOutput = async (_signal: AbortSignal) => {}) {
+async function harness(journalOpenFailure?: Error, beforeOutput = async (_signal: AbortSignal) => {}, reasoning?: 'high') {
   const root = await mkdtemp(join(tmpdir(), 'req0004-profile-analysis-')),
     ctx = new Context(),
     lifetime = new AbortController()
@@ -62,6 +62,7 @@ async function harness(journalOpenFailure?: Error, beforeOutput = async (_signal
           model: 'selected',
           configuration_generation: '1',
           adapter_fingerprint: 'c'.repeat(64),
+          ...(reasoning === undefined ? {} : { reasoning_effort: reasoning }),
         },
       },
       signal(),
@@ -644,8 +645,8 @@ it.each(['live','handoff','pending','binding','expired','closed','reopened','mem
   } finally {vi.useRealTimers()}
 })
 
-async function admittedRootFixture() {
-  const h = await harness(), roots = await openCollaborationRootJournal(h.facility)
+async function admittedRootFixture(reasoning?: 'high') {
+  const h = await harness(undefined, undefined, reasoning), roots = await openCollaborationRootJournal(h.facility)
   onTestFinished(() => roots.close())
   const capture = await h.capture(input(), signal())
   const pending = await roots.capture({ namespace_id: 'n2_' + 'a'.repeat(64), source: capture.snapshot,
@@ -1213,5 +1214,42 @@ it.each(['pending', 'membership', 'final_root', 'cancelled', 'closed'] as const)
   if (mode === 'cancelled') cancellation.abort()
   if (mode === 'closed') await f.owner.close()
   await expect(f.owner.readRootDiagnostic(f.target, cancellation.signal)).rejects.toThrow()
+  expect(f.h.calls()).toBe(0)
+})
+
+
+it('legacy owners refuse Root diagnostics without opening an analysis journal', async () => {
+  const f = await admittedRootFixture()
+  await expect(f.h.owner.readRootDiagnostic(f.target, signal())).rejects.toThrow('collaboration_root_unavailable')
+  expect(f.h.open).not.toHaveBeenCalled()
+  expect(f.h.calls()).toBe(0)
+})
+it('diagnostics retain frozen reasoning and only the original recovery failure without preparing a model', async () => {
+  const f = await admittedRootFixture('high')
+  const failure = { attempt_request_id: 'retained-attempt', input_manifest_digest: '1'.repeat(64),
+    source_digest: f.root.source_digest, dispatch_digest: '2'.repeat(64), trace_id: f.root.root_trace_id,
+    reason: 'model_failure' as const, observed_at: '2026-10-19T00:00:00.000Z' }
+  const prepare = vi.fn<SessionController['prepareCollaborationRootPlanning']>(),
+    close = vi.fn(async () => {}),
+    journal = { failures: () => [failure, { ...failure, source_digest: 'f'.repeat(64) }], close }
+  const owner = new DesktopCollaborationAnalysis(f.h.capture, f.h.open, f.h.lifetime.signal, undefined, f.reader,
+    { prepare, open: async () => journal as unknown as import('@deepseek-ai/dsh-api-session-controller').CollaborationRootPlanningJournal })
+  onTestFinished(() => owner.close())
+  const result = await owner.readRootDiagnostic(f.target, signal())
+  expect(result.model).toEqual({ provider: 'fixture', model: 'selected', reasoning_effort: 'high' })
+  expect(result.failures).toEqual([{ ...failure, journal: 'recovery' }])
+  expect(prepare).not.toHaveBeenCalled()
+  expect(f.h.calls()).toBe(0)
+  await owner.close()
+  expect(close).toHaveBeenCalledOnce()
+})
+it('private HTTP returns original Root diagnostic metadata without a planning or execution request', async () => {
+  const f = await admittedRootFixture(), http = await httpFixture({ ...f.h, owner: f.owner })
+  const reply = await http.post({ action: 'read_root_diagnostic', target: f.target, binding_key: binding })
+  expect(reply.status).toBe(200)
+  const value = await reply.json() as { value: { root: unknown; failures: unknown[] } }
+  expect(value.value.root).toMatchObject({ command_id: f.root.command_id, root_trace_id: f.root.root_trace_id })
+  expect(value.value.failures).toEqual([])
+  expect(JSON.stringify(value)).not.toContain('original_message')
   expect(f.h.calls()).toBe(0)
 })

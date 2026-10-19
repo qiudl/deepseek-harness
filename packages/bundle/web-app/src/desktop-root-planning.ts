@@ -62,6 +62,15 @@ export class DesktopRootPlanning {
   private assertOpen() {
     if (this.closing) throw Error('collaboration_root_planning_closed')
   }
+  /** Capture the admitted original and its journal for read-only evidence projections. */
+  private async readContext(value: unknown, signal: AbortSignal) {
+    const target = parseHostRootSubmissionTarget(value), active = AbortSignal.any([signal, this.lifetime])
+    active.throwIfAborted(); this.assertOpen()
+    const root = await this.read(target, active)
+    if (root.state !== 'admitted') throw Error('collaboration_root_not_admitted')
+    const journal = await wait(this.journal ??= this.open(), active)
+    return { target, active, root, journal }
+  }
   private async current(p: Pending, signal: AbortSignal) {
     signal.throwIfAborted(); this.lifetime.throwIfAborted(); p.controller.signal.throwIfAborted()
     this.assertOpen()
@@ -178,11 +187,7 @@ export class DesktopRootPlanning {
    * @returns Verified original-root evidence; lease expiry does not hide a consumed dispatch.
    */
   async readEvidence(value: unknown, signal: AbortSignal): Promise<HostRootPlanningEvidence> {
-    const target = parseHostRootSubmissionTarget(value), active = AbortSignal.any([signal, this.lifetime])
-    active.throwIfAborted(); this.assertOpen()
-    const root = await this.read(target, active)
-    if (root.state !== 'admitted') throw Error('collaboration_root_not_admitted')
-    const journal = await wait(this.journal ??= this.open(), active)
+    const { target, active, root, journal } = await this.readContext(value, signal)
     const record = await journal.readLatest(root.namespace_id, root.root_task_id, active)
     const descriptor = { namespace_id: root.namespace_id, command_id: root.command_id, root_task_id: root.root_task_id,
       root_trace_id: root.root_trace_id, payload_digest: root.payload_digest, source_descriptor: {
@@ -208,11 +213,7 @@ export class DesktopRootPlanning {
    * @returns Local failure observations only; absence does not authorize retry.
    */
   async readFailures(value: unknown, signal: AbortSignal): Promise<readonly CollaborationAnalysisFailure[]> {
-    const target = parseHostRootSubmissionTarget(value), active = AbortSignal.any([signal, this.lifetime])
-    active.throwIfAborted(); this.assertOpen()
-    const root = await this.read(target, active)
-    if (root.state !== 'admitted') throw Error('collaboration_root_not_admitted')
-    const journal = await wait(this.journal ??= this.open(), active)
+    const { target, active, root, journal } = await this.readContext(value, signal)
     const failures = [...journal.failures()].filter(failure =>
       failure.source_digest === root.source_digest && failure.trace_id === root.root_trace_id)
     if (!isDeepStrictEqual(await this.read(target, active), root)) throw Error('collaboration_root_planning_root_changed')
