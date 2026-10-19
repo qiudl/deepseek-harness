@@ -6,6 +6,7 @@ import {
   createHostDiagnostics,
   hostDiagnosticReason,
   hostDiagnosticsFileOperations,
+  hostStepRejection,
   type HostDiagnosticsFileOperations,
 } from '../src/host-diagnostics.ts'
 import { HostAuthorityError } from '../src/types.ts'
@@ -205,5 +206,35 @@ describe('Host diagnostics log', () => {
     expect(hostDiagnosticReason(new HostAuthorityError('profile_mismatch'))).toBe('profile_mismatch')
     expect(hostDiagnosticReason(new TypeError('carrier text'))).toBe('TypeError')
     expect(hostDiagnosticReason('rejected')).toBe('unknown')
+  })
+
+  it('prefers the finer local step reason over the wire authority code', () => {
+    expect(hostDiagnosticReason(new HostAuthorityError('unavailable', 'restore_selector_invalid')))
+      .toBe('restore_selector_invalid')
+  })
+
+  it('names the failing local Profile step while preserving the wire authority code', async () => {
+    await expect(hostStepRejection(() => 'ready', 'restore_profile_rejected')).resolves.toBe('ready')
+    await expect(hostStepRejection(async () => 'ready', 'restore_profile_rejected'))
+      .resolves.toBe('ready')
+
+    const named = await hostStepRejection(
+      () => { throw new HostAuthorityError('unavailable') },
+      'restore_selector_invalid',
+    ).catch((error: unknown) => error)
+    expect(named).toBeInstanceOf(HostAuthorityError)
+    expect((named as HostAuthorityError).code).toBe('unavailable')
+    expect((named as HostAuthorityError).diagnosticReason).toBe('restore_selector_invalid')
+
+    const labelled = await hostStepRejection(
+      () => { throw new HostAuthorityError('stale', 'restore_profile_missing') },
+      'restore_profile_rejected',
+    ).catch((error: unknown) => error)
+    expect((labelled as HostAuthorityError).code).toBe('stale')
+    expect((labelled as HostAuthorityError).diagnosticReason).toBe('restore_profile_missing')
+
+    const carrierText = new TypeError('worker unavailable at C:/Users/alice')
+    await expect(hostStepRejection(() => { throw carrierText }, 'restore_profile_rejected'))
+      .rejects.toBe(carrierText)
   })
 })

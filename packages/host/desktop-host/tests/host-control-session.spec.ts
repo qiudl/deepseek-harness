@@ -245,6 +245,24 @@ describe('Host control server session', () => {
     await expect(closing.session.handleRequest(statusRequest(), requestAbort.signal)).rejects.toBeInstanceOf(HostAuthorityError)
   })
 
+  it('records the finer local step reason while the broker still receives the authority code', async () => {
+    const record = vi.fn()
+    const authority = fixture(undefined, {
+      dispatchAuthorized: () => {
+        throw new HostAuthorityError('unavailable', 'restore_profile_rejected')
+      },
+      diagnostics: { record },
+    })
+    await authority.session.handleRequest(inspectRequest(), new AbortController().signal)
+    await expect(authority.session.handleRequest(statusRequest(), new AbortController().signal))
+      .resolves.toMatchObject({ type: 'error' })
+    expect(record).toHaveBeenCalledWith({
+      event: 'control-session',
+      reason: 'restore_profile_rejected',
+      method: 'profile.status',
+    })
+  })
+
   it('records one control-session diagnostic for a rejected authorized request', async () => {
     const record = vi.fn()
     const authority = fixture(undefined, {

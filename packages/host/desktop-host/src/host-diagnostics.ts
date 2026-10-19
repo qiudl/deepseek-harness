@@ -50,7 +50,7 @@ export interface HostDiagnosticsOptions {
 
 /** Production filesystem operations; tests inject mapped equivalents to run on any platform. */
 export const hostDiagnosticsFileOperations: HostDiagnosticsFileOperations = {
-  ensureDirectory: path => { mkdirSync(path, { recursive: true }) },
+  ensureDirectory: (path) => { mkdirSync(path, { recursive: true }) },
   append: (path, contents) => { appendFileSync(path, contents) },
   length: path => existsSync(path) ? statSync(path).size : undefined,
   replace: (source, target) => {
@@ -78,12 +78,32 @@ function recordToken(value: string | undefined, maximumChars: number): string | 
 /**
  * Map one rejected operation onto a stable, path-free diagnostics reason.
  * @param error - rejection raised by Host authority or its dispatcher.
- * @returns the Host authority code, otherwise the error name, otherwise `unknown`.
+ * @returns the finer local reason when the rejection names one, otherwise the Host authority code,
+ *   otherwise the error name, otherwise `unknown`.
  */
 export function hostDiagnosticReason(error: unknown): string {
-  if (error instanceof HostAuthorityError) return error.code
+  if (error instanceof HostAuthorityError) return error.diagnosticReason ?? error.code
   if (error instanceof Error) return error.name
   return 'unknown'
+}
+
+/**
+ * Name the failing step of one local Profile operation for local diagnostics.
+ * The control protocol still carries the Host authority code; only the diagnostics log learns
+ * which step rejected, so a stale selector is distinguishable from a rejected unlock or worker.
+ * @param operation - step under diagnosis.
+ * @param reason - stable, path-free reason recorded when the step rejects.
+ * @returns the step result unchanged.
+ */
+export async function hostStepRejection<T>(operation: () => Promise<T> | T, reason: string): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (error instanceof HostAuthorityError && error.diagnosticReason === undefined) {
+      throw new HostAuthorityError(error.code, reason)
+    }
+    throw error
+  }
 }
 
 /**

@@ -117,7 +117,7 @@ import type {
 import { HostAuthorityError } from './types.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
-import type { HostDiagnostics } from './host-diagnostics.ts'
+import { hostStepRejection, type HostDiagnostics } from './host-diagnostics.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
@@ -1367,19 +1367,34 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.bootstrap_local' || frame.method === 'profile.restore_local') {
           let profile: ReadyProfileIdentity
           if (frame.method === 'profile.bootstrap_local') {
-            profile = await this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId))
+            profile = await hostStepRejection(
+              () => this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId)),
+              'bootstrap_local_rejected',
+            )
           } else {
-            const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
-            profile = await this.options.host.restoreLocalProfile({
-              profileId: selector.profile_id as never,
-              bindingGeneration: selector.binding_generation,
-              ...profileUnlockFields(frame.params, ownerId),
-            })
+            const selector = await hostStepRejection(
+              () => verifyProfileSelector(this.options.identity, frame.params.profile_selector),
+              'restore_selector_invalid',
+            )
+            profile = await hostStepRejection(
+              () => this.options.host.restoreLocalProfile({
+                profileId: selector.profile_id as never,
+                bindingGeneration: selector.binding_generation,
+                ...profileUnlockFields(frame.params, ownerId),
+              }),
+              'restore_profile_rejected',
+            )
           }
-          const persistenceGeneration = await this.options.profilePersistenceGeneration(profile.profileId)
+          const persistenceGeneration = await hostStepRejection(
+            () => this.options.profilePersistenceGeneration(profile.profileId),
+            'local_persistence_unavailable',
+          )
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
+            result: await hostStepRejection(
+              () => localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
+              'local_profile_result_invalid',
+            ),
           })
         } else if (frame.method === 'profile.status') {
           const status = this.options.host.getProfileStatus({
