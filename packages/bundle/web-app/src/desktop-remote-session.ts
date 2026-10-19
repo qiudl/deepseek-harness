@@ -89,7 +89,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -151,6 +151,28 @@ export class DesktopRemoteSessionExecutor {
         this.directories.delete(command.grant_id)
         return await this.gateway.invoke({ namespace: 'workspace', method: 'create',
           args: { request: { path: grant.path } }, signal }) as HostRemoteSessionJson
+      }
+      case 'terminal.apply': {
+        if (command.request.sessionId !== command.session_id) throw new Error('desktop terminal: Session mismatch')
+        try {
+          const value = await this.gateway.invoke({ namespace: 'terminal', method: command.request.method,
+            args: command.request.args, signal })
+          return value === undefined ? { ok: true } : { ok: true, value: value as HostRemoteSessionJson }
+        } catch (error) {
+          if (row(error) && error.isDSHRemoteError === true) {
+            const details: Record<string, HostRemoteSessionJson> = {}
+            if (error.code === 'terminal/control-unavailable') {
+              if (!row(error.details) || !['read-only', 'not-running'].includes(String(error.details.reason))) throw error
+              details.reason = String(error.details.reason)
+            } else if (error.code === 'terminal/limit-reached') {
+              if (!row(error.details) || typeof error.details.limit !== 'number' || !Number.isSafeInteger(error.details.limit)
+                || error.details.limit < 1) throw error
+              details.limit = error.details.limit
+            } else if (error.code !== 'terminal/unavailable') throw error
+            return { ok: false, error: { code: error.code, message: 'Terminal operation was rejected.', details } }
+          }
+          throw error
+        }
       }
       case 'credentials.apply': {
         try {

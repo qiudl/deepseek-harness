@@ -1,3 +1,4 @@
+import { parseWorkbenchTerminalRequest } from './workbench-terminal.js'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
 import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
 import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
@@ -538,6 +539,13 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     return { operation: 'session.list', command_id }
   }
 
+  if (command.operation === 'terminal.apply') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseWorkbenchTerminalRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (!request || request.sessionId !== session_id) reject()
+    return { operation: 'terminal.apply', command_id, session_id, control: remoteSessionControlProof(command.control), request }
+  }
   if (command.operation === 'credentials.apply') {
     exactKeys(command, ['operation', 'command_id', 'request'])
     const request = parseWorkbenchCredentialWrite(command.request)

@@ -211,3 +211,6 @@ export type { WorkbenchSettingsWrite, WorkbenchSettingsJson } from './workbench-
 
 export { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
 export type { WorkbenchCredentialWrite } from './workbench-credentials.js'
+
+export { parseWorkbenchTerminalRequest } from './workbench-terminal.js'
+export type { WorkbenchTerminalRequest } from './workbench-terminal.js'

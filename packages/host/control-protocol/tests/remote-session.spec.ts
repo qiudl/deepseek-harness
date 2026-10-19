@@ -15,6 +15,15 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('rejects terminal proof omissions and cross-Session arguments before dispatch', () => {
+    const command = { operation: 'terminal.apply', command_id: randomUUID(), session_id: 's1',
+      control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
+      request: { sessionId: 's1', method: 'list', args: { sessionId: 's1' } } }
+    for (const changed of [{ ...command, control: undefined }, { ...command, request: {} },
+      { ...command, session_id: 's2' }, { ...command, request: { ...command.request, args: { sessionId: 's2' } } }]) {
+      expect(() => decode(frame(changed))).toThrow()
+    }
+  })
   it('round-trips the closed command set', () => {
     const sessionId = 'session-0123456789abcdef'
     const commandId = randomUUID()
@@ -31,6 +40,7 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'control.release', command_id: commandId, session_id: sessionId,
         controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
       { operation: 'session.list', command_id: commandId },
+      { operation: 'terminal.apply', command_id: commandId, session_id: sessionId, control, request: { sessionId, method: 'list', args: { sessionId } } },
       { operation: 'credentials.apply', command_id: commandId, request: { method: 'set', args: { ref: 'TEST_API_KEY', value: 'synthetic' } } },
       { operation: 'settings.apply', command_id: commandId, request: { method: 'update', args: { ns: 'general', patch: { locale: 'zh' }, expectedRevision: 1 } } },
       { operation: 'directory.pick', command_id: commandId, client_id: randomUUID() },

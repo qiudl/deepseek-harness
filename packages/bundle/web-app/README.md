@@ -279,3 +279,5 @@ The same file capability admits the exact `workspaceFiles/changes` stream. Gatew
 The personal `settings.apply` command admits only the existing update, replace, and mutate form operations. It retains provider revisions and redacted namespace responses, bounds intents to 32 KiB, rejects authority selectors and unsafe JSON, and preserves typed conflict/rejection results without private exception text. It never changes the selected Profile or acquires conversation control.
 
 The personal `credentials.apply` command admits only exact set/unset operations. Reference names retain the existing grammar and are capped at 128 characters; write-only values are capped at 16 KiB. The existing credential provider owns storage. Success has no returned value, known refusal details name only the reference, and neither provider values nor private diagnostics are echoed.
+
+Controlled terminal calls retain the original Gateway arguments and reject cross-Session input; shell input and lifecycle changes require the current Host-issued Session proof.

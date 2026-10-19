@@ -22,6 +22,41 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('binds terminal calls to live control and preserves only typed terminal failures', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'session-1')
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control)
+    const signal = new AbortController().signal
+    const command = { operation: 'terminal.apply' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session-1', control: proof,
+      request: { sessionId: 'session-1', method: 'write' as const,
+        args: { agent: 'session-1', id: 't-1', attachmentId: 'a-1', data: 'hello\n' } } }
+    await expect(executor.execute(command, signal)).resolves.toEqual({ ok: true })
+    expect(invoke).toHaveBeenCalledExactlyOnceWith({ namespace: 'terminal', method: 'write', args: command.request.args, signal })
+    invoke.mockResolvedValueOnce({ id: 't-1' })
+    await expect(executor.execute(command, signal)).resolves.toEqual({ ok: true, value: { id: 't-1' } })
+    for (const [code, details] of [['terminal/unavailable', {}],
+      ['terminal/control-unavailable', { reason: 'read-only' }], ['terminal/control-unavailable', { reason: 'not-running' }],
+      ['terminal/limit-reached', { limit: 8 }]] as const) {
+      invoke.mockRejectedValueOnce({ isDSHRemoteError: true, code, details, message: 'private process info' })
+      await expect(executor.execute(command, signal)).resolves.toEqual({ ok: false,
+        error: { code, details, message: 'Terminal operation was rejected.' } })
+    }
+    for (const error of [Error('transport'), { isDSHRemoteError: true, code: 'other' },
+      { isDSHRemoteError: true, code: 'terminal/control-unavailable' },
+      { isDSHRemoteError: true, code: 'terminal/control-unavailable', details: { reason: 'other' } },
+      ...[undefined, { limit: '8' }, { limit: 1.5 }, { limit: 0 }].map(details =>
+        ({ isDSHRemoteError: true, code: 'terminal/limit-reached', details }))]) {
+      invoke.mockRejectedValueOnce(error)
+      await expect(executor.execute(command, signal)).rejects.toBe(error)
+    }
+    const count = invoke.mock.calls.length
+    await expect(executor.execute({ ...command, request: { ...command.request, sessionId: 'other' } }, signal)).rejects.toThrow('Session mismatch')
+    await expect(executor.execute({ ...command, control: undefined } as never, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...command, control: { ...proof, epoch: proof.epoch + 1 } }, signal)).rejects.toThrow()
+    expect(invoke).toHaveBeenCalledTimes(count)
+  })
   it('writes credentials once and never returns provider secrets or exception messages', async () => {
     const invoke = vi.fn().mockResolvedValue({ value: 'synthetic-secret' })
     const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
