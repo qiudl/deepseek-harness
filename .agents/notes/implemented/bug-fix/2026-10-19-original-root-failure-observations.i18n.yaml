@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-19-original-root-failure-observations.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-19-original-root-failure-observations.md
+/agent-note-original-root-failure-observations:
+  en: 0644e06daddf5e54
+  zh: 635163231ba76404
+/agent-note-original-root-failure-observations/problem:
+  en: d496ca3117573574
+  zh: ea81285d949db022
+/agent-note-original-root-failure-observations/decision:
+  en: ecd41e6ca1ab55af
+  zh: 9563650bbc0bbac9
+/agent-note-original-root-failure-observations/alternatives-considered:
+  en: 58f2816e5c283ccb
+  zh: 15a1b296a82dc1e7
+/agent-note-original-root-failure-observations/consequences:
+  en: ba4136a4122b271c
+  zh: cbcb064537d5679f

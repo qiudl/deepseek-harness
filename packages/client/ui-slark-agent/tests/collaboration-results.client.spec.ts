@@ -1490,3 +1490,85 @@ it('ignores a settled automatic trace response whose consumer resumes after navi
   await background
   expect(f.model.getSnapshot().groups[0]?.trace?.page?.root.state_version).toBe('1')
 })
+
+it('reads long-planning diagnostics in the background and never delays a delivered Agent reply', async () => {
+  const f = fixture(); let now = 0
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+  onTestFinished(() => { clock.mockRestore() })
+  const held = Promise.withResolvers<unknown>()
+  onTestFinished(async () => { held.resolve({ ok: false, errorCode: 'gone' }); await new Promise<void>(resolve => setImmediate(resolve)) })
+  const diagnostic = vi.fn(async () => held.promise)
+  f.bridge.collaborationRootExecution = diagnostic
+  f.bridge.collaborationPending = async request => ({ ok: true, value: { source: request.source, pending_items: [], frozen_task_count: 0,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1', planning_state: 'planning', route_decision: 'undecided' } } })
+  f.changeBridge({ ...f.bridge, collaborationDiagnosticAvailable: true })
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  await f.model.refresh()
+  expect(diagnostic).not.toHaveBeenCalled()
+  now = 30_000; await f.model.refresh()
+  expect(diagnostic).toHaveBeenCalledWith({ action: 'diagnostic', source })
+  expect(f.model.getSnapshot().groups[0]?.planningState).toBe('planning')
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [reply] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot().groups[0]?.replies[0]?.answer).toBe(reply.answer)
+  held.resolve({ ok: true, value: { root: { source_descriptor: { ...source, snapshot_digest: original.snapshot_digest },
+    root_trace_id: 'b'.repeat(32) }, failures: [{ reason: 'timeout', observed_at: '2026-10-19T00:00:00.000Z',
+    source_digest: original.snapshot_digest, trace_id: 'b'.repeat(32) }] } })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  expect(f.model.getSnapshot().groups[0]?.planningFailure).toBeUndefined()
+  expect(f.model.getSnapshot().groups[0]?.replies[0]?.answer).toBe(reply.answer)
+  expect(diagnostic).toHaveBeenCalledOnce()
+})
+it('does not send new diagnostic actions to an older Main bridge', async () => {
+  const f = fixture(), diagnostic = vi.fn(async () => ({}))
+  let now = 0
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+  onTestFinished(() => { clock.mockRestore() })
+  f.bridge.collaborationRootExecution = diagnostic
+  f.bridge.collaborationPending = async request => ({ ok: true, value: { source: request.source, pending_items: [], frozen_task_count: 0,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1', planning_state: 'planning', route_decision: 'undecided' } } })
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  await f.model.refresh(); now = 90_000; await f.model.refresh()
+  expect(diagnostic).not.toHaveBeenCalled()
+  expect(f.model.getSnapshot().groups[0]?.planningState).toBe('planning')
+})
+
+it('publishes an original planning failure from Main without changing task state', async () => {
+  const f = fixture(); let now = 0
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+  onTestFinished(() => { clock.mockRestore() })
+  const held = Promise.withResolvers<unknown>()
+  onTestFinished(async () => { held.resolve({ ok: false, errorCode: 'gone' }); await new Promise<void>(resolve => setImmediate(resolve)) })
+  const diagnostic = vi.fn(async () => held.promise)
+  f.changeBridge({ ...f.bridge, collaborationDiagnosticAvailable: true, collaborationRootExecution: diagnostic,
+    collaborationPending: async request => ({ ok: true, value: { source: request.source, pending_items: [], frozen_task_count: 0,
+      plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1', planning_state: 'planning', route_decision: 'undecided' } } }) })
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  const changed = vi.fn(), stop = f.model.subscribe(changed)
+  onTestFinished(stop)
+  await f.model.refresh()
+  await new Promise<void>(resolve => setImmediate(resolve))
+  expect(f.model.getSnapshot().groups[0]?.planningState).toBe('planning')
+  expect(f.model.getSnapshot().groups[0]?.planningFailure).toBeUndefined()
+  now = 30_000; await f.model.refresh()
+  expect(diagnostic).toHaveBeenCalledExactlyOnceWith({ action: 'diagnostic', source })
+  const notifications = changed.mock.calls.length
+  held.resolve({ ok: true, value: { root: { source_descriptor: { ...source, snapshot_digest: original.snapshot_digest },
+    root_trace_id: 'b'.repeat(32) }, failures: [{ reason: 'timeout', observed_at: '2026-10-19T00:00:00.000Z',
+    source_digest: original.snapshot_digest, trace_id: 'b'.repeat(32) }] } })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  expect(f.model.getSnapshot().groups[0]).toMatchObject({ planningState: 'planning', replies: [],
+    planningFailure: { reason: 'timeout', observedAt: '2026-10-19T00:00:00.000Z' } })
+  expect(changed.mock.calls.length).toBeGreaterThan(notifications)
+  expect(diagnostic).toHaveBeenCalledExactlyOnceWith({ action: 'diagnostic', source })
+  const observed = [f.model.getSnapshot().groups[0]?.planningFailure]
+  changed.mockImplementation(() => { observed.push(f.model.getSnapshot().groups[0]?.planningFailure) })
+  await f.model.refresh()
+  expect(observed.length).toBeGreaterThan(1)
+  expect(observed.every(item => item?.reason === 'timeout')).toBe(true)
+  expect(diagnostic).toHaveBeenCalledOnce()
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [reply] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot().groups[0]?.planningFailure).toBeUndefined()
+  expect(f.model.getSnapshot().groups[0]?.replies[0]?.answer).toBe(reply.answer)
+})

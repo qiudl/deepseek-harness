@@ -355,3 +355,30 @@ it('does not record a consumed-attempt failure when model preparation rejects be
   expect(h.adapter.requests).toBe(0)
   await reopened.close()
 })
+
+it('reads fresh-attempt failures after model settlement without preparing another attempt', async () => {
+  const h = await harness(), owner = h.make(), binding = 'a'.repeat(64)
+  const d = await owner.prepare(h.target, binding, h.signal)
+  h.adapter.before = async () => { throw Error('collaboration_analysis_failed') }
+  await expect(owner.dispatch(d.attempt_request_id, binding, dispatchGrant(d), h.signal)).rejects.toThrow()
+  await owner.close()
+  const recovered = h.make(), failures = await recovered.readFailures(h.target, h.signal)
+  expect(failures).toMatchObject([{ reason: 'model_failure', trace_id: h.root.root_trace_id,
+    source_digest: h.root.source_digest, attempt_request_id: d.attempt_request_id }])
+  expect(h.adapter.requests).toBe(1)
+  expect(h.preparing).toHaveBeenCalledTimes(1)
+  h.setMember(false)
+  await expect(recovered.readFailures(h.target, h.signal)).rejects.toThrow('membership')
+})
+it.each(['pending', 'changed', 'cancelled', 'closed'] as const)('fresh diagnostic failure reads reject %s without a model call', async (mode) => {
+  const h = await harness(), owner = h.make(), cancellation = new AbortController()
+  if (mode === 'pending') h.setRoot(h.pending)
+  if (mode === 'changed') {
+    let read = 0
+    h.setRead(async () => { if (++read === 2) h.setRoot({ ...h.root, root_trace_id: 'f'.repeat(32) as typeof h.root.root_trace_id }) })
+  }
+  if (mode === 'cancelled') cancellation.abort()
+  if (mode === 'closed') await owner.close()
+  await expect(owner.readFailures(h.target, cancellation.signal)).rejects.toThrow()
+  expect(h.adapter.requests).toBe(0)
+})
