@@ -42,15 +42,15 @@ kind: "package-reference"
 <details>
 <summary>实现细节——点击展开</summary>
 
-Client 插件提供 `ctx.fileUpload`。其 `upload()` 方法接收所属 Session 标识，组装原始路由请求，并为精确字节调用生成的 Remote。提供方只读取一次可选的 Cordis 启动前 `__DSH_FILE_UPLOAD__` 钩子。没有该钩子时，每个 Blob 或 stream 请求拥有一个短期 Worker，并在完成、失败或取消后释放。存在该钩子时，服务通过页面自己提供的 Fetch 载体发送请求体；Web Worker runtime 会通过请求帧转移 stream 请求体，再以带背压的分片形式交给 Host HTTP bridge。
+Client 插件提供 `ctx.fileUpload`。其 `upload()` 方法接收所属 Session 标识，组装原始路由请求，并为精确字节调用生成的 Remote。提供方只读取一次可选的 Cordis 启动前 `__DSH_FILE_UPLOAD__` 钩子。没有该钩子时，每个 Blob 或 stream 请求拥有一个短期 Worker，并在完成、失败或取消后释放。存在该钩子时，服务通过页面自己提供的 Fetch 载体发送请求体，并把上传观察器作为钩子的可选第三个参数。能够测量已消费字节的载体通过该观察器报告进度；不能测量的载体不调用它。Web Worker runtime 会通过请求帧转移 stream 请求体，再以带背压的分片形式交给 Host HTTP bridge。
 
 Host 插件提供 `ctx.fileUploads`。它拥有经过认证的流式路由、编码 Remote 兜底、命令凭证解析器与暂存凭证生命周期；编码准入、附件错误识别与字节存储仍由 `ctx.attachments` 提供。解析器使用每个 Agent 的精确运行时上下文。凭证表以接收方 Agent 的 Session 对象为键。Session Controller 注册可恢复休眠普通 Agent 的解析器，并在 prompt 准入时消费凭证。同一时间只能有一个解析器注册；所属插件释放时会在重载前清理该注册，重复调用旧清理回调不能移除替代注册。Prompt 投递通过可释放事务持有每个凭证绑定。成功投递提交事务前，释放会恢复原绑定；提交后，队列或历史观察会退休该凭证。
 
 | 文件 | 职责 |
 |---|---|
 | [`src/index.ts`](src/index.ts) | Host 流式路由、附件服务准入与 Session 所属的凭证生命周期 |
-| [`src/types.ts`](src/types.ts) | 编码请求、凭证与持久结果类型 |
-| [`src/client/contract.ts`](src/client/contract.ts) | Client 上传、进度与页面钩子类型 |
+| [`src/types.ts`](src/types.ts) | 编码请求、凭证、持久结果与页面载体类型 |
+| [`src/client/contract.ts`](src/client/contract.ts) | Client 上传服务契约 |
 | [`src/client/runtime.ts`](src/client/runtime.ts) | 专用 Worker 与页面自有载体实现 |
 | [`src/client/index.ts`](src/client/index.ts) | Client 插件注册与 `ctx.fileUpload` 声明 |
 

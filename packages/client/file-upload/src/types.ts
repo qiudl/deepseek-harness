@@ -28,7 +28,17 @@ export type FileUploadReceiptId = Branded<'file-upload-receipt-id'>
  * @param init - raw request body, headers, and cancellation signal.
  * @returns the Host response.
  */
-export type FileUploadFetch = (input: string | URL, init: RequestInit) => Promise<Response>
+/** Monotone byte progress emitted by a page-owned upload carrier. */
+export interface FileUploadCarrierProgress {
+  readonly loaded: number
+  readonly total?: number
+}
+
+export type FileUploadFetch = (
+  input: string | URL,
+  init: RequestInit,
+  onProgress?: (progress: FileUploadCarrierProgress) => void,
+) => Promise<Response>
 
 /** Pre-Cordis hook supplied by a page whose Host runs in another execution context. */
 export interface ClientFileUploadHooks {

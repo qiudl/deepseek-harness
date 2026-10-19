@@ -163,7 +163,7 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
       ownsHost: true,
     }
     ;(globalThis as ClientFileUploadGlobal).__DSH_FILE_UPLOAD__ = {
-      fetch: (input, init) => tunnel.fetch(input, init),
+      fetch: (input, init, onProgress) => tunnel.fetch(input, init, onProgress),
     }
     await applyIndexInjections(payload.injections, src => tunnel.loadBundle(src))
     ready.resolve()

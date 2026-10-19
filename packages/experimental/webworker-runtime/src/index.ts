@@ -9,7 +9,7 @@ export {
 export {
   parseInboundFrame,
   type TunnelAbortFrame, type TunnelInboundFrame, type TunnelOutboundFrame, type TunnelRequestFrame,
-  type TunnelRequestId, type TunnelResponseChunkFrame, type TunnelResponseEndFrame,
+  type TunnelRequestId, type TunnelRequestProgressFrame, type TunnelResponseChunkFrame, type TunnelResponseEndFrame,
   type TunnelResponseErrorFrame, type TunnelResponseFrame, type TunnelResponseHeadFrame,
   type TunnelStreamEndFrame, type TunnelStreamErrorFrame, type TunnelStreamUplinkEndFrame,
   type TunnelStreamUplinkItemFrame, type TunnelStreamItemFrame, type TunnelStreamOpenFrame,

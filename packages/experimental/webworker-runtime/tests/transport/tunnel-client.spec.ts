@@ -125,6 +125,30 @@ function stubWorker(): {
   check('a Blob request body stays opaque', (sent[0] as unknown as { body: unknown }).body, body)
 }
 
+// A verified external carrier can report exact request-body progress until the response settles.
+{
+  const { worker, deliver } = stubWorker()
+  const tunnel = new WorkerTunnel(worker)
+  const progress: Array<{ loaded: number; total?: number }> = []
+  const response = tunnel.fetch('/upload', { method: 'POST', body: new Blob(['large']) },
+    (value) => { progress.push(value) })
+  deliver({ t: 'req-progress', id: 1, loaded: 0.5 })
+  deliver({ t: 'req-progress', id: 1, loaded: 1 })
+  deliver({ t: 'req-progress', id: 1, loaded: 2, total: 1.5 })
+  deliver({ t: 'req-progress', id: 1, loaded: 2, total: 1 })
+  deliver({ t: 'req-progress', id: 1, loaded: 2, total: 5 })
+  deliver({ t: 'req-progress', id: 1, loaded: 5, total: 5 })
+  deliver({ t: 'req-progress', id: 1, loaded: 4, total: 5 })
+  deliver({ t: 'res', id: 1, status: 200, headers: {} })
+  deliver({ t: 'req-progress', id: 1, loaded: 5, total: 5 })
+  await response
+  check('request progress is monotone and stops after completion', progress, [
+    { loaded: 1 },
+    { loaded: 2, total: 5 },
+    { loaded: 5, total: 5 },
+  ])
+}
+
 // A streamed reply reassembles in order and closes.
 {
   const { worker, deliver } = stubWorker()

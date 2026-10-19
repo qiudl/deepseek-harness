@@ -75,6 +75,14 @@ export interface TunnelResponseFrame {
   readonly message?: string | undefined
 }
 
+/** Byte progress for one request body consumed by an external transport owner. */
+export interface TunnelRequestProgressFrame {
+  readonly t: 'req-progress'
+  readonly id: TunnelRequestId
+  readonly loaded: number
+  readonly total?: number | undefined
+}
+
 /** Head of a streamed response, followed by chunks and one terminator. */
 export interface TunnelResponseHeadFrame {
   readonly t: 'res-head'
@@ -144,6 +152,7 @@ export interface TunnelViewTextFrame {
 /** Frames the worker emits. */
 export type TunnelOutboundFrame =
   | TunnelViewTextFrame
+  | TunnelRequestProgressFrame
   | TunnelResponseFrame
   | TunnelResponseHeadFrame
   | TunnelResponseChunkFrame
