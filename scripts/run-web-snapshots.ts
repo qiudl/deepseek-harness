@@ -6,6 +6,7 @@ const serialFiles = [
   'apps/web/tests/hmr-live.e2e.ts',
   'apps/web/tests/client-plugin-live.e2e.ts',
   'apps/web/tests/native-workbench.e2e.ts',
+  'apps/web/tests/native-workbench-terminal.e2e.ts',
 ]
 const workerRaw = process.env.DSH_WEB_SNAPSHOT_WORKERS
 const workers = Number.parseInt(workerRaw ?? '', 10)
