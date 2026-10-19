@@ -245,8 +245,10 @@ export class CollaborationResultsModel {
         const execution = this.executions.get(group.original.snapshot_digest)
         const trace = this.traces.get(group.original.snapshot_digest)
         const provisionalResponses = this.responses?.read(group.original, group.replies.map(reply => reply.invocation_id)) ?? []
-        const planningFailure = this.diagnostics?.observe(group.original, group.phase !== 'error' && !group.pendingUnavailable &&
-          group.planningState === 'planning' && !group.replies.length && !group.pending?.length && !provisionalResponses.length)
+        const eligible = group.phase !== 'error' && !group.pendingUnavailable &&
+          !group.replies.length && !group.pending?.length && !provisionalResponses.length
+        const planning = group.pending === undefined && group.planningState === undefined ? undefined : group.planningState === 'planning'
+        const planningFailure = this.diagnostics?.observe(group.original, eligible ? planning : false)
         if (!this.responses && !group.provisionalResponses && group.execution === execution && group.trace === trace &&
           group.planningFailure === planningFailure) return group
         const { execution: _old, trace: _trace, provisionalResponses: _provisional, planningFailure: _failure, ...original } = group

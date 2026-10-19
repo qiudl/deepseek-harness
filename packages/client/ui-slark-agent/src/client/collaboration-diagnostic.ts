@@ -61,11 +61,12 @@ export class CollaborationDiagnosticProjection {
   }
   /** Observe long-running planning without introducing another timer or changing task state.
    * @param original - Original Source already checked by the result reader.
-   * @param eligible - Still planning, without pending questions or Agent output.
+   * @param eligible - Planning without output; false stops observations, undefined preserves them while planning metadata loads.
    * @returns A historical finite failure observation, never an execution or retry decision.
    */
-  observe(original: Original, eligible: boolean): CollaborationPlanningFailure | undefined {
+  observe(original: Original, eligible: boolean | undefined): CollaborationPlanningFailure | undefined {
     const digest = original.snapshot_digest
+    if (eligible === undefined) return this.entries.get(digest)?.failure
     if (!eligible) {
       this.entries.delete(digest); this.active.get(digest)?.abort()
       return undefined

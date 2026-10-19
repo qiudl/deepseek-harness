@@ -113,3 +113,18 @@ it('discards a read if its synchronous bridge call closes the owning view before
   await drain()
   expect(changed).not.toHaveBeenCalled()
 })
+
+it('retains observations during unknown planning metadata without starting another read', async () => {
+  const f = fixture()
+  expect(f.projection.observe(original, undefined)).toBeUndefined()
+  f.projection.observe(original, true); f.advance()
+  expect(f.projection.observe(original, undefined)).toBeUndefined()
+  expect(f.read).not.toHaveBeenCalled()
+  f.projection.observe(original, true)
+  f.held[0]!.resolve(response()); await drain()
+  f.advance()
+  expect(f.projection.observe(original, undefined)).toEqual({ reason: 'timeout', observedAt: '2026-10-19T00:00:00.000Z' })
+  expect(f.read).toHaveBeenCalledOnce()
+  f.projection.observe(original, true)
+  expect(f.read).toHaveBeenCalledTimes(2)
+})

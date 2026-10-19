@@ -14,6 +14,8 @@ The Host exposes committed analysis failures through a separately negotiated `re
 
 The result model reads diagnostics in the background only after it has observed planning without questions or Agent output for thirty seconds. Existing refreshes drive reads; each model generation holds at most two underlying IPC read slots, with thirty seconds between completed reads for an original message. Cancellation retains a slot until the bounded Main read settles. Delivery rendering does not await diagnosis.
 
+Delivery pages can arrive before planning metadata. While that metadata is pending for the same authorized original, the projection retains existing observations without starting a diagnostic read. Once planning, clarification, output or a read failure is known, normal eligibility rules apply.
+
 The original message displays a localized historical failure observation while the coordinator still reports planning. The observation does not change the coordinator state or declare execution terminal. Agent output or a clarification removes the notice. Account, connection, workspace and view lifetime changes discard observations and ignore late replies. Older Main bridges receive no diagnostic action.
 
 ## Alternatives considered
