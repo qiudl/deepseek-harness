@@ -5,6 +5,7 @@ import type { HostSavedAnalysisFields, HostRootAnalysisOutput } from './root-ana
 import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJournalCommand, HostRootJournalMetadata, HostRootAnalysisInput, HostRootSubmissionTarget, HostRootSubmissionDescriptor } from './root-authority.ts'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
+import type { HostSkillHubExecutionReceipt } from './skillhub-execution-receipt.ts'
 
 /** Current on-wire Host control protocol version. */
 export type HostControlProtocolVersion = 1
@@ -535,6 +536,72 @@ export interface ProfileSkillHubPackageResult {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.skillhub_package'
   readonly result: { readonly receipt: HostSkillHubPackageSignedReceipt | null }
+}
+
+/** One immutable package object selected by an exact signed activation receipt. */
+export type HostSkillHubPackageSnapshotTarget =
+  | { readonly kind: 'manifest' }
+  | { readonly kind: 'file'; readonly path: string }
+
+/** Read one bounded chunk without following the package's mutable current pointer. */
+export interface ProfileSkillHubPackageSnapshotRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_snapshot'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly receipt: HostSkillHubPackageSignedReceipt
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+  }
+}
+
+/** Exact-operation bytes bounded below the Host frame ceiling. */
+export interface ProfileSkillHubPackageSnapshotResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_snapshot'
+  readonly result: {
+    readonly operation_id: string
+    readonly manifest_sha256: HostControlSha256
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+    readonly total_bytes: number
+    readonly chunk_base64url: string
+    readonly complete: boolean
+  }
+}
+
+/** Daemon-observed execution fields that the authorized Host binds to one fixed package. */
+export type HostSkillHubExecutionReport = Pick<HostSkillHubExecutionReceipt,
+  'effectId' | 'requestDigest' | 'subject' | 'registryId' | 'hostId' | 'profileId'
+  | 'bindingGeneration' | 'equipmentRevision' | 'hostRevision'
+  | 'computerAuthorizationVersion' | 'sandboxOperationId' | 'containerId' | 'backendId'
+  | 'image' | 'entry' | 'args' | 'exitCode' | 'stdoutSha256' | 'stderrSha256'
+  | 'interrupted' | 'quiescent' | 'network' | 'readonly'>
+
+/** Ask the current Profile-authorized Host to sign one completed sandbox report. */
+export interface ProfileSkillHubExecutionReceiptRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_execution_receipt'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly package_receipt: HostSkillHubPackageSignedReceipt
+    readonly execution: HostSkillHubExecutionReport
+  }
+}
+
+/** Installation-signed execution fact for the exact fixed package and sandbox result. */
+export interface ProfileSkillHubExecutionReceiptResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_execution_receipt'
+  readonly result: { readonly receipt: HostSkillHubExecutionReceipt }
 }
 
 /** Open the same Profile through a Main-only local view lease. */
@@ -1865,6 +1932,10 @@ export type HostControlFrame =
   | ProfileSkillHubPackageChunkResult
   | ProfileSkillHubPackageRequest
   | ProfileSkillHubPackageResult
+  | ProfileSkillHubPackageSnapshotRequest
+  | ProfileSkillHubPackageSnapshotResult
+  | ProfileSkillHubExecutionReceiptRequest
+  | ProfileSkillHubExecutionReceiptResult
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
   | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest

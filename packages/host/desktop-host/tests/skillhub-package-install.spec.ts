@@ -60,6 +60,54 @@ it('retains the old complete package when a truncated or changed archive is prep
   expect(await installation.readFile(packageId, 'references/data.txt')).toEqual(resource)
 })
 
+it('pins every file to the admitted version while a later version activates', async () => {
+  const { root, installation } = await store()
+  const first = archive()
+  const prior = target('version-1', first)
+  await installation.prepare(prior, first.bytes)
+  await installation.activate(prior.operationId, '1', '0')
+  const fixed = await installation.snapshot(packageId)
+  expect(fixed.receipt.operationId).toBe(prior.operationId)
+  expect(fixed.files).toEqual([
+    { path: 'SKILL.md', mode: '0644', size: markdown.length, sha256: sha(markdown) },
+    { path: 'references/data.txt', mode: '0644', size: resource.length, sha256: sha(resource) },
+  ])
+  expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
+
+  const replacement = Buffer.from('replacement\n')
+  const next = archive(replacement)
+  const later = { ...target('version-2', next), expectedRevision: '1' }
+  await installation.prepare(later, next.bytes)
+  await installation.activate(later.operationId, '1', '1')
+  expect(await installation.readFile(packageId, 'references/data.txt')).toEqual(replacement)
+  expect(await fixed.readFile('references/data.txt')).toEqual(resource)
+  const reopened = await installation.snapshotFixed(fixed.receipt)
+  expect(reopened.files).toEqual(fixed.files)
+  expect(await reopened.readFile('references/data.txt')).toEqual(resource)
+  await expect(installation.snapshotFixed({ ...fixed.receipt,
+    manifestSha256: 'b'.repeat(64) })).rejects.toThrow()
+  await expect(fixed.readFile('../SKILL.md')).rejects.toThrow()
+  writeFileSync(join(root, 'skillhub-versions', prior.operationId,
+    'files', 'references', 'data.txt'), 'tampered\n')
+  await expect(fixed.readFile('references/data.txt')).rejects.toThrow()
+})
+
+it('refuses a missing pointer or changed fixed plan after a snapshot was captured', async () => {
+  const { root, installation } = await store()
+  await expect(installation.snapshot(packageId)).rejects.toThrow()
+  const evidence = archive(), plan = target('version-1', evidence)
+  await installation.prepare(plan, evidence.bytes)
+  await installation.activate(plan.operationId, '1', '0')
+  const fixed = await installation.snapshot(packageId)
+  const path = join(root, 'skillhub-versions', plan.operationId, 'plan.json')
+  unlinkSync(path)
+  await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
+  writeFileSync(path, JSON.stringify({ ...plan, versionId: 'forged' }))
+  await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
+  writeFileSync(path, JSON.stringify(plan))
+  expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
+})
+
 it('rejects the wrong Profile, key, generation and stale revision before activation', async () => {
   const { installation } = await store()
   const evidence = archive()

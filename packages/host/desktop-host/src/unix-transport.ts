@@ -7,7 +7,8 @@ import {
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload,
-  SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
+  SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload,
+  SKILLHUB_EXECUTION_RECEIPT_DOMAIN, encodeSkillHubExecutionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningEvidence } from '@deepseek-ai/dsh-host-control-protocol'
@@ -57,7 +58,12 @@ import type {
   ProfileSkillHubBindingResult,
   ProfileSkillHubPackageChunkRequest,
   ProfileSkillHubPackageRequest,
+  ProfileSkillHubPackageSnapshotRequest,
+  HostSkillHubPackageSnapshotTarget,
   HostSkillHubPackageSignedReceipt,
+  HostSkillHubExecutionReceipt,
+  HostSkillHubExecutionReport,
+  ProfileSkillHubExecutionReceiptRequest,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
@@ -136,6 +142,7 @@ import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
 import { CollaborationDeliveryUploads, type CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 import { SkillHubPackageUploads } from './skillhub-package-uploads.ts'
+import { SkillHubPackageSnapshotReads } from './skillhub-package-snapshot-reads.ts'
 import type { createSkillHubPackageInstallationStore } from './skillhub-package-install.ts'
 import { RemoteUiStreamCursor } from './remote-ui-stream-cursor.ts'
 import type { SingleHostLock } from './single-instance.ts'
@@ -959,6 +966,7 @@ class FrameChannel implements HostClientFrameTransport {
 export class HostControlAuthority {
   private readonly deliveryUploads = new CollaborationDeliveryUploads()
   private readonly packageUploads = new SkillHubPackageUploads()
+  private readonly packageSnapshotReads = new SkillHubPackageSnapshotReads()
   constructor(private readonly options: HostControlAuthorityOptions) {}
 
   private skillHubPackageGrant(profileSelector: string, ownerId: string, signal: AbortSignal) {
@@ -1525,6 +1533,88 @@ export class HostControlAuthority {
           })()
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { receipt: signed || null } })
+        } else if (frame.method === 'profile.skillhub_package_snapshot') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          const { signature, ...unsigned } = frame.params.receipt
+          if (unsigned.installationId !== this.options.identity.installationId
+            || unsigned.profileId !== profileId || unsigned.hostKeyId !== hostKeyId
+            || unsigned.bindingGeneration !== generation
+            || !verify(null, Buffer.from(SKILLHUB_PACKAGE_RECEIPT_DOMAIN
+              + encodeSkillHubPackageReceiptPayload(unsigned)),
+            publicKeyObject(this.options.identity.installationPublicKey), Buffer.from(signature, 'base64url')))
+            throw new HostAuthorityError('unavailable')
+          const { version: _version, installationId: _installationId, challengeId: _challengeId,
+            ...fixedReceipt } = unsigned
+          authorize()
+          let read
+          try {
+            read = await this.packageSnapshotReads.read({ ownerId,
+              bindingKey: JSON.stringify([profileId, generation, hostKeyId, unsigned.operationId,
+                unsigned.manifestSha256, frame.params.target]),
+              offset: frame.params.offset, signal: context.signal, authorize,
+              capture: async () => {
+                const store = await createStore(profileId, generation, hostKeyId)
+                authorize()
+                const snapshot = await store.snapshotFixed(fixedReceipt)
+                return frame.params.target.kind === 'manifest'
+                  ? Buffer.from(JSON.stringify(['slark-skillhub-manifest-v1', snapshot.files.map(file =>
+                    [file.path, file.mode, file.size, file.sha256])]))
+                  : snapshot.readFile(frame.params.target.path)
+              } })
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            throw new HostAuthorityError('unavailable')
+          }
+          authorize(); context.signal.throwIfAborted()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { operation_id: unsigned.operationId,
+              manifest_sha256: unsigned.manifestSha256 as HostControlSha256,
+              target: frame.params.target, offset: frame.params.offset, total_bytes: read.totalBytes,
+              chunk_base64url: read.chunk.toString('base64url'), complete: read.complete } })
+        } else if (frame.method === 'profile.skillhub_execution_receipt') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          const { signature, ...unsignedPackage } = frame.params.package_receipt
+          if (unsignedPackage.installationId !== this.options.identity.installationId
+            || unsignedPackage.profileId !== profileId || unsignedPackage.hostKeyId !== hostKeyId
+            || unsignedPackage.bindingGeneration !== generation
+            || frame.params.execution.profileId !== profileId
+            || frame.params.execution.bindingGeneration !== generation
+            || !verify(null, Buffer.from(SKILLHUB_PACKAGE_RECEIPT_DOMAIN
+              + encodeSkillHubPackageReceiptPayload(unsignedPackage)),
+            publicKeyObject(this.options.identity.installationPublicKey), Buffer.from(signature, 'base64url')))
+            throw new HostAuthorityError('unavailable')
+          const { version: _version, installationId: _installationId, challengeId: _challengeId,
+            ...fixedReceipt } = unsignedPackage
+          authorize()
+          try {
+            const store = await createStore(profileId, generation, hostKeyId)
+            authorize()
+            await store.snapshotFixed(fixedReceipt)
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            throw new HostAuthorityError('unavailable')
+          }
+          authorize(); context.signal.throwIfAborted()
+          const unsignedExecution = {
+            schema: 'slark-dsh-profile-execution-receipt/v1' as const,
+            receiptId: randomUUID(), ...frame.params.execution,
+            hostInstallationId: this.options.identity.installationId, hostKeyId,
+            packageOperationId: unsignedPackage.operationId, packageId: unsignedPackage.packageId,
+            versionId: unsignedPackage.versionId, archiveSha256: unsignedPackage.archiveSha256,
+            manifestSha256: unsignedPackage.manifestSha256,
+            publicKey: this.options.identity.installationPublicKey,
+          }
+          const executionSignature = signAuthorityPayload(this.options.identity, Buffer.from(
+            SKILLHUB_EXECUTION_RECEIPT_DOMAIN
+              + encodeSkillHubExecutionReceiptPayload(unsignedExecution)))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { receipt: { ...unsignedExecution, signature: executionSignature } } })
         } else if (frame.method === 'profile.open') {
           const opened = await this.options.host.openProfile({
             authorityEnvironmentId: frame.params.authority_environment_id,
@@ -2265,7 +2355,8 @@ export class HostControlAuthority {
         capabilities: [
           ...capabilities,
           ...(this.options.createSkillHubPackageStore
-            ? ['profile.skillhub_package_chunk', 'profile.skillhub_package'] : []),
+            ? ['profile.skillhub_package_chunk', 'profile.skillhub_package',
+              'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] : []),
           'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
@@ -3025,6 +3116,86 @@ export class UnixHostClient {
       profile_selector: input.profileSelector, challenge_id: input.challengeId,
       action: 'current', package_id: input.packageId }, input.signal)
     if (receipt && receipt.packageId !== input.packageId) throw new HostAuthorityError('unavailable')
+    return receipt
+  }
+
+  /** Read one bounded immutable package object chunk under the current Profile grant.
+   * @param input - Signed activation receipt, exact object target, byte offset, and cancellation.
+   * @returns Exact-operation bytes and continuity fields checked against the request.
+   */
+  async readSkillHubPackageSnapshotChunk(input: {
+    readonly profileSelector: string
+    readonly receipt: HostSkillHubPackageSignedReceipt
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+    readonly signal?: AbortSignal
+  }): Promise<Readonly<{
+    operationId: string
+    manifestSha256: string
+    target: HostSkillHubPackageSnapshotTarget
+    offset: number
+    totalBytes: number
+    bytes: Buffer
+    complete: boolean
+  }>> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package_snapshot' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubPackageSnapshotRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package_snapshot',
+      params: { ...this.auth(), profile_selector: input.profileSelector, receipt: input.receipt,
+        target: input.target, offset: input.offset },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = frame.result
+    if (result.operation_id !== input.receipt.operationId
+      || result.manifest_sha256 !== input.receipt.manifestSha256
+      || JSON.stringify(result.target) !== JSON.stringify(input.target)
+      || result.offset !== input.offset) throw new HostAuthorityError('unavailable')
+    return { operationId: result.operation_id, manifestSha256: result.manifest_sha256,
+      target: result.target, offset: result.offset, totalBytes: result.total_bytes,
+      bytes: Buffer.from(result.chunk_base64url, 'base64url'), complete: result.complete }
+  }
+
+  /** Sign a completed sandbox report through the current Profile grant.
+   * @param input - Fixed Host package receipt, exact daemon report, selector, and cancellation.
+   * @returns Installation-signed execution receipt after package and Profile revalidation.
+   */
+  async signSkillHubExecutionReceipt(input: {
+    readonly profileSelector: string
+    readonly packageReceipt: HostSkillHubPackageSignedReceipt
+    readonly execution: HostSkillHubExecutionReport
+    readonly signal?: AbortSignal
+  }): Promise<HostSkillHubExecutionReceipt> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_execution_receipt' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubExecutionReceiptRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_execution_receipt',
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        package_receipt: input.packageReceipt, execution: input.execution },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    const receipt = frame.result.receipt
+    const { signature, ...unsigned } = receipt
+    const expected = {
+      schema: 'slark-dsh-profile-execution-receipt/v1' as const,
+      receiptId: receipt.receiptId, ...input.execution,
+      hostInstallationId: input.packageReceipt.installationId,
+      hostKeyId: input.packageReceipt.hostKeyId,
+      packageOperationId: input.packageReceipt.operationId,
+      packageId: input.packageReceipt.packageId, versionId: input.packageReceipt.versionId,
+      archiveSha256: input.packageReceipt.archiveSha256,
+      manifestSha256: input.packageReceipt.manifestSha256,
+      publicKey: this.inspection.installation_public_key,
+    }
+    if (encodeSkillHubExecutionReceiptPayload(unsigned)
+      !== encodeSkillHubExecutionReceiptPayload(expected)
+      || !verify(null, Buffer.from(SKILLHUB_EXECUTION_RECEIPT_DOMAIN
+        + encodeSkillHubExecutionReceiptPayload(unsigned)),
+      publicKeyObject(this.inspection.installation_public_key), Buffer.from(signature, 'base64url')))
+      throw new HostAuthorityError('unavailable')
     return receipt
   }
 
@@ -4586,6 +4757,7 @@ export class UnixHostClient {
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest
       | ProfileSkillHubPackageChunkRequest | ProfileSkillHubPackageRequest
+      | ProfileSkillHubPackageSnapshotRequest | ProfileSkillHubExecutionReceiptRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
