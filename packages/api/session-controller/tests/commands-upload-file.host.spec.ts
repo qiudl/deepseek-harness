@@ -196,6 +196,25 @@ describe('Session file uploads', () => {
     ])
   })
 
+  it('discards only the named staged receipt and makes repeated cleanup idempotent', async () => {
+    const { uploads, agent, saveFile } = await uploadHarness()
+    const first = await uploads.upload(
+      agent,
+      { data: 'AAAA', name: 'first.bin' },
+      new AbortController().signal,
+    )
+    const second = await uploads.upload(
+      agent,
+      { data: 'AQID', name: 'second.bin' },
+      new AbortController().signal,
+    )
+    await expect(uploads.discardUpload(SESSION, first.receiptId)).resolves.toBe(true)
+    expect(uploads.resolve(agent, first.receiptId)).toBeUndefined()
+    expect(uploads.resolve(agent, second.receiptId)).toEqual(second.file)
+    await expect(uploads.discardUpload(SESSION, first.receiptId)).resolves.toBe(false)
+    expect(saveFile).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps the stream name optional and maps storage failures through the same error vocabulary', async () => {
     const { uploads, saveFileStream } = await uploadHarness()
     const stream = (async function* (): AsyncIterable<Uint8Array> {})()

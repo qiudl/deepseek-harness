@@ -9,12 +9,14 @@ function request(input: {
   method?: string
   sessionId?: string
   name?: string
+  receiptId?: string
   contentType?: string
   body?: Uint8Array
 } = {}): Request {
   const query = new URLSearchParams()
   if (input.sessionId !== undefined) query.set('sessionId', input.sessionId)
   if (input.name !== undefined) query.set('name', input.name)
+  if (input.receiptId !== undefined) query.set('receiptId', input.receiptId)
   const suffix = query.size === 0 ? '' : `?${query.toString()}`
   return new Request(`http://host/api/session/uploadFileBinary${suffix}`, {
     method: input.method ?? 'POST',
@@ -25,6 +27,7 @@ function request(input: {
 
 function uploads(result: unknown): FileUploads & {
   uploadStream: Mock<FileUploads['uploadStream']>
+  discardUpload: Mock<FileUploads['discardUpload']>
   uploadedChunks: Uint8Array[]
 } {
   const uploadedChunks: Uint8Array[] = []
@@ -32,11 +35,14 @@ function uploads(result: unknown): FileUploads & {
     for await (const chunk of input.data) uploadedChunks.push(chunk)
     return await result as Awaited<ReturnType<FileUploads['uploadStream']>>
   })
+  const discardUpload = vi.fn<FileUploads['discardUpload']>(() => Promise.resolve(true))
   return {
     uploadedChunks,
     uploadStream,
+    discardUpload,
   } as unknown as FileUploads & {
     uploadStream: Mock<FileUploads['uploadStream']>
+    discardUpload: Mock<FileUploads['discardUpload']>
     uploadedChunks: Uint8Array[]
   }
 }
@@ -53,7 +59,7 @@ describe('background file upload Fetch route', () => {
     const service = uploads(Promise.resolve({}))
     const wrongMethod = await handleFileUploadHttp(service, request({ method: 'GET' }))
     expect(wrongMethod.status).toBe(405)
-    expect(wrongMethod.headers.get('allow')).toBe('POST')
+    expect(wrongMethod.headers.get('allow')).toBe('POST, DELETE')
 
     const wrongType = await handleFileUploadHttp(service, request({ contentType: 'application/json' }))
     expect(wrongType.status).toBe(415)
@@ -66,6 +72,22 @@ describe('background file upload Fetch route', () => {
     expect(missingSession.status).toBe(400)
     expect(await missingSession.text()).toBe('sessionId is required')
     expect(service.uploadStream).not.toHaveBeenCalled()
+  })
+
+  it('discards one Session-owned receipt without requiring an upload media type', async () => {
+    const service = uploads(Promise.resolve({}))
+    const missingReceipt = await handleFileUploadHttp(service, request({
+      method: 'DELETE', sessionId: 's1',
+    }))
+    expect(missingReceipt.status).toBe(400)
+    expect(await missingReceipt.text()).toBe('receiptId is required')
+
+    const response = await handleFileUploadHttp(service, request({
+      method: 'DELETE', sessionId: 's1', receiptId: 'receipt-1',
+    }))
+    expect(service.discardUpload).toHaveBeenCalledWith('s1', 'receipt-1')
+    expect(service.uploadStream).not.toHaveBeenCalled()
+    expect(await response.json()).toEqual({ ok: true, value: { discarded: true } })
   })
 
   it('stores the request bytes and returns the staged receipt', async () => {
