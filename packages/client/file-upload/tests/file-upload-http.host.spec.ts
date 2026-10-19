@@ -5,6 +5,12 @@ import type { Mock } from 'vitest'
 import { handleFileUploadHttp } from '../src/http-route.ts'
 import type { FileUploads } from '../src/index.ts'
 
+function isErrorShape(value: unknown): value is Error {
+  return typeof value === 'object' && value !== null &&
+    'name' in value && typeof value.name === 'string' &&
+    'message' in value && typeof value.message === 'string'
+}
+
 function request(input: {
   method?: string
   sessionId?: string
@@ -25,7 +31,7 @@ function request(input: {
   })
 }
 
-function uploads(result: unknown): FileUploads & {
+function uploads(result: unknown): {
   uploadStream: Mock<FileUploads['uploadStream']>
   discardUpload: Mock<FileUploads['discardUpload']>
   uploadedChunks: Uint8Array[]
@@ -40,10 +46,6 @@ function uploads(result: unknown): FileUploads & {
     uploadedChunks,
     uploadStream,
     discardUpload,
-  } as unknown as FileUploads & {
-    uploadStream: Mock<FileUploads['uploadStream']>
-    discardUpload: Mock<FileUploads['discardUpload']>
-    uploadedChunks: Uint8Array[]
   }
 }
 
@@ -137,7 +139,9 @@ describe('background file upload Fetch route', () => {
       ok: false, error: { code: 'gateway/internal', message: 'disk offline', details: {} },
     })
 
-    const foreignError = runInNewContext('new Error("disk exception")') as unknown as Error
+    const foreignError: unknown = runInNewContext('new Error("disk exception")')
+    expect(isErrorShape(foreignError)).toBe(true)
+    if (!isErrorShape(foreignError)) throw new Error('expected a cross-Realm Error shape')
     const exception = uploads(Promise.reject(foreignError))
     expect(await (await handleFileUploadHttp(exception, request({
       sessionId: 's1', contentType: 'application/octet-stream',

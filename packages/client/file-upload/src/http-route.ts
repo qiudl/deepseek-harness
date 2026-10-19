@@ -14,13 +14,15 @@ type FileUploadHttpResult =
     readonly error: { readonly code: string; readonly message: string; readonly details: object }
   }
 
+type FileUploadHttpService = Pick<FileUploads, 'discardUpload' | 'uploadStream'>
+
 /**
  * Handle one authenticated raw-byte upload or staged-receipt discard.
  * @param service - Host upload service receiving the operation.
  * @param request - authenticated HTTP request from Connection.
  * @returns JSON result using HTTP status 200 after request validation.
  */
-export async function handleFileUploadHttp(service: FileUploads, request: Request): Promise<Response> {
+export async function handleFileUploadHttp(service: FileUploadHttpService, request: Request): Promise<Response> {
   if (request.method !== 'POST' && request.method !== 'DELETE') {
     return new Response(null, { status: 405, headers: { allow: 'POST, DELETE' } })
   }
