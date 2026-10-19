@@ -456,11 +456,12 @@ describe('authenticated Unix transport', () => {
 
   it('prepares a complete SkillHub ZIP only on the granted Host connection', async () => {
     const packagesRoot = dir()
-    let rejectSnapshotWithAuthority = false
+    let rejectSnapshot: 'authority' | 'generic' | undefined
     let stored: Awaited<ReturnType<typeof createSkillHubPackageInstallationStore>> | undefined
     const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, true,
       async (profileId, generation, hostKeyId) => {
-        if (rejectSnapshotWithAuthority) throw new HostAuthorityError('unauthorized')
+        if (rejectSnapshot === 'authority') throw new HostAuthorityError('unauthorized')
+        if (rejectSnapshot === 'generic') throw new Error('snapshot unavailable')
         stored ??= await createSkillHubPackageInstallationStore(packagesRoot, profileId, hostKeyId, generation)
         return stored
       })
@@ -550,6 +551,13 @@ describe('authenticated Unix transport', () => {
       await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
         packageReceipt: { ...receipt, manifestSha256: 'b'.repeat(64) }, execution }))
         .rejects.toMatchObject({ code: 'unavailable' })
+      rejectSnapshot = 'authority'
+      await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+        packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unauthorized' })
+      rejectSnapshot = 'generic'
+      await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+        packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unavailable' })
+      rejectSnapshot = undefined
       const repeated = await owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
         operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
         challengeId: randomUUID() })
@@ -603,12 +611,12 @@ describe('authenticated Unix transport', () => {
         ['empty.txt', '0644', 0, sha(Buffer.alloc(0))],
         ['references/data.bin', '0644', reference.length, sha(reference)],
       ]])
-      rejectSnapshotWithAuthority = true
+      rejectSnapshot = 'authority'
       await expect(owner.readSkillHubPackageSnapshotChunk({
         profileSelector: local.profileSelector, receipt,
         target: { kind: 'file', path: 'SKILL.md' }, offset: 0,
       })).rejects.toMatchObject({ code: 'unauthorized' })
-      rejectSnapshotWithAuthority = false
+      rejectSnapshot = undefined
       await expect(owner.readSkillHubPackageSnapshotChunk({
         profileSelector: local.profileSelector, receipt,
         target: { kind: 'file', path: 'empty.txt' }, offset: 0,
@@ -687,6 +695,9 @@ describe('authenticated Unix transport', () => {
           method: 'profile.skillhub_execution_receipt', result: { receipt: {
             ...executionReceipt, effectId: randomUUID(),
           } } }))
+        await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+          packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.status' }))
         await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
           packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unavailable' })
         Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package',
