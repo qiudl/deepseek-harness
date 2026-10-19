@@ -41,6 +41,8 @@ The [built-bundle import sweep](tests/compile/transform-corpus-check.ts) checks 
 -----
 
 <a id="model-experience"></a>
+The optional second `WorkerTunnel` constructor argument fixes the Host URL namespace for an opaque native frame. Ordinary callers keep the page origin. This only resolves request and source-map URLs; the parent still owns origin checks, endpoint admission and Host authentication.
+
 ## Model Experience
 
 None, as this package only hosts the tree in a browser worker and answers its `node:*` calls; every model-facing registration belongs to the plugins it boots.

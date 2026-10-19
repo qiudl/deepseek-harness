@@ -5,6 +5,8 @@ export const NS = 'slarkAgent'
 
 /** Simplified Chinese copy. */
 export const zh = {
+  'duet.start': 'Duet 语音对话',
+  'duet.uncertain': '暂未确认通话连接，请查看悬浮通话状态。',
   'trace.executionDetails': '查看执行明细',
   'trace.providerBoundary': '仅展示执行器可观测事件，Provider 内部过程不可见；时间为记录的毫秒时间戳',
   'trace.noEvidence': '没有可读取的执行明细',
@@ -191,6 +193,8 @@ export const zh = {
 
 /** English copy. */
 export const en = {
+  'duet.start': 'Duet voice conversation',
+  'duet.uncertain': 'The call connection is not confirmed. Check the floating call status.',
   'trace.executionDetails': 'View execution details',
   'trace.providerBoundary': 'Executor observations only; provider internals are unavailable. Times are recorded millisecond timestamps.',
   'trace.noEvidence': 'No execution observations are available.',

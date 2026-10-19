@@ -84,3 +84,12 @@ it('loads a combo map through the tunnel and embeds it in the blob script', asyn
   expect(new TextDecoder().decode(decoded)).toBe(map)
   expect(revoked).toEqual(['blob:fixture-1'])
 })
+
+it('uses the explicit Host origin inside an opaque native frame', async () => {
+  const { worker, sent, deliver } = stubWorker()
+  const tunnel = new WorkerTunnel(worker, 'https://ui.example.test')
+  const reading = tunnel.fetch('/__boot__')
+  expect(sent[0]?.url).toBe('https://ui.example.test/__boot__')
+  deliver({ t: 'res', id: 1, status: 200, headers: {}, body: new ArrayBuffer(0) })
+  expect((await reading).status).toBe(200)
+})

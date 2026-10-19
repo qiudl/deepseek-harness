@@ -41,6 +41,8 @@ kind: "package-library"
 -----
 
 <a id="model-experience"></a>
+`WorkerTunnel` 构造函数可选的第二个参数为不透明原生 frame 固定 Host URL 命名空间。普通调用方继续使用页面 origin。它只解析请求和 source-map URL，父页面仍负责来源检查、接口准入和 Host 认证。
+
 ## 模型体验
 
 无：本包只在浏览器 worker 里承载插件树并应答它的 `node:*` 调用；所有面向模型的注册都属于它启动的那些插件。
