@@ -44,7 +44,7 @@ The standalone Main-only client artifact also owns Windows discovery. It first r
 
 After connection, the Worker will read the pipe client PID twice around opening a query-limited process handle. It will compare the process token owner with the Host token owner, open the executable for read while denying write and delete sharing, and compare both process-image reads with the final handle path by Windows ordinal rules. It will then require both a pinned Authenticode leaf-certificate SHA-256 and a pinned streaming executable SHA-256 from that same stable handle.
 
-WinTrust verification will be noninteractive and cache-only. It will keep one `WINTRUST_DATA` record from `WTD_STATEACTION_VERIFY` through `WTD_STATEACTION_CLOSE`; only status zero succeeds. Executable hashing will use 64 KiB chunks and reject files above 512 MiB, premature EOF, zero progress, or changing native lengths.
+WinTrust verification will be noninteractive and cache-only. It will keep one `WINTRUST_DATA` record from `WTD_STATEACTION_VERIFY` through `WTD_STATEACTION_CLOSE`; status zero and `CERT_E_UNTRUSTEDROOT` both continue to the signer certificate SHA-256, whose pinned value decides trust (REQ-20261019-0004), and every other status fails closed. Executable hashing will use 64 KiB chunks and reject files above 512 MiB, premature EOF, zero progress, or changing native lengths.
 
 The carrier stays unexported. The package ships the Worker as a dedicated file-backed bundle so the parent starts it without eval or a data URL; that artifact is deliberately absent from package exports. Slark Desktop hashes, packages, and orchestrates the adapter, while account, environment, migration, fallback, release enablement, and capability-discovery policy remain outside deepseek-harness.
 

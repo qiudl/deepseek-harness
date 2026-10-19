@@ -1,12 +1,17 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { HostAuthorityError } from '../src/index.ts'
+import { createWindowsAuthenticodeVerifier } from '../src/windows-authenticode.ts'
 import { createWindowsPeerAttestor } from '../src/windows-peer-attestor.ts'
 
 const daemonBytes = Buffer.from('signed Slark daemon fixture')
 const daemonDigest = createHash('sha256').update(daemonBytes).digest('hex')
 const publisher = 'A'.repeat(64)
 const ownerSid = 'S-1-5-21-1000-2000-3000-1001'
+const executablePath = String.raw`C:\Program Files\Slark\slark-daemon-windows-x64.exe`
+const CERT_E_UNTRUSTEDROOT = -2_146_762_487
+const TRUST_E_NOSIGNATURE = -2_146_762_496
+const TRUST_E_BAD_DIGEST = -2_146_869_232
 
 function bindings(overrides: Partial<Parameters<typeof createWindowsPeerAttestor>[0]['bindings']> = {}) {
   return {
@@ -15,7 +20,7 @@ function bindings(overrides: Partial<Parameters<typeof createWindowsPeerAttestor
     processOwnerSid: vi.fn((_processHandle: bigint) => ownerSid),
     openProcessExecutable: vi.fn((_processHandle: bigint) => ({
       handle: 202n,
-      path: String.raw`C:\Program Files\Slark\slark-daemon-windows-x64.exe`,
+      path: executablePath,
     })),
     verifyAuthenticodePublisher: vi.fn((_executableHandle: bigint) => publisher),
     digestExecutable: vi.fn((_executableHandle: bigint) => daemonDigest),
@@ -99,6 +104,41 @@ describe('Windows named-pipe peer attestation', () => {
       bindings: bindings({ digestExecutable: vi.fn((_handle: bigint) => createHash('sha256').update('attacker').digest('hex')) }),
     })
     await expect(wrongDigest(91n)).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('admits a pinned publisher under an untrusted root and rejects every other trust status', async () => {
+    const attestWithTrustStatus = (status: number, allowed = publisher) => createWindowsPeerAttestor({
+      allowedPublisherThumbprints: new Set([allowed]),
+      allowedExecutableDigests: new Set([daemonDigest]),
+      bindings: bindings({
+        verifyAuthenticodePublisher: vi.fn((_handle: bigint) => createWindowsAuthenticodeVerifier({
+          beginFileVerification: vi.fn(() => ({ status, stateHandle: 901n })),
+          publisherCertificateSha256: vi.fn(() => publisher.toLowerCase()),
+          closeFileVerification: vi.fn(() => 0),
+        })(202n, executablePath)),
+      }),
+    })
+    await expect(attestWithTrustStatus(CERT_E_UNTRUSTEDROOT)(91n)).resolves.toMatchObject({
+      executablePath,
+      authenticodePublisherThumbprint: publisher,
+    })
+    for (const attest of [
+      attestWithTrustStatus(CERT_E_UNTRUSTEDROOT, 'B'.repeat(64)),
+      attestWithTrustStatus(TRUST_E_NOSIGNATURE),
+      attestWithTrustStatus(TRUST_E_BAD_DIGEST),
+    ]) {
+      let failure: unknown
+      let message = ''
+      try {
+        await attest(91n)
+      } catch (error) {
+        failure = error
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(failure).toBeInstanceOf(HostAuthorityError)
+      expect(message).not.toContain('Program Files')
+      expect(message).not.toContain('slark-daemon')
+    }
   })
 
   it('rejects non-canonical executable paths and every unavailable native fact', async () => {

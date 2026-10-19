@@ -44,7 +44,7 @@ Cordis 启动会显式按平台分派。Windows 私密身份内容绝不进入�
 
 连接建立后，Worker 会在打开仅查询进程句柄前后各读取一次管道客户端 PID。它会比较该进程 token owner 与 Host token owner，以只读且拒绝写入和删除共享的方式打开可执行文件，并按 Windows ordinal 规则比较两次进程镜像路径与最终句柄路径。随后，它会要求同一稳定句柄同时满足固定的 Authenticode 叶证书 SHA-256 与固定的流式可执行文件 SHA-256。
 
-WinTrust 验证将不显示界面且仅使用缓存。它会让同一个 `WINTRUST_DATA` 记录从 `WTD_STATEACTION_VERIFY` 保留到 `WTD_STATEACTION_CLOSE`；只有状态零表示成功。可执行文件摘要会使用 64 KiB 分片，并拒绝超过 512 MiB 的文件、提前 EOF、零进度或变化的原生长度。
+WinTrust 验证将不显示界面且仅使用缓存。它会让同一个 `WINTRUST_DATA` 记录从 `WTD_STATEACTION_VERIFY` 保留到 `WTD_STATEACTION_CLOSE`；状态零与 `CERT_E_UNTRUSTEDROOT` 都会继续提取签名者证书 SHA-256，由钉住值决定信任（REQ-20261019-0004），其他任何状态一律失败关闭。可执行文件摘要会使用 64 KiB 分片，并拒绝超过 512 MiB 的文件、提前 EOF、零进度或变化的原生长度。
 
 该载体保持不导出。包会把 Worker 作为独立的文件形式 bundle 携带，使父线程无需 eval 或 data URL 即可启动它；该产物刻意不进入 package exports。Slark Desktop 负责校验哈希、打包和编排该适配器，而账号、环境、迁移、fallback、发布启用和 capability discovery 策略仍位于 deepseek-harness 之外。
 
