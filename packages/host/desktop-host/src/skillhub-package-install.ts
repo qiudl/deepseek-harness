@@ -54,18 +54,21 @@ interface FileEvidence { path: string; mode: '0644' | '0755'; size: number; sha2
 type StoredFile = Omit<FileEvidence, 'bytes' | 'mode'> & { mode: string }
 type StoredReceipt = Omit<SkillHubPackageReceipt, 'readiness' | 'loadEvidenceId'>
   & { readiness: string; loadEvidenceId: unknown }
+type SkillHubPackageSnapshot = Readonly<{
+  receipt: SkillHubPackageReceipt
+  files: readonly Readonly<{
+    path: string
+    mode: '0644' | '0755'
+    size: number
+    sha256: string
+  }>[]
+  readFile(path: string): Promise<Buffer>
+}>
 type SkillHubPackageInstallationStore = Readonly<{
   current(packageId: string): Promise<SkillHubPackageReceipt | null>
-  snapshot(packageId: string): Promise<Readonly<{
-    receipt: SkillHubPackageReceipt
-    files: readonly Readonly<{
-      path: string
-      mode: '0644' | '0755'
-      size: number
-      sha256: string
-    }>[]
-    readFile(path: string): Promise<Buffer>
-  }>>
+  snapshot(packageId: string): Promise<SkillHubPackageSnapshot>
+  /** Reopen one exact activated operation without following the current pointer. */
+  snapshotFixed(receipt: SkillHubPackageReceipt): Promise<SkillHubPackageSnapshot>
   prepare(plan: SkillHubPackagePlan, archive: Buffer): Promise<void>
   activate(operationId: string, bindingGeneration: string, expectedRevision: string,
     assertCurrent?: () => void): Promise<SkillHubPackageReceipt>
@@ -259,11 +262,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     if (!/^[a-zA-Z0-9_-]{1,100}$/u.test(packageId)) fail()
     const receipt = await storedJson<StoredReceipt>(join(pointers, `${packageId}.json`))
     if (!receipt) return null
-    if (!UUID.test(receipt.operationId) || receipt.packageId !== packageId || receipt.profileId !== profileId
-      || receipt.hostKeyId !== hostKeyId || receipt.bindingGeneration !== bindingGeneration
-      || !REVISION.test(receipt.revision)
-      || !SHA.test(receipt.archiveSha256) || !SHA.test(receipt.manifestSha256)
-      || receipt.readiness !== 'prepared' || receipt.loadEvidenceId !== null) fail()
+    receiptValid(receipt, packageId)
     const plan = await storedJson<SkillHubPackagePlan>(join(versions, receipt.operationId, 'plan.json'))
     if (!plan) throw Error('skillhub_package_unavailable')
     planValid(plan, profileId, hostKeyId, bindingGeneration)
@@ -274,7 +273,19 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     await verifiedFiles(plan, join(versions, receipt.operationId))
     return receipt as SkillHubPackageReceipt
   }
+  function receiptValid(receipt: StoredReceipt | SkillHubPackageReceipt, expectedPackageId?: string) {
+    if (!receipt || Object.keys(receipt).length !== 11 || !UUID.test(receipt.operationId)
+      || !/^[a-zA-Z0-9_-]{1,100}$/u.test(receipt.packageId)
+      || (expectedPackageId !== undefined && receipt.packageId !== expectedPackageId)
+      || receipt.profileId !== profileId || receipt.hostKeyId !== hostKeyId
+      || receipt.bindingGeneration !== bindingGeneration || !REVISION.test(receipt.revision)
+      || receipt.revision === '0' || !receipt.versionId || receipt.versionId.length > 200
+      || receipt.versionId.trim() !== receipt.versionId
+      || !SHA.test(receipt.archiveSha256) || !SHA.test(receipt.manifestSha256)
+      || receipt.readiness !== 'prepared' || receipt.loadEvidenceId !== null) fail()
+  }
   async function fixedPlan(receipt: SkillHubPackageReceipt) {
+    receiptValid(receipt)
     const base = join(versions, receipt.operationId)
     const plan = await storedJson<SkillHubPackagePlan>(join(base, 'plan.json'))
     if (!plan) throw Error('skillhub_package_unavailable')
@@ -304,19 +315,25 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       return bytes
     } finally { await file.close() }
   }
+  async function snapshotFixed(receipt: SkillHubPackageReceipt): Promise<SkillHubPackageSnapshot> {
+    await checkRoot()
+    const fixed = Object.freeze({ ...receipt })
+    const { base, plan } = await fixedPlan(fixed)
+    const files = Object.freeze((await verifiedFiles(plan, base)).map(file => Object.freeze({
+      path: file.path, mode: file.mode as '0644' | '0755',
+      size: file.size, sha256: file.sha256,
+    })))
+    return Object.freeze({ receipt: fixed, files,
+      readFile: (path: string) => readFixedFile(fixed, path) })
+  }
   return Object.freeze({
     current,
     async snapshot(packageId: string) {
       const receipt = await current(packageId)
       if (!receipt) throw Error('skillhub_package_unavailable')
-      const { base, plan } = await fixedPlan(receipt)
-      const files = Object.freeze((await verifiedFiles(plan, base)).map(file => Object.freeze({
-        path: file.path, mode: file.mode as '0644' | '0755',
-        size: file.size, sha256: file.sha256,
-      })))
-      return Object.freeze({ receipt: Object.freeze({ ...receipt }), files,
-        readFile: (path: string) => readFixedFile(receipt, path) })
+      return snapshotFixed(receipt)
     },
+    snapshotFixed,
     async prepare(plan: SkillHubPackagePlan, archive: Buffer): Promise<void> {
       await checkRoot(); planValid(plan, profileId, hostKeyId, bindingGeneration)
       const files = inspectArchive(Buffer.from(archive), plan)
