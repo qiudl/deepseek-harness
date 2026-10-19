@@ -1,3 +1,8 @@
+import { randomUUID } from 'node:crypto'
+import { DesktopRemoteTerminalStreams } from '../../../packages/bundle/web-app/src/desktop-remote-terminal-stream.ts'
+import { DesktopRemoteSessionExecutor } from '../../../packages/bundle/web-app/src/desktop-remote-session.ts'
+import { DesktopSessionControl } from '../../../packages/bundle/web-app/src/desktop-session-control.ts'
+import type { WorkbenchTerminalRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteUiStreamExecutor } from '../../../packages/bundle/web-app/src/desktop-remote-ui-stream.ts'
 import { createWebConnectionRpc } from '@deepseek-ai/dsh-client-connection/src/client/rpc.ts'
 import type {} from '@deepseek-ai/dsh-api-gateway'
@@ -216,3 +221,55 @@ it('follows real Host file changes and releases the watcher on page cancellation
       value: { kind: 'change', change: { absolutePath: path } } })
   } finally { controller.abort(); await iterator.return?.() }
 })
+
+it('operates a real Host shell with controlled input, streamed output and attachment cleanup', async () => {
+  const control = new DesktopSessionControl()
+  const owner = { kind: 'remote' as const, id: randomUUID() }
+  const state = control.acquire(sessionId, owner, { takeover: false })
+  if (!('claim' in state)) throw new Error('missing terminal control')
+  const proof = { controller_id: owner.id, generation: state.claim.generation, epoch: state.claim.epoch }
+  const terminalStreams = new DesktopRemoteTerminalStreams(control)
+  const actions = new DesktopRemoteSessionExecutor(scaffold.ctx.typertGateway, undefined, control, terminalStreams)
+  const streams = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway, undefined, undefined, terminalStreams)
+  const controller = new AbortController()
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)])
+  const terminalId = randomUUID(), attachmentId = randomUUID()
+  const invoke = (method: WorkbenchTerminalRequest['method'], args: WorkbenchTerminalRequest['args']) => actions.execute({
+    operation: 'terminal.apply', command_id: randomUUID() as never, session_id: sessionId, control: proof,
+    request: { sessionId, method, args },
+  }, signal)
+  let iterator: AsyncIterator<unknown> | undefined
+  try {
+    await expect(invoke('create', { agentId: sessionId, request: { id: terminalId, cols: 80, rows: 24 } }))
+      .resolves.toMatchObject({ ok: true, value: { id: terminalId, state: 'running' } })
+    const granted = await invoke('follow', { agentId: sessionId, id: terminalId, attachmentId })
+    if (!granted || typeof granted !== 'object' || Array.isArray(granted) || !('value' in granted)
+      || !granted.value || typeof granted.value !== 'object' || Array.isArray(granted.value)) throw new Error('missing terminal permit')
+    const source = await streams.open('terminal/stream', { args: granted.value }, signal)
+    iterator = source[Symbol.asyncIterator]()
+    await expect(iterator.next()).resolves.toMatchObject({ done: false, value: { type: 'snapshot', info: { id: terminalId } } })
+    await expect(invoke('resize', { agentId: sessionId, id: terminalId, attachmentId, cols: 100, rows: 30 })).resolves.toEqual({ ok: true })
+    await expect(invoke('rename', { agentId: sessionId, id: terminalId, title: 'iPhone shell' })).resolves.toEqual({ ok: true })
+    await expect(invoke('write', { agentId: sessionId, id: terminalId, attachmentId, data: 'echo REQ6049_NATIVE_TERMINAL\n' })).resolves.toEqual({ ok: true })
+    let output = ''
+    while (!/\r?\nREQ6049_NATIVE_TERMINAL\r?\n/u.test(output)) {
+      const next = await iterator.next()
+      if (next.done) throw new Error('terminal closed before echo')
+      const value = next.value as { type: string; data?: string }
+      if (value.type === 'output') output += value.data
+    }
+    await expect(invoke('list', { sessionId })).resolves.toMatchObject({ ok: true,
+      value: expect.arrayContaining([expect.objectContaining({ id: terminalId, title: 'iPhone shell', cols: 100, rows: 30 })]) })
+    controller.abort()
+    await iterator.return?.()
+    await expect.poll(async () => {
+      const items = await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'list', args: { sessionId }, signal: new AbortController().signal })
+      return Array.isArray(items) && items.some(item => item && typeof item === 'object' && 'id' in item
+        && item.id === terminalId && !Object.hasOwn(item, 'controllerId'))
+    }).toBe(true)
+  } finally {
+    controller.abort()
+    await iterator?.return?.()
+    await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'close', args: { agentId: sessionId, id: terminalId }, signal: new AbortController().signal })
+  }
+}, 20000)

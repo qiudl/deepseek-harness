@@ -51,6 +51,10 @@ describe('Desktop remote Session bridge', () => {
       invoke.mockRejectedValueOnce(error)
       await expect(executor.execute(command, signal)).rejects.toBe(error)
     }
+    for (const method of ['follow', 'retain'] as const) {
+      await expect(executor.execute({ ...command, request: { ...command.request, method } }, signal))
+        .resolves.toMatchObject({ ok: true, value: { grantId: expect.any(String) } })
+    }
     const count = invoke.mock.calls.length
     await expect(executor.execute({ ...command, request: { ...command.request, sessionId: 'other' } }, signal)).rejects.toThrow('Session mismatch')
     await expect(executor.execute({ ...command, control: undefined } as never, signal)).rejects.toThrow()

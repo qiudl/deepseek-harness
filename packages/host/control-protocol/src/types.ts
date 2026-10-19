@@ -1,4 +1,4 @@
-import type { WorkbenchTerminalRequest } from './workbench-terminal.js'
+import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 import type { WorkbenchSettingsWrite } from './workbench-settings.js'
 import type { WorkbenchReadPayload, WorkbenchChangesPayload } from './workbench-read.js'
@@ -1532,6 +1532,7 @@ export interface ProfileRemoteUiReadResult {
 
 /** Only selected native read streams may cross a live Profile view lease. */
 export type ProfileRemoteUiStreamCommand =
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'terminal/stream'; readonly item_chunks?: true; readonly payload: WorkbenchTerminalStreamPayload }
   | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workspaceFiles/changes'; readonly payload: WorkbenchChangesPayload }
   | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workbench/read'; readonly payload: WorkbenchReadPayload }
   | {

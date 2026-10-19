@@ -2,11 +2,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
-import { parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseWorkbenchTerminalRequest, parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
+const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
   'llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const STARTUP_ZERO_ARG = new Set(['llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list',
@@ -42,6 +42,14 @@ export class DesktopRemoteUiExecutor {
     }
     if (STARTUP_ZERO_ARG.has(endpoint) && Object.keys(payload.args).length !== 0) {
       throw new Error('desktop remote UI: invalid payload')
+    }
+    if (endpoint === 'terminal/environment' || endpoint === 'terminal/shells' || endpoint === 'terminal/list') {
+      const method = endpoint.slice('terminal/'.length)
+      const args = payload.args
+      const sessionId = method === 'list' ? args.sessionId : args.agentId
+      if (!parseWorkbenchTerminalRequest({ sessionId, method, args })) {
+        throw new Error('desktop remote UI: invalid terminal payload')
+      }
     }
     if (endpoint === 'commands/list' || endpoint === 'skills/list') {
       const args = payload.args

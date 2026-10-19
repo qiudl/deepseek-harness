@@ -1,4 +1,4 @@
-import { parseWorkbenchTerminalRequest } from './workbench-terminal.js'
+import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
 import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
 import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
@@ -1794,11 +1794,16 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     } else if (command.action === 'open') {
       exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload',
         ...(command.item_chunks === undefined ? [] : ['item_chunks'])])
-      if (command.item_chunks !== undefined && (command.item_chunks !== true || command.endpoint !== 'session/follow')) reject()
+      if (command.item_chunks !== undefined && (command.item_chunks !== true || (command.endpoint !== 'session/follow' && command.endpoint !== 'terminal/stream'))) reject()
       const payload = record(command.payload)
       exactKeys(payload, ['args'])
       const args = record(payload.args)
-      if (command.endpoint === 'workspaceFiles/changes') {
+      if (command.endpoint === 'terminal/stream') {
+        const parsedPayload = parseWorkbenchTerminalStreamPayload(payload)
+        if (!parsedPayload) reject()
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload,
+          ...(command.item_chunks === true ? { item_chunks: true } : {}) }
+      } else if (command.endpoint === 'workspaceFiles/changes') {
         const parsedPayload = parseWorkbenchChangesPayload(payload)
         if (!parsedPayload) reject()
         parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload }

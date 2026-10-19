@@ -1,3 +1,5 @@
+import { DesktopRemoteTerminalStreams } from '../src/desktop-remote-terminal-stream.ts'
+import { DesktopSessionControl } from '../src/desktop-session-control.ts'
 import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -209,6 +211,40 @@ describe('Desktop remote UI read-only bridge', () => {
     expect(stream).toHaveBeenCalledTimes(2)
   })
 
+  it('opens only issued terminal permits through the same Profile manager', async () => {
+    const signal = new AbortController().signal
+    const stream = vi.fn(async () => (async function* () { yield { type: 'retained' } })())
+    const gateway = gatewayFixture({ stream })
+    const control = new DesktopSessionControl()
+    const state = control.acquire('s', { kind: 'remote', id: '123e4567-e89b-42d3-a456-426614174001' }, { takeover: false })
+    if (!('claim' in state)) throw new Error('missing claim')
+    const manager = new DesktopRemoteTerminalStreams(control)
+    const permit = manager.issue({ operation: 'terminal.apply', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 's', control: { controller_id: state.claim.id, generation: state.claim.generation, epoch: state.claim.epoch },
+      request: { sessionId: 's', method: 'retain', args: { sessionId: 's', id: 't' } } })
+    const executor = new DesktopRemoteUiStreamExecutor(gateway, undefined, undefined, manager)
+    const items: unknown[] = []
+    for await (const value of await executor.open('terminal/stream', { args: permit }, signal)) items.push(value)
+    expect(items).toEqual([{ type: 'retained' }])
+    await expect(executor.open('terminal/stream', { args: { grantId: 'bad' } }, signal)).rejects.toThrow('unavailable')
+    await expect(new DesktopRemoteUiStreamExecutor(gateway).open('terminal/stream', { args: permit }, signal)).rejects.toThrow('unavailable')
+    expect(stream).toHaveBeenCalledOnce()
+  })
+  it('reads terminal lists and launch choices without acquiring Session control', async () => {
+    const invoke = vi.fn(async () => [])
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+    const signal = new AbortController().signal
+    for (const [method, args] of [
+      ['environment', { agentId: 's' }], ['shells', { agentId: 's' }], ['list', { sessionId: 's' }],
+    ] as const) {
+      await expect(executor.execute('terminal/' + method, { args }, signal)).resolves.toEqual([])
+      expect(invoke).toHaveBeenLastCalledWith({ namespace: 'terminal', method, args, signal })
+    }
+    for (const args of [{ agentId: 's', profile: 'other' }, { agentId: '../other' }, { sessionId: 's', path: '/' }]) {
+      await expect(executor.execute('terminal/list', { args }, signal)).rejects.toThrow('invalid terminal payload')
+    }
+    expect(invoke).toHaveBeenCalledTimes(3)
+  })
   it('keeps file observations scoped and cancellation owned by the caller', async () => {
     const stream = vi.fn(async () => (async function* () { yield { type: 'ready' } })())
     const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))

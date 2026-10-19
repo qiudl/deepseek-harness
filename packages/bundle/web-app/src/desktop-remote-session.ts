@@ -1,3 +1,4 @@
+import { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 /** Host-only bridge from the Desktop worker to the existing Session Remote surface. */
 import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -79,7 +80,8 @@ export class DesktopRemoteSessionExecutor {
 
   constructor(private readonly gateway: TypertGateway,
     private readonly remoteApprovals?: DesktopRemoteApprovalEvents,
-    private readonly control = new DesktopSessionControl()) {}
+    private readonly control = new DesktopSessionControl(),
+    private readonly terminalStreams = new DesktopRemoteTerminalStreams(control)) {}
 
   /**
    * Execute one bounded Session command using the Session Remote method parameter names.
@@ -154,6 +156,7 @@ export class DesktopRemoteSessionExecutor {
       }
       case 'terminal.apply': {
         if (command.request.sessionId !== command.session_id) throw new Error('desktop terminal: Session mismatch')
+        if (command.request.method === 'follow' || command.request.method === 'retain') return { ok: true, value: this.terminalStreams.issue(command) }
         try {
           const value = await this.gateway.invoke({ namespace: 'terminal', method: command.request.method,
             args: command.request.args, signal })

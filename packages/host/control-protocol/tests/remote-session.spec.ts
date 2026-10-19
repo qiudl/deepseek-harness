@@ -320,6 +320,8 @@ describe('Profile remote UI stream wire commands', () => {
       { action: 'open', stream_id, endpoint: 'workspaceFiles/changes', payload: {
         args: { workspaceFileScopeId: 'session-1', path: 'file.txt' },
       } },
+      { action: 'open', stream_id, endpoint: 'terminal/stream', payload: { args: { grantId: stream_id } } },
+      { action: 'open', stream_id, endpoint: 'terminal/stream', payload: { args: { grantId: stream_id } }, item_chunks: true },
       { action: 'poll', stream_id }, { action: 'close', stream_id },
     ]) {
       const value = streamFrame(command)
@@ -345,6 +347,7 @@ describe('Profile remote UI stream wire commands', () => {
       { action: 'open', stream_id, endpoint: 'session/list', payload: { args: { path: '/tmp' } } },
       { action: 'open', stream_id, endpoint: '$events', payload: { args: { all: true } } },
       { action: 'open', stream_id, endpoint: 'asset/read', payload: { args: {} } },
+      { action: 'open', stream_id, endpoint: 'terminal/stream', payload: { args: { grantId: 'bad' } } },
       { action: 'open', stream_id, endpoint: 'workspaceFiles/changes', payload: { args: { workspaceFileScopeId: 'session-1', path: 'file', profile: 'other' } } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: '../other' },

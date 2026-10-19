@@ -338,7 +338,7 @@ export interface UnixHostServerOptions {
   readonly remoteUiItemChunksSupported?: boolean
   /** Open only native read streams in the lease-selected worker. */
   readonly remoteUiStream?: (
-    profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events' | 'session/list' | 'workbench/read' | 'workspaceFiles/changes', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
+    profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events' | 'session/list' | 'workbench/read' | 'workspaceFiles/changes' | 'terminal/stream', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
       { action: 'open' }>['payload'], signal: AbortSignal, itemChunks?: boolean,
   ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
@@ -1524,7 +1524,7 @@ export class HostControlAuthority {
           const profileId = authority()
           let result: ProfileRemoteUiStreamResult['result']
           if (command.action === 'open') {
-            if (command.endpoint === 'session/follow' && command.item_chunks && !this.options.remoteUiItemChunksSupported)
+            if ((command.endpoint === 'session/follow' || command.endpoint === 'terminal/stream') && command.item_chunks && !this.options.remoteUiItemChunksSupported)
               throw new HostAuthorityError('upgrade_required')
             const execute = this.options.remoteUiStream
             if (!execute) throw new HostAuthorityError('upgrade_required')
@@ -1532,7 +1532,7 @@ export class HostControlAuthority {
               throw new HostAuthorityError('conflict')
             }
             const cursor = await RemoteUiStreamCursor.open(
-              cursorSignal => command.endpoint === 'session/follow' && command.item_chunks === true
+              cursorSignal => (command.endpoint === 'session/follow' || command.endpoint === 'terminal/stream') && command.item_chunks === true
                 ? execute(profileId, command.endpoint, command.payload, cursorSignal, true)
                 : execute(profileId, command.endpoint, command.payload, cursorSignal), signal)
             try {
@@ -2199,7 +2199,7 @@ export class HostControlAuthority {
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
-            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list', 'profile.remote_ui_stream.workbench_read',
+            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list', 'profile.remote_ui_stream.workbench_read', 'profile.remote_ui_stream.terminal',
             ...(this.options.remoteUiItemChunksSupported ? ['profile.remote_ui_stream.item_chunks'] : [])] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction

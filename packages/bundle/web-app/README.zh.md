@@ -110,6 +110,8 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 Desktop 远端 Session 路由启用时，选定 Profile 为每个 Session 保留一份控制权证明。未受控制的 Session 接受本地浏览器写入时会隐式认领；远端控制者通过显式认领和比较交换接管。Profile 对支持的每次修改及审批答复核对远端证明，在 Gateway 检查本地浏览器写入和事件答复，并持有已获准的写入直到执行结束。控制权在未续期 30 秒后过期，Profile 重启也会使旧证明失效。daemon 和 Slark Server 必须交换 Profile 证明，远端浏览器才能使用这些命令。
 
+原生移动端终端复用 Profile 现有的终端 Gateway。环境、Shell 选项和终端列表保持只读；创建、输入、调整大小、改名和关闭都要求当前 Session 控制权，Desktop 浏览器的对应终端写入也遵守同一控制权栅栏。follow 和 retain 先在控制权下取得十秒有效、一次性使用的票据；Profile 在打开原终端流及交付输出前再次校验控制者。关闭移动端流只释放 attachment，不关闭 Shell。
+
 远端客户端持有当前 Session 控制权时，Desktop 浏览器会在会话标题栏显示接管入口。用户点击后，浏览器重新读取 Profile 当前 epoch，请用户确认，再通过已认证的浏览器 Gateway 提交比较交换接管。用户随后重新发送保留的草稿。Desktop 远端 Session 路由未启用时不显示此入口。
 
 远程 `session.create` 向选定 Profile 转发可选的工作区和会话 ID。Profile 通过本机注册表和原生 Session controller 解析这些 ID；调用方指定的路径不能通过 Host 命令协议。原生 `session/writer-held` 拒绝返回有界的 `sessionCreateFailure` 值，供远程 UI 执行已有的空白会话回退规则。原生审批答复使用仍在等待的 `$events` 连接，且必须匹配其 Session ID。事件流会拒绝第二个 ready 帧或已被其他活动事件流占用的客户端 ID；事件流关闭时清除待处理审批。
