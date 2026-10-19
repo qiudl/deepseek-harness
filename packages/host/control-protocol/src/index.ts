@@ -208,3 +208,6 @@ export type { WorkbenchReadPayload, WorkbenchReadEndpoint, WorkbenchChangesPaylo
 
 export { parseWorkbenchSettingsWrite } from './workbench-settings.js'
 export type { WorkbenchSettingsWrite, WorkbenchSettingsJson } from './workbench-settings.js'
+
+export { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
+export type { WorkbenchCredentialWrite } from './workbench-credentials.js'

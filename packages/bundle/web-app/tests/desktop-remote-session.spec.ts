@@ -22,6 +22,24 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('writes credentials once and never returns provider secrets or exception messages', async () => {
+    const invoke = vi.fn().mockResolvedValue({ value: 'synthetic-secret' })
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))
+    const command = { operation: 'credentials.apply' as const, command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      request: { method: 'set' as const, args: { ref: 'TEST_API_KEY', value: 'synthetic-secret' } } }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual({ ok: true })
+    expect(invoke).toHaveBeenCalledExactlyOnceWith({ namespace: 'credentials', method: 'set', args: command.request.args, signal })
+    invoke.mockRejectedValueOnce({ isDSHRemoteError: true, code: 'credential/rejected', message: 'synthetic-secret', details: { value: 'synthetic-secret' } })
+    const result = await executor.execute(command, signal)
+    expect(result).toMatchObject({ ok: false, error: { code: 'credential/rejected', details: { ref: 'TEST_API_KEY' } } })
+    expect(JSON.stringify(result)).not.toContain('synthetic-secret')
+    for (const error of [null, new Error('unavailable'), { isDSHRemoteError: false }, { isDSHRemoteError: true, code: 'gateway/internal' }]) {
+      invoke.mockRejectedValueOnce(error)
+      await expect(executor.execute(command, signal)).rejects.toBe(error)
+    }
+  })
+
   it('preserves settings revisions and bounded business failures without exposing secret diagnostics', async () => {
     const invoke = vi.fn().mockResolvedValue({ ns: 'general', revision: 2, value: { locale: 'zh' } })
     const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }))

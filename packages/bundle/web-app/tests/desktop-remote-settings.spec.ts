@@ -1,3 +1,4 @@
+import { MemoryCredentials } from '../../../credentials/credentials/tests/memory.ts'
 /** Real Profile configuration writes through the fixed personal Host command. */
 import { readFile } from 'node:fs/promises'
 import { expect, it } from 'vitest'
@@ -30,4 +31,23 @@ it('persists into the selected Profile, preserves optimistic conflicts and redac
   } } }, signal)
   expect(redacted).toMatchObject({ ok: true, value: { value: { count: 3 } } })
   expect(JSON.stringify(redacted)).not.toContain('private')
+})
+
+it('sets and removes through the real credential provider with metadata-only results', async () => {
+  const { ctx } = await configurationFixture()
+  await ctx.plugin(TypertRegistry)
+  await ctx.plugin(TypertGateway)
+  await ctx.plugin(MemoryCredentials, {})
+  await ctx.plugin(SettingsController)
+  const executor = new DesktopRemoteSessionExecutor(ctx.typertGateway)
+  const command_id = '123e4567-e89b-42d3-a456-426614174000' as never
+  const signal = new AbortController().signal
+  await expect(executor.execute({ operation: 'credentials.apply', command_id,
+    request: { method: 'set', args: { ref: 'TEST_API_KEY', value: 'synthetic-secret' } } }, signal)).resolves.toEqual({ ok: true })
+  const configured = await ctx.credentialsController.describe(['TEST_API_KEY'])
+  expect(configured.TEST_API_KEY).toMatchObject({ configured: true, writable: true })
+  expect(JSON.stringify(configured)).not.toContain('synthetic-secret')
+  await expect(executor.execute({ operation: 'credentials.apply', command_id,
+    request: { method: 'unset', args: { ref: 'TEST_API_KEY' } } }, signal)).resolves.toEqual({ ok: true })
+  expect(await ctx.credentialsController.describe(['TEST_API_KEY'])).toMatchObject({ TEST_API_KEY: { configured: false } })
 })

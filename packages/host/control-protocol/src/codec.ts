@@ -1,3 +1,4 @@
+import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
 import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
 import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
 import { parseRecoveryDescriptor, parseRecoveryDescribeInput, parseRecoveryValidateInput, parseRecoveryValidation } from './recovery-materials.ts'
@@ -537,6 +538,12 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     return { operation: 'session.list', command_id }
   }
 
+  if (command.operation === 'credentials.apply') {
+    exactKeys(command, ['operation', 'command_id', 'request'])
+    const request = parseWorkbenchCredentialWrite(command.request)
+    if (!request) reject()
+    return { operation: 'credentials.apply', command_id, request }
+  }
   if (command.operation === 'settings.apply') {
     exactKeys(command, ['operation', 'command_id', 'request'])
     const request = parseWorkbenchSettingsWrite(command.request)

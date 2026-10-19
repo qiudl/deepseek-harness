@@ -152,6 +152,19 @@ export class DesktopRemoteSessionExecutor {
         return await this.gateway.invoke({ namespace: 'workspace', method: 'create',
           args: { request: { path: grant.path } }, signal }) as HostRemoteSessionJson
       }
+      case 'credentials.apply': {
+        try {
+          await this.gateway.invoke({ namespace: 'credentials', method: command.request.method,
+            args: command.request.args, signal })
+          return { ok: true }
+        } catch (error) {
+          if (row(error) && error.isDSHRemoteError === true && error.code === 'credential/rejected') {
+            return { ok: false, error: { code: 'credential/rejected', message: 'Credential update was rejected.',
+              details: { ref: command.request.args.ref } } }
+          }
+          throw error
+        }
+      }
       case 'settings.apply': {
         try {
           const value = await this.gateway.invoke({ namespace: 'settings', method: command.request.method,
