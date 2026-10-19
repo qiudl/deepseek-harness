@@ -228,11 +228,18 @@ it('operates a real Host shell with controlled input, streamed output and attach
   const state = control.acquire(sessionId, owner, { takeover: false })
   if (!('claim' in state)) throw new Error('missing terminal control')
   const proof = { controller_id: owner.id, generation: state.claim.generation, epoch: state.claim.epoch }
+  const credential = { kind: owner.kind, id: owner.id, generation: state.claim.generation, epoch: state.claim.epoch }
   const terminalStreams = new DesktopRemoteTerminalStreams(control)
   const actions = new DesktopRemoteSessionExecutor(scaffold.ctx.typertGateway, undefined, control, terminalStreams)
   const streams = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway, undefined, undefined, terminalStreams)
   const controller = new AbortController()
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)])
+  const renewal = setInterval(() => {
+    if (control.renew(sessionId, credential).outcome !== 'controlled') {
+      controller.abort(new Error('terminal control renewal failed'))
+    }
+  }, 5000)
+  renewal.unref()
   const terminalId = randomUUID(), attachmentId = randomUUID()
   const invoke = (method: WorkbenchTerminalRequest['method'], args: WorkbenchTerminalRequest['args']) => actions.execute({
     operation: 'terminal.apply', command_id: randomUUID() as never, session_id: sessionId, control: proof,
@@ -272,6 +279,7 @@ it('operates a real Host shell with controlled input, streamed output and attach
         && item.id === terminalId && !Object.hasOwn(item, 'controllerId'))
     }).toBe(true)
   } finally {
+    clearInterval(renewal)
     controller.abort()
     await iterator?.return?.()
     await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'close', args: { agentId: sessionId, id: terminalId }, signal: new AbortController().signal })
