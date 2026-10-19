@@ -256,15 +256,19 @@ it('operates a real Host shell with controlled input, streamed output and attach
       const next = await iterator.next()
       if (next.done) throw new Error('terminal closed before echo')
       const value = next.value as { type: string; data?: string }
-      if (value.type === 'output') output += value.data
+      if (value.type === 'output') output += value.data ?? ''
     }
-    await expect(invoke('list', { sessionId })).resolves.toMatchObject({ ok: true,
-      value: expect.arrayContaining([expect.objectContaining({ id: terminalId, title: 'iPhone shell', cols: 100, rows: 30 })]) })
+    const listed = await invoke('list', { sessionId })
+    if (!listed || typeof listed !== 'object' || Array.isArray(listed) || !('value' in listed)
+      || !Array.isArray(listed.value)) throw new Error('terminal list missing')
+    expect((listed.value as unknown[]).some(item => item !== null && typeof item === 'object'
+      && 'id' in item && item.id === terminalId && 'title' in item && item.title === 'iPhone shell'
+      && 'cols' in item && item.cols === 100 && 'rows' in item && item.rows === 30)).toBe(true)
     controller.abort()
     await iterator.return?.()
     await expect.poll(async () => {
-      const items = await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'list', args: { sessionId }, signal: new AbortController().signal })
-      return Array.isArray(items) && items.some(item => item && typeof item === 'object' && 'id' in item
+      const items: unknown = await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'list', args: { sessionId }, signal: new AbortController().signal })
+      return Array.isArray(items) && (items as unknown[]).some(item => item !== null && typeof item === 'object' && 'id' in item
         && item.id === terminalId && !Object.hasOwn(item, 'controllerId'))
     }).toBe(true)
   } finally {

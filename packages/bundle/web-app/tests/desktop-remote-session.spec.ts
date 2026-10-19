@@ -31,7 +31,7 @@ describe('Desktop remote Session bridge', () => {
     const command = { operation: 'terminal.apply' as const,
       command_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session-1', control: proof,
       request: { sessionId: 'session-1', method: 'write' as const,
-        args: { agent: 'session-1', id: 't-1', attachmentId: 'a-1', data: 'hello\n' } } }
+        args: { agentId: 'session-1', id: 't-1', attachmentId: 'a-1', data: 'hello\n' } } }
     await expect(executor.execute(command, signal)).resolves.toEqual({ ok: true })
     expect(invoke).toHaveBeenCalledExactlyOnceWith({ namespace: 'terminal', method: 'write', args: command.request.args, signal })
     invoke.mockResolvedValueOnce({ id: 't-1' })
@@ -52,8 +52,12 @@ describe('Desktop remote Session bridge', () => {
       await expect(executor.execute(command, signal)).rejects.toBe(error)
     }
     for (const method of ['follow', 'retain'] as const) {
-      await expect(executor.execute({ ...command, request: { ...command.request, method } }, signal))
-        .resolves.toMatchObject({ ok: true, value: { grantId: expect.any(String) } })
+      const result = await executor.execute({ ...command, request: { ...command.request, method } }, signal)
+      if (result === null || typeof result !== 'object' || Array.isArray(result)
+        || !('ok' in result) || result.ok !== true || !('value' in result)
+        || !result.value || typeof result.value !== 'object'
+        || !('grantId' in result.value)) throw new Error('missing terminal permit')
+      expect(typeof result.value.grantId).toBe('string')
     }
     const count = invoke.mock.calls.length
     await expect(executor.execute({ ...command, request: { ...command.request, sessionId: 'other' } }, signal)).rejects.toThrow('Session mismatch')

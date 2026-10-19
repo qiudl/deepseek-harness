@@ -71,7 +71,11 @@ describe('native terminal stream permits', () => {
         const signal = request.signal
         if (!signal) throw new Error('missing signal')
         observed = signal
-        await new Promise<void>((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+        await new Promise<void>((_, reject) => {
+          signal.addEventListener('abort', () => {
+            reject(signal.reason instanceof Error ? signal.reason : new Error('cancelled'))
+          }, { once: true })
+        })
       })())
       const opened = f.manager.open(stream, f.manager.issue(f.command).grantId, new AbortController().signal)
       const pending = opened.next()
