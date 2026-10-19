@@ -1,3 +1,5 @@
+import { DesktopRemoteTerminalStreams } from '../src/desktop-remote-terminal-stream.ts'
+import { DesktopSessionControl } from '../src/desktop-session-control.ts'
 import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -209,6 +211,68 @@ describe('Desktop remote UI read-only bridge', () => {
     expect(stream).toHaveBeenCalledTimes(2)
   })
 
+  it('opens only issued terminal permits through the same Profile manager', async () => {
+    const signal = new AbortController().signal
+    const stream = vi.fn(async () => (async function* () { yield { type: 'retained' } })())
+    const gateway = gatewayFixture({ stream })
+    const control = new DesktopSessionControl()
+    const state = control.acquire('s', { kind: 'remote', id: '123e4567-e89b-42d3-a456-426614174001' }, { takeover: false })
+    if (!('claim' in state)) throw new Error('missing claim')
+    const manager = new DesktopRemoteTerminalStreams(control)
+    const permit = manager.issue({ operation: 'terminal.apply', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 's', control: { controller_id: state.claim.id, generation: state.claim.generation, epoch: state.claim.epoch },
+      request: { sessionId: 's', method: 'retain', args: { sessionId: 's', id: 't' } } })
+    const executor = new DesktopRemoteUiStreamExecutor(gateway, undefined, undefined, manager)
+    const items: unknown[] = []
+    for await (const value of await executor.open('terminal/stream', { args: permit }, signal)) items.push(value)
+    expect(items).toEqual([{ type: 'retained' }])
+    await expect(executor.open('terminal/stream', { args: { grantId: 'bad' } }, signal)).rejects.toThrow('unavailable')
+    await expect(new DesktopRemoteUiStreamExecutor(gateway).open('terminal/stream', { args: permit }, signal)).rejects.toThrow('unavailable')
+    expect(stream).toHaveBeenCalledOnce()
+  })
+  it('reads terminal lists and launch choices without acquiring Session control', async () => {
+    const invoke = vi.fn(async () => [])
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+    const signal = new AbortController().signal
+    for (const [method, args] of [
+      ['environment', { agentId: 's' }], ['shells', { agentId: 's' }], ['list', { sessionId: 's' }],
+    ] as const) {
+      await expect(executor.execute('terminal/' + method, { args }, signal)).resolves.toEqual([])
+      expect(invoke).toHaveBeenLastCalledWith({ namespace: 'terminal', method, args, signal })
+    }
+    for (const args of [{ agentId: 's', profile: 'other' }, { agentId: '../other' }, { sessionId: 's', path: '/' }]) {
+      await expect(executor.execute('terminal/list', { args }, signal)).rejects.toThrow('invalid terminal payload')
+    }
+    expect(invoke).toHaveBeenCalledTimes(3)
+  })
+  it('keeps file observations scoped and cancellation owned by the caller', async () => {
+    const stream = vi.fn(async () => (async function* () { yield { type: 'ready' } })())
+    const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))
+    const signal = new AbortController().signal
+    const payload = { args: { workspaceFileScopeId: 'session-1', path: 'file.txt' } }
+    const opened = await executor.open('workspaceFiles/changes', payload, signal)
+    await expect(opened[Symbol.asyncIterator]().next()).resolves.toEqual({ done: false, value: { type: 'ready' } })
+    expect(stream).toHaveBeenCalledExactlyOnceWith({ namespace: 'workspaceFiles', method: 'changes', args: payload.args, signal })
+    await expect(executor.open('workspaceFiles/changes', { args: { ...payload.args, profile: 'other' } }, signal)).rejects.toThrow('invalid file observation')
+    expect(stream).toHaveBeenCalledOnce()
+  })
+
+  it('forwards only validated file reads to the composed Connection handler', async () => {
+    const read = vi.fn(async () => Response.json({ value: 'file' }))
+    const gateway = gatewayFixture({})
+    const executor = new DesktopRemoteUiStreamExecutor(gateway, undefined, read)
+    const signal = new AbortController().signal
+    const payload = { args: { endpoint: 'workspaceFiles/stat', rpcId: 'file-rpc',
+      args: { workspaceFileScopeId: 'session-1', path: 'file.txt' } } }
+    const items: unknown[] = []
+    for await (const value of await executor.open('workbench/read', payload, signal)) items.push(value)
+    expect(items[0]).toEqual({ type: 'head', contentType: 'application/json' })
+    expect(items.at(-1)).toEqual({ type: 'complete', totalBytes: 16 })
+    expect(read).toHaveBeenCalledOnce()
+    await expect(executor.open('workbench/read', { args: {} }, signal)).rejects.toThrow('file read unavailable')
+    await expect(new DesktopRemoteUiStreamExecutor(gateway).open('workbench/read', payload, signal)).rejects.toThrow('file read unavailable')
+  })
+
   it('opens a Workspace baseline stream only with empty arguments', async () => {
     const stream = vi.fn(async () => (async function* () { yield { type: 'baseline', value: { items: [] } } })())
     const executor = new DesktopRemoteUiStreamExecutor(gatewayFixture({ stream }))
@@ -415,6 +479,40 @@ describe('Desktop remote UI read-only bridge', () => {
     }
   })
 
+  it('admits only scoped terminal and file observation streams over private HTTP', async () => {
+    const token = 'A'.repeat(43)
+    const open = vi.fn(async () => (async function* () { yield { type: 'ready' } })())
+    const server = createServer((req, res) => {
+      void handleDesktopRemoteUiStreamRequest(req, res, token, open)
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const cases = [
+        { endpoint: 'terminal/stream', valid: { args: { grantId: '123e4567-e89b-42d3-a456-426614174000' } },
+          invalid: { args: { grantId: 'not-a-grant' } } },
+        { endpoint: 'workspaceFiles/changes', valid: { args: { workspaceFileScopeId: 'session-1', path: 'file.txt' } },
+          invalid: { args: { workspaceFileScopeId: 'session-1', path: 'file.txt', profile: 'other' } } },
+      ]
+      for (const { endpoint, valid, invalid } of cases) {
+        const denied = await fetch(origin, { method: 'POST', headers: { authorization: `Bearer ${token}` },
+          body: JSON.stringify({ endpoint, payload: invalid }) })
+        expect(denied.status).toBe(422)
+        const admitted = await fetch(origin, { method: 'POST', headers: { authorization: `Bearer ${token}` },
+          body: JSON.stringify({ endpoint, payload: valid }) })
+        expect(admitted.status).toBe(200)
+        expect(await admitted.text()).toBe(JSON.stringify({ type: 'item', value: { type: 'ready' } }) + '\n'
+          + JSON.stringify({ type: 'end' }) + '\n')
+      }
+      expect(open).toHaveBeenCalledTimes(cases.length)
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      }))
+    }
+  })
+
   it('ends a Host stream with a bounded error when the Gateway fails after its first item', async () => {
     const token = 'D'.repeat(43)
     const server = createServer((req, res) => {
@@ -478,6 +576,27 @@ describe('Desktop remote UI read-only bridge', () => {
       }))
     }
   })
+  it('reads only exact Session command and skill catalogs', async () => {
+    const invoke = vi.fn(async () => ({ items: [] }))
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+    const signal = new AbortController().signal
+    await executor.execute('commands/list', { args: { agent: 'session-1' } }, signal)
+    await executor.execute('skills/list', { args: { request: { sessionId: 'session-1' } } }, signal)
+    for (const [endpoint, args] of [
+      ['commands/list', {}], ['commands/list', { agent: 1 }],
+      ['commands/list', { agent: 'session-1', profile: 'other' }],
+      ['commands/list', { agent: '../other' }],
+      ['skills/list', {}], ['skills/list', { request: null }],
+      ['skills/list', { request: {} }], ['skills/list', { request: { sessionId: 1 } }],
+      ['skills/list', { request: { sessionId: 'session-1', profile: 'other' } }],
+      ['skills/list', { request: { sessionId: '../other' } }],
+      ['llm/listProviders', { secret: true }],
+    ] as const) await expect(executor.execute(endpoint, { args }, signal)).rejects.toThrow()
+    expect(invoke.mock.calls).toEqual([
+      [{ namespace: 'commands', method: 'list', args: { agent: 'session-1' }, signal }],
+      [{ namespace: 'skills', method: 'list', args: { request: { sessionId: 'session-1' } }, signal }],
+    ])
+  })
   it('dispatches only the exact M1 read endpoints with named Remote arguments', async () => {
     const invoke = vi.fn(async () => ({ items: [] }))
     const boot = vi.fn(() => [{ kind: 'script' as const, placement: 'head' as const, text: 'boot()' }])
@@ -492,7 +611,7 @@ describe('Desktop remote UI read-only bridge', () => {
       .resolves.toEqual({ items: [] })
     expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
     for (const endpoint of ['settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
-      'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits']) {
+      'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits', 'llm/listProviders', 'llm/listConfigurableProviders']) {
       const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] } : {}
       await expect(executor.execute(endpoint, { args }, signal)).resolves.toEqual({ items: [] })
       const [namespace, method] = endpoint.split('/')
@@ -504,12 +623,12 @@ describe('Desktop remote UI read-only bridge', () => {
       .rejects.toThrow('invalid payload')
     await expect(executor.execute('cotTranslation/limits', { args: { provider: 'other' } }, signal))
       .rejects.toThrow('invalid payload')
-    for (const endpoint of ['cotTranslation/translate', 'cotTranslation/limits?all=true', 'session/prompt', 'session/delete', 'workspace/create', 'llm/listProviders', '$events/result']) {
+    for (const endpoint of ['cotTranslation/translate', 'cotTranslation/limits?all=true', 'session/prompt', 'session/delete', 'workspace/create', 'llm/discoverModels', '$events/result']) {
       await expect(executor.execute(endpoint, { args: {} }, signal)).rejects.toThrow('endpoint denied')
     }
     await expect(executor.execute('dynamicCordisRunner/syncInspectManifest', { args: {} }, signal))
       .rejects.toThrow('endpoint denied')
-    expect(invoke).toHaveBeenCalledTimes(7)
+    expect(invoke).toHaveBeenCalledTimes(9)
   })
   it('REQ-20261011-0002 validates membership replies before passing them to Main', async () => {
     const entry = { workspaceId: '11111111-1111-4111-8111-111111111111', sessionId: 'session-1' }

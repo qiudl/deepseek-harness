@@ -88,6 +88,8 @@ These pages cover the conversation host and the session data this view projects.
 
 -----
 
+Inside the App-bundled native carrier, this independent view is labeled Thinking. It retains the original trajectory data and navigation while the conversation view shows user messages and answers.
+
 <a id="model-experience"></a>
 ## Model Experience
 

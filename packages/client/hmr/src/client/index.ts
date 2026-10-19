@@ -16,6 +16,9 @@ export const inject = ['modules']
  * @param ctx - Plugin context with the client module system.
  */
 export function apply(ctx: Context): void {
+  // Remote pages execute only their authenticated boot manifest. A loopback SSE
+  // update would bypass that lease and cannot be reached from the opaque page.
+  if ((globalThis as { __DSH_TRANSPORT__?: { remoteHost?: boolean } }).__DSH_TRANSPORT__?.remoteHost === true) return
   const entries = ctx.modules.entries
   const handle = (frame: Extract<PluginsEventParseResult, { kind: 'frame' }>['frame']): void => {
     const run = frame.type === 'graph'

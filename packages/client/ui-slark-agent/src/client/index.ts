@@ -1,3 +1,4 @@
+import { NativeDuetButton } from './NativeDuetButton.tsx'
 import { SlarkAccountLauncher, type SlarkAccountIdentity } from './SlarkAccountLauncher.tsx'
 import { DraftPersistence } from './DraftPersistence.tsx'
 import type { DraftBridge } from './draft-persistence.ts'
@@ -114,6 +115,7 @@ export interface DesktopAgentInvocation {
 declare global {
   interface Window {
     __DSH_DESKTOP_HOST__?: DesktopAgentDirectory
+    __DSH_NATIVE_WORKBENCH__?: { duetStart?: (sessionId: string) => Promise<void>; conversationDraft?: DraftBridge }
   }
 }
 
@@ -292,8 +294,16 @@ export function apply(ctx: ClientContext): void {
       name: 'shell.mobile.collaboration', inject: injected, locale: NS,
     }, CollaborationMobileTab))
   })
+  ctx.slots.inject('conversation.input.right', () => {
+    const start = typeof window === 'undefined' ? undefined : window.__DSH_NATIVE_WORKBENCH__?.duetStart
+    if (!start) return () => {}
+    return ctx.slots.register({ name: 'conversation.input.right', id: 'slark-native-duet', order: 10, locale: NS,
+      inject: () => ({ start }),
+    }, NativeDuetButton)
+  })
   ctx.slots.inject('conversation.input.dock', () => {
-    const bridge = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__?.conversationDraft
+    const bridge = typeof window === 'undefined' ? undefined
+      : window.__DSH_NATIVE_WORKBENCH__?.conversationDraft ?? window.__DSH_DESKTOP_HOST__?.conversationDraft
     if (!bridge) return () => {}
     return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-draft-persistence', order: 5, locale: NS,
       inject: sessionId => ({ sessionId, bridge }),

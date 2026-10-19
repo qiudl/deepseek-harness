@@ -2,7 +2,8 @@
 import { randomUUID } from 'node:crypto'
 
 const BROWSER_SESSION_WRITES = new Set(['session/create', 'session/selectModel', 'session/rename',
-  'session/delete', 'session/fork', 'session/prompt', 'session/updateQueue', 'session/cancel'])
+  'session/delete', 'session/fork', 'session/prompt', 'session/updateQueue', 'session/cancel',
+  'terminal/create', 'terminal/write', 'terminal/resize', 'terminal/rename', 'terminal/close'])
 const SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u
 
 /** Owner identity scoped to one Desktop Profile process. */
@@ -189,8 +190,9 @@ export class DesktopSessionControl {
   admitBrowserInvoke(endpoint: string, args: Readonly<Record<string, unknown>>): (() => void) | undefined {
     if (!BROWSER_SESSION_WRITES.has(endpoint)) return
     const request = args.request
-    if (typeof request !== 'object' || request === null || Array.isArray(request)) return
-    const sessionId: unknown = Reflect.get(request, 'sessionId')
+    const sessionId: unknown = endpoint.startsWith('terminal/')
+      ? args.agentId : typeof request === 'object' && request !== null && !Array.isArray(request)
+        ? Reflect.get(request, 'sessionId') : undefined
     if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return
     return this.admitBrowserWrite(sessionId)
   }

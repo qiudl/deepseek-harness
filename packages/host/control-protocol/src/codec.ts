@@ -1,3 +1,7 @@
+import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
+import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
+import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
 import { parseHostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
 import { parseRecoveryDescriptor, parseRecoveryDescribeInput, parseRecoveryValidateInput, parseRecoveryValidation } from './recovery-materials.ts'
 import { parseHostRootTextContextReceipt } from './root-text-context.ts'
@@ -536,6 +540,25 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     return { operation: 'session.list', command_id }
   }
 
+  if (command.operation === 'terminal.apply') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseWorkbenchTerminalRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (!request || request.sessionId !== session_id) reject()
+    return { operation: 'terminal.apply', command_id, session_id, control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'credentials.apply') {
+    exactKeys(command, ['operation', 'command_id', 'request'])
+    const request = parseWorkbenchCredentialWrite(command.request)
+    if (!request) reject()
+    return { operation: 'credentials.apply', command_id, request }
+  }
+  if (command.operation === 'settings.apply') {
+    exactKeys(command, ['operation', 'command_id', 'request'])
+    const request = parseWorkbenchSettingsWrite(command.request)
+    if (!request) reject()
+    return { operation: 'settings.apply', command_id, request }
+  }
   if (command.operation === 'directory.pick') {
     exactKeys(command, ['operation', 'command_id', 'client_id'])
     return { operation: 'directory.pick', command_id, client_id: uuid(command.client_id) }
@@ -595,6 +618,20 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'title'])
     return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
       control: remoteSessionControlProof(command.control), title: wireText(command.title, 256) }
+  }
+  if (command.operation === 'session.select_model') {
+    const withEffort = Object.hasOwn(command, 'reasoning_effort')
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'provider', 'model',
+      ...(withEffort ? ['reasoning_effort'] : [])])
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      control: remoteSessionControlProof(command.control), provider: wireText(command.provider, 256),
+      model: wireText(command.model, 256),
+      ...(withEffort ? { reasoning_effort: wireText(command.reasoning_effort, 256) } : {}) }
+  }
+  if (command.operation === 'session.select_agent') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'agent_preset'])
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      control: remoteSessionControlProof(command.control), agent_preset: wireText(command.agent_preset, 256) }
   }
   if (command.operation === 'approval.poll') {
     const withCursor = 'cursor' in command
@@ -1675,6 +1712,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
       && params.endpoint !== 'session/collaborationMembership'
+      && params.endpoint !== 'commands/list' && params.endpoint !== 'skills/list'
+      && params.endpoint !== 'llm/listProviders' && params.endpoint !== 'llm/listConfigurableProviders'
       && params.endpoint !== 'settings/describe'
       && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
       && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog'
@@ -1684,10 +1723,22 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     const args = remoteSessionJson(payload.args)
     if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()
-    if ((params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
+    if ((params.endpoint === 'llm/listProviders' || params.endpoint === 'llm/listConfigurableProviders' || params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
       || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog'
       || params.endpoint === 'cotTranslation/limits')
       && Object.keys(args).length !== 0) reject()
+    if (params.endpoint === 'commands/list') {
+      const catalogArgs = record(args)
+      exactKeys(catalogArgs, ['agent'])
+      remoteIdentifier(catalogArgs.agent)
+    }
+    if (params.endpoint === 'skills/list') {
+      const catalogArgs = record(args)
+      exactKeys(catalogArgs, ['request'])
+      const request = record(catalogArgs.request)
+      exactKeys(request, ['sessionId'])
+      remoteIdentifier(request.sessionId)
+    }
     if (params.endpoint === 'session/collaborationSources') {
       const sourceArgs = args as Record<string, unknown>
       exactKeys(sourceArgs, ['request'])
@@ -1733,7 +1784,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         || (params.endpoint !== 'asset/describe' &&
           (!Number.isSafeInteger(assetArgs.offset) || (assetArgs.offset as number) < 0))
         || (params.endpoint === 'asset/read-gzip-chunk'
-          && (assetArgs.offset as number) > 8 * 1024 * 1024 + 64 * 1024)) reject()
+          && (assetArgs.offset as number) > 16 * 1024 * 1024 + 64 * 1024)) reject()
     }
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
@@ -1752,11 +1803,24 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     } else if (command.action === 'open') {
       exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload',
         ...(command.item_chunks === undefined ? [] : ['item_chunks'])])
-      if (command.item_chunks !== undefined && (command.item_chunks !== true || command.endpoint !== 'session/follow')) reject()
+      if (command.item_chunks !== undefined && (command.item_chunks !== true || (command.endpoint !== 'session/follow' && command.endpoint !== 'terminal/stream'))) reject()
       const payload = record(command.payload)
       exactKeys(payload, ['args'])
       const args = record(payload.args)
-      if (command.endpoint === 'workspace/follow' || command.endpoint === '$events' || command.endpoint === 'session/list') {
+      if (command.endpoint === 'terminal/stream') {
+        const parsedPayload = parseWorkbenchTerminalStreamPayload(payload)
+        if (!parsedPayload) reject()
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload,
+          ...(command.item_chunks === true ? { item_chunks: true } : {}) }
+      } else if (command.endpoint === 'workspaceFiles/changes') {
+        const parsedPayload = parseWorkbenchChangesPayload(payload)
+        if (!parsedPayload) reject()
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload }
+      } else if (command.endpoint === 'workbench/read') {
+        const parsedPayload = parseWorkbenchReadPayload(payload)
+        if (!parsedPayload) reject()
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload }
+      } else if (command.endpoint === 'workspace/follow' || command.endpoint === '$events' || command.endpoint === 'session/list') {
         exactKeys(args, [])
         parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: { args: {} } }
       } else if (command.endpoint === 'session/follow') {

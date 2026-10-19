@@ -133,6 +133,7 @@ export const ChatGroupSeat = memo(function ChatGroupSeat({ groupKey, useChatGrou
   const members = useChatGroup(groupKey, group => group?.members)
   const turn = useChatGroup(groupKey, group => group?.data.turn)
   const closed = useChatGroup(groupKey, group => group?.data.closed)
+  const separateProcess = props.usePresentation(policy => policy.separateProcess === true)
   const foldCompleted = props.usePresentation(policy => policy.foldCompletedTurns)
   const { expanded: open, setExpanded: setOpen } = useDisclosure()
   const firstKey = members?.[0]?.key ?? ''
@@ -176,7 +177,7 @@ export const ChatGroupSeat = memo(function ChatGroupSeat({ groupKey, useChatGrou
     if (!open) initialize(closed === false ? 'bottom' : 'top')
     setOpen(!open)
   }, [closed, initialize, open, setOpen])
-  if (members === undefined) return null
+  if (members === undefined || separateProcess) return null
   // The height cap applies only to a group the reader opened; a body that is closing keeps its flat
   // height so the transition starts from what is on screen instead of snapping to the cap first.
   const capped = grouped && (!deferCompletedTurns || open)

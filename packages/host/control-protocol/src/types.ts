@@ -1,3 +1,7 @@
+import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
+import type { WorkbenchSettingsWrite } from './workbench-settings.js'
+import type { WorkbenchReadPayload, WorkbenchChangesPayload } from './workbench-read.js'
 import type { HostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
 import type { RecoveryDescribeInput, RecoveryValidateInput, RecoveryDescriptor, RecoveryValidation } from './recovery-materials.ts'
 import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
@@ -1372,6 +1376,9 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'terminal.apply'; readonly command_id: HostControlRequestId; readonly session_id: string; readonly control: HostRemoteSessionControlProof; readonly request: WorkbenchTerminalRequest }
+  | { readonly operation: 'credentials.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchCredentialWrite }
+  | { readonly operation: 'settings.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchSettingsWrite }
   | {
     readonly operation: 'control.status'
     readonly command_id: HostControlRequestId
@@ -1443,6 +1450,22 @@ export type HostRemoteSessionCommand =
     readonly title: string
   }
   | {
+    readonly operation: 'session.select_model'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly provider: string
+    readonly model: string
+    readonly reasoning_effort?: string
+  }
+  | {
+    readonly operation: 'session.select_agent'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly agent_preset: string
+  }
+  | {
     readonly operation: 'approval.poll'
     readonly command_id: HostControlRequestId
     readonly wait_ms: number
@@ -1494,6 +1517,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly lease_generation: number
     readonly runtime_generation: number
     readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+      | 'commands/list' | 'skills/list' | 'llm/listProviders' | 'llm/listConfigurableProviders'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'
     readonly payload: { readonly args: HostRemoteSessionJson }
@@ -1511,6 +1535,9 @@ export interface ProfileRemoteUiReadResult {
 
 /** Only selected native read streams may cross a live Profile view lease. */
 export type ProfileRemoteUiStreamCommand =
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'terminal/stream'; readonly item_chunks?: true; readonly payload: WorkbenchTerminalStreamPayload }
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workspaceFiles/changes'; readonly payload: WorkbenchChangesPayload }
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workbench/read'; readonly payload: WorkbenchReadPayload }
   | {
     readonly action: 'open'
     readonly stream_id: string

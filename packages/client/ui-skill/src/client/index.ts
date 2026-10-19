@@ -109,6 +109,10 @@ export function apply(ctx: ClientContext): void {
     if (existing !== undefined) return existing
     const abort = new AbortController()
     const promise = (async () => {
+      // Composer construction may run during render; retention publishes shared
+      // state and must begin after that synchronous render has finished.
+      await Promise.resolve()
+      abort.signal.throwIfAborted()
       if (sessions.binding(sessionId) === undefined) {
         throw new Error(`skill catalog requires a retained session "${sessionId}"`)
       }

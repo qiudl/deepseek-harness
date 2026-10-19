@@ -1,3 +1,4 @@
+import { executeNativeScript } from './native-script.ts'
 /** Browser entry for the Web client. */
 import '@deepseek-ai/dsh-client-ui-theme/brand-font.css'
 import { AppWebEntry, applyIndexInjections } from '@deepseek-ai/dsh-client-web'
@@ -54,7 +55,7 @@ try {
       ;(globalThis as { __DSH_TRANSPORT__?: ClientTransportHooks }).__DSH_TRANSPORT__ = {
         fetch, openStream, loadBundle, ownsHost: false, remoteHost: true,
       }
-      await applyIndexInjections(injections, loadBundle)
+      await applyIndexInjections(injections, loadBundle, import.meta.env.MODE === 'native' ? executeNativeScript : undefined)
       gate.resolve()
     }).catch((error: unknown) => { gate.reject(error) })
   }

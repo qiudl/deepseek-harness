@@ -12,6 +12,7 @@ export type CollapseTiming = typeof COLLAPSE_TIMINGS[number]
 /** Presentation capabilities that one work-details mode enables. */
 export interface ChatPresentationPolicy {
   /** Preference identity for layout resets and diagnostics; renderers select the capabilities below. */
+  readonly separateProcess?: boolean
   readonly mode: TranscriptViewMode
   /** Browser-local experiment; completion retains the default immediate folding and scrolling. */
   readonly collapseTiming: CollapseTiming
@@ -87,14 +88,26 @@ export function presentationPolicyFor(
  * Combine Host-backed detail and in-memory timing without owning subscriptions.
  * @param mode - live work-details mode.
  * @param collapseTiming - live, in-memory collapse timing.
+ * @param separateProcess - show execution details only in the independent trajectory view.
  * @returns observable policy whose subscriptions follow both preferences.
  */
 export function derivePresentationPolicy(
   mode: ObservableSnapshot<TranscriptViewMode>,
   collapseTiming: ObservableSnapshot<CollapseTiming>,
+  separateProcess = false,
 ): ObservableSnapshot<ChatPresentationPolicy> {
+  const nativePolicies = new Map<ChatPresentationPolicy, ChatPresentationPolicy>()
   return {
-    getSnapshot: () => presentationPolicyFor(mode.getSnapshot(), collapseTiming.getSnapshot()),
+    getSnapshot: () => {
+      const policy = presentationPolicyFor(mode.getSnapshot(), collapseTiming.getSnapshot())
+      if (!separateProcess) return policy
+      let native = nativePolicies.get(policy)
+      if (native === undefined) {
+        native = { ...policy, separateProcess: true, foldCompletedTurns: false }
+        nativePolicies.set(policy, native)
+      }
+      return native
+    },
     subscribe: (listener) => {
       const unsubscribeMode = mode.subscribe(listener)
       const unsubscribeTiming = collapseTiming.subscribe(listener)
