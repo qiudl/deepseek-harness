@@ -5,6 +5,7 @@ import type {
   HostInspectRequest,
   HostInspectResult,
 } from '@deepseek-ai/dsh-host-control-protocol'
+import { hostDiagnosticReason, type HostDiagnostics } from './host-diagnostics.ts'
 import { HostAuthorityError } from './types.ts'
 
 interface HandshakeState {
@@ -62,6 +63,8 @@ export interface HostControlServerSessionOptions {
   ) => void | Promise<void>
   readonly errorResponse: (request: HostAuthorizedRequest, error: unknown) => HostControlFrame
   readonly revokeOwner: (ownerId: string) => void
+  /** Redacted failure sink; `undefined` keeps this session silent. */
+  readonly diagnostics: HostDiagnostics | undefined
 }
 
 function requestFrame(frame: HostControlFrame): HostControlRequest {
@@ -125,6 +128,11 @@ export class HostControlServerSession {
         }, respond)
       } catch (error) {
         if (error instanceof HostControlResponseCorrelationError) throw error
+        this.options.diagnostics?.record({
+          event: 'control-session',
+          reason: hostDiagnosticReason(error),
+          method: request.method,
+        })
         respond(this.options.errorResponse(request, error))
       }
       this.assertOpen()

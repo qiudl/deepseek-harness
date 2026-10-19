@@ -84,6 +84,35 @@ describe('Windows native peer-attestor composition', () => {
     expect(openProcess).toHaveBeenCalledWith(84)
   })
 
+  it('forwards the failure sink so a rejected publisher is recorded', async () => {
+    const record = vi.fn()
+    const attest = await loadWindowsPeerAttestor({
+      allowedPublisherThumbprints: new Set([publisher]),
+      allowedExecutableDigests: new Set([digest]),
+      diagnostics: { record },
+    }, {
+      loadAuthenticode: async () => () => 'B'.repeat(64),
+      loadDigest: async () => () => digest,
+      loadProcessNative: async () => ({
+        getNamedPipeClientProcessId: vi.fn(() => 42),
+        getNamedPipeServerProcessId: vi.fn(() => 84),
+        openProcess: vi.fn(() => 101n),
+        currentUserSid: vi.fn(() => 'S-1-5-21-1-2-3-1001'),
+        processOwnerSid: vi.fn(() => 'S-1-5-21-1-2-3-1001'),
+        queryProcessImagePath: vi.fn(() => path),
+        openExecutableForVerification: vi.fn(() => 202n),
+        finalExecutablePath: vi.fn(() => path),
+        equalWindowsPath: vi.fn(() => true),
+        verifyAuthenticodePublisher: vi.fn(() => 'B'.repeat(64)),
+        digestExecutable: vi.fn(() => digest),
+        closeHandle: vi.fn(),
+      }),
+    })
+
+    await expect(attest(91n)).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(record).toHaveBeenCalledWith({ event: 'peer-attest', reason: 'publisher_not_allowed' })
+  })
+
   it('forwards one Windows x64 worker boundary to every loader', async () => {
     const calls: string[] = []
     const runtime = { platform: 'win32', arch: 'x64', isMainThread: false } as const

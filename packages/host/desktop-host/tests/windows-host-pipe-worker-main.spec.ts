@@ -23,6 +23,7 @@ function fixture() {
       path: String.raw`C:\Program Files\Slark\resources\dsh\native\win32-x64\koffi.node`,
       sha256: 'c'.repeat(64),
     },
+    diagnosticsRoot: String.raw`C:\Users\alice\AppData\Local\Slark\dsh-host`,
   })
   const cancellation = {
     openCurrentThreadHandle: vi.fn(() => 91n),
@@ -81,6 +82,7 @@ describe('Windows Host pipe Worker composition root', () => {
     expect(state.dependencies.loadAttestor).toHaveBeenCalledWith({
       allowedPublisherThumbprints: new Set(['A'.repeat(64)]),
       allowedExecutableDigests: new Set(['b'.repeat(64)]),
+      diagnostics: expect.objectContaining({ record: expect.any(Function) }),
     })
     const options = state.receivedRunnerOptions()
     expect(options).toBeDefined()
