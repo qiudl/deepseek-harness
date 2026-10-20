@@ -331,6 +331,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   Inbox: 'core.md',
   InboxItem: 'core.md',
   InboxPlacement: 'core.md',
+  InboxTarget: 'core.md',
   InspectorJsonValue: 'extensions.md',
   MessageId: 'llm-streaming.md',
   ResumeAgentOptions: 'core.md',
