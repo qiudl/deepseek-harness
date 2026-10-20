@@ -82,7 +82,7 @@ function pointerFromSlot(slot: Buffer, api: string): bigint {
   return value
 }
 
-function normalizedSid(value: string, canonicalize: (token: string) => string = token => token): string {
+function normalizedSid(value: string, canonicalize: (token: string) => string): string {
   return canonicalize(value)
 }
 

@@ -504,7 +504,7 @@ it('canonicalizes owner and ACE aliases and releases both SID allocations', asyn
 })
 
 it('releases acquired SID allocations when conversion or decoding fails', async () => {
-  for (const fault of ['sid-api', 'text-api', 'decode', 'text-free', 'sid-free'] as const) {
+  for (const fault of ['sid-api', 'text-api', 'decode', 'non-text', 'non-numeric', 'text-free', 'sid-free'] as const) {
     const state = world()
     const free = vi.fn((allocation: unknown) => {
       if ((fault === 'text-free' && allocation === 32n) || (fault === 'sid-free' && allocation === 31n)) {
@@ -515,17 +515,22 @@ it('releases acquired SID allocations when conversion or decoding fails', async 
     state.functions.LocalFree = free
     if (fault === 'sid-api') state.functions.ConvertStringSidToSidW = () => { state.setLastError(5); return 0 }
     if (fault === 'text-api') state.functions.ConvertSidToStringSidW = () => { state.setLastError(5); return 0 }
-    if (fault === 'decode') {
+    if (fault === 'decode' || fault === 'non-text' || fault === 'non-numeric') {
       const decode = state.koffi.decode.getMockImplementation()!
       state.koffi.decode.mockImplementation((value, type) => {
-        if (Buffer.isBuffer(value) && value.readBigUInt64LE() === 32n) throw new Error('SID text decode failed')
+        if (Buffer.isBuffer(value) && value.readBigUInt64LE() === 32n) {
+          if (fault === 'decode') throw new Error('SID text decode failed')
+          return fault === 'non-text' ? 42 : 'SY'
+        }
         return decode(value, type)
       })
     }
     const bindings = await loadWindowsHostRegistrationFileBindings({
       platform: 'win32', arch: 'x64', loadKoffi: async () => state.koffi,
     })
-    expect(() => bindings.inspectExistingDirectory!(path), fault).toThrow()
+    const expected = fault === 'non-text' || fault === 'non-numeric'
+      ? new WindowsHostRegistrationNativeError('ConvertSidToStringSidW', 13) : undefined
+    expect(() => bindings.inspectExistingDirectory!(path), fault).toThrow(expected)
     const allocations = free.mock.calls.map(call => call[0])
     expect(allocations).toEqual(fault === 'sid-api' ? [23n, 22n]
       : fault === 'text-api' ? [31n, 23n, 22n] : [32n, 31n, 23n, 22n])
