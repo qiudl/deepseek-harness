@@ -687,7 +687,7 @@ it('normalizes SDDL alias SIDs to numeric form through the evidence canonicalize
   )
   expect(decoded.ownerSid).toBe('S-1-5-21-1-2-3-500')
   expect(decoded.daclProtected).toBe(true)
-  expect(decoded.access.map((entry) => entry.sid)).toEqual([
+  expect(decoded.access.map(entry => entry.sid)).toEqual([
     'S-1-5-18',
     'S-1-5-32-544',
     'S-1-5-21-1-2-3-500',

@@ -80,7 +80,7 @@ describe('Host diagnostics log', () => {
   it('falls back to the production filesystem operations when none are injected', () => {
     const diagnostics = createHostDiagnostics({ root, now: () => createdAt })
 
-    expect(diagnostics.record).toBeTypeOf('function')
+    expect(typeof diagnostics.record).toBe('function')
   })
 
   it('defaults the clock so an omitted timestamp source still records one ISO instant', () => {

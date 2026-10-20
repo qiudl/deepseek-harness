@@ -353,16 +353,18 @@ describe('Windows named-pipe peer attestation', () => {
       allowedExecutableDigests: new Set([daemonDigest]),
       bindings: bindings({ verifyAuthenticodePublisher: vi.fn(() => 'B'.repeat(64)) }),
       diagnostics: {
-        record: sink => createHostDiagnostics({
-          root: String.raw`C:\Slark\env`,
-          now: () => 0,
-          fileOperations: {
-            ensureDirectory: () => undefined,
-            append: (_path, contents) => { appended.push(contents) },
-            length: () => undefined,
-            replace: () => undefined,
-          },
-        }).record(sink),
+        record: (sink) => {
+          createHostDiagnostics({
+            root: String.raw`C:\Slark\env`,
+            now: () => 0,
+            fileOperations: {
+              ensureDirectory: () => undefined,
+              append: (_path, contents) => { appended.push(contents) },
+              length: () => undefined,
+              replace: () => undefined,
+            },
+          }).record(sink)
+        },
       },
     })
 

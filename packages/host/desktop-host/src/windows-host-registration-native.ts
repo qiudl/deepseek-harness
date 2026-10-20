@@ -82,7 +82,7 @@ function pointerFromSlot(slot: Buffer, api: string): bigint {
   return value
 }
 
-function normalizedSid(value: string, canonicalize: (token: string) => string = (token) => token): string {
+function normalizedSid(value: string, canonicalize: (token: string) => string = token => token): string {
   return canonicalize(value)
 }
 
@@ -120,7 +120,7 @@ function decodeFileRights(rights: string): number {
 
 export function decodeEvidenceSddl(
   sddl: string,
-  canonicalize: (token: string) => string = (token) => token,
+  canonicalize: (token: string) => string = token => token,
 ): Pick<WindowsHostPrivatePathEvidence, 'ownerSid' | 'daclProtected' | 'access'> {
   const owner = section(sddl, 'O')
   const dacl = section(sddl, 'D')
