@@ -141,12 +141,13 @@ Archiving is a registry-global durable set, and the registry refuses to hide run
  * sees exactly the keys its program compiled and falls through to a generic
  * description for any other. The shipped providers merge `turn` (the Agent
  * registry), `job` (the job registry seam), `subagent` (the Subagent
- * runtime), and `schedule` (the Schedule plugin).
+ * runtime), `schedule` (the Schedule plugin), and `source_capture` (the
+ * Session Controller).
  */
 interface SessionActivityKindMap {}
 ```
 
-`SessionActivityKind` is `keyof SessionActivityKindMap`, so a program that compiled no provider sees no key at all. The shipped keys live in client-importable type modules: `turn` in the Agent registry's `types.ts`, `job` in the job registry seam's `view.ts`, `subagent` in the Subagent runtime's `control-types.ts`, `schedule` in the Schedule plugin's `types.ts`; a consumer that renders the families imports those modules for its cases and keeps a generic line for any other key. A provider answers the waterfall by prepending its `SessionActivity` entries to the result of `next()`; the registry's innermost callback returns an empty list, so a composition without providers archives freely.
+`SessionActivityKind` is `keyof SessionActivityKindMap`, so a program that compiled no provider sees no key at all. The UI-oriented keys live in client-importable type modules: `turn` in the Agent registry's `types.ts`, `job` in the job registry seam's `view.ts`, `subagent` in the Subagent runtime's `control-types.ts`, `schedule` in the Schedule plugin's `types.ts`. The Session Controller declares Host-only `source_capture` while a Source, root, or analysis call is in flight; Client consumers keep a generic line for that or any other unknown key. A provider answers the waterfall by prepending its `SessionActivity` entries to the result of `next()`; the registry's innermost callback returns an empty list, so a composition without providers archives freely.
 
 ```ts type-equiv
 /**

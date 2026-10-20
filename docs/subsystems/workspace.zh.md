@@ -141,12 +141,13 @@ interface Workspace {
  * sees exactly the keys its program compiled and falls through to a generic
  * description for any other. The shipped providers merge `turn` (the Agent
  * registry), `job` (the job registry seam), `subagent` (the Subagent
- * runtime), and `schedule` (the Schedule plugin).
+ * runtime), `schedule` (the Schedule plugin), and `source_capture` (the
+ * Session Controller).
  */
 interface SessionActivityKindMap {}
 ```
 
-`SessionActivityKind` 即 `keyof SessionActivityKindMap`，因此一个没有编译任何提供方的程序看不到任何键。随附的键放在各自 client 可导入的类型模块里：`turn` 在 Agent 注册表的 `types.ts`，`job` 在任务注册表接缝的 `view.ts`，`subagent` 在 Subagent runtime 的 `control-types.ts`，`schedule` 在 Schedule 插件的 `types.ts`；渲染各族的消费方为其分支导入这些模块，并为其他任何键保留一条通用文案。提供方通过把自己的 `SessionActivity` 条目前置到 `next()` 的结果来回答 waterfall；注册表最内层的回调返回空列表，因此没有提供方的组合可自由归档。
+`SessionActivityKind` 即 `keyof SessionActivityKindMap`，因此一个没有编译任何提供方的程序看不到任何键。面向 UI 的键放在各自 client 可导入的类型模块里：`turn` 在 Agent 注册表的 `types.ts`，`job` 在任务注册表接缝的 `view.ts`，`subagent` 在 Subagent runtime 的 `control-types.ts`，`schedule` 在 Schedule 插件的 `types.ts`。Session Controller 在 Source、root 或分析调用在途时声明仅限 Host 的 `source_capture`；Client 消费方对它及其他未知键保留通用文案。提供方通过把自己的 `SessionActivity` 条目前置到 `next()` 的结果来回答 waterfall；注册表最内层的回调返回空列表，因此没有提供方的组合可自由归档。
 
 ```ts type-equiv
 /**
