@@ -541,6 +541,18 @@ delete(id: WorkspaceId): Promise<boolean>
  */
 insertBefore(id: WorkspaceId, beforeId?: WorkspaceId): Promise<readonly WorkspaceId[]>
 
+/** Synchronous admission check, including writes waiting on durable storage.
+ * @param sessionId - Original Session to inspect.
+ * @returns Whether its old input route is closed.
+ */
+isGroupInputBlocked(sessionId: SessionId): boolean
+
+/** Install an irreversible local fence before the cloud group activation CAS.
+ * @param raw - Bound original Session and preparing group identity.
+ * @returns The persisted fence, or the same fence from an exact retry.
+ */
+installGroupInputFence(raw: GroupInputFence): Promise<GroupInputFence>
+
 /** Find the original retry token under the Registry queue after Main or Host restarts.
  * @param raw - Current Account and Workspace membership without a caller token.
  * @returns Bound token and phase, or null when this Session has no outstanding intent.

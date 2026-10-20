@@ -110,6 +110,8 @@ The private Host control path reads an exact account-bound phase through `inspec
 
 `findCollaborationArchiveIntent` reads the original token and phase for an exact Account, Workspace and Session inside the Registry queue. It reports absence only after checking Workspace membership; an Account mismatch with an existing intent is rejected. Main and Daemon use this read after restart before minting another token.
 
+REQ-20261020-0010 adds a local group input fence for the original Session. `installGroupInputFence` synchronously closes admission while its serialized ownership, existence, archive, and activity checks and durable write run. An exact retry returns the stored fence; a conflicting Session or group claim fails. If the storage write outcome is indeterminate, this process stays closed until restart reloads durable state. Restart preserves the fence without moving or hiding the Session. While fenced, Workspace and Session removal and ordinary archive are refused; a collaboration archive intent and a group fence cannot coexist. This package provides local state only: the trusted Host must still reconcile pending inbox input and prove the bound group version before Slark changes the group to active. No activation or release route is exposed here.
+
 ### Source map
 
 | File | Role |

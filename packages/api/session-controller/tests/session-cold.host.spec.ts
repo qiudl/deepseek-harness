@@ -1007,6 +1007,26 @@ describe('sessions.prompt synchronous rejection', () => {
     }
   })
 
+  it('rejects the retired prompt route before resolving an Agent or replaying a request id', async () => {
+    const ctx = new Context()
+    ctx.provide('workspaceRegistry', { isGroupInputBlocked: (id: SessionId) => id === sid('group-original') } as never)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp',
+    })
+    const response = await remote.prompt(promptRequest({
+      sessionId: sid('group-original'), mode: 'queue', content: [{ type: 'text', text: 'old route' }],
+    }))
+    expect(response).toMatchObject({
+      ok: false, error: { code: 'session/agent-busy', details: { reason: 'Error: group_session_active' } },
+    })
+    const queued = await remote.updateQueue(request({
+      sessionId: sid('group-original'), itemId: MessageId('old-queued'), action: { kind: 'remove' },
+    }))
+    expect(queued).toMatchObject({
+      ok: false, error: { code: 'session/agent-busy', details: { reason: 'Error: group_session_active' } },
+    })
+  })
+
   it('classifies a raced cold-resume ID collision as agent-busy', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

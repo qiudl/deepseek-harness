@@ -91,6 +91,8 @@ Attachment authorization reads declared content fields of built-in Session event
 
 The controller composes `ArchivedSessionGate` through `ctx.plugin`: it loads once the Agent registry, Session store, and Workspace registry exist and unwinds with the controller. Its `agent/pre-step` listener rejects a step proposed for an archived Session or for a subagent descendant of one — read from the Session header's lineage fields, never a fork — so a late waking delivery ends its turn as `blocked` without a model request; unarchiving lifts the gate for the whole lineage. The work an archived Session still runs is reported and stopped by its owners through the Workspace registry's archive admission ([seam](../../workspace/workspace/README.md)): the running turn by the [Agent registry](../../core/agent/README.md), owned jobs by the [job registry seam](../../jobs/jobs/README.md), subagent descendants by the [Subagent](../../subagent/subagent/README.md) runtime, reminders by the [Schedule](../../schedule/schedule/README.md) plugin; this controller reports nothing itself.
 
+For REQ-20261020-0010, `GroupInputGate` reads the Workspace registry's local group fence in the synchronous `agent/pre-inbox` event and refuses user messages to the original Session. `prompt` also checks the fence before request-ID replay and after asynchronous attachment admission; `updateQueue` refuses edits, removal, and steering through the retired route. This closes direct Agent and Session input locally; the trusted Host and Slark activation protocol must separately fence Source submission and reconcile already queued input.
+
 <a id="client-references"></a>
 
 ## Client references

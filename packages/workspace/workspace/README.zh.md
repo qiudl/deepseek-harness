@@ -111,6 +111,8 @@ REQ-20261011-0002 在归档前增加 `workspace/session-collaboration` journal �
 
 `findCollaborationArchiveIntent` 在 Registry 队列内按精确账号、工作区和 Session 读取原 token 与阶段。确认工作区成员关系后才报告无意图；已有意图的账号不匹配会被拒绝。Main 和 Daemon 重启后先调用此读取，再决定是否生成新 token。
 
+REQ-20261020-0010 为原 Session 增加本地群输入栅栏。`installGroupInputFence` 在串行化的归属、存在性、归档、活动检查及持久化写入期间同步关闭准入。相同请求返回已保存的栅栏；冲突的 Session 或群归属会被拒绝。如果存储写入结果无法判定，本进程会保持封闭，直到重启读取持久状态。重启后保留栅栏，Session 不移动也不隐藏。栅栏生效期间，移除 Workspace 或 Session 以及普通归档都会被拒绝；协作归档意图与群栅栏不能并存。本包只提供本地状态：可信 Host 仍须对账待处理 inbox 输入并证明绑定的群版本，Slark 才能把群切到 active。这里没有开放激活或释放入口。
+
 ### 源码地图
 
 | 文件 | 职责 |
