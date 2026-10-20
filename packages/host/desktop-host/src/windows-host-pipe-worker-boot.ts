@@ -9,6 +9,8 @@ const PIPE_PATH = /^\\\\\.\\pipe\\slark-dsh-host-v1-[0-9a-f]{64}$/u
 const SECURITY_DESCRIPTOR = /^O:(S-[0-9-]+)D:P\(A;;GRGW;;;(S-[0-9-]+)\)$/u
 const PUBLISHER = /^(?:[0-9A-F]{40}|[0-9A-F]{64})$/u
 const SHA256 = /^[0-9a-f]{64}$/u
+const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const PIPE_OPEN_MODE = 0x0008_0003
 const PIPE_MODE = 0x0000_0008
 
@@ -21,6 +23,8 @@ export interface WindowsHostPipeWorkerBootData {
   readonly allowedPublisherThumbprints: readonly string[]
   readonly allowedExecutableDigests: readonly string[]
   readonly nativeModule: WindowsVaultNativeModulePin
+  /** Environment root whose `diagnostics` directory receives redacted attestation failures. */
+  readonly diagnosticsRoot: string
 }
 
 export interface CreateWindowsHostPipeWorkerBootDataOptions {
@@ -30,6 +34,7 @@ export interface CreateWindowsHostPipeWorkerBootDataOptions {
   readonly allowedPublisherThumbprints: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
   readonly nativeModule: WindowsVaultNativeModulePin
+  readonly diagnosticsRoot: string
 }
 
 function invalid(): never { throw new Error('Invalid Windows Host Worker boot data') }
@@ -83,6 +88,12 @@ function canonicalNativeModule(value: unknown): WindowsVaultNativeModulePin {
   return Object.freeze({ path: native.path, sha256: native.sha256 })
 }
 
+function canonicalEnvironmentRoot(value: unknown): string {
+  if (typeof value !== 'string' || !DRIVE_ROOTED_PATH.test(value) || CONTROL_CHARACTER.test(value)
+    || value.slice(2).includes(':') || win32.normalize(value) !== value) return invalid()
+  return value
+}
+
 /** Strictly decode the only payload accepted by the native Windows Worker entry. */
 export function decodeWindowsHostPipeWorkerBootData(input: unknown): WindowsHostPipeWorkerBootData {
   const value = record(input)
@@ -94,6 +105,7 @@ export function decodeWindowsHostPipeWorkerBootData(input: unknown): WindowsHost
     'allowedPublisherThumbprints',
     'allowedExecutableDigests',
     'nativeModule',
+    'diagnosticsRoot',
   ])
   if (value.version !== 1 || !Number.isSafeInteger(value.generation)
     || (value.generation as number) < 1
@@ -107,6 +119,7 @@ export function decodeWindowsHostPipeWorkerBootData(input: unknown): WindowsHost
     allowedPublisherThumbprints: canonicalAnchors(value.allowedPublisherThumbprints, PUBLISHER),
     allowedExecutableDigests: canonicalAnchors(value.allowedExecutableDigests, SHA256),
     nativeModule: canonicalNativeModule(value.nativeModule),
+    diagnosticsRoot: canonicalEnvironmentRoot(value.diagnosticsRoot),
   })
 }
 
@@ -123,6 +136,7 @@ export function createWindowsHostPipeWorkerBootData(
       allowedPublisherThumbprints: [...options.allowedPublisherThumbprints].sort(),
       allowedExecutableDigests: [...options.allowedExecutableDigests].sort(),
       nativeModule: options.nativeModule,
+      diagnosticsRoot: options.diagnosticsRoot,
     })
   } catch {
     throw new HostAuthorityError('invalid_input')

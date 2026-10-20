@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import {
   decodeWindowsHostPipeWorkerBootData,
 } from './windows-host-pipe-worker-boot.ts'
+import { createHostDiagnostics } from './host-diagnostics.ts'
 import {
   runWindowsHostPipeWorker,
   type WindowsHostPipeWorkerPort,
@@ -107,6 +108,7 @@ export async function runWindowsHostPipeWorkerMain(
     resolvedDependencies.loadAttestor({
       allowedPublisherThumbprints: new Set(boot.allowedPublisherThumbprints),
       allowedExecutableDigests: new Set(boot.allowedExecutableDigests),
+      diagnostics: createHostDiagnostics({ root: boot.diagnosticsRoot }),
     }),
   ])
   return await resolvedDependencies.runWorker({

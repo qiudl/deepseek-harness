@@ -1618,8 +1618,11 @@ it.each(['windows-build', 'windows-coverage', 'windows-native-tests'])(
     expect(evaluate('qiudl/deepseek-harness', 'github', 'dependabot[bot]')).toBe('windows-2025')
     for (const repository of ['deepseek-ai/deepseek-harness', 'another/fork']) {
       expect(evaluate(repository, 'github')).toBe('dsh-windows-2025-16core')
+      expect(evaluate(repository, '')).toBe('dsh-windows-2025-16core')
     }
-    expect(evaluate('qiudl/deepseek-harness', '')).toBe('dsh-windows-2025-16core')
+    expect(evaluate('qiudl/deepseek-harness', '')).toBe('windows-2025')
+    expect(evaluate('qiudl/deepseek-harness', '', 'dependabot[bot]')).toBe('windows-2025')
+    expect(evaluate('qiudl/deepseek-harness', 'hosted')).toBe('dsh-windows-2025-16core')
     expect(evaluate('qiudl/deepseek-harness', 'selfhosted')).toEqual(['self-hosted', 'dsh-win-ci', 'windows'])
     expect(evaluate('qiudl/deepseek-harness', 'selfhosted', 'dependabot[bot]')).toBe('dsh-windows-2025-16core')
     expect(evaluate('qiudl/deepseek-harness', 'blacksmith')).toBe(
@@ -1628,7 +1631,7 @@ it.each(['windows-build', 'windows-coverage', 'windows-native-tests'])(
   },
 )
 
-it('bounds only explicitly selected standard Windows fork coverage', () => {
+it('bounds default and explicitly selected standard Windows fork coverage', () => {
   const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'windows-coverage')
   if (!isRecord(job.env)) throw new TypeError('Windows coverage must define its execution budgets')
   const environment = job.env
@@ -1649,8 +1652,11 @@ it('bounds only explicitly selected standard Windows fork coverage', () => {
   expect(budgets('qiudl/deepseek-harness', 'selfhosted', 'dependabot[bot]')).toEqual(defaults)
   for (const repository of ['deepseek-ai/deepseek-harness', 'another/fork']) {
     expect(budgets(repository, 'github')).toEqual(defaults)
+    expect(budgets(repository, '')).toEqual(defaults)
   }
-  expect(budgets('qiudl/deepseek-harness', '')).toEqual(defaults)
+  expect(budgets('qiudl/deepseek-harness', '')).toEqual(standard)
+  expect(budgets('qiudl/deepseek-harness', '', 'dependabot[bot]')).toEqual(standard)
+  expect(budgets('qiudl/deepseek-harness', 'hosted')).toEqual(defaults)
   expect(budgets('qiudl/deepseek-harness', 'blacksmith')).toEqual(defaults)
   expect(job.env.DSH_COVERAGE_TEST_TIMEOUT_MS).toBe('90000')
 })
@@ -1665,7 +1671,10 @@ it.each(['node-24', 'node-24-coverage', 'node-24-consumers'])(
     expect(evaluate('qiudl/deepseek-harness', 'github')).toBe('ubuntu-24.04')
     expect(evaluate('deepseek-ai/deepseek-harness', 'github')).toBe('dsh-ubuntu-24-04-16core')
     expect(evaluate('another/fork', 'github')).toBe('dsh-ubuntu-24-04-16core')
-    expect(evaluate('qiudl/deepseek-harness', '')).toBe('dsh-ubuntu-24-04-16core')
+    expect(evaluate('qiudl/deepseek-harness', '')).toBe('ubuntu-24.04')
+    expect(evaluate('deepseek-ai/deepseek-harness', '')).toBe('dsh-ubuntu-24-04-16core')
+    expect(evaluate('another/fork', '')).toBe('dsh-ubuntu-24-04-16core')
+    expect(evaluate('qiudl/deepseek-harness', 'hosted')).toBe('dsh-ubuntu-24-04-16core')
   },
 )
 

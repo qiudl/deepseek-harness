@@ -183,3 +183,25 @@ describe('Windows isolated Profile preparation', () => {
     expect(vanished.readPrivateFile).toHaveBeenCalledOnce()
   })
 })
+
+it('accepts worker-rewritten mutable documents owned by BUILTIN\Administrators', () => {
+  const existing = new Map<string, Buffer>([
+    [String.raw`${root}\profiles\${profileId}\owner-state\settings.yaml`, Buffer.from('custom: 1\n')],
+  ])
+  const value = fixture(existing)
+  value.readPrivateFile.mockImplementation((path) => {
+    const contents = existing.get(path)
+    if (contents === undefined) return undefined
+    const owned = { ...evidence('file'), ownerSid: 'S-1-5-32-544' }
+    return { contents, evidence: owned }
+  })
+  const prepared = prepareWindowsIsolatedProfile({
+    root,
+    profileId,
+    userSid,
+    maximumManagedFileBytes: 64 * 1024,
+    prepareMcpStorage: true,
+    bindings: value.bindings,
+  })
+  expect(prepared.pluginRoots.length).toBe(1)
+})
