@@ -2,6 +2,7 @@
 import type { Context, Plugin } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
 
+/** Controller plugin that enforces the original Session's local user-input fence. */
 export const GroupInputGate: Plugin.Object<void> = {
   name: 'group-input-gate',
   inject: ['workspaceRegistry'],

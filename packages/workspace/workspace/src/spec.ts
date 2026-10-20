@@ -64,6 +64,7 @@ export const groupInputFence = z.object({
   groupId: z.string().min(1),
   groupVersion: z.number().int().nonnegative(),
 }).strict()
+/** Durable local admission fence for one original Session and preparing group. */
 export type GroupInputFence = z.infer<typeof groupInputFence>
 
 /**
