@@ -1652,14 +1652,14 @@ it('enforces root rollout capabilities on the server even if the client advertis
   const target = { namespace_id: 'n2_' + 'a'.repeat(64), command_id: randomUUID(),
     workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id, source_revision: c.source_revision }
   const input = { namespace_id: target.namespace_id, continuation_policy: 'follow_authorized_plan', source: {} }
-  const caps = ['root_capture', 'root_continuation', 'source_analysis_recovery', 'root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
+  const caps = ['root_capture', 'root_continuation', 'source_analysis_recovery', 'root_feedback', 'root_execution_journal', 'root_planning_attempt', 'root_live_resume', 'root_analysis_recovery', 'root_analysis_diagnostic', 'root_pending_lookup', 'root_lookup', 'root_analysis', 'root_planning_attempt_recovery']
   Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities, ...caps.map(c => 'profile.' + c)])
   const commands = [
     { action: 'read_source_output', target: { workspace_id: c.workspace_id, session_id: c.session_id,
       source_message_id: c.source_message_id, source_revision: c.source_revision } },
     { action: 'root_feedback', operation: { action: 'continuation_read' } },
     ...['root_feedback', 'root_execution_journal'].map(action => ({ action, operation: { action: 'read' } })),
-    ...['prepare_root_attempt', 'read_root_attempt', 'read_root_output'].map(action => ({ action, target })),
+    ...['prepare_root_attempt', 'read_root_attempt', 'read_root_output', 'read_root_diagnostic'].map(action => ({ action, target })),
     ...['capture_root', 'start_captured_root', 'release_captured_root', 'resume_root', 'reconcile_root', 'recover_root', 'prepare_root'].map(action => ({ action, input })),
   ]
   for (const command of commands)
@@ -1826,3 +1826,29 @@ it.each(['unsigned', 'signature', 'binding', 'peer', 'output', 'grant', 'receipt
     await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'read_source_output', target } })).rejects.toThrow()
   },
 )
+
+it.each(['read', 'old', 'foreign', 'source', 'revoked', 'cancelled'] as const)('original Root diagnostic retains Account, capability and Source fences: %s', async (mode) => {
+  const { parseHostRootSubmissionTarget } = await import('@deepseek-ai/dsh-host-control-protocol')
+  const f = await fixture(true, mode !== 'old'), c = f.challenge, abort = new AbortController()
+  const descriptor = { workspace_id: c.workspace_id, session_id: c.session_id,
+    source_message_id: c.source_message_id, source_revision: c.source_revision, snapshot_digest: c.snapshot_digest }
+  const root = { namespace_id: 'n2_' + 'b'.repeat(64), command_id: randomUUID(), root_task_id: randomUUID(),
+    root_trace_id: 'b'.repeat(32), payload_digest: 'c'.repeat(64), source_descriptor: descriptor }
+  const target = parseHostRootSubmissionTarget({ namespace_id: root.namespace_id, command_id: root.command_id,
+    workspace_id: c.workspace_id, session_id: c.session_id, source_message_id: c.source_message_id, source_revision: c.source_revision })
+  const diagnostic = { root, model: { provider: 'fixture', model: 'original' }, failures: [] }
+  let calls = 0
+  f.setAnalysis(async (_profile, command) => {
+    calls++
+    expect(command.action).toBe('read_root_diagnostic')
+    if (mode === 'revoked') f.host.revokeOwner(f.ownerId)
+    if (mode === 'cancelled') abort.abort()
+    return { ...diagnostic, root: mode === 'foreign' ? { ...root, command_id: randomUUID() }
+      : mode === 'source' ? { ...root, source_descriptor: { ...descriptor, session_id: 'foreign' } } : root }
+  })
+  await f.grant()
+  const pending = f.client.collaborationAnalysis({ ...f.account, command: { action: 'read_root_diagnostic', target }, signal: abort.signal })
+  if (mode === 'read') expect(await pending).toEqual({ kind: 'root_diagnostic', evidence: diagnostic })
+  else await expect(pending).rejects.toThrow()
+  expect(calls).toBe(mode === 'old' ? 0 : 1)
+})

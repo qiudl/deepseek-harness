@@ -1,3 +1,4 @@
+import { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 /** Host-only bridge from the Desktop worker to the existing Session Remote surface. */
 import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -79,7 +80,8 @@ export class DesktopRemoteSessionExecutor {
 
   constructor(private readonly gateway: TypertGateway,
     private readonly remoteApprovals?: DesktopRemoteApprovalEvents,
-    private readonly control = new DesktopSessionControl()) {}
+    private readonly control = new DesktopSessionControl(),
+    private readonly terminalStreams = new DesktopRemoteTerminalStreams(control)) {}
 
   /**
    * Execute one bounded Session command using the Session Remote method parameter names.
@@ -89,8 +91,9 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
+      command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
       if (!Object.hasOwn(command, 'control')) throw new Error('desktop session control: claim required')
       const proof = command.control
@@ -151,6 +154,63 @@ export class DesktopRemoteSessionExecutor {
         return await this.gateway.invoke({ namespace: 'workspace', method: 'create',
           args: { request: { path: grant.path } }, signal }) as HostRemoteSessionJson
       }
+      case 'terminal.apply': {
+        if (command.request.sessionId !== command.session_id) throw new Error('desktop terminal: Session mismatch')
+        if (command.request.method === 'follow' || command.request.method === 'retain') return { ok: true, value: this.terminalStreams.issue(command) }
+        try {
+          const value = await this.gateway.invoke({ namespace: 'terminal', method: command.request.method,
+            args: command.request.args, signal })
+          return value === undefined ? { ok: true } : { ok: true, value: value as HostRemoteSessionJson }
+        } catch (error) {
+          if (row(error) && error.isDSHRemoteError === true) {
+            const details: Record<string, HostRemoteSessionJson> = {}
+            if (error.code === 'terminal/control-unavailable') {
+              if (!row(error.details) || !['read-only', 'not-running'].includes(String(error.details.reason))) throw error
+              details.reason = String(error.details.reason)
+            } else if (error.code === 'terminal/limit-reached') {
+              if (!row(error.details) || typeof error.details.limit !== 'number' || !Number.isSafeInteger(error.details.limit)
+                || error.details.limit < 1) throw error
+              details.limit = error.details.limit
+            } else if (error.code !== 'terminal/unavailable') throw error
+            return { ok: false, error: { code: error.code, message: 'Terminal operation was rejected.', details } }
+          }
+          throw error
+        }
+      }
+      case 'credentials.apply': {
+        try {
+          await this.gateway.invoke({ namespace: 'credentials', method: command.request.method,
+            args: command.request.args, signal })
+          return { ok: true }
+        } catch (error) {
+          if (row(error) && error.isDSHRemoteError === true && error.code === 'credential/rejected') {
+            return { ok: false, error: { code: 'credential/rejected', message: 'Credential update was rejected.',
+              details: { ref: command.request.args.ref } } }
+          }
+          throw error
+        }
+      }
+      case 'settings.apply': {
+        try {
+          const value = await this.gateway.invoke({ namespace: 'settings', method: command.request.method,
+            args: command.request.args, signal })
+          return { ok: true, value: value as HostRemoteSessionJson }
+        } catch (error) {
+          if (row(error) && error.isDSHRemoteError === true
+            && (error.code === 'settings/conflict' || error.code === 'settings/rejected')) {
+            const details: Record<string, HostRemoteSessionJson> = { ns: command.request.args.ns }
+            if (error.code === 'settings/conflict') {
+              if (!row(error.details) || typeof error.details.expected !== 'number' || !Number.isSafeInteger(error.details.expected)
+                || typeof error.details.actual !== 'number' || !Number.isSafeInteger(error.details.actual)) throw error
+              details.expected = error.details.expected
+              details.actual = error.details.actual
+            }
+            return { ok: false, error: { code: error.code,
+              message: error.code === 'settings/conflict' ? 'Settings changed; refresh before saving.' : 'Settings update was rejected.', details } }
+          }
+          throw error
+        }
+      }
       case 'session.list':
         return this.invoke('list', { _request: {} }, signal)
       case 'session.create':
@@ -173,6 +233,16 @@ export class DesktopRemoteSessionExecutor {
           content: command.content,
           ...(command.client_time_zone === undefined ? {} : { clientTimeZone: command.client_time_zone }),
         } }, signal)
+      case 'session.select_model':
+        return this.invoke('selectModel', { request: { sessionId: command.session_id,
+          provider: command.provider, model: command.model,
+          ...(command.reasoning_effort === undefined ? {} : { reasoningEffort: command.reasoning_effort }) } }, signal)
+      case 'session.select_agent': {
+        const value = await this.gateway.invoke({ namespace: 'agentPresets', method: 'select',
+          args: { agent: command.session_id, agentPreset: command.agent_preset }, signal })
+        if (typeof value !== 'string') throw new Error('desktop remote UI: invalid preset result')
+        return { agentPreset: value }
+      }
       case 'session.cancel':
         return this.invoke('cancel', { request: { sessionId: command.session_id } }, signal)
       case 'session.delete':

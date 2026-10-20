@@ -81,7 +81,7 @@ export function apply(ctx: Context): void {
     id: 'trajectory',
     order: 10,
     locale: NS,
-    label: () => t('view.trajectory'),
+    label: () => t(document.documentElement.dataset.dshNative === 'true' ? 'view.thinking' : 'view.trajectory'),
     children: {
       'conversation.trajectory.external': { kind: 'list', scope: 'session' },
       'conversation.trajectory.images': { kind: 'single', scope: 'session' },

@@ -87,6 +87,46 @@ async function loadComposition(): Promise<{ ctx: Context; settingsPath: string }
 }
 
 describe('llm-pi-ai real dormant composition', () => {
+
+  it('loads a keyless local profile and dispatches its captured request without a wire credential', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const { ctx, settingsPath } = await loadComposition()
+    const writeProfile = (baseURL: string, name: string) => writeFile(settingsPath, [
+      '- id: llm-pi-ai',
+      '  config:',
+      '    providers:',
+      '      ollama-local:',
+      '        displayName: ' + name,
+      '        api: openai-completions',
+      '        baseURL: ' + baseURL,
+      '        models:',
+      '          - id: qwen3.8-flash-next:125b-mlx',
+      '            contextWindow: 32768',
+      '',
+    ].join('\n'))
+    await writeProfile(server.url, 'Original local')
+    await vi.waitFor(() => {
+      expect(ctx.llm.listProviders().map(p => p.id)).toEqual(['ollama-local'])
+    }, { timeout: 5000 })
+    const prepared = await ctx.llm.prepareSnapshot({
+      provider: 'ollama-local', model: 'qwen3.8-flash-next:125b-mlx', maxTokens: 8192,
+    }, new AbortController().signal)
+    expect(server.requests).toHaveLength(0)
+    for await (const _chunk of prepared.stream({ ...prepared.config, messages: [] })) { /* consume */ }
+    expect(server.requests).toHaveLength(1)
+    expect(server.headers[0]?.authorization).toBeUndefined()
+    await expect([
+      'provider=ollama-local',
+      'model=' + prepared.snapshot.model,
+      'source-preparation-requests=0',
+      'captured-requests=' + String(server.requests.length),
+      'authorization=' + String(server.headers[0]?.authorization),
+    ].join('\n') + '\n').toMatchFileSnapshot(join(import.meta.dirname, 'expected/keyless-snapshot.expected.txt'))
+    const llm = ctx.llm
+    await ctx.fiber.dispose()
+    expect(llm.listProviders()).toEqual([])
+  })
+
   it('boots with zero routes and registers one the moment settings supply a profile', async () => {
     vi.stubEnv('PI_COMPOSITION_KEY', '')
     const server = await mockServer([{ events: textEvents }])

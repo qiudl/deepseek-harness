@@ -1,8 +1,14 @@
 /** Private native read streams from one Profile's Gateway to its Desktop Host worker. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { gzip } from 'node:zlib'
+import { promisify } from 'node:util'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+import { parseWorkbenchTerminalStreamPayload, parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { readDesktopWorkbenchResponse } from './desktop-remote-workbench-read.ts'
 import type { HostRemoteSessionCommand } from '@deepseek-ai/dsh-host-control-protocol'
 import { openDesktopRemotePrivateRequest, readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
+
+import type { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 
 const SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u
 
@@ -91,16 +97,44 @@ export class DesktopRemoteApprovalEvents {
 /** Opens only the selected Profile's native Session, Workspace, and forwarded event streams. */
 export class DesktopRemoteUiStreamExecutor {
   constructor(private readonly gateway: TypertGateway,
-    private readonly approvals?: DesktopRemoteApprovalEvents) {}
+    private readonly approvals?: DesktopRemoteApprovalEvents,
+    private readonly readResponse?: (request: Request) => Promise<Response>,
+    private readonly terminalStreams?: DesktopRemoteTerminalStreams) {}
 
   /**
    * Open the selected Profile's native Session event stream without granting another Gateway endpoint.
-   * @param endpoint - `session/follow`, `workspace/follow`, or `$events`.
+   * @param endpoint - `session/list`, `session/follow`, `workspace/follow`, `$events`, or `workbench/read`.
    * @param payload - Validated arguments for the selected stream.
    * @param signal - Host-owned cancellation signal.
    * @returns Gateway events until cancellation or normal completion.
    */
   async open(endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
+    if (endpoint === 'terminal/stream') {
+      const request = parseWorkbenchTerminalStreamPayload(payload)
+      if (!request || !this.terminalStreams) throw new Error('desktop remote UI: terminal stream unavailable')
+      return this.terminalStreams.open(this.gateway, request.args.grantId, signal)
+    }
+    if (endpoint === 'workspaceFiles/changes') {
+      const request = parseWorkbenchChangesPayload(payload)
+      if (!request) throw new Error('desktop remote UI: invalid file observation')
+      return this.gateway.stream({ namespace: 'workspaceFiles', method: 'changes', args: request.args, signal })
+    }
+    if (endpoint === 'workbench/read') {
+      const request = parseWorkbenchReadPayload(payload)
+      if (!request || !this.readResponse) throw new Error('desktop remote UI: file read unavailable')
+      return readDesktopWorkbenchResponse(this.readResponse, request, signal)
+    }
+    if (endpoint === 'session/list') {
+      if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args) ||
+        Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
+      const gateway = this.gateway
+      return (async function* () {
+        signal.throwIfAborted()
+        const value = await gateway.invoke({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
+        signal.throwIfAborted()
+        yield value
+      })()
+    }
     if (endpoint === '$events') {
       if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args) ||
         Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
@@ -116,6 +150,39 @@ export class DesktopRemoteUiStreamExecutor {
     if (endpoint !== 'session/follow') throw new Error('desktop remote UI: endpoint denied')
     if (!followPayload(payload)) throw new Error('desktop remote UI: invalid payload')
     return this.gateway.stream({ namespace: 'session', method: 'follow', args: payload.args, signal })
+  }
+}
+
+/**
+ * Encode one complete native event without changing its Session semantics.
+ * @param value - Original Gateway item.
+ * @param itemChunks - Explicitly negotiated private transport support.
+ * @param signal - Owner cancellation, rechecked after compression and before every fragment.
+ * @returns Bounded private frames; legacy requests retain their original limit.
+ */
+export async function* encodeDesktopRemoteUiStreamItem(
+  value: unknown, itemChunks: boolean, signal: AbortSignal,
+): AsyncGenerator<{ type: 'item'; value: unknown }> {
+  signal.throwIfAborted()
+  const source = JSON.stringify(value)
+  const raw = Buffer.from(source)
+  if (!itemChunks || raw.length < 16 * 1024) {
+    if (Buffer.byteLength(JSON.stringify({ type: 'item', value }) + '\n') > 512 * 1024)
+      throw new Error('stream item too large')
+    yield { type: 'item', value }
+    return
+  }
+  if (raw.length > 8 * 1024 * 1024) throw new Error('stream item too large')
+  const compressed = await promisify(gzip)(raw)
+  signal.throwIfAborted()
+  const useCompression = compressed.length < raw.length
+  const packed = useCompression ? compressed : raw
+  const encoding = useCompression ? 'gzip' : 'identity'
+  for (let offset = 0; offset < packed.length; offset += 10 * 1024) {
+    signal.throwIfAborted()
+    yield { type: 'item', value: { type: 'item-chunk', encoding, offset,
+      totalBytes: packed.length, uncompressedBytes: raw.length,
+      bytes: packed.subarray(offset, offset + 10 * 1024).toString('base64url') } }
   }
 }
 
@@ -161,11 +228,18 @@ export async function handleDesktopRemoteUiStreamRequest(
   }
   try {
     const request = await readDesktopRemotePrivateBody(req)
-    if (!record(request) || Object.keys(request).length !== 2 ||
-      (request.endpoint !== 'session/follow' && request.endpoint !== 'workspace/follow' && request.endpoint !== '$events') ||
-      (request.endpoint === 'session/follow' ? !followPayload(request.payload) :
-        !record(request.payload) || Object.keys(request.payload).length !== 1 ||
-        !record(request.payload.args) || Object.keys(request.payload.args).length !== 0))
+    if (!record(request) ||
+      !Object.keys(request).every(key => ['endpoint', 'payload', 'itemChunks'].includes(key)) ||
+      (request.itemChunks !== undefined && (request.itemChunks !== true || (request.endpoint !== 'session/follow' && request.endpoint !== 'terminal/stream'))) ||
+      (request.endpoint !== 'session/list' && request.endpoint !== 'session/follow' &&
+        request.endpoint !== 'workspace/follow' && request.endpoint !== '$events'
+        && request.endpoint !== 'terminal/stream' && request.endpoint !== 'workbench/read' && request.endpoint !== 'workspaceFiles/changes') ||
+      (request.endpoint === 'terminal/stream' ? !parseWorkbenchTerminalStreamPayload(request.payload)
+        : request.endpoint === 'workspaceFiles/changes' ? !parseWorkbenchChangesPayload(request.payload)
+          : request.endpoint === 'workbench/read' ? !parseWorkbenchReadPayload(request.payload)
+            : request.endpoint === 'session/follow' ? !followPayload(request.payload) :
+              !record(request.payload) || Object.keys(request.payload).length !== 1 ||
+          !record(request.payload.args) || Object.keys(request.payload.args).length !== 0))
       throw new Error('invalid stream request')
     const stream = await open(request.endpoint, request.payload, controller.signal)
     controller.signal.throwIfAborted()
@@ -181,7 +255,9 @@ export async function handleDesktopRemoteUiStreamRequest(
     controller.signal.addEventListener('abort', stopHeartbeat, { once: true })
     for await (const value of stream) {
       controller.signal.throwIfAborted()
-      await writeDesktopRemoteUiStreamLine(res, { type: 'item', value })
+      for await (const frame of encodeDesktopRemoteUiStreamItem(value, request.itemChunks === true, controller.signal)) {
+        await writeDesktopRemoteUiStreamLine(res, frame)
+      }
     }
     if (!controller.signal.aborted) { await writeDesktopRemoteUiStreamLine(res, { type: 'end' }); res.end() }
   } catch {

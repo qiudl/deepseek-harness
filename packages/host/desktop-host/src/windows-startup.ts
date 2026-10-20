@@ -561,7 +561,9 @@ async function startWindowsDesktopHostApplicationWithTrust(
         remoteSession,
         remoteUiAssetGzipSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
-        remoteUiStream: (profileId, endpoint, payload, signal) => workers.remoteUiStream(profileId, endpoint, payload, signal),
+        remoteUiItemChunksSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiStream: (profileId, endpoint, payload, signal, itemChunks) =>
+          workers.remoteUiStream(profileId, endpoint, payload, signal, itemChunks),
         ...(mcp && extensionOperations && extensionExecutor ? { extensions: {
           operations: extensionOperations,
           kinds: plugin ? ['plugin', 'mcp'] as const : ['mcp'] as const,

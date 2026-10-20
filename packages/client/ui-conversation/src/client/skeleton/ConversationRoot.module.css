@@ -520,13 +520,28 @@ button.crumb:hover {
 .heroWorkspaceRow {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  align-self: center;
+  flex-wrap: nowrap;
+  overflow-x: auto;
   margin-top: 4px;
   /* figma drew px 8; left nudged +12 so the chip's folder glyph lines up
      closer to the card's inner controls below; right keeps the trailing
      preset seat off the card edge. */
   padding: 0 16px 0 20px;
+}
+
+/* Leave the contributed toolbar and preset visible when a workspace has a long name. */
+.heroWorkspaceRow[data-has-toolbar] button {
+  flex-shrink: 0;
+}
+
+.heroWorkspaceRow[data-has-toolbar] > button:first-child {
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 /* Hero: the composer sits inside the session scroll body; center there so

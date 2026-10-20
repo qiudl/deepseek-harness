@@ -38,7 +38,9 @@ kind: "package-reference"
 
 `profile.remote_session.control_lease` capability 增加精确的 `control.status`、`control.acquire`、`control.renew` 和 `control.release` 命令。选定 Profile 签发进程 generation 和按 Session 递增的 epoch；每次远端 Session 修改及审批答复都携带该证明。Profile 在调用业务代码前拒绝过期或缺失的证明，已获准的写入执行期间不允许接管。Profile 重启会更换 generation，使旧证明失效。
 
-`profile.remote_ui_read` 将启动、资源、Session 和五种精确的启动元数据读取绑定到同一有效视图租约。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
+`profile.remote_ui_read` 将启动、资源、Session 和六种精确的启动元数据读取绑定到同一有效视图租约。`cotTranslation/limits` 读取翻译偏好、可用提供方和文本上限，不授予翻译执行或设置写入。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
+
+原生终端只读操作限于原有 `terminal/environment`、`terminal/shells` 和 `terminal/list`，且必须提供准确的 Session 身份。终端修改操作使用 Session 控制权证明。私有 `terminal/stream` 路由只消费在该证明下为 `follow` 或 `retain` 签发的一次性票据；每次轮询继续检查视图租约，Profile 在流期间重新核验 Session 控制权。
 
 `profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。
 
@@ -46,7 +48,7 @@ kind: "package-reference"
 
 `session/collaborationMembership` 在同一视图租约上接受 1 至 50 组准确的工作区与会话身份。Profile 核对当前归属并按原顺序返回归属、置顶布尔值；格式错误、重复或超限的批次在 Gateway 调用前拒绝。Host 用这项私有读取裁剪云端协同索引，随后才向远端浏览器展示。
 
-`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。`turnWindow` 保留原生历史分页：`minMessages` 必须为正安全整数且不超过 `maxMessages`（省略时为 50），`minTurns` 必须为正安全整数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。
+`profile.remote_ui_stream` 将一个 `session/follow` 游标绑定到同一有效视图租约和 Host 连接。打开操作只接受经过校验的 Session 或子代理地址，以及有上限的可选跟随参数。`turnWindow` 保留原生历史分页：`minMessages` 必须为正安全整数且不超过 `maxMessages`（省略时为 50），`minTurns` 必须为正安全整数。轮询立即返回空闲、最多 16 KiB 的 base64url 分块或不含细节的终止状态；关闭操作会取消 worker 读取。Host 每个游标最多缓存一个 512 KiB 事件，每条连接最多保留八个游标。每条命令都重新校验租约；租约撤销后的下一次请求或连接断开会关闭相关游标。该方法不提供通用 Gateway 流，也不暴露 worker 令牌。 只有声明 `profile.remote_ui_stream.item_chunks` 的 Host 才接受 `session/follow` 打开命令上的 `item_chunks: true`。消费方还必须检查本机客户端 SDK 标志 `remoteUiItemChunksSupported`。此时 worker 在现有传输限制之前，把最多 8 MiB 的完整历史项编码为压缩或原始字节分片；未协商的请求保留原事件上限。每个游标仍最多缓存一个 512 KiB 传输项，每次轮询仍执行相同的 owner 与租约校验。
 
 `profile.model_claim_inventory` 携带 Main 持有的 Account 视图租约，返回来源摘要、最多 128 个互不重复的提供方候选、凭据是否存在、共享引用标志及无法映射记录的数量。编解码器拒绝凭据值、引用名、路径和额外字段。该只读盘点不是认领确认，也不授予凭据迁移权限。
 
@@ -125,6 +127,10 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 
 远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
 
+仅供 Main 使用的 `profile.recovery_materials.describe` 和 `profile.recovery_materials.validate` 沿用既有连接认证字段，完整帧上限为 16 KiB。[严格字段与固定顺序签名载荷](src/recovery-materials.ts) 绑定规范 issuer/subject、安装实例、Profile 和材料承诺。安装签名使用独立的 `DSH-RECOVERY-DESCRIPTOR-v1` 域；恢复包附带的公钥不能作为信任锚。
+
+描述和校验仅证明历史材料属于原 Host，不授予 Account 会话、当前绑定、云权限或 worker 访问。写入材料前，Main 必须比对独立可信的所选身份与操作，核对同一连接上的新挑战以及描述符和材料摘要，并使用本进程的单调时钟限制往返时长。
+
 ## 模型体验
 
 无，因为这个本地 Host 控制编解码器不注册任何面向模型的内容。
@@ -138,7 +144,7 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 ## 已知限制与延后工作
 
 - 远程 Session 创建可携带不透明的工作区和会话 ID，由选定 Profile 验证工作区，并按原生 cwd 和 writer 检查幂等复用会话。会话身份复用要求 `profile.remote_session.session_reuse` 能力。传输命令不接受调用方指定的路径。
-- **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read、扩展命令、远程 Session 命令、十种远程 UI 读取、三种原生流（`session/follow`、`workspace/follow` 与 `$events`）与通用错误。远程方法在 Host 执行器发布 capability 前仍不可用；environment、attachment 和 upgrade 操作需要显式扩展协议。
+- **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read、扩展命令、远程 Session 命令、十五种远程 UI 读取、三种原生流（`session/follow`、`workspace/follow` 与 `$events`）与通用错误。远程方法在 Host 执行器发布 capability 前仍不可用；environment、attachment 和 upgrade 操作需要显式扩展协议。
 - **传输上限由外部执行**——Unix domain socket carrier 必须在字节上限停止读取，并在首次 codec 失败时关闭连接。
 - **密码学策略由外部执行**——密钥持久化、代码签名检查、挑战签名与验证、重放存储和密钥轮换属于 Host identity 与 Desktop broker 包。
 
@@ -204,3 +210,17 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 消费回执采用独立的 `dsh-collaboration-consumption-receipt-v1` 签名域。提交将原根 trace、执行命令、消费尝试和逻辑步骤绑定到实际 Session 事件坐标、首次持久化前缀及本地 journal 提交。投递签名不能替代消费证据。这些编解码器仅确立语法，不授予权限。
 
 首条回复凭据使用 `dsh-collaboration-continuation-observation-v1` 签名域。commit 嵌套原消费 commit，并独立绑定观察 ID、`assistant_message_committed`、助手事件序号和观察到的持久前缀。消费签名不能证明此域；凭据不包含回复正文或完成声明。
+
+`profile.remote_ui_stream.session_list` 声明支持 `args` 为空的 `session/list` 游标。每次打开、轮询和关闭仍由所属视图租约授权；结果通过现有的 16 KiB 分块传输，不提高 64 KiB 控制帧上限。
+
+闭合的会话命令集还包含 `session.select_model`（提供方、模型和可选思考强度）与 `session.select_agent`（预设）。两者均携带精确会话 ID 和必需的控制权证明；执行前校验文本上限并拒绝未知字段。
+
+绑定 view lease 的 `workbench/read` 流只允许 `workspaceFiles/read`、`readBytes`、`stat` 和 `list`，并校验精确的工作区范围与路径参数。它使用 Profile 进程内的 Connection Fetch handler，保留原有 JSON 或 multipart RPC 响应。按序分块不超过 16 KiB，完整响应上限为 34 MiB。取消会关闭所属 reader；未知接口与授权选择字段在派发前被拒绝。
+
+同一文件能力也允许精确的 `workspaceFiles/changes` 流。Gateway 范围查找与文件系统策略继续负责授权；页面取消释放所属 watcher，每次 Host 轮询仍要求原 view lease。
+
+个人 `settings.apply` 命令只允许原有 update、replace、mutate 表单操作。它保留 provider 的版本校验与脱敏 namespace 响应，意图上限 32 KiB，拒绝授权选择字段和不安全 JSON，并保留类型化冲突/拒绝结果，不返回私有异常文本。它不会改变选中 Profile，也不会获取会话控制权。
+
+个人 `credentials.apply` 命令只允许精确的 set/unset。引用名沿用原语法且最多 128 字符，只写值最多 16 KiB。存储由原凭据 provider 负责。成功不返回值，已知拒绝的详情只包含引用名，不回显 provider 值或私有诊断。
+
+受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。

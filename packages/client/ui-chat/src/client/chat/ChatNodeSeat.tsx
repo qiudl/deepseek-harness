@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { JsonBlock } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconAgentPresetOutlineRegular, IconUserOutlineRegular, JsonBlock } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ConversationLocationDataStore, ConversationTurnDataMap } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatNodeHookContext, ChatNodeOwnerProps, ChatFlowSlotProps, UsePresentation } from '../contract/slots.ts'
@@ -50,6 +50,7 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
   cwd, openFile, openSkill, inspectCall, forkAt,
   loadImage, renderMessageImages, fileMentions, useStore, actions, renderSlot, t, useChatNodeBottom, deferCollapse, useGroupAction,
 }: ChatNodeSeatProps) {
+  const separateProcess = usePresentation(policy => policy.separateProcess === true)
   const bottom = useChatNodeBottom(nodeKey)
   const node = useChatNode(nodeKey)
   const routedNode = node as ChatNode | undefined
@@ -139,6 +140,9 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
     loadImage, renderMessageImages, fileMentions, turnProcess,
   ])
   if (routedNode === undefined || owner === null) return null
+  if (separateProcess && (groupPart === 'reasoning' || !['user', 'steering', 'assistant-step', 'turn-error', 'turn-max-tokens', 'turn-tail'].includes(routedNode.kind))) return null
+  const speaker = separateProcess ? routedNode.kind === 'assistant-step' ? 'assistant'
+    : routedNode.kind === 'user' || routedNode.kind === 'steering' ? 'user' : undefined : undefined
   // Runtime dispatch owns the correlation: every Node's discriminant is the
   // keyed-slot entry passed alongside that same Node. TypeScript does not
   // distribute an object containing a union into a union of objects itself.
@@ -159,7 +163,12 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
       data-turn-process-hidden={processHidden || undefined}
       data-turn-process-answer={compactAnswer || undefined}
     >
-      {renderSlot('conversation.chat.node', routedOwner, {
+      {speaker !== undefined && <div className={css.messageIdentity}>
+        <span className={css.messageAvatar} aria-hidden="true">
+          {speaker === 'user' ? <IconUserOutlineRegular size={18} /> : <IconAgentPresetOutlineRegular size={18} />}
+        </span><span>{t(speaker === 'user' ? 'message.nativeUser' : 'message.nativeAgent')}</span>
+      </div>}
+      {renderSlot('conversation.chat.node' , routedOwner, {
         entryKey: routedNode.kind,
         hookContext,
         fallback: (

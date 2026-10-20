@@ -1,3 +1,9 @@
+import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
+import type { WorkbenchSettingsWrite } from './workbench-settings.js'
+import type { WorkbenchReadPayload, WorkbenchChangesPayload } from './workbench-read.js'
+import type { HostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
+import type { RecoveryDescribeInput, RecoveryValidateInput, RecoveryDescriptor, RecoveryValidation } from './recovery-materials.ts'
 import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
 import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
 import type { HostSavedAnalysisFields, HostRootAnalysisOutput } from './root-analysis-output.ts'
@@ -88,6 +94,44 @@ export type HostControlErrorCode =
   | 'scope_mismatch'
   | 'selector_stale'
   | 'lease_conflict'
+  | 'identity_mismatch'
+  | 'installation_mismatch'
+  | 'material_invalid'
+  | 'legacy_verifier_unsupported'
+  | 'schema_unsupported'
+
+/** Read-only historical ownership description, authenticated by the existing connection tuple. */
+export interface ProfileRecoveryMaterialsDescribeRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.describe'
+  readonly params: HostAuthorizedParams & RecoveryDescribeInput
+}
+/** Installation-signed historical facts; no worker or binding authority is granted. */
+export interface ProfileRecoveryMaterialsDescribeResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.describe'
+  readonly result: { readonly descriptor: RecoveryDescriptor; readonly signature: HostControlSignature }
+}
+/** Fresh original-Host validation of an imported historical descriptor and material proof. */
+export interface ProfileRecoveryMaterialsValidateRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.validate'
+  readonly params: HostAuthorizedParams & RecoveryValidateInput
+}
+/** Transport-authenticated read-only observation, separately fenced by Main before file commit. */
+export interface ProfileRecoveryMaterialsValidateResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.validate'
+  readonly result: RecoveryValidation
+}
 
 /** Initial challenge request; it is the only payload decoded before negotiation. */
 export interface HostInspectRequest {
@@ -709,6 +753,7 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'dispatch_root_attempt'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
   | Readonly<{ action: 'read_source_output'; target: HostCollaborationSourceTarget }>
   | Readonly<{ action: 'read_root_output'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'read_root_diagnostic'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'prepare_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'capture_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'start_captured_root'; input: HostRootAnalysisInput }>
@@ -728,6 +773,7 @@ export type HostCollaborationAnalysisResult =
   | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>
   | Readonly<{ kind: 'source_output'; evidence: HostSourceAnalysisOutput }>
   | Readonly<{ kind: 'root_output'; evidence: HostRootAnalysisOutput }>
+  | Readonly<{ kind: 'root_diagnostic'; evidence: HostRootAnalysisDiagnostic }>
   | Readonly<{ kind: 'root_prepared'; preparation: HostRemoteSessionJson }>
   | Readonly<{ kind: 'root_captured'; capture: HostRemoteSessionJson; context_receipt?: import('./root-text-context.ts').HostRootTextContextReceipt }>
   | Readonly<{ kind: 'root_capture_released'; root: HostRootSubmissionDescriptor }>
@@ -1330,6 +1376,9 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'terminal.apply'; readonly command_id: HostControlRequestId; readonly session_id: string; readonly control: HostRemoteSessionControlProof; readonly request: WorkbenchTerminalRequest }
+  | { readonly operation: 'credentials.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchCredentialWrite }
+  | { readonly operation: 'settings.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchSettingsWrite }
   | {
     readonly operation: 'control.status'
     readonly command_id: HostControlRequestId
@@ -1401,6 +1450,22 @@ export type HostRemoteSessionCommand =
     readonly title: string
   }
   | {
+    readonly operation: 'session.select_model'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly provider: string
+    readonly model: string
+    readonly reasoning_effort?: string
+  }
+  | {
+    readonly operation: 'session.select_agent'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly agent_preset: string
+  }
+  | {
     readonly operation: 'approval.poll'
     readonly command_id: HostControlRequestId
     readonly wait_ms: number
@@ -1452,8 +1517,9 @@ export interface ProfileRemoteUiReadRequest {
     readonly lease_generation: number
     readonly runtime_generation: number
     readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+      | 'commands/list' | 'skills/list' | 'llm/listProviders' | 'llm/listConfigurableProviders'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
-      | 'credentials/describe' | 'permissionPresets/catalog'
+      | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'
     readonly payload: { readonly args: HostRemoteSessionJson }
   }
 }
@@ -1469,10 +1535,14 @@ export interface ProfileRemoteUiReadResult {
 
 /** Only selected native read streams may cross a live Profile view lease. */
 export type ProfileRemoteUiStreamCommand =
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'terminal/stream'; readonly item_chunks?: true; readonly payload: WorkbenchTerminalStreamPayload }
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workspaceFiles/changes'; readonly payload: WorkbenchChangesPayload }
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workbench/read'; readonly payload: WorkbenchReadPayload }
   | {
     readonly action: 'open'
     readonly stream_id: string
     readonly endpoint: 'session/follow'
+    readonly item_chunks?: true
     readonly payload: { readonly args: { readonly request: {
       readonly address: { readonly kind: 'session'; readonly sessionId: string }
         | {
@@ -1493,6 +1563,10 @@ export type ProfileRemoteUiStreamCommand =
   | { readonly action: 'open'
     readonly stream_id: string
     readonly endpoint: '$events'
+    readonly payload: { readonly args: Record<string, never> } }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'session/list'
     readonly payload: { readonly args: Record<string, never> } }
   | { readonly action: 'poll' | 'close'; readonly stream_id: string }
 
@@ -1700,6 +1774,8 @@ export interface ProfileModelClaimRetryResult {
 
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
+  | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
+  | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest
   | ProfileRemoteSessionResult
   | ProfileRemoteUiReadRequest

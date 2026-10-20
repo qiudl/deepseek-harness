@@ -297,3 +297,7 @@
 .modalAction {
   min-width: 72px;
 }
+
+.messageIdentity { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.messageAvatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
+  corner-shape: round; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover); flex: none; }

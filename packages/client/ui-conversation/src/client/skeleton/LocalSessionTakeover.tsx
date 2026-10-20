@@ -23,6 +23,7 @@ async function controlRpc(endpoint: string, args: Record<string, unknown>): Prom
 
 /** Shown only when this Desktop Profile reports an active remote owner. */
 export function LocalSessionTakeover({ sessionId, t }: Props) {
+  const remote = (globalThis as { __DSH_TRANSPORT__?: { remoteHost?: boolean } }).__DSH_TRANSPORT__?.remoteHost === true
   const [epoch, setEpoch] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -30,6 +31,8 @@ export function LocalSessionTakeover({ sessionId, t }: Props) {
   const actionVersion = useRef(0)
   currentSession.current = sessionId
   useEffect(() => {
+    // Remote control is owned by the paired carrier, never by the Host browser takeover RPC.
+    if (remote) return
     let active = true
     let unsupported = false
     let pollVersion = 0
@@ -59,8 +62,8 @@ export function LocalSessionTakeover({ sessionId, t }: Props) {
     const timer = window.setInterval(refresh, 3_000)
     refresh()
     return () => { active = false; actionVersion.current += 1; window.clearInterval(timer) }
-  }, [sessionId])
-  if (epoch === null && !failed) return null
+  }, [sessionId, remote])
+  if (remote || (epoch === null && !failed)) return null
   return (
     <span className={css.root}>
       {epoch !== null && (

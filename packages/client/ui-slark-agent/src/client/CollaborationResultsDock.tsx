@@ -62,11 +62,12 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
         }}>
         <small>{t('task.question')}</small>
         <div className={css.text}>{group.original.original_message}</div>
-        {state.locatorAvailable && locateOriginal && <Button size="sm" disabled={state.phase === 'loading'}
+        {state.locatorAvailable && locateOriginal && <Button size="sm" disabled={state.historyReadPending === true}
           data-testid="slark-source-locate" onClick={() => { void locateOriginal(group.original.snapshot_digest) }}>{t('task.viewOriginal')}</Button>}
         {group.phase === 'error' ? <p role="status">{t('task.readUnavailable')}</p>
           : group.replies.length === 0 && !group.pending?.length && !group.pendingUnavailable &&
-            <p role="status">{t(planningStatus[group.planningState ?? ''] ?? 'task.awaitingResult')}</p>}
+            <p role="status">{group.planningFailure ? t('task.localPlanningFailure', { reason: t(`task.planningFailure.${group.planningFailure.reason}`) })
+              : t(planningStatus[group.planningState ?? ''] ?? 'task.awaitingResult')}</p>}
         {group.pendingUnavailable && <p role="status">{t('task.readUnavailable')}</p>}
         {group.pending?.map(item => <div className={css.reply} key={item.pending_item_id}>
           <strong>{item.mentions.map(mention => `${mention.agent_name}${mention.project_name === null ? '' : ` · ${mention.project_name}`}`).join(', ')}</strong>
@@ -110,12 +111,12 @@ export function CollaborationResultsDock({ useSlarkResults, loadSources, loadRep
             </div>}
           </div>
         })}
-        {group.nextCursor && <Button size="sm" disabled={state.phase === 'loading'}
+        {group.nextCursor && <Button size="sm" disabled={state.historyReadPending === true}
           data-testid="slark-collaboration-results-more"
           onClick={() => { void loadReplies(group.original.snapshot_digest) }}>{t('task.moreResults')}</Button>}
       </article>)}
     </div>
-    {state.nextCursor && <Button size="sm" disabled={state.phase === 'loading'}
+    {state.nextCursor && <Button size="sm" disabled={state.historyReadPending === true}
       data-testid="slark-collaboration-messages-more"
       onClick={() => { void loadSources() }}>{t(state.workspaceHistory ? 'task.moreWorkspaceMessages' : 'task.moreMessages')}</Button>}
   </section>

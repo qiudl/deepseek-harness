@@ -372,14 +372,25 @@ describe('hand-declared providers', () => {
     expect(streamSimple).toHaveBeenCalledOnce()
   })
 
-  it('leaves an unauthenticated route to its protocol rather than inventing a credential', async () => {
+  it('does not invent authentication for a keyless responses route', async () => {
+    const server = await mockServer([])
+    const ctx = await harness({
+      providers: {
+        'local-responses': {
+          api: 'openai-responses',
+          baseURL: `${server.url}/v1`,
+          models: [{ id: 'local-model', contextWindow: 32_768, maxTokens: 2048 }],
+        },
+      },
+    })
+
+    const result = await assemble(ctx, { provider: 'local-responses', model: 'local-model', messages: [] })
+    expect(result.finish.kind).toBe('error')
+    expect(server.requests).toHaveLength(0)
+  })
+
+  it('sends a keyless completion request without a wire credential', async () => {
     const server = await mockServer([{ events: textEvents }])
-    // Naming no credential is the deliberately unauthenticated posture — a
-    // named reference that resolved to nothing would have failed with
-    // MISSING_CREDENTIAL long before this point. The route resolves as
-    // configured and the protocol decides: pi-ai's OpenAI-compatible
-    // implementation wants a key or an Authorization header of its own, and
-    // says so instead of the harness guessing a placeholder.
     const ctx = await harness({
       providers: {
         'local-llm': {
@@ -391,11 +402,10 @@ describe('hand-declared providers', () => {
     })
 
     const result = await assemble(ctx, { provider: 'local-llm', model: 'qwen3', messages: [] })
-    expect(result.finish).toMatchObject({
-      kind: 'error',
-      failure: { message: 'No API key for provider: local-llm' },
-    })
-    expect(server.requests).toHaveLength(0)
+    expect(result.finish).toEqual({ kind: 'stop' })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+    expect(server.requests).toHaveLength(1)
+    expect(server.headers[0]?.authorization).toBeUndefined()
   })
 
   it('authenticates an unauthenticated route through a configured header', async () => {

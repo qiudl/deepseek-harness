@@ -7,15 +7,73 @@ import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { CollaborationBadge, CollaborationBrowser, CollaborationMobileTab } from '../src/client/CollaborationBrowser.tsx'
 import type { ConversationIndex } from '../src/client/CollaborationBrowser.tsx'
 import { en } from '../src/client/locales.ts'
+import { createCollaborationBrowserStore } from '../src/client/collaboration-browser-store.ts'
 
 afterEach(cleanup)
+
+function viewingProps() {
+  const store = createCollaborationBrowserStore().create()
+  return { useStore: bindSnapshotSelector(store), actions: store.actions }
+}
+
+it('retains the all-workspace filter, search and scroll when returning from a mobile conversation', () => {
+  const first = 'a15fc774-6fae-4795-9f55-f4be65e06846'
+  const second = 'b15fc774-6fae-4795-9f55-f4be65e06846'
+  const id = SessionId('return-to-collaboration-list')
+  const openConversation = vi.fn()
+  const props = {
+    ...viewingProps(),
+    useCollaborationIndex: bindSnapshotSelector(createSnapshotStore<ConversationIndex>({
+      state: 'ready', global_pending_count: 0, items: [{
+        workspace_id: second, session_id: id, first_source_at: '1', last_activity_at: '2',
+        source_count: 1, pending_count: 0, planning_count: 0, running_count: 0, issue_count: 0,
+        first_pending_digest: null, pinned: false, archived: false,
+      }],
+    })),
+    useSessions: (select: (value: unknown) => unknown) => select({ byId: { [id]: { displayTitle: 'Review' } } }),
+    useWorkspaces: (select: (value: unknown) => unknown) => select({ phase: 'ready', items: [
+      { workspaceId: first, title: 'First', sessionIds: [] },
+      { workspaceId: second, title: 'Second', sessionIds: [id] },
+    ], dedicatedCollaborationSessionIds: [], archivedSessionIds: [], pinnedSessionIds: [] }),
+    openConversation, startConversation: vi.fn(), currentWorkspaceId: () => first,
+    togglePin: vi.fn(), renameConversation: vi.fn(), archiveConversation: vi.fn(), restoreConversation: vi.fn(),
+    t: makeTranslate(en),
+  } as Parameters<typeof CollaborationBrowser>[0]
+  const view = render(<CollaborationBrowser {...props} />)
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'all' } })
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Review' } })
+  fireEvent.scroll(screen.getByRole('region'), { target: { scrollTop: 180 } })
+  fireEvent.click(screen.getByRole('button', { name: /Review/ }))
+  expect(openConversation).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: second, session_id: id }))
+  view.unmount()
+  const returned = render(<CollaborationBrowser {...props} />)
+  expect({
+    scope: screen.getByRole<HTMLSelectElement>('combobox').value,
+    query: screen.getByRole<HTMLInputElement>('searchbox').value,
+    scrollTop: screen.getByRole('region').scrollTop,
+  }).toMatchInlineSnapshot(`
+    {
+      "query": "Review",
+      "scope": "all",
+      "scrollTop": 180,
+    }
+  `)
+  expect(screen.getByRole('button', { name: /Review/ })).toBeTruthy()
+  expect(props.currentWorkspaceId()).toBe(first)
+  returned.unmount()
+  render(<CollaborationBrowser {...props} {...viewingProps()} />)
+  expect(screen.getByRole<HTMLSelectElement>('combobox').value).toBe(first)
+  expect(screen.getByRole<HTMLInputElement>('searchbox').value).toBe('')
+  expect(screen.getByRole('region').scrollTop).toBe(0)
+  expect(screen.queryByRole('button', { name: /Review/ })).toBeNull()
+})
 
 it('shows a Host-marked dedicated Session before its first accepted Source', () => {
   const sessionId = SessionId('dedicated-blank')
   const workspaceId = 'a15fc774-6fae-4795-9f55-f4be65e06846'
   const index = createSnapshotStore<ConversationIndex>({ state: 'ready', global_pending_count: 0, items: [] })
   const openConversation = vi.fn()
-  render(<CollaborationBrowser {...({
+  render(<CollaborationBrowser {...({ ...viewingProps(),
     useCollaborationIndex: bindSnapshotSelector(index),
     useSessions: (select: (value: unknown) => unknown) => select({ byId: {
       [sessionId]: { displayTitle: 'New collaboration', updatedAt: 42 },
@@ -39,7 +97,7 @@ it('starts a mobile collaboration in the workspace selected from the sidebar', (
   const first = 'a15fc774-6fae-4795-9f55-f4be65e06846'
   const second = 'b15fc774-6fae-4795-9f55-f4be65e06846'
   const startConversation = vi.fn()
-  render(<CollaborationBrowser {...({
+  render(<CollaborationBrowser {...({ ...viewingProps(),
     useCollaborationIndex: bindSnapshotSelector(createSnapshotStore<ConversationIndex>({
       state: 'ready', global_pending_count: 0, items: [],
     })),
@@ -73,6 +131,7 @@ it('shows the global pending badge, groups one conversation once, and opens its 
   const togglePin = vi.fn().mockResolvedValue(undefined)
   const t = makeTranslate(en)
   const props = {
+    ...viewingProps(),
     useCollaborationIndex,
     useSessions: (select: (value: unknown) => unknown) => select({ byId: { [sessionId]: { displayTitle: 'Release review' } } }),
     useWorkspaces: (select: (value: unknown) => unknown) => select({ phase: 'ready', dedicatedCollaborationSessionIds: [], pinnedSessionIds: [], archivedSessionIds: [], items: [{
@@ -124,7 +183,7 @@ it('surfaces new work in an archived conversation and offers restore', () => {
   const workspaces = createSnapshotStore({ phase: 'ready', items: [{
     workspaceId, title: 'North', sessionIds: [sessionId],
   }], dedicatedCollaborationSessionIds: [] as SessionId[], archivedSessionIds: [sessionId], pinnedSessionIds: [] as SessionId[] })
-  render(<CollaborationBrowser {...({
+  render(<CollaborationBrowser {...({ ...viewingProps(),
     useCollaborationIndex: bindSnapshotSelector(index),
     useSessions: (select: (value: unknown) => unknown) => select({ byId: {
       [sessionId]: { displayTitle: 'Needs restoring', updatedAt: 2 },
@@ -189,7 +248,7 @@ it('groups owned work, filters by workspace and title, and completes rename and 
     ] }
   const renameConversation = vi.fn(async () => {}), archiveConversation = vi.fn(async () => {})
   const startConversation = vi.fn(), togglePin = vi.fn(async () => {})
-  render(<CollaborationBrowser {...({
+  render(<CollaborationBrowser {...({ ...viewingProps(),
     useCollaborationIndex: bindSnapshotSelector(index),
     useSessions: (select: (value: unknown) => unknown) => select(sessions),
     useWorkspaces: (select: (value: unknown) => unknown) => select(workspaces),
@@ -214,6 +273,7 @@ it('groups owned work, filters by workspace and title, and completes rename and 
   expect(screen.getByText('Topic archive')).toBeTruthy()
   fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Topic finished' } })
   const shell = screen.getByRole('button', { name: /Topic finished/ }).parentElement!
+  expect(within(shell).getByText('Completed')).toBeTruthy()
   fireEvent.click(within(shell).getByRole('button', { name: 'Rename' }))
   const edit = within(shell).getByRole('textbox', { name: 'Rename' })
   fireEvent.keyDown(edit, { key: 'a' })
@@ -264,7 +324,7 @@ it('handles empty, fallback, cancel, and failed actions without losing the list'
   const index = createSnapshotStore<ConversationIndex>({ state: 'loading', global_pending_count: 0, items: [] })
   const togglePin = vi.fn(async () => { throw Error('offline') })
   const renameConversation = vi.fn(async () => {})
-  render(<CollaborationBrowser {...({ useCollaborationIndex: bindSnapshotSelector(index),
+  render(<CollaborationBrowser {...({ ...viewingProps(), useCollaborationIndex: bindSnapshotSelector(index),
     useSessions: (select: (value: unknown) => unknown) => select({ byId: {} }),
     useWorkspaces: (select: (value: unknown) => unknown) => select({ phase: 'ready', items: [{
       workspaceId, title: '', sessionIds: [id],
@@ -305,7 +365,7 @@ it('uses the fallback workspace label and keeps sorted rows stable for equal act
     { ...base, session_id: ids[1]!, last_activity_at: '1' },
     { ...base, session_id: ids[2]!, last_activity_at: '1' },
   ] })
-  render(<CollaborationBrowser {...({ useCollaborationIndex: bindSnapshotSelector(index),
+  render(<CollaborationBrowser {...({ ...viewingProps(), useCollaborationIndex: bindSnapshotSelector(index),
     useSessions: (select: (value: unknown) => unknown) => select({ byId: {} }),
     useWorkspaces: (select: (value: unknown) => unknown) => select({ phase: 'ready',
       items: [{ workspaceId, title: undefined, sessionIds: ids }], pinnedSessionIds: [], archivedSessionIds: [] }),
@@ -315,4 +375,57 @@ it('uses the fallback workspace label and keeps sorted rows stable for equal act
   expect(screen.getAllByText(/Workspace ·/)).toHaveLength(3)
   fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'one' } })
   expect(screen.getByText('Untitled collaboration conversation')).toBeTruthy()
+})
+
+it('orders pending first, then pinned and recent conversations across execution states', async () => {
+  const workspaceId = 'a15fc774-6fae-4795-9f55-f4be65e06846'
+  const base = { workspace_id: workspaceId, first_source_at: '1', source_count: 1,
+    pending_count: 0, planning_count: 0, running_count: 0, issue_count: 0,
+    first_pending_digest: null, pinned: false, archived: false }
+  const items = [
+    { ...base, session_id: 'finished-pin', last_activity_at: '1', pinned: true },
+    { ...base, session_id: 'running', last_activity_at: '20', running_count: 1 },
+    { ...base, session_id: 'draft-pin', last_activity_at: '2', source_count: 0, pinned: true },
+    { ...base, session_id: 'issue', last_activity_at: '40', issue_count: 1 },
+    { ...base, session_id: 'finished', last_activity_at: '50' },
+    { ...base, session_id: 'planning', last_activity_at: '30', planning_count: 1 },
+    { ...base, session_id: 'draft', last_activity_at: '10', source_count: 0 },
+    { ...base, session_id: 'pending-old', last_activity_at: '90', pending_count: 1 },
+    { ...base, session_id: 'pending-new', last_activity_at: '100', pending_count: 1 },
+    { ...base, session_id: 'pending-pin', last_activity_at: '1', pending_count: 1, pinned: true },
+    { ...base, session_id: 'archived', last_activity_at: '200', pinned: true, archived: true },
+  ]
+  render(<CollaborationBrowser {...({ ...viewingProps(),
+    useCollaborationIndex: bindSnapshotSelector(createSnapshotStore<ConversationIndex>({
+      state: 'ready', items, global_pending_count: 3,
+    })),
+    useSessions: (select: (value: unknown) => unknown) => select({ byId: Object.fromEntries(
+      items.map(row => [row.session_id, { displayTitle: `Order ${row.session_id}` }]),
+    ) }),
+    useWorkspaces: (select: (value: unknown) => unknown) => select({ phase: 'ready', items: [
+      { workspaceId, title: 'Workspace', sessionIds: items.map(row => SessionId(row.session_id)) },
+    ], dedicatedCollaborationSessionIds: [], archivedSessionIds: [], pinnedSessionIds: [] }),
+    currentWorkspaceId: () => workspaceId, openConversation: vi.fn(), startConversation: vi.fn(),
+    togglePin: vi.fn(), renameConversation: vi.fn(), archiveConversation: vi.fn(), restoreConversation: vi.fn(),
+    t: makeTranslate(en),
+  } as Parameters<typeof CollaborationBrowser>[0])} />)
+  const rowTitles = () => screen.getAllByRole('button').flatMap((button) => {
+    const title = button.querySelector('span')?.textContent
+    return title?.includes('Order ') ? [title.replace(/^◆ /u, '')] : []
+  })
+  expect(rowTitles()).toEqual(['Order pending-pin', 'Order pending-new', 'Order pending-old',
+    'Order draft-pin', 'Order finished-pin', 'Order finished', 'Order issue', 'Order planning',
+    'Order running', 'Order draft'])
+  expect(screen.getByText('1 items need review')).toBeTruthy()
+  expect(screen.getAllByText('Task execution or result sync in progress')).toHaveLength(2)
+  for (const id of ['pending-pin', 'issue', 'planning', 'running']) {
+    const row = screen.getByRole('button', { name: new RegExp(`Order ${id}`, 'u') })
+    expect(within(row.parentElement!).getByRole('button', { name: 'Archive' }).hasAttribute('disabled')).toBe(true)
+  }
+  await expect(rowTitles().join('\n') + '\n').toMatchFileSnapshot('./expected/collaboration-browser-order.expected.txt')
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Order' } })
+  expect(rowTitles().at(-1)).toBe('Order archived')
+  const archived = screen.getByRole('button', { name: /Order archived/ })
+  expect(archived.hasAttribute('disabled')).toBe(true)
+  expect(within(archived.parentElement!).getByRole('button', { name: 'Restore' }).hasAttribute('disabled')).toBe(false)
 })

@@ -5,7 +5,7 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 
 describe('lease-owned compressed plugin assets', () => {
-  it.each([Buffer.from('registered();'.repeat(100_000)), randomBytes(100_000), Buffer.alloc(0)])(
+  it.each([Buffer.from('registered();'.repeat(100_000)), randomBytes(100_000), Buffer.alloc(12 * 1024 * 1024, 65), Buffer.alloc(0)])(
     'reassembles compressed assets and rechecks cached-read authority (%#)', async (body) => {
       const asset = '/plugins/a.js'
       let authorized = true
@@ -35,7 +35,7 @@ describe('lease-owned compressed plugin assets', () => {
         endpoint: string, payload: unknown, signal: AbortSignal, stopped: () => boolean,
         cache: object,
       ) => Promise<{ bytes: string; total: number; uncompressedBytes: number; encoding: string }>
-      const cache: { current?: { url: string; bytes: Buffer; gzip?: Promise<Buffer> } } = {}
+      const cache: { entries?: Map<string, Promise<{ url: string; bytes: Buffer; gzip?: Promise<Buffer> }>> } = {}
       const signal = new AbortController().signal
       const chunk = (offset: number, stopped = () => false, selectedSignal = signal) => read.call(factory,
         `http://127.0.0.1:${address.port}`, { name: 'cookie', value: 'private' }, 'token',
@@ -54,7 +54,7 @@ describe('lease-owned compressed plugin assets', () => {
         chunks.push(bytes)
         offset += bytes.byteLength
       }
-      expect(gunzipSync(Buffer.concat(chunks))).toEqual(body)
+      expect(gunzipSync(Buffer.concat(chunks)).equals(body)).toBe(true)
       expect(assetReads).toBe(1)
       const concurrent = await Promise.all([chunk(0), chunk(0)])
       expect(concurrent).toEqual([first, first])
@@ -67,15 +67,34 @@ describe('lease-owned compressed plugin assets', () => {
       authorized = true
       let stopCalls = 0
       await expect(chunk(0, () => ++stopCalls >= 4)).rejects.toMatchObject({ code: 'unavailable' })
-      const entry = cache.current
-      if (!entry) throw new Error('Expected a current asset')
+      const entry = await cache.entries?.get(asset)
+      if (!entry) throw new Error('Expected a cached asset')
+      const entries = cache.entries!
+      const getEntry = entries.get.bind(entries)
+      type CachedEntry = NonNullable<typeof entry>
+      let releaseCached!: (value: CachedEntry) => void
+      const heldEntry = new Promise<CachedEntry>((resolve) => { releaseCached = resolve })
+      let joinedCached!: () => void
+      const joined = new Promise<void>((resolve) => { joinedCached = resolve })
+      entries.get = (url) => {
+        if (url !== asset) return getEntry(url)
+        joinedCached()
+        return heldEntry
+      }
+      let workerClosed = false
+      const closedRead = expect(chunk(0, () => workerClosed)).rejects.toMatchObject({ code: 'unavailable' })
+      await joined
+      workerClosed = true
+      releaseCached(entry)
+      await closedRead
+      entries.get = getEntry
       const failed = Promise.reject<Buffer>(new Error('compression failed'))
       void failed.catch(() => {}) // The fault is consumed after asynchronous boot authorization.
       entry.gzip = failed
       await expect(chunk(0)).rejects.toThrow('compression failed')
       expect(entry.gzip).toBeUndefined()
       await expect(chunk(0)).resolves.toEqual(first)
-      entry.gzip = Promise.resolve(Buffer.alloc(8 * 1024 * 1024 + 64 * 1024 + 1))
+      entry.gzip = Promise.resolve(Buffer.alloc(16 * 1024 * 1024 + 64 * 1024 + 1))
       await expect(chunk(0)).rejects.toMatchObject({ code: 'unavailable' })
       delete entry.gzip
       let rejectCompression!: (error: Error) => void

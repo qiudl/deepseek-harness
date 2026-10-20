@@ -8,6 +8,7 @@
     "rewriteRelativeImportExtensions": false
   },
   "include": [
+    "apps/web/tests/native-workbench.e2e.ts",
     "apps/web/tests/collapse-timing.e2e.ts",
     "apps/web/tests/chat-flow-layout.e2e.ts",
     "apps/web/product-isolation.ts",
@@ -23,6 +24,7 @@
     "apps/web/tests/code-card-layout.e2e.ts",
     "apps/web/tests/code-language.snapshot.ts",
     "apps/web/tests/scaffold.ts",
+    "apps/web/tests/scaffold-clock.expected.e2e.ts",
     "apps/web/tests/voice-input.e2e.ts",
     "apps/web/tests/cot-translation.e2e.ts",
     "apps/web/tests/cot-translation-paid.e2e.ts",

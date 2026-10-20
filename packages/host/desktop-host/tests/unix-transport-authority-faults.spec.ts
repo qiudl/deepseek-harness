@@ -338,6 +338,33 @@ describe('Unix transport authority failures', () => {
     client.close()
   })
 
+  it('transports a complete large Session list through the authorized chunk cursor', async () => {
+    const value = { items: Array.from({ length: 94 }, (_, i) => ({ sessionId: `session-${i}`,
+      projections: { values: { title: '摘要🌟'.repeat(300) } } })) }
+    const remoteUiStream = vi.fn(async function* () { yield value })
+    const { client } = await authorityClient({ remoteUiStream })
+    expect(client.inspection.capabilities).toContain('profile.remote_ui_stream.session_list')
+    const lease = await client.openLocalProfile({ profileSelector: await localSelector(client) })
+    const stream_id = randomUUID()
+    try {
+      await expect(client.remoteUiStream({ ...lease, command: { action: 'open', stream_id,
+        endpoint: 'session/list', payload: { args: {} } } })).resolves.toEqual({ type: 'opened' })
+      const chunks: Buffer[] = []
+      for (;;) {
+        const item = await client.remoteUiStream({ ...lease, command: { action: 'poll', stream_id } })
+        if (item.type === 'idle') continue
+        if (item.type === 'end') break
+        expect(item.type).toBe('chunk')
+        if (item.type !== 'chunk') throw new Error('unexpected cursor result')
+        const bytes = Buffer.from(item.bytes, 'base64url')
+        expect(bytes.byteLength).toBeLessThanOrEqual(16_384)
+        chunks.push(bytes)
+      }
+      expect(JSON.parse(Buffer.concat(chunks).toString('utf8'))).toEqual(value)
+      expect(remoteUiStream).toHaveBeenCalledWith(profileId, 'session/list', { args: {} }, expect.any(AbortSignal))
+    } finally { client.close() }
+  })
+
   it('streams Session follow in short lease-authorized chunks and closes on connection loss', async () => {
     const host = fakeHost()
     let release!: (value: IteratorResult<unknown>) => void
@@ -818,4 +845,25 @@ describe('Unix transport authority failures', () => {
       keyHandle: 'key', unlockMaterial: 'material' })).rejects.toMatchObject({ code: 'upgrade_required' })
     client.close()
   })
+})
+
+
+it('REQ-20260930-0015: only a capable Host admits source-side history chunk requests', async () => {
+  for (const supported of [false, true]) {
+    const remoteUiStream = vi.fn(async function* () { yield { type: 'event', seq: 1 } })
+    const { client } = await authorityClient({ remoteUiStream, remoteUiItemChunksSupported: supported })
+    const selector = await localSelector(client)
+    const lease = await client.openLocalProfile({ profileSelector: selector })
+    expect(client.inspection.capabilities.includes('profile.remote_ui_stream.item_chunks' as HostControlCapability)).toBe(supported)
+    const command = { action: 'open' as const, stream_id: randomUUID(), endpoint: 'session/follow' as const,
+      payload: { args: { request: { address: { kind: 'session' as const, sessionId: 'session-1' } } } }, item_chunks: true as const }
+    if (!supported) {
+      await expect(client.remoteUiStream({ ...lease, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+      expect(remoteUiStream).not.toHaveBeenCalled()
+    } else {
+      await expect(client.remoteUiStream({ ...lease, command })).resolves.toEqual({ type: 'opened' })
+      expect(remoteUiStream).toHaveBeenCalledWith(profileId, 'session/follow', command.payload, expect.any(AbortSignal), true)
+      await client.remoteUiStream({ ...lease, command: { action: 'close', stream_id: command.stream_id } })
+    }
+  }
 })

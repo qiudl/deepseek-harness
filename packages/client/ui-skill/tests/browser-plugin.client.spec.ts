@@ -190,6 +190,8 @@ describe('candidates: sessionId addressing', () => {
     const b = await bench(list, undefined, { initialOpen: () => opened.promise })
     try {
       const pending = b.source.candidates(proj('s1'), req(''))
+      expect(b.sessions.retainInfo(sid('s1')).getSnapshot().retainedBy.skillCatalog).toBeUndefined()
+      await Promise.resolve()
       expect(b.sessions.retainInfo(sid('s1')).getSnapshot().retainedBy.skillCatalog).toBe(1)
       expect(list).not.toHaveBeenCalled()
       opened.resolve(undefined)

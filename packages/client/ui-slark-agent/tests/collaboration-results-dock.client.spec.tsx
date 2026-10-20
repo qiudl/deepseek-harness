@@ -373,3 +373,62 @@ it.each(['unavailable', 'disabled'] as const)('shows %s execution without enabli
   if (mode === 'disabled') expect(screen.getByTestId('slark-execution-confirm').hasAttribute('disabled')).toBe(true)
   else expect(screen.queryByTestId('slark-execution-confirm')).toBeNull()
 })
+
+it.each(['dock', 'timeline'] as const)('keeps %s history navigation available during a background read', async (viewKind) => {
+  const f = fixture('完整回复', true, true)
+  f.readSources.mockResolvedValue({ ok: true, value: { items: [f.original], next_cursor: f.original.snapshot_digest } })
+  f.read.mockResolvedValue({ ok: true, value: { deliveries: [f.item], next_cursor: f.item.delivery_id } })
+  const view = render(viewKind === 'dock' ? <CollaborationResultsDock {...f.props} />
+    : <CollaborationTimeline {...f.props} recordId={null} />)
+  onTestFinished(() => { view.unmount() })
+  await screen.findByText('完整回复')
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.read>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.read.mockImplementationOnce(async () => { entered.resolve(undefined); return held.promise })
+  let background!: Promise<void>
+  await act(async () => { background = f.model.refresh(); await entered.promise })
+  onTestFinished(async () => {
+    f.model.dispose()
+    held.resolve({ ok: false, errorCode: 'denied' })
+    await background
+  })
+  const ids = viewKind === 'dock' ? ['slark-source-locate', 'slark-collaboration-messages-more', 'slark-collaboration-results-more']
+    : ['slark-timeline-more', 'slark-timeline-more-replies']
+  for (const id of ids) expect(screen.getByTestId<HTMLButtonElement>(id).disabled).toBe(false)
+})
+
+it('disables repeated history actions only while an explicit lookup is pending', async () => {
+  const f = fixture('完整回复', true, true)
+  f.readSources.mockResolvedValue({ ok: true, value: { items: [f.original], next_cursor: f.original.snapshot_digest } })
+  f.read.mockResolvedValue({ ok: true, value: { deliveries: [f.item], next_cursor: f.item.delivery_id } })
+  const view = render(<CollaborationResultsDock {...f.props} />)
+  onTestFinished(() => { view.unmount() })
+  await screen.findByText('完整回复')
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.readOriginal>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.readOriginal.mockImplementationOnce(async () => { entered.resolve(undefined); return held.promise })
+  let selected!: Promise<void>
+  onTestFinished(async () => {
+    f.model.dispose()
+    held.resolve({ ok: false })
+    await selected
+  })
+  await act(async () => { selected = f.model.locateOriginal(f.original.snapshot_digest, () => {}); await entered.promise })
+  const ids = ['slark-source-locate', 'slark-collaboration-messages-more', 'slark-collaboration-results-more']
+  for (const id of ids) expect(screen.getByTestId<HTMLButtonElement>(id).disabled).toBe(true)
+  await act(async () => { screen.getByTestId('slark-source-locate').click() })
+  expect(f.readOriginal).toHaveBeenCalledOnce()
+  await act(async () => { held.resolve({ ok: false }); await selected })
+  for (const id of ids) expect(screen.getByTestId<HTMLButtonElement>(id).disabled).toBe(false)
+})
+
+it('keeps the original message beside finite local planning failure observations', () => {
+  const f = fixture()
+  const state = { phase: 'ready' as const, groups: [{ original: f.original, phase: 'ready' as const, replies: [],
+    planningState: 'planning', planningFailure: { reason: 'timeout' as const, observedAt: '2026-10-19T00:00:00.000Z' } }] }
+  render(<CollaborationResultsDock {...f.props} useSlarkResults={selector => selector(state)} />)
+  expect(screen.getByText(f.original.original_message)).toBeTruthy()
+  expect(screen.getByText(/本机识别任务曾失败/).textContent).toContain(zh['task.planningFailure.timeout'])
+  expect(screen.queryByText(zh['task.planning'])).toBeNull()
+  expect(screen.queryByRole('button', { name: /重试|retry/i })).toBeNull()
+})

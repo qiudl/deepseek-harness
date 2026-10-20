@@ -15,8 +15,8 @@
   en: 431c79e8f1d3425d
   zh: e36641bb99e01953
 /dsh-host-control-protocol/wire-contract:
-  en: e6f6055feb0fadff
-  zh: 600bce38b94991ba
+  en: 82661696a842a4f0
+  zh: 861ceff7bee9c179
 /dsh-host-control-protocol/challenge-authentication:
   en: 3aaa878c96e9da45
   zh: 58cc3a8855c132f7
@@ -30,8 +30,8 @@
   en: b3f7ef53ffc89101
   zh: 90f8cb60256f6917
 /dsh-host-control-protocol/runtime-invariants/remote-workspace-directories:
-  en: 804610ff0f553589
-  zh: 28b1b6ce9f10a143
+  en: 2530b0becf20c7ce
+  zh: e6018fba5cf1bb96
 /dsh-host-control-protocol/model-experience:
   en: 014d55646fcf02ad
   zh: e290720514952264
@@ -39,5 +39,5 @@
   en: 7e27c6b2c939d049
   zh: 9781e6ac564ea433
 /dsh-host-control-protocol/known-limitations-and-deferred-work:
-  en: 78a103aba57eb4a3
-  zh: 2a910f91bbcd7446
+  en: 3a201cbc3b2ba81b
+  zh: 7f30a5adebe3f086

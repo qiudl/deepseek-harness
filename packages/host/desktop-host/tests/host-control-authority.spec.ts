@@ -71,6 +71,8 @@ describe('transport-neutral Host control authority', () => {
     })
     if (inspection.type === 'result' && inspection.method === 'host.inspect') {
       expect(inspection.result.capabilities).not.toContain('profile.model_claim_inventory')
+      expect(inspection.result.capabilities).not.toContain('profile.recovery_materials.describe')
+      expect(inspection.result.capabilities).not.toContain('profile.recovery_materials.validate')
     }
     const status: HostControlFrame = {
       version: 1,

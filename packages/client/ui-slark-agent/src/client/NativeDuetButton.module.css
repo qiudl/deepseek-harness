@@ -1,0 +1,7 @@
+.action { display: inline-flex; position: relative; align-items: center; }
+.button { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 50%; corner-shape: round; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover); cursor: pointer; touch-action: manipulation; }
+.button:disabled { opacity: .5; cursor: default; }
+.button:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
+.notice { position: absolute; bottom: calc(100% + 8px); right: 0; width: 220px; padding: 10px; border-radius: var(--dsw-radius-md); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font-size: 12px; }
+
+@media (pointer: coarse) { .button { width: 44px; height: 44px; } }

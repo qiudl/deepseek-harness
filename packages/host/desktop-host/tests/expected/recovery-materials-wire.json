@@ -1,0 +1,20 @@
+{
+  "capabilities": {
+    "describe": true,
+    "validate": true
+  },
+  "signatureVerified": true,
+  "validated": true,
+  "currentProfileMatches": true,
+  "contentGenerationChanged": true,
+  "refusals": {
+    "wrongIdentity": "identity_mismatch",
+    "wrongMaterial": "material_invalid",
+    "forged": "material_invalid",
+    "oldHost": "upgrade_required"
+  },
+  "oldHostInspectedMaterials": false,
+  "workerStarts": 0,
+  "profileFilesUnchanged": true,
+  "sessionFilesCreated": false
+}

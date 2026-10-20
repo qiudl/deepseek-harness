@@ -27,6 +27,8 @@ kind: "package-reference"
 
 随包提供的 Web 组合挂载此传输，以交付插件动态变更。开发时，bundle watcher 还会提供代码重建。停用此传输会停止向已打开的页面交付图更新。
 
+远程载体（`remoteHost: true`）不打开此 SSE 通道。页面代码绑定已认证的启动清单；代码变更必须在重新连接并验证新清单之后生效。
+
 ### 启动重载链路
 
 运行 `pnpm run dev:web`，它会同时启动宿主与重建 watcher（`--no-serve` 则只把 watcher 接到别处启动的宿主上，使用共享 Client tsdown 预设的任何 watch 进程亦然）；重建后的插件随后会被自动逐个替换进运行中的浏览器。该预设会在所有包内 chunk 写完后标记 `lib/client.js`，因此仅 chunk 发生重建也会推进包 revision，无需 Host 扫描 chunk。

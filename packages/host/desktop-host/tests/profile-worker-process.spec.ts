@@ -735,7 +735,7 @@ describe('dsh web Profile worker', () => {
             return
           }
           if (url.pathname === '/plugins/' && url.search === '??large/client.js&rev=1') {
-            response.writeHead(200, { 'content-type': 'text/javascript' }).end(Buffer.alloc(8 * 1024 * 1024 + 1))
+            response.writeHead(200, { 'content-type': 'text/javascript' }).end(Buffer.alloc(16 * 1024 * 1024 + 1))
             return
           }
           if (url.pathname === '/plugins/' && url.search === '??missing/client.js&rev=1') {
