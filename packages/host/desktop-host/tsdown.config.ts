@@ -53,7 +53,16 @@ export default defineConfig([
     dts: false,
     clean: false,
     codeSplitting: false,
-    noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
+    outputOptions: { polyfillRequire: false },
+    banner: {
+      js: `import { createRequire as createBuiltinRequire, isBuiltin } from 'node:module';
+const builtinRequire = createBuiltinRequire(process.execPath);
+const require = (specifier) => {
+  if (!isBuiltin(specifier)) throw new Error('Windows startup only loads bundled dependencies and Node builtins');
+  return builtinRequire(specifier);
+};`,
+    },
+    noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u, /^adm-zip(?:\/|$)/u],
   },
   {
     entry: { 'windows-host-pipe-worker-entry': 'lib/types/windows-host-pipe-worker-entry.js' },

@@ -42,6 +42,9 @@ describe('desktop Host startup artifact', () => {
   })()
 
   it.skipIf(source === undefined)('imports the private Windows startup composition from memory without starting a Host', () => {
+    const windowsSource = readFileSync('packages/host/desktop-host/lib/windows-startup.js', 'utf8')
+    const imports = [...windowsSource.matchAll(/^import\s+(?:[^'"]*?\s+from\s+)?(["'])([^"']+)\1/gmu)].map(match => match[2])
+    expect(imports.every(specifier => specifier?.startsWith('node:'))).toBe(true)
     const checked = spawnSync(process.execPath, ['--input-type=module', '-e', `
       import { readFileSync } from 'node:fs'
       import assert from 'node:assert/strict'
@@ -50,6 +53,10 @@ describe('desktop Host startup artifact', () => {
         const loaded = await import('data:text/javascript;base64,' + bytes.toString('base64'))
         assert.equal(typeof loaded.startWindowsDesktopHostApplicationFromPrivateFiles, 'function')
         assert.equal(typeof loaded.startWindowsDesktopHostApplication, 'function')
+        const unbundled = Buffer.concat([bytes, Buffer.from(String.fromCharCode(10) + 'require("adm-zip")')])
+        await assert.rejects(import('data:text/javascript;base64,' + unbundled.toString('base64')), {
+          message: 'Windows startup only loads bundled dependencies and Node builtins',
+        })
         for (const config of [{ platform: 'darwin', arch: 'arm64' }, { platform: 'win32', arch: 'arm64' }]) {
           await assert.rejects(loaded.startWindowsDesktopHostApplicationFromPrivateFiles(config), {
             name: 'HostAuthorityError', code: 'invalid_input',

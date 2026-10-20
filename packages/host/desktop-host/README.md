@@ -25,6 +25,8 @@ Remote UI boot reads project the worker's document-relative `plugins/` reference
 
 The pinned native helper creates its default loader only after validating the exact addon path and bytes. Importing that helper does not resolve a native package. The private `windows-startup.js` composition passes the same release pin to its parent SID, registration, listener, and cancellation adapters and includes it in strictly decoded Worker boot data. The file Worker independently revalidates and loads that exact addon for cancellation, pipe I/O, lifecycle, and peer attestation. Neither production path searches the Koffi package; the embedding must still verify release metadata and protect the installed files throughout use.
 
+The verified Windows startup artifact loads from memory and bundles its non-Node static dependencies, including archive decoding; it must not resolve packages relative to a data URL.
+
 Windows directory security evidence preserves generic, standard, and file-specific SDDL rights as unsigned masks. Unknown tokens and masks wider than 32 bits reject inspection. Parsing generic rights does not grant private-storage access: private files still require the exact protected three-principal file-full-control DACL.
 
 The startup artifact exposes `loadWindowsLegacySourceProbe` for trusted embedding code. Assembly resolves the current process SID through the same release-pinned native addon as local-vault storage, performs no legacy filesystem inspection, and returns only a read-only probe. Unsupported platforms, missing pins, native identity failures, or a missing directory inspector reject loading. The embedding must protect the addon throughout later probe calls and supply the OS-selected user home.
