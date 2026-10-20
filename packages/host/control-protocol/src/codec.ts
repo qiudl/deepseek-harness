@@ -574,12 +574,16 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'mode', 'content',
       ...(withTimeZone ? ['client_time_zone'] : [])])
     if (command.mode !== 'queue' || !Array.isArray(command.content)
-      || command.content.length < 1 || command.content.length > 16) reject()
+      || command.content.length < 1 || command.content.length > 33) reject()
     const content = command.content.map((value) => {
       const part = record(value)
-      exactKeys(part, ['type', 'text'])
-      if (part.type !== 'text') reject()
-      return { type: 'text' as const, text: wireText(part.text, 32_768, true) }
+      if (part.type === 'text') {
+        exactKeys(part, ['type', 'text'])
+        return { type: 'text' as const, text: wireText(part.text, 32_768, true) }
+      }
+      exactKeys(part, ['type', 'receiptId'])
+      if (part.type !== 'file') reject()
+      return { type: 'file' as const, receiptId: uuid(part.receiptId) }
     })
     return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
       control: remoteSessionControlProof(command.control), mode: 'queue', content,

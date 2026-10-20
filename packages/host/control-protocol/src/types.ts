@@ -1423,7 +1423,10 @@ export type HostRemoteSessionCommand =
     readonly session_id: string
     readonly control: HostRemoteSessionControlProof
     readonly mode: 'queue'
-    readonly content: readonly { readonly type: 'text'; readonly text: string }[]
+    readonly content: readonly (
+      | { readonly type: 'text'; readonly text: string }
+      | { readonly type: 'file'; readonly receiptId: string }
+    )[]
     readonly client_time_zone?: string
   }
   | {

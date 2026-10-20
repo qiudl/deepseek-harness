@@ -36,6 +36,8 @@ kind: "package-reference"
 
 `profile.remote_session` 把封闭的 Session 与审批命令集合绑定到 Main 持有的一个视图租约。每条命令另带一个 UUID 幂等键；命令不能选择 HTTP 路径、Profile 根目录、凭据、cookie、启动 token 或任意方法。提示文本、标识符、标题、等待间隔、游标、JSON 深度、节点数、字符串和完整帧均有上限。能够解码该方法不代表功能可用；Host 只有在安装受租约授权的 worker 执行器后才能发布对应 capability。
 
+有界的 `session.prompt` 命令还接受同一 Profile 视图中经认证的本地上传路由签发的 UUID 文件凭证。命令不携带文件字节、路径或上传凭据；Session 服务在受控会话下解析该凭证。
+
 `profile.remote_session.control_lease` capability 增加精确的 `control.status`、`control.acquire`、`control.renew` 和 `control.release` 命令。选定 Profile 签发进程 generation 和按 Session 递增的 epoch；每次远端 Session 修改及审批答复都携带该证明。Profile 在调用业务代码前拒绝过期或缺失的证明，已获准的写入执行期间不允许接管。Profile 重启会更换 generation，使旧证明失效。
 
 `profile.remote_ui_read` 将启动、资源、Session、命令、技能、提供方和启动元数据读取绑定到同一有效视图租约。`cotTranslation/limits` 读取翻译偏好、可用提供方和文本上限，不授予翻译执行或设置写入。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
