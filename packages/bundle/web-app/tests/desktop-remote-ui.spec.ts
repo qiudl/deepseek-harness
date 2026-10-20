@@ -491,7 +491,8 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('session/list', { args: { _request: {} } }, signal))
       .resolves.toEqual({ items: [] })
     expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
-    for (const endpoint of ['settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
+    for (const endpoint of ['commands/list', 'skills/list', 'llm/listProviders', 'llm/listConfigurableProviders',
+      'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
       'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits']) {
       const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] } : {}
       await expect(executor.execute(endpoint, { args }, signal)).resolves.toEqual({ items: [] })
@@ -502,14 +503,18 @@ describe('Desktop remote UI read-only bridge', () => {
       .rejects.toThrow('invalid payload')
     await expect(executor.execute('settings/describe', { args: { path: '/private' } }, signal))
       .rejects.toThrow('invalid payload')
+    await expect(executor.execute('llm/listProviders', { args: { path: '/private' } }, signal))
+      .rejects.toThrow('invalid payload')
+    await expect(executor.execute('llm/listConfigurableProviders', { args: { path: '/private' } }, signal))
+      .rejects.toThrow('invalid payload')
     await expect(executor.execute('cotTranslation/limits', { args: { provider: 'other' } }, signal))
       .rejects.toThrow('invalid payload')
-    for (const endpoint of ['cotTranslation/translate', 'cotTranslation/limits?all=true', 'session/prompt', 'session/delete', 'workspace/create', 'llm/listProviders', '$events/result']) {
+    for (const endpoint of ['cotTranslation/translate', 'cotTranslation/limits?all=true', 'session/prompt', 'session/delete', 'workspace/create', '$events/result']) {
       await expect(executor.execute(endpoint, { args: {} }, signal)).rejects.toThrow('endpoint denied')
     }
     await expect(executor.execute('dynamicCordisRunner/syncInspectManifest', { args: {} }, signal))
       .rejects.toThrow('endpoint denied')
-    expect(invoke).toHaveBeenCalledTimes(7)
+    expect(invoke).toHaveBeenCalledTimes(11)
   })
   it('REQ-20261011-0002 validates membership replies before passing them to Main', async () => {
     const entry = { workspaceId: '11111111-1111-4111-8111-111111111111', sessionId: 'session-1' }

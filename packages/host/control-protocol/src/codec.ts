@@ -1666,6 +1666,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
       && params.endpoint !== 'session/collaborationMembership'
+      && params.endpoint !== 'commands/list' && params.endpoint !== 'skills/list'
+      && params.endpoint !== 'llm/listProviders' && params.endpoint !== 'llm/listConfigurableProviders'
       && params.endpoint !== 'settings/describe'
       && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
       && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog'
@@ -1675,7 +1677,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     const args = remoteSessionJson(payload.args)
     if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()
-    if ((params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
+    if ((params.endpoint === 'llm/listProviders' || params.endpoint === 'llm/listConfigurableProviders'
+      || params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
       || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog'
       || params.endpoint === 'cotTranslation/limits')
       && Object.keys(args).length !== 0) reject()

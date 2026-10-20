@@ -7,9 +7,10 @@ import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
 const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'session/collaborationSources', 'session/collaborationMembership',
+  'commands/list', 'skills/list', 'llm/listProviders', 'llm/listConfigurableProviders',
   'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
-const STARTUP_ZERO_ARG = new Set(['settings/describe', 'agentPresets/list',
+const STARTUP_ZERO_ARG = new Set(['llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list',
   'dynamicCordisRunner/inventory', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const CREDENTIAL_REF = /^[A-Za-z_][A-Za-z0-9_]*$/u
 
