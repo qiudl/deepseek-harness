@@ -49,7 +49,7 @@ describe('Agent', () => {
     })
     for (const method of ['followup', 'steer', 'inject'] as const) {
       const input = createUserMessage({ content: [{ type: 'text', text: method }], source: { kind: 'user' } })
-      expect(() => agent[method](input)).toThrow('group_session_active')
+      expect(() => { agent[method](input) }).toThrow('group_session_active')
     }
     expect(seen).toEqual(['next-turn', 'next-step', 'next-step'])
     expect(agent.session.snapshotEvents()).toHaveLength(0)
@@ -63,13 +63,19 @@ describe('Agent', () => {
   })
 
   it('rejects asynchronous and value-returning admission listeners', async () => {
-    for (const listener of [() => Promise.resolve(), () => true]) {
+    const listeners: Array<() => void> = [
+      () => Promise.resolve(),
+      () => Promise.reject(new Error('late rejection')),
+      () => true,
+    ]
+    for (const listener of listeners) {
       const ctx = await harness(new MockAdapter([textResponse('ok')]))
       const agent = await ctx.agentLoop.create(SessionId('invalid-pre-inbox-listener'), { provider: 'mock', model: 'mock' })
       ctx.on('agent/pre-inbox', listener)
-      expect(() => agent.inject(createUserMessage({ content: [{ type: 'text', text: 'blocked' }], source: { kind: 'user' } })))
+      expect(() => { agent.inject(createUserMessage({ content: [{ type: 'text', text: 'blocked' }], source: { kind: 'user' } })) })
         .toThrow(/must (finish synchronously|return no value)/)
       expect(agent.session.snapshotEvents()).toHaveLength(0)
+      await Promise.resolve()
     }
   })
 

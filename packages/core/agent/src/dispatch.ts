@@ -125,8 +125,9 @@ export function agentEvents(ctx: Context, agent: Agent, carrier: Scoped<Agent> =
     ({ ...payload, agent } as PayloadOf<K>)
   return {
     bail(name, payload) {
-      const bail = ctx.bail as (thisArg: Scoped<Agent>, name: string, value: unknown) => never
-      const result: unknown = bail(carrier, name, fused(payload))
+      const result: unknown = (ctx.bail as (thisArg: Scoped<Agent>, name: string, value: unknown) => never)(
+        carrier, name, fused(payload),
+      )
       if (result !== null && typeof result === 'object' && 'then' in result && typeof result.then === 'function') {
         void Promise.resolve(result).catch(() => undefined)
         throw new Error(`agent event "${name}" must finish synchronously`)
