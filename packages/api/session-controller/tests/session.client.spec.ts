@@ -546,22 +546,23 @@ describe('prompt and cancel errors', () => {
     })
   })
 
-  it('rejects staged files instead of dropping them from subagent continuations', async ({ mock, start }) => {
+  it('rejects staged file and image receipts from subagent continuations', async ({ mock, start }) => {
     const session = await sessionBench(mock, start, SID, { address: CHILD, parentAvailable: true })
     await session.open()
 
-    const prompted = await session.prompt([
-      { type: 'file', receiptId: 'receipt' as never },
-      { type: 'text', text: '继续' },
-    ], 'queue')
-
-    expect(prompted).toMatchObject({
-      ok: false,
-      error: {
-        code: 'subagent/attachment-invalid',
-        details: { reason: 'SUBAGENT_FILE_UNSUPPORTED' },
-      },
-    })
+    for (const receipt of [
+      { type: 'file' as const, receiptId: 'receipt' as never },
+      { type: 'image' as const, receiptId: 'receipt' as never, mediaType: 'image/png' as const },
+    ]) {
+      const prompted = await session.prompt([receipt, { type: 'text', text: '继续' }], 'queue')
+      expect(prompted).toMatchObject({
+        ok: false,
+        error: {
+          code: 'subagent/attachment-invalid',
+          details: { reason: 'SUBAGENT_FILE_UNSUPPORTED' },
+        },
+      })
+    }
     expect(mock.log.requests('subagents/prompt')).toEqual([])
   })
 

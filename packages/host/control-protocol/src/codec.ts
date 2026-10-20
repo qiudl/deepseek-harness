@@ -581,6 +581,13 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
         exactKeys(part, ['type', 'text'])
         return { type: 'text' as const, text: wireText(part.text, 32_768, true) }
       }
+      if (part.type === 'image') {
+        exactKeys(part, ['type', 'receiptId', 'mediaType'])
+        if (part.mediaType !== 'image/png' && part.mediaType !== 'image/jpeg' &&
+            part.mediaType !== 'image/webp' && part.mediaType !== 'image/gif') reject()
+        return { type: 'image' as const, receiptId: uuid(part.receiptId),
+          mediaType: part.mediaType as 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' }
+      }
       exactKeys(part, ['type', 'receiptId'])
       if (part.type !== 'file') reject()
       return { type: 'file' as const, receiptId: uuid(part.receiptId) }

@@ -36,7 +36,7 @@ kind: "package-reference"
 
 `profile.remote_session` 把封闭的 Session 与审批命令集合绑定到 Main 持有的一个视图租约。每条命令另带一个 UUID 幂等键；命令不能选择 HTTP 路径、Profile 根目录、凭据、cookie、启动 token 或任意方法。提示文本、标识符、标题、等待间隔、游标、JSON 深度、节点数、字符串和完整帧均有上限。能够解码该方法不代表功能可用；Host 只有在安装受租约授权的 worker 执行器后才能发布对应 capability。
 
-有界的 `session.prompt` 命令还接受同一 Profile 视图中经认证的本地上传路由签发的 UUID 文件凭证。命令不携带文件字节、路径或上传凭据；Session 服务在受控会话下解析该凭证。
+有界的 `session.prompt` 命令还接受同一 Profile 视图中经认证的本地上传路由签发的 UUID 文件和图片凭证。图片凭证须附带受支持的图片媒体类型。命令不携带附件字节、路径或上传凭据；Session 服务在受控会话下解析凭证，并在 20 MiB 的远程图片批次限制内读取图片，作为原生图片附件接收。
 
 `profile.remote_session.control_lease` capability 增加精确的 `control.status`、`control.acquire`、`control.renew` 和 `control.release` 命令。选定 Profile 签发进程 generation 和按 Session 递增的 epoch；每次远端 Session 修改及审批答复都携带该证明。Profile 在调用业务代码前拒绝过期或缺失的证明，已获准的写入执行期间不允许接管。Profile 重启会更换 generation，使旧证明失效。
 

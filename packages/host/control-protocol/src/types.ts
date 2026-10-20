@@ -1426,6 +1426,11 @@ export type HostRemoteSessionCommand =
     readonly content: readonly (
       | { readonly type: 'text'; readonly text: string }
       | { readonly type: 'file'; readonly receiptId: string }
+      | {
+        readonly type: 'image'
+        readonly receiptId: string
+        readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+      }
     )[]
     readonly client_time_zone?: string
   }

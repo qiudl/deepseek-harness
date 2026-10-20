@@ -173,6 +173,31 @@ describe('Session file uploads', () => {
     ])
   })
 
+  it('admits an image from a Session-scoped upload receipt in the same ordered prompt', async () => {
+    const { ctx, controller, uploads, agent, followup, saveImages } = await uploadHarness()
+    const receipt = await uploads.upload(agent, { data: 'AAAA', name: 'screen.png' },
+      new AbortController().signal)
+    const read = vi.spyOn(ctx.attachments, 'readFileStream').mockImplementation(async function* () {
+      yield Uint8Array.of(0, 0, 0)
+    })
+    const image: ImageAttachmentRef = {
+      attachmentId: AttachmentId(`sha256:${'ab'.repeat(32)}`),
+      mediaType: 'image/png', bytes: 3, width: 1, height: 1,
+    }
+    saveImages.mockResolvedValueOnce([image])
+    await controller.prompt(promptRequest([
+      { type: 'text', text: 'inspect' },
+      { type: 'image', receiptId: receipt.receiptId, mediaType: 'image/png' },
+    ]))
+    expect(read).toHaveBeenCalledWith(receipt.file)
+    expect(saveImages).toHaveBeenCalledWith([{
+      data: Uint8Array.of(0, 0, 0), mediaType: 'image/png', name: 'screen.png',
+    }])
+    expect((followup.mock.calls[0]?.[0] as UserMessage).content).toEqual([
+      { type: 'text', text: 'inspect' }, { type: 'image', attachment: image },
+    ])
+  })
+
   it('stages a bounded byte stream and forwards cancellation to storage', async () => {
     const { controller, uploads, followup, saveFileStream } = await uploadHarness()
     const abort = new AbortController()
