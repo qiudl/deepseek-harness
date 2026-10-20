@@ -977,6 +977,36 @@ describe('sessions.prompt synchronous rejection', () => {
     }
   })
 
+  it('propagates pre-inbox denial through the real prompt path without recording input', async () => {
+    const ctx = new Context()
+    await mountAgentLoopTestDependencies(ctx)
+    const harness = await mountAgentLoopTestHarness(ctx)
+    const agent = await harness.create(sid('pre-inbox-remote'), { provider: 'p', model: 'm' })
+    ctx.on('agent/pre-inbox', ({ agent: subject, message }) => {
+      if (subject === agent && message.source.kind === 'user') throw new Error('group_session_active')
+    })
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp',
+    })
+    try {
+      for (const mode of ['queue', 'steer'] as const) {
+        const response = await remote.prompt(promptRequest({
+          sessionId: agent.id, mode, content: [{ type: 'text', text: mode }],
+        }))
+        expect(response).toMatchObject({
+          ok: false,
+          error: { code: 'session/agent-busy', details: { reason: 'Error: group_session_active' } },
+        })
+      }
+      expect(agent.session.snapshotEvents()).toEqual([])
+      expect(agent.inbox.nextTurn).toEqual([])
+      expect(agent.inbox.nextStep).toEqual([])
+      expect(agent.status).toBe('idle')
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('classifies a raced cold-resume ID collision as agent-busy', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

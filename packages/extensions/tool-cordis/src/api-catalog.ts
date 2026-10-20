@@ -4165,6 +4165,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'payload', description: '.message - the inserted message. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.' }],
   },
   {
+    name: 'agent/pre-inbox',
+    mode: 'bail',
+    signature: '\'agent/pre-inbox\'(this: Scoped<Agent>, payload: { agent: Agent; message: UserMessage; target: InboxTarget }): void',
+    summary: 'Admit one direct Agent input before its durable inbox splice.',
+    description: 'Admit one direct Agent input before its durable inbox splice. A listener may throw synchronously to refuse it; no inbox event or wake occurs then. This event does not run for driver-owned runtime context insertion. Listeners must finish synchronously and derive any state from a local committed view; asynchronous authorization cannot protect this splice.',
+    parameters: [{ name: 'payload', description: '.target - the resolved next-turn or next-step queue. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.' }],
+  },
+  {
     name: 'agent/pre-step',
     mode: 'waterfall',
     signature: '\'agent/pre-step\'(this: Scoped<Agent>, payload: { agent: Agent; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal }, next: () => Promise<PreStepDecision>): Promise<PreStepDecision>',
@@ -5859,6 +5867,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ImageVariantId',
     declaration: 'export type ImageVariantId = Branded<\'ImageVariantId\'>;',
+  },
+  {
+    name: 'InboxTarget',
+    declaration: 'export type InboxTarget = \'next-turn\' | \'next-step\';',
   },
   {
     name: 'IncompatiblePlugin',

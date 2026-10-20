@@ -37,6 +37,48 @@ function send(agent: Agent, text: string): void {
 }
 
 describe('Agent', () => {
+  it('rejects direct user input before durable inbox insertion while allowing internal context', async () => {
+    const ctx = await harness(new MockAdapter([textResponse('ok')]))
+    const agent = await ctx.agentLoop.create(SessionId('pre-inbox-admission'), { provider: 'mock', model: 'mock' })
+    const other = await ctx.agentLoop.create(SessionId('other-admission'), { provider: 'mock', model: 'mock' })
+    const seen: string[] = []
+    ctx.on('agent/pre-inbox', ({ agent: subject, message, target }) => {
+      if (subject !== agent || message.source.kind !== 'user') return
+      seen.push(target)
+      throw new Error('group_session_active')
+    })
+    for (const method of ['followup', 'steer', 'inject'] as const) {
+      const input = createUserMessage({ content: [{ type: 'text', text: method }], source: { kind: 'user' } })
+      expect(() => { agent[method](input) }).toThrow('group_session_active')
+    }
+    expect(seen).toEqual(['next-turn', 'next-step', 'next-step'])
+    expect(agent.session.snapshotEvents()).toHaveLength(0)
+    expect(agent.inbox.nextTurn).toHaveLength(0)
+    expect(agent.inbox.nextStep).toHaveLength(0)
+    expect(agent.status).toBe('idle')
+    agent.inject(createUserMessage({ content: [{ type: 'text', text: 'runtime context' }], source: { kind: 'p' } }))
+    expect(agent.session.snapshotEvents().map(event => event.type)).toEqual(['agent/inbox/spliced'])
+    other.inject(createUserMessage({ content: [{ type: 'text', text: 'other user' }], source: { kind: 'user' } }))
+    expect(other.session.snapshotEvents().map(event => event.type)).toEqual(['agent/inbox/spliced'])
+  })
+
+  it('rejects asynchronous and value-returning admission listeners', async () => {
+    const listeners: Array<() => void> = [
+      () => Promise.resolve(),
+      () => Promise.reject(new Error('late rejection')),
+      () => true,
+    ]
+    for (const listener of listeners) {
+      const ctx = await harness(new MockAdapter([textResponse('ok')]))
+      const agent = await ctx.agentLoop.create(SessionId('invalid-pre-inbox-listener'), { provider: 'mock', model: 'mock' })
+      ctx.on('agent/pre-inbox', listener)
+      expect(() => { agent.inject(createUserMessage({ content: [{ type: 'text', text: 'blocked' }], source: { kind: 'user' } })) })
+        .toThrow(/must (finish synchronously|return no value)/)
+      expect(agent.session.snapshotEvents()).toHaveLength(0)
+      await Promise.resolve()
+    }
+  })
+
   it('idle inject() durably stages context without opening a turn', async () => {
     const adapter = new MockAdapter([textResponse('ok')])
     const ctx = await harness(adapter)
