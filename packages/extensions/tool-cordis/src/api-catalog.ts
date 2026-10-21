@@ -3993,6 +3993,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the complete committed workspace order.',
       },
       {
+        signature: 'isGroupInputBlocked(sessionId: SessionId): boolean',
+        description: 'Synchronous admission check, including writes waiting on durable storage.',
+        parameters: [{ name: 'sessionId', description: 'Original Session to inspect.' }],
+        returns: 'Whether its old input route is closed.',
+      },
+      {
+        signature: 'installGroupInputFence(raw: GroupInputFence): Promise<GroupInputFence>',
+        description: 'Install an irreversible local fence before the cloud group activation CAS.',
+        parameters: [{ name: 'raw', description: 'Bound original Session and preparing group identity.' }],
+        returns: 'The persisted fence, or the same fence from an exact retry.',
+      },
+      {
         signature: 'findCollaborationArchiveIntent(raw: Omit<CollaborationArchiveIntent, \'token\' | \'phase\'>): Promise< Readonly<{ token: string; phase: \'staged\' | \'prepared\' | \'archived\' | \'restored\' }> | null >',
         description: 'Find the original retry token under the Registry queue after Main or Host restarts.',
         parameters: [{ name: 'raw', description: 'Current Account and Workspace membership without a caller token.' }],
@@ -5811,6 +5823,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GrantRecord',
     declaration: 'export interface GrantRecord {\n    readonly kind: \'grant\';\n    readonly payload: unknown;\n}',
+  },
+  {
+    name: 'GroupInputFence',
+    declaration: 'export type GroupInputFence = z.infer<typeof groupInputFence>;',
   },
   {
     name: 'HookBudget',

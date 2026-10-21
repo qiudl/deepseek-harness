@@ -1007,6 +1007,66 @@ describe('sessions.prompt synchronous rejection', () => {
     }
   })
 
+  it('rejects the retired prompt route before resolving an Agent or replaying a request id', async () => {
+    const ctx = new Context()
+    ctx.provide('workspaceRegistry', { isGroupInputBlocked: (id: SessionId) => id === sid('group-original') } as never)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp',
+    })
+    const response = await remote.prompt(promptRequest({
+      sessionId: sid('group-original'), mode: 'queue', content: [{ type: 'text', text: 'old route' }],
+    }))
+    expect(response).toMatchObject({
+      ok: false, error: { code: 'session/agent-busy', details: { reason: 'Error: group_session_active' } },
+    })
+    const queued = await remote.updateQueue(request({
+      sessionId: sid('group-original'), itemId: MessageId('old-queued'), action: { kind: 'remove' },
+    }))
+    expect(queued).toMatchObject({
+      ok: false, error: { code: 'session/agent-busy', details: { reason: 'Error: group_session_active' } },
+    })
+  })
+
+  it('rechecks the group fence after attachment admission has awaited I/O', async () => {
+    const ctx = new Context()
+    await mountAgentLoopTestDependencies(ctx)
+    const harness = await mountAgentLoopTestHarness(ctx)
+    const agent = await harness.create(sid('group-fence-race'), { provider: 'p', model: 'm' })
+    let blocked = false
+    ctx.provide('workspaceRegistry', {
+      archivedSessionIds: [], isGroupInputBlocked: (id: SessionId) => id === agent.id && blocked,
+    } as never)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp',
+    })
+    const bind = vi.spyOn(ctx.fileUploads, 'bindPrompt')
+    const original = ctx.attachments.admitPromptContent.bind(ctx.attachments)
+    let entered!: () => void, release!: () => void
+    const waiting = new Promise<void>((resolve) => { entered = resolve })
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(ctx.attachments, 'admitPromptContent').mockImplementation(async (...args) => {
+      entered()
+      await hold
+      return original(...args)
+    })
+    try {
+      const pending = remote.prompt(promptRequest({
+        sessionId: agent.id, mode: 'queue', content: [{ type: 'text', text: 'raced input' }],
+      }))
+      await waiting
+      blocked = true
+      release()
+      expect(await pending).toMatchObject({
+        ok: false, error: { code: 'session/agent-busy', details: { reason: 'Error: group_session_active' } },
+      })
+      expect(bind).not.toHaveBeenCalled()
+      expect(agent.session.snapshotEvents()).toEqual([])
+    } finally {
+      release()
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('classifies a raced cold-resume ID collision as agent-busy', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

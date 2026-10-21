@@ -63,6 +63,7 @@ import { SessionSkillCatalog } from './skill-catalog.ts'
 import { installAttachmentExport } from './attachment-export.ts'
 import { SessionMediaReferences } from './media-references.ts'
 import { ArchivedSessionGate } from './archived-session-gate.ts'
+import { GroupInputGate } from './group-input-gate.ts'
 import type {
   ModelCatalog,
   SessionWorkspacePathApplication,
@@ -332,6 +333,7 @@ export class SessionController extends TypertRemoteService {
     ctx.plugin(SessionMediaReferences)
     ctx.plugin(SessionSkillCatalog)
     ctx.plugin(ArchivedSessionGate)
+    ctx.plugin(GroupInputGate)
 
     ctx.on('session/created', (session) => {
       ctx.emit('api-session/added', this.listState.summaryFor(session))
