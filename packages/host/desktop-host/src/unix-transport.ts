@@ -3704,6 +3704,29 @@ export class UnixHostClient {
     return this.remoteProfileValue(request, input.signal)
   }
 
+  /** Read only redacted Account memory through a capability-advertised Host. */
+  async memoryQuery(input: AccountBindingInput & {
+    readonly issuer: string
+    readonly subject: string
+    readonly ownerUserId: string
+    readonly computerId: string
+    readonly command: ProfileMemoryQueryRequest['params']['command']
+    readonly signal?: AbortSignal
+  }): Promise<ProfileMemoryQueryResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.memory_query' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileMemoryQueryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.memory_query',
+      params: { ...this.collaborationAccountRequestParams(input),
+        owner_user_id: input.ownerUserId, computer_id: input.computerId, command: input.command },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
   /**
    * Execute one bounded read through the lease-selected Profile worker.
    * @param input - Live view lease, exact read endpoint, arguments, and cancellation.
@@ -4437,7 +4460,7 @@ export class UnixHostClient {
 
   private async call(
     request: ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
-      | ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest
+      | ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileMemoryQueryRequest | ProfileRemoteUiReadRequest
       | ProfileRemoteUiStreamRequest | ProfileModelClaimInventoryRequest
       | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
       | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
