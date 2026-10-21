@@ -5,7 +5,8 @@ import { MemoryDirectiveVerifier, type MemoryDirectiveContext } from '../src/mem
 const keys = generateKeyPairSync('ed25519')
 const now = 1_800_000_000_000
 const context: MemoryDirectiveContext = {
-  environmentId: 'prod', installationId: 'installation', profileId: 'profile',
+  environmentId: 'prod', ownerUserId: 'owner', computerId: 'computer',
+  installationId: 'installation', profileId: 'profile',
   hostInstanceId: '22222222-2222-4222-8222-222222222222', processNonce: 'P'.repeat(43),
   operation: 'search', value: 'redacted', limit: 2,
 }
@@ -54,6 +55,8 @@ it('rejects changed scope, operation, limit, Host epoch, signature and expiry', 
   const value = directive()
   for (const [changed, expected] of [
     [{ ...value, grant: { ...value.grant, profileId: 'other' } }, context],
+    [value, { ...context, ownerUserId: 'other' }],
+    [value, { ...context, computerId: 'other' }],
     [value, { ...context, operation: 'evidence' as const }],
     [value, { ...context, limit: 3 }],
     [value, { ...context, processNonce: 'Q'.repeat(43) }],

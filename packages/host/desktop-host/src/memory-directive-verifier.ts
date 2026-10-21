@@ -33,6 +33,10 @@ function token(value: unknown): value is string {
 
 export interface MemoryDirectiveContext {
   readonly environmentId: string
+  /** Current Slark login, resolved independently of the signed directive. */
+  readonly ownerUserId: string
+  /** Current registered computer, resolved independently of the signed directive. */
+  readonly computerId: string
   readonly installationId: string
   readonly profileId: string
   readonly hostInstanceId: string
@@ -120,6 +124,7 @@ export class MemoryDirectiveVerifier {
       || typeof directive.signature !== 'string' || !SIGNATURE.test(directive.signature)
       || typeof grant.grantId !== 'string' || !UUID.test(grant.grantId)
       || !positive(grant.generation) || !token(grant.ownerUserId) || !token(grant.computerId)
+      || grant.ownerUserId !== context.ownerUserId || grant.computerId !== context.computerId
       || grant.environmentId !== context.environmentId || grant.environmentId !== this.environmentId
       || grant.installationId !== context.installationId || grant.profileId !== context.profileId
       || grant.readerKind !== 'personal_dsh') throw new HostAuthorityError('unauthorized')

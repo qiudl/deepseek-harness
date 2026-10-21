@@ -143,7 +143,7 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 `HostMemoryEvidenceIndex` 在 Host 进程内投影每个原始 Session 快照，只在内存中保留脱敏文本和三元字符索引。所有更新与读取都绑定同一 Account 所有者、安装和 Profile；替换与删除使用代际检查，Session 变化后旧 Evidence 引用失效。`buildHostMemoryEvidenceIndex` 在固定的 worker 代际上扫描，并再次核对完整的 ID/版本清单后才返回索引；版本或 worker 变化会丢弃本次构建。文本、记录、索引项和 Session 数量均有上限；Host 重启后索引丢失，目前尚未接入控制协议。
 
-记忆指令验签器只接受固定的 Ed25519 公钥环，并对每个签名的 15 秒 nonce 只消费一次。指令绑定当前安装、Profile、Host 进程、操作和查询摘要，然后返回不可变的 grant 字段与截止时间，供读取完成后再次检查。签名的 macOS 嵌入应用可经 Host Profile 的环境映射同时提供 `memoryKeyringPath` 与 `memoryKeyringSha256`；启动时读取仅所有者可访问的文件，摘要不符即拒绝。验签器尚未接入控制协议。
+记忆指令验签器只接受固定的 Ed25519 公钥环，并对每个签名的 15 秒 nonce 只消费一次。指令绑定当前 Slark 用户、已注册设备、安装、Profile、Host 进程、操作和查询摘要，然后返回不可变的 grant 字段与截止时间，供读取完成后再次检查。用户与设备输入必须来自当前已认证状态，不能从指令本身复制。签名的 macOS 嵌入应用可经 Host Profile 的环境映射同时提供 `memoryKeyringPath` 与 `memoryKeyringSha256`；启动时读取仅所有者可访问的文件，摘要不符即拒绝。验签器尚未接入控制协议。
 
 ### 远端工作区目录
 
