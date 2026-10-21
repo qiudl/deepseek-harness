@@ -5,6 +5,27 @@ import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarg
 import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 
+it('pins one memory reader to a worker generation across inventory and Session reads', async () => {
+  const read = vi.fn(async (sessionId: string) => ({ sessionId, revision: 'r1', text: '{}' }))
+  const list = vi.fn(async () => ({ items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }))
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {},
+    done: Promise.resolve(), listMemorySessions: list, readMemorySession: read }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  const signal = new AbortController().signal
+  try {
+    await workers.start(input)
+    const reader = workers.memoryProfileReader(input.profileId)
+    expect((await reader.list(null, signal)).items).toHaveLength(1)
+    expect((await reader.read('session-one', signal)).revision).toBe('r1')
+    await workers.dispose(input.profileId)
+    await workers.start(input)
+    await expect(reader.list(null, signal)).rejects.toMatchObject({ code: 'stale' })
+    await expect(reader.read('session-one', signal)).rejects.toMatchObject({ code: 'stale' })
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(read).toHaveBeenCalledTimes(1)
+  } finally { await workers.disposeAll() }
+})
+
 it('discards a memory inventory page from a replaced Profile worker', async () => {
   let enter!: () => void, release!: () => void
   const entered = new Promise<void>((resolve) => { enter = resolve })

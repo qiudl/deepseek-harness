@@ -139,7 +139,7 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 `profile.source_snapshot` 使用同一当前 Account 与 Profile worker 读取器私有传输 journal 原始内容。worker bearer 路由校验完整持久 Source；监管器拒绝已销毁或被替换的 worker。固定 32 KiB 字节分块保留现有控制帧预算，客户端在有界读取内跨块核验坐标、描述符和长度一致性、完整 UTF-8、取消及已检查的 peer。返回原文与脱敏模型/提交元数据，不含凭据，不准备模型或恢复调用。macOS 与 Windows 启动组合安装读取器；真实聊天捕获和派发仍须单独接入。
 
-父 Host 为每个 Profile worker 提供独立随机记忆 bearer 令牌。本地 `listMemorySessions` 方法通过私有 worker 路由分页列出顶层 Session ID 和版本，校验页面顺序和游标，并拒绝被替换的 worker。本地 `readMemorySession` 方法只接受一个 Session ID，检查有界 JSONL 响应，并拒绝被替换的 worker 或不匹配的 Session ID。这些方法不授予控制协议读取或云端传输权限；原始内容离开本地路径前仍需独立核验 Account、Profile 和 grant。
+父 Host 为每个 Profile worker 提供独立随机记忆 bearer 令牌。本地 `listMemorySessions` 方法通过私有 worker 路由分页列出顶层 Session ID 和版本，校验页面顺序和游标，并拒绝被替换的 worker。本地 `readMemorySession` 方法只接受一个 Session ID，检查有界 JSONL 响应，并拒绝被替换的 worker 或不匹配的 Session ID。`memoryProfileReader` 在一次本地操作的分页与读取期间固定同一个 worker 代际。这些方法不授予控制协议读取或云端传输权限；原始内容离开本地路径前仍需独立核验 Account、Profile 和 grant。
 
 记忆指令验签器只接受固定的 Ed25519 公钥环，并对每个签名的 15 秒 nonce 只消费一次。指令绑定当前安装、Profile、Host 进程、操作和查询摘要。签名的 macOS 嵌入应用可经 Host Profile 的环境映射同时提供 `memoryKeyringPath` 与 `memoryKeyringSha256`；启动时读取仅所有者可访问的文件，摘要不符即拒绝。验签器尚未接入控制协议。
 

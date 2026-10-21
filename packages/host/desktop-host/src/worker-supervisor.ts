@@ -424,6 +424,38 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
+  /** Keep one worker generation across all pages and Session reads in a local memory operation. */
+  memoryProfileReader(profileId: string): {
+    readonly list: (after: string | null, signal: AbortSignal) => Promise<HostMemorySessionPage>
+    readonly read: (sessionId: string, signal: AbortSignal) => Promise<HostMemorySessionSnapshot>
+  } {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.listMemorySessions || !worker.readMemorySession)
+      throw new HostAuthorityError('unavailable')
+    const list = worker.listMemorySessions
+    const read = worker.readMemorySession
+    const current = () => { this.assertCurrentWorker(profileId, worker) }
+    return {
+      list: async (after, signal) => {
+        signal.throwIfAborted()
+        current()
+        const result = await list(after, signal)
+        signal.throwIfAborted()
+        current()
+        return result
+      },
+      read: async (sessionId, signal) => {
+        signal.throwIfAborted()
+        current()
+        const result = await read(sessionId, signal)
+        signal.throwIfAborted()
+        current()
+        if (result.sessionId !== sessionId) throw new HostAuthorityError('profile_mismatch')
+        return result
+      },
+    }
+  }
+
   /**
    * Execute one closed Session command in the running Profile worker.
    * @param profileId - Active Profile identity.
