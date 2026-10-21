@@ -15,6 +15,7 @@ import { FileLegacyClaimRecoveryFiles } from '../src/legacy-claim-recovery-files
 import { LegacyClaimRecoveryStore } from '../src/legacy-claim-recovery.ts'
 import { FileLegacyClaimTargetFiles } from '../src/legacy-claim-target-files.ts'
 import { LegacyClaimTarget } from '../src/legacy-claim-target.ts'
+import { MemoryDirectiveVerifier } from '../src/memory-directive-verifier.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -118,6 +119,13 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
     repository: 'https://github.com/qiudl/dsh-duet.git', sourceSha: 'c'.repeat(40), entryIds: ['duplex-harness-control'] }] }), { mode: 0o644 })
   writeFileSync(deviceKey, Buffer.alloc(32, 7), { mode: 0o600 })
   writeFileSync(accountKeyringPath, keyring, { mode: 0o600 })
+  const memoryKeys = generateKeyPairSync('ed25519')
+  const memoryKeyringPath = join(root, 'memory-keyring.json')
+  const memoryKeyring = `${JSON.stringify({ version: 1, environmentId: 'prod',
+    issuer: 'https://slark.example', keys: [{ kid: 'dsh-assertion-test',
+      publicKeyPem: memoryKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      validFrom: 1, validUntil: NOW + 60_000 }] })}\n`
+  writeFileSync(memoryKeyringPath, memoryKeyring, { mode: 0o600 })
   writeFileSync(installationPrivateKeyPath,
     installation.privateKey.export({ format: 'pem', type: 'pkcs8' }), { mode: 0o600 })
   const installationPublicKey = (installation.publicKey.export({ format: 'der', type: 'spki' }) as Buffer)
@@ -135,6 +143,8 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
       deviceIndexKeyPath: deviceKey,
       accountKeyringPath,
       accountKeyringSha256: createHash('sha256').update(keyring).digest('hex'),
+      memoryKeyringPath,
+      memoryKeyringSha256: createHash('sha256').update(memoryKeyring).digest('hex'),
       installationPrivateKeyPath,
       installationPublicKey,
       installationId: randomUUID(),
@@ -245,6 +255,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   cleanup.closeApplication = () => application.close()
   expect(serverStart).toHaveBeenCalledOnce()
   if (!serverOptions) throw new Error('missing captured server options')
+  expect(serverOptions.memoryDirectiveVerifier).toBeInstanceOf(MemoryDirectiveVerifier)
   expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
   expect(await serverOptions.inspectModelClaimSource?.(new AbortController().signal)).toMatchObject({ candidates: [] })
 

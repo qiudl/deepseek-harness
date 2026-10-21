@@ -122,6 +122,7 @@ import type {
   ProfileViewLeaseId,
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import type { MemoryDirectiveVerifier } from './memory-directive-verifier.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
@@ -235,6 +236,8 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** Present only when the embedding pins Slark's public memory signing keys. */
+  readonly memoryDirectiveVerifier?: MemoryDirectiveVerifier
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
