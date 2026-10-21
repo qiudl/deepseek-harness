@@ -226,10 +226,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
               if (args.trim() || ctx.sessions.scopeOf(actx) !== session.sessionId || latest.draft !== body ||
                 latest.occurrences.length || workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
                 window.__DSH_DESKTOP_HOST__ !== host) return { kind: 'error', text: t('submit.changed') }
-              let result: Awaited<ReturnType<typeof sendGroupText>>
-              try { result = await sendGroupText({ bridge: host,
-                workspaceId: groupWorkspace, sessionId: session.sessionId, groupId, body }) }
-              catch { result = { state: 'retry_required' } }
+              const result = await sendGroupText({ bridge: host,
+                workspaceId: groupWorkspace, sessionId: session.sessionId, groupId, body })
               signal.throwIfAborted()
               if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== groupWorkspace)
                 return { kind: 'error', text: t('group.uncertain') }
@@ -238,7 +236,6 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
               const recorded = result
               const inputState = ctx.conversation.input.for(actx).state
               let acknowledged = false
-              let unsubscribe = () => {}
               const acknowledgeWhenCleared = () => {
                 if (acknowledged || inputState.getSnapshot().draft !== '') return
                 acknowledged = true
@@ -247,7 +244,7 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
                   sessionId: session.sessionId, groupId, requestId: recorded.requestId,
                   digest: recorded.digest })
               }
-              unsubscribe = inputState.subscribe(acknowledgeWhenCleared)
+              const unsubscribe = inputState.subscribe(acknowledgeWhenCleared)
               acknowledgeWhenCleared()
               window.dispatchEvent(new CustomEvent('dsh-slark-group-message-recorded', {
                 detail: { workspace_id: groupWorkspace, session_id: session.sessionId, group_id: groupId },

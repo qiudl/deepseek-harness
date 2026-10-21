@@ -79,3 +79,19 @@ it('rejects invalid group coordinates before transport', async () => {
     .toEqual({ state: 'retry_required' })
   expect(bridge.collaborationGroupMessages).not.toHaveBeenCalled()
 })
+
+it('retains the draft when receipt is uncertain or the parent call throws', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const { bridge, commands } = parent('retry_required')
+  const input = { bridge, workspaceId, sessionId, groupId, body: 'hello' }
+  expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
+  expect(commands.map(command => command.operation)).toEqual(['pending_claim', 'receipt'])
+  bridge.collaborationGroupMessages.mockRejectedValueOnce(Error('disconnected'))
+  expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
+})
+
+it('keeps the pending key when acknowledgment fails', async () => {
+  const bridge = { collaborationGroupMessages: vi.fn(async () => { throw Error('disconnected') }) }
+  expect(await acknowledgeGroupText({ bridge, workspaceId, sessionId, groupId,
+    requestId, digest: 'digest' })).toBe(false)
+})

@@ -1668,6 +1668,31 @@ it.each(['parent_storage_refused', 'host_changed', 'pending_other'] as const)
   expect(f.submit).not.toHaveBeenCalled()
 })
 
+it('acknowledges the recorded group key after the composer clears its draft', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  const requestId = '33333333-3333-4333-8333-333333333333'
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1', version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
+    ? { state: 'pending' as const, request_id: requestId }
+    : command.operation === 'receipt' ? { state: 'recorded' as const, message_id: groupId, seq: 1 }
+      : { state: 'acknowledged' as const })
+  host.collaborationGroupMessages = messages
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }
+  f.composer.setDraft('hello')
+  const outcome = await source.matchEnter?.(session, 'hello', new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped) throw Error('missing group claim')
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'success', text: 'group.recorded' })
+  expect(messages.mock.calls.map(([command]) => command.operation)).toEqual(['pending_claim', 'receipt'])
+  f.composer.setDraft('')
+  await vi.waitFor(() => { expect(messages.mock.calls.map(([command]) => command.operation)).toEqual([
+    'pending_claim', 'receipt', 'pending_ack']) })
+})
+
 it('public reply and scoped Source owners ignore unknown Sessions and stale input lines', async () => {
   const f = await bench(true), signal = new AbortController().signal
   f.composer.setDraft('请检查登录问题')
