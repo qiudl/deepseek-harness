@@ -7,7 +7,7 @@ import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { createCollaborationReplyMatcher, readCollaborationPending, collaborationQuestionText } from './collaboration-dialogue.ts'
 import type { zh } from './locales.ts'
 import { dispatchPlannedSource } from './dispatch-planned-source.ts'
-import { sendGroupText } from './collaboration-group-input.ts'
+import { acknowledgeGroupText, sendGroupText } from './collaboration-group-input.ts'
 
 interface Reference {
   kind: 'collaboration-v2'
@@ -109,6 +109,11 @@ export function scopedCollaborationClipboard(ref: string): string | undefined {
   const r = parse(ref)
   return r?.source_id ? `@${label(r)}` : undefined
 }
+/** Resolve only a current, non-archived workspace membership.
+ * @param ctx - current Client Context.
+ * @param sessionId - original Session ID.
+ * @returns its current workspace ID, when present.
+ */
 export function workspaceOf(ctx: Context, sessionId: SessionId): string | undefined {
   const workspaces = ctx.get('workspaces')
   const snapshot = workspaces?.list.getSnapshot()
@@ -120,6 +125,7 @@ export function workspaceOf(ctx: Context, sessionId: SessionId): string | undefi
  * Candidates require current scope and execution availability; every send rechecks Session membership and the original chip.
  * @param ctx - the source entry's Client Context; optional workspace state is read on each operation.
  * @param t - the entry's typed locale dictionary.
+ * @param isCollaborationSession - current original Session membership check.
  * @returns a source with workspace/connection candidate subscriptions, Main submission and retained failed drafts.
  */
 export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typeof zh) => string,
@@ -221,14 +227,28 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
                 latest.occurrences.length || workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
                 window.__DSH_DESKTOP_HOST__ !== host) return { kind: 'error', text: t('submit.changed') }
               let result: Awaited<ReturnType<typeof sendGroupText>>
-              try { result = await sendGroupText({ bridge: host, storage: window.localStorage,
+              try { result = await sendGroupText({ bridge: host,
                 workspaceId: groupWorkspace, sessionId: session.sessionId, groupId, body }) }
-              catch { result = 'retry_required' }
+              catch { result = { state: 'retry_required' } }
               signal.throwIfAborted()
               if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== groupWorkspace)
                 return { kind: 'error', text: t('group.uncertain') }
-              if (result !== 'recorded') return { kind: 'error',
-                text: t(result === 'pending_other' ? 'group.pendingOther' : 'group.uncertain') }
+              if (result.state !== 'recorded') return { kind: 'error',
+                text: t(result.state === 'pending_other' ? 'group.pendingOther' : 'group.uncertain') }
+              const recorded = result
+              const inputState = ctx.conversation.input.for(actx).state
+              let acknowledged = false
+              let unsubscribe = () => {}
+              const acknowledgeWhenCleared = () => {
+                if (acknowledged || inputState.getSnapshot().draft !== '') return
+                acknowledged = true
+                unsubscribe()
+                void acknowledgeGroupText({ bridge: host, workspaceId: groupWorkspace,
+                  sessionId: session.sessionId, groupId, requestId: recorded.requestId,
+                  digest: recorded.digest })
+              }
+              unsubscribe = inputState.subscribe(acknowledgeWhenCleared)
+              acknowledgeWhenCleared()
               window.dispatchEvent(new CustomEvent('dsh-slark-group-message-recorded', {
                 detail: { workspace_id: groupWorkspace, session_id: session.sessionId, group_id: groupId },
               }))

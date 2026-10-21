@@ -1497,8 +1497,11 @@ it('routes plain text from the original active Session to one durable group comm
   const groupId = '22222222-2222-4222-8222-222222222222'
   host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const, group_id: groupId,
     workspace_id: f.workspace.id, session_id: 'session-1', version: 2 as const, last_seq: 0 }))
-  const messages = vi.fn(async () => ({ state: 'recorded' as const,
-    message_id: '33333333-3333-4333-8333-333333333333', seq: 1 }))
+  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
+    ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+    : command.operation === 'receipt' ? { state: 'missing' as const }
+      : command.operation === 'pending_ack' ? { state: 'acknowledged' as const }
+        : { state: 'recorded' as const, message_id: '33333333-3333-4333-8333-333333333333', seq: 1 })
   host.collaborationGroupMessages = messages
   const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
   const session = { sessionId: SessionId('session-1') }
@@ -1510,6 +1513,9 @@ it('routes plain text from the original active Session to one durable group comm
   expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'success' })
   expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'send',
     workspace_id: f.workspace.id, session_id: 'session-1', body: 'hello group' }))
+  expect(messages).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' }))
+  f.composer.setDraft('')
+  await vi.waitFor(() => { expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' })) })
   expect(f.submit).not.toHaveBeenCalled()
   expect(f.sink).not.toHaveBeenCalled()
 })
@@ -1635,35 +1641,28 @@ it('falls through to the original Session input when no group was mapped', async
     new AbortController().signal, { attachments: 0 })).toBeUndefined()
 })
 
-it.each(['storage_refused', 'host_changed', 'pending_other'] as const)
+it.each(['parent_storage_refused', 'host_changed', 'pending_other'] as const)
 ('keeps the original Session draft when group send is %s', async (mode) => {
   const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
   if (!host) throw Error('missing Host')
   const groupId = '22222222-2222-4222-8222-222222222222'
-  const store = localStorage
-  store.clear()
-  onTestFinished(() => { store.clear() })
   host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
     group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1', version: 2 as const, last_seq: 0 }))
-  host.collaborationGroupMessages = vi.fn(async (command: { operation: 'send' | 'receipt' | 'page' }) => {
+  host.collaborationGroupMessages = vi.fn(async (command: { operation: string }) => {
     if (mode === 'host_changed') Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
-    return command.operation === 'receipt' ? { state: 'missing' as const }
-      : { state: 'recorded' as const, message_id: groupId, seq: 1 }
+    return command.operation === 'pending_claim' ? mode === 'pending_other'
+      ? { state: 'pending_other' as const } : mode === 'parent_storage_refused'
+        ? { state: 'retry_required' as const }
+        : { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+      : command.operation === 'receipt' ? { state: 'missing' as const }
+        : { state: 'recorded' as const, message_id: groupId, seq: 1 }
   })
-  if (mode === 'pending_other') localStorage.setItem(`dsh:slark-group-message:v1:${groupId}`,
-    JSON.stringify({ request_id: '33333333-3333-4333-8333-333333333333',
-      digest: createHash('sha256').update('older text').digest('hex') }))
   const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
   const session = { sessionId: SessionId('session-1') }
   f.composer.setDraft('hello')
   const outcome = await source.matchEnter?.(session, 'hello', new AbortController().signal, { attachments: 0 })
   const scoped = f.ctx.sessions.scope(session.sessionId)
   if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped) throw Error('missing group claim')
-  if (mode === 'storage_refused') {
-    const original = Object.getOwnPropertyDescriptor(window, 'localStorage')
-    Object.defineProperty(window, 'localStorage', { configurable: true, get: () => { throw Error('storage denied') } })
-    if (original) onTestFinished(() => { Object.defineProperty(window, 'localStorage', original) })
-  }
   const expected = mode === 'pending_other' ? 'group.pendingOther' : 'group.uncertain'
   expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'error', text: expected })
   expect(f.submit).not.toHaveBeenCalled()
