@@ -15,10 +15,12 @@ it('pins one memory reader to a worker generation across inventory and Session r
   try {
     await workers.start(input)
     const reader = workers.memoryProfileReader(input.profileId)
+    expect(workers.memoryProfileReader(input.profileId)).toBe(reader)
     expect((await reader.list(null, signal)).items).toHaveLength(1)
     expect((await reader.read('session-one', signal)).revision).toBe('r1')
     await workers.dispose(input.profileId)
     await workers.start(input)
+    expect(workers.memoryProfileReader(input.profileId)).not.toBe(reader)
     await expect(reader.list(null, signal)).rejects.toMatchObject({ code: 'stale' })
     await expect(reader.read('session-one', signal)).rejects.toMatchObject({ code: 'stale' })
     expect(list).toHaveBeenCalledTimes(1)

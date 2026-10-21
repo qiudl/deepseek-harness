@@ -3,6 +3,7 @@ import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@d
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostMemorySessionPage, HostMemorySessionSnapshot, ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { HostMemoryProfileReader } from './memory-evidence-index.ts'
 import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection,
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
@@ -25,6 +26,7 @@ export class ProfileWorkerSupervisor {
   private closed = false
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
+  private readonly memoryReaders = new Map<string, { worker: ProfileWorkerHandle; reader: HostMemoryProfileReader }>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
   private assertCurrentWorker(profileId: string, worker: ProfileWorkerHandle): void {
@@ -424,19 +426,17 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
-  /** Keep one worker generation across all pages and Session reads in a local memory operation. */
-  memoryProfileReader(profileId: string): {
-    readonly list: (after: string | null, signal: AbortSignal) => Promise<HostMemorySessionPage>
-    readonly read: (sessionId: string, signal: AbortSignal) => Promise<HostMemorySessionSnapshot>
-    readonly assertCurrent: () => void
-  } {
+  /** Reuse one reader within a worker generation; old readers reject after disposal. */
+  memoryProfileReader(profileId: string): HostMemoryProfileReader {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.listMemorySessions || !worker.readMemorySession)
       throw new HostAuthorityError('unavailable')
+    const existing = this.memoryReaders.get(profileId)
+    if (existing?.worker === worker) return existing.reader
     const list = worker.listMemorySessions
     const read = worker.readMemorySession
     const current = () => { this.assertCurrentWorker(profileId, worker) }
-    return {
+    const reader: HostMemoryProfileReader = {
       assertCurrent: current,
       list: async (after, signal) => {
         signal.throwIfAborted()
@@ -456,6 +456,8 @@ export class ProfileWorkerSupervisor {
         return result
       },
     }
+    this.memoryReaders.set(profileId, { worker, reader })
+    return reader
   }
 
   /**
@@ -515,6 +517,7 @@ export class ProfileWorkerSupervisor {
   private async disposeOwned(profileId: string): Promise<void> {
     const worker = this.workers.get(profileId)
     if (!worker) return
+    this.memoryReaders.delete(profileId)
     this.workers.delete(profileId)
     worker.closeNotifications()
     worker.abort()

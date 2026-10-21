@@ -139,7 +139,7 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 `profile.source_snapshot` 使用同一当前 Account 与 Profile worker 读取器私有传输 journal 原始内容。worker bearer 路由校验完整持久 Source；监管器拒绝已销毁或被替换的 worker。固定 32 KiB 字节分块保留现有控制帧预算，客户端在有界读取内跨块核验坐标、描述符和长度一致性、完整 UTF-8、取消及已检查的 peer。返回原文与脱敏模型/提交元数据，不含凭据，不准备模型或恢复调用。macOS 与 Windows 启动组合安装读取器；真实聊天捕获和派发仍须单独接入。
 
-父 Host 为每个 Profile worker 提供独立随机记忆 bearer 令牌。本地 `listMemorySessions` 方法通过私有 worker 路由分页列出顶层 Session ID 和版本，校验页面顺序和游标，并拒绝被替换的 worker。本地 `readMemorySession` 方法只接受一个 Session ID，检查有界 JSONL 响应，并拒绝被替换的 worker 或不匹配的 Session ID。`memoryProfileReader` 在一次本地操作的分页与读取期间固定同一个 worker 代际。这些方法不授予控制协议读取或云端传输权限；原始内容离开本地路径前仍需独立核验 Account、Profile 和 grant。
+父 Host 为每个 Profile worker 提供独立随机记忆 bearer 令牌。本地 `listMemorySessions` 方法通过私有 worker 路由分页列出顶层 Session ID 和版本，校验页面顺序和游标，并拒绝被替换的 worker。本地 `readMemorySession` 方法只接受一个 Session ID，检查有界 JSONL 响应，并拒绝被替换的 worker 或不匹配的 Session ID。`memoryProfileReader` 在同一 worker 代际内返回同一个 reader，供预热后的缓存继续使用；worker 更换后，旧 reader 拒绝读取。这些方法不授予控制协议读取或云端传输权限；原始内容离开本地路径前仍需独立核验 Account、Profile 和 grant。
 
 `HostMemoryEvidenceIndex` 在 Host 进程内投影每个原始 Session 快照，只在内存中保留脱敏文本和三元字符索引。所有更新与读取都绑定同一 Account 所有者、安装和 Profile；替换与删除使用代际检查，Session 变化后旧 Evidence 引用失效。`buildHostMemoryEvidenceIndex` 在固定的 worker 代际上扫描，并再次核对完整的 ID/版本清单后才返回索引；版本或 worker 变化会丢弃本次构建。`HostMemoryIndexCache` 只为精确匹配的 Account、安装、Profile 和固定 reader 保留一个就绪索引。新的预热或显式清除会取消旧构建；被取代的构建不能发布。搜索和 Evidence 读取在选取结果前后复核完整清单；清单过期或身份变化时清除缓存。文本、记录、索引项和 Session 数量均有上限；Host 重启后索引丢失，目前尚未接入控制协议。
 
