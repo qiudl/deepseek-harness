@@ -42,6 +42,18 @@ export interface MemoryDirectiveContext {
   readonly limit: number
 }
 
+/** Signed grant fields copied after verification; caller-owned input cannot change them. */
+export interface VerifiedMemoryDirectiveGrant {
+  readonly grantId: string
+  readonly generation: number
+  readonly ownerUserId: string
+  readonly environmentId: string
+  readonly computerId: string
+  readonly installationId: string
+  readonly profileId: string
+  readonly readerKind: 'personal_dsh'
+}
+
 /** Pinned, public-only signing keys selected by the signed Desktop embedding. */
 export class MemoryDirectiveVerifier {
   private readonly keys: ReadonlyMap<string, { key: KeyObject; validFrom: number; validUntil: number }>
@@ -76,7 +88,7 @@ export class MemoryDirectiveVerifier {
   }
 
   /** Consume exactly once after all signature, scope, operation and expiry checks pass. */
-  verifyAndConsume(value: unknown, context: MemoryDirectiveContext): void {
+  verifyAndConsume(value: unknown, context: MemoryDirectiveContext): VerifiedMemoryDirectiveGrant {
     const directive = record(value, ['schemaVersion', 'purpose', 'issuer', 'keyId', 'requestId', 'nonce',
       'hostInstanceId', 'processNonce', 'issuedAt', 'expiresAt', 'operation', 'queryDigest', 'limit',
       'grant', 'signature'])
@@ -121,5 +133,9 @@ export class MemoryDirectiveVerifier {
     if (this.used.has(nonce)) throw new HostAuthorityError('replayed')
     if (this.used.size >= MAX_USED_NONCES) throw new HostAuthorityError('busy')
     this.used.set(nonce, directive.expiresAt as number)
+    return Object.freeze({ grantId: grant.grantId, generation: grant.generation,
+      ownerUserId: grant.ownerUserId, environmentId: grant.environmentId,
+      computerId: grant.computerId, installationId: grant.installationId,
+      profileId: grant.profileId, readerKind: 'personal_dsh' })
   }
 }
