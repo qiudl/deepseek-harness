@@ -1,6 +1,7 @@
 /** REQ-20261021-0013: Host-local signed reads of a warmed, scoped memory index. */
-import type { HostMemoryEvidence, HostMemoryProfileReader, HostMemoryScope,
+import type { HostMemoryProfileReader, HostMemoryScope,
   HostMemorySearchItem } from './memory-evidence-index.ts'
+import { chunkHostMemoryEvidence, type HostMemoryEvidenceChunk } from './memory-evidence-chunk.ts'
 import { HostMemoryIndexCache } from './memory-index-cache.ts'
 import { MemoryDirectiveVerifier, type MemoryDirectiveContext } from './memory-directive-verifier.ts'
 import { HostAuthorityError } from './types.ts'
@@ -91,8 +92,12 @@ export class HostMemoryReadController {
       (scope, reader) => this.cache.search(scope, reader, query, limit, signal))
   }
 
-  evidence(directive: unknown, sourceRef: string, signal: AbortSignal): Promise<HostMemoryEvidence | null> {
+  evidenceChunk(directive: unknown, sourceRef: string, offset: number,
+    signal: AbortSignal): Promise<HostMemoryEvidenceChunk | null> {
     return this.read(directive, 'evidence', sourceRef, 1, signal,
-      (scope, reader) => this.cache.evidence(scope, reader, sourceRef, signal))
+      async (scope, reader) => {
+        const evidence = await this.cache.evidence(scope, reader, sourceRef, signal)
+        return evidence === null ? null : chunkHostMemoryEvidence(evidence, offset)
+      })
   }
 }

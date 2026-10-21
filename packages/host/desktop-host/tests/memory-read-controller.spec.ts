@@ -74,9 +74,9 @@ describe('Host memory signed read controller', () => {
     await f.controller.warm(signal)
     const found = await f.controller.search(directive('search', 'private'), 'private', 1, signal)
     expect(found.items).toHaveLength(1)
-    const evidence = await f.controller.evidence(directive('evidence', found.items[0]!.sourceRef, 'M'),
-      found.items[0]!.sourceRef, signal)
-    expect(evidence?.text).toContain('private plan')
+    const evidence = await f.controller.evidenceChunk(directive('evidence', found.items[0]!.sourceRef, 'M'),
+      found.items[0]!.sourceRef, 0, signal)
+    expect(Buffer.from(evidence!.bytesBase64url, 'base64url').toString('utf8')).toContain('private plan')
     expect(f.current).toHaveBeenCalledTimes(6)
   })
 

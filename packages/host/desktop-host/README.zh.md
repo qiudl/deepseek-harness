@@ -145,7 +145,7 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 记忆指令验签器只接受固定的 Ed25519 公钥环，并对每个签名的 15 秒 nonce 只消费一次。指令绑定当前 Slark 用户、已注册设备、安装、Profile、Host 进程、操作和查询摘要，然后返回不可变的 grant 字段与截止时间，供读取完成后再次检查。用户与设备输入必须来自当前已认证状态，不能从指令本身复制。签名的 macOS 嵌入应用可经 Host Profile 的环境映射同时提供 `memoryKeyringPath` 与 `memoryKeyringSha256`；启动时读取仅所有者可访问的文件，摘要不符即拒绝。验签器尚未接入控制协议。
 
-`HostMemoryReadController` 组合固定公钥验签器与预热缓存。调用方每次读取都须提供当前已认证的 Desktop 用户、设备和 Account Profile 权限；控制器在验签前复制这份权限，并在索引读取后与新取得的权限比较。返回结果前再次检查指令期限；身份、worker 或清单校验失败时清除缓存。预热在签名查询有效期之外进行，构建前后都检查当前权限。在已认证的控制协议消费者提供当前权限前，该控制器仅供 Host 本地使用；grant 撤销由 Slark Server 单独复核。
+`HostMemoryReadController` 组合固定公钥验签器与预热缓存。调用方每次读取都须提供当前已认证的 Desktop 用户、设备和 Account Profile 权限；控制器在验签前复制这份权限，并在索引读取后与新取得的权限比较。返回结果前再次检查指令期限；身份、worker 或清单校验失败时清除缓存。预热在签名查询有效期之外进行，构建前后都检查当前权限。每条签名指令只读取一段至多 8 KiB 的脱敏 Evidence 文本字节，并返回精确来源、总字节数和全文 SHA-256。在已认证的控制协议消费者提供当前权限前，该控制器仅供 Host 本地使用；grant 撤销由 Slark Server 单独复核。
 
 ### 远端工作区目录
 
