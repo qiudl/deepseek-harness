@@ -141,6 +141,8 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 父 Host 为每个 Profile worker 提供独立随机记忆 bearer 令牌。本地 `readMemorySession` 方法只接受一个 Session ID，检查有界 JSONL 响应，并拒绝被替换的 worker 或不匹配的 Session ID。它不授予控制协议读取或云端传输权限；原始内容离开本地路径前仍需独立核验 Account、Profile 和 grant。
 
+记忆指令验签器只接受固定的 Ed25519 公钥环，并对每个签名的 15 秒 nonce 只消费一次。指令绑定当前安装、Profile、Host 进程、操作和查询摘要。验签器尚未接入控制协议；启用记忆读取前，签名的嵌入应用必须配置可信公钥环。
+
 ### 远端工作区目录
 
 远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。

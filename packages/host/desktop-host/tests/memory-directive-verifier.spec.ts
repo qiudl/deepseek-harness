@@ -1,0 +1,66 @@
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
+import { expect, it } from 'vitest'
+import { MemoryDirectiveVerifier, type MemoryDirectiveContext } from '../src/memory-directive-verifier.ts'
+
+const keys = generateKeyPairSync('ed25519')
+const now = 1_800_000_000_000
+const context: MemoryDirectiveContext = {
+  environmentId: 'prod', installationId: 'installation', profileId: 'profile',
+  hostInstanceId: '22222222-2222-4222-8222-222222222222', processNonce: 'P'.repeat(43),
+  operation: 'search', value: 'redacted', limit: 2,
+}
+const publicRing = JSON.stringify({ version: 1, environmentId: context.environmentId,
+  issuer: 'https://slark.example', keys: [{ kid: 'dsh-assertion-test',
+    publicKeyPem: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    validFrom: 1, validUntil: now + 60_000 }] })
+
+function directive() {
+  const grant = { grantId: '11111111-1111-4111-8111-111111111111', generation: 1,
+    ownerUserId: 'owner', environmentId: context.environmentId, computerId: 'computer',
+    installationId: context.installationId, profileId: context.profileId, readerKind: 'personal_dsh' }
+  const unsigned = { schemaVersion: 1, purpose: 'dsh_memory_query', issuer: 'https://slark.example',
+    keyId: 'dsh-assertion-test', requestId: '33333333-3333-4333-8333-333333333333',
+    nonce: 'N'.repeat(43), hostInstanceId: context.hostInstanceId, processNonce: context.processNonce,
+    issuedAt: now, expiresAt: now + 15_000, operation: context.operation,
+    queryDigest: createHash('sha256').update(JSON.stringify(['search', 'redacted', 2])).digest('hex'),
+    limit: 2, grant }
+  const payload = Buffer.from('slark.dsh-memory-query/v1\0' + JSON.stringify([
+    1, 'dsh_memory_query', unsigned.issuer, unsigned.keyId, unsigned.requestId, unsigned.nonce,
+    unsigned.hostInstanceId, unsigned.processNonce, unsigned.issuedAt, unsigned.expiresAt,
+    unsigned.operation, unsigned.queryDigest, unsigned.limit, grant.grantId, grant.generation,
+    grant.ownerUserId, grant.environmentId, grant.computerId, grant.installationId, grant.profileId,
+    grant.readerKind,
+  ]))
+  return { ...unsigned, signature: sign(null, payload, keys.privateKey).toString('base64url') }
+}
+
+it('accepts one exact signed instruction and consumes its nonce', () => {
+  const verifier = new MemoryDirectiveVerifier(publicRing, () => now + 1)
+  const value = directive()
+  expect(() => { verifier.verifyAndConsume(value, context) }).not.toThrow()
+  expect(() => { verifier.verifyAndConsume(value, context) }).toThrow(/replayed/u)
+})
+
+it('rejects changed scope, operation, limit, Host epoch, signature and expiry', () => {
+  const value = directive()
+  for (const [changed, expected] of [
+    [{ ...value, grant: { ...value.grant, profileId: 'other' } }, context],
+    [value, { ...context, operation: 'evidence' as const }],
+    [value, { ...context, limit: 3 }],
+    [value, { ...context, processNonce: 'Q'.repeat(43) }],
+    [{ ...value, signature: 'A'.repeat(86) }, context],
+  ] as const) {
+    expect(() => { new MemoryDirectiveVerifier(publicRing, () => now + 1)
+      .verifyAndConsume(changed, expected) }).toThrow()
+  }
+  expect(() => { new MemoryDirectiveVerifier(publicRing, () => now + 15_000)
+    .verifyAndConsume(value, context) }).toThrow()
+})
+
+it('rejects caller-supplied private keys and untrusted public ring shapes', () => {
+  expect(() => new MemoryDirectiveVerifier(JSON.stringify({ ...JSON.parse(publicRing) as object,
+    privateKeyPem: keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() }))).toThrow()
+  expect(() => new MemoryDirectiveVerifier(JSON.stringify({ version: 1, environmentId: 'prod',
+    issuer: 'https://slark.example', keys: [{ kid: 'dsh-assertion-test', publicKeyPem: 'bad',
+      validFrom: 1, validUntil: now + 60_000 }] }))).toThrow()
+})
