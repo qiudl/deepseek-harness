@@ -9,7 +9,44 @@ import type { ConversationIndex } from '../src/client/CollaborationBrowser.tsx'
 import { en } from '../src/client/locales.ts'
 import { createCollaborationBrowserStore } from '../src/client/collaboration-browser-store.ts'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__')
+  Reflect.deleteProperty(window, 'IntersectionObserver')
+})
+
+it('loads the original Session group mapping only when its sidebar row is visible', async () => {
+  const workspaceId = 'a15fc774-6fae-4795-9f55-f4be65e06846'
+  const sessionId = SessionId('source-session')
+  const lookup = vi.fn(async () => ({ state: 'group_active', group_id: '44444444-4444-4444-8444-444444444444',
+    workspace_id: workspaceId, session_id: sessionId, version: 2, last_seq: 1 }))
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationGroupPreparation: lookup })
+  let visible: ((entries: IntersectionObserverEntry[]) => void) | undefined
+  Reflect.set(window, 'IntersectionObserver', class {
+    constructor(callback: (entries: IntersectionObserverEntry[]) => void) { visible = callback }
+    observe() {}
+    disconnect() {}
+  })
+  render(<CollaborationBrowser {...({ ...viewingProps(),
+    useCollaborationIndex: bindSnapshotSelector(createSnapshotStore<ConversationIndex>({
+      state: 'ready', global_pending_count: 0, items: [{ workspace_id: workspaceId, session_id: sessionId,
+        first_source_at: '1', last_activity_at: '2', source_count: 1, pending_count: 0,
+        planning_count: 0, running_count: 0, issue_count: 0, first_pending_digest: null,
+        pinned: false, archived: false }],
+    })),
+    useSessions: (select: (value: unknown) => unknown) => select({ byId: { [sessionId]: { displayTitle: 'Review' } } }),
+    useWorkspaces: (select: (value: unknown) => unknown) => select({ phase: 'ready', items: [{
+      workspaceId, title: 'North', sessionIds: [sessionId],
+    }], dedicatedCollaborationSessionIds: [], archivedSessionIds: [], pinnedSessionIds: [] }),
+    openConversation: vi.fn(), startConversation: vi.fn(), currentWorkspaceId: () => workspaceId,
+    togglePin: vi.fn(), renameConversation: vi.fn(), archiveConversation: vi.fn(), restoreConversation: vi.fn(),
+    t: makeTranslate(en),
+  } as Parameters<typeof CollaborationBrowser>[0])} />)
+  expect(lookup).not.toHaveBeenCalled()
+  act(() => { visible?.([{ isIntersecting: true } as IntersectionObserverEntry]) })
+  await waitFor(() => { expect(screen.getByText('Group chat active')).toBeTruthy() })
+  expect(lookup).toHaveBeenCalledWith({ operation: 'lookup', workspace_id: workspaceId, session_id: sessionId })
+})
 
 function viewingProps() {
   const store = createCollaborationBrowserStore().create()
