@@ -16,6 +16,22 @@ function snapshot(message: string, revision = 'r1', sessionId = 'session-one') {
 }
 
 describe('Host local memory Evidence index', () => {
+  it('rejects cached results after a Session revision, addition or deletion', async () => {
+    const index = new HostMemoryEvidenceIndex(scope)
+    index.replace(scope, snapshot('private plan'), 0)
+    let items = [{ sessionId: 'session-one', revision: 'r1' }]
+    const reader = { assertCurrent() {}, read: async () => snapshot('private plan'),
+      list: async () => ({ items, nextAfter: null }) }
+    const signal = new AbortController().signal
+    await index.assertCurrentInventory(scope, reader, signal)
+    items = [{ sessionId: 'session-one', revision: 'r2' }]
+    await expect(index.assertCurrentInventory(scope, reader, signal)).rejects.toMatchObject({ code: 'stale' })
+    items = [{ sessionId: 'session-one', revision: 'r1' }, { sessionId: 'session-two', revision: 'r1' }]
+    await expect(index.assertCurrentInventory(scope, reader, signal)).rejects.toMatchObject({ code: 'stale' })
+    items = []
+    await expect(index.assertCurrentInventory(scope, reader, signal)).rejects.toMatchObject({ code: 'stale' })
+  })
+
   it('builds only after a second complete inventory confirms the same versions', async () => {
     const first = snapshot('部署到 staging', 'r1', 'session-one')
     const second = snapshot('deploy to testing', 'r2', 'session-two')

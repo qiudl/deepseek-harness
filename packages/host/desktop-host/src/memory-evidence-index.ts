@@ -180,6 +180,21 @@ export class HostMemoryEvidenceIndex {
     }
     return null
   }
+
+  /** Reject cached results if any Session was added, removed or revised in the current worker. */
+  async assertCurrentInventory(scope: HostMemoryScope, reader: HostMemoryProfileReader,
+    signal: AbortSignal): Promise<void> {
+    this.checkScope(scope)
+    let checked = 0
+    await scanMemoryInventory(reader, signal, (sessionId, revision) => {
+      if (this.sessions.get(sessionId)?.version !== createHash('sha256').update(revision).digest('hex'))
+        throw new HostAuthorityError('stale')
+      checked += 1
+    })
+    reader.assertCurrent()
+    signal.throwIfAborted()
+    if (checked !== this.sessions.size) throw new HostAuthorityError('stale')
+  }
 }
 
 async function scanMemoryInventory(
@@ -215,22 +230,13 @@ export async function buildHostMemoryEvidenceIndex(
   signal: AbortSignal,
 ): Promise<HostMemoryEvidenceIndex> {
   const index = new HostMemoryEvidenceIndex(scope)
-  const inventory = new Map<string, string>()
   let generation = 0
   await scanMemoryInventory(reader, signal, async (sessionId, revision) => {
     const snapshot = await reader.read(sessionId, signal)
     if (snapshot.sessionId !== sessionId || snapshot.revision !== revision)
       throw new HostAuthorityError('stale')
     generation = index.replace(scope, snapshot, generation)
-    inventory.set(sessionId, revision)
   })
-  let checked = 0
-  await scanMemoryInventory(reader, signal, (sessionId, revision) => {
-    if (inventory.get(sessionId) !== revision) throw new HostAuthorityError('stale')
-    checked += 1
-  })
-  reader.assertCurrent()
-  signal.throwIfAborted()
-  if (checked !== inventory.size) throw new HostAuthorityError('stale')
+  await index.assertCurrentInventory(scope, reader, signal)
   return index
 }
