@@ -70,18 +70,20 @@ it('holds a recorded tombstone until the composer confirms its draft cleared', a
   expect(commands.at(-1)?.operation).toBe('pending_ack')
 })
 
-it('reconciles a recorded message after its acknowledgment failed and then sends new text', async () => {
+it('keeps a recorded key until the original draft clears or the user explicitly acknowledges it', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const { bridge, commands, setReceipt } = parent()
   const input = { bridge, workspaceId, sessionId, groupId, body: 'first' }
-  const first = await sendGroupText(input)
-  expect(first.state).toBe('retry_required')
+  expect((await sendGroupText(input)).state).toBe('retry_required')
   setReceipt('recorded')
   expect((await sendGroupText(input)).state).toBe('recorded')
-  const next = await sendGroupText({ ...input, body: 'second' })
-  expect(next.state).toBe('recorded')
-  expect(commands.map(command => command.operation).slice(-6)).toEqual([
-    'pending_status', 'receipt', 'pending_ack', 'pending_claim', 'receipt', 'send'])
+  expect(await sendGroupText({ ...input, body: 'second' })).toEqual({ state: 'pending_other' })
+  expect(commands.some(command => command.operation === 'pending_ack')).toBe(false)
+  const first = await sendGroupText(input)
+  if (first.state !== 'recorded') throw Error('test setup')
+  expect(await acknowledgeGroupText({ bridge, workspaceId, sessionId, groupId,
+    requestId: first.requestId, digest: first.digest })).toBe(true)
+  expect((await sendGroupText({ ...input, body: 'second' })).state).toBe('recorded')
 })
 
 it('does not release an old key when its receipt is missing', async () => {
@@ -93,7 +95,7 @@ it('does not release an old key when its receipt is missing', async () => {
   expect(commands.some(command => command.operation === 'pending_ack')).toBe(false)
 })
 
-it('retains a recorded old key when the parent rejects its acknowledgment', async () => {
+it('retains a recorded old key when the parent rejects explicit acknowledgment', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const { bridge, setReceipt } = parent()
   const input = { bridge, workspaceId, sessionId, groupId, body: 'first' }
@@ -102,7 +104,11 @@ it('retains a recorded old key when the parent rejects its acknowledgment', asyn
   const original = bridge.collaborationGroupMessages
   bridge.collaborationGroupMessages = vi.fn(async (command: GroupMessageCommand) =>
     command.operation === 'pending_ack' ? { state: 'retry_required' as const } : original(command))
-  expect(await sendGroupText({ ...input, body: 'second' })).toEqual({ state: 'retry_required' })
+  const recorded = await sendGroupText(input)
+  if (recorded.state !== 'recorded') throw Error('test setup')
+  expect(await acknowledgeGroupText({ bridge, workspaceId, sessionId, groupId,
+    requestId: recorded.requestId, digest: recorded.digest })).toBe(false)
+  expect(await sendGroupText({ ...input, body: 'second' })).toEqual({ state: 'pending_other' })
 })
 
 it('fails closed when the parent cannot persist the request key', async () => {

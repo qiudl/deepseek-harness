@@ -7,6 +7,7 @@ import css from './GroupChatDock.module.css'
 
 type Host = NonNullable<Window['__DSH_DESKTOP_HOST__']>
 type Message = Extract<GroupMessageReply, { state: 'page' }>['items'][number]
+type RecordedPending = { requestId: string; digest: string }
 type Snapshot = {
   state: 'missing' | 'preparing' | 'active' | 'unavailable'
   workspaceId: string | undefined
@@ -16,6 +17,8 @@ type Snapshot = {
   readFailed: boolean
 }
 const empty: Snapshot = { state: 'missing', workspaceId: undefined, items: [], hasMore: false, loading: false, readFailed: false }
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+const sha256 = /^[a-f0-9]{64}$/u
 type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & {
   sessionId: SessionId
   host: Host
@@ -27,15 +30,56 @@ const noSubscription = () => () => {}
 export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace = noSubscription, t }: Props) {
   const selectedWorkspace = useSyncExternalStore(subscribeWorkspace, workspaceId, workspaceId)
   const [snapshot, setSnapshot] = useState<Snapshot>(empty)
+  const [recordedPending, setRecordedPending] = useState<RecordedPending | null>(null)
+  const [recovering, setRecovering] = useState(false)
   const loadMore = useRef<(() => void) | null>(null)
+  const recoverPending = useRef<((pending: RecordedPending) => Promise<void>) | null>(null)
   useEffect(() => {
     setSnapshot(empty)
+    setRecordedPending(null)
+    setRecovering(false)
     let disposed = false, groupId: string | undefined, cursor = 0, hasMore = false, busy = false
     let items: readonly Message[] = []
     const current = () => !disposed && window.__DSH_DESKTOP_HOST__ === host && workspaceId() === selectedWorkspace
       && !!selectedWorkspace
     const publish = (state: Snapshot['state'], loading = false, readFailed = false) => {
       if (current()) setSnapshot({ state, workspaceId: selectedWorkspace, items, hasMore, loading, readFailed })
+    }
+    const checkPending = async () => {
+      const workspace = workspaceId(), expectedGroupId = groupId
+      if (!current() || !workspace || !expectedGroupId || !host.collaborationGroupMessages) return
+      try {
+        const status = await host.collaborationGroupMessages({ operation: 'pending_status',
+          workspace_id: workspace, session_id: sessionId, group_id: expectedGroupId })
+        if (!current() || groupId !== expectedGroupId) return
+        if (status.state !== 'pending_status' || !uuid.test(status.request_id) ||
+          !sha256.test(status.digest)) { setRecordedPending(null); return }
+        const receipt = await host.collaborationGroupMessages({ operation: 'receipt',
+          workspace_id: workspace, session_id: sessionId, request_id: status.request_id })
+        if (!current() || groupId !== expectedGroupId) return
+        setRecordedPending(receipt.state === 'recorded'
+          ? { requestId: status.request_id, digest: status.digest } : null)
+      } catch { if (current() && groupId === expectedGroupId) setRecordedPending(null) }
+    }
+    recoverPending.current = async (pending) => {
+      const workspace = workspaceId(), expectedGroupId = groupId
+      if (!current() || !workspace || !expectedGroupId || !host.collaborationGroupMessages) return
+      setRecovering(true)
+      try {
+        const status = await host.collaborationGroupMessages({ operation: 'pending_status',
+          workspace_id: workspace, session_id: sessionId, group_id: expectedGroupId })
+        if (!current() || groupId !== expectedGroupId || status.state !== 'pending_status' ||
+          status.request_id !== pending.requestId || status.digest !== pending.digest) return
+        const receipt = await host.collaborationGroupMessages({ operation: 'receipt',
+          workspace_id: workspace, session_id: sessionId, request_id: pending.requestId })
+        if (!current() || groupId !== expectedGroupId || receipt.state !== 'recorded') return
+        const acknowledged = await host.collaborationGroupMessages({ operation: 'pending_ack',
+          workspace_id: workspace, session_id: sessionId, group_id: expectedGroupId,
+          request_id: pending.requestId, digest: pending.digest })
+        if (current() && groupId === expectedGroupId && acknowledged.state === 'acknowledged')
+          setRecordedPending(null)
+      } catch { /* Keep the pending key for another explicit recovery attempt. */ }
+      finally { if (current() && groupId === expectedGroupId) setRecovering(false) }
     }
     const page = async () => {
       const workspace = workspaceId()
@@ -68,9 +112,11 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
         if (result.state !== 'group_active') { publish('unavailable'); return }
         if (groupId !== result.group_id) {
           groupId = result.group_id; cursor = 0; hasMore = true; items = []
+          setRecordedPending(null)
           publish('active')
           await page()
         } else if (!hasMore) await page()
+        await checkPending()
       } catch { publish('unavailable') }
     }
     const onRecorded = (event: Event) => {
@@ -78,6 +124,7 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
       if (detail && typeof detail === 'object' && 'session_id' in detail &&
         detail.session_id === sessionId && 'workspace_id' in detail && detail.workspace_id === workspaceId()) {
         void page()
+        void checkPending()
       }
     }
     void refresh()
@@ -96,6 +143,13 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
     {snapshot.state === 'preparing' && <p role="status">{t('group.preparing')}</p>}
     {snapshot.state === 'unavailable' && <p role="status">{t('group.readUnavailable')}</p>}
     {snapshot.state === 'active' && <>
+      {recordedPending && <div className={css.recovery} role="status">
+        <p>{t('group.pendingRecorded')}</p>
+        <button type="button" disabled={recovering}
+          onClick={() => { void recoverPending.current?.(recordedPending) }}>
+          {t('group.confirmDraftCleared')}
+        </button>
+      </div>}
       {snapshot.items.length === 0 && !snapshot.loading && <p>{t('group.empty')}</p>}
       {snapshot.items.map(item => <article key={item.id} className={css.message}>
         <strong>{item.actor_kind === 'human' ? t('group.human') : item.actor_ref}</strong>
