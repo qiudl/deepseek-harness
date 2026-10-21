@@ -73,6 +73,31 @@ function capture(value: unknown): Record<string, unknown> {
     (op.query.cursor === undefined || text(op.query.cursor, 2048))) return input
   throw Error('remote collaboration operation is invalid')
 }
+function groupResult(value: unknown): boolean {
+  if (!row(value)) return false
+  if (['missing', 'conflict', 'retry_required'].includes(String(value.state)))
+    return exact(value, ['state'])
+  if (value.state === 'recorded') return exact(value, ['state', 'message_id', 'seq'])
+    && typeof value.message_id === 'string' && uuid.test(value.message_id)
+    && Number.isSafeInteger(value.seq) && Number(value.seq) > 0
+  if (value.state !== 'page' || !exact(value, ['state', 'items', 'next_seq', 'has_more', 'last_seq'])
+    || !Array.isArray(value.items) || value.items.length > 100
+    || !Number.isSafeInteger(value.next_seq) || Number(value.next_seq) < 0
+    || !Number.isSafeInteger(value.last_seq) || Number(value.last_seq) < Number(value.next_seq)
+    || typeof value.has_more !== 'boolean') return false
+  let previous = 0
+  for (const item of value.items) {
+    if (!exact(item, ['id', 'seq', 'actor_kind', 'actor_ref', 'body', 'created_at'])
+      || typeof item.id !== 'string' || !uuid.test(item.id)
+      || !Number.isSafeInteger(item.seq) || Number(item.seq) <= previous
+      || !['human', 'bot', 'slark_agent', 'system'].includes(String(item.actor_kind))
+      || !text(item.actor_ref, 256) || typeof item.body !== 'string'
+      || item.body.length < 1 || item.body.length > 16_000
+      || !Number.isSafeInteger(item.created_at) || Number(item.created_at) < 1) return false
+    previous = Number(item.seq)
+  }
+  return !value.items.length || previous === value.next_seq
+}
 /**
  * Negotiate scope support before applying Client plugins. Old parents leave the bridge absent.
  * @param fetch - Unary transport using only the authenticated parent port.
@@ -106,9 +131,12 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     const methods: readonly unknown[] = advertised.methods
     const conversations = methods.includes('conversations')
     const archive = methods.includes('archive')
+    const groupMessages = methods.includes('groupMessages')
     const execution = ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
     if (!methods.includes('workspace') || methods.length !== (execution ? 4 : 1) + (conversations ? 1 : 0) + (archive ? 1 : 0)
-      || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive'].includes(String(method)))) return
+      + (groupMessages ? 1 : 0)
+      || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive',
+        'groupMessages'].includes(String(method)))) return
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
     const bridge = {
@@ -128,7 +156,7 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
       },
       collaborationScopeAvailable: true,
       collaborationExecutionAvailable: execution,
-      ...((execution || conversations || archive) ? (() => {
+      ...((execution || conversations || archive || groupMessages) ? (() => {
         const call = async (method: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> => {
           const rpcId = 'collaboration-' + String(++sequence)
           const response = await exchange(fetch, '/api/' + method, { method: 'POST',
@@ -145,6 +173,36 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
         return { ...(execution ? { collaborationSubmit: methods.collaborationSubmit,
           collaborationPending: methods.collaborationPending, collaborationDeliveries: methods.collaborationDeliveries } : {}),
         ...(conversations ? { collaborationConversations: methods.collaborationConversations } : {}),
+        ...(groupMessages ? { collaborationGroupMessages: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 60_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            if (!row(raw) || typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id)
+              || typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id)
+              || /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..')
+              throw Error('invalid group request')
+            const fields = raw.operation === 'send' ? ['operation', 'request_id', 'workspace_id', 'session_id',
+              'expected_group_version', 'body'] : raw.operation === 'receipt'
+              ? ['operation', 'request_id', 'workspace_id', 'session_id'] : raw.operation === 'page'
+                ? ['operation', 'workspace_id', 'session_id', 'after_seq', 'limit'] : []
+            if (!exact(raw, fields) || !fields.length) throw Error('invalid group request')
+            if (raw.operation === 'page') {
+              if (!Number.isSafeInteger(raw.after_seq) || Number(raw.after_seq) < 0 ||
+                !Number.isInteger(raw.limit) || Number(raw.limit) < 1 || Number(raw.limit) > 100)
+                throw Error('invalid group page')
+            } else if (typeof raw.request_id !== 'string' || !uuid.test(raw.request_id)) {
+              throw Error('invalid group key')
+            }
+            if (raw.operation === 'send' && (raw.expected_group_version !== 2 ||
+              typeof raw.body !== 'string' || raw.body.length < 1 || raw.body.length > 16_000 ||
+              encoder.encode(raw.body).length > 24_000)) throw Error('invalid group body')
+            const result = await call('collaboration/groupMessages', raw, signal)
+            if (!groupResult(result)) throw Error('invalid group reply')
+            return result
+          } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
         ...(archive ? { collaborationArchive: async (raw: unknown) => {
           const controller = new AbortController()
           const timer = setTimeout(() => { controller.abort() }, 60_000)

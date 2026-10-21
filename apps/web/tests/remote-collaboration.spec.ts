@@ -53,6 +53,7 @@ function bridge(): {
   collaborationPending(value: unknown): Promise<unknown>
   collaborationDeliveries(value: unknown): Promise<unknown>
   collaborationConversations?(): Promise<unknown>
+  collaborationGroupMessages?(value: unknown): Promise<unknown>
   collaborationArchive?(value: unknown): Promise<unknown> } {
   const host: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
   if (typeof host !== 'object' || host === null || !('collaborationWorkspace' in host)) throw Error('bridge is missing')
@@ -294,6 +295,40 @@ it('REQ-20261011-0002: archive capability sends only action coordinates over the
   expect(requests[0]?.payload.args.request).toEqual(request)
   expect(await bridge().collaborationArchive?.({ ...request, archive_token: 'forged' })).toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
+})
+it('REQ-20261020-0010: a group message capability preserves older scope and requires exact commands', async () => {
+  const advertised = { ...capability, methods: ['workspace', 'groupMessages'] }
+  const command = { operation: 'send', workspace_id: workspace, session_id: 'session-1',
+    request_id: '33333333-3333-4333-8333-333333333333', expected_group_version: 2, body: 'hello' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'recorded',
+      message_id: '44444444-4444-4444-8444-444444444444', seq: 1 }) }
+  })
+  await installRemoteCollaboration(h.fetch)
+  expect(bridge().collaborationScopeAvailable).toBe(true)
+  expect(await bridge().collaborationGroupMessages?.(command)).toMatchObject({ state: 'recorded', seq: 1 })
+  expect(requests[0]?.method).toBe('collaboration/groupMessages')
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupMessages?.({ ...command, actor_ref: 'bot' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261020-0010: group page accepts multiline messages but rejects malformed rows', async () => {
+  const advertised = { ...capability, methods: ['workspace', 'groupMessages'] }
+  const command = { operation: 'page', workspace_id: workspace, session_id: 'session-1', after_seq: 0, limit: 10 }
+  let body = 'hello\nworld'
+  const h = harness((path, rpc) => path === '/__collaboration__' ? { status: 200, value: advertised }
+    : { status: 200, value: envelope(rpc, { state: 'page', items: [{
+      id: '44444444-4444-4444-8444-444444444444', seq: 1, actor_kind: 'human',
+      actor_ref: 'alice', body, created_at: 1 }], next_seq: 1, has_more: false, last_seq: 1 }) })
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMessages?.(command)).toMatchObject({ state: 'page', items: [{ body }] })
+  body = ''
+  expect(await bridge().collaborationGroupMessages?.(command)).toEqual({ state: 'retry_required' })
 })
 it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pagehide without resubmitting the Agent', async () => {
   const started = Promise.withResolvers<undefined>()
