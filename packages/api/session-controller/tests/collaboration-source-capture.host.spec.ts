@@ -141,6 +141,25 @@ describe('Profile-owned collaboration Source capture', () => {
     } finally { release?.(); await h.dispose() }
   })
 
+  it('REQ-20261020-0010 checks queued input before a turn can claim it during activity inspection', async () => {
+    const h = await harness()
+    try {
+      h.events.push({ type: 'agent/inbox/spliced', seq: SessionSeq(1), time: 2,
+        data: { target: 'next-turn', start: 0, inserted: [createUserMessage({
+          content: [{ type: 'text', text: 'queued before group activation' }], source: { kind: 'user' },
+        })] } })
+      h.ctx.on('workspace/session-activity', async (_request, next) => {
+        const rest = await next()
+        h.events.push({ type: 'agent/inbox/spliced', seq: SessionSeq(2), time: 3,
+          data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] } })
+        return rest
+      })
+      await expect(h.ctx.workspaceRegistry.installGroupInputFence({
+        workspaceId: h.workspace.id, sessionId: h.sessionId, groupId: 'group-1', groupVersion: 0,
+      })).rejects.toMatchObject({ name: 'WorkspaceActiveSessionError' })
+    } finally { await h.dispose() }
+  })
+
   it('REQ-20261020-0010 keeps root capture active between Source and root journal commits', async () => {
     const h = await harness(), signal = new AbortController().signal
     let release!: () => void

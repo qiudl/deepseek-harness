@@ -335,12 +335,12 @@ export class SessionController extends TypertRemoteService {
     })
     ctx.on('workspace/session-activity', async ({ sessionId }, next) => {
       const active = this.collaborationInputActivity.has(sessionId)
-      const rest = await next()
       using observation = await ctx.sessionQuery.observeSession(sessionId, { projectionMode: 'none' })
       const inbox = observation.events.reduce(
         (state, event) => inboxProjectionDefinition.apply(state, event),
         inboxProjectionDefinition.init(),
       )
+      const rest = await next()
       return [
         ...(active ? [{ kind: 'source_capture' as const }] : []),
         ...(inbox['next-turn'].length > 0 || inbox['next-step'].length > 0
