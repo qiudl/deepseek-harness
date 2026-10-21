@@ -315,11 +315,17 @@ it('signs a group input fence only after the current Account Profile installs th
       group_version: 2 } } } : frame)
   await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unauthorized' })
   f.alter(undefined)
-  f.alter(frame => frame.type === 'result' && frame.method === 'profile.group_input_fence'
-    ? { ...frame, type: 'request' } as unknown as HostControlFrame : frame)
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.group_input_fence') Reflect.set(frame, 'type', 'request')
+    return frame
+  })
   await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unavailable' })
-  f.alter(frame => frame.type === 'result' && frame.method === 'profile.group_input_fence'
-    ? { ...frame, method: 'profile.collaboration_archive_state' } as unknown as HostControlFrame : frame)
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.group_input_fence') {
+      Reflect.set(frame, 'method', 'profile.collaboration_archive_state')
+    }
+    return frame
+  })
   await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unavailable' })
   f.alter((frame) => {
     if (frame.type === 'result' && frame.method === 'profile.group_input_fence') f.time.value = 2000
