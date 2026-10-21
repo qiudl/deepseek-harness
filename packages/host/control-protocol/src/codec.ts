@@ -584,10 +584,12 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
       }
       if (part.type === 'image') {
         exactKeys(part, ['type', 'receiptId', 'mediaType'])
-        if (part.mediaType !== 'image/png' && part.mediaType !== 'image/jpeg' &&
-            part.mediaType !== 'image/webp' && part.mediaType !== 'image/gif') reject()
+        const mediaType = part.mediaType
+        if (mediaType !== 'image/png' && mediaType !== 'image/jpeg' &&
+            mediaType !== 'image/webp' && mediaType !== 'image/gif') reject()
         return { type: 'image' as const, receiptId: uuid(part.receiptId),
-          mediaType: part.mediaType }
+          // oxlint-disable-next-line typescript/no-unnecessary-type-assertion -- declaration emit needs the literal union.
+          mediaType: mediaType as 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' }
       }
       exactKeys(part, ['type', 'receiptId'])
       if (part.type !== 'file') reject()
