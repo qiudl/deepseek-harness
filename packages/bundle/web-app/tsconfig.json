@@ -46,6 +46,9 @@
       "path": "../../core/system-prompt"
     },
     {
+      "path": "../../session/session-persistence"
+    },
+    {
       "path": "../../core/agent-default-model"
     },
     {
