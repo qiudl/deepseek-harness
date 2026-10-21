@@ -54,7 +54,7 @@ it('loads and refreshes the original Session mapping only while its row is visib
   const ticks: Array<() => void> = []
   const clear = vi.spyOn(window, 'clearInterval')
   vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout) => {
-    if (timeout === 20_000) ticks.push(callback as () => void)
+    if (timeout === 20_000) ticks.push(callback)
     return ticks.length as never
   })
   const view = render(<CollaborationBrowser {...props} />)

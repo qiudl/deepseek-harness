@@ -52,17 +52,18 @@ function GroupStatus({ row, t }: { row: ConversationRow; t: PropsLocale<'slarkAg
     if (!host?.collaborationGroupPreparation) return
     let active = true, visible = false, busy = false
     let timer: number | undefined
+    const stillActive = () => active
     const refresh = async () => {
       if (!active || !visible || busy) return
       if (window.__DSH_DESKTOP_HOST__ !== host) { setState(undefined); return }
       busy = true
       try {
-        const result = await host.collaborationGroupPreparation?.({ operation: 'lookup',
+        const result = await host.collaborationGroupPreparation({ operation: 'lookup',
           workspace_id: row.workspace_id, session_id: row.session_id })
-        if (active && window.__DSH_DESKTOP_HOST__ === host) {
-          setState(result?.state === 'preparing' || result?.state === 'group_active' ? result.state : undefined)
+        if (stillActive() && window.__DSH_DESKTOP_HOST__ === host) {
+          setState(result.state === 'preparing' || result.state === 'group_active' ? result.state : undefined)
         }
-      } catch { if (active) setState(undefined) }
+      } catch { if (stillActive()) setState(undefined) }
       finally { busy = false }
     }
     const show = () => {
