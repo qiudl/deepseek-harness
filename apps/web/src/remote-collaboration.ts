@@ -124,6 +124,11 @@ function groupPreparationResult(value: unknown, input: Record<string, unknown>):
     && typeof value.group_id === 'string' && uuid.test(value.group_id)
     && value.workspace_id === input.workspace_id && value.session_id === input.session_id
 }
+function groupActivationResult(value: unknown): boolean {
+  return row(value) && (value.state === 'retry_required' && exact(value, ['state']) ||
+    value.state === 'group_active' && exact(value, ['state', 'group_id', 'version']) &&
+    typeof value.group_id === 'string' && uuid.test(value.group_id) && value.version === 2)
+}
 /**
  * Negotiate scope support before applying Client plugins. Old parents leave the bridge absent.
  * @param fetch - Unary transport using only the authenticated parent port.
@@ -175,11 +180,12 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     const archive = methods.includes('archive')
     const groupMessages = expectedSchema === groupSchema && methods.includes('groupMessages')
     const groupPreparation = expectedSchema === groupSchema && methods.includes('groupPreparation')
+    const groupActivation = expectedSchema === groupSchema && methods.includes('groupActivation')
     const execution = ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
     if (!methods.includes('workspace') || methods.length !== (execution ? 4 : 1) + (conversations ? 1 : 0) + (archive ? 1 : 0)
-      + (groupMessages ? 1 : 0) + (groupPreparation ? 1 : 0)
+      + (groupMessages ? 1 : 0) + (groupPreparation ? 1 : 0) + (groupActivation ? 1 : 0)
       || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive',
-        'groupMessages', 'groupPreparation'].includes(String(method)))) return
+        'groupMessages', 'groupPreparation', 'groupActivation'].includes(String(method)))) return
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
     const bridge = {
@@ -199,7 +205,7 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
       },
       collaborationScopeAvailable: true,
       collaborationExecutionAvailable: execution,
-      ...((execution || conversations || archive || groupMessages || groupPreparation) ? (() => {
+      ...((execution || conversations || archive || groupMessages || groupPreparation || groupActivation) ? (() => {
         const call = async (method: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> => {
           const rpcId = 'collaboration-' + String(++sequence)
           const response = await exchange(fetch, '/api/' + method, { method: 'POST',
@@ -274,6 +280,23 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
               throw Error('invalid group Source')
             const result = await call('collaboration/groupPreparation', raw, signal)
             if (!groupPreparationResult(result, raw)) throw Error('invalid group preparation')
+            return result
+          } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
+        ...(groupActivation ? { collaborationGroupActivation: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 60_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            if (!exact(raw, ['request_id', 'workspace_id', 'session_id']) ||
+              typeof raw.request_id !== 'string' || !uuid.test(raw.request_id) ||
+              typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id) ||
+              typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id) ||
+              /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..')
+              throw Error('invalid group activation')
+            const result = await call('collaboration/groupActivation', raw, signal)
+            if (!groupActivationResult(result)) throw Error('invalid group activation reply')
             return result
           } catch { return { state: 'retry_required' as const } }
           finally { clearTimeout(timer) }

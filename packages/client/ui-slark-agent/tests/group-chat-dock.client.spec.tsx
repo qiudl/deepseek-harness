@@ -64,6 +64,115 @@ it('shows preparing state without reading the group ledger', async () => {
   expect(host.collaborationGroupMessages).not.toHaveBeenCalled()
 })
 
+it('upgrades a prepared original Session only after an authoritative active lookup', async () => {
+  let active = false, attempts = 0
+  const preparation = vi.fn(async () => active
+    ? { state: 'group_active' as const, group_id: groupId, workspace_id: workspaceId,
+      session_id: sessionId, version: 2 as const, last_seq: 0 }
+    : { state: 'preparing' as const, group_id: groupId, workspace_id: workspaceId,
+      session_id: sessionId, version: 1 as const, last_seq: 0 })
+  const activation = vi.fn(async (_input: { request_id: string; workspace_id: string; session_id: string }) => {
+    attempts++
+    if (attempts === 1) return { state: 'retry_required' as const }
+    active = true
+    return { state: 'group_active' as const, group_id: groupId, version: 2 as const }
+  })
+  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'page'
+    ? { state: 'page' as const, items: [], next_seq: 0, has_more: false, last_seq: 0 }
+    : { state: 'pending_empty' as const })
+  const host = { collaborationGroupPreparation: preparation,
+    collaborationGroupActivation: activation, collaborationGroupMessages: messages }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  const button = await screen.findByRole('button', { name: 'Upgrade to group chat' })
+  expect(messages).not.toHaveBeenCalled()
+  fireEvent.click(button)
+  await waitFor(() => { expect(screen.getByText('Group chat upgrade is not confirmed. Try again.')).toBeTruthy() })
+  fireEvent.click(button)
+  await waitFor(() => { expect(screen.getByText('Group chat is active. Waiting for the first message.')).toBeTruthy() })
+  expect(activation).toHaveBeenCalledTimes(2)
+  expect(activation.mock.calls[0]?.[0]).toEqual(activation.mock.calls[1]?.[0])
+  expect(activation.mock.calls[0]?.[0]).toMatchObject({ workspace_id: workspaceId, session_id: sessionId })
+  expect(preparation).toHaveBeenCalledTimes(2)
+})
+
+it('keeps one activation request across a preparing refresh and blocks a second click in flight', async () => {
+  let tick: (() => void) | undefined
+  vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout) => {
+    if (timeout === 20_000) tick = callback
+    return 1 as never
+  })
+  const delayed = Promise.withResolvers<{ state: 'retry_required' }>()
+  const activation = vi.fn(() => delayed.promise)
+  const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'preparing' as const,
+    group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 1 as const })),
+  collaborationGroupActivation: activation, collaborationGroupMessages: vi.fn() }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  const button = await screen.findByRole('button', { name: 'Upgrade to group chat' })
+  act(() => { tick?.() })
+  await waitFor(() => { expect(host.collaborationGroupPreparation).toHaveBeenCalledTimes(2) })
+  fireEvent.click(button)
+  fireEvent.click(button)
+  expect(activation).toHaveBeenCalledTimes(1)
+  await act(async () => { delayed.resolve({ state: 'retry_required' }); await delayed.promise })
+  expect(screen.getByText('Group chat upgrade is not confirmed. Try again.')).toBeTruthy()
+})
+
+it('keeps the original Session preparing until the mapping confirms activation', async () => {
+  const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'preparing' as const,
+    group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 1 as const })),
+  collaborationGroupActivation: vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, version: 2 as const })), collaborationGroupMessages: vi.fn() }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Upgrade to group chat' }))
+  await waitFor(() => { expect(host.collaborationGroupPreparation).toHaveBeenCalledTimes(2) })
+  expect(screen.getByText('Group chat is preparing. Try again shortly.')).toBeTruthy()
+  expect(host.collaborationGroupMessages).not.toHaveBeenCalled()
+})
+
+it.each(['refused', 'stale', 'stale_success'] as const)(
+  'keeps group activation unconfirmed on %s Host response', async (kind) => {
+    const delayed = Promise.withResolvers<never>()
+    const activation = vi.fn(() => delayed.promise)
+    const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'preparing' as const,
+      group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 1 as const })),
+    collaborationGroupActivation: activation, collaborationGroupMessages: vi.fn() }
+    Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+    render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+      t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+    const button = await screen.findByRole('button', { name: 'Upgrade to group chat' })
+    fireEvent.click(button)
+    await waitFor(() => { expect(activation).toHaveBeenCalledTimes(1) })
+    if (kind !== 'refused') Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+    await act(async () => {
+      if (kind === 'stale_success') delayed.resolve({ state: 'group_active', group_id: groupId, version: 2 } as never)
+      else delayed.reject(Error('offline'))
+      await delayed.promise.catch(() => undefined)
+    })
+    if (kind === 'refused') expect(screen.getByText('Group chat upgrade is not confirmed. Try again.')).toBeTruthy()
+    else expect(screen.queryByText('Group chat upgrade is not confirmed. Try again.')).toBeNull()
+  },
+)
+
+it('does not start activation from a stale Host button', async () => {
+  const activation = vi.fn()
+  const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'preparing' as const,
+    group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 1 as const })),
+  collaborationGroupActivation: activation, collaborationGroupMessages: vi.fn() }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  const button = await screen.findByRole('button', { name: 'Upgrade to group chat' })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+  fireEvent.click(button)
+  expect(activation).not.toHaveBeenCalled()
+})
+
 it('requires explicit confirmation before releasing a recorded key from another window', async () => {
   const requestId = '44444444-4444-4444-8444-444444444444'
   const digest = 'a'.repeat(64)
