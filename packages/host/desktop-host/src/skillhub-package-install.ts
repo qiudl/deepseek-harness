@@ -214,6 +214,27 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     }
   }
   await checkRoot()
+  async function verifiedFileBytes(base: string, path: string,
+    evidence: Pick<StoredFile, 'size' | 'mode' | 'sha256'>): Promise<Buffer> {
+    const parts = path.split('/')
+    let parent = join(base, 'files')
+    for (const part of parts.slice(0, -1)) {
+      parent = join(parent, part)
+      const entry = await lstat(parent)
+      /* v8 ignore next -- the privateMode false arm requires POSIX mode bits. */
+      if (!entry.isDirectory() || entry.isSymbolicLink() || !privateMode(entry.mode)) fail()
+    }
+    const file = await open(join(base, 'files', ...parts), constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      const stat = await file.stat()
+      /* v8 ignore next 2 -- the mode comparison is POSIX-only; Linux coverage exercises it. */
+      if (!stat.isFile() || stat.size !== evidence.size
+        || (process.platform !== 'win32' && (stat.mode & 0o777) !== (evidence.mode === '0755' ? 0o755 : 0o644))) fail()
+      const bytes = await file.readFile()
+      if (digest(bytes) !== evidence.sha256) fail()
+      return bytes
+    } finally { await file.close() }
+  }
   async function verifiedFiles(plan: SkillHubPackagePlan, base: string): Promise<StoredFile[]> {
     for (const path of [base, join(base, 'files')]) {
       const info = await lstat(path)
@@ -230,22 +251,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       if (!safePath(evidence.path) || !SHA.test(evidence.sha256)
         || !Number.isSafeInteger(evidence.size) || evidence.size < 0 || evidence.size > MAX_FILE
         || (evidence.mode !== '0644' && evidence.mode !== '0755')) fail()
-      const parts = evidence.path.split('/'), filePath = join(base, 'files', ...parts)
-      let parent = join(base, 'files')
-      for (const part of parts.slice(0, -1)) {
-        parent = join(parent, part)
-        const entry = await lstat(parent)
-        /* v8 ignore next -- the privateMode false arm requires POSIX mode bits. */
-        if (!entry.isDirectory() || entry.isSymbolicLink() || !privateMode(entry.mode)) fail()
-      }
-      const file = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW)
-      try {
-        const stat = await file.stat()
-        /* v8 ignore next 2 -- the mode comparison is POSIX-only; Linux coverage exercises it. */
-        if (!stat.isFile() || stat.size !== evidence.size
-          || (process.platform !== 'win32' && (stat.mode & 0o777) !== (evidence.mode === '0755' ? 0o755 : 0o644))
-          || digest(await file.readFile()) !== evidence.sha256) fail()
-      } finally { await file.close() }
+      await verifiedFileBytes(base, evidence.path, evidence)
     }
     if (!files.some(file => file.path === 'SKILL.md')) fail()
     return files
@@ -317,22 +323,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
         manifest.map(file => [file.path, file.mode, file.size, file.sha256])])) !== plan.manifestSha256) fail()
     const evidence = files.find(file => file.path === path)
     if (!evidence) throw Error('skillhub_package_unavailable')
-    let parent = join(base, 'files')
-    for (const part of path.split('/').slice(0, -1)) {
-      parent = join(parent, part)
-      const entry = await lstat(parent)
-      if (!entry.isDirectory() || entry.isSymbolicLink() || !privateMode(entry.mode)) fail()
-    }
-    const file = await open(join(base, 'files', ...path.split('/')),
-      constants.O_RDONLY | constants.O_NOFOLLOW)
-    try {
-      const stat = await file.stat()
-      if (!stat.isFile() || stat.size !== evidence.size
-        || (process.platform !== 'win32' && (stat.mode & 0o777) !== (evidence.mode === '0755' ? 0o755 : 0o644))) fail()
-      const bytes = await file.readFile()
-      if (digest(bytes) !== evidence.sha256) fail()
-      return bytes
-    } finally { await file.close() }
+    return verifiedFileBytes(base, path, evidence)
   }
   async function snapshotFixed(receipt: SkillHubPackageReceipt): Promise<SkillHubPackageSnapshot> {
     await checkRoot()
