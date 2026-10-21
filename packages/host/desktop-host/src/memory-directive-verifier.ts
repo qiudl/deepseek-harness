@@ -54,6 +54,13 @@ export interface VerifiedMemoryDirectiveGrant {
   readonly readerKind: 'personal_dsh'
 }
 
+/** Immutable result retained through asynchronous reads for a final expiry check. */
+export interface VerifiedMemoryDirective {
+  readonly requestId: string
+  readonly expiresAt: number
+  readonly grant: VerifiedMemoryDirectiveGrant
+}
+
 /** Pinned, public-only signing keys selected by the signed Desktop embedding. */
 export class MemoryDirectiveVerifier {
   private readonly keys: ReadonlyMap<string, { key: KeyObject; validFrom: number; validUntil: number }>
@@ -88,7 +95,7 @@ export class MemoryDirectiveVerifier {
   }
 
   /** Consume exactly once after all signature, scope, operation and expiry checks pass. */
-  verifyAndConsume(value: unknown, context: MemoryDirectiveContext): VerifiedMemoryDirectiveGrant {
+  verifyAndConsume(value: unknown, context: MemoryDirectiveContext): VerifiedMemoryDirective {
     const directive = record(value, ['schemaVersion', 'purpose', 'issuer', 'keyId', 'requestId', 'nonce',
       'hostInstanceId', 'processNonce', 'issuedAt', 'expiresAt', 'operation', 'queryDigest', 'limit',
       'grant', 'signature'])
@@ -133,9 +140,16 @@ export class MemoryDirectiveVerifier {
     if (this.used.has(nonce)) throw new HostAuthorityError('replayed')
     if (this.used.size >= MAX_USED_NONCES) throw new HostAuthorityError('busy')
     this.used.set(nonce, directive.expiresAt as number)
-    return Object.freeze({ grantId: grant.grantId, generation: grant.generation,
+    const verifiedGrant = Object.freeze({ grantId: grant.grantId, generation: grant.generation,
       ownerUserId: grant.ownerUserId, environmentId: grant.environmentId,
       computerId: grant.computerId, installationId: grant.installationId,
       profileId: grant.profileId, readerKind: 'personal_dsh' })
+    return Object.freeze({ requestId: directive.requestId, expiresAt: directive.expiresAt as number,
+      grant: verifiedGrant })
+  }
+
+  /** Refuse a result that finished after the signed instruction expired. */
+  assertUnexpired(verified: VerifiedMemoryDirective): void {
+    if (this.now() >= verified.expiresAt) throw new HostAuthorityError('stale')
   }
 }

@@ -37,12 +37,17 @@ function directive() {
 it('accepts one exact signed instruction and consumes its nonce', () => {
   const verifier = new MemoryDirectiveVerifier(publicRing, () => now + 1)
   const value = directive()
-  const grant = verifier.verifyAndConsume(value, context)
-  expect(grant).toEqual(value.grant)
-  expect(Object.isFrozen(grant)).toBe(true)
+  const verified = verifier.verifyAndConsume(value, context)
+  expect(verified.grant).toEqual(value.grant)
+  expect(verified.expiresAt).toBe(value.expiresAt)
+  expect(Object.isFrozen(verified)).toBe(true)
+  expect(Object.isFrozen(verified.grant)).toBe(true)
   expect(() => { verifier.verifyAndConsume(value, context) }).toThrow(/replayed/u)
   value.grant.ownerUserId = 'changed'
-  expect(grant.ownerUserId).toBe('owner')
+  expect(verified.grant.ownerUserId).toBe('owner')
+  verifier.assertUnexpired(verified)
+  expect(() => { new MemoryDirectiveVerifier(publicRing, () => now + 15_000)
+    .assertUnexpired(verified) }).toThrow(/stale/u)
 })
 
 it('rejects changed scope, operation, limit, Host epoch, signature and expiry', () => {
