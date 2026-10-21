@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarget,
+  parseHostGroupInputFenceChallenge,
   parseHostRemoteSessionJson,
   parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionTarget, parseHostRootJournalCommand, parseHostRootJournalMetadata, parseHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
@@ -19,6 +20,13 @@ const archiveTarget = { workspace_id: target.workspace_id, session_id: target.se
   environment_id: '20000000-0000-4000-8000-000000000002',
   account_issuer: 'https://accounts.example.test',
   account_subject: '30000000-0000-4000-8000-000000000003' }
+const groupChallenge = parseHostGroupInputFenceChallenge({ request_id: '10000000-0000-4000-8000-000000000001',
+  challenge_nonce: 'A'.repeat(43), expires_at: 2000, audience: 'https://slark.example.test',
+  environment_id: archiveTarget.environment_id, account_issuer: archiveTarget.account_issuer,
+  account_subject: archiveTarget.account_subject, workspace_id: target.workspace_id,
+  session_id: target.session_id, group_id: '70000000-0000-4000-8000-000000000007', group_version: 1 })
+const groupValue = { workspace_id: groupChallenge.workspace_id, session_id: groupChallenge.session_id,
+  group_id: groupChallenge.group_id, group_version: groupChallenge.group_version }
 const descriptor = { ...target, snapshot_digest: 'a'.repeat(64) }
 const rootTarget = parseHostRootSubmissionTarget({ ...target, namespace_id: 'n2_' + 'b'.repeat(64), command_id: '10000000-0000-4000-8000-000000000001' })
 const rootDescriptor = { namespace_id: rootTarget.namespace_id, command_id: rootTarget.command_id,
@@ -68,6 +76,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged')
       '/internal/desktop-collaboration-archive-state': 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN',
       '/internal/desktop-collaboration-archive-intent': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-collaboration-archive-transition': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
+      '/internal/desktop-group-input-fence': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -110,6 +119,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged')
           : url.pathname.endsWith('archive-intent') ? { archive_phase: 'prepared', archive_token: ${JSON.stringify(archiveTarget.archive_token)} }
           : url.pathname.endsWith('archive-transition') ? { archive_phase: ({ stage: ${JSON.stringify(archiveStagePhase)}, prepared: 'prepared',
               archive: 'archived', restore: 'restored', finish_release: 'released' })[input.action] }
+          : url.pathname.endsWith('group-input-fence') ? ${JSON.stringify(groupValue)}
           : input.action === 'read_source_output' ? { value: ${JSON.stringify(sourceOutput)} }
           : url.pathname.endsWith('analysis') ? { value: input }
           : { delivery_id: input.projection.delivery_id }
@@ -137,16 +147,18 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged')
   const { inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant,
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
-    inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive } = worker
+    inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
+    installGroupInputFence } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
-    || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive)
+    || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
+    || !installGroupInputFence)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
-    transitionCollaborationArchive }
+    transitionCollaborationArchive, installGroupInputFence }
 }
 
 it('routes account-bound archive inspection and every transition through separate worker tokens', async () => {
@@ -171,6 +183,16 @@ it('routes account-bound archive inspection and every transition through separat
   await expect(h.inspectCollaborationArchiveState(archiveTarget, signal)).rejects.toThrow('unavailable')
   await expect(h.inspectCollaborationArchiveIntent(intent, signal)).rejects.toThrow('unavailable')
   await expect(h.transitionCollaborationArchive({ ...archiveTarget, action: 'stage' }, signal)).rejects.toThrow('unavailable')
+})
+
+it('uses the parent-only token for an exact group fence acknowledgement', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-group-input-fence`, {
+    method: 'POST', body: JSON.stringify(groupChallenge),
+  })).status).toBe(403)
+  await expect(h.installGroupInputFence(groupChallenge, signal)).resolves.toEqual(groupValue)
+  h.worker.abort()
+  await expect(h.installGroupInputFence(groupChallenge, signal)).rejects.toThrow('unavailable')
 })
 
 it('rejects a released stage and accepts an existing staged archive', async () => {

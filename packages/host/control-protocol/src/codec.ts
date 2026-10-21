@@ -58,6 +58,8 @@ import type {
   HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
   HostCollaborationArchiveStateTarget, HostCollaborationArchiveStateValue,
   ProfileCollaborationArchiveStateRequest, ProfileCollaborationArchiveStateResult,
+  HostGroupInputFenceChallenge, HostGroupInputFenceValue, HostGroupInputFenceAssertion,
+  ProfileGroupInputFenceRequest, ProfileGroupInputFenceResult,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
   ProfileCollaborationArchiveIntentRequest, ProfileCollaborationArchiveIntentResult,
   HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult,
@@ -1044,6 +1046,60 @@ export function encodeHostCollaborationArchiveStatePayload(value: HostCollaborat
     r.host_instance_id, r.process_nonce,
   ])}`, 'utf8')
 }
+/** Parse one exact Slark group challenge for the original Session.
+ * @param value - Untrusted challenge.
+ * @returns Validated group challenge.
+ */
+export function parseHostGroupInputFenceChallenge(value: unknown): HostGroupInputFenceChallenge {
+  const r = registrationRecord(value)
+  exactKeys(r, ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
+    'account_issuer', 'account_subject', 'workspace_id', 'session_id', 'group_id', 'group_version'])
+  const base = parseHostWorkspaceAuthorityChallenge(Object.fromEntries(
+    ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
+      'account_issuer', 'account_subject', 'workspace_id', 'session_id'].map(key => [key, r[key]])))
+  if (!Number.isSafeInteger(r.group_version) || (r.group_version as number) < 1) reject()
+  return Object.freeze({ ...base, group_id: uuid(r.group_id), group_version: r.group_version as number })
+}
+/** Validate the exact worker acknowledgement without admitting extra claims.
+ * @param value - Untrusted worker result.
+ * @returns Validated installed fence.
+ */
+export function parseHostGroupInputFenceValue(value: unknown): HostGroupInputFenceValue {
+  const r = registrationRecord(value)
+  exactKeys(r, ['workspace_id', 'session_id', 'group_id', 'group_version'])
+  const target = parseHostWorkspaceModelSelectionTarget({ workspace_id: r.workspace_id, session_id: r.session_id })
+  if (!Number.isSafeInteger(r.group_version) || (r.group_version as number) < 1) reject()
+  return Object.freeze({ ...target, group_id: uuid(r.group_id), group_version: r.group_version as number })
+}
+
+/** Parse installation proof without accepting a caller-provided local fence.
+ * @param value - Untrusted Host assertion.
+ * @returns Validated signed assertion.
+ */
+export function parseHostGroupInputFenceAssertion(value: unknown): HostGroupInputFenceAssertion {
+  const r = registrationRecord(value)
+  exactKeys(r, ['schema_version', 'challenge', 'installation_id', 'installation_public_key',
+    'host_instance_id', 'process_nonce', 'signature'])
+  if (r.schema_version !== 1) reject()
+  const challenge = parseHostGroupInputFenceChallenge(r.challenge)
+  const identity = parseHostWorkspaceAuthorityAssertion({ ...r, challenge: Object.fromEntries(
+    ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
+      'account_issuer', 'account_subject', 'workspace_id', 'session_id'].map(key => [key, challenge[key as keyof typeof challenge]])) })
+  return Object.freeze({ ...identity, challenge })
+}
+
+/** Sign the exact installed group and version in a domain separate from ownership proofs.
+ * @param value - Validated signed assertion.
+ * @returns Domain-separated signature payload.
+ */
+export function encodeHostGroupInputFencePayload(value: HostGroupInputFenceAssertion): Buffer {
+  const r = parseHostGroupInputFenceAssertion(value), c = r.challenge
+  return Buffer.from(`dsh-group-input-fence/v1\0${JSON.stringify([
+    1, c.request_id, c.challenge_nonce, c.expires_at, c.audience, c.environment_id,
+    c.account_issuer, c.account_subject, c.workspace_id, c.session_id, c.group_id, c.group_version,
+    r.installation_id, r.installation_public_key, r.host_instance_id, r.process_nonce,
+  ])}`, 'utf8')
+}
 /** Bounded private worker lookup with no caller-selected phase.
  * @param value - Untrusted worker target.
  * @returns Validated Account-bound token target.
@@ -1616,6 +1672,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
+  | ProfileGroupInputFenceRequest
   | ProfileCollaborationArchiveIntentRequest
   | ProfileCollaborationArchiveTransitionRequest
   | ProfileSourceAuthorityRequest
@@ -2118,6 +2175,12 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       params: { ...accountChallengeParams(params),
         challenge: parseHostCollaborationArchiveStateChallenge(params.challenge) } }
   }
+  if (frame.method === 'profile.group_input_fence') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...accountChallengeParams(params),
+        challenge: parseHostGroupInputFenceChallenge(params.challenge) } }
+  }
   if (frame.method === 'profile.collaboration_archive_intent') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
@@ -2221,6 +2284,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateResult
+  | ProfileGroupInputFenceResult
   | ProfileCollaborationArchiveIntentResult
   | ProfileCollaborationArchiveTransitionResult
   | ProfileSourceAuthorityResult
@@ -2488,6 +2552,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
   if (frame.method === 'profile.collaboration_archive_state') {
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: parseHostCollaborationArchiveStateAssertion(result) }
+  }
+  if (frame.method === 'profile.group_input_fence') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostGroupInputFenceAssertion(result) }
   }
   if (frame.method === 'profile.collaboration_archive_intent') {
     return { version: 1, type: 'result', request_id, method: frame.method,

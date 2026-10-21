@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { parseHostCollaborationSourceTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationSourceTarget, parseHostGroupInputFenceChallenge } from '@deepseek-ai/dsh-host-control-protocol'
 import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
 import type { Config } from '../src/startup.ts'
@@ -194,6 +194,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     async () => ({ archive_phase: 'missing', archive_token: null }))
   const transitionCollaborationArchive = vi.fn<NonNullable<ProfileWorkerHandle['transitionCollaborationArchive']>>(
     async () => ({ archive_phase: 'staged' }))
+  const installGroupInputFence = vi.fn<NonNullable<ProfileWorkerHandle['installGroupInputFence']>>(
+    async challenge => ({ workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+      group_id: challenge.group_id, group_version: challenge.group_version }))
   const inspectCollaborationSource = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationSource']>>(
     async () => sourceDescriptor)
   const readCollaborationSourceSnapshot = vi.fn<NonNullable<ProfileWorkerHandle['readCollaborationSourceSnapshot']>>(
@@ -228,6 +231,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       generateText,
       inspectWorkspaceModelSelection, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
       transitionCollaborationArchive,
+      installGroupInputFence,
       inspectCollaborationSource, readCollaborationSourceSnapshot,
       collaborationAnalysis, receiveCollaborationDelivery,
       closeNotifications: () => { workerEvents.push(`notifications:${spec.profileId}`) },
@@ -320,6 +324,18 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(serverOptions.transitionCollaborationArchive?.(profile.profileId, transitionTarget, collaborationSignal))
     .resolves.toEqual({ archive_phase: 'staged' })
   expect(transitionCollaborationArchive).toHaveBeenCalledWith(transitionTarget, collaborationSignal)
+  const challenge = parseHostGroupInputFenceChallenge({
+    request_id: '10000000-0000-4000-8000-000000000001', challenge_nonce: 'A'.repeat(43),
+    expires_at: 2000, audience: 'https://slark.example.test',
+    environment_id: archiveTarget.environment_id, account_issuer: 'https://accounts.example.test',
+    account_subject: '30000000-0000-4000-8000-000000000003', workspace_id: archiveTarget.workspace_id,
+    session_id: archiveTarget.session_id,
+    group_id: '70000000-0000-4000-8000-000000000007', group_version: 1,
+  })
+  await expect(serverOptions.installGroupInputFence?.(profile.profileId, challenge, collaborationSignal))
+    .resolves.toEqual({ workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+      group_id: challenge.group_id, group_version: challenge.group_version })
+  expect(installGroupInputFence).toHaveBeenCalledWith(challenge, collaborationSignal)
   await expect(serverOptions.inspectCollaborationSource?.(profile.profileId, sourceTarget, collaborationSignal))
     .resolves.toEqual(sourceDescriptor)
   expect(inspectCollaborationSource).toHaveBeenCalledWith(sourceTarget, collaborationSignal)

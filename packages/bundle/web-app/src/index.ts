@@ -44,6 +44,7 @@ import { openCollaborationAnalysisJournal } from '@deepseek-ai/dsh-api-session-c
 import { handleDesktopWorkspaceModelSelectionRequest } from './desktop-workspace-model-selection.ts'
 import { handleDesktopCollaborationArchiveStateRequest } from './desktop-collaboration-archive-state.ts'
 import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-collaboration-archive-transition.ts'
+import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
@@ -405,6 +406,20 @@ export function apply(ctx: Context, config: Config): void {
   const archiveTransitionToken = process.env.DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN
   if (archiveTransitionToken && /^[A-Za-z0-9_-]{43}$/u.test(archiveTransitionToken)) {
     ctx.inject(['workspaceRegistry'], (workspaceCtx) => {
+      workspaceCtx.effect(() => workspaceCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-group-input-fence',
+        handler: (req, res) => handleDesktopGroupInputFenceRequest(req, res, archiveTransitionToken,
+          async (challenge, signal) => {
+            signal.throwIfAborted()
+            const installed = await workspaceCtx.workspaceRegistry.installGroupInputFence({
+              workspaceId: challenge.workspace_id, sessionId: challenge.session_id,
+              groupId: challenge.group_id, groupVersion: challenge.group_version,
+            })
+            signal.throwIfAborted()
+            return { workspace_id: installed.workspaceId, session_id: installed.sessionId,
+              group_id: installed.groupId, group_version: installed.groupVersion }
+          }),
+      }))
       workspaceCtx.effect(() => workspaceCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-collaboration-archive-intent',
         handler: (req, res) => handleDesktopCollaborationArchiveIntentRequest(req, res, archiveTransitionToken,
