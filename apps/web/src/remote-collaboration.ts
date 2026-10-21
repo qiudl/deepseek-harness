@@ -4,6 +4,7 @@ import { exchange, readJson } from './remote-response.ts'
 import { createRemoteCollaborationExecution } from './remote-collaboration-execution.ts'
 
 const schema = 'dsh-remote-collaboration/v1'
+const groupSchema = 'dsh-remote-collaboration/v2'
 const encoder = new TextEncoder()
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const version = /^(0|[1-9][0-9]{0,18})$/u
@@ -135,21 +136,32 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     const discoveryTimer = setTimeout(() => { discovery.abort() }, 5_000)
     const discoverySignal = AbortSignal.any([discovery.signal, lifetime.signal])
     let advertised: unknown
+    let expectedSchema = schema
     try {
-      const response = await exchange(fetch, '/__collaboration__', { method: 'GET' }, discoverySignal)
-      if (!response.ok) { void response.body?.cancel().catch(() => undefined); return }
-      advertised = await readJson(response, discoverySignal)
+      for (const [path, candidateSchema] of [
+        ['/__collaboration_v2__', groupSchema], ['/__collaboration__', schema],
+      ] as const) {
+        const response = await exchange(fetch, path, { method: 'GET' }, discoverySignal)
+        if (!response.ok) { void response.body?.cancel().catch(() => undefined); continue }
+        const candidate = await readJson(response, discoverySignal)
+        if (exact(candidate, ['schema', 'methods']) && candidate.schema === candidateSchema &&
+          Array.isArray(candidate.methods)) {
+          advertised = candidate
+          expectedSchema = candidateSchema
+          break
+        }
+      }
     } catch (_error) {
       // A missing or unusable capability response does not prevent ordinary remote chat.
       return
     } finally { clearTimeout(discoveryTimer) }
     lifetime.signal.throwIfAborted()
-    if (!exact(advertised, ['schema', 'methods']) || advertised.schema !== schema || !Array.isArray(advertised.methods)) return
+    if (!exact(advertised, ['schema', 'methods']) || advertised.schema !== expectedSchema || !Array.isArray(advertised.methods)) return
     const methods: readonly unknown[] = advertised.methods
     const conversations = methods.includes('conversations')
     const archive = methods.includes('archive')
-    const groupMessages = methods.includes('groupMessages')
-    const groupPreparation = methods.includes('groupPreparation')
+    const groupMessages = expectedSchema === groupSchema && methods.includes('groupMessages')
+    const groupPreparation = expectedSchema === groupSchema && methods.includes('groupPreparation')
     const execution = ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
     if (!methods.includes('workspace') || methods.length !== (execution ? 4 : 1) + (conversations ? 1 : 0) + (archive ? 1 : 0)
       + (groupMessages ? 1 : 0) + (groupPreparation ? 1 : 0)
