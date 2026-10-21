@@ -108,6 +108,24 @@ it('refuses a group fence acknowledgement from a replaced Profile worker', async
   await workers.disposeAll()
 })
 
+it('refuses a group fence when the selected Profile worker lacks the capability', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+  }))
+  await workers.start(input)
+  const challenge = parseHostGroupInputFenceChallenge({
+    request_id: '10000000-0000-4000-8000-000000000001', challenge_nonce: 'A'.repeat(43),
+    expires_at: 2000, audience: 'https://slark.example.test',
+    environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'https://accounts.example.test', account_subject: '30000000-0000-4000-8000-000000000003',
+    workspace_id: target.workspace_id, session_id: target.session_id,
+    group_id: '70000000-0000-4000-8000-000000000007', group_version: 1,
+  })
+  await expect(workers.installGroupInputFence(input.profileId, challenge, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  await workers.disposeAll()
+})
+
 it('discards a recovered archive token from a replaced Profile worker', async () => {
   let release!: () => void
   const pending = new Promise<void>((resolve) => { release = resolve })
