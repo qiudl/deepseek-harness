@@ -14,12 +14,15 @@ export type GroupMessageCommand =
   | { operation: 'page'; workspace_id: string; session_id: string; after_seq: number; limit: number }
   | { operation: 'pending_claim'; workspace_id: string; session_id: string; group_id: string; digest: string }
   | { operation: 'pending_ack'; workspace_id: string; session_id: string; group_id: string; digest: string; request_id: string }
+  | { operation: 'pending_status'; workspace_id: string; session_id: string; group_id: string }
 
 /** Exact group ledger or parent pending-key reply. */
 export type GroupMessageReply =
   | { state: 'recorded'; message_id: string; seq: number }
   | { state: 'missing' | 'conflict' | 'retry_required' }
   | { state: 'pending'; request_id: string }
+  | { state: 'pending_status'; request_id: string; digest: string }
+  | { state: 'pending_empty' }
   | { state: 'pending_other' | 'acknowledged' }
   | {
     state: 'page'
@@ -59,9 +62,23 @@ export async function sendGroupText(input: {
     return { state: 'retry_required' }
   try {
     const bodyDigest = await digest(body)
-    const pending = await bridge.collaborationGroupMessages({ operation: 'pending_claim',
+    let pending = await bridge.collaborationGroupMessages({ operation: 'pending_claim',
       workspace_id: workspaceId, session_id: sessionId, group_id: groupId, digest: bodyDigest })
-    if (pending.state === 'pending_other') return { state: 'pending_other' }
+    if (pending.state === 'pending_other') {
+      const previous = await bridge.collaborationGroupMessages({ operation: 'pending_status',
+        workspace_id: workspaceId, session_id: sessionId, group_id: groupId })
+      if (previous.state !== 'pending_status' || !uuid.test(previous.request_id) ||
+        !/^[a-f0-9]{64}$/u.test(previous.digest)) return { state: 'retry_required' }
+      const priorReceipt = await bridge.collaborationGroupMessages({ operation: 'receipt',
+        workspace_id: workspaceId, session_id: sessionId, request_id: previous.request_id })
+      if (priorReceipt.state !== recordedState) return { state: 'pending_other' }
+      const acknowledgment = await bridge.collaborationGroupMessages({ operation: 'pending_ack',
+        workspace_id: workspaceId, session_id: sessionId, group_id: groupId,
+        digest: previous.digest, request_id: previous.request_id })
+      if (acknowledgment.state !== 'acknowledged') return { state: 'retry_required' }
+      pending = await bridge.collaborationGroupMessages({ operation: 'pending_claim',
+        workspace_id: workspaceId, session_id: sessionId, group_id: groupId, digest: bodyDigest })
+    }
     if (pending.state !== 'pending' || !uuid.test(pending.request_id)) return { state: 'retry_required' }
     const receipt = await bridge.collaborationGroupMessages({ operation: 'receipt',
       workspace_id: workspaceId, session_id: sessionId, request_id: pending.request_id })

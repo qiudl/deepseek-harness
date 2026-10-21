@@ -8,6 +8,7 @@ const workspaceId = '11111111-1111-4111-8111-111111111111'
 const groupId = '22222222-2222-4222-8222-222222222222'
 const sessionId = 'original-session'
 const requestId = '33333333-3333-4333-8333-333333333333'
+const nextRequestId = '44444444-4444-4444-8444-444444444444'
 afterEach(() => { vi.unstubAllGlobals() })
 
 function parent(receipt: 'missing' | 'recorded' | 'retry_required' = 'missing') {
@@ -18,17 +19,21 @@ function parent(receipt: 'missing' | 'recorded' | 'retry_required' = 'missing') 
     commands.push(command)
     if (command.operation === 'pending_claim') {
       if (saved && saved.digest !== command.digest) return { state: 'pending_other' }
-      saved ??= { digest: command.digest, request_id: requestId }
+      saved ??= { digest: command.digest, request_id: sends ? nextRequestId : requestId }
       return { state: 'pending', request_id: saved.request_id }
     }
+    if (command.operation === 'pending_status') return saved
+      ? { state: 'pending_status', request_id: saved.request_id, digest: saved.digest }
+      : { state: 'pending_empty' }
     if (command.operation === 'pending_ack') {
       if (saved?.request_id !== command.request_id || saved.digest !== command.digest)
         return { state: 'retry_required' }
       saved = undefined
       return { state: 'acknowledged' }
     }
-    if (command.operation === 'receipt') return receipt === 'recorded'
-      ? { state: 'recorded', message_id: groupId, seq: 1 } : { state: receipt }
+    if (command.operation === 'receipt') return command.request_id === nextRequestId
+      ? { state: 'missing' } : receipt === 'recorded'
+        ? { state: 'recorded', message_id: groupId, seq: 1 } : { state: receipt }
     if (command.operation === 'send') return ++sends === 1
       ? { state: 'retry_required' } : { state: 'recorded', message_id: groupId, seq: 1 }
     return { state: 'retry_required' }
@@ -63,6 +68,29 @@ it('holds a recorded tombstone until the composer confirms its draft cleared', a
   expect(await acknowledgeGroupText({ bridge, workspaceId, sessionId, groupId,
     requestId: recorded.requestId, digest: recorded.digest })).toBe(true)
   expect(commands.at(-1)?.operation).toBe('pending_ack')
+})
+
+it('reconciles a recorded message after its acknowledgment failed and then sends new text', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const { bridge, commands, setReceipt } = parent()
+  const input = { bridge, workspaceId, sessionId, groupId, body: 'first' }
+  const first = await sendGroupText(input)
+  expect(first.state).toBe('retry_required')
+  setReceipt('recorded')
+  expect((await sendGroupText(input)).state).toBe('recorded')
+  const next = await sendGroupText({ ...input, body: 'second' })
+  expect(next.state).toBe('recorded')
+  expect(commands.map(command => command.operation).slice(-6)).toEqual([
+    'pending_status', 'receipt', 'pending_ack', 'pending_claim', 'receipt', 'send'])
+})
+
+it('does not release an old key when its receipt is missing', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const { bridge, commands } = parent()
+  const input = { bridge, workspaceId, sessionId, groupId, body: 'first' }
+  expect((await sendGroupText(input)).state).toBe('retry_required')
+  expect(await sendGroupText({ ...input, body: 'second' })).toEqual({ state: 'pending_other' })
+  expect(commands.some(command => command.operation === 'pending_ack')).toBe(false)
 })
 
 it('fails closed when the parent cannot persist the request key', async () => {
