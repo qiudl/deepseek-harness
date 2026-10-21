@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
 import { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
-import { readDesktopMemorySession } from '../src/desktop-memory-session.ts'
+import { handleDesktopMemorySessionRequest, readDesktopMemorySession } from '../src/desktop-memory-session.ts'
 
 const id = SessionId('session-54a5bf6e-b050-46f3-8149-f48b709b0480')
 const header = { id, version: SESSION_FORMAT_VERSION, createdAt: 1, isSeeded: false }
@@ -76,5 +78,35 @@ describe('private Desktop memory session reader', () => {
     await expect(readDesktopMemorySession(persistence, id, new AbortController().signal))
       .rejects.toThrow('memory_session_oversized')
     expect(closed).toBe(true)
+  })
+
+  it('accepts only its independent Host bearer token on the private HTTP route', async () => {
+    const f = fixture()
+    const token = 'a'.repeat(43)
+    const server = createServer((req, res) => {
+      void handleDesktopMemorySessionRequest(req, res, token, f.persistence)
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw Error('missing test listener')
+      const url = `http://127.0.0.1:${address.port}/internal/desktop-memory-session`
+      const body = JSON.stringify({ session_id: id })
+      const cookieOnly = await fetch(url, { method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body })
+      expect(cookieOnly.status).toBe(403)
+      const sourceToken = await fetch(url, {
+        method: 'POST', headers: { authorization: `Bearer ${'b'.repeat(43)}` }, body,
+      })
+      expect(sourceToken.status).toBe(403)
+      const allowed = await fetch(url, {
+        method: 'POST', headers: { authorization: `Bearer ${token}` }, body,
+      })
+      expect(allowed.status).toBe(200)
+      expect((await allowed.json() as { sessionId: string }).sessionId).toBe(id)
+    } finally {
+      server.close()
+      await once(server, 'close')
+    }
   })
 })

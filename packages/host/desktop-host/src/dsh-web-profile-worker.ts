@@ -22,7 +22,7 @@ import { parseHostCollaborationArchiveStateValue,
   type HostCollaborationArchiveIntentTarget, type HostCollaborationArchiveIntentValue,
   type HostCollaborationArchiveStateTarget, type HostCollaborationArchiveTransitionTarget,
   type HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
-import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { HostMemorySessionSnapshot, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
 
@@ -40,6 +40,7 @@ const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
   'DSH_PROFILE_ANALYSIS_TOKEN', 'DSH_PROFILE_REFERENCE_TOKEN',
+  'DSH_PROFILE_MEMORY_TOKEN',
   'DSH_PROFILE_DELIVERY_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
@@ -158,6 +159,7 @@ export class DshWebProfileWorkerFactory {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
     const sourceToken = randomBytes(32).toString('base64url')
+    const memoryToken = randomBytes(32).toString('base64url')
     const referenceToken = randomBytes(32).toString('base64url')
     const analysisToken = randomBytes(32).toString('base64url')
     const deliveryToken = randomBytes(32).toString('base64url')
@@ -180,6 +182,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_WORKSPACE_MODEL_TOKEN: workspaceModelToken,
         DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN: archiveTransitionToken,
         DSH_PROFILE_SOURCE_TOKEN: sourceToken,
+        DSH_PROFILE_MEMORY_TOKEN: memoryToken,
         DSH_PROFILE_REFERENCE_TOKEN: referenceToken,
         DSH_PROFILE_ANALYSIS_TOKEN: analysisToken,
         DSH_PROFILE_DELIVERY_TOKEN: deliveryToken,
@@ -195,7 +198,7 @@ export class DshWebProfileWorkerFactory {
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
       modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, archiveTransitionToken,
-      sourceToken, analysisToken, deliveryToken, referenceToken)
+      sourceToken, analysisToken, deliveryToken, referenceToken, memoryToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -260,6 +263,7 @@ export class DshWebProfileWorkerFactory {
     analysisToken: string,
     deliveryToken: string,
     referenceToken: string,
+    memoryToken: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -311,6 +315,9 @@ export class DshWebProfileWorkerFactory {
       },
       readCollaborationSourceSnapshot: (target, signal) => this.readCollaborationSourceSnapshot(
         viewOrigin, sourceToken, target, signal, () => requestedStop || settled,
+      ),
+      readMemorySession: (sessionId, signal) => this.readMemorySession(
+        viewOrigin, memoryToken, sessionId, signal, () => requestedStop || settled,
       ),
       collaborationAnalysis: (command, signal) => this.collaborationAnalysis(
         viewOrigin, analysisToken, command, signal, () => requestedStop || settled,
@@ -595,6 +602,34 @@ export class DshWebProfileWorkerFactory {
       parseHostCollaborationSourceSnapshot,
       result => result.descriptor,
     )
+  }
+
+  private async readMemorySession(
+    viewOrigin: string,
+    token: string,
+    sessionId: string,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostMemorySessionSnapshot> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    active.throwIfAborted()
+    if (stopped() || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(sessionId))
+      throw new HostAuthorityError('invalid_input')
+    const response = await fetch(`${viewOrigin}/internal/desktop-memory-session`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 72 * 1024 * 1024, (bytes) => {
+      const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HostAuthorityError('unavailable')
+      const result = value as Record<string, unknown>
+      if (Object.keys(result).length !== 3 || result.sessionId !== sessionId
+        || typeof result.revision !== 'string' || !result.revision
+        || typeof result.text !== 'string' || Buffer.byteLength(result.text, 'utf8') > 64 * 1024 * 1024)
+        throw new HostAuthorityError('profile_mismatch')
+      return result as unknown as HostMemorySessionSnapshot
+    }, 'detach')
   }
 
   private async readSource<T>(

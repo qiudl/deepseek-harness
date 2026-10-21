@@ -1,6 +1,8 @@
 /** REQ-20261021-0013: bounded Profile-local Session extraction for the private Host worker. */
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { handleDesktopPrivateRequest } from './desktop-private-read.ts'
 
 /** Reconstructed current-format JSONL, retained only in the calling Host process. */
 export interface DesktopMemorySessionSnapshot {
@@ -75,4 +77,42 @@ export async function readDesktopMemorySession(
   } finally {
     await handle.close()
   }
+}
+
+/**
+ * Serve a Profile Session only to its parent Host's independent memory bearer token.
+ * Browser cookies and other private worker tokens confer no access.
+ * @param req - Exact Session ID POST from the parent Host.
+ * @param res - Noncacheable bounded raw snapshot or sanitized refusal.
+ * @param token - Random memory-only token held by this worker and its parent Host.
+ * @param persistence - Current Profile's validating persistence service.
+ * @returns Resolution when the private response settles.
+ */
+export function handleDesktopMemorySessionRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  persistence: Pick<SessionPersistence, 'stat' | 'open'>,
+): Promise<void> {
+  return handleDesktopPrivateRequest(
+    req, res, token,
+    (target, signal) => readDesktopMemorySession(persistence, target.session_id, signal),
+    (value: unknown) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_input')
+      const record = value as Record<string, unknown>
+      if (Object.keys(record).length !== 1 || typeof record.session_id !== 'string'
+        || !SESSION_ID.test(record.session_id)) throw Error('invalid_input')
+      return { session_id: record.session_id }
+    },
+    (value: unknown) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
+      const record = value as Record<string, unknown>
+      if (Object.keys(record).length !== 3 || typeof record.sessionId !== 'string'
+        || typeof record.revision !== 'string' || typeof record.text !== 'string'
+        || Buffer.byteLength(record.text, 'utf8') > MAX_SESSION_BYTES) throw Error('invalid_result')
+      return record as unknown as DesktopMemorySessionSnapshot
+    },
+    (result, target) => result.sessionId === target.session_id,
+    2048,
+  )
 }

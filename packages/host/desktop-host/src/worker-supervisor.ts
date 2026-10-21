@@ -2,7 +2,7 @@ import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-contro
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { HostMemorySessionSnapshot, ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection,
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
@@ -388,6 +388,28 @@ export class ProfileWorkerSupervisor {
       d.source_revision !== target.source_revision
     )
       throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  /**
+   * Read one current Profile's Session for local memory redaction.
+   * @param profileId - Profile resolved from the Host's current Account binding.
+   * @param sessionId - Exact Session identity, never a filesystem path.
+   * @param signal - Current Host operation lifetime.
+   * @returns Bounded raw JSONL while the same worker remains current.
+   */
+  async readMemorySession(
+    profileId: string,
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<HostMemorySessionSnapshot> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readMemorySession) throw new HostAuthorityError('unavailable')
+    const result = await worker.readMemorySession(sessionId, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (result.sessionId !== sessionId) throw new HostAuthorityError('profile_mismatch')
     return result
   }
 
