@@ -50,6 +50,7 @@ function GroupStatus({ row, t }: { row: ConversationRow; t: PropsLocale<'slarkAg
   useEffect(() => {
     const host = window.__DSH_DESKTOP_HOST__
     if (!host?.collaborationGroupPreparation) return
+    const lookupGroup = host.collaborationGroupPreparation.bind(host)
     let active = true, visible = false, busy = false
     let timer: number | undefined
     const stillActive = () => active
@@ -58,7 +59,7 @@ function GroupStatus({ row, t }: { row: ConversationRow; t: PropsLocale<'slarkAg
       if (window.__DSH_DESKTOP_HOST__ !== host) { setState(undefined); return }
       busy = true
       try {
-        const result = await host.collaborationGroupPreparation({ operation: 'lookup',
+        const result = await lookupGroup({ operation: 'lookup',
           workspace_id: row.workspace_id, session_id: row.session_id })
         if (stillActive() && window.__DSH_DESKTOP_HOST__ === host) {
           setState(result.state === 'preparing' || result.state === 'group_active' ? result.state : undefined)
