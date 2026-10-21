@@ -1486,6 +1486,76 @@ export interface ProfileRemoteSessionResult {
   readonly result: { readonly value: HostRemoteSessionJson }
 }
 
+/** REQ-20261021-0013: signed, read-only memory operation in the current Account Profile. */
+export interface ProfileMemoryQueryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.memory_query'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly owner_user_id: string
+    readonly computer_id: string
+    readonly command: {
+      readonly action: 'search'
+      readonly directive: unknown
+      readonly query: string
+      readonly limit: number
+    } | {
+      readonly action: 'evidence_chunk'
+      readonly directive: unknown
+      readonly source_ref: HostControlSha256
+      readonly offset: number
+    }
+  }
+}
+
+export interface ProfileMemorySource {
+  readonly ownerUserId: string
+  readonly installationId: string
+  readonly profileId: string
+  readonly sessionId: string
+  readonly formatVersion: number
+}
+
+export interface ProfileMemoryEvidenceIdentity {
+  readonly sourceRef: HostControlSha256
+  readonly sourceVersion: HostControlSha256
+  readonly eventSeq: number
+  readonly kind: 'user' | 'assistant'
+  readonly source: ProfileMemorySource
+}
+
+/** Redacted text is capped to one 8 KiB fragment in a Host control frame. */
+export interface ProfileMemoryQueryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.memory_query'
+  readonly result: {
+    readonly action: 'search'
+    readonly generation: number
+    readonly items: readonly (ProfileMemoryEvidenceIdentity & { readonly snippet: string })[]
+  } | {
+    readonly action: 'evidence_chunk'
+    readonly state: 'missing'
+  } | {
+    readonly action: 'evidence_chunk'
+    readonly state: 'ready'
+    readonly chunk: ProfileMemoryEvidenceIdentity & {
+      readonly offset: number
+      readonly totalBytes: number
+      readonly textDigest: HostControlSha256
+      readonly bytesBase64url: string
+      readonly nextOffset: number | null
+    }
+  }
+}
+
 /** Exact read RPC carried only by a live Host-owned Profile view lease.
  * Gzip asset offsets address compressed bytes and require signed `profile.remote_ui_asset_gzip` capability.
  */
@@ -1753,6 +1823,7 @@ export interface ProfileModelClaimRetryResult {
 
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
+  | ProfileMemoryQueryRequest | ProfileMemoryQueryResult
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
   | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest
