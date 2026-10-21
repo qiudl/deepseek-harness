@@ -55,7 +55,7 @@ export interface VerifiedMemoryDirectiveGrant {
   readonly computerId: string
   readonly installationId: string
   readonly profileId: string
-  readonly readerKind: 'personal_dsh'
+  readonly readerKind: 'personal_dsh' | 'personal_coordinator'
 }
 
 /** Immutable result retained through asynchronous reads for a final expiry check. */
@@ -127,7 +127,8 @@ export class MemoryDirectiveVerifier {
       || grant.ownerUserId !== context.ownerUserId || grant.computerId !== context.computerId
       || grant.environmentId !== context.environmentId || grant.environmentId !== this.environmentId
       || grant.installationId !== context.installationId || grant.profileId !== context.profileId
-      || grant.readerKind !== 'personal_dsh') throw new HostAuthorityError('unauthorized')
+      || (grant.readerKind !== 'personal_dsh' && grant.readerKind !== 'personal_coordinator'))
+      throw new HostAuthorityError('unauthorized')
     const entry = this.keys.get(directive.keyId)
     if (!entry || (directive.issuedAt as number) < entry.validFrom
       || (directive.expiresAt as number) > entry.validUntil) throw new HostAuthorityError('unauthorized')
@@ -148,7 +149,7 @@ export class MemoryDirectiveVerifier {
     const verifiedGrant = Object.freeze({ grantId: grant.grantId, generation: grant.generation,
       ownerUserId: grant.ownerUserId, environmentId: grant.environmentId,
       computerId: grant.computerId, installationId: grant.installationId,
-      profileId: grant.profileId, readerKind: 'personal_dsh' })
+      profileId: grant.profileId, readerKind: grant.readerKind })
     return Object.freeze({ requestId: directive.requestId, expiresAt: directive.expiresAt as number,
       grant: verifiedGrant })
   }

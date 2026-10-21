@@ -15,10 +15,10 @@ const publicRing = JSON.stringify({ version: 1, environmentId: context.environme
     publicKeyPem: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
     validFrom: 1, validUntil: now + 60_000 }] })
 
-function directive() {
+function directive(readerKind: 'personal_dsh' | 'personal_coordinator' = 'personal_dsh') {
   const grant = { grantId: '11111111-1111-4111-8111-111111111111', generation: 1,
     ownerUserId: 'owner', environmentId: context.environmentId, computerId: 'computer',
-    installationId: context.installationId, profileId: context.profileId, readerKind: 'personal_dsh' }
+    installationId: context.installationId, profileId: context.profileId, readerKind }
   const unsigned = { schemaVersion: 1, purpose: 'dsh_memory_query', issuer: 'https://slark.example',
     keyId: 'dsh-assertion-test', requestId: '33333333-3333-4333-8333-333333333333',
     nonce: 'N'.repeat(43), hostInstanceId: context.hostInstanceId, processNonce: context.processNonce,
@@ -49,6 +49,14 @@ it('accepts one exact signed instruction and consumes its nonce', () => {
   verifier.assertUnexpired(verified)
   expect(() => { new MemoryDirectiveVerifier(publicRing, () => now + 15_000)
     .assertUnexpired(verified) }).toThrow(/stale/u)
+})
+
+it('accepts an explicitly signed personal coordinator grant for the same owner and Profile', () => {
+  const value = directive('personal_coordinator')
+  const verifier = new MemoryDirectiveVerifier(publicRing, () => now + 1)
+  expect(verifier.verifyAndConsume(value, context).grant.readerKind).toBe('personal_coordinator')
+  expect(() => verifier.verifyAndConsume({ ...value, grant: {
+    ...value.grant, readerKind: 'personal_dsh' } }, context)).toThrow()
 })
 
 it('rejects changed scope, operation, limit, Host epoch, signature and expiry', () => {

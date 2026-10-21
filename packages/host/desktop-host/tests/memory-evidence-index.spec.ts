@@ -95,7 +95,8 @@ describe('Host local memory Evidence index', () => {
     const mutable = { ...scope }
     const index = new HostMemoryEvidenceIndex(mutable)
     mutable.ownerUserId = 'owner-b'
-    expect(() => new HostMemoryEvidenceIndex({ ...scope, secret: 'hidden' })).toThrow()
+    const extraFieldScope = { ...scope, secret: 'hidden' }
+    expect(() => new HostMemoryEvidenceIndex(extraFieldScope)).toThrow()
     index.replace(scope, snapshot('private plan'), 0)
     const item = index.search(scope, 'private', 1).items[0]!
     const evidence = index.evidence(scope, item.sourceRef)!
