@@ -29,6 +29,7 @@ export interface GroupMessageBridge {
 }
 
 type Pending = { request_id: string; digest: string }
+const recordedState = 'recorded' as const
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const sha = /^[a-f0-9]{64}$/u
 function pendingKey(groupId: string): string { return `dsh:slark-group-message:v1:${groupId}` }
@@ -70,7 +71,7 @@ export async function sendGroupText(input: {
         workspace_id: workspaceId, session_id: sessionId, request_id: pending.request_id })
       if (receipt.state === 'recorded') {
         storage.removeItem(key)
-        return pending.digest === bodyDigest ? 'recorded' : 'pending_other'
+        return pending.digest === bodyDigest ? recordedState : 'pending_other'
       }
       if (receipt.state !== 'missing') return 'retry_required'
       if (pending.digest !== bodyDigest) return 'pending_other'
@@ -83,6 +84,6 @@ export async function sendGroupText(input: {
       expected_group_version: 2, body })
     if (result.state !== 'recorded') return 'retry_required'
     storage.removeItem(key)
-    return 'recorded'
+    return recordedState
   } catch { return 'retry_required' }
 }
