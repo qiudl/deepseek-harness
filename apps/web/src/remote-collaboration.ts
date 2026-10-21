@@ -141,14 +141,19 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
       for (const [path, candidateSchema] of [
         ['/__collaboration_v2__', groupSchema], ['/__collaboration__', schema],
       ] as const) {
-        const response = await exchange(fetch, path, { method: 'GET' }, discoverySignal)
-        if (!response.ok) { void response.body?.cancel().catch(() => undefined); continue }
-        const candidate = await readJson(response, discoverySignal)
-        if (exact(candidate, ['schema', 'methods']) && candidate.schema === candidateSchema &&
-          Array.isArray(candidate.methods)) {
-          advertised = candidate
-          expectedSchema = candidateSchema
-          break
+        try {
+          const response = await exchange(fetch, path, { method: 'GET' }, discoverySignal)
+          if (!response.ok) { void response.body?.cancel().catch(() => undefined); continue }
+          const candidate = await readJson(response, discoverySignal)
+          if (exact(candidate, ['schema', 'methods']) && candidate.schema === candidateSchema &&
+            Array.isArray(candidate.methods)) {
+            advertised = candidate
+            expectedSchema = candidateSchema
+            break
+          }
+        } catch (_error) {
+          if (discoverySignal.aborted) return
+          // An older parent may reject the v2 probe before legacy discovery succeeds.
         }
       }
     } catch (_error) {

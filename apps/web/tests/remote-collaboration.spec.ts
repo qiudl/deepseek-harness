@@ -85,6 +85,17 @@ it.each([undefined, { ...capability, methods: [] }, { ...capability, methods: ['
   expect(h.frames).toHaveLength(2)
 })
 
+it('falls back to the legacy capability when the v2 probe rejects', async () => {
+  const paths: string[] = []
+  await installRemoteCollaboration(async (path) => {
+    paths.push(String(path))
+    if (path === '/__collaboration_v2__') throw Error('unsupported capability')
+    return Response.json(capability)
+  })
+  expect(bridge().collaborationScopeAvailable).toBe(true)
+  expect(paths).toEqual(['/__collaboration_v2__', '/__collaboration__'])
+})
+
 it('unwraps the workspace result over the real tunnel and preserves ordinary network isolation', async () => {
   const network = vi.fn(() => { throw Error('network fetch is forbidden') })
   vi.stubGlobal('fetch', network)
