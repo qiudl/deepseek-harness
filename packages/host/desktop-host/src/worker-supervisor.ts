@@ -428,6 +428,7 @@ export class ProfileWorkerSupervisor {
   memoryProfileReader(profileId: string): {
     readonly list: (after: string | null, signal: AbortSignal) => Promise<HostMemorySessionPage>
     readonly read: (sessionId: string, signal: AbortSignal) => Promise<HostMemorySessionSnapshot>
+    readonly assertCurrent: () => void
   } {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.listMemorySessions || !worker.readMemorySession)
@@ -436,6 +437,7 @@ export class ProfileWorkerSupervisor {
     const read = worker.readMemorySession
     const current = () => { this.assertCurrentWorker(profileId, worker) }
     return {
+      assertCurrent: current,
       list: async (after, signal) => {
         signal.throwIfAborted()
         current()

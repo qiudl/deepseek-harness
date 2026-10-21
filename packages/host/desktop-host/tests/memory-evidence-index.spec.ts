@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
-import { HostMemoryEvidenceIndex } from '../src/memory-evidence-index.ts'
+import { buildHostMemoryEvidenceIndex, HostMemoryEvidenceIndex } from '../src/memory-evidence-index.ts'
 
 const scope = { ownerUserId: 'owner-a', installationId: 'installation-a', profileId: 'profile-a' }
 
@@ -16,6 +16,39 @@ function snapshot(message: string, revision = 'r1', sessionId = 'session-one') {
 }
 
 describe('Host local memory Evidence index', () => {
+  it('builds only after a second complete inventory confirms the same versions', async () => {
+    const first = snapshot('部署到 staging', 'r1', 'session-one')
+    const second = snapshot('deploy to testing', 'r2', 'session-two')
+    const list = vi.fn(async (after: string | null) => ({
+      items: after === null ? [
+        { sessionId: first.sessionId, revision: first.revision },
+        { sessionId: second.sessionId, revision: second.revision },
+      ] : [], nextAfter: null,
+    }))
+    const read = vi.fn(async (sessionId: string) => sessionId === first.sessionId ? first : second)
+    const assertCurrent = vi.fn()
+    const index = await buildHostMemoryEvidenceIndex(scope, { list, read, assertCurrent }, new AbortController().signal)
+    expect(index.search(scope, 'staging', 1).items).toHaveLength(1)
+    expect(index.search(scope, 'testing', 1).items).toHaveLength(1)
+    expect(list).toHaveBeenCalledTimes(2)
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(assertCurrent).toHaveBeenCalled()
+  })
+
+  it('refuses a changed Session revision or inventory before publishing an index', async () => {
+    const source = snapshot('private plan')
+    const original = { sessionId: source.sessionId, revision: source.revision }
+    const signal = new AbortController().signal
+    const reader = { assertCurrent() {}, list: async () => ({ items: [original], nextAfter: null }),
+      read: async () => ({ ...source, revision: 'r2' }) }
+    await expect(buildHostMemoryEvidenceIndex(scope, reader, signal)).rejects.toMatchObject({ code: 'stale' })
+    let scans = 0
+    await expect(buildHostMemoryEvidenceIndex(scope, {
+      assertCurrent() {}, read: async () => source,
+      list: async () => ({ items: [{ ...original, revision: ++scans === 1 ? 'r1' : 'r2' }], nextAfter: null }),
+    }, signal)).rejects.toMatchObject({ code: 'stale' })
+  })
+
   it('searches redacted Chinese and ASCII text while keeping raw credentials out of results', () => {
     const index = new HostMemoryEvidenceIndex(scope)
     const secret = `sk-${'a'.repeat(32)}`

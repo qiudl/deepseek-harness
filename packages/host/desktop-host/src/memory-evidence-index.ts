@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { projectMemorySession, type MemoryProjectedRecord } from './memory-session-projection.ts'
-import type { HostMemorySessionSnapshot } from './types.ts'
+import type { HostMemorySessionPage, HostMemorySessionSnapshot } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
 const HASH = /^[0-9a-f]{64}$/u
@@ -17,6 +17,13 @@ export interface HostMemoryScope {
   readonly ownerUserId: string
   readonly installationId: string
   readonly profileId: string
+}
+
+/** One current Profile worker generation, held for the full scan. */
+export interface HostMemoryProfileReader {
+  readonly list: (after: string | null, signal: AbortSignal) => Promise<HostMemorySessionPage>
+  readonly read: (sessionId: string, signal: AbortSignal) => Promise<HostMemorySessionSnapshot>
+  readonly assertCurrent: () => void
 }
 
 export interface HostMemoryEvidence {
@@ -173,4 +180,57 @@ export class HostMemoryEvidenceIndex {
     }
     return null
   }
+}
+
+async function scanMemoryInventory(
+  reader: HostMemoryProfileReader,
+  signal: AbortSignal,
+  visit: (sessionId: string, revision: string) => void | Promise<void>,
+): Promise<void> {
+  let after: string | null = null
+  let count = 0
+  do {
+    signal.throwIfAborted()
+    reader.assertCurrent()
+    const page = await reader.list(after, signal)
+    if (page.items.length > 64 || page.nextAfter !== null && (page.items.length !== 64
+      || page.nextAfter !== page.items.at(-1)?.sessionId)) throw new HostAuthorityError('unavailable')
+    for (const item of page.items) {
+      if (!SESSION_ID.test(item.sessionId) || item.sessionId <= (after ?? '')
+        || item.revision.length < 1 || item.revision.length > 256) throw new HostAuthorityError('unavailable')
+      after = item.sessionId
+      count += 1
+      if (count > MAX_SESSIONS) throw new HostAuthorityError('busy')
+      await visit(item.sessionId, item.revision)
+    }
+    reader.assertCurrent()
+    if (page.nextAfter === null) return
+  } while (true)
+}
+
+/** Build a complete private index, publishing nothing if inventory or worker generation changes. */
+export async function buildHostMemoryEvidenceIndex(
+  scope: HostMemoryScope,
+  reader: HostMemoryProfileReader,
+  signal: AbortSignal,
+): Promise<HostMemoryEvidenceIndex> {
+  const index = new HostMemoryEvidenceIndex(scope)
+  const inventory = new Map<string, string>()
+  let generation = 0
+  await scanMemoryInventory(reader, signal, async (sessionId, revision) => {
+    const snapshot = await reader.read(sessionId, signal)
+    if (snapshot.sessionId !== sessionId || snapshot.revision !== revision)
+      throw new HostAuthorityError('stale')
+    generation = index.replace(scope, snapshot, generation)
+    inventory.set(sessionId, revision)
+  })
+  let checked = 0
+  await scanMemoryInventory(reader, signal, (sessionId, revision) => {
+    if (inventory.get(sessionId) !== revision) throw new HostAuthorityError('stale')
+    checked += 1
+  })
+  reader.assertCurrent()
+  signal.throwIfAborted()
+  if (checked !== inventory.size) throw new HostAuthorityError('stale')
+  return index
 }
