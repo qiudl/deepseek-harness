@@ -56,7 +56,8 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
   delivery_state: 'pending', delivery_state_version: '1',
 } })
 
-async function harness(selectionRedirect?: string, archiveStagePhase = 'staged') {
+async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
+  fenceValue: typeof groupValue = groupValue) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -119,7 +120,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged')
           : url.pathname.endsWith('archive-intent') ? { archive_phase: 'prepared', archive_token: ${JSON.stringify(archiveTarget.archive_token)} }
           : url.pathname.endsWith('archive-transition') ? { archive_phase: ({ stage: ${JSON.stringify(archiveStagePhase)}, prepared: 'prepared',
               archive: 'archived', restore: 'restored', finish_release: 'released' })[input.action] }
-          : url.pathname.endsWith('group-input-fence') ? ${JSON.stringify(groupValue)}
+          : url.pathname.endsWith('group-input-fence') ? ${JSON.stringify(fenceValue)}
           : input.action === 'read_source_output' ? { value: ${JSON.stringify(sourceOutput)} }
           : url.pathname.endsWith('analysis') ? { value: input }
           : { delivery_id: input.projection.delivery_id }
@@ -193,6 +194,13 @@ it('uses the parent-only token for an exact group fence acknowledgement', async 
   await expect(h.installGroupInputFence(groupChallenge, signal)).resolves.toEqual(groupValue)
   h.worker.abort()
   await expect(h.installGroupInputFence(groupChallenge, signal)).rejects.toThrow('unavailable')
+})
+
+it('rejects a group fence acknowledgement for another group', async () => {
+  const h = await harness(undefined, 'staged', { ...groupValue,
+    group_id: '80000000-0000-4000-8000-000000000008' })
+  await expect(h.installGroupInputFence(groupChallenge, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
 })
 
 it('rejects a released stage and accepts an existing staged archive', async () => {
