@@ -57,6 +57,7 @@ import type {
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
   HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
   HostCollaborationArchiveStateTarget, ProfileCollaborationArchiveStateRequest,
+  HostGroupInputFenceChallenge, HostGroupInputFenceAssertion, ProfileGroupInputFenceRequest,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
   ProfileCollaborationArchiveIntentRequest,
   HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult,
@@ -98,6 +99,7 @@ import {
   encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
   encodeHostCollaborationArchiveStatePayload, parseHostCollaborationArchiveStateChallenge,
   parseHostCollaborationArchiveStateAssertion,
+  encodeHostGroupInputFencePayload, parseHostGroupInputFenceChallenge, parseHostGroupInputFenceAssertion,
   parseHostCollaborationArchiveIntentTarget, parseHostCollaborationArchiveIntentValue,
   parseHostCollaborationArchiveTransitionTarget, parseHostCollaborationArchiveTransitionResult,
   encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
@@ -248,6 +250,10 @@ export interface UnixHostServerOptions {
     target: HostCollaborationArchiveStateTarget,
     signal: AbortSignal,
   ) => Promise<Readonly<{ archive_phase: 'staged' | 'prepared' | 'archived' | 'restored' }>>
+  /** Install the local group fence before signing cloud activation proof. */
+  readonly installGroupInputFence?: (
+    profileId: string, challenge: HostGroupInputFenceChallenge, signal: AbortSignal,
+  ) => Promise<Readonly<{ workspace_id: string; session_id: string; group_id: string; group_version: number }>>
   /** Recover the original token from the current Account Profile only. */
   readonly inspectCollaborationArchiveIntent?: (
     profileId: string, target: HostCollaborationArchiveIntentTarget, signal: AbortSignal,
@@ -496,7 +502,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -1642,6 +1648,24 @@ export class HostControlAuthority {
           const signature = signAuthorityPayload(identity, encodeHostCollaborationArchiveStatePayload(unsigned))
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { ...unsigned, signature } })
+        } else if (frame.method === 'profile.group_input_fence') {
+          const install = this.options.installGroupInputFence
+          if (!install) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const installed = await install(profileId, c, context.signal)
+          if (authorize() !== profileId || installed.workspace_id !== c.workspace_id
+            || installed.session_id !== c.session_id || installed.group_id !== c.group_id
+            || installed.group_version !== c.group_version) throw new HostAuthorityError('profile_mismatch')
+          const identity = this.options.identity
+          const unsigned: HostGroupInputFenceAssertion = {
+            schema_version: 1, challenge: c, ...assertionIdentityFields(identity),
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = signAuthorityPayload(identity, encodeHostGroupInputFencePayload(unsigned))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { ...unsigned, signature } })
         } else if (frame.method === 'profile.collaboration_archive_intent') {
           const inspect = this.options.inspectCollaborationArchiveIntent
           if (!inspect) throw new HostAuthorityError('upgrade_required')
@@ -2196,6 +2220,7 @@ export class HostControlAuthority {
           ...(this.options.collaborationDeliveryReceiver ? ['profile.collaboration_delivery'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
           ...(this.options.inspectCollaborationArchiveState ? ['profile.collaboration_archive_state'] : []),
+          ...(this.options.installGroupInputFence ? ['profile.group_input_fence'] : []),
           ...(this.options.inspectCollaborationArchiveIntent ? ['profile.collaboration_archive_intent'] : []),
           ...(this.options.transitionCollaborationArchive ? ['profile.collaboration_archive_transition'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session',
@@ -2991,6 +3016,40 @@ export class UnixHostClient {
     if (!this.matchesChallengeIdentity(result, challenge)
       || challenge.expires_at <= this.now() || challenge.expires_at - this.now() > 300_000
       || !verify(null, encodeHostCollaborationArchiveStatePayload(result),
+        publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /** Install the exact local group fence, then verify the Host installation signature.
+   * @param input - Bound Account grant, server challenge and optional cancellation.
+   * @returns Installation-signed proof of the durable local fence.
+   */
+  async attestGroupInputFence(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostGroupInputFenceChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostGroupInputFenceAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostGroupInputFenceChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.group_input_fence' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileGroupInputFenceRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.group_input_fence',
+      params: { ...this.challengeRequestParams(input, challenge) },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostGroupInputFenceAssertion(frame.result)
+    if (!this.matchesChallengeIdentity(result, challenge)
+      || challenge.expires_at <= this.now() || challenge.expires_at - this.now() > 300_000
+      || !verify(null, encodeHostGroupInputFencePayload(result),
         publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
       throw new HostAuthorityError('unauthorized')
     }
@@ -4391,6 +4450,7 @@ export class UnixHostClient {
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
+  | ProfileGroupInputFenceRequest
   | ProfileCollaborationArchiveIntentRequest
   | ProfileCollaborationArchiveTransitionRequest
   | ProfileSourceAuthorityRequest

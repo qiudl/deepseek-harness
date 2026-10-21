@@ -7,6 +7,7 @@ import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborat
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostCollaborationArchiveStateTarget, HostCollaborationArchiveStateValue,
+  HostGroupInputFenceChallenge, HostGroupInputFenceValue,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
   HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
@@ -171,6 +172,24 @@ export class ProfileWorkerSupervisor {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.transitionCollaborationArchive) throw new HostAuthorityError('unavailable')
     const result = await worker.transitionCollaborationArchive(target, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
+  /** Discard acknowledgements from a replaced Profile worker after the durable write.
+   * @param profileId - Account-authorized Profile identity.
+   * @param challenge - Exact preparing group and original Session.
+   * @param signal - Owning connection cancellation.
+   * @returns Current worker's persisted fence.
+   */
+  async installGroupInputFence(
+    profileId: string, challenge: HostGroupInputFenceChallenge, signal: AbortSignal,
+  ): Promise<HostGroupInputFenceValue> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.installGroupInputFence) throw new HostAuthorityError('unavailable')
+    const result = await worker.installGroupInputFence(challenge, signal)
     signal.throwIfAborted()
     this.assertCurrentWorker(profileId, worker)
     return result
@@ -481,11 +500,12 @@ export class ProfileWorkerSupervisor {
  * @returns Source and reference readers with their supervisor receiver retained; cloud transfer requires separate authority.
  */
 export function collaborationWorkerReaders(workers: ProfileWorkerSupervisor): Pick<HostControlAuthorityOptions,
-  'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'readCollaborationReferenceGrant'
+  'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'readCollaborationReferenceGrant'
   | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent'> {
   return {
     inspectWorkspaceModelSelection: workers.inspectWorkspaceModelSelection.bind(workers),
     inspectCollaborationArchiveState: workers.inspectCollaborationArchiveState.bind(workers),
+    installGroupInputFence: workers.installGroupInputFence.bind(workers),
     inspectCollaborationArchiveIntent: workers.inspectCollaborationArchiveIntent.bind(workers),
     transitionCollaborationArchive: workers.transitionCollaborationArchive.bind(workers),
     inspectCollaborationSource: workers.inspectCollaborationSource.bind(workers),

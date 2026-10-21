@@ -68,6 +68,8 @@ kind: "package-reference"
 
 `profile.workspace_authority` 仅在授权 Profile 读取器确认归属后，签署服务器 nonce、Account/environment 及注册表工作区/Session 目标。读取后再次核验 Account 授权和五分钟有效期。独立签名域 `dsh-collaboration-workspace-authority/v1` 绑定完整目标及当前安装/进程，登记签名不能替代。此证明仅说明读取时的归属，不证明 Source 内容、journal 持久性或 prepared 模型配置。服务器必须认证其挑战，并在重新核验当前 Host/Account 的同一事务中消费。
 
+REQ-20261020-0010 增加 `profile.group_input_fence`。挑战将原 Workspace/Session、准备中群的 UUID 与正整数版本绑定到当前账号和环境。只有当前 Profile worker 确认完全匹配的持久输入栅栏后，Host 才签署 `dsh-group-input-fence/v1`。客户端核验完整挑战、当前安装/进程、有效期及签名。Slark 须先认证并消费挑战，再把群从 preparing 切换为 active；此协议方法不执行云端转移。
+
 REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号的 Host 从当前 Profile worker 读取 Registry 中持久的工作区、会话、token、环境和账号阶段；仅当读取结果等于服务器挑战要求的阶段时签名。独立签名域 `dsh-collaboration-archive-state/v1` 绑定 token 与 `staged`、`prepared`、`archived` 或 `restored` 阶段。私有 worker token 保护读取端点，浏览器视图 cookie 无法调用。此证明只表示一次阶段观察；Slark 仍须认证挑战并协调每次状态转移。
 
 `profile.collaboration_archive_transition` 允许已授权账号的 Main 或 Daemon 连接在当前 Profile worker 中推进同一持久 token，动作依次为 `stage`、`prepared`、`archive`、`restore` 和 `finish_release`。请求在已认证控制参数及精确目标中分别绑定账号与环境，字段不一致时不会调用 worker。Host 在 worker 返回后重新核验账号授权，并拒绝已替换 worker 代际的响应。重复 `stage` 返回实际持久阶段，可能已是 `prepared`、`archived` 或 `restored`。失败或取消的响应可能发生在本地写入已提交之后，调用方须用原 token 对账后重试。

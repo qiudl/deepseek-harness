@@ -81,6 +81,10 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)
   const archiveMethods = {
+    installGroupInputFence: vi.fn(async (input: { workspaceId: string
+      sessionId: string
+      groupId: string
+      groupVersion: number }) => input),
     inspectCollaborationArchiveState: vi.fn(async () => ({ phase: 'archived' })),
     findCollaborationArchiveIntent: vi.fn(async () => ({ phase: 'prepared', token: '70000000-0000-4000-8000-000000000007' })),
     stageCollaborationArchive: vi.fn(async () => ({ phase: 'staged' })),
@@ -149,6 +153,19 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect(await intent.json()).toEqual({ archive_phase: 'prepared', archive_token: archiveIdentity.archive_token })
   archiveMethods.findCollaborationArchiveIntent.mockResolvedValueOnce(null as never)
   expect(await (await archivePost('intent', intentTarget)).json()).toEqual({ archive_phase: 'missing', archive_token: null })
+  const groupChallenge = { request_id: '10000000-0000-4000-8000-000000000001',
+    challenge_nonce: 'A'.repeat(43), expires_at: 2000, audience: 'https://slark.example.test',
+    environment_id: archiveIdentity.environment_id, account_issuer: archiveIdentity.account_issuer,
+    account_subject: archiveIdentity.account_subject, workspace_id: target.workspace_id,
+    session_id: target.session_id, group_id: archiveIdentity.archive_token, group_version: 1 }
+  const groupResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    + '/internal/desktop-group-input-fence', { method: 'POST',
+    headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(groupChallenge) })
+  expect(groupResponse.status).toBe(200)
+  expect(await groupResponse.json()).toEqual({ workspace_id: target.workspace_id,
+    session_id: target.session_id, group_id: groupChallenge.group_id, group_version: 1 })
+  expect(archiveMethods.installGroupInputFence).toHaveBeenCalledWith({ workspaceId: target.workspace_id,
+    sessionId: target.session_id, groupId: groupChallenge.group_id, groupVersion: 1 })
   for (const [action, phase, method] of [
     ['stage', 'staged', 'stageCollaborationArchive'],
     ['prepared', 'prepared', 'recordCollaborationArchivePrepared'],

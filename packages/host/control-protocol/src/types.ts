@@ -647,6 +647,39 @@ export interface ProfileCollaborationArchiveStateResult {
   readonly result: HostCollaborationArchiveStateAssertion
 }
 
+/** One prepared Slark group bound to the original Session before cloud activation. */
+export interface HostGroupInputFenceChallenge extends HostWorkspaceAuthorityChallenge {
+  readonly group_id: string
+  readonly group_version: number
+}
+/** Exact durable fence echoed by the Profile worker before Host signing. */
+export type HostGroupInputFenceValue = Readonly<Pick<HostGroupInputFenceChallenge,
+  'workspace_id' | 'session_id' | 'group_id' | 'group_version'>>
+/** Installation signature issued only after the Profile durably closes old input. */
+export interface HostGroupInputFenceAssertion extends Omit<HostWorkspaceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostGroupInputFenceChallenge
+}
+/** Account-verified request to install the original Session's durable group fence. */
+export interface ProfileGroupInputFenceRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.group_input_fence'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostGroupInputFenceChallenge
+  }
+}
+/** Signed acknowledgement of the exact local group and version. */
+export interface ProfileGroupInputFenceResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.group_input_fence'
+  readonly result: HostGroupInputFenceAssertion
+}
+
 /** Exact Account and Session identity used to recover a persisted archive token. */
 export interface HostCollaborationArchiveIntentTarget extends HostWorkspaceModelSelectionTarget {
   readonly environment_id: string
@@ -1832,6 +1865,8 @@ export type HostControlFrame =
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateRequest
   | ProfileCollaborationArchiveStateResult
+  | ProfileGroupInputFenceRequest
+  | ProfileGroupInputFenceResult
   | ProfileCollaborationArchiveIntentRequest
   | ProfileCollaborationArchiveIntentResult
   | ProfileCollaborationArchiveTransitionRequest

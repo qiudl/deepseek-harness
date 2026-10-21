@@ -17,6 +17,8 @@ import { gzip } from 'node:zlib'
 import { parseHostRemoteSessionJson, parseHostWorkspaceModelSelection, parseHostCollaborationSourceDescriptor, parseHostCollaborationSourceSnapshot } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationArchiveStateValue,
+  parseHostGroupInputFenceChallenge, parseHostGroupInputFenceValue,
+  type HostGroupInputFenceChallenge, type HostGroupInputFenceValue,
   parseHostCollaborationArchiveIntentTarget, parseHostCollaborationArchiveIntentValue,
   parseHostCollaborationArchiveTransitionTarget, parseHostCollaborationArchiveTransitionResult,
   type HostCollaborationArchiveIntentTarget, type HostCollaborationArchiveIntentValue,
@@ -353,6 +355,9 @@ export class DshWebProfileWorkerFactory {
       transitionCollaborationArchive: (target, signal) => this.transitionCollaborationArchive(
         viewOrigin, archiveTransitionToken, target, signal, () => requestedStop || settled,
       ),
+      installGroupInputFence: (challenge, signal) => this.installGroupInputFence(
+        viewOrigin, archiveTransitionToken, challenge, signal, () => requestedStop || settled,
+      ),
       remoteSession: (command, signal) => this.remoteSession(
         viewOrigin, remoteSessionToken, command, signal, () => requestedStop || settled,
       ),
@@ -434,6 +439,28 @@ export class DshWebProfileWorkerFactory {
         ? value.archive_phase === 'released'
         : value.archive_phase !== expected) {
         throw new HostAuthorityError('unavailable')
+      }
+      return value
+    }, 'await')
+  }
+
+  private async installGroupInputFence(
+    viewOrigin: string, token: string, challenge: HostGroupInputFenceChallenge,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostGroupInputFenceValue> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    const response = await fetch(`${viewOrigin}/internal/desktop-group-input-fence`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(parseHostGroupInputFenceChallenge(challenge)), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 2048, (bytes) => {
+      const value = parseHostGroupInputFenceValue(JSON.parse(bytes.toString('utf8')))
+      if (value.workspace_id !== challenge.workspace_id || value.session_id !== challenge.session_id
+        || value.group_id !== challenge.group_id || value.group_version !== challenge.group_version) {
+        throw new HostAuthorityError('profile_mismatch')
       }
       return value
     }, 'await')

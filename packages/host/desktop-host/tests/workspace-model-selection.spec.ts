@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest'
+import { parseHostGroupInputFenceChallenge } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 
 const target = { workspace_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session' as never }
@@ -75,6 +76,53 @@ it('reports an uncertain archive write after its Profile worker is replaced', as
   await workers.start(input)
   release()
   await rejected
+  await workers.disposeAll()
+})
+
+it('refuses a group fence acknowledgement from a replaced Profile worker', async () => {
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const challenge = parseHostGroupInputFenceChallenge({
+    request_id: '10000000-0000-4000-8000-000000000001', challenge_nonce: 'A'.repeat(43),
+    expires_at: 2000, audience: 'https://slark.example.test',
+    environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'https://accounts.example.test', account_subject: '30000000-0000-4000-8000-000000000003',
+    workspace_id: target.workspace_id, session_id: target.session_id,
+    group_id: '70000000-0000-4000-8000-000000000007', group_version: 1,
+  })
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    installGroupInputFence: async () => {
+      await pending
+      return { workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+        group_id: challenge.group_id, group_version: challenge.group_version }
+    },
+  }))
+  await workers.start(input)
+  const write = workers.installGroupInputFence(input.profileId, challenge, new AbortController().signal)
+  const rejected = expect(write).rejects.toMatchObject({ code: 'stale' })
+  await workers.dispose(input.profileId)
+  await workers.start(input)
+  release()
+  await rejected
+  await workers.disposeAll()
+})
+
+it('refuses a group fence when the selected Profile worker lacks the capability', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+  }))
+  await workers.start(input)
+  const challenge = parseHostGroupInputFenceChallenge({
+    request_id: '10000000-0000-4000-8000-000000000001', challenge_nonce: 'A'.repeat(43),
+    expires_at: 2000, audience: 'https://slark.example.test',
+    environment_id: '20000000-0000-4000-8000-000000000002',
+    account_issuer: 'https://accounts.example.test', account_subject: '30000000-0000-4000-8000-000000000003',
+    workspace_id: target.workspace_id, session_id: target.session_id,
+    group_id: '70000000-0000-4000-8000-000000000007', group_version: 1,
+  })
+  await expect(workers.installGroupInputFence(input.profileId, challenge, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
   await workers.disposeAll()
 })
 

@@ -57,6 +57,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `profile.workspace_authority` 使用同一授权读取器签发安装级归属证明，不打开视图、不追加 Session 事件、不发送模型请求。客户端核验准确挑战、当前安装/进程、有效期和签名。未安装读取器时不发布此能力。服务器的 nonce、消费及 Source 校验仍须独立完成，见[协议](../control-protocol/README.zh.md#challenge-authentication)。
 
+`profile.group_input_fence` 接受绑定一个准备中 Slark 群和原 Session 的账号授权挑战。选定 Profile worker 通过 Workspace Registry 持久关闭旧 Session 输入；只有保存的群 ID 和版本完全匹配，Host 才在独立的群栅栏签名域签发证明。监管器拒绝已替换 worker 的回包；已提交的栅栏继续保持封闭，回包不确定时须对账。此方法不激活 Slark 群；Slark 须核验并消费签名挑战后，才执行激活转移。
+
 `profile.collaboration_archive_transition` 核验当前账号绑定，将一个精确 token 动作转交选定的 Profile worker，并在返回前再次核验账号授权。worker supervisor 拒绝已替换代际的响应；在拒绝前本地写入仍可能已提交。因此调用方保留原 token，并在回包不确定时对账持久阶段。只有启动组合提供 worker 阶段转移函数时才声明此能力。
 
 `profile.collaboration_archive_intent` 使用同一账号授权及当前 worker 代际，按 Session 找回未完成归档的 token。Host 在 worker 读取前后核验账号授权，并拒绝已替换 worker 的结果；只有 Registry 确认工作区成员关系后，无意图结果才有效。
