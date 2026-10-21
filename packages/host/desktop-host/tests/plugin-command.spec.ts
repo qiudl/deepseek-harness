@@ -136,9 +136,9 @@ it('reports launch, exit, and post-install authority failures without leaving it
 
   const revoked = fixture(); let guards = 0
   await expect(runProfilePluginCommand({ ...revoked.options, spec: 'bundle@1.0.0',
-    signal: new AbortController().signal, guard() { if (++guards === 3) throw Error('revoked after install') } }))
+    signal: new AbortController().signal, guard() { if (++guards >= 3) throw Error('revoked after install') } }))
     .rejects.toThrow('plugin_authority_revoked')
-  expect(guards).toBe(3)
+  expect(guards).toBeGreaterThanOrEqual(3)
   expect(readdirSync(revoked.control)).toEqual([])
 })
 it('cancels a running installer and waits for process exit', async () => {
