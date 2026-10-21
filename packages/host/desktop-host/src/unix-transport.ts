@@ -144,9 +144,9 @@ import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
 import { CollaborationDeliveryUploads, type CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 import { SkillHubPackageUploads } from './skillhub-package-uploads.ts'
-import { SkillHubPackageSnapshotReads } from './skillhub-package-snapshot-reads.ts'
+import { SkillHubPackageSnapshotReads, SkillHubPackageTransferSnapshot } from './skillhub-package-snapshot-reads.ts'
 import { SkillHubClockWitnesses } from './skillhub-clock-witness.ts'
-import type { createSkillHubPackageInstallationStore } from './skillhub-package-install.ts'
+import type { createSkillHubPackageInstallationStore, SkillHubPackageSnapshot } from './skillhub-package-install.ts'
 import { RemoteUiStreamCursor } from './remote-ui-stream-cursor.ts'
 import type { SingleHostLock } from './single-instance.ts'
 
@@ -991,6 +991,7 @@ export class HostControlAuthority {
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const clock = this.options.now ?? Date.now
+    const packageTransferSnapshot = new SkillHubPackageTransferSnapshot<SkillHubPackageSnapshot>()
     const migrationExports = new Map<string, MigrationExportService>()
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
@@ -1016,6 +1017,7 @@ export class HostControlAuthority {
       readonly runtimeGeneration: number
     }>()
     signal.addEventListener('abort', () => {
+      packageTransferSnapshot.clear()
       for (const entry of remoteUiStreams.values()) void entry.cursor.close()
       remoteUiStreams.clear()
     }, { once: true })
@@ -1561,9 +1563,13 @@ export class HostControlAuthority {
                 unsigned.manifestSha256, frame.params.target]),
               offset: frame.params.offset, signal: context.signal, authorize,
               capture: async () => {
-                const store = await createStore(profileId, generation, hostKeyId)
-                authorize()
-                const snapshot = await store.snapshotFixed(fixedReceipt)
+                const snapshot = await packageTransferSnapshot.get(
+                  JSON.stringify([profileId, generation, hostKeyId, fixedReceipt]),
+                  async () => {
+                    const store = await createStore(profileId, generation, hostKeyId)
+                    authorize()
+                    return store.snapshotFixed(fixedReceipt)
+                  }, frame.params.target.kind === 'manifest')
                 return frame.params.target.kind === 'manifest'
                   ? Buffer.from(JSON.stringify(['slark-skillhub-manifest-v1', snapshot.files.map(file =>
                     [file.path, file.mode, file.size, file.sha256])]))

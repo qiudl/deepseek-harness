@@ -54,7 +54,8 @@ interface FileEvidence { path: string; mode: '0644' | '0755'; size: number; sha2
 type StoredFile = Omit<FileEvidence, 'bytes' | 'mode'> & { mode: string }
 type StoredReceipt = Omit<SkillHubPackageReceipt, 'readiness' | 'loadEvidenceId'>
   & { readiness: string; loadEvidenceId: unknown }
-type SkillHubPackageSnapshot = Readonly<{
+/** Verified fixed package metadata; each file read rechecks its own bytes and stored identity. */
+export type SkillHubPackageSnapshot = Readonly<{
   receipt: SkillHubPackageReceipt
   files: readonly Readonly<{
     path: string

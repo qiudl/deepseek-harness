@@ -5,6 +5,26 @@ const MAX_READERS = 8
 const IDLE_MS = 300_000
 const fail = (): never => { throw Error('skillhub_package_snapshot_unavailable') }
 
+/** Keep one fully verified package manifest for consecutive objects on one authenticated connection. */
+export class SkillHubPackageTransferSnapshot<T> {
+  private current: { key: string; value: Promise<T> } | undefined
+
+  /** Refresh for manifest reads; file reads reuse the matching operation and verify their own bytes. */
+  async get(key: string, capture: () => Promise<T>, fresh = false): Promise<T> {
+    if (!fresh && this.current?.key === key) return this.current.value
+    const entry = { key, value: Promise.resolve().then(capture) }
+    this.current = entry
+    try { return await entry.value }
+    catch (error) {
+      if (this.current === entry) this.current = undefined
+      throw error
+    }
+  }
+
+  /** Drop retained evidence when the owning connection closes. */
+  clear(): void { this.current = undefined }
+}
+
 interface ActiveRead {
   readonly ownerId: string
   readonly bindingKey: string

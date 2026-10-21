@@ -1,6 +1,6 @@
 /** REQ-20261013-0021 / 24206. Connection-owned fixed package reads. */
 import { expect, it, vi } from 'vitest'
-import { SkillHubPackageSnapshotReads } from '../src/skillhub-package-snapshot-reads.ts'
+import { SkillHubPackageSnapshotReads, SkillHubPackageTransferSnapshot } from '../src/skillhub-package-snapshot-reads.ts'
 
 function input(bytes: Buffer, changes: Partial<Parameters<SkillHubPackageSnapshotReads['read']>[0]> = {}) {
   const controller = new AbortController()
@@ -11,6 +11,17 @@ function input(bytes: Buffer, changes: Partial<Parameters<SkillHubPackageSnapsho
     signal: controller.signal, capture, authorize, ...changes,
   } }
 }
+
+it('reuses one verified package across file objects and refreshes it for a manifest or new operation', async () => {
+  const snapshots = new SkillHubPackageTransferSnapshot<number>()
+  const capture = vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(2).mockResolvedValueOnce(3)
+  expect(await snapshots.get('operation-1', capture, true)).toBe(1)
+  expect(await snapshots.get('operation-1', capture)).toBe(1)
+  expect(capture).toHaveBeenCalledTimes(1)
+  expect(await snapshots.get('operation-1', capture, true)).toBe(2)
+  expect(await snapshots.get('operation-2', capture)).toBe(3)
+  expect(capture).toHaveBeenCalledTimes(3)
+})
 
 it('captures once and serves exact sequential chunks plus an identical retry', async () => {
   const reads = new SkillHubPackageSnapshotReads()
