@@ -36,6 +36,16 @@ it('round-trips exact signed search and bounded redacted search metadata', () =>
   expect(decodeHostControlFrame(wire(result))).toEqual(result)
 })
 
+it('requires an exact Account-bound local warmup frame without a query directive', () => {
+  const warm = { ...request, params: { ...params, command: { action: 'warm' } } }
+  const ready = { version: 1, type: 'result', request_id: uuid, method: 'profile.memory_query',
+    result: { action: 'warm', state: 'ready' } }
+  expect(decodeHostControlFrame(wire(warm))).toEqual(warm)
+  expect(decodeHostControlFrame(wire(ready))).toEqual(ready)
+  expect(() => decodeHostControlFrame(wire({ ...warm, params: { ...params,
+    command: { action: 'warm', directive } } }))).toThrow(HostControlProtocolError)
+})
+
 it('accepts a canonical 8 KiB Evidence chunk and rejects raw or oversized payloads', () => {
   const evidenceRequest = { ...request, params: { ...params,
     command: { action: 'evidence_chunk', directive: { ...directive, operation: 'evidence' },

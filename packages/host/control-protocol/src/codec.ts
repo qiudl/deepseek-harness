@@ -1656,7 +1656,10 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       'computer_id', 'command'])
     const command = record(params.command)
     let parsed: ProfileMemoryQueryRequest['params']['command']
-    if (command.action === 'search') {
+    if (command.action === 'warm') {
+      exactKeys(command, ['action'])
+      parsed = { action: 'warm' }
+    } else if (command.action === 'search') {
       exactKeys(command, ['action', 'directive', 'query', 'limit'])
       const query = wireText(command.query, 2000)
       if (query.length < 3 || query.length > 500 || generation(command.limit) > 10) reject()
@@ -1667,9 +1670,11 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       parsed = { action: 'evidence_chunk', directive: memoryDirective(command.directive),
         source_ref: digest(command.source_ref), offset: nonnegative(command.offset) }
     } else return reject()
-    const directive = parsed.directive as { operation: string; limit: number }
-    if (directive.operation !== (parsed.action === 'search' ? 'search' : 'evidence')
-      || directive.limit !== (parsed.action === 'search' ? parsed.limit : 1)) reject()
+    if (parsed.action !== 'warm') {
+      const directive = parsed.directive as { operation: string; limit: number }
+      if (directive.operation !== (parsed.action === 'search' ? 'search' : 'evidence')
+        || directive.limit !== (parsed.action === 'search' ? parsed.limit : 1)) reject()
+    }
     return { version: 1, type: 'request', request_id: requestId, method: frame.method,
       params: { ...authorized(params),
         authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
@@ -2261,6 +2266,12 @@ function decodeProfileResult(frame: Record<string, unknown>):
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
   if (frame.method === 'profile.memory_query') {
+    if (result.action === 'warm') {
+      exactKeys(result, ['action', 'state'])
+      if (result.state !== 'ready') reject()
+      return { version: 1, type: 'result', request_id: uuid(frame.request_id) as HostControlRequestId,
+        method: frame.method, result: { action: 'warm', state: 'ready' } }
+    }
     if (result.action === 'search') {
       exactKeys(result, ['action', 'generation', 'items'])
       if (!Array.isArray(result.items) || result.items.length > 10) reject()

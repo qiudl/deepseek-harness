@@ -1500,7 +1500,7 @@ export interface ProfileMemoryQueryRequest {
     readonly account_subject: string
     readonly owner_user_id: string
     readonly computer_id: string
-    readonly command: {
+    readonly command: { readonly action: 'warm' } | {
       readonly action: 'search'
       readonly directive: unknown
       readonly query: string
@@ -1537,6 +1537,9 @@ export interface ProfileMemoryQueryResult {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.memory_query'
   readonly result: {
+    readonly action: 'warm'
+    readonly state: 'ready'
+  } | {
     readonly action: 'search'
     readonly generation: number
     readonly items: readonly (ProfileMemoryEvidenceIdentity & { readonly snippet: string })[]
