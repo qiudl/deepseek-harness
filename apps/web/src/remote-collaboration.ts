@@ -101,6 +101,15 @@ function groupResult(value: unknown): boolean {
 function groupPreparationResult(value: unknown, input: Record<string, unknown>): boolean {
   if (!row(value)) return false
   if (value.state === 'retry_required') return exact(value, ['state'])
+  if (input.operation === 'lookup') {
+    if (value.state === 'missing') return exact(value, ['state'])
+    return exact(value, ['group_id', 'last_seq', 'session_id', 'state', 'version', 'workspace_id'])
+      && (value.state === 'preparing' || value.state === 'group_active')
+      && value.version === (value.state === 'preparing' ? 1 : 2)
+      && Number.isSafeInteger(value.last_seq) && Number(value.last_seq) >= 0
+      && typeof value.group_id === 'string' && uuid.test(value.group_id)
+      && value.workspace_id === input.workspace_id && value.session_id === input.session_id
+  }
   return exact(value, ['group_id', 'session_id', 'state', 'version', 'workspace_id'])
     && value.state === 'preparing' && value.version === 1
     && typeof value.group_id === 'string' && uuid.test(value.group_id)
@@ -217,14 +226,17 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
           const timer = setTimeout(() => { controller.abort() }, 60_000)
           const signal = AbortSignal.any([controller.signal, lifetime.signal])
           try {
-            if (!exact(raw, ['workspace_id', 'session_id', 'source_message_id', 'source_revision'])
+            const lookup = row(raw) && raw.operation === 'lookup'
+            if (!exact(raw, lookup ? ['operation', 'workspace_id', 'session_id']
+              : ['workspace_id', 'session_id', 'source_message_id', 'source_revision'])
               || typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id)
               || typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id)
               || /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..'
-              || typeof raw.source_message_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.source_message_id)
-              || /[/\\]/u.test(raw.source_message_id) || raw.source_message_id === '.' || raw.source_message_id === '..'
-              || typeof raw.source_revision !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(raw.source_revision)
-              || BigInt(raw.source_revision) > 9223372036854775807n)
+              || !lookup && (typeof raw.source_message_id !== 'string' ||
+                !/^[!-~]{1,256}$/u.test(raw.source_message_id) ||
+                /[/\\]/u.test(raw.source_message_id) || raw.source_message_id === '.' || raw.source_message_id === '..' ||
+                typeof raw.source_revision !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(raw.source_revision) ||
+                BigInt(raw.source_revision) > 9223372036854775807n))
               throw Error('invalid group Source')
             const result = await call('collaboration/groupPreparation', raw, signal)
             if (!groupPreparationResult(result, raw)) throw Error('invalid group preparation')

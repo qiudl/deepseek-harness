@@ -353,6 +353,28 @@ it('REQ-20261020-0010: preparation sends only original Source coordinates', asyn
     .toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })
+it('REQ-20261020-0010: group lookup recovers only the mapped original Session', async () => {
+  const advertised = { ...capability, methods: ['workspace', 'groupPreparation'] }
+  const lookup = { operation: 'lookup', workspace_id: workspace, session_id: 'session-1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, requests.length === 1 ? {
+      state: 'group_active', group_id: '44444444-4444-4444-8444-444444444444',
+      version: 2, last_seq: 3, workspace_id: workspace, session_id: 'session-1',
+    } : { state: 'missing' }) }
+  })
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupPreparation?.(lookup)).toMatchObject({
+    state: 'group_active', version: 2, last_seq: 3 })
+  expect(requests[0]?.payload.args.request).toEqual(lookup)
+  expect(await bridge().collaborationGroupPreparation?.(lookup)).toEqual({ state: 'missing' })
+  expect(await bridge().collaborationGroupPreparation?.({ ...lookup, owner: 'bob' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(2)
+})
 it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pagehide without resubmitting the Agent', async () => {
   const started = Promise.withResolvers<undefined>()
   const h = harness((path) => {
