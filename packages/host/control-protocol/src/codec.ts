@@ -1082,9 +1082,8 @@ export function parseHostGroupInputFenceAssertion(value: unknown): HostGroupInpu
     'host_instance_id', 'process_nonce', 'signature'])
   if (r.schema_version !== 1) reject()
   const challenge = parseHostGroupInputFenceChallenge(r.challenge)
-  const identity = parseHostWorkspaceAuthorityAssertion({ ...r, challenge: Object.fromEntries(
-    ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
-      'account_issuer', 'account_subject', 'workspace_id', 'session_id'].map(key => [key, challenge[key as keyof typeof challenge]])) })
+  const { group_id: _groupId, group_version: _groupVersion, ...workspaceChallenge } = challenge
+  const identity = parseHostWorkspaceAuthorityAssertion({ ...r, challenge: workspaceChallenge })
   return Object.freeze({ ...identity, challenge })
 }
 
