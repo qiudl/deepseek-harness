@@ -104,6 +104,21 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it.each(['next-turn', 'next-step'] as const)(
+    'REQ-20261020-0010 refuses a group fence while the original Session has pending %s input', async (target) => {
+      const h = await harness()
+      try {
+        h.events.push({ type: 'agent/inbox/spliced', seq: SessionSeq(1), time: 2,
+          data: { target, start: 0, inserted: [createUserMessage({
+            content: [{ type: 'text', text: 'queued before group activation' }], source: { kind: 'user' },
+          })] } })
+        await expect(h.ctx.workspaceRegistry.installGroupInputFence({
+          workspaceId: h.workspace.id, sessionId: h.sessionId, groupId: 'group-1', groupVersion: 0,
+        })).rejects.toMatchObject({ name: 'WorkspaceActiveSessionError' })
+        expect(h.ctx.workspaceRegistry.isGroupInputBlocked(h.sessionId)).toBe(false)
+      } finally { await h.dispose() }
+    })
+
   it('REQ-20261020-0010 refuses a group fence during an in-flight Source capture, then rejects old Source input', async () => {
     const h = await harness(), signal = new AbortController().signal
     let release!: () => void
@@ -124,6 +139,25 @@ describe('Profile-owned collaboration Source capture', () => {
       await installing
       await expect(h.controller.captureCollaborationSource(h.source(), signal)).rejects.toThrow('group_session_active')
     } finally { release?.(); await h.dispose() }
+  })
+
+  it('REQ-20261020-0010 checks queued input before a turn can claim it during activity inspection', async () => {
+    const h = await harness()
+    try {
+      h.events.push({ type: 'agent/inbox/spliced', seq: SessionSeq(1), time: 2,
+        data: { target: 'next-turn', start: 0, inserted: [createUserMessage({
+          content: [{ type: 'text', text: 'queued before group activation' }], source: { kind: 'user' },
+        })] } })
+      h.ctx.on('workspace/session-activity', async (_request, next) => {
+        const rest = await next()
+        h.events.push({ type: 'agent/inbox/spliced', seq: SessionSeq(2), time: 3,
+          data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] } })
+        return rest
+      })
+      await expect(h.ctx.workspaceRegistry.installGroupInputFence({
+        workspaceId: h.workspace.id, sessionId: h.sessionId, groupId: 'group-1', groupVersion: 0,
+      })).rejects.toMatchObject({ name: 'WorkspaceActiveSessionError' })
+    } finally { await h.dispose() }
   })
 
   it('REQ-20261020-0010 keeps root capture active between Source and root journal commits', async () => {
