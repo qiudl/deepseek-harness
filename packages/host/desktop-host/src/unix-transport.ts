@@ -1563,13 +1563,11 @@ export class HostControlAuthority {
                 unsigned.manifestSha256, frame.params.target]),
               offset: frame.params.offset, signal: context.signal, authorize,
               capture: async () => {
+                const store = await createStore(profileId, generation, hostKeyId)
+                authorize()
                 const snapshot = await packageTransferSnapshot.get(
                   JSON.stringify([profileId, generation, hostKeyId, fixedReceipt]),
-                  async () => {
-                    const store = await createStore(profileId, generation, hostKeyId)
-                    authorize()
-                    return store.snapshotFixed(fixedReceipt)
-                  }, frame.params.target.kind === 'manifest')
+                  () => store.snapshotFixed(fixedReceipt), frame.params.target.kind === 'manifest')
                 return frame.params.target.kind === 'manifest'
                   ? Buffer.from(JSON.stringify(['slark-skillhub-manifest-v1', snapshot.files.map(file =>
                     [file.path, file.mode, file.size, file.sha256])]))
