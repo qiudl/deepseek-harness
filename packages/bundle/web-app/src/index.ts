@@ -45,6 +45,7 @@ import { handleDesktopWorkspaceModelSelectionRequest } from './desktop-workspace
 import { handleDesktopCollaborationArchiveStateRequest } from './desktop-collaboration-archive-state.ts'
 import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-collaboration-archive-transition.ts'
 import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
+import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
@@ -313,6 +314,21 @@ export function apply(ctx: Context, config: Config): void {
   }
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-identity',
+      handler: (req, res) => handleDesktopBotIdentityRequest(req, res, sourceToken, async (botId, signal) => {
+        signal.throwIfAborted()
+        const service = ctx.get('dsBotSlarkExternalGroup') as undefined | {
+          resolveLocalBot(botId: string): Promise<{ botId: string; actorRef: string; displayName: string } | null>
+        }
+        if (!service) return null
+        const identity = await service.resolveLocalBot(botId)
+        signal.throwIfAborted()
+        return identity === null ? null : {
+          bot_id: identity.botId, actor_ref: identity.actorRef, display_name: identity.displayName,
+        }
+      }),
+    }))
     ctx.inject(['sessionController'], (sessionCtx) => {
       sessionCtx.effect(() => sessionCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-collaboration-root',

@@ -67,6 +67,7 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     await rm(directory, { recursive: true, force: true })
   })
   vi.stubEnv('DSH_PROFILE_WORKSPACE_MODEL_TOKEN', token)
+  vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
   vi.stubEnv('DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN', token)
   vi.stubEnv('DSH_PROFILE_MODEL_TOKEN', '')
   vi.stubEnv('DSH_PROFILE_REMOTE_SESSION_TOKEN', '')
@@ -77,6 +78,10 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       routes.set(route.path, route.handler)
       return () => { routes.delete(route.path) }
     },
+  } as never)
+  ctx.provide('dsBotSlarkExternalGroup' as never, {
+    resolveLocalBot: async (botId: string) => botId === 'bot_1'
+      ? { botId, actorRef: `deepseek-bot:${botId}`, displayName: 'My Bot' } : null,
   } as never)
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)
@@ -133,6 +138,11 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect(session.seq).toBe(seq)
   expect(ctx.agents.get(target.session_id)).toBeUndefined()
   expect(resume).not.toHaveBeenCalled()
+  const botResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_1' }),
+  })
+  expect(botResponse.status).toBe(200)
+  expect(await botResponse.json()).toEqual({ bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' })
   const archiveIdentity = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
     environment_id: '20000000-0000-4000-8000-000000000002',
     account_issuer: 'https://accounts.example.test',

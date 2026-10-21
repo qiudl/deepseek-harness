@@ -32,6 +32,9 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.js'
+export type { HostBotIdentity } from './bot-identity.js'
+export type { ProfileBotIdentityRequest, ProfileBotIdentityResult } from './types.js'
 export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'
 export type { HostRootTextContextReceipt } from './root-text-context.js'
 export {

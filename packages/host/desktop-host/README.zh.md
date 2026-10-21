@@ -65,6 +65,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `profile.collaboration_registration` 使用当前连接已验证的 Account grant 和安装私钥，将服务器挑战与当前 Host 进程一起签名。客户端按已核验的安装身份验证签名，检查全部挑战/进程字段及有效期，返回冻结证明。Unix 与 Windows 共用这套 authority/client 方法。它不启动 worker、不打开视图租约、不修改 Profile/Session 数据。Slark 私有 Host broker 持有独立连接并负责取消；服务器挑战持久层、公钥登记及操作对账不属于该方法。
 
+`profile.bot_identity` 在读取选定 Profile worker 的前后校验当前连接的 Account 绑定和 issuer/subject。worker 私有 token 仅到达 Profile 本地的 `dsBotSlarkExternalGroup` 服务；插件缺失、Bot 不存在或插件不是唯一 writer 时返回缺失。worker 被替换或 Account 撤权时拒绝读取。结果不含聊天内容，也不授权 Slark 群操作。
+
 仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
 
 Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
