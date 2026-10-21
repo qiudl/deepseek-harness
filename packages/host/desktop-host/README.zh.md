@@ -141,6 +141,8 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 父 Host 为每个 Profile worker 提供独立随机记忆 bearer 令牌。本地 `listMemorySessions` 方法通过私有 worker 路由分页列出顶层 Session ID 和版本，校验页面顺序和游标，并拒绝被替换的 worker。本地 `readMemorySession` 方法只接受一个 Session ID，检查有界 JSONL 响应，并拒绝被替换的 worker 或不匹配的 Session ID。`memoryProfileReader` 在一次本地操作的分页与读取期间固定同一个 worker 代际。这些方法不授予控制协议读取或云端传输权限；原始内容离开本地路径前仍需独立核验 Account、Profile 和 grant。
 
+`HostMemoryEvidenceIndex` 在 Host 进程内投影每个原始 Session 快照，只在内存中保留脱敏文本和三元字符索引。所有更新与读取都绑定同一 Account 所有者、安装和 Profile；替换与删除使用代际检查，Session 变化后旧 Evidence 引用失效。文本、记录和索引项数量均有上限；Host 重启后索引丢失，目前尚未接入控制协议。
+
 记忆指令验签器只接受固定的 Ed25519 公钥环，并对每个签名的 15 秒 nonce 只消费一次。指令绑定当前安装、Profile、Host 进程、操作和查询摘要。签名的 macOS 嵌入应用可经 Host Profile 的环境映射同时提供 `memoryKeyringPath` 与 `memoryKeyringSha256`；启动时读取仅所有者可访问的文件，摘要不符即拒绝。验签器尚未接入控制协议。
 
 ### 远端工作区目录
