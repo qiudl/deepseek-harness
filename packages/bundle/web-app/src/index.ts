@@ -33,7 +33,7 @@ import type {} from '@deepseek-ai/dsh-llm'
 import { describeCollaborationReference } from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-session-persistence'
-import { handleDesktopMemorySessionRequest } from './desktop-memory-session.ts'
+import { handleDesktopMemorySessionRequest, handleDesktopMemorySessionsRequest } from './desktop-memory-session.ts'
 import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopCollaborationReferenceGrantRequest, handleDesktopCollaborationReferenceCaptureRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopCollaborationReferenceContentRequest } from './desktop-collaboration-source.ts'
@@ -318,6 +318,11 @@ export function apply(ctx: Context, config: Config): void {
       memoryCtx.effect(() => memoryCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-memory-session',
         handler: (req, res) => handleDesktopMemorySessionRequest(
+          req, res, memoryToken, memoryCtx.sessionPersistence),
+      }))
+      memoryCtx.effect(() => memoryCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-memory-sessions',
+        handler: (req, res) => handleDesktopMemorySessionsRequest(
           req, res, memoryToken, memoryCtx.sessionPersistence),
       }))
     })

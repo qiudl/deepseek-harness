@@ -5,6 +5,33 @@ import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarg
 import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 
+it('discards a memory inventory page from a replaced Profile worker', async () => {
+  let enter!: () => void, release!: () => void
+  const entered = new Promise<void>((resolve) => { enter = resolve })
+  let generation = 0
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const current = ++generation
+    return { closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      listMemorySessions: async () => {
+        if (current === 1) await new Promise<void>((resolve) => { release = resolve; enter() })
+        return { items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }
+      },
+    }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  try {
+    await workers.start(input)
+    const pending = workers.listMemorySessions(input.profileId, null, new AbortController().signal)
+    const denied = expect(pending).rejects.toMatchObject({ code: 'stale' })
+    await entered
+    await workers.dispose(input.profileId)
+    await workers.start(input)
+    release()
+    await denied
+    expect((await workers.listMemorySessions(input.profileId, null, new AbortController().signal)).items).toHaveLength(1)
+  } finally { release?.(); await workers.disposeAll() }
+})
+
 it('reads the exact original worker reference grant and refuses changed digests, cancellation and missing workers', async () => {
   const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
     session_id: 'session', source_message_id: 'message', source_revision: '1' })

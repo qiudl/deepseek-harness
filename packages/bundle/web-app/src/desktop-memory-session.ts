@@ -15,6 +15,12 @@ const MAX_SESSION_BYTES = 64 * 1024 * 1024
 const MAX_EVENTS = 100_000
 const PAGE_SIZE = 256
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
+const PAGE_LIMIT = 64
+
+export interface DesktopMemorySessionPage {
+  readonly items: readonly { readonly sessionId: string; readonly revision: string }[]
+  readonly nextAfter: string | null
+}
 
 function privateTopLevel(header: {
   readonly isSeeded: boolean
@@ -23,7 +29,7 @@ function privateTopLevel(header: {
   readonly delegationDepth?: number
 }): boolean {
   return !header.isSeeded && header.parentSession === undefined
-    && header.origin !== 'subagent' && (header.delegationDepth ?? 0) === 0
+    && header.origin === undefined && (header.delegationDepth ?? 0) === 0
 }
 
 /**
@@ -77,6 +83,67 @@ export async function readDesktopMemorySession(
   } finally {
     await handle.close()
   }
+}
+
+/** List only current Profile's top-level Session metadata; raw content stays in readDesktopMemorySession. */
+export async function listDesktopMemorySessions(
+  persistence: Pick<SessionPersistence, 'list'>,
+  after: string | null,
+  signal: AbortSignal,
+): Promise<DesktopMemorySessionPage> {
+  signal.throwIfAborted()
+  if (after !== null && !SESSION_ID.test(after)) throw new Error('memory_cursor_invalid')
+  const snapshots = await persistence.list({ signal })
+  signal.throwIfAborted()
+  if (snapshots.length > MAX_EVENTS) throw new Error('memory_inventory_oversized')
+  const items = snapshots
+    .filter(snapshot => privateTopLevel(snapshot.header))
+    .map(snapshot => ({ sessionId: String(snapshot.header.id), revision: String(snapshot.revision) }))
+    .sort((left, right) => left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1 : 0)
+  if (items.some((item, index) => !SESSION_ID.test(item.sessionId)
+    || item.revision.length < 1 || item.revision.length > 256
+    || index > 0 && item.sessionId === items[index - 1]?.sessionId))
+    throw new Error('memory_inventory_invalid')
+  const start = after === null ? 0 : items.findIndex(item => item.sessionId > after)
+  if (start < 0) return { items: [], nextAfter: null }
+  const page = items.slice(start, start + PAGE_LIMIT)
+  const nextAfter = start + PAGE_LIMIT < items.length ? page.at(-1)?.sessionId ?? null : null
+  return { items: page, nextAfter }
+}
+
+/** Independent memory bearer; request accepts only an opaque pagination cursor. */
+export function handleDesktopMemorySessionsRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  persistence: Pick<SessionPersistence, 'list'>,
+): Promise<void> {
+  return handleDesktopPrivateRequest(req, res, token,
+    (target, signal) => listDesktopMemorySessions(persistence, target.after, signal),
+    (value: unknown) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_input')
+      const row = value as Record<string, unknown>
+      if (Object.keys(row).length !== 1 || row.after !== null
+        && (typeof row.after !== 'string' || !SESSION_ID.test(row.after))) throw Error('invalid_input')
+      return { after: row.after }
+    },
+    (value: unknown) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
+      const row = value as Record<string, unknown>
+      if (Object.keys(row).length !== 2 || !Array.isArray(row.items) || row.items.length > PAGE_LIMIT
+        || (row.items as unknown[]).some((value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return true
+          const item = value as Record<string, unknown>
+          return Object.keys(item).length !== 2 || typeof item.sessionId !== 'string'
+            || !SESSION_ID.test(item.sessionId) || typeof item.revision !== 'string'
+            || item.revision.length < 1 || item.revision.length > 256
+        })
+        || row.nextAfter !== null && (typeof row.nextAfter !== 'string' || !SESSION_ID.test(row.nextAfter)))
+        throw Error('invalid_result')
+      return row as unknown as DesktopMemorySessionPage
+    },
+    () => true,
+    2048)
 }
 
 /**

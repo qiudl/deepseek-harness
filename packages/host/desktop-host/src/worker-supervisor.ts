@@ -2,7 +2,7 @@ import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-contro
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostMemorySessionSnapshot, ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { HostMemorySessionPage, HostMemorySessionSnapshot, ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection,
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
@@ -410,6 +410,17 @@ export class ProfileWorkerSupervisor {
     signal.throwIfAborted()
     this.assertCurrentWorker(profileId, worker)
     if (result.sessionId !== sessionId) throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  /** List only metadata from the current Account Profile worker. */
+  async listMemorySessions(profileId: string, after: string | null, signal: AbortSignal): Promise<HostMemorySessionPage> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.listMemorySessions) throw new HostAuthorityError('unavailable')
+    const result = await worker.listMemorySessions(after, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
     return result
   }
 

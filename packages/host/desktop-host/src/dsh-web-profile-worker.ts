@@ -22,7 +22,7 @@ import { parseHostCollaborationArchiveStateValue,
   type HostCollaborationArchiveIntentTarget, type HostCollaborationArchiveIntentValue,
   type HostCollaborationArchiveStateTarget, type HostCollaborationArchiveTransitionTarget,
   type HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostMemorySessionSnapshot, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { HostMemorySessionPage, HostMemorySessionSnapshot, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
 
@@ -318,6 +318,9 @@ export class DshWebProfileWorkerFactory {
       ),
       readMemorySession: (sessionId, signal) => this.readMemorySession(
         viewOrigin, memoryToken, sessionId, signal, () => requestedStop || settled,
+      ),
+      listMemorySessions: (after, signal) => this.listMemorySessions(
+        viewOrigin, memoryToken, after, signal, () => requestedStop || settled,
       ),
       collaborationAnalysis: (command, signal) => this.collaborationAnalysis(
         viewOrigin, analysisToken, command, signal, () => requestedStop || settled,
@@ -629,6 +632,47 @@ export class DshWebProfileWorkerFactory {
         || typeof result.text !== 'string' || Buffer.byteLength(result.text, 'utf8') > 64 * 1024 * 1024)
         throw new HostAuthorityError('profile_mismatch')
       return result as unknown as HostMemorySessionSnapshot
+    }, 'detach')
+  }
+
+  private async listMemorySessions(
+    viewOrigin: string,
+    token: string,
+    after: string | null,
+    signal: AbortSignal,
+    stopped: () => boolean,
+  ): Promise<HostMemorySessionPage> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+    active.throwIfAborted()
+    if (stopped() || after !== null && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(after))
+      throw new HostAuthorityError('invalid_input')
+    const response = await fetch(`${viewOrigin}/internal/desktop-memory-sessions`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ after }), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 64 * 1024, (bytes) => {
+      const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HostAuthorityError('unavailable')
+      const result = value as Record<string, unknown>
+      if (Object.keys(result).length !== 2 || !Array.isArray(result.items) || result.items.length > 64
+        || (result.items as unknown[]).some((value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return true
+          const item = value as Record<string, unknown>
+          return Object.keys(item).length !== 2 || typeof item.sessionId !== 'string'
+            || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(item.sessionId)
+            || typeof item.revision !== 'string' || item.revision.length < 1 || item.revision.length > 256
+        })
+        || result.nextAfter !== null && (typeof result.nextAfter !== 'string'
+          || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(result.nextAfter)))
+        throw new HostAuthorityError('unavailable')
+      const page = result as unknown as HostMemorySessionPage
+      if (page.items.some((item, index) => after !== null && item.sessionId <= after
+        || index > 0 && item.sessionId <= (page.items[index - 1]?.sessionId ?? ''))
+        || page.nextAfter !== null && (page.items.length !== 64
+          || page.nextAfter !== page.items.at(-1)?.sessionId))
+        throw new HostAuthorityError('unavailable')
+      return page
     }, 'detach')
   }
 

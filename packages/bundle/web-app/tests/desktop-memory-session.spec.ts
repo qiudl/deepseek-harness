@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
-import { handleDesktopMemorySessionRequest, readDesktopMemorySession } from '../src/desktop-memory-session.ts'
+import { handleDesktopMemorySessionRequest, handleDesktopMemorySessionsRequest, listDesktopMemorySessions, readDesktopMemorySession } from '../src/desktop-memory-session.ts'
 
 const id = SessionId('session-54a5bf6e-b050-46f3-8149-f48b709b0480')
 const header = { id, version: SESSION_FORMAT_VERSION, createdAt: 1, isSeeded: false }
@@ -46,6 +46,45 @@ describe('private Desktop memory session reader', () => {
     await expect(readDesktopMemorySession(delegated, id, new AbortController().signal))
       .rejects.toThrow('memory_session_unavailable')
     expect(f.closed()).toBe(false)
+    const imported = { stat: async () => ({ header: { ...header, origin: 'imported' }, revision: 'r1' }),
+      open: f.persistence.open } as unknown as Pick<SessionPersistence, 'stat' | 'open'>
+    await expect(readDesktopMemorySession(imported, id, new AbortController().signal))
+      .rejects.toThrow('memory_session_unavailable')
+  })
+
+  it('pages only top-level Session IDs and revisions through the independent memory bearer', async () => {
+    const rows = Array.from({ length: 70 }, (_, index) => ({
+      header: { ...header, id: SessionId(`session-${String(index).padStart(3, '0')}`) },
+      revision: `revision-${index}`,
+    }))
+    rows.push({ header: { ...header, id: SessionId('session-seeded'), isSeeded: true }, revision: 'hidden' })
+    const persistence = { list: async () => rows } as unknown as Pick<SessionPersistence, 'list'>
+    const first = await listDesktopMemorySessions(persistence, null, new AbortController().signal)
+    expect(first.items).toHaveLength(64)
+    expect(first.nextAfter).toBe('session-063')
+    const second = await listDesktopMemorySessions(persistence, first.nextAfter, new AbortController().signal)
+    expect(second.items).toHaveLength(6)
+    expect(second.nextAfter).toBeNull()
+    expect(JSON.stringify([first, second])).not.toContain('session-seeded')
+    const token = 'm'.repeat(43)
+    const server = createServer((req, res) => {
+      void handleDesktopMemorySessionsRequest(req, res, token, persistence)
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw Error('missing test listener')
+      const url = `http://127.0.0.1:${address.port}/internal/desktop-memory-sessions`
+      const body = JSON.stringify({ after: null })
+      expect((await fetch(url, { method: 'POST', headers: { cookie: 'dsh-auth=browser' }, body })).status).toBe(403)
+      const allowed = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body })
+      expect(allowed.status).toBe(200)
+      expect((await allowed.json() as { items: unknown[] }).items).toHaveLength(64)
+    } finally {
+      server.close()
+      await once(server, 'close')
+    }
   })
 
   it('drops a snapshot when its persistence revision changes during the read', async () => {
