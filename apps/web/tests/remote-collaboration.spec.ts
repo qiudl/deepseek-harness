@@ -59,6 +59,7 @@ function bridge(): {
   collaborationConversations?(): Promise<unknown>
   collaborationGroupMessages?(value: unknown): Promise<unknown>
   collaborationGroupPreparation?(value: unknown): Promise<unknown>
+  collaborationGroupActivation?(value: unknown): Promise<unknown>
   collaborationArchive?(value: unknown): Promise<unknown> } {
   const host: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
   if (typeof host !== 'object' || host === null || !('collaborationWorkspace' in host)) throw Error('bridge is missing')
@@ -408,6 +409,30 @@ it('REQ-20261020-0010: group lookup recovers only the mapped original Session', 
   expect(await bridge().collaborationGroupPreparation?.(lookup)).toEqual({ state: 'missing' })
   expect(await bridge().collaborationGroupPreparation?.({ ...lookup, owner: 'bob' }))
     .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(2)
+})
+it('REQ-20261020-0010: activation uses a verified v2 Host capability and exact result', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupActivation', 'groupMessages', 'groupPreparation'] }
+  const input = { request_id: '33333333-3333-4333-8333-333333333333',
+    workspace_id: workspace, session_id: 'session-1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, requests.length === 1
+      ? { state: 'group_active', group_id: '44444444-4444-4444-8444-444444444444', version: 2 }
+      : { state: 'group_active', group_id: 'invalid', version: 2 }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupActivation?.(input)).toEqual({ state: 'group_active',
+    group_id: '44444444-4444-4444-8444-444444444444', version: 2 })
+  expect(requests[0]?.method).toBe('collaboration/groupActivation')
+  expect(requests[0]?.payload.args.request).toEqual(input)
+  expect(await bridge().collaborationGroupActivation?.({ ...input, request_id: 'invalid' }))
+    .toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupActivation?.(input)).toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(2)
 })
 it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pagehide without resubmitting the Agent', async () => {

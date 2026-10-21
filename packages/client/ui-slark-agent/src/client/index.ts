@@ -69,6 +69,8 @@ interface AgentItem {
 
 interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge,
   GroupMessageBridge {
+  collaborationGroupActivation?(input: { request_id: string; workspace_id: string; session_id: string }):
+  Promise<{ state: 'group_active'; group_id: string; version: 2 } | { state: 'retry_required' }>
   collaborationGroupPreparation?(input: { workspace_id: string
     session_id: string
     source_message_id: string
