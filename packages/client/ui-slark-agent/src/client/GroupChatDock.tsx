@@ -116,10 +116,14 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
         if (!current() || workspaceId() !== workspace) return
         if (result.state === 'missing') {
           groupId = undefined; preparedGroupId = undefined; activationRequestId = undefined
+          setActivationFailed(false)
           items = []; publish('missing'); return
         }
         if (result.state === 'preparing') {
-          if (preparedGroupId !== result.group_id) activationRequestId = undefined
+          if (preparedGroupId !== result.group_id) {
+            activationRequestId = undefined
+            setActivationFailed(false)
+          }
           groupId = undefined; preparedGroupId = result.group_id; cursor = 0; items = []
           publish('preparing'); return
         }
