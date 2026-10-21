@@ -93,6 +93,18 @@ it('does not release an old key when its receipt is missing', async () => {
   expect(commands.some(command => command.operation === 'pending_ack')).toBe(false)
 })
 
+it('retains a recorded old key when the parent rejects its acknowledgment', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const { bridge, setReceipt } = parent()
+  const input = { bridge, workspaceId, sessionId, groupId, body: 'first' }
+  expect((await sendGroupText(input)).state).toBe('retry_required')
+  setReceipt('recorded')
+  const original = bridge.collaborationGroupMessages
+  bridge.collaborationGroupMessages = vi.fn(async (command: GroupMessageCommand) =>
+    command.operation === 'pending_ack' ? { state: 'retry_required' as const } : original(command))
+  expect(await sendGroupText({ ...input, body: 'second' })).toEqual({ state: 'retry_required' })
+})
+
 it('fails closed when the parent cannot persist the request key', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const bridge = { collaborationGroupMessages: vi.fn(async () => ({ state: 'retry_required' as const })) }

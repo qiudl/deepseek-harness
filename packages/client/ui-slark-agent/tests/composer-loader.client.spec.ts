@@ -1641,21 +1641,27 @@ it('falls through to the original Session input when no group was mapped', async
     new AbortController().signal, { attachments: 0 })).toBeUndefined()
 })
 
-it.each(['parent_storage_refused', 'host_changed', 'pending_other'] as const)
+it.each(['parent_storage_refused', 'host_changed', 'pending_other', 'receipt_uncertain'] as const)
 ('keeps the original Session draft when group send is %s', async (mode) => {
   const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
   if (!host) throw Error('missing Host')
   const groupId = '22222222-2222-4222-8222-222222222222'
   host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
     group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1', version: 2 as const, last_seq: 0 }))
-  host.collaborationGroupMessages = vi.fn(async (command: { operation: string }) => {
+  let pendingDigest = ''
+  host.collaborationGroupMessages = vi.fn(async (command: { operation: string; digest?: string }) => {
     if (mode === 'host_changed') Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+    if (command.operation === 'pending_claim' && mode === 'pending_other') pendingDigest = command.digest ?? ''
     return command.operation === 'pending_claim' ? mode === 'pending_other'
       ? { state: 'pending_other' as const } : mode === 'parent_storage_refused'
         ? { state: 'retry_required' as const }
         : { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
-      : command.operation === 'receipt' ? { state: 'missing' as const }
-        : { state: 'recorded' as const, message_id: groupId, seq: 1 }
+      : command.operation === 'pending_status' && mode === 'pending_other'
+        ? { state: 'pending_status' as const,
+          request_id: '33333333-3333-4333-8333-333333333333', digest: pendingDigest }
+        : command.operation === 'receipt' ? mode === 'receipt_uncertain'
+          ? { state: 'retry_required' as const } : { state: 'missing' as const }
+          : { state: 'recorded' as const, message_id: groupId, seq: 1 }
   })
   const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
   const session = { sessionId: SessionId('session-1') }
