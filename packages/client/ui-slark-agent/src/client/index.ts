@@ -66,6 +66,16 @@ interface AgentItem {
 }
 
 interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge {
+  collaborationGroupPreparation?(input: { workspace_id: string
+    session_id: string
+    source_message_id: string
+    source_revision: string }): Promise<
+    { state: 'preparing'
+      group_id: string
+      workspace_id: string
+      session_id: string
+      version: 1 } |
+    { state: 'retry_required' }>
   accountIdentity?: () => Promise<SlarkAccountIdentity | null>
   collaborationArchive?(input: { workspace_id: string; session_id: string; action: 'archive' | 'restore' }):
   Promise<{ state: 'archived' | 'restored' | 'retry_required' | 'conflict' }>

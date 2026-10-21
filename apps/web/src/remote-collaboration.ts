@@ -98,6 +98,14 @@ function groupResult(value: unknown): boolean {
   }
   return !value.items.length || previous === value.next_seq
 }
+function groupPreparationResult(value: unknown, input: Record<string, unknown>): boolean {
+  if (!row(value)) return false
+  if (value.state === 'retry_required') return exact(value, ['state'])
+  return exact(value, ['group_id', 'session_id', 'state', 'version', 'workspace_id'])
+    && value.state === 'preparing' && value.version === 1
+    && typeof value.group_id === 'string' && uuid.test(value.group_id)
+    && value.workspace_id === input.workspace_id && value.session_id === input.session_id
+}
 /**
  * Negotiate scope support before applying Client plugins. Old parents leave the bridge absent.
  * @param fetch - Unary transport using only the authenticated parent port.
@@ -132,11 +140,12 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     const conversations = methods.includes('conversations')
     const archive = methods.includes('archive')
     const groupMessages = methods.includes('groupMessages')
+    const groupPreparation = methods.includes('groupPreparation')
     const execution = ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
     if (!methods.includes('workspace') || methods.length !== (execution ? 4 : 1) + (conversations ? 1 : 0) + (archive ? 1 : 0)
-      + (groupMessages ? 1 : 0)
+      + (groupMessages ? 1 : 0) + (groupPreparation ? 1 : 0)
       || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive',
-        'groupMessages'].includes(String(method)))) return
+        'groupMessages', 'groupPreparation'].includes(String(method)))) return
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
     const bridge = {
@@ -156,7 +165,7 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
       },
       collaborationScopeAvailable: true,
       collaborationExecutionAvailable: execution,
-      ...((execution || conversations || archive || groupMessages) ? (() => {
+      ...((execution || conversations || archive || groupMessages || groupPreparation) ? (() => {
         const call = async (method: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> => {
           const rpcId = 'collaboration-' + String(++sequence)
           const response = await exchange(fetch, '/api/' + method, { method: 'POST',
@@ -199,6 +208,26 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
               encoder.encode(raw.body).length > 24_000)) throw Error('invalid group body')
             const result = await call('collaboration/groupMessages', raw, signal)
             if (!groupResult(result)) throw Error('invalid group reply')
+            return result
+          } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
+        ...(groupPreparation ? { collaborationGroupPreparation: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 60_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            if (!exact(raw, ['workspace_id', 'session_id', 'source_message_id', 'source_revision'])
+              || typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id)
+              || typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id)
+              || /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..'
+              || typeof raw.source_message_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.source_message_id)
+              || /[/\\]/u.test(raw.source_message_id) || raw.source_message_id === '.' || raw.source_message_id === '..'
+              || typeof raw.source_revision !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(raw.source_revision)
+              || BigInt(raw.source_revision) > 9223372036854775807n)
+              throw Error('invalid group Source')
+            const result = await call('collaboration/groupPreparation', raw, signal)
+            if (!groupPreparationResult(result, raw)) throw Error('invalid group preparation')
             return result
           } catch { return { state: 'retry_required' as const } }
           finally { clearTimeout(timer) }

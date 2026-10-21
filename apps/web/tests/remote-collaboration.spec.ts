@@ -54,6 +54,7 @@ function bridge(): {
   collaborationDeliveries(value: unknown): Promise<unknown>
   collaborationConversations?(): Promise<unknown>
   collaborationGroupMessages?(value: unknown): Promise<unknown>
+  collaborationGroupPreparation?(value: unknown): Promise<unknown>
   collaborationArchive?(value: unknown): Promise<unknown> } {
   const host: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
   if (typeof host !== 'object' || host === null || !('collaborationWorkspace' in host)) throw Error('bridge is missing')
@@ -329,6 +330,28 @@ it('REQ-20261020-0010: group page accepts multiline messages but rejects malform
   expect(await bridge().collaborationGroupMessages?.(command)).toMatchObject({ state: 'page', items: [{ body }] })
   body = ''
   expect(await bridge().collaborationGroupMessages?.(command)).toEqual({ state: 'retry_required' })
+})
+it('REQ-20261020-0010: preparation sends only original Source coordinates', async () => {
+  const advertised = { ...capability, methods: ['workspace', 'groupPreparation'] }
+  const source = { workspace_id: workspace, session_id: 'session-1',
+    source_message_id: 'message-1', source_revision: '1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'preparing',
+      group_id: '44444444-4444-4444-8444-444444444444', version: 1,
+      workspace_id: workspace, session_id: 'session-1' }) }
+  })
+  await installRemoteCollaboration(h.fetch)
+  expect(bridge().collaborationScopeAvailable).toBe(true)
+  expect(await bridge().collaborationGroupPreparation?.(source)).toMatchObject({ state: 'preparing', version: 1 })
+  expect(requests[0]?.method).toBe('collaboration/groupPreparation')
+  expect(requests[0]?.payload.args.request).toEqual(source)
+  expect(await bridge().collaborationGroupPreparation?.({ ...source, host_snapshot_assertion: 'caller' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
 })
 it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pagehide without resubmitting the Agent', async () => {
   const started = Promise.withResolvers<undefined>()
