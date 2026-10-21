@@ -108,6 +108,25 @@ it('refuses a missing pointer or changed fixed plan after a snapshot was capture
   expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
 })
 
+it('reads only the requested file after a complete fixed snapshot check', async () => {
+  const { root, installation } = await store()
+  const evidence = archive(), plan = target('version-1', evidence)
+  await installation.prepare(plan, evidence.bytes)
+  const receipt = await installation.activate(plan.operationId, '1', '0')
+  const fixed = await installation.snapshotFixed(receipt)
+  const base = join(root, 'skillhub-versions', plan.operationId)
+  const unrelated = join(base, 'files', 'references', 'data.txt')
+  writeFileSync(unrelated, 'corrupted')
+  expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
+  await expect(fixed.readFile('references/data.txt')).rejects.toThrow()
+  await expect(installation.snapshotFixed(receipt)).rejects.toThrow()
+  await expect(installation.current(packageId)).rejects.toThrow()
+  writeFileSync(unrelated, resource)
+  const manifest = join(base, 'manifest.json')
+  writeFileSync(manifest, '[]')
+  await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
+})
+
 it('rejects the wrong Profile, key, generation and stale revision before activation', async () => {
   const { installation } = await store()
   const evidence = archive()

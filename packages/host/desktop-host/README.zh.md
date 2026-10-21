@@ -57,7 +57,7 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_package_chunk` 片段。它根据固定包和完整清单摘要校验 ZIP，再写入私有准备快照。准备不会改变资产安装 revision。单独的 `profile.skillhub_package` 调用检查该授权和预期 revision 后才原子激活；当前回读返回 Host 签名回执。完整回执可在当前指针前移后重新打开同一不可变 operation，并再次检查全部身份字段和文件。该回执只证明存储激活，不证明运行时加载或 Slark 侧安装授权。
 
-`profile.skillhub_package_snapshot` 通过有界只读控制帧公开固定重开能力。客户端指定 manifest 或一个安全相对文件，并按精确偏移推进；每帧最多 32 KiB。偏移零会验证不可变 operation，并为该认证连接捕获一个对象。后续每帧都重新校验回执与有效 Profile 授权，只接受下一偏移或相同分片重试，并在中止或空闲后释放保留字节。客户端在接收字节前拒绝被修改的 operation、manifest、目标或偏移字段。
+`profile.skillhub_package_snapshot` 通过有界只读控制帧公开固定重开能力。客户端指定 manifest 或一个安全相对文件，并按精确偏移推进；每帧最多 32 KiB。偏移零会验证完整不可变 operation，并为该认证连接捕获一个对象。已捕获快照在每次读取文件时校验计划、清单、路径和目标文件摘要；重新打开快照或回读当前回执时仍校验全部文件。后续每帧都重新校验回执与有效 Profile 授权，只接受下一偏移或相同分片重试，并在中止或空闲后释放保留字节。客户端在接收字节前拒绝被修改的 operation、manifest、目标或偏移字段。
 
 `profile.skillhub_execution_receipt` 在签署完成的 daemon 报告前，重新检查同一当前 Profile 授权、激活签名和不可变包文件。Host 与包坐标由本地派生；客户端在返回回执前拒绝任何字段变化或无效签名。Host 证明的是已认证 Main 报告与固定包身份，Slark 仍负责核对 effect、Work 权限、Computer 授权和已准备沙箱。
 

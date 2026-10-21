@@ -257,12 +257,17 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     await previous
     try { return await action() } finally { release() }
   }
-  async function current(packageId: string): Promise<SkillHubPackageReceipt | null> {
+  async function currentReceipt(packageId: string): Promise<SkillHubPackageReceipt | null> {
     await checkRoot()
     if (!/^[a-zA-Z0-9_-]{1,100}$/u.test(packageId)) fail()
     const receipt = await storedJson<StoredReceipt>(join(pointers, `${packageId}.json`))
     if (!receipt) return null
     receiptValid(receipt, packageId)
+    return receipt as SkillHubPackageReceipt
+  }
+  async function current(packageId: string): Promise<SkillHubPackageReceipt | null> {
+    const receipt = await currentReceipt(packageId)
+    if (!receipt) return null
     const plan = await storedJson<SkillHubPackagePlan>(join(versions, receipt.operationId, 'plan.json'))
     if (!plan) throw Error('skillhub_package_unavailable')
     planValid(plan, profileId, hostKeyId, bindingGeneration)
@@ -271,7 +276,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       || plan.manifestSha256 !== receipt.manifestSha256
       || (BigInt(plan.expectedRevision) + 1n).toString() !== receipt.revision) fail()
     await verifiedFiles(plan, join(versions, receipt.operationId))
-    return receipt as SkillHubPackageReceipt
+    return receipt
   }
   function receiptValid(receipt: StoredReceipt | SkillHubPackageReceipt, expectedPackageId?: string) {
     if (Object.keys(receipt).length !== 11 || !UUID.test(receipt.operationId)
@@ -296,21 +301,34 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       || (BigInt(plan.expectedRevision) + 1n).toString() !== receipt.revision) fail()
     return { base, plan }
   }
-  async function readFixedFile(receipt: SkillHubPackageReceipt, path: string): Promise<Buffer> {
+  async function readFixedFile(receipt: SkillHubPackageReceipt, path: string,
+    files: SkillHubPackageSnapshot['files']): Promise<Buffer> {
     await checkRoot()
     if (!safePath(path)) fail()
     const { base, plan } = await fixedPlan(receipt)
-    const files = await verifiedFiles(plan, base)
+    for (const directory of [base, join(base, 'files')]) {
+      const info = await lstat(directory)
+      if (!info.isDirectory() || info.isSymbolicLink() || !privateMode(info.mode)) fail()
+    }
+    const manifest = await storedJson<StoredFile[]>(join(base, 'manifest.json'))
+    if (!Array.isArray(manifest) || !manifest.length || manifest.length > 500
+      || digest(JSON.stringify([MANIFEST_SCHEMA,
+        manifest.map(file => [file.path, file.mode, file.size, file.sha256])])) !== plan.manifestSha256) fail()
     const evidence = files.find(file => file.path === path)
     if (!evidence) throw Error('skillhub_package_unavailable')
+    let parent = join(base, 'files')
+    for (const part of path.split('/').slice(0, -1)) {
+      parent = join(parent, part)
+      const entry = await lstat(parent)
+      if (!entry.isDirectory() || entry.isSymbolicLink() || !privateMode(entry.mode)) fail()
+    }
     const file = await open(join(base, 'files', ...path.split('/')),
       constants.O_RDONLY | constants.O_NOFOLLOW)
     try {
       const stat = await file.stat()
-      /* v8 ignore next -- verifiedFiles already checked this file; only a concurrent mutation between two opens reaches this guard. */
-      if (!stat.isFile() || stat.size !== evidence.size) fail()
+      if (!stat.isFile() || stat.size !== evidence.size
+        || (process.platform !== 'win32' && (stat.mode & 0o777) !== (evidence.mode === '0755' ? 0o755 : 0o644))) fail()
       const bytes = await file.readFile()
-      /* v8 ignore next -- verifiedFiles already hashed this file; only a concurrent mutation between two reads reaches this guard. */
       if (digest(bytes) !== evidence.sha256) fail()
       return bytes
     } finally { await file.close() }
@@ -324,12 +342,12 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       size: file.size, sha256: file.sha256,
     })))
     return Object.freeze({ receipt: fixed, files,
-      readFile: (path: string) => readFixedFile(fixed, path) })
+      readFile: (path: string) => readFixedFile(fixed, path, files) })
   }
   return Object.freeze({
     current,
     async snapshot(packageId: string) {
-      const receipt = await current(packageId)
+      const receipt = await currentReceipt(packageId)
       if (!receipt) throw Error('skillhub_package_unavailable')
       return snapshotFixed(receipt)
     },
@@ -409,9 +427,9 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
       })
     },
     async readFile(packageId: string, path: string): Promise<Buffer> {
-      const receipt = await current(packageId)
+      const receipt = await currentReceipt(packageId)
       if (!receipt) throw Error('skillhub_package_unavailable')
-      return readFixedFile(receipt, path)
+      return (await snapshotFixed(receipt)).readFile(path)
     },
   })
 }
