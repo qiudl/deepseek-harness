@@ -13,6 +13,7 @@ import type { CollaborationPlanningPredecessor, CollaborationRootPlanningManifes
 import { hostname } from 'node:os'
 import { resolve } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { inboxProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -158,6 +159,8 @@ declare module '@deepseek-ai/dsh-workspace/types' {
   interface SessionActivityKindMap {
     /** A Source, root, or its immediate analysis is still being submitted. */
     source_capture: true
+    /** An old input is still queued in the original Session. */
+    pending_inbox: true
   }
 }
 
@@ -333,7 +336,17 @@ export class SessionController extends TypertRemoteService {
     ctx.on('workspace/session-activity', async ({ sessionId }, next) => {
       const active = this.collaborationInputActivity.has(sessionId)
       const rest = await next()
-      return active ? [{ kind: 'source_capture' as const }, ...rest] : rest
+      using observation = await ctx.sessionQuery.observeSession(sessionId, { projectionMode: 'none' })
+      const inbox = observation.events.reduce(
+        (state, event) => inboxProjectionDefinition.apply(state, event),
+        inboxProjectionDefinition.init(),
+      )
+      return [
+        ...(active ? [{ kind: 'source_capture' as const }] : []),
+        ...(inbox['next-turn'].length > 0 || inbox['next-step'].length > 0
+          ? [{ kind: 'pending_inbox' as const }] : []),
+        ...rest,
+      ]
     })
     this.fileApplications = internals.fileApplications ?? nativeFileApplications
     this.openFileApplication = internals.openFileApplication ?? openNativeFileApplication
