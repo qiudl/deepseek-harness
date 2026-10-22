@@ -44,6 +44,7 @@ function inspectResult(request: HostInspectRequest): HostInspectResult {
       runtime_generation: 5,
       schema_generation: 1,
       process_nonce: processNonce as never,
+      boot_nonce: 'A'.repeat(43) as never,
       capabilities: ['host.inspect', 'profile.status'],
       challenge_signature: 'A'.repeat(86) as never,
       executable_signature_digest: '1'.repeat(64) as never,

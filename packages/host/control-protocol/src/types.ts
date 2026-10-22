@@ -156,6 +156,8 @@ export interface HostInspectResult {
     readonly runtime_generation: number
     readonly schema_generation: number
     readonly process_nonce: HostControlNonce
+    /** Fresh for each Host authority process, stable across its client connections. */
+    readonly boot_nonce: HostControlNonce
     readonly capabilities: readonly HostControlCapability[]
     readonly challenge_signature: HostControlSignature
     readonly executable_signature_digest: HostControlSha256
