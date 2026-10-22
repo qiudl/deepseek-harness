@@ -470,6 +470,11 @@ function extensionKind(value: unknown): HostExtensionKind {
   if (value !== 'plugin' && value !== 'mcp' && value !== 'skill') reject()
   return value
 }
+function botGroupDeliveryParams(params: Record<string, unknown>) {
+  return parseHostBotGroupDeliveryInput({ computer_id: params.computer_id,
+    slark_audience: params.slark_audience, ticket: params.ticket, command: params.command })
+}
+
 function collaborationAccountParams(params: Record<string, unknown>) {
   return {
     ...authorized(params),
@@ -2263,10 +2268,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
       'slark_audience', 'ticket', 'command'])
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...collaborationAccountParams(params), ...parseHostBotGroupDeliveryInput({
-        computer_id: params.computer_id, slark_audience: params.slark_audience,
-        ticket: params.ticket, command: params.command,
-      }),
+      ...collaborationAccountParams(params), ...botGroupDeliveryParams(params),
     } } satisfies ProfileBotGroupDeliverRequest
   }
   if (frame.method === 'profile.bot_group_result_page') {
@@ -2275,23 +2277,18 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       'slark_audience', 'ticket', 'command', 'after'])
     if (!Number.isSafeInteger(params.after) || Number(params.after) < 0) reject()
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...collaborationAccountParams(params), ...parseHostBotGroupDeliveryInput({
-        computer_id: params.computer_id, slark_audience: params.slark_audience,
-        ticket: params.ticket, command: params.command,
-      }), after: params.after as number,
+      ...collaborationAccountParams(params), ...botGroupDeliveryParams(params),
+      after: params.after as number,
     } } satisfies ProfileBotGroupResultPageRequest
   }
   if (frame.method === 'profile.bot_group_result_ack') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
       'slark_audience', 'ticket', 'command', 'result_id'])
-    const delivery = parseHostBotGroupDeliveryInput({
-      computer_id: params.computer_id, slark_audience: params.slark_audience,
-      ticket: params.ticket, command: params.command,
-    })
+    const delivery = botGroupDeliveryParams(params)
     if (params.result_id !== `${delivery.command.deliveryId}:final`) reject()
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
-      ...collaborationAccountParams(params), ...delivery, result_id: params.result_id as string,
+      ...collaborationAccountParams(params), ...delivery, result_id: params.result_id,
     } } satisfies ProfileBotGroupResultAckRequest
   }
   if (frame.method === 'profile.model_text') {

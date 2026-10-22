@@ -86,7 +86,7 @@ function decoded(value: string): unknown {
   catch { return fail() }
 }
 function publicKeys(keyring: BotGroupPublicKeyring): Map<string, VerifiedKey> {
-  if (keyring.version !== 1 || !UUID.test(keyring.environmentId) ||
+  if (!UUID.test(keyring.environmentId) ||
       !issuerOrigin(keyring.issuer) ||
       !Array.isArray(keyring.keys) || keyring.keys.length < 1 || keyring.keys.length > 4) fail()
   const keys = new Map<string, VerifiedKey>()
@@ -159,7 +159,11 @@ export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyri
       claims.message_id, claims.group_id, `deepseek-bot:${expected.botId}`,
       expected.memberCycle, expected.messageSeq, expected.text])).digest('hex')
     if (claims.payload_digest !== digest) fail()
-    const accepted = claims as unknown as AcceptedClaims
+    const accepted: AcceptedClaims = {
+      issued_at: claims.issued_at as number, expires_at: claims.expires_at as number,
+      workspace_id: claims.workspace_id as string, session_id: claims.session_id as string,
+      message_id: claims.message_id as string, payload_digest: claims.payload_digest as string,
+    }
     const key = publicKeys(keyring).get(header.kid as string)
     const signature = Buffer.from(signaturePart, 'base64url')
     if (!key || key.validFrom > accepted.issued_at || key.validUntil < accepted.expires_at ||
@@ -196,8 +200,8 @@ export async function confirmBotGroupTicket(token: string, keyring: BotGroupPubl
       if (length > 4_096) { await reader.cancel(); fail() }
       chunks.push(next.value)
     }
-    const body = JSON.parse(new TextDecoder('utf-8', { fatal: true })
-      .decode(Buffer.concat(chunks))) as unknown
+    const body: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true })
+      .decode(Buffer.concat(chunks)))
     if (!exact(body, ['ok', 'value']) || body.ok !== true ||
         !exact(body.value, ['state', 'delivery_id', 'expires_at']) ||
         body.value.state !== 'active' || body.value.delivery_id !== expected.deliveryId ||

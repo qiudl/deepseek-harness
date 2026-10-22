@@ -38,7 +38,8 @@ export function parseHostBotGroupPublicKeyring(value: unknown): HostBotGroupPubl
         !Number.isSafeInteger(key.validUntil) || Number(key.validUntil) <= Number(key.validFrom))
       throw Error('invalid_bot_group')
     seen.add(key.kid)
-    return key as unknown as HostBotGroupPublicKey
+    return { kid: key.kid, publicKeyPem: key.publicKeyPem,
+      validFrom: key.validFrom as number, validUntil: key.validUntil as number }
   })
   return { version: 1, environmentId: row.environmentId, issuer: row.issuer, keys }
 }
