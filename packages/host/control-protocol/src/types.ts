@@ -472,6 +472,56 @@ export interface ProfileSkillHubClockWitnessResult {
   }
 }
 
+/** Host-issued anchors prevent an evicted witness from being initialized again. */
+export type HostSkillHubClockV2Command =
+  | { readonly kind: 'epoch' }
+  | { readonly kind: 'issue' }
+  | {
+    readonly kind: 'witness'
+    readonly anchor_id: HostSkillHubClockAnchorId
+    readonly epoch: HostControlNonce
+    readonly ticket: HostControlNonce | null
+    readonly command: HostSkillHubClockWitnessCommand
+  }
+
+/** Profile-granted issue, epoch read or exact witness operation for the V2 ledger. */
+export interface ProfileSkillHubClockV2Request {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_clock_v2'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly profile_id: HostProfileId
+    readonly binding_generation: string
+    readonly host_key_id: HostControlSha256
+    readonly command: HostSkillHubClockV2Command
+  }
+}
+
+/** Current epoch, Host-issued ticket or exact witness verdict. */
+export interface ProfileSkillHubClockV2Result {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_clock_v2'
+  readonly result:
+    | { readonly kind: 'epoch'; readonly epoch: HostControlNonce }
+    | {
+      readonly kind: 'issued'
+      readonly anchor_id: HostSkillHubClockAnchorId
+      readonly epoch: HostControlNonce
+      readonly ticket: HostControlNonce
+    }
+    | {
+      readonly kind: 'witness'
+      readonly anchor_id: HostSkillHubClockAnchorId
+      readonly epoch: HostControlNonce
+      readonly value: HostSkillHubClockWitnessValue | null
+      readonly applied: boolean | null
+    }
+}
+
 /** Open the same Profile through a Main-only local view lease. */
 export interface ProfileSkillHubBindingRequest {
   readonly version: 1
@@ -1987,6 +2037,8 @@ export type HostControlFrame =
   | ProfileSkillHubExecutionReceiptResult
   | ProfileSkillHubClockWitnessRequest
   | ProfileSkillHubClockWitnessResult
+  | ProfileSkillHubClockV2Request
+  | ProfileSkillHubClockV2Result
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
   | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest

@@ -115,6 +115,7 @@ export type {
   ProfileSkillHubExecutionReceiptResult,
   HostSkillHubClockAnchorId, HostSkillHubClockWitnessValue, HostSkillHubClockWitnessCommand,
   ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockWitnessResult,
+  ProfileSkillHubClockV2Request, ProfileSkillHubClockV2Result, HostSkillHubClockV2Command,
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,

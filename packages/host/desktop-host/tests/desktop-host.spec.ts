@@ -489,6 +489,44 @@ describe('authenticated Unix transport', () => {
     } finally { owner.close(); other.close(); await server.close() }
   })
 
+  it('issues Profile-granted V2 anchors and requires their one-time initialization tickets', async () => {
+    const { server, socketPath } = await fixture()
+    const options = { socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now }
+    const owner = await UnixHostClient.connect(options)
+    const other = await UnixHostClient.connect(options)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:clock-v2', unlockMaterial })
+      const input = { profileSelector: local.profileSelector, profileId: local.profileId,
+        bindingGeneration: '1',
+        hostKeyId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex') }
+      await expect(other.skillHubClockV2({ ...input, command: { kind: 'issue' } }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue' } })
+      expect(issued.kind).toBe('issued')
+      if (issued.kind !== 'issued') throw Error('expected issued anchor')
+      expect(await owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
+        .toEqual({ kind: 'epoch', epoch: issued.epoch })
+      const zero = { revision: '0', digest: 'a'.repeat(64) }
+      const command = { kind: 'witness' as const, anchor_id: issued.anchor_id, epoch: issued.epoch,
+        ticket: issued.ticket, command: { kind: 'compare_and_set' as const, previous: null, next: zero } }
+      await expect(owner.skillHubClockV2({ ...input, command: { ...command, ticket: null } }))
+        .rejects.toMatchObject({ code: 'stale' })
+      expect(await owner.skillHubClockV2({ ...input, command }))
+        .toEqual({ kind: 'witness', anchor_id: issued.anchor_id, epoch: issued.epoch,
+          value: zero, applied: true })
+      expect((await owner.skillHubClockV2({ ...input, command })).kind).toBe('witness')
+      owner.close()
+      await other.restoreLocalProfile({ profileSelector: local.profileSelector,
+        keyHandle: 'keychain:clock-v2', unlockMaterial })
+      expect(await other.skillHubClockV2({ ...input, command: { kind: 'witness',
+        anchor_id: issued.anchor_id, epoch: issued.epoch, ticket: null,
+        command: { kind: 'read' } } })).toEqual({ kind: 'witness', anchor_id: issued.anchor_id,
+        epoch: issued.epoch, value: zero, applied: null })
+    } finally { owner.close(); other.close(); await server.close() }
+  })
+
   it('signs a separate SkillHub challenge only for a currently authorized Host-local Profile', async () => {
     const { server, socketPath } = await fixture()
     const connectionOptions = {
