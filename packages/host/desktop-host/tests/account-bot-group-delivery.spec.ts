@@ -119,3 +119,61 @@ it('acknowledges only the exact result under a live original delivery', async ()
     .rejects.toThrow('invalid_input')
   expect(f.workers.operateBotGroup).toHaveBeenCalledTimes(1)
 })
+
+it('rejects a non-delivery command and a replaced Profile before worker access', async () => {
+  const unsigned = fixture()
+  const { confirm, ...withoutConfirm } = unsigned.input
+  expect(confirm).toBeDefined()
+  await expect(deliverAccountBotGroup(withoutConfirm))
+    .rejects.toThrow('bot_group_ticket_invalid')
+  expect(unsigned.workers.operateBotGroup).not.toHaveBeenCalled()
+
+  const wrong = fixture()
+  await expect(deliverAccountBotGroup({ ...wrong.input,
+    command: { operation: 'receipt', deliveryId: wrong.command.deliveryId,
+      groupId: wrong.command.groupId, botId: wrong.command.botId,
+      memberCycle: wrong.command.memberCycle } as never }))
+    .rejects.toThrow('invalid_input')
+  expect(wrong.workers.operateBotGroup).not.toHaveBeenCalled()
+
+  const replaced = fixture()
+  replaced.host.authorizeAccountModelText.mockReturnValueOnce('profile' as never)
+    .mockReturnValueOnce('replacement' as never)
+  await expect(deliverAccountBotGroup(replaced.input)).rejects.toThrow('stale')
+  expect(replaced.workers.operateBotGroup).not.toHaveBeenCalled()
+})
+
+it('preserves the original worker error when receipt recovery fails or authority changes', async () => {
+  const failed = fixture()
+  failed.workers.operateBotGroup.mockRejectedValueOnce(Error('delivery uncertain'))
+    .mockRejectedValueOnce(Error('receipt unavailable'))
+  await expect(deliverAccountBotGroup(failed.input)).rejects.toThrow('delivery uncertain')
+  expect(failed.workers.operateBotGroup).toHaveBeenCalledTimes(2)
+
+  const replaced = fixture()
+  replaced.workers.operateBotGroup.mockRejectedValueOnce(Error('delivery uncertain'))
+  replaced.host.authorizeAccountModelText.mockReturnValueOnce('profile' as never)
+    .mockReturnValueOnce('profile' as never).mockReturnValueOnce('replacement' as never)
+  await expect(deliverAccountBotGroup(replaced.input)).rejects.toThrow('stale')
+  expect(replaced.workers.operateBotGroup).toHaveBeenCalledTimes(1)
+})
+
+it('rejects mismatched worker replies after successful delivery, result read and ack', async () => {
+  const delivered = fixture()
+  delivered.workers.operateBotGroup.mockResolvedValueOnce({
+    ...delivered.result, groupId: randomUUID() } as never)
+  await expect(deliverAccountBotGroup(delivered.input)).rejects.toThrow('stale')
+
+  const page = fixture()
+  await expect(readAccountBotGroupResultPage({ ...page.input, after: -1 }))
+    .rejects.toThrow('invalid_input')
+  page.workers.operateBotGroup.mockResolvedValueOnce({ state: 'ok',
+    results: [], next: 3 } as never)
+  await expect(readAccountBotGroupResultPage({ ...page.input, after: 0 }))
+    .rejects.toThrow('stale')
+
+  const ack = fixture()
+  ack.workers.operateBotGroup.mockResolvedValueOnce({ state: 'conflict' } as never)
+  await expect(acknowledgeAccountBotGroupResult({ ...ack.input,
+    resultId: `${ack.command.deliveryId}:final` })).rejects.toThrow('stale')
+})

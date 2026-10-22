@@ -67,11 +67,6 @@ const exact = (value: unknown, fields: readonly string[]): value is Record<strin
   typeof value === 'object' && value !== null && !Array.isArray(value) &&
   Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key))
 const positive = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0
-function origin(value: unknown): value is string {
-  if (typeof value !== 'string') return false
-  try { const url = new URL(value); return url.protocol === 'https:' && url.origin === value }
-  catch { return false }
-}
 function issuerOrigin(value: unknown): string | null {
   if (typeof value !== 'string') return null
   try {
@@ -152,7 +147,7 @@ export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyri
         !positive(claims.issued_at) || !positive(claims.expires_at) ||
         claims.issued_at > now + 5000 || claims.expires_at <= now ||
         claims.expires_at <= claims.issued_at || claims.expires_at - claims.issued_at > 60_000 ||
-        !origin(claims.slark_audience) || !UUID.test(expected.groupId) ||
+        typeof claims.slark_audience !== 'string' || !UUID.test(expected.groupId) ||
         !UUID.test(expected.deliveryId) || !BOT.test(expected.botId) ||
         !positive(expected.memberCycle) || !positive(expected.messageSeq)) fail()
     const digest = createHash('sha256').update(JSON.stringify(['slark_bot_group_v1',

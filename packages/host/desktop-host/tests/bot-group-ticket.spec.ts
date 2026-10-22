@@ -116,3 +116,68 @@ it('refuses a revoked, mismatched, expired or oversized confirmation', async () 
     new AbortController().signal, async () => Response.json({}),
     () => now + 60_001)).rejects.toThrow('bot_group_ticket_invalid')
 })
+
+it('rejects malformed ticket framing and untrusted public key projections', () => {
+  for (const token of [null, 'a'.repeat(8193), '', 'bad.token', 'a.b.c',
+    `${Buffer.from('{', 'utf8').toString('base64url')}.e30.A`]) {
+    expect(() => verifyBotGroupTicket(token as string, keyring, expected, now))
+      .toThrow('bot_group_ticket_invalid')
+  }
+  const otherPair = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  for (const projection of [
+    { ...keyring, issuer: null }, { ...keyring, issuer: 'bad' },
+    { ...keyring, issuer: 'https://slark.example.test/path' },
+    { ...keyring, keys: null }, { ...keyring, keys: Array(5).fill(keyring.keys[0]) },
+    { ...keyring, keys: [{ ...keyring.keys[0], kid: 'bad' }] },
+    { ...keyring, keys: [keyring.keys[0], keyring.keys[0]] },
+    { ...keyring, keys: [{ ...keyring.keys[0], validFrom: 0 }] },
+    { ...keyring, keys: [{ ...keyring.keys[0], validUntil: 0 }] },
+    { ...keyring, keys: [{ ...keyring.keys[0], validUntil: keyring.keys[0]!.validFrom }] },
+    { ...keyring, keys: [{ ...keyring.keys[0], publicKeyPem:
+      otherPair.publicKey.export({ type: 'spki', format: 'pem' }).toString() }] },
+  ]) {
+    expect(() => verifyBotGroupTicket(ticket(), projection as typeof keyring, expected, now))
+      .toThrow('bot_group_ticket_invalid')
+  }
+})
+
+it('rejects wrong ticket header, signer window and aborted confirmation', async () => {
+  const signed = ticket()
+  const [header, claims, signature] = signed.split('.')
+  const alteredHeader = Buffer.from(JSON.stringify({ alg: 'none', typ: 'SLARK-DSH-BOT-GROUP',
+    version: 1, kid: keyring.keys[0]!.kid })).toString('base64url')
+  for (const invalid of [`${alteredHeader}.${claims}.${signature}`,
+    `${header}.${claims}.${'A'.repeat(86)}`]) {
+    expect(() => verifyBotGroupTicket(invalid, keyring, expected, now))
+      .toThrow('bot_group_ticket_invalid')
+  }
+  const malformedHeader = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'SLARK-DSH-BOT-GROUP',
+    version: 1 })).toString('base64url')
+  const malformedClaims = Buffer.from(JSON.stringify({ extra: true })).toString('base64url')
+  for (const invalid of [`${malformedHeader}.${claims}.${signature}`,
+    `${header}.${malformedClaims}.${signature}`]) {
+    expect(() => verifyBotGroupTicket(invalid, keyring, expected, now))
+      .toThrow('bot_group_ticket_invalid')
+  }
+  for (const issuer of [null, 'bad', 'https://slark.example.test/?query=1']) {
+    expect(() => verifyBotGroupTicket(ticket({ issuer, slark_audience: null }),
+      { ...keyring, issuer } as typeof keyring,
+      { ...expected, slarkAudience: null } as unknown as BotGroupTicketExpected, now))
+      .toThrow('bot_group_ticket_invalid')
+  }
+  for (const projection of [
+    { ...keyring, keys: [{ ...keyring.keys[0], validFrom: now + 1 }] },
+    { ...keyring, keys: [{ ...keyring.keys[0], validUntil: now + 59_999 }] },
+  ]) {
+    expect(() => verifyBotGroupTicket(signed, projection as typeof keyring, expected, now))
+      .toThrow('bot_group_ticket_invalid')
+  }
+  const aborted = new AbortController()
+  aborted.abort()
+  await expect(confirmBotGroupTicket(signed, keyring, expected, aborted.signal,
+    async () => Response.json({ ok: true }), () => now + 1_000))
+    .rejects.toThrow('bot_group_ticket_invalid')
+  await expect(confirmBotGroupTicket(signed, keyring, expected,
+    new AbortController().signal, async () => { throw Error('network') }, () => now + 1_000))
+    .rejects.toThrow('bot_group_ticket_invalid')
+})

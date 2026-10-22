@@ -57,8 +57,11 @@ export function parseHostBotGroupResultProof(value: unknown): HostBotGroupResult
     !Number.isSafeInteger(row.issued_at) || Number(row.issued_at) < 1 ||
     typeof row.signature !== 'string' || !SIG.test(row.signature)) fail()
   const result = row.result as Result
-  const parsed = parseHostBotGroupResponse({ state: 'ok', results: [result], next: result.seq })
-  if (parsed.state === 'ok' && parsed.results.length === 1 && parsed.results[0]) return {
+  // The parser returns `ok` with this one result or throws; it cannot return
+  // another state for the fixed input above.
+  const parsed = parseHostBotGroupResponse({ state: 'ok', results: [result], next: result.seq }) as
+    Extract<HostBotGroupResponse, { state: 'ok' }>
+  return {
     schema_version: 1, authority_environment_id: row.authority_environment_id as string,
     account_binding_handle: row.account_binding_handle as string,
     authority_binding_version: row.authority_binding_version as number,
@@ -67,9 +70,8 @@ export function parseHostBotGroupResultProof(value: unknown): HostBotGroupResult
     slark_audience: row.slark_audience as string, installation_id: row.installation_id as string,
     installation_public_key: row.installation_public_key as string,
     host_instance_id: row.host_instance_id as string, process_nonce: row.process_nonce as string,
-    result: parsed.results[0], issued_at: row.issued_at as number, signature: row.signature as string,
+    result: parsed.results[0] as Result, issued_at: row.issued_at as number, signature: row.signature as string,
   }
-  return fail()
 }
 
 /**
