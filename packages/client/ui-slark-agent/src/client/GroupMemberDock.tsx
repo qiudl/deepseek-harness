@@ -49,6 +49,17 @@ export type GroupMemberCommand =
     request_id: string
     expected_binding_epoch: number
     bot_id: string }
+  | { operation: 'proxy_replace'
+    workspace_id: string
+    session_id: string
+    request_id: string
+    expected_binding_epoch: number
+    bot_id: string }
+  | { operation: 'proxy_unbind'
+    workspace_id: string
+    session_id: string
+    request_id: string
+    expected_binding_epoch: number }
   | { operation: 'proxy_attach'
     workspace_id: string
     session_id: string
@@ -98,6 +109,12 @@ export type GroupMemberReply = Snapshot | Receipt |
     binding_id: string
     binding_epoch: number
     bot_ref: string } |
+  { state: 'proxy_changed'
+    operation: 'replace' | 'unbind'
+    binding_id: string
+    binding_epoch: number
+    bot_ref: string | null
+    binding_state: 'transferring' | 'unbound' } |
   { state: 'missing' | 'conflict' | 'retry_required' }
 export interface GroupMemberBridge {
   collaborationGroupMembers?(command: GroupMemberCommand): Promise<GroupMemberReply>
@@ -121,6 +138,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   const [proxyBusy, setProxyBusy] = useState(false)
   const [proxyUnavailable, setProxyUnavailable] = useState(false)
   const [proxyLabel, setProxyLabel] = useState<string | null>(null)
+  const [proxyHandoffPending, setProxyHandoffPending] = useState(false)
   const [unavailable, setUnavailable] = useState(false)
   const [removalPending, setRemovalPending] = useState(false)
   const [removalNeedsDecision, setRemovalNeedsDecision] = useState(false)
@@ -132,7 +150,9 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   const botIdRef = useRef('')
   const rosterLoad = useRef<((after: string) => Promise<void>) | null>(null)
   const proxySelect = useRef<(() => Promise<void>) | null>(null)
+  const proxyUnbind = useRef<(() => Promise<void>) | null>(null)
   const proxyRequestId = useRef<string | null>(null)
+  const unbindRequestId = useRef<string | null>(null)
   useEffect(() => { snapshotRef.current = snapshot }, [snapshot])
   useEffect(() => { botIdRef.current = botId }, [botId])
   useEffect(() => {
@@ -140,7 +160,8 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     setRemovalPending(false); setRemovalNeedsDecision(false)
     snapshotRef.current = null; botIdRef.current = ''
     setRoster(null); setRosterBusy(false); setRosterUnavailable(false)
-    setProxyBusy(false); setProxyUnavailable(false); setProxyLabel(null); proxyRequestId.current = null
+    setProxyBusy(false); setProxyUnavailable(false); setProxyLabel(null)
+    setProxyHandoffPending(false); proxyRequestId.current = null; unbindRequestId.current = null
     pendingRef.current = null
     if (!host.collaborationGroupMembers) return
     let disposed = false, inFlight = false, inFlightChange = false
@@ -207,6 +228,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
           return
         }
         setProxyLabel(status.bot_ref)
+        setProxyHandoffPending(status.binding_state === 'transferring')
         if (status.binding_state === 'active' && status.bot_ref === `deepseek-bot:${selected}` &&
           snapshotRef.current.members.some(member => member.actor_ref === status.bot_ref &&
             member.sources.includes('personal_proxy'))) return
@@ -226,6 +248,20 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
             return
           }
           binding = result; proxyRequestId.current = null; setProxyLabel(result.bot_ref)
+        } else if (status.binding_state === 'active') {
+          const requestId = proxyRequestId.current ?? randomUUID()
+          proxyRequestId.current = requestId
+          const result = await host.collaborationGroupMembers({ operation: 'proxy_replace',
+            workspace_id: workspaceId, session_id: sessionId, request_id: requestId,
+            expected_binding_epoch: status.binding_epoch, bot_id: selected })
+          if (!current() || result.state !== 'proxy_changed' ||
+            result.operation !== 'replace' || result.bot_ref !== `deepseek-bot:${selected}`) {
+            if (current()) setProxyUnavailable(true)
+            return
+          }
+          proxyRequestId.current = null; setProxyLabel(result.bot_ref)
+          setProxyHandoffPending(true)
+          return
         }
         const currentSnapshot = snapshotRef.current
         // The snapshot can disappear while the async Bot selection is in progress.
@@ -239,10 +275,40 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       } catch { if (current()) setProxyUnavailable(true) }
       finally { proxyInFlight = false; if (current()) setProxyBusy(false) }
     }
+    proxyUnbind.current = async () => {
+      /* v8 ignore next -- the unbind button is disabled while a proxy command is active. */
+      if (!current() || proxyInFlight || !host.collaborationGroupMembers) return
+      proxyInFlight = true; setProxyBusy(true); setProxyUnavailable(false)
+      try {
+        const status = await host.collaborationGroupMembers({ operation: 'proxy_status',
+          workspace_id: workspaceId, session_id: sessionId })
+        if (!current() || status.state !== 'proxy_binding') {
+          if (current()) setProxyUnavailable(true)
+          return
+        }
+        if (status.binding_state === 'unbound') {
+          setProxyLabel(null); setProxyHandoffPending(false); return
+        }
+        if (status.binding_state !== 'active') { setProxyUnavailable(true); return }
+        const requestId = unbindRequestId.current ?? randomUUID()
+        unbindRequestId.current = requestId
+        const result = await host.collaborationGroupMembers({ operation: 'proxy_unbind',
+          workspace_id: workspaceId, session_id: sessionId, request_id: requestId,
+          expected_binding_epoch: status.binding_epoch })
+        if (!current() || result.state !== 'proxy_changed' || result.operation !== 'unbind' ||
+          result.bot_ref !== null) {
+          if (current()) setProxyUnavailable(true)
+          return
+        }
+        unbindRequestId.current = null; setProxyLabel(null); setProxyHandoffPending(true)
+      } catch { if (current()) setProxyUnavailable(true) }
+      finally { proxyInFlight = false; if (current()) setProxyBusy(false) }
+    }
     void load()
     const timer = window.setInterval(() => { void load() }, 20_000)
     return () => { disposed = true; window.clearInterval(timer)
-      change.current = null; rosterLoad.current = null; proxySelect.current = null }
+      change.current = null; rosterLoad.current = null; proxySelect.current = null
+      proxyUnbind.current = null }
   }, [host, workspaceId, sessionId, groupId])
   const add = () => {
     /* v8 ignore next -- the Add button is disabled until a snapshot and valid Bot ID exist and while a change is pending. */
@@ -298,6 +364,8 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
         onClick={add}>{t('group.addBot')}</button>
       <button type="button" disabled={busy || proxyBusy || !!pending || !botIdPattern.test(botId)}
         onClick={() => { void proxySelect.current?.() }}>{t('group.makeProxy')}</button>
+      <button type="button" disabled={busy || proxyBusy || !!pending}
+        onClick={() => { void proxyUnbind.current?.() }}>{t('group.unbindProxy')}</button>
     </div>
     {roster && <div className={css.memberAdd}>
       {roster.bots.map(bot => <button key={bot.bot_id} type="button"
@@ -308,6 +376,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     </div>}
     {rosterUnavailable && <p role="status">{t('group.botRosterUnavailable')}</p>}
     {proxyLabel && <p>{t('group.personalProxy')}: {proxyLabel}</p>}
+    {proxyHandoffPending && <p role="status">{t('group.proxyHandoffPending')}</p>}
     {proxyUnavailable && <p role="status">{t('group.proxyUnavailable')}</p>}
     {unavailable && <p role="status">{t('group.memberUnavailable')}</p>}
     {removalNeedsDecision && <p role="status">{t('group.pendingWorkDecision')}</p>}
