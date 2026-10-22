@@ -68,11 +68,13 @@ describe('profile worker child process', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
-    }) as unknown as { listMemorySessions(origin: string, token: string, after: string | null,
-      signal: AbortSignal, stopped: () => boolean): Promise<unknown> }
+    })
+    const listMemorySessions = Reflect.get(factory, 'listMemorySessions') as (
+      origin: string, token: string, after: string | null,
+      signal: AbortSignal, stopped: () => boolean) => Promise<unknown>
     const signal = new AbortController().signal
     const list = (after: string | null = null, stopped: () => boolean = () => false) =>
-      factory.listMemorySessions(origin, 'private-token', after, signal, stopped)
+      listMemorySessions.call(factory, origin, 'private-token', after, signal, stopped)
     await expect(list()).resolves.toEqual(value)
     await expect(list('../bad')).rejects.toMatchObject({ code: 'invalid_input' })
     await expect(list(null, () => true)).rejects.toMatchObject({ code: 'invalid_input' })
@@ -113,11 +115,13 @@ describe('profile worker child process', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
-    }) as unknown as { readMemorySession(origin: string, token: string, sessionId: string,
-      signal: AbortSignal, stopped: () => boolean): Promise<unknown> }
+    })
+    const readMemorySession = Reflect.get(factory, 'readMemorySession') as (
+      origin: string, token: string, sessionId: string,
+      signal: AbortSignal, stopped: () => boolean) => Promise<unknown>
     const signal = new AbortController().signal
     const read = (sessionId = 'session-one', stopped: () => boolean = () => false) =>
-      factory.readMemorySession(origin, 'private-token', sessionId, signal, stopped)
+      readMemorySession.call(factory, origin, 'private-token', sessionId, signal, stopped)
     await expect(read()).resolves.toEqual(value)
     await expect(read('../bad')).rejects.toMatchObject({ code: 'invalid_input' })
     await expect(read('session-one', () => true)).rejects.toMatchObject({ code: 'invalid_input' })
@@ -137,7 +141,7 @@ describe('profile worker child process', () => {
     })
     const handle = Reflect.get(factory, 'handle') as (...args: unknown[]) => ProfileWorkerHandle
     const child = controlledWebChild()
-    const worker = handle.call(factory, child as unknown as ChildProcess, 'http://127.0.0.1:1',
+    const worker = handle.call(factory, child, 'http://127.0.0.1:1',
       { name: 'cookie', value: 'private' }, 1, ...Array.from({ length: 10 }, () => 'private-token'))
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
@@ -230,16 +234,17 @@ describe('profile worker child process', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
-    }) as unknown as {
-      remoteSession(origin: string, token: string, command: object, signal: AbortSignal,
-        stopped: () => boolean): Promise<unknown>
-      remoteUiRead(origin: string, token: string, endpoint: string, payload: object,
-        signal: AbortSignal, stopped: () => boolean): Promise<unknown>
-    }
+    })
+    const remoteSession = Reflect.get(factory, 'remoteSession') as (
+      origin: string, token: string, command: object, signal: AbortSignal,
+      stopped: () => boolean) => Promise<unknown>
+    const remoteUiRead = Reflect.get(factory, 'remoteUiRead') as (
+      origin: string, token: string, endpoint: string, payload: object,
+      signal: AbortSignal, stopped: () => boolean) => Promise<unknown>
     const signal = new AbortController().signal
     const readers = [
-      (stopped: () => boolean) => factory.remoteSession(origin, 'token', { operation: 'session.list' }, signal, stopped),
-      (stopped: () => boolean) => factory.remoteUiRead(origin, 'token', 'session/list', { args: {} }, signal, stopped),
+      (stopped: () => boolean) => remoteSession.call(factory, origin, 'token', { operation: 'session.list' }, signal, stopped),
+      (stopped: () => boolean) => remoteUiRead.call(factory, origin, 'token', 'session/list', { args: {} }, signal, stopped),
     ]
     for (const read of readers) {
       await expect(read(() => true)).rejects.toMatchObject({ code: 'unavailable' })
@@ -277,15 +282,15 @@ describe('profile worker child process', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
-    }) as unknown as {
-      remoteUiAssetRead(origin: string, cookie: { name: string; value: string }, token: string,
-        endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
-        cache: { current?: { url: string; bytes: Buffer } }): Promise<unknown>
-    }
+    })
+    const remoteUiAssetRead = Reflect.get(factory, 'remoteUiAssetRead') as (
+      origin: string, cookie: { name: string; value: string }, token: string,
+      endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
+      cache: { current?: { url: string; bytes: Buffer } }) => Promise<unknown>
     const signal = new AbortController().signal
     const read = (payload: unknown, stopped: () => boolean = () => false,
       cache: { current?: { url: string; bytes: Buffer } } = {}, selectedSignal = signal) =>
-      factory.remoteUiAssetRead(origin, { name: 'cookie', value: 'private' }, 'token',
+      remoteUiAssetRead.call(factory, origin, { name: 'cookie', value: 'private' }, 'token',
         'asset/read', payload, selectedSignal, stopped, cache)
     for (const payload of [null, {}, { args: null }, { args: { url: 'http://[', offset: 0 } }]) {
       await expect(read(payload)).rejects.toMatchObject({ code: 'invalid_input' })

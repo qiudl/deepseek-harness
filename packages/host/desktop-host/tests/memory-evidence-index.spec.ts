@@ -166,8 +166,8 @@ describe('Host local memory Evidence index', () => {
 
   it('keeps the prior index when the aggregate text budget is exhausted', () => {
     const index = new HostMemoryEvidenceIndex(scope)
-    const internals = index as unknown as { sessions: Map<string, unknown> }
-    internals.sessions.set('existing', { version: 'old', records: [], postings: new Map(), textBytes: 32 * 1024 * 1024 })
+    const sessions = Reflect.get(index, 'sessions') as Map<string, unknown>
+    sessions.set('existing', { version: 'old', records: [], postings: new Map(), textBytes: 32 * 1024 * 1024 })
     expect(() => index.replace(scope, snapshot('new text'), 0)).toThrow()
     expect(index.search(scope, 'new', 1).items).toEqual([])
   })
@@ -234,10 +234,10 @@ describe('Host local memory Evidence index', () => {
 
   it('caps a paginated inventory before accepting its ten-thousand-and-first Session', async () => {
     const index = new HostMemoryEvidenceIndex(scope)
-    const internals = index as unknown as { sessions: Map<string, { version: string }> }
+    const sessions = Reflect.get(index, 'sessions') as Map<string, { version: string }>
     const version = createHash('sha256').update('r1').digest('hex')
     for (let n = 0; n < 10_000; n++)
-      internals.sessions.set(`s${String(n).padStart(5, '0')}`, { version })
+      sessions.set(`s${String(n).padStart(5, '0')}`, { version })
     let scans = 0
     await expect(index.assertCurrentInventory(scope, {
       assertCurrent() {}, read: async () => snapshot('unused'),
