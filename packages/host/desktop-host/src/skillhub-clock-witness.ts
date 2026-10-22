@@ -4,6 +4,12 @@ import { HostAuthorityError } from './types.ts'
 
 const MAX_ANCHORS = 4096
 const TICKET_TTL_NS = 30_000_000_000n
+function matchesWitness(previous: HostSkillHubClockWitnessValue | null,
+  current: HostSkillHubClockWitnessValue | null, next: HostSkillHubClockWitnessValue): boolean {
+  return (current === null) === (previous === null)
+    && (!current || !previous || (current.revision === previous.revision && current.digest === previous.digest))
+    && next.revision === (previous ? BigInt(previous.revision) + 1n : 0n).toString()
+}
 /** Epoch-bound Host-issued witnesses for the opt-in V2 clock protocol.
  * The V1 ledger remains independent and fail-closed for older callers.
  */
@@ -57,9 +63,7 @@ export class SkillHubClockWitnessTickets {
     const key = JSON.stringify([scope, anchorId]), current = this.values.get(key) ?? null
     if (command.kind === 'read') return { value: current && { ...current }, applied: null }
     const previous = command.previous
-    if ((current === null) !== (previous === null)
-      || (current && previous && (current.revision !== previous.revision || current.digest !== previous.digest))
-      || command.next.revision !== (previous ? BigInt(previous.revision) + 1n : 0n).toString())
+    if (!matchesWitness(previous, current, command.next))
       return { value: current && { ...current }, applied: false }
     if (!current) {
       const issued = this.pending.get(key)
@@ -89,9 +93,7 @@ export class SkillHubClockWitnesses {
     const key = JSON.stringify([scope, anchorId]), current = this.values.get(key) ?? null
     if (command.kind === 'read') return { value: current && { ...current }, applied: null }
     const previous = command.previous
-    if ((current === null) !== (previous === null)
-      || (current && previous && (current.revision !== previous.revision || current.digest !== previous.digest))
-      || command.next.revision !== (previous ? BigInt(previous.revision) + 1n : 0n).toString())
+    if (!matchesWitness(previous, current, command.next))
       return { value: current && { ...current }, applied: false }
     // Capacity is a security bound. Eviction could turn a previous anchor into a new one.
     if (!current && this.values.size >= 4096) throw new HostAuthorityError('busy')

@@ -992,6 +992,20 @@ export class HostControlAuthority {
     return { profileId, generation, hostKeyId, authorize }
   }
 
+  private skillHubClockGrant(params: {
+    profile_selector: string
+    profile_id: string
+    binding_generation: string
+    host_key_id: string
+  }, ownerId: string, signal: AbortSignal) {
+    const { profileId, generation, hostKeyId, authorize } =
+      this.skillHubPackageGrant(params.profile_selector, ownerId, signal)
+    authorize()
+    if (params.profile_id !== profileId || params.binding_generation !== generation
+      || params.host_key_id !== hostKeyId) throw new HostAuthorityError('unavailable')
+    return { scope: JSON.stringify([profileId, generation, hostKeyId]), authorize }
+  }
+
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const clock = this.options.now ?? Date.now
@@ -1588,23 +1602,13 @@ export class HostControlAuthority {
               target: frame.params.target, offset: frame.params.offset, total_bytes: read.totalBytes,
               chunk_base64url: read.chunk.toString('base64url'), complete: read.complete } })
         } else if (frame.method === 'profile.skillhub_clock_witness') {
-          const { profileId, generation, hostKeyId, authorize } =
-            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
-          authorize()
-          if (frame.params.profile_id !== profileId || frame.params.binding_generation !== generation
-            || frame.params.host_key_id !== hostKeyId) throw new HostAuthorityError('unavailable')
-          const scope = JSON.stringify([profileId, generation, hostKeyId])
+          const { scope, authorize } = this.skillHubClockGrant(frame.params, ownerId, context.signal)
           const result = this.clockWitnesses.apply(scope, frame.params.anchor_id, frame.params.command)
           authorize()
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { anchor_id: frame.params.anchor_id, ...result } })
         } else if (frame.method === 'profile.skillhub_clock_v2') {
-          const { profileId, generation, hostKeyId, authorize } =
-            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
-          authorize()
-          if (frame.params.profile_id !== profileId || frame.params.binding_generation !== generation
-            || frame.params.host_key_id !== hostKeyId) throw new HostAuthorityError('unavailable')
-          const scope = JSON.stringify([profileId, generation, hostKeyId])
+          const { scope, authorize } = this.skillHubClockGrant(frame.params, ownerId, context.signal)
           const command = frame.params.command
           const result: ProfileSkillHubClockV2Result['result'] = command.kind === 'epoch'
             ? { kind: 'epoch', epoch: this.clockWitnessTickets.currentEpoch() as HostControlNonce }
