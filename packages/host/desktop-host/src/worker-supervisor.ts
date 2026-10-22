@@ -47,7 +47,13 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
-  /** Use only the current Account Profile worker for an already authorized Bot group command. */
+  /**
+   * Use only the current Account Profile worker for an authorized Bot group command.
+   * @param profileId - Selected Account Profile.
+   * @param command - Host-validated group operation.
+   * @param signal - Caller cancellation.
+   * @returns Worker reply for the exact operation.
+   */
   async operateBotGroup(profileId: string, command: HostBotGroupCommand,
     signal: AbortSignal): Promise<HostBotGroupResponse> {
     signal.throwIfAborted()

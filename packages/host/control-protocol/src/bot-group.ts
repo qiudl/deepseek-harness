@@ -4,12 +4,14 @@ const BOT_ID = /^[A-Za-z0-9_-]{1,200}$/u
 const DIGEST = /^[0-9a-f]{64}$/u
 const KEY_ID = /^dsh-assertion-[A-Za-z0-9][A-Za-z0-9._:-]{0,84}$/u
 
+/** One Slark signing key pinned for a bounded validity window. */
 export interface HostBotGroupPublicKey {
   readonly kid: string
   readonly publicKeyPem: string
   readonly validFrom: number
   readonly validUntil: number
 }
+/** Desktop-pinned Slark keys for one environment and issuer. */
 export interface HostBotGroupPublicKeyring {
   readonly version: 1
   readonly environmentId: string
@@ -17,7 +19,11 @@ export interface HostBotGroupPublicKeyring {
   readonly keys: readonly HostBotGroupPublicKey[]
 }
 
-/** Bound the Desktop-pinned public projection before it enters Host authority code. */
+/**
+ * Bound the Desktop-pinned public projection before it enters Host authority code.
+ * @param value - Untrusted keyring projection.
+ * @returns Validated public keyring.
+ */
 export function parseHostBotGroupPublicKeyring(value: unknown): HostBotGroupPublicKeyring {
   const row = exact(value, ['version', 'environmentId', 'issuer', 'keys'])
   if (row.version !== 1 || typeof row.environmentId !== 'string' || !UUID.test(row.environmentId) ||
@@ -44,6 +50,7 @@ export function parseHostBotGroupPublicKeyring(value: unknown): HostBotGroupPubl
   return { version: 1, environmentId: row.environmentId, issuer: row.issuer, keys }
 }
 
+/** Delivery ticket and command accepted at the Host protocol boundary. */
 export type HostBotGroupDeliveryInput = Readonly<{
   computer_id: string
   slark_audience: string
@@ -51,6 +58,11 @@ export type HostBotGroupDeliveryInput = Readonly<{
   command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
 }>
 
+/**
+ * Validate the exact Slark delivery request shape.
+ * @param value - Untrusted Host request.
+ * @returns Validated delivery input.
+ */
 export function parseHostBotGroupDeliveryInput(value: unknown): HostBotGroupDeliveryInput {
   const row = exact(value, ['computer_id', 'slark_audience', 'ticket', 'command'])
   if (typeof row.computer_id !== 'string' || !/^[\x21-\x7e]{1,256}$/u.test(row.computer_id) ||
@@ -69,6 +81,7 @@ export function parseHostBotGroupDeliveryInput(value: unknown): HostBotGroupDeli
     ticket: row.ticket, command }
 }
 
+/** Private Profile worker operations for one authorized Bot group. */
 export type HostBotGroupCommand = Readonly<{
   operation: 'deliver'
   schemaVersion: 1
@@ -108,6 +121,7 @@ export type HostBotGroupCommand = Readonly<{
   stopInFlight: boolean
 }>
 
+/** Bounded worker response for delivery, result paging or acknowledgment. */
 export type HostBotGroupResponse = Readonly<{
   state: 'accepted' | 'running' | 'result_recorded' | 'indeterminate'
   deliveryId: string
@@ -140,7 +154,11 @@ function exact(value: unknown, keys: readonly string[]): Record<string, unknown>
   return row
 }
 
-/** Validate one bounded private worker command; browser and model input cannot reach this route. */
+/**
+ * Validate one bounded private worker command; browser and model input cannot reach this route.
+ * @param value - Untrusted command frame.
+ * @returns Validated worker command.
+ */
 export function parseHostBotGroupCommand(value: unknown): HostBotGroupCommand {
   const operation = typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>).operation : undefined
@@ -180,6 +198,11 @@ export function parseHostBotGroupCommand(value: unknown): HostBotGroupCommand {
 }
 
 /** Validate a plugin reply before the Host receives any Bot Session identifier. */
+/**
+ * Validate one bounded Profile worker response.
+ * @param value - Untrusted worker response.
+ * @returns Validated response.
+ */
 export function parseHostBotGroupResponse(value: unknown): HostBotGroupResponse {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw Error('invalid_bot_group')
   const state = (value as Record<string, unknown>).state
@@ -225,7 +248,12 @@ export function parseHostBotGroupResponse(value: unknown): HostBotGroupResponse 
   return row as HostBotGroupResponse
 }
 
-/** A worker reply must belong to the exact group, Bot and member cycle requested. */
+/**
+ * Check that a worker reply belongs to the requested group, Bot and member cycle.
+ * @param reply - Validated worker response.
+ * @param command - Original Host command.
+ * @returns Whether the response matches the command.
+ */
 export function matchesHostBotGroupResponse(reply: HostBotGroupResponse,
   command: HostBotGroupCommand): boolean {
   if (command.operation === 'result_page') {

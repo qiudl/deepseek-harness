@@ -2464,7 +2464,7 @@ interface HandshakeState {
   readonly processNonce: HostControlNonce
 }
 
-/** Connected Main-only SDK matching Slark's `DshPersonalHostAdapter`. */
+/** Validate a Bot delivery before Main sends it to the Host. */
 function botGroupClientDelivery(input: { readonly computerId: string
   readonly slarkAudience: string
   readonly ticket: string
@@ -2473,6 +2473,7 @@ function botGroupClientDelivery(input: { readonly computerId: string
     slark_audience: input.slarkAudience, ticket: input.ticket, command: input.command })
 }
 
+/** Connected Main-only SDK matching Slark's `DshPersonalHostAdapter`. */
 export class UnixHostClient {
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
@@ -3766,6 +3767,11 @@ export class UnixHostClient {
     return parseHostBotGroupResponse(frame.result.reply)
   }
 
+  /**
+   * Send a Slark-authorized Bot group message to the current Account worker.
+   * @param input - Account binding, live delivery ticket and exact command.
+   * @returns Worker delivery reply.
+   */
   async deliverBotGroup(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -3792,7 +3798,11 @@ export class UnixHostClient {
     return reply
   }
 
-  /** Read one durable Bot result under a fresh, live Slark delivery claim. */
+  /**
+   * Read one durable Bot result under a fresh, live Slark delivery claim.
+   * @param input - Account binding, ticket and result cursor.
+   * @returns Validated worker reply and signed result proof.
+   */
   async readBotGroupResultPage(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -3853,7 +3863,11 @@ export class UnixHostClient {
     return { reply, proof }
   }
 
-  /** Release one durable Bot result only after Slark has recorded its exact receipt. */
+  /**
+   * Release one durable Bot result after Slark records its exact receipt.
+   * @param input - Account binding, ticket and acknowledged result ID.
+   * @returns Worker acknowledgment reply.
+   */
   async acknowledgeBotGroupResult(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string

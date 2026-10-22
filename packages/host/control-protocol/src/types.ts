@@ -622,6 +622,7 @@ export interface ProfileBotGroupResultPageRequest {
   readonly method: 'profile.bot_group_result_page'
   readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly after: number }
 }
+/** Host result frame carrying a verified Bot result and optional proof. */
 export interface ProfileBotGroupResultPageResult {
   readonly version: 1
   readonly type: 'result'
@@ -639,6 +640,7 @@ export interface ProfileBotGroupResultAckRequest {
   readonly method: 'profile.bot_group_result_ack'
   readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly result_id: string }
 }
+/** Host result frame after the Profile worker acknowledges one Bot result. */
 export interface ProfileBotGroupResultAckResult {
   readonly version: 1
   readonly type: 'result'

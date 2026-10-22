@@ -12,6 +12,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
  * @param parseResult - Route-specific strict result parser.
  * @param matches - Require the result to belong to the original target.
  * @param requestBytes - Protocol-specific request limit supplied by the owning route.
+ * @param timeoutMs - Maximum operation time in milliseconds.
  */
 export async function handleDesktopPrivateRequest<Target, Result>(
   req: IncomingMessage,

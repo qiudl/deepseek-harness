@@ -49,10 +49,12 @@ function ticket(change: Record<string, unknown> = {}): string {
 }
 
 it('accepts one pinned Slark signature for the current Account and exact message', () => {
-  expect(verifyBotGroupTicket(ticket(), keyring, expected, now + 1_000)).toEqual({
-    workspaceId: ids.workspace, sessionId: ids.session, messageId: ids.message,
-    payloadDigest: expect.stringMatching(/^[0-9a-f]{64}$/u), expiresAt: now + 60_000,
-  })
+  const result = verifyBotGroupTicket(ticket(), keyring, expected, now + 1_000)
+  expect(result.workspaceId).toBe(ids.workspace)
+  expect(result.sessionId).toBe(ids.session)
+  expect(result.messageId).toBe(ids.message)
+  expect(result.payloadDigest).toMatch(/^[0-9a-f]{64}$/u)
+  expect(result.expiresAt).toBe(now + 60_000)
 })
 
 it('rejects altered message, Account, Host, Bot cycle, group and expired tickets', () => {
@@ -94,7 +96,7 @@ it('confirms the exact delivery at the pinned Slark origin before returning it',
       delivery_id: expected.deliveryId, expires_at: now + 60_000 } })
   }
   const result = await confirmBotGroupTicket(signed, keyring, expected,
-    new AbortController().signal, fetchFn as typeof fetch, () => now + 1_000)
+    new AbortController().signal, fetchFn, () => now + 1_000)
   expect(result.messageId).toBe(ids.message)
 })
 
@@ -102,7 +104,7 @@ it('refuses a revoked, mismatched, expired or oversized confirmation', async () 
   const signed = ticket()
   const check = (body: unknown, status = 200) => confirmBotGroupTicket(signed, keyring,
     expected, new AbortController().signal,
-    (async () => Response.json(body, { status })) as typeof fetch, () => now + 1_000)
+    async () => Response.json(body, { status }), () => now + 1_000)
   await expect(check({ ok: false, error: { code: 'delivery_revoked' } }, 409))
     .rejects.toThrow('bot_group_ticket_invalid')
   await expect(check({ ok: true, value: { state: 'active', delivery_id: randomUUID(),
@@ -111,6 +113,6 @@ it('refuses a revoked, mismatched, expired or oversized confirmation', async () 
     expires_at: now + 60_000, extra: true } })).rejects.toThrow('bot_group_ticket_invalid')
   await expect(check({ content: 'a'.repeat(4_097) })).rejects.toThrow('bot_group_ticket_invalid')
   await expect(confirmBotGroupTicket(signed, keyring, expected,
-    new AbortController().signal, (async () => Response.json({})) as typeof fetch,
+    new AbortController().signal, async () => Response.json({}),
     () => now + 60_001)).rejects.toThrow('bot_group_ticket_invalid')
 })

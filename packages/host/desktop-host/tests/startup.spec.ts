@@ -45,15 +45,15 @@ describe.skipIf(process.platform === 'win32')('desktop Host application composit
       desktopExecutableDigests: ['2'.repeat(64)], runtimeGeneration: 1, schemaGeneration: 1,
     }
     await expect(start(Object.assign({}, config, { pnpmEntrypointPath: 'relative/pnpm.mjs' }))).rejects.toMatchObject({ code: 'invalid_input' })
-    await expect(start({ ...config, botGroupPublicKeyringsJson: '[{}]' }))
+    await expect(start(Object.assign({}, config, { botGroupPublicKeyringsJson: '[{}]' })))
       .rejects.toMatchObject({ code: 'invalid_input' })
     const publicProjection = JSON.stringify([{ version: 1,
       environmentId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3123',
       issuer: 'https://slark.example.test', keys: [{ kid: 'dsh-assertion-test',
         publicKeyPem: keys.publicKey.export({ format: 'pem', type: 'spki' }).toString(),
         validFrom: 1, validUntil: Date.now() + 120_000 }] }])
-    const app = await start({ ...config, pnpmEntrypointPath: privateKey,
-      botGroupPublicKeyringsJson: publicProjection })
+    const app = await start(Object.assign({}, config, { pnpmEntrypointPath: privateKey,
+      botGroupPublicKeyringsJson: publicProjection }))
     expect(existsSync(join(root, 'host.sock'))).toBe(true)
     expect(JSON.parse(readFileSync(join(legacyDshRoot, 'host', 'registration.v1.json'), 'utf8'))).toEqual({
       schema_version: 1,

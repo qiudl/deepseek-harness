@@ -2,6 +2,7 @@
 import { parseHostBotGroupResponse, type HostBotGroupResponse } from './bot-group.js'
 
 type Result = Extract<HostBotGroupResponse, { state: 'ok' }>['results'][number]
+/** Installation-signed result bound to one Account, Host process and Bot delivery. */
 export interface HostBotGroupResultProof {
   readonly schema_version: 1
   readonly authority_environment_id: string
@@ -26,6 +27,11 @@ const OPAQUE = /^[\x21-\x7e]{1,256}$/u
 const SIG = /^[A-Za-z0-9_-]{86}$/u
 const fail = (): never => { throw Error('invalid_bot_group_result_proof') }
 
+/**
+ * Validate the exact signed proof shape and its nested result.
+ * @param value - Untrusted Host frame value.
+ * @returns Validated proof.
+ */
 export function parseHostBotGroupResultProof(value: unknown): HostBotGroupResultProof {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail()
   const row = value as Record<string, unknown>
@@ -66,7 +72,11 @@ export function parseHostBotGroupResultProof(value: unknown): HostBotGroupResult
   return fail()
 }
 
-/** Fixed ordered UTF-8 payload shared with Slark's independent verifier. */
+/**
+ * Encode the fixed ordered payload shared with Slark's independent verifier.
+ * @param value - Proof fields before signing.
+ * @returns UTF-8 signature payload.
+ */
 export function encodeHostBotGroupResultProofPayload(value: Omit<HostBotGroupResultProof, 'signature'>): Uint8Array {
   const result = value.result
   return Buffer.from(JSON.stringify(['slark-bot-group-result-v1', value.schema_version,
