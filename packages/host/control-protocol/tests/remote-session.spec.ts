@@ -117,6 +117,8 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
         content: [{ type: 'file', receiptId: 'not-a-receipt' }] },
       { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'tool', receiptId: randomUUID() }] },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
         content: [{ type: 'image', receiptId: randomUUID(), mediaType: 'text/plain' }] },
       { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
         content: [{ type: 'image', receiptId: randomUUID(), mediaType: 'image/png', data: 'AAAA' }] },

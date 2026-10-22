@@ -87,3 +87,54 @@ it('rejects unsigned query changes and hidden request fields', () => {
     command: { ...request.params.command, query: '' } } })))
     .toThrow(HostControlProtocolError)
 })
+
+it('rejects malformed signed memory directives and mismatched operations', () => {
+  const rejects = (command: unknown) => {
+    expect(() => decodeHostControlFrame(wire({ ...request,
+      params: { ...params, command },
+    }))).toThrow(HostControlProtocolError)
+  }
+  for (const changed of [
+    { schemaVersion: 2 }, { purpose: 'other' }, { operation: 'other' },
+    { limit: 11 }, { issuedAt: 2000, expiresAt: 1000 },
+    { grant: { ...directive.grant, readerKind: 'team' } },
+    { grant: { ...directive.grant, generation: 0 } },
+    { issuer: 'x'.repeat(2048), keyId: 'x'.repeat(256), grant: { ...directive.grant,
+      ownerUserId: 'x'.repeat(256), environmentId: 'x'.repeat(256),
+      computerId: 'x'.repeat(256), installationId: 'x'.repeat(256), profileId: 'x'.repeat(256) } },
+  ]) rejects({ ...request.params.command, directive: { ...directive, ...changed } })
+  rejects({ ...request.params.command, limit: 2 })
+  rejects({ action: 'unknown' })
+  rejects({ action: 'evidence_chunk', directive, source_ref: hash, offset: 0 })
+  rejects({ action: 'evidence_chunk', directive: { ...directive, operation: 'evidence', limit: 2 },
+    source_ref: hash, offset: 0 })
+})
+
+it('rejects malformed memory results before accepting metadata or chunks', () => {
+  const rejects = (result: unknown) => {
+    expect(() => decodeHostControlFrame(wire({
+      version: 1, type: 'result', request_id: uuid, method: 'profile.memory_query', result,
+    }))).toThrow(HostControlProtocolError)
+  }
+  rejects({ action: 'warm', state: 'warming' })
+  rejects({ action: 'search', generation: 0, items: Array.from({ length: 11 }, () => identity) })
+  rejects({ action: 'search', generation: 0, items: [{ ...identity, snippet: 'x'.repeat(501) }] })
+  rejects({ action: 'search', generation: 0, items: [{ ...identity, kind: 'tool', snippet: 'safe' }] })
+  rejects({ action: 'search', generation: 0, items: [{ ...identity,
+    source: { ...source, formatVersion: 2 }, snippet: 'safe' }] })
+  rejects({ action: 'unknown' })
+  rejects({ action: 'evidence_chunk', state: 'other' })
+  rejects({ action: 'evidence_chunk', state: 'missing', chunk: {} })
+  rejects({ action: 'evidence_chunk', state: 'other', chunk: {
+    ...identity, offset: 0, totalBytes: 2, textDigest: hash,
+    bytesBase64url: Buffer.from('ok').toString('base64url'), nextOffset: null,
+  } })
+  for (const changed of [
+    { totalBytes: 100_001 }, { offset: 1, totalBytes: 1 },
+    { bytesBase64url: '!' }, { bytesBase64url: '' },
+    { nextOffset: 3 }, { sourceRef: 'bad' },
+  ]) rejects({ action: 'evidence_chunk', state: 'ready', chunk: {
+    ...identity, offset: 0, totalBytes: 2, textDigest: hash,
+    bytesBase64url: Buffer.from('ok').toString('base64url'), nextOffset: null, ...changed,
+  } })
+})
