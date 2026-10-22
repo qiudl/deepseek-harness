@@ -39,20 +39,22 @@ it('round-trips V2 epoch, issue, and ticketed witness frames while rejecting mal
   const ticket = Buffer.alloc(32, 1).toString('base64url')
   const epoch = Buffer.alloc(32, 2).toString('base64url'), anchor_id = randomUUID()
   const base = { ...request, method: 'profile.skillhub_clock_v2',
-    params: { ...common, command: { kind: 'issue' } } }
+    params: { ...common, command: { kind: 'issue', purpose: 'asset' } } }
   const witness = { ...base, params: { ...base.params,
     command: { kind: 'witness', anchor_id, epoch, ticket,
       command: { kind: 'compare_and_set', previous: null, next: value } } } }
   const result = { version: 1, type: 'result', request_id: request.request_id,
     method: base.method }
-  for (const frame of [base, { ...base, params: { ...base.params, command: { kind: 'epoch' } } },
+  for (const frame of [base, { ...base, params: { ...base.params, command: { kind: 'issue', purpose: 'work' } } },
+    { ...base, params: { ...base.params, command: { kind: 'epoch' } } },
     witness, { ...witness, params: { ...witness.params,
       command: { ...witness.params.command, ticket: null, command: { kind: 'read' } } } },
     { ...result, result: { kind: 'epoch', epoch } },
     { ...result, result: { kind: 'issued', anchor_id, epoch, ticket } },
     { ...result, result: { kind: 'witness', anchor_id, epoch, value, applied: true } }])
     expect(decodeHostControlFrame(encodeHostControlFrame(decode(frame)))).toEqual(decode(frame))
-  for (const command of [{ kind: 'issue', extra: true },
+  for (const command of [{ kind: 'issue', extra: true }, { kind: 'issue' },
+    { kind: 'issue', purpose: 'other' },
     { ...witness.params.command, ticket: 'bad' },
     { ...witness.params.command, epoch: 'bad' },
     { ...witness.params.command, anchor_id: 'bad' },

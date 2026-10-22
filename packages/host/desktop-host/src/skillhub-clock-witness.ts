@@ -11,17 +11,27 @@ export class SkillHubClockWitnessTickets {
   private epoch = randomBytes(32).toString('base64url')
   private readonly values = new Map<string, HostSkillHubClockWitnessValue>()
   private readonly pending = new Map<string, { ticket: string; expiresAt: bigint }>()
+  private readonly workHolds = new Map<string, bigint>()
 
   constructor(private readonly monotonicNow: () => bigint = () => process.hrtime.bigint()) {}
 
   currentEpoch(): string { return this.epoch }
 
-  issue(scope: string): { anchorId: string; ticket: string; epoch: string } {
+  issue(scope: string, purpose: 'asset' | 'work'): { anchorId: string; ticket: string; epoch: string } {
     const now = this.monotonicNow()
+    if (this.workHolds.size >= MAX_ANCHORS) {
+      for (const [key, expiresAt] of this.workHolds) {
+        if (expiresAt <= now) this.workHolds.delete(key)
+      }
+      if (this.workHolds.size >= MAX_ANCHORS) throw new HostAuthorityError('busy')
+    }
     if (this.values.size >= MAX_ANCHORS) {
+      for (const [key, expiresAt] of this.workHolds) if (expiresAt <= now) this.workHolds.delete(key)
+      if (this.workHolds.size) throw new HostAuthorityError('busy')
       this.epoch = randomBytes(32).toString('base64url')
       this.values.clear()
       this.pending.clear()
+      this.workHolds.clear()
     }
     if (this.pending.size >= MAX_ANCHORS) {
       for (const [key, value] of this.pending) {
@@ -30,7 +40,11 @@ export class SkillHubClockWitnessTickets {
       if (this.pending.size >= MAX_ANCHORS) throw new HostAuthorityError('busy')
     }
     const anchorId = randomUUID(), ticket = randomBytes(32).toString('base64url')
-    this.pending.set(JSON.stringify([scope, anchorId]), { ticket, expiresAt: now + TICKET_TTL_NS })
+    const key = JSON.stringify([scope, anchorId])
+    this.pending.set(key, { ticket, expiresAt: now + TICKET_TTL_NS })
+    // The original Work permit expires within 30 seconds of Server issuance,
+    // which precedes this issue. Never rotate while that Work may still start.
+    if (purpose === 'work') this.workHolds.set(key, now + TICKET_TTL_NS)
     return { anchorId, ticket, epoch: this.epoch }
   }
 

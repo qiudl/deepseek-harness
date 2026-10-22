@@ -72,7 +72,7 @@ kind: "package-reference"
 
 `profile.skillhub_clock_witness` 要求单独声明的 capability 和当前连接自己的 Profile selector。每次请求绑定 Profile ID、绑定代次、Host 密钥指纹和锚 UUID。命令读取见证，或对精确 revision/digest 执行 compare-and-set；初始化要求 revision 为零，更新要求旧 revision 加一。结果重复锚 ID，返回当前值，读取的 `applied` 为 null，CAS 则返回布尔判定。见证独立于 daemon checkpoint 文件，换连接后仍保留，Host authority 重启后丢失；丢失后必须在线恢复，不能从缓存静默初始化。它不授予资产或 effect 权限。
 
-`profile.skillhub_clock_v2` 是独立声明的 Host 签发锚协议。`issue` 返回新锚 UUID、32 字节 base64url epoch 和一次性票据；票据按 Host 单调时间在 30 秒后过期。首次 revision-zero CAS 必须匹配票据、Profile 范围和 epoch。`epoch` 供离线权限检查读取当前代次；`witness` 仅在该代次读取或推进锚，请求始终携带 epoch 和可为 null 的票据。初始化锚达到 4,096 个后，下一次签发会轮换 epoch 并清空 V2 记录，使旧锚和待用票据全部失效。待用票据也限制为 4,096 个，满额期间签发返回 `busy`。旧 V1 独立保留满额拒绝行为。调用方必须把当前 epoch 纳入权限并在变更时拒绝进行中的离线工作；仅有该 Host 能力不会启用 V2 离线工作。
+`profile.skillhub_clock_v2` 是独立声明的 Host 签发锚协议。`issue` 必须标明 `asset` 或 `work` 用途，返回新锚 UUID、32 字节 base64url epoch 和一次性票据；票据按 Host 单调时间在 30 秒后过期。首次 revision-zero CAS 必须匹配票据、Profile 范围和 epoch。`epoch` 供离线权限检查读取当前代次；`witness` 仅在该代次读取或推进锚，请求始终携带 epoch 和可为 null 的票据。初始化锚达到 4,096 个后，下一次签发会轮换 epoch 并清空 V2 记录，使旧锚和待用票据全部失效。Work 签发会将原代次保留 30 秒，覆盖 Work 许可的最长有效窗口；保留期内达到容量时，签发返回 `busy`，不在仍可能执行 Work 时轮换。待用票据也限制为 4,096 个，满额期间签发返回 `busy`。旧 V1 独立保留满额拒绝行为。调用方必须把当前 epoch 纳入权限，并在轮换后拒绝旧离线工作；仅有该 Host 能力不会启用 V2 离线工作。
 
 `profile.workspace_model_selection` 接受已验证的 Account 绑定、工作区注册表 UUID 和 Session id。精确响应包含这些身份、provider/model（各最多 256 UTF-8 字节），以及可选 reasoning effort（最多 128 字节）。调用方指定的模型、Profile 路径和额外响应字段均被拒绝。结果只是只读选择，不是可执行适配器快照或 Source 凭据；Host 必须发布已安装执行器的能力才可调用。
 

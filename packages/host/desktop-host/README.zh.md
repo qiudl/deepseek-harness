@@ -63,7 +63,7 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.skillhub_clock_witness` 按当前 Profile、绑定代次和安装密钥独立保存 checkpoint revision。已授权连接可以读取锚或在精确匹配旧值后将 revision 加一，不能替换已有锚或降低 revision。断线不删除当前 Host authority 生命周期内的见证；重启丢失见证后，旧离线资格必须先在线恢复才能运行。固定 4,096 个锚的容量满后拒绝新锚，不驱逐旧记录。该见证只证明 checkpoint 连续性；Slark 仍须验证签名资格、可信时间、当前资产权限和 effect 所有权。
 
-独立的 `profile.skillhub_clock_v2` capability 由 Host 签发带一次性票据的锚，并提供当前 epoch。V2 已初始化锚达到 4,096 个后，下一次签发轮换 epoch，使所有旧 V2 锚失效。`profile.skillhub_clock_witness` 使用独立记录，并继续在满额时拒绝新锚。
+独立的 `profile.skillhub_clock_v2` capability 由 Host 按资产或 Work 用途签发带一次性票据的锚，并提供当前 epoch。V2 已初始化锚达到 4,096 个后，下一次签发轮换 epoch，使所有旧 V2 锚失效；若原始 Work 许可窗口仍可能有效，则先拒绝签发，等待最长 30 秒的保留期结束。`profile.skillhub_clock_witness` 使用独立记录，并继续在满额时拒绝新锚。
 
 `profile.ensure_binding_scope` 允许可信 broker 传入根据已验证环境与 Slark 登录身份计算的 SHA-256 scope。绑定版本只在同一 scope 内单调递增；另一有效登录可共享同一 Account Profile，而不继承其版本。registry v4 持久化 scope，并拒绝重复 scope 或 handle。读取器接受已发布 v2/v3 记录，加载时不重写；登记带 scope 的绑定时写入 v4。同环境已有带 scope 的绑定后，旧绑定须独立验证并关联 scope 才能离线恢复。旧 broker 可续用已经关联 scope 的 handle，但不能在该环境新增无 scope 的绑定。同一 scope 换绑会使旧 handle 失效。Account 令牌、Profile 解锁和服务器协作鉴权仍须通过；scope 不转移设备所有权。旧 registry 读取器拒绝 v4，因此回退须使用兼容读取器，或在确认不会丢失后续绑定变更后恢复升级前的 registry 快照。
 

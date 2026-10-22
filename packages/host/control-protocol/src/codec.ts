@@ -2004,9 +2004,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       || !/^[1-9][0-9]{0,17}$/u.test(params.binding_generation)) reject()
     const raw = record(params.command)
     let command: HostSkillHubClockV2Command
-    if (raw.kind === 'epoch' || raw.kind === 'issue') {
+    if (raw.kind === 'epoch') {
       exactKeys(raw, ['kind'])
       command = { kind: raw.kind }
+    } else if (raw.kind === 'issue') {
+      exactKeys(raw, ['kind', 'purpose'])
+      if (raw.purpose !== 'asset' && raw.purpose !== 'work') reject()
+      command = { kind: 'issue', purpose: raw.purpose }
     } else if (raw.kind === 'witness') {
       exactKeys(raw, ['kind', 'anchor_id', 'epoch', 'ticket', 'command'])
       command = { kind: 'witness', anchor_id: uuid(raw.anchor_id) as HostSkillHubClockAnchorId,

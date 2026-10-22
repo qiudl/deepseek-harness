@@ -32,15 +32,15 @@ it('refuses new anchors at capacity without evicting or preventing updates to ex
 
 it('T24860 rotates after 4096 issued anchors without accepting old anchor replay', () => {
   const witness = new SkillHubClockWitnessTickets(), zero = { revision: '0', digest: 'a'.repeat(64) }
-  const first = witness.issue('profile')
+  const first = witness.issue('profile', 'asset')
   expect(witness.apply('profile', first.anchorId, first.epoch,
     { kind: 'compare_and_set', previous: null, next: zero }, first.ticket).applied).toBe(true)
   for (let i = 1; i < 4096; i++) {
-    const issued = witness.issue('profile')
+    const issued = witness.issue('profile', 'asset')
     expect(witness.apply('profile', issued.anchorId, issued.epoch,
       { kind: 'compare_and_set', previous: null, next: zero }, issued.ticket).applied).toBe(true)
   }
-  const next = witness.issue('profile')
+  const next = witness.issue('profile', 'asset')
   expect(next.epoch).not.toBe(first.epoch)
   expect(() => witness.apply('profile', first.anchorId, first.epoch, { kind: 'read' }))
     .toThrow('stale')
@@ -56,7 +56,7 @@ it('T24860 binds one pending ticket to scope, anchor, epoch and a monotonic dead
   let now = 0n
   const witness = new SkillHubClockWitnessTickets(() => now)
   const zero = { revision: '0', digest: 'a'.repeat(64) }
-  const issued = witness.issue('profile')
+  const issued = witness.issue('profile', 'asset')
   const cas = (scope: string, anchorId: string, ticket: string) => witness.apply(scope, anchorId,
     issued.epoch, { kind: 'compare_and_set', previous: null, next: zero }, ticket)
   expect(() => cas('other', issued.anchorId, issued.ticket)).toThrow('stale')
@@ -64,7 +64,7 @@ it('T24860 binds one pending ticket to scope, anchor, epoch and a monotonic dead
   expect(() => cas('profile', 'other-anchor', issued.ticket)).toThrow('stale')
   expect(cas('profile', issued.anchorId, issued.ticket).applied).toBe(true)
   expect(cas('profile', issued.anchorId, issued.ticket).applied).toBe(false)
-  const expired = witness.issue('profile')
+  const expired = witness.issue('profile', 'asset')
   now = 30_000_000_000n
   expect(() => witness.apply('profile', expired.anchorId, expired.epoch,
     { kind: 'compare_and_set', previous: null, next: zero }, expired.ticket)).toThrow('stale')
@@ -73,14 +73,35 @@ it('T24860 binds one pending ticket to scope, anchor, epoch and a monotonic dead
 it('T24860 bounds pending tickets and reclaims expired issuance without changing epoch', () => {
   let now = 0n
   const witness = new SkillHubClockWitnessTickets(() => now)
-  const first = witness.issue('profile')
-  for (let i = 1; i < 4096; i++) witness.issue('profile')
-  expect(() => witness.issue('profile')).toThrow('busy')
+  const first = witness.issue('profile', 'asset')
+  for (let i = 1; i < 4096; i++) witness.issue('profile', 'asset')
+  expect(() => witness.issue('profile', 'asset')).toThrow('busy')
   expect(witness.currentEpoch()).toBe(first.epoch)
   now = 30_000_000_000n
-  const next = witness.issue('profile')
+  const next = witness.issue('profile', 'asset')
   expect(next.epoch).toBe(first.epoch)
   expect(() => witness.apply('profile', first.anchorId, first.epoch,
     { kind: 'compare_and_set', previous: null,
       next: { revision: '0', digest: 'a'.repeat(64) } }, first.ticket)).toThrow('stale')
+})
+
+it('T24860 refuses capacity rotation during the original Work window', () => {
+  let now = 0n
+  const witness = new SkillHubClockWitnessTickets(() => now)
+  const zero = { revision: '0', digest: 'a'.repeat(64) }
+  const work = witness.issue('profile', 'work')
+  expect(witness.apply('profile', work.anchorId, work.epoch,
+    { kind: 'compare_and_set', previous: null, next: zero }, work.ticket).applied).toBe(true)
+  for (let i = 1; i < 4096; i++) {
+    const issued = witness.issue('profile', 'asset')
+    expect(witness.apply('profile', issued.anchorId, issued.epoch,
+      { kind: 'compare_and_set', previous: null, next: zero }, issued.ticket).applied).toBe(true)
+  }
+  expect(() => witness.issue('profile', 'asset')).toThrow('busy')
+  expect(witness.currentEpoch()).toBe(work.epoch)
+  expect(witness.apply('profile', work.anchorId, work.epoch, { kind: 'read' }).value).toEqual(zero)
+  now = 30_000_000_000n
+  const next = witness.issue('profile', 'asset')
+  expect(next.epoch).not.toBe(work.epoch)
+  expect(() => witness.apply('profile', work.anchorId, work.epoch, { kind: 'read' })).toThrow('stale')
 })

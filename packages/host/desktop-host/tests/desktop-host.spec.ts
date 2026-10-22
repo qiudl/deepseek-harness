@@ -501,9 +501,9 @@ describe('authenticated Unix transport', () => {
       const input = { profileSelector: local.profileSelector, profileId: local.profileId,
         bindingGeneration: '1',
         hostKeyId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex') }
-      await expect(other.skillHubClockV2({ ...input, command: { kind: 'issue' } }))
+      await expect(other.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset' } }))
         .rejects.toMatchObject({ code: 'unauthorized' })
-      const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue' } })
+      const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset' } })
       expect(issued.kind).toBe('issued')
       if (issued.kind !== 'issued') throw Error('expected issued anchor')
       expect(await owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
@@ -526,6 +526,44 @@ describe('authenticated Unix transport', () => {
         epoch: issued.epoch, value: zero, applied: null })
     } finally { owner.close(); other.close(); await server.close() }
   })
+
+  it('T24860 rotates V2 epoch at the 4097th initialized anchor through Unix Host transport', async () => {
+    const { server, socketPath } = await fixture()
+    const owner = await UnixHostClient.connect({ socketPath, expectedUid: uid,
+      trustedInstallationId: identity.installationId, trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now })
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:clock-v2-capacity', unlockMaterial })
+      const input = { profileSelector: local.profileSelector, profileId: local.profileId,
+        bindingGeneration: '1',
+        hostKeyId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex') }
+      const zero = { revision: '0', digest: 'a'.repeat(64) }
+      const initialize = async () => {
+        const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset' } })
+        if (issued.kind !== 'issued') throw Error('expected issued anchor')
+        const result = await owner.skillHubClockV2({ ...input, command: { kind: 'witness',
+          anchor_id: issued.anchor_id, epoch: issued.epoch, ticket: issued.ticket,
+          command: { kind: 'compare_and_set', previous: null, next: zero } } })
+        expect(result).toEqual({ kind: 'witness', anchor_id: issued.anchor_id,
+          epoch: issued.epoch, value: zero, applied: true })
+        return issued
+      }
+      const first = await initialize()
+      for (let i = 1; i < 4096; i++) await initialize()
+      const next = await initialize()
+      expect(next.epoch).not.toBe(first.epoch)
+      await expect(owner.skillHubClockV2({ ...input, command: { kind: 'witness',
+        anchor_id: first.anchor_id, epoch: first.epoch, ticket: null,
+        command: { kind: 'read' } } })).rejects.toMatchObject({ code: 'stale' })
+      await expect(owner.skillHubClockV2({ ...input, command: { kind: 'witness',
+        anchor_id: first.anchor_id, epoch: next.epoch, ticket: first.ticket,
+        command: { kind: 'compare_and_set', previous: null, next: zero } } }))
+        .rejects.toMatchObject({ code: 'stale' })
+      expect(await owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
+        .toEqual({ kind: 'epoch', epoch: next.epoch })
+    } finally { owner.close(); await server.close() }
+  }, 60_000)
 
   it('signs a separate SkillHub challenge only for a currently authorized Host-local Profile', async () => {
     const { server, socketPath } = await fixture()
