@@ -139,6 +139,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   const [proxyUnavailable, setProxyUnavailable] = useState(false)
   const [proxyLabel, setProxyLabel] = useState<string | null>(null)
   const [proxyHandoffPending, setProxyHandoffPending] = useState(false)
+  const [proxyNeedsReselection, setProxyNeedsReselection] = useState(false)
   const [unavailable, setUnavailable] = useState(false)
   const [removalPending, setRemovalPending] = useState(false)
   const [removalNeedsDecision, setRemovalNeedsDecision] = useState(false)
@@ -161,11 +162,27 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     snapshotRef.current = null; botIdRef.current = ''
     setRoster(null); setRosterBusy(false); setRosterUnavailable(false)
     setProxyBusy(false); setProxyUnavailable(false); setProxyLabel(null)
-    setProxyHandoffPending(false); proxyRequestId.current = null; unbindRequestId.current = null
+    setProxyHandoffPending(false); setProxyNeedsReselection(false)
+    proxyRequestId.current = null; unbindRequestId.current = null
     pendingRef.current = null
     if (!host.collaborationGroupMembers) return
     let disposed = false, inFlight = false, inFlightChange = false
+    let proxyInFlight = false, proxyStatusInFlight = false, proxyStatusVersion = 0
     const current = () => !disposed && window.__DSH_DESKTOP_HOST__ === host
+    const loadProxyStatus = async () => {
+      if (!current() || proxyInFlight || proxyStatusInFlight || !host.collaborationGroupMembers) return
+      proxyStatusInFlight = true
+      const version = proxyStatusVersion
+      try {
+        const result = await host.collaborationGroupMembers({ operation: 'proxy_status',
+          workspace_id: workspaceId, session_id: sessionId })
+        if (!current() || version !== proxyStatusVersion || result.state !== 'proxy_binding') return
+        setProxyLabel(result.bot_ref)
+        setProxyHandoffPending(result.binding_state === 'transferring')
+        setProxyNeedsReselection(result.binding_state === 'needs_reselection')
+      } catch { /* A missing Bot capability does not hide the group. Actions report their own errors. */ }
+      finally { proxyStatusInFlight = false }
+    }
     const load = async () => {
       if (!current() || inFlight || !host.collaborationGroupMembers) return
       inFlight = true
@@ -177,6 +194,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
           setUnavailable(true); return
         }
         setSnapshot(result); setUnavailable(false)
+        void loadProxyStatus()
       } catch { if (current()) setUnavailable(true) }
       finally { inFlight = false }
     }
@@ -213,12 +231,11 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       } catch { if (current()) setUnavailable(true) }
       finally { inFlightChange = false; if (current()) setBusy(false) }
     }
-    let proxyInFlight = false
     proxySelect.current = async () => {
       /* v8 ignore next -- the proxy button requires a snapshot, valid Bot and no pending command. */
       if (!current() || proxyInFlight || !host.collaborationGroupMembers ||
         !snapshotRef.current || !botIdPattern.test(botIdRef.current) || pendingRef.current) return
-      proxyInFlight = true; setProxyBusy(true); setProxyUnavailable(false)
+      proxyInFlight = true; proxyStatusVersion++; setProxyBusy(true); setProxyUnavailable(false)
       try {
         const selected = botIdRef.current
         const status = await host.collaborationGroupMembers({ operation: 'proxy_status',
@@ -229,6 +246,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
         }
         setProxyLabel(status.bot_ref)
         setProxyHandoffPending(status.binding_state === 'transferring')
+        setProxyNeedsReselection(status.binding_state === 'needs_reselection')
         if (status.binding_state === 'active' && status.bot_ref === `deepseek-bot:${selected}` &&
           snapshotRef.current.members.some(member => member.actor_ref === status.bot_ref &&
             member.sources.includes('personal_proxy'))) return
@@ -248,6 +266,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
             return
           }
           binding = result; proxyRequestId.current = null; setProxyLabel(result.bot_ref)
+          setProxyNeedsReselection(false)
         } else if (status.binding_state === 'active' ||
           status.binding_state === 'needs_reselection') {
           const requestId = proxyRequestId.current ?? randomUUID()
@@ -261,11 +280,12 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
             return
           }
           proxyRequestId.current = null; setProxyLabel(result.bot_ref)
-          setProxyHandoffPending(true)
+          setProxyHandoffPending(true); setProxyNeedsReselection(false)
           return
         }
         const currentSnapshot = snapshotRef.current
         // The snapshot can disappear while the async Bot selection is in progress.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- A pending request can outlive the original snapshot.
         if (!binding || !currentSnapshot) { setProxyUnavailable(true); return }
         void change.current?.({ operation: 'proxy_attach', workspace_id: workspaceId,
           session_id: sessionId, request_id: randomUUID(),
@@ -278,7 +298,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     proxyUnbind.current = async () => {
       /* v8 ignore next -- the unbind button is disabled while a proxy command is active. */
       if (!current() || proxyInFlight || !host.collaborationGroupMembers) return
-      proxyInFlight = true; setProxyBusy(true); setProxyUnavailable(false)
+      proxyInFlight = true; proxyStatusVersion++; setProxyBusy(true); setProxyUnavailable(false)
       try {
         const status = await host.collaborationGroupMembers({ operation: 'proxy_status',
           workspace_id: workspaceId, session_id: sessionId })
@@ -287,7 +307,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
           return
         }
         if (status.binding_state === 'unbound') {
-          setProxyLabel(null); setProxyHandoffPending(false); return
+          setProxyLabel(null); setProxyHandoffPending(false); setProxyNeedsReselection(false); return
         }
         if (status.binding_state !== 'active') { setProxyUnavailable(true); return }
         const requestId = unbindRequestId.current ?? randomUUID()
@@ -301,6 +321,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
           return
         }
         unbindRequestId.current = null; setProxyLabel(null); setProxyHandoffPending(true)
+        setProxyNeedsReselection(false)
       } catch { if (current()) setProxyUnavailable(true) }
       finally { proxyInFlight = false; if (current()) setProxyBusy(false) }
     }
@@ -377,6 +398,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     {rosterUnavailable && <p role="status">{t('group.botRosterUnavailable')}</p>}
     {proxyLabel && <p>{t('group.personalProxy')}: {proxyLabel}</p>}
     {proxyHandoffPending && <p role="status">{t('group.proxyHandoffPending')}</p>}
+    {proxyNeedsReselection && <p role="status">{t('group.proxyNeedsReselection')}</p>}
     {proxyUnavailable && <p role="status">{t('group.proxyUnavailable')}</p>}
     {unavailable && <p role="status">{t('group.memberUnavailable')}</p>}
     {removalNeedsDecision && <p role="status">{t('group.pendingWorkDecision')}</p>}
