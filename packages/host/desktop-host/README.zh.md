@@ -63,6 +63,8 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.skillhub_clock_witness` 按当前 Profile、绑定代次和安装密钥独立保存 checkpoint revision。已授权连接可以读取锚或在精确匹配旧值后将 revision 加一，不能替换已有锚或降低 revision。断线不删除当前 Host authority 生命周期内的见证；重启丢失见证后，旧离线资格必须先在线恢复才能运行。固定 4,096 个锚的容量满后拒绝新锚，不驱逐旧记录。该见证只证明 checkpoint 连续性；Slark 仍须验证签名资格、可信时间、当前资产权限和 effect 所有权。
 
+独立的 `profile.skillhub_clock_v2` capability 由 Host 按资产或 Work 用途签发带一次性票据的锚，并提供当前 epoch。签发请求须提供 `active_asset_anchor_id`：资产签发时为 null，Work 签发时为当前选中资产锚的 UUID。V2 已初始化锚达到 4,096 个后，下一次签发轮换 epoch，使旧 V2 锚失效；若原始 Work 许可窗口仍可能有效，则先拒绝签发，等待最长 30 秒的保留期结束。Work 触发轮换时，Host 只在新代次保留选中的资产见证，供调用方在登记 Work 前在线刷新资产权限。`profile.skillhub_clock_witness` 使用独立记录，并继续在满额时拒绝新锚。
+
 `profile.ensure_binding_scope` 允许可信 broker 传入根据已验证环境与 Slark 登录身份计算的 SHA-256 scope。绑定版本只在同一 scope 内单调递增；另一有效登录可共享同一 Account Profile，而不继承其版本。registry v4 持久化 scope，并拒绝重复 scope 或 handle。读取器接受已发布 v2/v3 记录，加载时不重写；登记带 scope 的绑定时写入 v4。同环境已有带 scope 的绑定后，旧绑定须独立验证并关联 scope 才能离线恢复。旧 broker 可续用已经关联 scope 的 handle，但不能在该环境新增无 scope 的绑定。同一 scope 换绑会使旧 handle 失效。Account 令牌、Profile 解锁和服务器协作鉴权仍须通过；scope 不转移设备所有权。旧 registry 读取器拒绝 v4，因此回退须使用兼容读取器，或在确认不会丢失后续绑定变更后恢复升级前的 registry 快照。
 
 `profile.workspace_model_selection` 从当前连接已验证令牌的 Account 绑定解出 Profile，并在读取后重新校验。监管器丢弃已销毁或替换 worker 的响应。macOS 和 Windows 启动组合安装读取器；旧 Host 不发布此能力。独立随机 worker 令牌授权私有 HTTP 入口，完整响应在流式读取时有上限。请求拒绝重定向，只使用已核验的监听端。15 秒期限覆盖请求和完整响应读取；读取结束后再次检查取消状态，才接纳结果。结果不授权 Source 登记、规划或任务执行。

@@ -65,7 +65,8 @@ import type {
   HostSkillHubExecutionReport,
   ProfileSkillHubExecutionReceiptRequest,
   HostSkillHubClockWitnessCommand, HostSkillHubClockWitnessValue, HostSkillHubClockAnchorId,
-  ProfileSkillHubClockWitnessRequest, HostProfileId,
+  ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockV2Request, ProfileSkillHubClockV2Result,
+  HostSkillHubClockV2Command, HostProfileId,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
@@ -145,7 +146,7 @@ import { HostControlServerSession } from './host-control-session.ts'
 import { CollaborationDeliveryUploads, type CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 import { SkillHubPackageUploads } from './skillhub-package-uploads.ts'
 import { SkillHubPackageSnapshotReads, SkillHubPackageTransferSnapshot } from './skillhub-package-snapshot-reads.ts'
-import { SkillHubClockWitnesses } from './skillhub-clock-witness.ts'
+import { SkillHubClockWitnesses, SkillHubClockWitnessTickets } from './skillhub-clock-witness.ts'
 import type { createSkillHubPackageInstallationStore, SkillHubPackageSnapshot } from './skillhub-package-install.ts'
 import { RemoteUiStreamCursor } from './remote-ui-stream-cursor.ts'
 import type { SingleHostLock } from './single-instance.ts'
@@ -549,6 +550,7 @@ const capabilities = [
   'profile.open_local',
   'profile.skillhub_binding',
   'profile.skillhub_clock_witness',
+  'profile.skillhub_clock_v2',
   'profile.restore',
   'profile.restore_local',
   'profile.status',
@@ -973,6 +975,7 @@ export class HostControlAuthority {
   private readonly packageUploads = new SkillHubPackageUploads()
   private readonly packageSnapshotReads = new SkillHubPackageSnapshotReads()
   private readonly clockWitnesses = new SkillHubClockWitnesses()
+  private readonly clockWitnessTickets = new SkillHubClockWitnessTickets()
   constructor(private readonly options: HostControlAuthorityOptions) {}
 
   private skillHubPackageGrant(profileSelector: string, ownerId: string, signal: AbortSignal) {
@@ -987,6 +990,20 @@ export class HostControlAuthority {
       })
     }
     return { profileId, generation, hostKeyId, authorize }
+  }
+
+  private skillHubClockGrant(params: {
+    profile_selector: string
+    profile_id: string
+    binding_generation: string
+    host_key_id: string
+  }, ownerId: string, signal: AbortSignal) {
+    const { profileId, generation, hostKeyId, authorize } =
+      this.skillHubPackageGrant(params.profile_selector, ownerId, signal)
+    authorize()
+    if (params.profile_id !== profileId || params.binding_generation !== generation
+      || params.host_key_id !== hostKeyId) throw new HostAuthorityError('unavailable')
+    return { scope: JSON.stringify([profileId, generation, hostKeyId]), authorize }
   }
 
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
@@ -1585,16 +1602,27 @@ export class HostControlAuthority {
               target: frame.params.target, offset: frame.params.offset, total_bytes: read.totalBytes,
               chunk_base64url: read.chunk.toString('base64url'), complete: read.complete } })
         } else if (frame.method === 'profile.skillhub_clock_witness') {
-          const { profileId, generation, hostKeyId, authorize } =
-            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
-          authorize()
-          if (frame.params.profile_id !== profileId || frame.params.binding_generation !== generation
-            || frame.params.host_key_id !== hostKeyId) throw new HostAuthorityError('unavailable')
-          const scope = JSON.stringify([profileId, generation, hostKeyId])
+          const { scope, authorize } = this.skillHubClockGrant(frame.params, ownerId, context.signal)
           const result = this.clockWitnesses.apply(scope, frame.params.anchor_id, frame.params.command)
           authorize()
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { anchor_id: frame.params.anchor_id, ...result } })
+        } else if (frame.method === 'profile.skillhub_clock_v2') {
+          const { scope, authorize } = this.skillHubClockGrant(frame.params, ownerId, context.signal)
+          const command = frame.params.command
+          const result: ProfileSkillHubClockV2Result['result'] = command.kind === 'epoch'
+            ? { kind: 'epoch', epoch: this.clockWitnessTickets.currentEpoch() as HostControlNonce }
+            : command.kind === 'issue'
+              ? (() => { const issued = this.clockWitnessTickets.issue(scope, command.purpose,
+                command.active_asset_anchor_id ?? undefined)
+              return { kind: 'issued' as const, anchor_id: issued.anchorId as HostSkillHubClockAnchorId,
+                epoch: issued.epoch as HostControlNonce, ticket: issued.ticket as HostControlNonce } })()
+              : { kind: 'witness', anchor_id: command.anchor_id, epoch: command.epoch,
+                ...this.clockWitnessTickets.apply(scope, command.anchor_id, command.epoch,
+                  command.command, command.ticket ?? undefined) }
+          authorize()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result })
         } else if (frame.method === 'profile.skillhub_execution_receipt') {
           const createStore = this.options.createSkillHubPackageStore
           if (!createStore) throw new HostAuthorityError('upgrade_required')
@@ -3218,6 +3246,42 @@ export class UnixHostClient {
     return { anchorId: frame.result.anchor_id, value: frame.result.value, applied: frame.result.applied }
   }
 
+  /** Use Host-issued clock anchors and epoch-bound one-time initialization tickets.
+   * @param input - Current Profile grant, V2 command and optional cancellation.
+   * @returns Current epoch, issued anchor or checked witness verdict.
+   */
+  async skillHubClockV2(input: {
+    readonly profileSelector: string
+    readonly profileId: string
+    readonly bindingGeneration: string
+    readonly hostKeyId: string
+    readonly command: HostSkillHubClockV2Command
+    readonly signal?: AbortSignal
+  }): Promise<ProfileSkillHubClockV2Result['result']> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_clock_v2' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const selected = structuredClone(input.command)
+    const request: ProfileSkillHubClockV2Request = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_clock_v2',
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        profile_id: input.profileId as HostProfileId,
+        binding_generation: input.bindingGeneration, host_key_id: input.hostKeyId as HostControlSha256,
+        command: selected },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method
+      || (selected.kind === 'epoch' && frame.result.kind !== 'epoch')
+      || (selected.kind === 'issue' && frame.result.kind !== 'issued')
+      || (selected.kind === 'witness' && (frame.result.kind !== 'witness'
+        || frame.result.anchor_id !== selected.anchor_id || frame.result.epoch !== selected.epoch
+        || (selected.command.kind === 'read' ? frame.result.applied !== null
+          : typeof frame.result.applied !== 'boolean'
+            || (frame.result.applied && (frame.result.value?.revision !== selected.command.next.revision
+              || frame.result.value.digest !== selected.command.next.digest))))))
+      throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
   /** Sign a completed sandbox report through the current Profile grant.
    * @param input - Fixed Host package receipt, exact daemon report, selector, and cancellation.
    * @returns Installation-signed execution receipt after package and Profile revalidation.
@@ -4820,6 +4884,7 @@ export class UnixHostClient {
       | ProfileSkillHubPackageChunkRequest | ProfileSkillHubPackageRequest
       | ProfileSkillHubPackageSnapshotRequest | ProfileSkillHubExecutionReceiptRequest
       | ProfileSkillHubClockWitnessRequest
+      | ProfileSkillHubClockV2Request
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest

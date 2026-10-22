@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-10-22-skillhub-clock-anchor-epochs.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-10-22-skillhub-clock-anchor-epochs.md
+/agent-note-skill-hub-clock-anchor-epochs:
+  en: 62b811d3b8093afc
+  zh: 0503a40d3d61e1c8
+/agent-note-skill-hub-clock-anchor-epochs/problem:
+  en: a42026fa44c6a701
+  zh: c3586f1fb4b63862
+/agent-note-skill-hub-clock-anchor-epochs/proposal:
+  en: 3f37a363b4cb9275
+  zh: e5caa4121fa695ee
+/agent-note-skill-hub-clock-anchor-epochs/alternatives-considered:
+  en: 3a6a5bdb5a2eb8c6
+  zh: 7e94d30ee091c963
+/agent-note-skill-hub-clock-anchor-epochs/acceptance-criteria:
+  en: 898d6b0af3eaf8d6
+  zh: 9d2703094262541c
+/agent-note-skill-hub-clock-anchor-epochs/risks:
+  en: fabe7eda666f9618
+  zh: 73e6b59402c4ad15

@@ -63,6 +63,7 @@ import type {
   ProfileSkillHubExecutionReceiptResult,
   HostSkillHubClockAnchorId, HostSkillHubClockWitnessValue, HostSkillHubClockWitnessCommand,
   ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockWitnessResult,
+  ProfileSkillHubClockV2Request, ProfileSkillHubClockV2Result, HostSkillHubClockV2Command,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
@@ -333,6 +334,20 @@ function clockWitnessValue(value: unknown): HostSkillHubClockWitnessValue {
   exactKeys(row, ['revision', 'digest'])
   if (typeof row.revision !== 'string' || !/^(0|[1-9][0-9]{0,77})$/u.test(row.revision)) reject()
   return { revision: row.revision, digest: digest(row.digest) }
+}
+
+function clockWitnessCommand(value: unknown): HostSkillHubClockWitnessCommand {
+  const raw = record(value)
+  if (raw.kind === 'read') {
+    exactKeys(raw, ['kind'])
+    return { kind: 'read' }
+  }
+  if (raw.kind === 'compare_and_set') {
+    exactKeys(raw, ['kind', 'previous', 'next'])
+    return { kind: 'compare_and_set', previous: raw.previous === null ? null
+      : clockWitnessValue(raw.previous), next: clockWitnessValue(raw.next) }
+  }
+  return reject()
 }
 
 function capability(value: unknown): HostControlCapability {
@@ -1669,6 +1684,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileSkillHubPackageSnapshotRequest
   | ProfileSkillHubExecutionReceiptRequest
   | ProfileSkillHubClockWitnessRequest
+  | ProfileSkillHubClockV2Request
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
@@ -1974,21 +1990,42 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       'binding_generation', 'host_key_id', 'anchor_id', 'command'])
     if (typeof params.binding_generation !== 'string'
       || !/^[1-9][0-9]{0,17}$/u.test(params.binding_generation)) reject()
-    const raw = record(params.command)
-    let command: HostSkillHubClockWitnessCommand
-    if (raw.kind === 'read') {
-      exactKeys(raw, ['kind'])
-      command = { kind: 'read' }
-    } else if (raw.kind === 'compare_and_set') {
-      exactKeys(raw, ['kind', 'previous', 'next'])
-      command = { kind: 'compare_and_set', previous: raw.previous === null ? null
-        : clockWitnessValue(raw.previous), next: clockWitnessValue(raw.next) }
-    } else return reject()
+    const command = clockWitnessCommand(params.command)
     return { version: 1, type: 'request', request_id: requestId, method: frame.method,
       params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
         profile_id: uuid(params.profile_id) as HostProfileId,
         binding_generation: params.binding_generation, host_key_id: digest(params.host_key_id),
         anchor_id: uuid(params.anchor_id) as HostSkillHubClockAnchorId, command } }
+  }
+  if (frame.method === 'profile.skillhub_clock_v2') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'profile_id',
+      'binding_generation', 'host_key_id', 'command'])
+    if (typeof params.binding_generation !== 'string'
+      || !/^[1-9][0-9]{0,17}$/u.test(params.binding_generation)) reject()
+    const raw = record(params.command)
+    let command: HostSkillHubClockV2Command
+    if (raw.kind === 'epoch') {
+      exactKeys(raw, ['kind'])
+      command = { kind: raw.kind }
+    } else if (raw.kind === 'issue') {
+      exactKeys(raw, ['kind', 'purpose', 'active_asset_anchor_id'])
+      if (raw.purpose !== 'asset' && raw.purpose !== 'work') reject()
+      if (raw.purpose === 'asset' && raw.active_asset_anchor_id !== null) reject()
+      if (raw.purpose === 'work' && raw.active_asset_anchor_id === null) reject()
+      command = { kind: 'issue', purpose: raw.purpose,
+        active_asset_anchor_id: raw.active_asset_anchor_id === null ? null
+          : uuid(raw.active_asset_anchor_id) as HostSkillHubClockAnchorId }
+    } else if (raw.kind === 'witness') {
+      exactKeys(raw, ['kind', 'anchor_id', 'epoch', 'ticket', 'command'])
+      command = { kind: 'witness', anchor_id: uuid(raw.anchor_id) as HostSkillHubClockAnchorId,
+        epoch: nonce(raw.epoch), ticket: raw.ticket === null ? null : nonce(raw.ticket),
+        command: clockWitnessCommand(raw.command) }
+    } else return reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        profile_id: uuid(params.profile_id) as HostProfileId,
+        binding_generation: params.binding_generation, host_key_id: digest(params.host_key_id),
+        command } }
   }
   if (frame.method === 'profile.skillhub_execution_receipt') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'package_receipt', 'execution'])
@@ -2340,6 +2377,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileSkillHubPackageSnapshotResult
   | ProfileSkillHubExecutionReceiptResult
   | ProfileSkillHubClockWitnessResult
+  | ProfileSkillHubClockV2Result
   | ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
@@ -2638,6 +2676,29 @@ function decodeProfileResult(frame: Record<string, unknown>):
       result: { anchor_id: uuid(result.anchor_id) as HostSkillHubClockAnchorId,
         value: result.value === null ? null : clockWitnessValue(result.value),
         applied: result.applied } }
+  }
+  if (frame.method === 'profile.skillhub_clock_v2') {
+    const raw = record(result)
+    if (raw.kind === 'epoch') {
+      exactKeys(raw, ['kind', 'epoch'])
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { kind: 'epoch', epoch: nonce(raw.epoch) } }
+    }
+    if (raw.kind === 'issued') {
+      exactKeys(raw, ['kind', 'anchor_id', 'epoch', 'ticket'])
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { kind: 'issued', anchor_id: uuid(raw.anchor_id) as HostSkillHubClockAnchorId,
+          epoch: nonce(raw.epoch), ticket: nonce(raw.ticket) } }
+    }
+    if (raw.kind === 'witness') {
+      exactKeys(raw, ['kind', 'anchor_id', 'epoch', 'value', 'applied'])
+      if (raw.applied !== null && typeof raw.applied !== 'boolean') reject()
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { kind: 'witness', anchor_id: uuid(raw.anchor_id) as HostSkillHubClockAnchorId,
+          epoch: nonce(raw.epoch), value: raw.value === null ? null : clockWitnessValue(raw.value),
+          applied: raw.applied } }
+    }
+    return reject()
   }
   if (frame.method === 'profile.open' || frame.method === 'profile.open_local') {
     exactKeys(result, ['profile_id', 'view_lease_id', 'view_activation_handle', 'lease_generation', 'expires_at', 'runtime_generation'])
