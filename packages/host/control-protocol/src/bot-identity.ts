@@ -72,7 +72,10 @@ export function parseHostBotRosterPage(value: unknown): HostBotRosterPage | null
   const bots = item.bots.map(parseHostBotIdentity)
   if (bots.some(bot => bot === null)) throw Error('invalid_bot_roster_page')
   const identities = bots as HostBotIdentity[]
-  if (identities.some((bot, index) => index > 0 && bot.bot_id <= (identities[index - 1]?.bot_id ?? '')) ||
+  if (identities.some((bot, index) => {
+    const previousBotId = identities[index - 1]?.bot_id
+    return previousBotId !== undefined && bot.bot_id <= previousBotId
+  }) ||
     (item.next_cursor !== null && item.next_cursor !== identities.at(-1)?.bot_id))
     throw Error('invalid_bot_roster_page')
   return { bots: identities, next_cursor: item.next_cursor }
