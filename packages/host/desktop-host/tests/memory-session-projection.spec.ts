@@ -38,6 +38,24 @@ describe('local memory Session projection', () => {
     expect(JSON.stringify(projected)).not.toContain(fakeToken)
   })
 
+  it('ignores source projections and replacements on tool or system events', () => {
+    const events = oneTurn.map(event => event.seq === 3
+      ? { ...event, sourceEventSeqs: [2], surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 } } : event)
+    expect(projectMemorySession(snapshot(events))).toEqual(projectMemorySession(snapshot(oneTurn)))
+  })
+
+  it('keeps only visible assistant text from mixed reasoning and tool-call blocks', () => {
+    const events = oneTurn.map(event => event.seq === 4
+      ? { ...event, data: { ...event.data, message: { id: 'a', role: 'assistant', content: [
+        { type: 'reasoning', text: 'private reasoning' },
+        { type: 'text', text: 'Visible answer' },
+        { type: 'tool-call', arguments: 'private tool arguments' },
+      ] } } } : event)
+    const result = projectMemorySession(snapshot(events))
+    expect(result.find(item => item.kind === 'assistant')?.text).toBe('Visible answer')
+    expect(JSON.stringify(result)).not.toMatch(/private reasoning|private tool arguments/u)
+  })
+
   it('withholds unfinished or failed turns and refuses delegated or replaced history', () => {
     expect(projectMemorySession(snapshot(oneTurn.slice(0, -1)))).toEqual([])
     const failed = oneTurn.map(event => event.type === 'turn/end'

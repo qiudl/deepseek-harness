@@ -72,7 +72,9 @@ function plainText(message: Record<string, unknown> | null, role: string): strin
   let text = ''
   for (const content of message.content) {
     const block = object(content)
-    if (!block || block.type !== 'text' || typeof block.text !== 'string') return null
+    if (!block) return null
+    if (role === 'assistant' && (block.type === 'reasoning' || block.type === 'tool-call')) continue
+    if (block.type !== 'text' || typeof block.text !== 'string') return null
     text += block.text
   }
   return text ? redactText(text) : null
@@ -101,8 +103,10 @@ export function projectMemorySession(snapshot: HostMemorySessionSnapshot): reado
     try { parsed = JSON.parse(line) } catch { throw new HostAuthorityError('unavailable') }
     const event = object(parsed), data = object(event?.data)
     if (!event || event.seq !== nextSeq || typeof event.type !== 'string') throw new HostAuthorityError('unavailable')
-    if ((event.surfaceOp !== undefined && event.surfaceOp !== 'append')
-      || event.sourceEventSeqs !== undefined) throw new HostAuthorityError('unavailable')
+    const projectedEvent = event.type === 'turn/start' || event.type === 'turn/end'
+      || event.type === 'user/message' || event.type === 'assistant/message'
+    if (projectedEvent && ((event.surfaceOp !== undefined && event.surfaceOp !== 'append')
+      || event.sourceEventSeqs !== undefined)) throw new HostAuthorityError('unavailable')
     nextSeq += 1
     if (event.type === 'turn/start') {
       const turn = data?.turn
