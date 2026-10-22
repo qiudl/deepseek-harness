@@ -69,7 +69,7 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 私有 Bot 群 worker 桥还支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。完成 Slark 群与 Account 权威核验之前，不开放派送这些命令的公开控制方法。
 
-Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。凭据验签不能单独证明群成员资格仍然有效；派送还需要向 Slark 实时核验成员资格。校验器未作为 Host 控制方法开放。
+Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。这些辅助函数尚未作为 Host 控制方法开放。
 
 仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
 

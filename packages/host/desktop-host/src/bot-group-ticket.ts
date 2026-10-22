@@ -8,7 +8,7 @@ const SEGMENT = /^[A-Za-z0-9_-]+$/u
 const REGISTRY = /^h2_[0-9a-f]{64}$/u
 const AUDIENCE = 'urn:slark:dsh-bot-group-delivery:v1'
 const CLAIMS = ['schema_version', 'issuer', 'audience', 'slark_audience', 'environment_id',
-  'owner_user_id', 'account_issuer', 'account_subject', 'account_binding_epoch',
+  'owner_user_id', 'computer_id', 'account_issuer', 'account_subject', 'account_binding_epoch',
   'host_registry_id', 'group_id', 'workspace_id', 'session_id', 'delivery_id',
   'message_id', 'message_seq', 'bot_id', 'member_cycle', 'payload_digest',
   'token_id', 'issued_at', 'expires_at'] as const
@@ -32,6 +32,7 @@ export interface BotGroupPublicKeyring {
 }
 export interface BotGroupTicketExpected {
   readonly ownerUserId: string
+  readonly computerId: string
   readonly accountIssuer: string
   readonly accountSubject: string
   readonly environmentId: string
@@ -124,6 +125,7 @@ export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyri
         claims.environment_id !== expected.environmentId ||
         claims.environment_id !== keyring.environmentId ||
         claims.owner_user_id !== expected.ownerUserId ||
+        claims.computer_id !== expected.computerId ||
         claims.account_issuer !== expected.accountIssuer ||
         claims.account_subject !== expected.accountSubject ||
         claims.account_binding_epoch !== expected.accountBindingEpoch ||
@@ -157,5 +159,41 @@ export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyri
     return { workspaceId: accepted.workspace_id, sessionId: accepted.session_id,
       messageId: accepted.message_id, payloadDigest: accepted.payload_digest,
       expiresAt: accepted.expires_at }
+  } catch { return fail() }
+}
+
+/** Recheck live Slark membership at the pinned origin before the worker accepts a delivery. */
+export async function confirmBotGroupTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupTicketExpected, signal: AbortSignal,
+  fetchFn: typeof fetch = fetch, clock: () => number = Date.now): Promise<BotGroupTicket> {
+  const ticket = verifyBotGroupTicket(token, keyring, expected, clock())
+  if (signal.aborted) fail()
+  const bounded = AbortSignal.any([signal, AbortSignal.timeout(5_000)])
+  try {
+    const response = await fetchFn(expected.slarkAudience +
+      '/api/v1/dsh/collaboration-v2/group-messages/delivery-confirm', {
+      method: 'POST', redirect: 'error', credentials: 'omit', cache: 'no-store',
+      headers: { authorization: `Bearer ${token}`, 'cache-control': 'no-store' }, signal: bounded,
+    })
+    const bodyStream = response.body
+    if (response.status !== 200 || !bodyStream) throw Error('bot_group_ticket_invalid')
+    const reader = bodyStream.getReader()
+    const chunks: Uint8Array[] = []
+    let length = 0
+    for (;;) {
+      const next = await reader.read()
+      if (next.done) break
+      length += next.value.byteLength
+      if (length > 4_096) { await reader.cancel(); fail() }
+      chunks.push(next.value)
+    }
+    const body = JSON.parse(new TextDecoder('utf-8', { fatal: true })
+      .decode(Buffer.concat(chunks))) as unknown
+    if (!exact(body, ['ok', 'value']) || body.ok !== true ||
+        !exact(body.value, ['state', 'delivery_id', 'expires_at']) ||
+        body.value.state !== 'active' || body.value.delivery_id !== expected.deliveryId ||
+        body.value.expires_at !== ticket.expiresAt ||
+        bounded.aborted || clock() >= ticket.expiresAt) fail()
+    return ticket
   } catch { return fail() }
 }
