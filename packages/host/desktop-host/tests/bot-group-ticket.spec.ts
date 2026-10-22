@@ -160,9 +160,11 @@ it('rejects wrong ticket header, signer window and aborted confirmation', async 
       .toThrow('bot_group_ticket_invalid')
   }
   for (const issuer of [null, 'bad', 'https://slark.example.test/?query=1']) {
+    const invalidExpected = { ...expected }
+    Reflect.set(invalidExpected, 'slarkAudience', null)
     expect(() => verifyBotGroupTicket(ticket({ issuer, slark_audience: null }),
       { ...keyring, issuer } as typeof keyring,
-      { ...expected, slarkAudience: null } as unknown as BotGroupTicketExpected, now))
+      invalidExpected, now))
       .toThrow('bot_group_ticket_invalid')
   }
   for (const projection of [
