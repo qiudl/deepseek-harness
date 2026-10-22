@@ -111,21 +111,35 @@ function groupMemberInput(value: unknown): value is Record<string, unknown> {
   if (!row(value)) return false
   const fields = value.operation === 'status' ? ['operation', 'workspace_id', 'session_id']
     : value.operation === 'bots' ? ['operation', 'workspace_id', 'session_id', 'after_bot_id', 'limit']
-      : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
-        : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
-          'expected_membership_version', 'bot_id']
-          : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
-            'expected_membership_version', 'member_id'] : []
+      : value.operation === 'proxy_status' ? ['operation', 'workspace_id', 'session_id']
+        : value.operation === 'proxy_select' ? ['operation', 'workspace_id', 'session_id',
+          'request_id', 'expected_binding_epoch', 'bot_id']
+          : value.operation === 'proxy_attach' ? ['operation', 'workspace_id', 'session_id',
+            'request_id', 'expected_membership_version', 'bot_id', 'binding_id', 'binding_epoch']
+            : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
+              : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+                'expected_membership_version', 'bot_id']
+                : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+                  'expected_membership_version', 'member_id'] : []
   if (!fields.length || !exact(value, fields) || typeof value.workspace_id !== 'string'
     || !uuid.test(value.workspace_id) || typeof value.session_id !== 'string'
     || !/^[!-~]{1,256}$/u.test(value.session_id) || /[/\\]/u.test(value.session_id)
     || value.session_id === '.' || value.session_id === '..') return false
   if (value.operation === 'status') return true
+  if (value.operation === 'proxy_status') return true
   if (value.operation === 'bots') return typeof value.after_bot_id === 'string'
     && (value.after_bot_id === '' || /^[A-Za-z0-9_-]{1,200}$/u.test(value.after_bot_id))
     && Number.isSafeInteger(value.limit) && Number(value.limit) >= 1 && Number(value.limit) <= 100
   if (typeof value.request_id !== 'string' || !uuid.test(value.request_id)) return false
   if (value.operation === 'receipt') return true
+  if (value.operation === 'proxy_select') return Number.isSafeInteger(value.expected_binding_epoch)
+    && Number(value.expected_binding_epoch) >= 0 && typeof value.bot_id === 'string'
+    && /^[A-Za-z0-9_-]{1,200}$/u.test(value.bot_id)
+  if (value.operation === 'proxy_attach') return Number.isSafeInteger(value.expected_membership_version)
+    && Number(value.expected_membership_version) >= 1 && typeof value.bot_id === 'string'
+    && /^[A-Za-z0-9_-]{1,200}$/u.test(value.bot_id)
+    && typeof value.binding_id === 'string' && uuid.test(value.binding_id)
+    && Number.isSafeInteger(value.binding_epoch) && Number(value.binding_epoch) >= 1
   if (!Number.isSafeInteger(value.expected_membership_version)
     || Number(value.expected_membership_version) < 1) return false
   return value.operation === 'join'
@@ -151,6 +165,19 @@ function groupMemberResult(value: unknown): boolean {
     }
     return value.next_cursor === null || value.next_cursor === prior
   }
+  if (value.state === 'proxy_binding') return exact(value,
+    ['state', 'binding_id', 'binding_epoch', 'bot_ref', 'binding_state'])
+    && (value.binding_id === null || typeof value.binding_id === 'string' && uuid.test(value.binding_id))
+    && Number.isSafeInteger(value.binding_epoch) && Number(value.binding_epoch) >= 0
+    && (value.bot_ref === null || typeof value.bot_ref === 'string'
+      && /^deepseek-bot:[A-Za-z0-9_-]{1,200}$/u.test(value.bot_ref))
+    && ['unbound', 'active', 'transferring', 'needs_reselection'].includes(String(value.binding_state))
+  if (value.state === 'proxy_bound') return exact(value,
+    ['state', 'binding_id', 'binding_epoch', 'bot_ref'])
+    && typeof value.binding_id === 'string' && uuid.test(value.binding_id)
+    && Number.isSafeInteger(value.binding_epoch) && Number(value.binding_epoch) >= 1
+    && typeof value.bot_ref === 'string'
+    && /^deepseek-bot:[A-Za-z0-9_-]{1,200}$/u.test(value.bot_ref)
   if (value.state === 'recorded') return exact(value, ['state', 'operation', 'member_id',
     'membership_version', 'seq']) && ['join', 'leave', 'proxy_attach', 'proxy_revoke'].includes(String(value.operation))
     && typeof value.member_id === 'string' && uuid.test(value.member_id)

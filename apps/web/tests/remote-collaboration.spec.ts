@@ -382,6 +382,36 @@ it('REQ-20261020-0010: Bot picker accepts only public sorted identities', async 
   expect(await bridge().collaborationGroupMembers?.({ ...command, limit: 101 }))
     .toEqual({ state: 'retry_required' })
 })
+it('REQ-20261020-0010: personal proxy commands carry only binding facts', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupMembers'] }
+  const commands: Rpc[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    commands.push(rpc)
+    const requested = rpc.payload.args.request as { operation?: string }
+    return { status: 200, value: envelope(rpc, requested.operation === 'proxy_status'
+      ? { state: 'proxy_binding', binding_id: null, binding_epoch: 0, bot_ref: null,
+        binding_state: 'unbound' }
+      : { state: 'proxy_bound', binding_id: bindingId, binding_epoch: 1,
+        bot_ref: 'deepseek-bot:my_bot' }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_status',
+    workspace_id: workspace, session_id: 'session-1' })).toMatchObject({ state: 'proxy_binding' })
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_select',
+    workspace_id: workspace, session_id: 'session-1',
+    request_id: '66666666-6666-4666-8666-666666666666',
+    expected_binding_epoch: 0, bot_id: 'my_bot' })).toMatchObject({ state: 'proxy_bound' })
+  expect(commands).toHaveLength(2)
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_select',
+    workspace_id: workspace, session_id: 'session-1',
+    request_id: '66666666-6666-4666-8666-666666666666',
+    expected_binding_epoch: 0, bot_id: '../other' })).toEqual({ state: 'retry_required' })
+  expect(commands).toHaveLength(2)
+})
 it('REQ-20261020-0010: group pending commands stay exact and use the verified parent bridge', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
   const command = { operation: 'pending_claim', workspace_id: workspace, session_id: 'session-1',
