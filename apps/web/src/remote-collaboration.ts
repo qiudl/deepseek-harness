@@ -110,16 +110,20 @@ function groupResult(value: unknown): boolean {
 function groupMemberInput(value: unknown): value is Record<string, unknown> {
   if (!row(value)) return false
   const fields = value.operation === 'status' ? ['operation', 'workspace_id', 'session_id']
-    : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
-      : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
-        'expected_membership_version', 'bot_id']
-        : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
-          'expected_membership_version', 'member_id'] : []
+    : value.operation === 'bots' ? ['operation', 'workspace_id', 'session_id', 'after_bot_id', 'limit']
+      : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
+        : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+          'expected_membership_version', 'bot_id']
+          : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+            'expected_membership_version', 'member_id'] : []
   if (!fields.length || !exact(value, fields) || typeof value.workspace_id !== 'string'
     || !uuid.test(value.workspace_id) || typeof value.session_id !== 'string'
     || !/^[!-~]{1,256}$/u.test(value.session_id) || /[/\\]/u.test(value.session_id)
     || value.session_id === '.' || value.session_id === '..') return false
   if (value.operation === 'status') return true
+  if (value.operation === 'bots') return typeof value.after_bot_id === 'string'
+    && (value.after_bot_id === '' || /^[A-Za-z0-9_-]{1,200}$/u.test(value.after_bot_id))
+    && Number.isSafeInteger(value.limit) && Number(value.limit) >= 1 && Number(value.limit) <= 100
   if (typeof value.request_id !== 'string' || !uuid.test(value.request_id)) return false
   if (value.operation === 'receipt') return true
   if (!Number.isSafeInteger(value.expected_membership_version)
@@ -132,6 +136,21 @@ function groupMemberResult(value: unknown): boolean {
   if (!row(value)) return false
   if (['missing', 'conflict', 'retry_required'].includes(String(value.state)))
     return exact(value, ['state'])
+  if (value.state === 'bot_roster') {
+    if (!exact(value, ['state', 'bots', 'next_cursor']) || !Array.isArray(value.bots)
+      || value.bots.length > 100 ||
+      (value.next_cursor !== null && typeof value.next_cursor !== 'string')) return false
+    let prior = ''
+    for (const bot of value.bots) {
+      if (!exact(bot, ['bot_id', 'actor_ref', 'display_name']) ||
+        typeof bot.bot_id !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/u.test(bot.bot_id) ||
+        bot.bot_id <= prior || bot.actor_ref !== `deepseek-bot:${bot.bot_id}` ||
+        typeof bot.display_name !== 'string' || !bot.display_name.trim() ||
+        encoder.encode(bot.display_name).length > 512) return false
+      prior = bot.bot_id
+    }
+    return value.next_cursor === null || value.next_cursor === prior
+  }
   if (value.state === 'recorded') return exact(value, ['state', 'operation', 'member_id',
     'membership_version', 'seq']) && ['join', 'leave', 'proxy_attach', 'proxy_revoke'].includes(String(value.operation))
     && typeof value.member_id === 'string' && uuid.test(value.member_id)

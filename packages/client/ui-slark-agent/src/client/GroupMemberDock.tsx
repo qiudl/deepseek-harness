@@ -29,6 +29,11 @@ type Receipt = {
   seq: number
 }
 export type GroupMemberCommand =
+  | { operation: 'bots'
+    workspace_id: string
+    session_id: string
+    after_bot_id: string
+    limit: number }
   | { operation: 'status'; workspace_id: string; session_id: string }
   | { operation: 'receipt'; workspace_id: string; session_id: string; request_id: string }
   | {
@@ -47,7 +52,13 @@ export type GroupMemberCommand =
     expected_membership_version: number
     member_id: string
   }
-export type GroupMemberReply = Snapshot | Receipt | { state: 'missing' | 'conflict' | 'retry_required' }
+export type GroupMemberReply = Snapshot | Receipt |
+  { state: 'bot_roster'
+    bots: { bot_id: string
+      actor_ref: string
+      display_name: string }[]
+    next_cursor: string | null } |
+  { state: 'missing' | 'conflict' | 'retry_required' }
 export interface GroupMemberBridge {
   collaborationGroupMembers?(command: GroupMemberCommand): Promise<GroupMemberReply>
 }
@@ -64,13 +75,18 @@ const botIdPattern = /^[A-Za-z0-9_-]{1,200}$/u
 export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Props) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [botId, setBotId] = useState('')
+  const [roster, setRoster] = useState<Extract<GroupMemberReply, { state: 'bot_roster' }> | null>(null)
+  const [rosterBusy, setRosterBusy] = useState(false)
+  const [rosterUnavailable, setRosterUnavailable] = useState(false)
   const [unavailable, setUnavailable] = useState(false)
   const [busy, setBusy] = useState(false)
   const [pending, setPending] = useState<Change | null>(null)
   const change = useRef<((command: Change) => Promise<void>) | null>(null)
   const pendingRef = useRef<Change | null>(null)
+  const rosterLoad = useRef<((after: string) => Promise<void>) | null>(null)
   useEffect(() => {
     setSnapshot(null); setBotId(''); setUnavailable(false); setBusy(false); setPending(null)
+    setRoster(null); setRosterBusy(false); setRosterUnavailable(false)
     pendingRef.current = null
     if (!host.collaborationGroupMembers) return
     let disposed = false, inFlight = false, inFlightChange = false
@@ -88,6 +104,19 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
         setSnapshot(result); setUnavailable(false)
       } catch { if (current()) setUnavailable(true) }
       finally { inFlight = false }
+    }
+    let rosterInFlight = false
+    rosterLoad.current = async (after) => {
+      if (!current() || rosterInFlight || !host.collaborationGroupMembers) return
+      rosterInFlight = true; setRosterBusy(true); setRosterUnavailable(false)
+      try {
+        const result = await host.collaborationGroupMembers({ operation: 'bots',
+          workspace_id: workspaceId, session_id: sessionId, after_bot_id: after, limit: 50 })
+        if (!current()) return
+        if (result.state !== 'bot_roster') { setRosterUnavailable(true); return }
+        setRoster(result)
+      } catch { if (current()) setRosterUnavailable(true) }
+      finally { rosterInFlight = false; if (current()) setRosterBusy(false) }
     }
     change.current = async (command) => {
       if (!current() || !host.collaborationGroupMembers || inFlightChange) return
@@ -109,7 +138,8 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     }
     void load()
     const timer = window.setInterval(() => { void load() }, 20_000)
-    return () => { disposed = true; window.clearInterval(timer); change.current = null }
+    return () => { disposed = true; window.clearInterval(timer)
+      change.current = null; rosterLoad.current = null }
   }, [host, workspaceId, sessionId, groupId])
   const add = () => {
     /* v8 ignore next -- the Add button is disabled until a snapshot and valid Bot ID exist and while a change is pending. */
@@ -140,9 +170,19 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       <label htmlFor="slark-group-bot-id">{t('group.botId')}</label>
       <input id="slark-group-bot-id" value={botId} maxLength={200}
         onChange={(event) => { setBotId(event.target.value) }} />
+      <button type="button" disabled={rosterBusy}
+        onClick={() => { void rosterLoad.current?.('') }}>{t('group.chooseBot')}</button>
       <button type="button" disabled={busy || !!pending || !botIdPattern.test(botId)}
         onClick={add}>{t('group.addBot')}</button>
     </div>
+    {roster && <div className={css.memberAdd}>
+      {roster.bots.map(bot => <button key={bot.bot_id} type="button"
+        onClick={() => { setBotId(bot.bot_id) }}>{bot.display_name}</button>)}
+      {roster.next_cursor && <button type="button" disabled={rosterBusy}
+        onClick={() => { if (roster.next_cursor) void rosterLoad.current?.(roster.next_cursor) }}>
+        {t('group.moreBots')}</button>}
+    </div>}
+    {rosterUnavailable && <p role="status">{t('group.botRosterUnavailable')}</p>}
     {unavailable && <p role="status">{t('group.memberUnavailable')}</p>}
     {pending && <button type="button" disabled={busy}
       onClick={() => { void change.current?.(pending) }}>{t('group.retryMemberChange')}</button>}

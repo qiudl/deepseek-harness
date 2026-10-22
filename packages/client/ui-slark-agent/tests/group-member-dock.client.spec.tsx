@@ -253,3 +253,31 @@ it('ignores member actions after the active desktop host changes', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
   expect(host.collaborationGroupMembers).toHaveBeenCalledTimes(1)
 })
+
+it('chooses an existing Bot from bounded Host pages before joining the group', async () => {
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'bots') return command.after_bot_id === ''
+      ? { state: 'bot_roster', bots: [{ bot_id: 'alpha', actor_ref: 'deepseek-bot:alpha',
+        display_name: 'Alpha' }], next_cursor: 'alpha' }
+      : { state: 'bot_roster', bots: [{ bot_id: 'my_bot', actor_ref: 'deepseek-bot:my_bot',
+        display_name: 'My Bot' }], next_cursor: null }
+    if (command.operation === 'join') return { state: 'recorded', operation: 'join',
+      member_id: memberId, membership_version: 3, seq: 2 }
+    return snapshot()
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose Bot' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Alpha' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'More Bots' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'My Bot' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'My Bot' }))
+  expect((screen.getByLabelText('Bot ID') as HTMLInputElement).value).toBe('my_bot')
+  fireEvent.click(screen.getByRole('button', { name: 'Add Bot' }))
+  await waitFor(() => { expect(commands.some(command => command.operation === 'join')).toBe(true) })
+  expect(commands.filter(command => command.operation === 'bots').map(command =>
+    command.operation === 'bots' ? command.after_bot_id : null)).toEqual(['', 'alpha'])
+  expect(commands.find(command => command.operation === 'join')).toMatchObject({ bot_id: 'my_bot' })
+})

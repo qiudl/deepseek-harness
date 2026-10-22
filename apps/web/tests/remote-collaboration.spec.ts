@@ -361,6 +361,27 @@ it('REQ-20261020-0010: a member capability keeps the remote bridge installed and
     .toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })
+it('REQ-20261020-0010: Bot picker accepts only public sorted identities', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupMembers'] }
+  const command = { operation: 'bots', workspace_id: workspace, session_id: 'session-1',
+    after_bot_id: '', limit: 50 }
+  let extra = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    return { status: 200, value: envelope(rpc, { state: 'bot_roster', bots: [{
+      bot_id: 'my_bot', actor_ref: 'deepseek-bot:my_bot', display_name: 'My Bot',
+      ...(extra ? { private_config: 'secret' } : {}) }], next_cursor: null }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMembers?.(command)).toMatchObject({ state: 'bot_roster',
+    bots: [{ bot_id: 'my_bot', display_name: 'My Bot' }] })
+  extra = true
+  expect(await bridge().collaborationGroupMembers?.(command)).toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupMembers?.({ ...command, limit: 101 }))
+    .toEqual({ state: 'retry_required' })
+})
 it('REQ-20261020-0010: group pending commands stay exact and use the verified parent bridge', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
   const command = { operation: 'pending_claim', workspace_id: workspace, session_id: 'session-1',
