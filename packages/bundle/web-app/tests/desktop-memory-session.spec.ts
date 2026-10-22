@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
-import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
-import { handleDesktopMemorySessionRequest, handleDesktopMemorySessionsRequest, listDesktopMemorySessions, readDesktopMemorySession } from '../src/desktop-memory-session.ts'
+import { handleDesktopMemorySessionRequest, handleDesktopMemorySessionsRequest, listDesktopMemorySessions, readDesktopMemorySession,
+  type DesktopMemorySessionPersistence } from '../src/desktop-memory-session.ts'
 
 const id = SessionId('session-54a5bf6e-b050-46f3-8149-f48b709b0480')
 const header = { id, version: SESSION_FORMAT_VERSION, createdAt: 1, isSeeded: false }
@@ -19,7 +19,7 @@ function fixture() {
       read: async (offset: number) => ({ events: offset === 0 ? [event] : [] }),
       close: async () => { closed = true },
     }),
-  } as unknown as Pick<SessionPersistence, 'stat' | 'open'>
+  } satisfies Pick<DesktopMemorySessionPersistence, 'stat' | 'open'>
   return { persistence, change: () => { revision = 'revision-2' }, closed: () => closed }
 }
 
@@ -42,12 +42,12 @@ describe('private Desktop memory session reader', () => {
   it('rejects delegated and seeded history', async () => {
     const f = fixture()
     const delegated = { stat: async () => ({ header: { ...header, delegationDepth: 1 }, revision: 'r1' }),
-      open: f.persistence.open } as unknown as Pick<SessionPersistence, 'stat' | 'open'>
+      open: f.persistence.open } satisfies Pick<DesktopMemorySessionPersistence, 'stat' | 'open'>
     await expect(readDesktopMemorySession(delegated, id, new AbortController().signal))
       .rejects.toThrow('memory_session_unavailable')
     expect(f.closed()).toBe(false)
-    const imported = { stat: async () => ({ header: { ...header, origin: 'imported' }, revision: 'r1' }),
-      open: f.persistence.open } as unknown as Pick<SessionPersistence, 'stat' | 'open'>
+    const imported = { stat: async () => ({ header: { ...header, origin: 'subagent' as const }, revision: 'r1' }),
+      open: f.persistence.open } satisfies Pick<DesktopMemorySessionPersistence, 'stat' | 'open'>
     await expect(readDesktopMemorySession(imported, id, new AbortController().signal))
       .rejects.toThrow('memory_session_unavailable')
   })
@@ -58,7 +58,7 @@ describe('private Desktop memory session reader', () => {
       revision: `revision-${index}`,
     }))
     rows.push({ header: { ...header, id: SessionId('session-seeded'), isSeeded: true }, revision: 'hidden' })
-    const persistence = { list: async () => rows } as unknown as Pick<SessionPersistence, 'list'>
+    const persistence = { list: async () => rows } satisfies Pick<DesktopMemorySessionPersistence, 'list'>
     const first = await listDesktopMemorySessions(persistence, null, new AbortController().signal)
     expect(first.items).toHaveLength(64)
     expect(first.nextAfter).toBe('session-063')
@@ -97,7 +97,7 @@ describe('private Desktop memory session reader', () => {
         f.change()
         return result
       } }
-    } } as Pick<SessionPersistence, 'stat' | 'open'>
+    } } satisfies Pick<DesktopMemorySessionPersistence, 'stat' | 'open'>
     await expect(readDesktopMemorySession(changing, id, new AbortController().signal))
       .rejects.toThrow('memory_session_changed')
     expect(f.closed()).toBe(true)
@@ -113,7 +113,7 @@ describe('private Desktop memory session reader', () => {
         }),
         close: async () => { closed = true },
       }),
-    } as unknown as Pick<SessionPersistence, 'stat' | 'open'>
+    } satisfies Pick<DesktopMemorySessionPersistence, 'stat' | 'open'>
     await expect(readDesktopMemorySession(persistence, id, new AbortController().signal))
       .rejects.toThrow('memory_session_oversized')
     expect(closed).toBe(true)

@@ -631,7 +631,7 @@ export class DshWebProfileWorkerFactory {
         || typeof result.revision !== 'string' || !result.revision
         || typeof result.text !== 'string' || Buffer.byteLength(result.text, 'utf8') > 64 * 1024 * 1024)
         throw new HostAuthorityError('profile_mismatch')
-      return result as unknown as HostMemorySessionSnapshot
+      return { sessionId: result.sessionId, revision: result.revision, text: result.text }
     }, 'detach')
   }
 
@@ -655,18 +655,22 @@ export class DshWebProfileWorkerFactory {
       const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HostAuthorityError('unavailable')
       const result = value as Record<string, unknown>
-      if (Object.keys(result).length !== 2 || !Array.isArray(result.items) || result.items.length > 64
-        || (result.items as unknown[]).some((value) => {
-          if (!value || typeof value !== 'object' || Array.isArray(value)) return true
-          const item = value as Record<string, unknown>
-          return Object.keys(item).length !== 2 || typeof item.sessionId !== 'string'
-            || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(item.sessionId)
-            || typeof item.revision !== 'string' || item.revision.length < 1 || item.revision.length > 256
-        })
-        || result.nextAfter !== null && (typeof result.nextAfter !== 'string'
-          || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(result.nextAfter)))
+      if (Object.keys(result).length !== 2 || !Array.isArray(result.items) || result.items.length > 64)
         throw new HostAuthorityError('unavailable')
-      const page = result as unknown as HostMemorySessionPage
+      const items = result.items.map((value: unknown) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HostAuthorityError('unavailable')
+        const item = value as Record<string, unknown>
+        if (Object.keys(item).length !== 2 || typeof item.sessionId !== 'string'
+          || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(item.sessionId)
+          || typeof item.revision !== 'string' || item.revision.length < 1 || item.revision.length > 256)
+          throw new HostAuthorityError('unavailable')
+        return { sessionId: item.sessionId, revision: item.revision }
+      })
+      const nextAfter = result.nextAfter
+      if (nextAfter !== null && (typeof nextAfter !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(nextAfter)))
+        throw new HostAuthorityError('unavailable')
+      const page: HostMemorySessionPage = { items, nextAfter }
       if (page.items.some((item, index) => after !== null && item.sessionId <= after
         || index > 0 && item.sessionId <= (page.items[index - 1]?.sessionId ?? ''))
         || page.nextAfter !== null && (page.items.length !== 64

@@ -1,6 +1,5 @@
 /** REQ-20261021-0013: bounded Profile-local Session extraction for the private Host worker. */
-import { SessionId } from '@deepseek-ai/dsh-session'
-import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import { SessionId, type SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { handleDesktopPrivateRequest } from './desktop-private-read.ts'
 
@@ -20,6 +19,33 @@ const PAGE_LIMIT = 64
 export interface DesktopMemorySessionPage {
   readonly items: readonly { readonly sessionId: string; readonly revision: string }[]
   readonly nextAfter: string | null
+}
+
+interface MemorySessionHeader {
+  readonly id: SessionIdType
+  readonly createdAt: number
+  readonly isSeeded: boolean
+  readonly parentSession?: unknown
+  readonly origin?: unknown
+  readonly delegationDepth?: number
+}
+
+interface MemorySessionMetadata {
+  readonly header: MemorySessionHeader
+  readonly revision: string
+}
+
+/** Only the current Profile persistence methods needed for bounded memory reads. */
+export interface DesktopMemorySessionPersistence {
+  readonly stat: (id: SessionIdType, options?: { readonly signal?: AbortSignal }) => Promise<MemorySessionMetadata | undefined>
+  readonly open: (id: SessionIdType, access: 'read', options?: { readonly signal?: AbortSignal }) => Promise<{
+    readonly header: MemorySessionHeader
+    readonly read: (offset: number, length: number, options?: { readonly signal?: AbortSignal }) => Promise<{
+      readonly events: readonly unknown[]
+    }>
+    readonly close: () => Promise<void>
+  }>
+  readonly list: (options?: { readonly signal?: AbortSignal }) => Promise<readonly MemorySessionMetadata[]>
 }
 
 function privateTopLevel(header: {
@@ -42,7 +68,7 @@ function privateTopLevel(header: {
  * @returns A current-format bounded snapshot; missing, changed, delegated or oversized sessions refuse.
  */
 export async function readDesktopMemorySession(
-  persistence: Pick<SessionPersistence, 'stat' | 'open'>,
+  persistence: Pick<DesktopMemorySessionPersistence, 'stat' | 'open'>,
   rawSessionId: string,
   signal: AbortSignal,
 ): Promise<DesktopMemorySessionSnapshot> {
@@ -87,7 +113,7 @@ export async function readDesktopMemorySession(
 
 /** List only current Profile's top-level Session metadata; raw content stays in readDesktopMemorySession. */
 export async function listDesktopMemorySessions(
-  persistence: Pick<SessionPersistence, 'list'>,
+  persistence: Pick<DesktopMemorySessionPersistence, 'list'>,
   after: string | null,
   signal: AbortSignal,
 ): Promise<DesktopMemorySessionPage> {
@@ -116,7 +142,7 @@ export function handleDesktopMemorySessionsRequest(
   req: IncomingMessage,
   res: ServerResponse,
   token: string,
-  persistence: Pick<SessionPersistence, 'list'>,
+  persistence: Pick<DesktopMemorySessionPersistence, 'list'>,
 ): Promise<void> {
   return handleDesktopPrivateRequest(req, res, token,
     (target, signal) => listDesktopMemorySessions(persistence, target.after, signal),
@@ -130,17 +156,20 @@ export function handleDesktopMemorySessionsRequest(
     (value: unknown) => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
       const row = value as Record<string, unknown>
-      if (Object.keys(row).length !== 2 || !Array.isArray(row.items) || row.items.length > PAGE_LIMIT
-        || (row.items as unknown[]).some((value) => {
-          if (!value || typeof value !== 'object' || Array.isArray(value)) return true
-          const item = value as Record<string, unknown>
-          return Object.keys(item).length !== 2 || typeof item.sessionId !== 'string'
-            || !SESSION_ID.test(item.sessionId) || typeof item.revision !== 'string'
-            || item.revision.length < 1 || item.revision.length > 256
-        })
-        || row.nextAfter !== null && (typeof row.nextAfter !== 'string' || !SESSION_ID.test(row.nextAfter)))
+      if (Object.keys(row).length !== 2 || !Array.isArray(row.items) || row.items.length > PAGE_LIMIT)
         throw Error('invalid_result')
-      return row as unknown as DesktopMemorySessionPage
+      const items = row.items.map((value: unknown) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
+        const item = value as Record<string, unknown>
+        if (Object.keys(item).length !== 2 || typeof item.sessionId !== 'string'
+          || !SESSION_ID.test(item.sessionId) || typeof item.revision !== 'string'
+          || item.revision.length < 1 || item.revision.length > 256) throw Error('invalid_result')
+        return { sessionId: item.sessionId, revision: item.revision }
+      })
+      const nextAfter = row.nextAfter
+      if (nextAfter !== null && (typeof nextAfter !== 'string' || !SESSION_ID.test(nextAfter)))
+        throw Error('invalid_result')
+      return { items, nextAfter }
     },
     () => true,
     2048)
@@ -159,7 +188,7 @@ export function handleDesktopMemorySessionRequest(
   req: IncomingMessage,
   res: ServerResponse,
   token: string,
-  persistence: Pick<SessionPersistence, 'stat' | 'open'>,
+  persistence: Pick<DesktopMemorySessionPersistence, 'stat' | 'open'>,
 ): Promise<void> {
   return handleDesktopPrivateRequest(
     req, res, token,
@@ -177,7 +206,7 @@ export function handleDesktopMemorySessionRequest(
       if (Object.keys(record).length !== 3 || typeof record.sessionId !== 'string'
         || typeof record.revision !== 'string' || typeof record.text !== 'string'
         || Buffer.byteLength(record.text, 'utf8') > MAX_SESSION_BYTES) throw Error('invalid_result')
-      return record as unknown as DesktopMemorySessionSnapshot
+      return { sessionId: record.sessionId, revision: record.revision, text: record.text }
     },
     (result, target) => result.sessionId === target.session_id,
     2048,
