@@ -82,6 +82,14 @@ vi.mock('../src/offline-profile-recovery.ts', async (importOriginal) => {
 
 const NOW = 1_780_000_000_000
 
+it.skipIf(process.platform === 'win32')('rejects a partial Memory keyring configuration before opening control', async () => {
+  const { config, root } = fixture()
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  await expect(startDesktopHostApplication(Object.assign(config, { memoryKeyringSha256: undefined }),
+    { now: () => NOW }, { platform: 'darwin' })).rejects.toMatchObject({ code: 'invalid_input' })
+})
+
 function accountToken(key: KeyObject, subject: string): string {
   const issuedAt = Math.floor(NOW / 1_000)
   const header = Buffer.from(JSON.stringify({
@@ -236,6 +244,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       generation: workerSpecs.length,
       bootstrapCookie: { name: 'fixture', value: 'private' },
       generateText,
+      listMemorySessions: async () => ({ items: [], nextAfter: null }),
+      readMemorySession: async sessionId => ({ sessionId, revision: 'r1', text: '{}' }),
       inspectWorkspaceModelSelection, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
       transitionCollaborationArchive,
       inspectCollaborationSource, readCollaborationSourceSnapshot,
@@ -256,12 +266,17 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   expect(serverStart).toHaveBeenCalledOnce()
   if (!serverOptions) throw new Error('missing captured server options')
   expect(serverOptions.memoryDirectiveVerifier).toBeInstanceOf(MemoryDirectiveVerifier)
+  const verifier = serverOptions.memoryDirectiveVerifier
+  if (!verifier) throw Error('missing Memory verifier')
+  const future = { expiresAt: NOW + 1_000 } as Parameters<MemoryDirectiveVerifier['assertUnexpired']>[0]
+  expect(() => { verifier.assertUnexpired(future) }).not.toThrow()
   expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
   expect(await serverOptions.inspectModelClaimSource?.(new AbortController().signal)).toMatchObject({ candidates: [] })
 
   const profile = await application.host.bootstrapLocalProfile({
     keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner',
   })
+  expect(serverOptions.memoryProfileReader?.(profile.profileId)).toBeDefined()
   expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => profile.profileId })).toBeNull()
   expect(serverOptions.modelClaimRecovery?.pendingReceipts({
