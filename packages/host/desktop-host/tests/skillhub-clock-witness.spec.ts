@@ -106,6 +106,15 @@ it('T24860 refuses capacity rotation during the original Work window', () => {
   expect(() => witness.apply('profile', work.anchorId, work.epoch, { kind: 'read' })).toThrow('stale')
 })
 
+it('T24860 bounds outstanding Work holds and reclaims expired holds', () => {
+  let now = 0n
+  const witness = new SkillHubClockWitnessTickets(() => now)
+  for (let i = 0; i < 4096; i++) witness.issue('profile', 'work')
+  expect(() => witness.issue('profile', 'asset')).toThrow('busy')
+  now = 30_000_000_000n
+  expect(witness.issue('profile', 'asset').epoch).toBe(witness.currentEpoch())
+})
+
 it('T24894 preserves only the selected asset witness when Work issue rotates capacity', () => {
   let now = 0n
   const witness = new SkillHubClockWitnessTickets(() => now)
@@ -126,10 +135,14 @@ it('T24894 preserves only the selected asset witness when Work issue rotates cap
       { kind: 'compare_and_set', previous: null, next: zero }, issued.ticket).applied).toBe(true)
   }
   expect(() => witness.issue('profile', 'work', oldWork.anchorId)).toThrow('unavailable')
+  expect(() => witness.issue('profile', 'work')).toThrow('unavailable')
   expect(() => witness.issue('other-profile', 'work', selected.anchorId)).toThrow('unavailable')
   const next = witness.issue('profile', 'work', selected.anchorId)
   expect(next.epoch).not.toBe(selected.epoch)
   expect(witness.apply('profile', selected.anchorId, next.epoch, { kind: 'read' }).value).toEqual(zero)
+  const advanced = { revision: '1', digest: 'b'.repeat(64) }
+  expect(witness.apply('profile', selected.anchorId, next.epoch,
+    { kind: 'compare_and_set', previous: zero, next: advanced }).value).toEqual(advanced)
   expect(witness.apply('profile', anotherAsset, next.epoch, { kind: 'read' }).value).toBeNull()
   expect(witness.apply('profile', oldWork.anchorId, next.epoch, { kind: 'read' }).value).toBeNull()
   expect(() => witness.apply('profile', selected.anchorId, selected.epoch, { kind: 'read' })).toThrow('stale')

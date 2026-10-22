@@ -517,6 +517,21 @@ describe('authenticated Unix transport', () => {
         .toEqual({ kind: 'witness', anchor_id: issued.anchor_id, epoch: issued.epoch,
           value: zero, applied: true })
       expect((await owner.skillHubClockV2({ ...input, command })).kind).toBe('witness')
+      const originalCall: unknown = Reflect.get(owner, 'call')
+      const originalInspection = owner.inspection
+      try {
+        Reflect.set(owner, 'inspection', { ...originalInspection, capabilities: [] })
+        await expect(owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        Reflect.set(owner, 'inspection', originalInspection)
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_clock_v2',
+          result: { kind: 'issued', anchor_id: issued.anchor_id, epoch: issued.epoch, ticket: issued.ticket } }))
+        await expect(owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+      } finally {
+        Reflect.set(owner, 'call', originalCall)
+        Reflect.set(owner, 'inspection', originalInspection)
+      }
       owner.close()
       await other.restoreLocalProfile({ profileSelector: local.profileSelector,
         keyHandle: 'keychain:clock-v2', unlockMaterial })

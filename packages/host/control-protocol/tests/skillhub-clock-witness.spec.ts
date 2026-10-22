@@ -52,7 +52,8 @@ it('round-trips V2 epoch, issue, and ticketed witness frames while rejecting mal
     command: { ...witness.params.command, ticket: null, command: { kind: 'read' } } } },
   { ...result, result: { kind: 'epoch', epoch } },
   { ...result, result: { kind: 'issued', anchor_id, epoch, ticket } },
-  { ...result, result: { kind: 'witness', anchor_id, epoch, value, applied: true } }])
+  { ...result, result: { kind: 'witness', anchor_id, epoch, value, applied: true } },
+  { ...result, result: { kind: 'witness', anchor_id, epoch, value: null, applied: null } }])
     expect(decodeHostControlFrame(encodeHostControlFrame(decode(frame)))).toEqual(decode(frame))
   for (const command of [{ kind: 'issue', extra: true }, { kind: 'issue' },
     { kind: 'issue', purpose: 'other', active_asset_anchor_id: null },
@@ -65,4 +66,10 @@ it('round-trips V2 epoch, issue, and ticketed witness frames while rejecting mal
     { ...witness.params.command, command: { kind: 'read', extra: true } }])
     expect(() => decode({ ...base, params: { ...base.params, command } })).toThrow()
   expect(() => decode({ ...result, result: { kind: 'issued', anchor_id, epoch, ticket: 'bad' } })).toThrow()
+  for (const binding_generation of [1, '0'])
+    expect(() => decode({ ...base, params: { ...base.params, binding_generation } })).toThrow()
+  expect(() => decode({ ...base, params: { ...base.params, command: { kind: 'other' } } })).toThrow()
+  expect(() => decode({ ...result, result: { kind: 'witness', anchor_id, epoch,
+    value, applied: 'yes' } })).toThrow()
+  expect(() => decode({ ...result, result: { kind: 'other' } })).toThrow()
 })
