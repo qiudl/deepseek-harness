@@ -157,7 +157,7 @@ it('records continue per delivery and removes only after all inventory pages agr
   expect(commands.filter(command => command.operation === 'inflight')).toHaveLength(5)
 })
 
-it('keeps request stop pending and retries its original request after reload', async () => {
+it('keeps request stop pending while permitting immediate leave after the decision', async () => {
   const deliveryId = '55555555-5555-4555-8555-555555555555'
   const saved = { request_id: '77777777-7777-4777-8777-777777777777',
     member_id: manualBot.member_id, member_cycle: 1, delivery_id: deliveryId,
@@ -176,7 +176,9 @@ it('keeps request stop pending and retries its original request after reload', a
       return { state: 'decision_recorded', member_id: command.member_id,
         member_cycle: command.member_cycle, delivery_id: command.delivery_id, decision: command.decision }
     }
-    throw Error('leave must wait for executor confirmation')
+    if (command.operation === 'leave') return { state: 'recorded', operation: 'leave',
+      member_id: command.member_id, membership_version: 3, seq: 2 }
+    throw Error('unexpected command')
   }) }
   show(host)
   await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
@@ -188,7 +190,7 @@ it('keeps request stop pending and retries its original request after reload', a
   expect(readLeaveDecisionIntent(workspaceId, sessionId, groupId)).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
   await waitFor(() => { expect(commands.filter(command => command.operation === 'inflight')).toHaveLength(2) })
-  expect(commands.some(command => command.operation === 'leave')).toBe(false)
+  await waitFor(() => { expect(commands.some(command => command.operation === 'leave')).toBe(true) })
 })
 
 it('holds a decision unsent when browser storage fails', async () => {

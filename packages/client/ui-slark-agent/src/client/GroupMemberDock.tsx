@@ -426,7 +426,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
           setUnavailable(true); return
         }
         firstPage ??= inventory
-        needsDecision ||= inventory.deliveries.some(item => item.decision !== 'continue')
+        needsDecision ||= inventory.deliveries.some(item => item.decision === null)
         cursor = inventory.next_cursor ?? ''
         if (!inventory.next_cursor) break
       } while (true)
