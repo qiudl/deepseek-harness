@@ -5,6 +5,7 @@ import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { GroupMemberDock } from '../src/client/GroupMemberDock.tsx'
 import type { GroupMemberCommand, GroupMemberReply } from '../src/client/GroupMemberDock.tsx'
+import { writeProxyIntent } from '../src/client/proxy-intent-store.ts'
 import { en } from '../src/client/locales.ts'
 
 const workspaceId = '11111111-1111-4111-8111-111111111111'
@@ -26,7 +27,7 @@ const show = (host: { collaborationGroupMembers?: (command: GroupMemberCommand) 
   return render(<GroupMemberDock host={host} groupId={groupId} workspaceId={workspaceId}
     sessionId={sessionId} t={makeTranslate(en)} />)
 }
-afterEach(() => { cleanup(); vi.restoreAllMocks(); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); sessionStorage.clear(); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
 
 it('shows current Bot members and retries an uncertain join with the same request key', async () => {
   const commands: unknown[] = []
@@ -651,6 +652,7 @@ it('ignores failed proxy responses that arrive after Host replacement', async ()
   await act(async () => { resolveReplace?.({ state: 'retry_required' }) })
   expect(screen.queryByText('Personal proxy status is uncertain. Try again.')).toBeNull()
   firstView.unmount()
+  sessionStorage.clear()
 
   let rejectUnbind: ((error: Error) => void) | undefined
   const unbindHost = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand) => {
@@ -747,6 +749,162 @@ it('keeps the same personal Bot selection request key after an uncertain reply',
   fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
   await waitFor(() => { expect(keys).toHaveLength(2) })
   expect(keys[0]).toBe(keys[1])
+})
+
+it('recovers the original Bot selection receipt after remount without a second binding', async () => {
+  const keys: string[] = []
+  let accepted = false
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding', binding_id: null,
+      binding_epoch: accepted ? 1 : 0, bot_ref: accepted ? 'deepseek-bot:my_bot' : null,
+      binding_state: accepted ? 'active' : 'unbound' }
+    if (command.operation === 'proxy_select') {
+      keys.push(command.request_id); accepted = true
+      return keys.length < 3 ? { state: 'retry_required' } : { state: 'proxy_bound',
+        binding_id: '55555555-5555-4555-8555-555555555555', binding_epoch: 1,
+        bot_ref: 'deepseek-bot:my_bot' }
+    }
+    if (command.operation === 'proxy_attach') return { state: 'recorded', operation: 'proxy_attach',
+      member_id: manualBot.member_id, membership_version: 3, seq: 2 }
+    return snapshot([owner])
+  }) }
+  const first = show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'my_bot' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(1) })
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  first.unmount()
+  show(host)
+  await waitFor(() => { expect(screen.getByLabelText('Bot ID').getAttribute('value')).toBe('my_bot') })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(2) })
+  expect(keys[1]).toBe(keys[0])
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(3) })
+  expect(keys[2]).toBe(keys[0])
+  await waitFor(() => { expect(host.collaborationGroupMembers.mock.calls.some(([command]) =>
+    command.operation === 'proxy_attach')).toBe(true) })
+})
+
+it('keeps an uncertain replacement fenced across remount and refuses a different Bot', async () => {
+  const keys: string[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding',
+      binding_id: '55555555-5555-4555-8555-555555555555', binding_epoch: 2,
+      bot_ref: 'deepseek-bot:old', binding_state: 'active' }
+    if (command.operation === 'proxy_replace') {
+      keys.push(command.request_id)
+      return keys.length < 3 ? { state: 'retry_required' } : { state: 'proxy_changed',
+        operation: 'replace', binding_id: '55555555-5555-4555-8555-555555555555',
+        binding_epoch: 3, bot_ref: 'deepseek-bot:new', binding_state: 'transferring' }
+    }
+    return snapshot([owner])
+  }) }
+  const first = show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'new' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(1) })
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  first.unmount()
+  show(host)
+  await waitFor(() => { expect(screen.getByLabelText('Bot ID').getAttribute('value')).toBe('new') })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'other' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  expect(keys).toHaveLength(1)
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'new' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(2) })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(3) })
+  expect(new Set(keys).size).toBe(1)
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+  expect(host.collaborationGroupMembers.mock.calls.some(([command]) => command.operation === 'proxy_attach')).toBe(false)
+})
+
+it('holds a new proxy request when session storage cannot preserve its receipt key', async () => {
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('storage denied') })
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    return command.operation === 'proxy_status' ? { state: 'proxy_binding', binding_id: null,
+      binding_epoch: 0, bot_ref: null, binding_state: 'unbound' } : snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'my_bot' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  expect(commands.some(command => command.operation === 'proxy_select')).toBe(false)
+})
+
+it('recovers an uncertain unbind after remount even when status already advanced', async () => {
+  const keys: string[] = []
+  let accepted = false
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding',
+      binding_id: '55555555-5555-4555-8555-555555555555', binding_epoch: accepted ? 3 : 2,
+      bot_ref: accepted ? null : 'deepseek-bot:old', binding_state: accepted ? 'unbound' : 'active' }
+    if (command.operation === 'proxy_unbind') {
+      keys.push(command.request_id); accepted = true
+      return keys.length === 1 ? { state: 'retry_required' } : { state: 'proxy_changed',
+        operation: 'unbind', binding_id: '55555555-5555-4555-8555-555555555555',
+        binding_epoch: 3, bot_ref: null, binding_state: 'unbound' }
+    }
+    return snapshot([owner])
+  }) }
+  const first = show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(keys).toHaveLength(1) })
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  first.unmount()
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(keys).toHaveLength(2) })
+  expect(keys[1]).toBe(keys[0])
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+})
+
+it('holds unbind while a prior selection receipt remains unresolved', async () => {
+  expect(writeProxyIntent(workspaceId, sessionId, groupId, { operation: 'proxy_select',
+    request_id: '11111111-1111-4111-8111-111111111111', expected_binding_epoch: 0,
+    bot_id: 'my_bot' })).toBe(true)
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    return command.operation === 'proxy_status' ? { state: 'proxy_binding', binding_id: null,
+      binding_epoch: 0, bot_ref: null, binding_state: 'unbound' } : snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  expect(commands.some(command => command.operation === 'proxy_unbind')).toBe(false)
+})
+
+it('drops a recovered selection receipt after its Host is replaced', async () => {
+  expect(writeProxyIntent(workspaceId, sessionId, groupId, { operation: 'proxy_select',
+    request_id: '11111111-1111-4111-8111-111111111111', expected_binding_epoch: 0,
+    bot_id: 'my_bot' })).toBe(true)
+  let answer: ((reply: GroupMemberReply) => void) | undefined
+  const host = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand) =>
+    command.operation === 'proxy_select' ? new Promise<GroupMemberReply>((resolve) => { answer = resolve }) :
+      Promise.resolve(command.operation === 'proxy_status' ? { state: 'proxy_binding' as const,
+        binding_id: null, binding_epoch: 0, bot_ref: null, binding_state: 'unbound' as const } : snapshot([owner]))) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(answer).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { answer?.({ state: 'proxy_bound',
+    binding_id: '55555555-5555-4555-8555-555555555555', binding_epoch: 1,
+    bot_ref: 'deepseek-bot:my_bot' }) })
+  expect(screen.queryByText('Personal proxy: deepseek-bot:my_bot')).toBeNull()
+  expect(host.collaborationGroupMembers.mock.calls.some(([command]) => command.operation === 'proxy_attach')).toBe(false)
 })
 
 it('rejects a Bot picker request that fails while the Host remains current', async () => {

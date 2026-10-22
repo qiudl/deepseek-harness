@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
+import { clearProxyIntent, readProxyIntent, writeProxyIntent } from './proxy-intent-store.ts'
+import type { ProxyIntent } from './proxy-intent-store.ts'
 import css from './GroupChatDock.module.css'
 
 type Member = {
@@ -154,6 +156,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   const proxyUnbind = useRef<(() => Promise<void>) | null>(null)
   const proxyRequestId = useRef<string | null>(null)
   const unbindRequestId = useRef<string | null>(null)
+  const pendingProxyIntent = useRef<ProxyIntent | null>(null)
   useEffect(() => { snapshotRef.current = snapshot }, [snapshot])
   useEffect(() => { botIdRef.current = botId }, [botId])
   useEffect(() => {
@@ -163,12 +166,32 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     setRoster(null); setRosterBusy(false); setRosterUnavailable(false)
     setProxyBusy(false); setProxyUnavailable(false); setProxyLabel(null)
     setProxyHandoffPending(false); setProxyNeedsReselection(false)
-    proxyRequestId.current = null; unbindRequestId.current = null
+    const savedIntent = readProxyIntent(workspaceId, sessionId, groupId)
+    pendingProxyIntent.current = savedIntent
+    if (savedIntent?.bot_id) { setBotId(savedIntent.bot_id); botIdRef.current = savedIntent.bot_id }
+    setProxyUnavailable(savedIntent !== null)
+    proxyRequestId.current = savedIntent?.operation === 'proxy_unbind' ? null : savedIntent?.request_id ?? null
+    unbindRequestId.current = savedIntent?.operation === 'proxy_unbind' ? savedIntent.request_id : null
     pendingRef.current = null
     if (!host.collaborationGroupMembers) return
+    const operate = host.collaborationGroupMembers.bind(host)
     let disposed = false, inFlight = false, inFlightChange = false
     let proxyInFlight = false, proxyStatusInFlight = false, proxyStatusVersion = 0
     const current = () => !disposed && window.__DSH_DESKTOP_HOST__ === host
+    const forgetProxyIntent = () => {
+      pendingProxyIntent.current = null
+      clearProxyIntent(workspaceId, sessionId, groupId)
+    }
+    const sendProxyIntent = async (intent: ProxyIntent): Promise<GroupMemberReply | null> => {
+      if (pendingProxyIntent.current === null &&
+        !writeProxyIntent(workspaceId, sessionId, groupId, intent)) return null
+      pendingProxyIntent.current = intent
+      const base = { workspace_id: workspaceId, session_id: sessionId,
+        request_id: intent.request_id, expected_binding_epoch: intent.expected_binding_epoch }
+      if (intent.operation === 'proxy_unbind')
+        return operate({ operation: 'proxy_unbind', ...base })
+      return operate({ operation: intent.operation, ...base, bot_id: intent.bot_id })
+    }
     const loadProxyStatus = async () => {
       if (!current() || proxyInFlight || proxyStatusInFlight || !host.collaborationGroupMembers) return
       proxyStatusInFlight = true
@@ -238,55 +261,72 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       proxyInFlight = true; proxyStatusVersion++; setProxyBusy(true); setProxyUnavailable(false)
       try {
         const selected = botIdRef.current
-        const status = await host.collaborationGroupMembers({ operation: 'proxy_status',
-          workspace_id: workspaceId, session_id: sessionId })
-        if (!current() || status.state !== 'proxy_binding') {
-          if (current()) setProxyUnavailable(true)
-          return
-        }
-        setProxyLabel(status.bot_ref)
-        setProxyHandoffPending(status.binding_state === 'transferring')
-        setProxyNeedsReselection(status.binding_state === 'needs_reselection')
-        if (status.binding_state === 'active' && status.bot_ref === `deepseek-bot:${selected}` &&
+        let binding: { binding_id: string; binding_epoch: number; bot_ref: string } | null = null
+        const saved = pendingProxyIntent.current
+        if (saved) {
+          if (saved.operation === 'proxy_unbind' || saved.bot_id !== selected) {
+            setProxyUnavailable(true); return
+          }
+          const result = await sendProxyIntent(saved)
+          if (!current()) return
+          if (saved.operation === 'proxy_replace') {
+            if (result?.state !== 'proxy_changed' || result.operation !== 'replace' ||
+              result.bot_ref !== `deepseek-bot:${selected}`) { setProxyUnavailable(true); return }
+            forgetProxyIntent(); proxyRequestId.current = null
+            setProxyLabel(result.bot_ref); setProxyHandoffPending(true); setProxyNeedsReselection(false)
+            return
+          }
+          if (result?.state !== 'proxy_bound' || result.bot_ref !== `deepseek-bot:${selected}`) {
+            setProxyUnavailable(true); return
+          }
+          forgetProxyIntent(); proxyRequestId.current = null
+          binding = result; setProxyLabel(result.bot_ref); setProxyNeedsReselection(false)
+        } else {
+          const status = await host.collaborationGroupMembers({ operation: 'proxy_status',
+            workspace_id: workspaceId, session_id: sessionId })
+          if (!current() || status.state !== 'proxy_binding') {
+            if (current()) setProxyUnavailable(true)
+            return
+          }
+          setProxyLabel(status.bot_ref)
+          setProxyHandoffPending(status.binding_state === 'transferring')
+          setProxyNeedsReselection(status.binding_state === 'needs_reselection')
+          if (status.binding_state === 'active' && status.bot_ref === `deepseek-bot:${selected}` &&
           snapshotRef.current.members.some(member => member.actor_ref === status.bot_ref &&
             member.sources.includes('personal_proxy'))) return
-        let binding: { binding_id: string; binding_epoch: number; bot_ref: string } | null = null
-        if (status.binding_state === 'active' && status.bot_ref === `deepseek-bot:${selected}`
+          if (status.binding_state === 'active' && status.bot_ref === `deepseek-bot:${selected}`
           && status.binding_id) binding = { binding_id: status.binding_id,
-          binding_epoch: status.binding_epoch, bot_ref: status.bot_ref }
-        else if (status.binding_state === 'unbound') {
-          const requestId = proxyRequestId.current ?? randomUUID()
-          proxyRequestId.current = requestId
-          const result = await host.collaborationGroupMembers({ operation: 'proxy_select',
-            workspace_id: workspaceId, session_id: sessionId, request_id: requestId,
-            expected_binding_epoch: status.binding_epoch, bot_id: selected })
-          if (!current() || result.state !== 'proxy_bound' ||
+            binding_epoch: status.binding_epoch, bot_ref: status.bot_ref }
+          else if (status.binding_state === 'unbound') {
+            const requestId = proxyRequestId.current ?? randomUUID()
+            proxyRequestId.current = requestId
+            const result = await sendProxyIntent({ operation: 'proxy_select', request_id: requestId,
+              expected_binding_epoch: status.binding_epoch, bot_id: selected })
+            if (!current() || result?.state !== 'proxy_bound' ||
             result.bot_ref !== `deepseek-bot:${selected}`) {
-            if (current()) setProxyUnavailable(true)
-            return
-          }
-          binding = result; proxyRequestId.current = null; setProxyLabel(result.bot_ref)
-          setProxyNeedsReselection(false)
-        } else if (status.binding_state === 'active' ||
+              if (current()) setProxyUnavailable(true)
+              return
+            }
+            binding = result; forgetProxyIntent(); proxyRequestId.current = null; setProxyLabel(result.bot_ref)
+            setProxyNeedsReselection(false)
+          } else if (status.binding_state === 'active' ||
           status.binding_state === 'needs_reselection') {
-          const requestId = proxyRequestId.current ?? randomUUID()
-          proxyRequestId.current = requestId
-          const result = await host.collaborationGroupMembers({ operation: 'proxy_replace',
-            workspace_id: workspaceId, session_id: sessionId, request_id: requestId,
-            expected_binding_epoch: status.binding_epoch, bot_id: selected })
-          if (!current() || result.state !== 'proxy_changed' ||
+            const requestId = proxyRequestId.current ?? randomUUID()
+            proxyRequestId.current = requestId
+            const result = await sendProxyIntent({ operation: 'proxy_replace', request_id: requestId,
+              expected_binding_epoch: status.binding_epoch, bot_id: selected })
+            if (!current() || result?.state !== 'proxy_changed' ||
             result.operation !== 'replace' || result.bot_ref !== `deepseek-bot:${selected}`) {
-            if (current()) setProxyUnavailable(true)
+              if (current()) setProxyUnavailable(true)
+              return
+            }
+            forgetProxyIntent(); proxyRequestId.current = null; setProxyLabel(result.bot_ref)
+            setProxyHandoffPending(true); setProxyNeedsReselection(false)
             return
           }
-          proxyRequestId.current = null; setProxyLabel(result.bot_ref)
-          setProxyHandoffPending(true); setProxyNeedsReselection(false)
-          return
         }
         const currentSnapshot = snapshotRef.current
-        // The snapshot can disappear while the async Bot selection is in progress.
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- A pending request can outlive the original snapshot.
-        if (!binding || !currentSnapshot) { setProxyUnavailable(true); return }
+        if (!binding) { setProxyUnavailable(true); return }
         void change.current?.({ operation: 'proxy_attach', workspace_id: workspaceId,
           session_id: sessionId, request_id: randomUUID(),
           expected_membership_version: currentSnapshot.membership_version,
@@ -300,27 +340,32 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       if (!current() || proxyInFlight || !host.collaborationGroupMembers) return
       proxyInFlight = true; proxyStatusVersion++; setProxyBusy(true); setProxyUnavailable(false)
       try {
-        const status = await host.collaborationGroupMembers({ operation: 'proxy_status',
-          workspace_id: workspaceId, session_id: sessionId })
-        if (!current() || status.state !== 'proxy_binding') {
-          if (current()) setProxyUnavailable(true)
-          return
+        const saved = pendingProxyIntent.current
+        if (saved && saved.operation !== 'proxy_unbind') { setProxyUnavailable(true); return }
+        let result: GroupMemberReply | null
+        if (saved) result = await sendProxyIntent(saved)
+        else {
+          const status = await host.collaborationGroupMembers({ operation: 'proxy_status',
+            workspace_id: workspaceId, session_id: sessionId })
+          if (!current() || status.state !== 'proxy_binding') {
+            if (current()) setProxyUnavailable(true)
+            return
+          }
+          if (status.binding_state === 'unbound') {
+            setProxyLabel(null); setProxyHandoffPending(false); setProxyNeedsReselection(false); return
+          }
+          if (status.binding_state !== 'active') { setProxyUnavailable(true); return }
+          const requestId = unbindRequestId.current ?? randomUUID()
+          unbindRequestId.current = requestId
+          result = await sendProxyIntent({ operation: 'proxy_unbind', request_id: requestId,
+            expected_binding_epoch: status.binding_epoch, bot_id: null })
         }
-        if (status.binding_state === 'unbound') {
-          setProxyLabel(null); setProxyHandoffPending(false); setProxyNeedsReselection(false); return
-        }
-        if (status.binding_state !== 'active') { setProxyUnavailable(true); return }
-        const requestId = unbindRequestId.current ?? randomUUID()
-        unbindRequestId.current = requestId
-        const result = await host.collaborationGroupMembers({ operation: 'proxy_unbind',
-          workspace_id: workspaceId, session_id: sessionId, request_id: requestId,
-          expected_binding_epoch: status.binding_epoch })
-        if (!current() || result.state !== 'proxy_changed' || result.operation !== 'unbind' ||
+        if (!current() || result?.state !== 'proxy_changed' || result.operation !== 'unbind' ||
           result.bot_ref !== null) {
           if (current()) setProxyUnavailable(true)
           return
         }
-        unbindRequestId.current = null; setProxyLabel(null); setProxyHandoffPending(true)
+        forgetProxyIntent(); unbindRequestId.current = null; setProxyLabel(null); setProxyHandoffPending(true)
         setProxyNeedsReselection(false)
       } catch { if (current()) setProxyUnavailable(true) }
       finally { proxyInFlight = false; if (current()) setProxyBusy(false) }
