@@ -28,6 +28,41 @@ it('pins one memory reader to a worker generation across inventory and Session r
   } finally { await workers.disposeAll() }
 })
 
+it('checks Memory read identity, cancellation and worker generation before returning results', async () => {
+  const read = vi.fn(async (sessionId: string) => ({ sessionId, revision: 'r1', text: '{}' }))
+  const list = vi.fn(async () => ({ items: [], nextAfter: null }))
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {},
+    done: Promise.resolve(), listMemorySessions: list, readMemorySession: read }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  const signal = new AbortController().signal
+  try {
+    await expect(workers.readMemorySession(input.profileId, 'session-one', signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(workers.listMemorySessions(input.profileId, null, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    expect(() => workers.memoryProfileReader(input.profileId)).toThrow()
+    await workers.start(input)
+    expect(await workers.readMemorySession(input.profileId, 'session-one', signal))
+      .toMatchObject({ sessionId: 'session-one' })
+    expect(await workers.listMemorySessions(input.profileId, null, signal)).toEqual({ items: [], nextAfter: null })
+    read.mockResolvedValueOnce({ sessionId: 'other', revision: 'r1', text: '{}' })
+    await expect(workers.readMemorySession(input.profileId, 'session-one', signal))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    const reader = workers.memoryProfileReader(input.profileId)
+    read.mockResolvedValueOnce({ sessionId: 'other', revision: 'r1', text: '{}' })
+    await expect(reader.read('session-one', signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+    await expect(reader.read('session-one', AbortSignal.abort())).rejects.toThrow()
+    await expect(reader.list(null, AbortSignal.abort())).rejects.toThrow()
+    let release!: (value: { sessionId: string; revision: string; text: string }) => void
+    read.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+    const pending = reader.read('session-one', signal)
+    const denied = expect(pending).rejects.toMatchObject({ code: 'stale' })
+    await workers.dispose(input.profileId)
+    release({ sessionId: 'session-one', revision: 'r1', text: '{}' })
+    await denied
+  } finally { await workers.disposeAll() }
+})
+
 it('discards a memory inventory page from a replaced Profile worker', async () => {
   let enter!: () => void, release!: () => void
   const entered = new Promise<void>((resolve) => { enter = resolve })
