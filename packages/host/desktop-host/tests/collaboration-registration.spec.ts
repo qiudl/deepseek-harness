@@ -50,6 +50,12 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     ...(supportBot ? {
       resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
+      listBotRoster: async (profileId: string, afterBotId: string, limit: number, signal: AbortSignal) => {
+        signal.throwIfAborted()
+        if (profileId !== profile.profileId) throw Error('wrong_profile')
+        const bots = afterBotId < bot.bot_id && limit > 0 ? [bot] : []
+        return { bots, next_cursor: null }
+      },
     } : {}),
     ...(supportDelivery ? { operateBotGroup,
       ...(pinDeliveryKeys ? { trustedBotGroupKeyrings: [botGroupKeyring] } : {}) } : {}) })
@@ -84,6 +90,22 @@ it('resolves an exact Bot only in the currently verified Account Profile', async
     await expect(f.client.resolveBotIdentity({ ...input, ...change })).rejects.toThrow()
   }
   expect(await f.client.resolveBotIdentity({ ...input, botId: 'missing' })).toBeNull()
+})
+
+it('pages the Bot roster only for this Account and rejects a forged worker page', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    afterBotId: '', limit: 50 }
+  await expect(f.client.listBotRoster(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.listBotRoster(input)).toEqual({ bots: [f.bot], next_cursor: null })
+  expect(await f.client.listBotRoster({ ...input, afterBotId: 'bot_1' }))
+    .toEqual({ bots: [], next_cursor: null })
+  await expect(f.client.listBotRoster({ ...input, issuer: 'https://other.example.test' })).rejects.toThrow()
+  await expect(f.client.listBotRoster({ ...input, limit: 101 })).rejects.toThrow()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_roster'
+    ? { ...frame, result: { page: { bots: [{ ...f.bot, bot_id: 'bot_2' }], next_cursor: null } } } : frame)
+  await expect(f.client.listBotRoster(input)).rejects.toThrow()
 })
 
 it('refuses a revoked Account, missing capability and mismatched worker identity', async () => {

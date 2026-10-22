@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { resolveAccountBotIdentity } from '../src/account-bot-identity.ts'
+import { resolveAccountBotIdentity, listAccountBotRoster } from '../src/account-bot-identity.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
@@ -123,4 +123,46 @@ it('rejects a Profile selection that changes during the Bot read', async () => {
   const workers = { resolveBotIdentity: async () => { current = `${first}-replaced` as typeof first; return f.bot } }
   await expect(resolveAccountBotIdentity(authority, workers, f.proof,
     f.bot.bot_id, new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
+})
+
+it('fences a roster page to the current Account Profile before and after the worker reply', async () => {
+  const f = await fixture()
+  const signal = new AbortController().signal
+  const page = { bots: [f.bot], next_cursor: null }
+  const workers = { listBotRoster: vi.fn(async () => page) }
+  await expect(listAccountBotRoster(f.host, workers, f.proof, '', 50, signal)).rejects.toThrow()
+  await f.grant()
+  expect(await listAccountBotRoster(f.host, workers, f.proof, '', 50, signal)).toEqual(page)
+  expect(workers.listBotRoster).toHaveBeenCalledWith(
+    f.host.authorizeAccountModelText(f.proof), '', 50, signal)
+  await expect(listAccountBotRoster(f.host, workers, f.proof, '../other', 50, signal)).rejects.toThrow()
+  expect(workers.listBotRoster).toHaveBeenCalledTimes(1)
+  const profileId = f.host.authorizeAccountModelText(f.proof)
+  let current = profileId
+  const authority = { authorizeCollaborationRegistration() {}, authorizeAccountModelText: () => current }
+  const replaced = { listBotRoster: async () => { current = `${profileId}-replaced` as typeof profileId; return page } }
+  await expect(listAccountBotRoster(authority, replaced, f.proof, '', 50, signal))
+    .rejects.toMatchObject({ code: 'stale' })
+})
+
+it('rejects unavailable, stale and out-of-order worker roster pages', async () => {
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'One' }
+  let answer = { bots: [bot], next_cursor: null }
+  const listBotRoster = vi.fn(async () => answer)
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(), listBotRoster,
+  }))
+  onTestFinished(() => workers.disposeAll())
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  const signal = new AbortController().signal
+  await expect(workers.listBotRoster(input.profileId, '', 50, signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  await workers.start(input)
+  expect(await workers.listBotRoster(input.profileId, '', 50, signal)).toEqual(answer)
+  answer = { bots: [bot], next_cursor: null }
+  await expect(workers.listBotRoster(input.profileId, 'bot_2', 50, signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  await workers.disposeAll()
+  await expect(workers.listBotRoster(input.profileId, '', 50, signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
 })

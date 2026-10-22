@@ -46,6 +46,7 @@ import { handleDesktopCollaborationArchiveStateRequest } from './desktop-collabo
 import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-collaboration-archive-transition.ts'
 import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
 import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
+import { handleDesktopBotRosterRequest } from './desktop-bot-roster.ts'
 import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
@@ -394,6 +395,24 @@ export function apply(ctx: Context, config: Config): void {
           bot_id: identity.botId, actor_ref: identity.actorRef, display_name: identity.displayName,
         }
       }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-roster',
+      handler: (req, res) => handleDesktopBotRosterRequest(req, res, sourceToken,
+        async (afterBotId, limit, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkExternalGroup') as undefined | {
+            listLocalBots(input: { afterBotId: string; limit: number }): Promise<{
+              bots: { botId: string; actorRef: string; displayName: string }[]
+              nextCursor: string | null
+            } | null>
+          }
+          if (!service) return null
+          const page = await service.listLocalBots({ afterBotId, limit })
+          signal.throwIfAborted()
+          return page === null ? null : { bots: page.bots.map(bot => ({ bot_id: bot.botId,
+            actor_ref: bot.actorRef, display_name: bot.displayName })), next_cursor: page.nextCursor }
+        }),
     }))
     ctx.inject(['sessionController'], (sessionCtx) => {
       sessionCtx.effect(() => sessionCtx.webServer.register({

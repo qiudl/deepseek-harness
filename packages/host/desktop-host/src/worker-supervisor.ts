@@ -47,6 +47,20 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
+  /** Read one ordered page from the current Account Profile worker. */
+  async listBotRoster(profileId: string, afterBotId: string, limit: number, signal: AbortSignal):
+  Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotRosterPage | null> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.listBotRoster) throw new HostAuthorityError('unavailable')
+    const page = await worker.listBotRoster(afterBotId, limit, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (page && (page.bots.length > limit || page.bots.some(bot => bot.bot_id <= afterBotId)))
+      throw new HostAuthorityError('profile_mismatch')
+    return page
+  }
+
   /**
    * Use only the current Account Profile worker for an authorized Bot group command.
    * @param profileId - Selected Account Profile.

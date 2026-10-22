@@ -1,5 +1,6 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
-import { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.ts'
+import { parseHostBotIdentity, parseHostBotIdentityTarget,
+  parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.ts'
 import { parseHostBotGroupDeliveryInput, parseHostBotGroupResponse } from './bot-group.ts'
 import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
@@ -86,7 +87,7 @@ import type {
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
-  ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileBotIdentityRequest, ProfileBotIdentityResult, ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult,
@@ -1680,7 +1681,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
+  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
+  | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupResultPageRequest
   | ProfileBotGroupResultAckRequest
@@ -2263,6 +2265,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
     } } satisfies ProfileBotIdentityRequest
   }
+  if (frame.method === 'profile.bot_roster') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'after_bot_id', 'limit'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      ...parseHostBotRosterTarget({ after_bot_id: params.after_bot_id, limit: params.limit }),
+    } } satisfies ProfileBotRosterRequest
+  }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
@@ -2330,7 +2340,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult
+  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult
+  | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotRosterResult
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageResult
   | ProfileBotGroupResultAckResult
@@ -2656,6 +2667,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['identity'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { identity: parseHostBotIdentity(result.identity) } } satisfies ProfileBotIdentityResult
+  }
+  if (frame.method === 'profile.bot_roster') {
+    exactKeys(result, ['page'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { page: parseHostBotRosterPage(result.page) } } satisfies ProfileBotRosterResult
   }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(result, ['reply'])

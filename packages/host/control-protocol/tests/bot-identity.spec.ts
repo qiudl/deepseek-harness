@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
-import { parseHostBotIdentity, parseHostBotIdentityTarget } from '../src/bot-identity.ts'
+import { parseHostBotIdentity, parseHostBotIdentityTarget,
+  parseHostBotRosterPage, parseHostBotRosterTarget } from '../src/bot-identity.ts'
 import { decodeHostControlFrame, encodeHostControlFrame } from '../src/index.ts'
 
 it('accepts only an exact public Bot identity with a derived actor reference', () => {
@@ -17,6 +18,23 @@ it('refuses names, paths and extra request fields as Bot targets', () => {
   expect(parseHostBotIdentityTarget({ bot_id: 'bot_1' })).toEqual({ bot_id: 'bot_1' })
   for (const invalid of [{ bot_id: '../bot' }, { bot_id: 'bot 1' }, { bot_id: 'bot_1', session_id: 'private' }, null]) {
     expect(() => parseHostBotIdentityTarget(invalid)).toThrow()
+  }
+})
+
+it('accepts only bounded, ordered pages of public Bot identities', () => {
+  expect(parseHostBotRosterTarget({ after_bot_id: '', limit: 50 })).toEqual({ after_bot_id: '', limit: 50 })
+  for (const invalid of [{ after_bot_id: '../x', limit: 50 }, { after_bot_id: '', limit: 101 },
+    { after_bot_id: '', limit: 50, profile_id: 'private' }]) {
+    expect(() => parseHostBotRosterTarget(invalid)).toThrow()
+  }
+  const first = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'One' }
+  const second = { bot_id: 'bot_2', actor_ref: 'deepseek-bot:bot_2', display_name: 'Two' }
+  expect(parseHostBotRosterPage({ bots: [first, second], next_cursor: 'bot_2' }))
+    .toEqual({ bots: [first, second], next_cursor: 'bot_2' })
+  for (const invalid of [{ bots: [second, first], next_cursor: null },
+    { bots: [first], next_cursor: 'other' }, { bots: [first], next_cursor: null, secret: 'x' },
+    { bots: [{ ...first, private_chat: 'secret' }], next_cursor: null }]) {
+    expect(() => parseHostBotRosterPage(invalid)).toThrow()
   }
 })
 
@@ -39,4 +57,15 @@ it('roundtrips Account-bound Bot identity frames and rejects extra private field
   expect(() => decodeHostControlFrame(`${JSON.stringify({ ...request, params: { ...request.params, session_id: 'private' } })}\n`)).toThrow()
   expect(() => decodeHostControlFrame(`${JSON.stringify({ ...result,
     result: { identity: { ...result.result.identity, private_chat: 'secret' } } })}\n`)).toThrow()
+  const rosterParams = { ...request.params, after_bot_id: '', limit: 50 }
+  Reflect.deleteProperty(rosterParams, 'bot_id')
+  const rosterRequest = { ...request, method: 'profile.bot_roster', params: rosterParams }
+  const rosterResult = { ...result, method: 'profile.bot_roster', result: {
+    page: { bots: [result.result.identity], next_cursor: null },
+  } }
+  for (const frame of [rosterRequest, rosterResult]) {
+    expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`))).toBe(`${JSON.stringify(frame)}\n`)
+  }
+  expect(() => decodeHostControlFrame(`${JSON.stringify({ ...rosterResult,
+    result: { page: { bots: [{ ...result.result.identity, private_chat: 'secret' }], next_cursor: null } } })}\n`)).toThrow()
 })

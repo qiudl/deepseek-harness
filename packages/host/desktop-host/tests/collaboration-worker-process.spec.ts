@@ -81,6 +81,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-group-input-fence': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-identity': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-roster': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -119,6 +120,8 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
           : url.pathname.endsWith('bot-identity') ? ${JSON.stringify(botIdentity)}
+          : url.pathname.endsWith('bot-roster') ? ${JSON.stringify(botIdentity === null ? null :
+            { bots: [botIdentity], next_cursor: null })}
           : url.pathname.endsWith('bot-group') ? ${JSON.stringify(botGroupReply)}
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
           : url.pathname.endsWith('archive-state') ? { archive_phase: 'archived' }
@@ -154,17 +157,17 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant,
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
-    installGroupInputFence, resolveBotIdentity, operateBotGroup } = worker
+    installGroupInputFence, resolveBotIdentity, listBotRoster, operateBotGroup } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
-    || !installGroupInputFence || !resolveBotIdentity || !operateBotGroup)
+    || !installGroupInputFence || !resolveBotIdentity || !listBotRoster || !operateBotGroup)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
-    transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, operateBotGroup }
+    transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster, operateBotGroup }
 }
 
 it('uses the private Bot group token, validates the receipt and fences a stopped worker', async () => {
@@ -205,6 +208,19 @@ it('reads Bot identity through the parent-only source token and checks the reque
   await expect(h.resolveBotIdentity('bot_2', signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
   h.worker.abort()
   await expect(h.resolveBotIdentity(bot.bot_id, signal)).rejects.toThrow('unavailable')
+})
+
+it('reads an Account Profile Bot roster only through the parent worker token', async () => {
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const h = await harness(undefined, 'staged', groupValue, bot)
+  const signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-roster`, {
+    method: 'POST', body: JSON.stringify({ after_bot_id: '', limit: 50 }),
+  })).status).toBe(403)
+  expect(await h.listBotRoster('', 50, signal)).toEqual({ bots: [bot], next_cursor: null })
+  await expect(h.listBotRoster('bot_2', 50, signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  h.worker.abort()
+  await expect(h.listBotRoster('', 50, signal)).rejects.toThrow('unavailable')
 })
 
 it('accepts an absent Bot identity from the Profile worker', async () => {

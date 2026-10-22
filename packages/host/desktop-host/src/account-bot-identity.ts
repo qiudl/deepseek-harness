@@ -1,5 +1,5 @@
-import { parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostBotIdentity } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotIdentityTarget, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotIdentity, HostBotRosterPage } from '@deepseek-ai/dsh-host-control-protocol'
 import type { DesktopHost } from './desktop-host.ts'
 import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 import { HostAuthorityError } from './types.ts'
@@ -30,4 +30,21 @@ export async function resolveAccountBotIdentity(
   host.authorizeCollaborationRegistration(account)
   if (host.authorizeAccountModelText(account) !== profileId) throw new HostAuthorityError('stale')
   return result
+}
+
+/** Read a public Bot roster page and fence the selected Account Profile after the worker reply. */
+export async function listAccountBotRoster(
+  host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>,
+  workers: Pick<ProfileWorkerSupervisor, 'listBotRoster'>,
+  account: BotIdentityAccount, afterBotId: string, limit: number, signal: AbortSignal,
+): Promise<HostBotRosterPage | null> {
+  const target = parseHostBotRosterTarget({ after_bot_id: afterBotId, limit })
+  signal.throwIfAborted()
+  host.authorizeCollaborationRegistration(account)
+  const profileId = host.authorizeAccountModelText(account)
+  const page = await workers.listBotRoster(profileId, target.after_bot_id, target.limit, signal)
+  signal.throwIfAborted()
+  host.authorizeCollaborationRegistration(account)
+  if (host.authorizeAccountModelText(account) !== profileId) throw new HostAuthorityError('stale')
+  return page
 }
