@@ -428,6 +428,38 @@ export interface ProfileRecoveryStatusResult {
 }
 
 /** Open the same Profile through a Main-only local view lease. */
+export interface ProfileSkillHubBindingRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_binding'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly actor_user_id: string
+    readonly computer_id: string
+    readonly challenge_id: string
+  }
+}
+
+/** Host-signed exact local Profile fact for one Slark challenge. */
+export interface ProfileSkillHubBindingResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_binding'
+  readonly result: {
+    readonly version: 1
+    readonly actorUserId: string
+    readonly computerId: string
+    readonly installationId: string
+    readonly profileId: string
+    readonly bindingGeneration: string
+    readonly challengeId: string
+    readonly signature: string
+  }
+}
+
+/** Open the same Profile through a Main-only local view lease. */
 export interface ProfileOpenRequest {
   readonly version: 1
   readonly type: 'request'
@@ -1774,6 +1806,8 @@ export interface ProfileModelClaimRetryResult {
 
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
+  | ProfileSkillHubBindingRequest
+  | ProfileSkillHubBindingResult
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
   | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest

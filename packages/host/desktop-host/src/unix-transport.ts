@@ -7,6 +7,7 @@ import {
   type ProfileRecoveryMaterialsValidateRequest, type ProfileRecoveryMaterialsValidateResult,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningEvidence } from '@deepseek-ai/dsh-host-control-protocol'
@@ -52,6 +53,8 @@ import type {
   ProfileBootstrapLocalRequest,
   ProfileRestoreLocalRequest,
   ProfileOpenRequest,
+  ProfileSkillHubBindingRequest,
+  ProfileSkillHubBindingResult,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
@@ -529,6 +532,7 @@ const capabilities = [
   'profile.bootstrap_local',
   'profile.open',
   'profile.open_local',
+  'profile.skillhub_binding',
   'profile.restore',
   'profile.restore_local',
   'profile.status',
@@ -1444,6 +1448,27 @@ export class HostControlAuthority {
             result: status.state === 'ready'
               ? { state: 'ready', profile_id: status.profileId as never, persistence_generation: persistenceGeneration as number }
               : { state: status.state },
+          })
+        } else if (frame.method === 'profile.skillhub_binding') {
+          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+          const profileId = this.options.host.authorizeMigrationProfileSelector({
+            profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation, ownerId,
+          })
+          const payload = {
+            version: 1 as const,
+            actorUserId: frame.params.actor_user_id,
+            computerId: frame.params.computer_id,
+            installationId: this.options.identity.installationId,
+            profileId,
+            bindingGeneration: String(selector.binding_generation),
+            challengeId: frame.params.challenge_id,
+          }
+          const signature = signAuthorityPayload(this.options.identity, Buffer.from(
+            SKILLHUB_PROFILE_BINDING_DOMAIN + encodeSkillHubProfileBindingPayload(payload),
+          ))
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { ...payload, signature },
           })
         } else if (frame.method === 'profile.open') {
           const opened = await this.options.host.openProfile({
@@ -2844,6 +2869,28 @@ export class UnixHostClient {
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     return openProfileResult(frame.result)
+  }
+
+  /**
+   * Sign one Slark challenge after the current connection's Profile grant is rechecked.
+   * @param input - Host selector and exact Slark actor, Computer, and challenge coordinates.
+   * @returns Installation-signed local Profile identity; Slark authenticates the remote coordinates separately.
+   */
+  async signSkillHubProfileBinding(input: {
+    readonly profileSelector: string
+    readonly actorUserId: string
+    readonly computerId: string
+    readonly challengeId: string
+    readonly signal?: AbortSignal
+  }): Promise<ProfileSkillHubBindingResult['result']> {
+    const request: ProfileSkillHubBindingRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_binding',
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        actor_user_id: input.actorUserId, computer_id: input.computerId, challenge_id: input.challengeId },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
   }
 
   /**
@@ -4404,7 +4451,7 @@ export class UnixHostClient {
       | ProfileModelClaimRetryRequest
       | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
-      | ProfileOpenRequest | ProfileOpenLocalRequest
+      | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
