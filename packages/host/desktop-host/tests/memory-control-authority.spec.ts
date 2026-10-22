@@ -9,6 +9,7 @@ import { DesktopHost } from '../src/desktop-host.ts'
 import { MemoryDirectiveVerifier } from '../src/memory-directive-verifier.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { HostControlAuthority } from '../src/unix-transport.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
 
 const now = 1000
 const environmentId = '11111111-1111-4111-8111-111111111111'
@@ -32,7 +33,7 @@ it('requires current Account authority for warmup and every signed Host memory r
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const hostKeys = generateKeyPairSync('ed25519'), memoryKeys = generateKeyPairSync('ed25519')
   const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7),
-    clock: { now: () => now } })
+    clock: { now: () => now }, ...registryFileFixture() })
   const profile = await registry.registerAccount({ issuer: 'https://accounts.example.test', subject: 'owner',
     keyHandle: 'keychain:memory', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ...binding })
   const host = new DesktopHost({ registry, clock: { now: () => now }, runtimeGeneration: 5,
