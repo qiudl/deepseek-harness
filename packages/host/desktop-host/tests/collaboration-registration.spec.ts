@@ -191,6 +191,13 @@ it('delivers through the Host only after signed Slark and current membership con
   const { signature, ...unsigned } = signedProof
   expect(verify(null, encodeHostBotGroupResultProofPayload(unsigned), f.keys.publicKey,
     Buffer.from(signature, 'base64url'))).toBe(true)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'acknowledged' })
+  expect(await f.client.acknowledgeBotGroupResult({ ...input,
+    resultId: `${command.deliveryId}:final` })).toEqual({ state: 'acknowledged' })
+  expect(f.operateBotGroup).toHaveBeenLastCalledWith(expect.any(String),
+    { operation: 'ack_result', groupId: command.groupId, botId: command.botId,
+      memberCycle: command.memberCycle, deliveryId: command.deliveryId,
+      resultId: `${command.deliveryId}:final` }, expect.any(AbortSignal))
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
     ? { ...frame, result: { ...frame.result, proof: { ...signedProof, signature: 'A'.repeat(86) } } }
     : frame)
@@ -207,7 +214,7 @@ it('delivers through the Host only after signed Slark and current membership con
       memberCycle: command.memberCycle, after: 0, limit: 1 }, expect.any(AbortSignal))
   fetchMock.mockResolvedValueOnce(Response.json({ ok: false }, { status: 409 }))
   await expect(f.client.deliverBotGroup(input)).rejects.toThrow()
-  expect(f.operateBotGroup).toHaveBeenCalledTimes(3)
+  expect(f.operateBotGroup).toHaveBeenCalledTimes(4)
 })
 
 it('does not advertise Bot delivery without startup-pinned Slark keys', async () => {

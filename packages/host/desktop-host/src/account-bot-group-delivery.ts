@@ -102,3 +102,22 @@ export async function readAccountBotGroupResultPage(input: AccountBotGroupInput 
       !matchesHostBotGroupResponse(result, query)) throw new HostAuthorityError('stale')
   return result
 }
+
+/** Clear only the result whose Slark receipt was recorded by the caller. */
+export async function acknowledgeAccountBotGroupResult(input: AccountBotGroupInput & {
+  resultId: string
+}): Promise<HostBotGroupResponse> {
+  if (input.resultId !== `${input.command.deliveryId}:final`)
+    throw new HostAuthorityError('invalid_input')
+  const profileId = await authorizeDelivery(input)
+  const command: HostBotGroupCommand = { operation: 'ack_result',
+    groupId: input.command.groupId, botId: input.command.botId,
+    memberCycle: input.command.memberCycle, deliveryId: input.command.deliveryId,
+    resultId: input.resultId }
+  const result = await input.workers.operateBotGroup(profileId, command, input.signal)
+  input.signal.throwIfAborted()
+  input.host.authorizeCollaborationRegistration(input.account)
+  if (input.host.authorizeAccountModelText(input.account) !== profileId ||
+      !matchesHostBotGroupResponse(result, command)) throw new HostAuthorityError('stale')
+  return result
+}

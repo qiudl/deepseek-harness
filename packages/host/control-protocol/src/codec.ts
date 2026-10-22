@@ -89,6 +89,7 @@ import type {
   ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
+  ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -1677,6 +1678,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupResultPageRequest
+  | ProfileBotGroupResultAckRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
   | ProfileGroupInputFenceRequest
@@ -2279,6 +2281,19 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       }), after: params.after as number,
     } } satisfies ProfileBotGroupResultPageRequest
   }
+  if (frame.method === 'profile.bot_group_result_ack') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
+      'slark_audience', 'ticket', 'command', 'result_id'])
+    const delivery = parseHostBotGroupDeliveryInput({
+      computer_id: params.computer_id, slark_audience: params.slark_audience,
+      ticket: params.ticket, command: params.command,
+    })
+    if (params.result_id !== `${delivery.command.deliveryId}:final`) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...delivery, result_id: params.result_id as string,
+    } } satisfies ProfileBotGroupResultAckRequest
+  }
   if (frame.method === 'profile.model_text') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
       'account_binding_handle', 'authority_binding_version', 'text'])
@@ -2321,6 +2336,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageResult
+  | ProfileBotGroupResultAckResult
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateResult
   | ProfileGroupInputFenceResult
@@ -2659,6 +2675,13 @@ function decodeProfileResult(frame: Record<string, unknown>):
       (item && proof && JSON.stringify(item) !== JSON.stringify(proof.result))) reject()
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { reply, proof } } satisfies ProfileBotGroupResultPageResult
+  }
+  if (frame.method === 'profile.bot_group_result_ack') {
+    exactKeys(result, ['reply'])
+    const reply = parseHostBotGroupResponse(result.reply)
+    if (!['acknowledged', 'missing', 'invalid', 'unavailable'].includes(reply.state)) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { reply } } satisfies ProfileBotGroupResultAckResult
   }
   if (frame.method === 'profile.model_text') {
     if (result.state === 'rejected') {

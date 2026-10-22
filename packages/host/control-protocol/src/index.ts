@@ -36,7 +36,8 @@ export { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity
 export type { HostBotIdentity } from './bot-identity.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
-  ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult } from './types.js'
+  ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
+  ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'
 export { parseHostBotGroupCommand, parseHostBotGroupResponse,
   matchesHostBotGroupResponse, parseHostBotGroupPublicKeyring,
   parseHostBotGroupDeliveryInput } from './bot-group.js'

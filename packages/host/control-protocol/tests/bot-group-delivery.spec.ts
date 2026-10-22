@@ -42,6 +42,16 @@ it('roundtrips only an exact public-key Bot delivery control frame', () => {
     expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)))
       .toBe(`${JSON.stringify(frame)}\n`)
   }
+  const ackRequest = { ...request, method: 'profile.bot_group_result_ack',
+    params: { ...request.params, result_id: `${command.deliveryId}:final` } }
+  const ackResult = { ...result, method: ackRequest.method,
+    result: { reply: { state: 'acknowledged' } } }
+  for (const frame of [ackRequest, ackResult]) {
+    expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)))
+      .toBe(`${JSON.stringify(frame)}\n`)
+  }
+  expect(() => decodeHostControlFrame(`${JSON.stringify({ ...ackRequest,
+    params: { ...ackRequest.params, result_id: 'wrong' } })}\n`)).toThrow()
   expect(() => decodeHostControlFrame(`${JSON.stringify({ ...pageRequest,
     params: { ...pageRequest.params, after: -1 } })}\n`)).toThrow()
   for (const invalid of [

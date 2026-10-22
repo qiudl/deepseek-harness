@@ -631,6 +631,22 @@ export interface ProfileBotGroupResultPageResult {
     readonly proof: import('./bot-group-result-proof.ts').HostBotGroupResultProof | null }
 }
 
+/** Acknowledge one already persisted Slark result under its original live delivery. */
+export interface ProfileBotGroupResultAckRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_ack'
+  readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly result_id: string }
+}
+export interface ProfileBotGroupResultAckResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_ack'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
 /** Server nonce bound to Account and one registry workspace/ordinary Session. */
 export interface HostWorkspaceAuthorityChallenge extends HostWorkspaceModelSelectionTarget {
   readonly request_id: HostControlRequestId
@@ -1933,6 +1949,8 @@ export type HostControlFrame =
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageRequest
   | ProfileBotGroupResultPageResult
+  | ProfileBotGroupResultAckRequest
+  | ProfileBotGroupResultAckResult
   | ProfileWorkspaceAuthorityRequest
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateRequest
