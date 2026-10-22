@@ -143,4 +143,33 @@ describe('Host memory signed read controller', () => {
     await expect(f.controller.search(directive('search', 'private'), 'private', 1, signal))
       .rejects.toMatchObject({ code: 'stale' })
   })
+
+  it('rejects an empty live identity and a missing evidence reference', async () => {
+    const f = fixture()
+    f.setOwner('')
+    await expect(f.controller.warm(signal)).rejects.toMatchObject({ code: 'unauthorized' })
+    f.setOwner(identity.ownerUserId)
+    await f.controller.warm(signal)
+    const missing = 'f'.repeat(64)
+    await expect(f.controller.evidenceChunk(directive('evidence', missing), missing, 0, signal))
+      .resolves.toBeNull()
+  })
+
+  it('keeps a newer clear when an in-flight warm or read finishes', async () => {
+    const warming = fixture()
+    warming.reader.list.mockImplementationOnce(async () => {
+      warming.controller.clear()
+      return { items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }
+    })
+    await expect(warming.controller.warm(signal)).rejects.toMatchObject({ code: 'stale' })
+
+    const reading = fixture()
+    await reading.controller.warm(signal)
+    reading.reader.list.mockImplementationOnce(async () => {
+      reading.controller.clear()
+      return { items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }
+    })
+    await expect(reading.controller.search(directive('search', 'private'), 'private', 1, signal))
+      .rejects.toMatchObject({ code: 'stale' })
+  })
 })

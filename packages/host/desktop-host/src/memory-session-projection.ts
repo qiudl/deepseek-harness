@@ -88,7 +88,7 @@ export function projectMemorySession(snapshot: HostMemorySessionSnapshot): reado
   const lines = snapshot.text.split('\n')
   if (lines.length > MAX_EVENTS + 2 || lines.at(-1) !== '') throw new HostAuthorityError('unavailable')
   let header: unknown
-  try { header = JSON.parse(lines[0] ?? '') } catch { throw new HostAuthorityError('unavailable') }
+  try { header = JSON.parse(lines[0] || '') } catch { throw new HostAuthorityError('unavailable') }
   const meta = object(header)
   if (!meta || meta.id !== snapshot.sessionId || meta.version !== SESSION_FORMAT_VERSION
     || meta.isSeeded !== false || (meta.delegationDepth !== undefined && meta.delegationDepth !== 0)

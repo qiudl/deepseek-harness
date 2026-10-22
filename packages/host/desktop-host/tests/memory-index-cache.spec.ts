@@ -123,4 +123,39 @@ describe('Host memory index cache', () => {
     cache.clear()
     await expect(cache.search(scope, active, 'new', 1, signal)).rejects.toMatchObject({ code: 'unavailable' })
   })
+
+  it('clears a reused index when the pinned worker is no longer current', async () => {
+    const cache = new HostMemoryIndexCache()
+    const active = reader()
+    await cache.warm(scope, active, signal)
+    active.setCurrent(false)
+    await expect(cache.warm(scope, active, signal)).rejects.toThrow('worker replaced')
+    await expect(cache.search(scope, active, 'private', 1, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('rejects a warmup cleared at its final authority check', async () => {
+    const cache = new HostMemoryIndexCache()
+    const active = reader()
+    let calls = 0
+    active.assertCurrent = () => { if (++calls === 6) cache.clear() }
+    await expect(cache.warm(scope, active, signal)).rejects.toMatchObject({ code: 'stale' })
+  })
+
+  it('drops results when the cache is cleared during either inventory fence', async () => {
+    for (const fence of [1, 2]) {
+      const cache = new HostMemoryIndexCache()
+      const active = reader()
+      await cache.warm(scope, active, signal)
+      let calls = 0
+      active.list.mockImplementation(async () => {
+        if (++calls === fence) cache.clear()
+        return { items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }
+      })
+      await expect(cache.search(scope, active, 'private', 1, signal))
+        .rejects.toMatchObject({ code: 'stale' })
+      await expect(cache.search(scope, active, 'private', 1, signal))
+        .rejects.toMatchObject({ code: 'unavailable' })
+    }
+  })
 })
