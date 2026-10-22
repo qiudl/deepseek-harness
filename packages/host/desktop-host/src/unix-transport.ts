@@ -3798,7 +3798,8 @@ export class UnixHostClient {
     }
     const frame = await this.call(request, input.signal)
     input.signal?.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    if (frame.type !== 'result' || frame.method !== 'profile.bot_roster')
+      throw new HostAuthorityError('unavailable')
     const page = parseHostBotRosterPage(frame.result.page)
     if (page && (page.bots.length > target.limit || page.bots.some(bot => bot.bot_id <= target.after_bot_id)))
       throw new HostAuthorityError('profile_mismatch')

@@ -91,6 +91,9 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, {
     resolveLocalBot: async (botId: string) => botId === 'bot_1'
       ? { botId, actorRef: `deepseek-bot:${botId}`, displayName: 'My Bot' } : null,
+    listLocalBots: async ({ afterBotId }: { afterBotId: string; limit: number }) => afterBotId === ''
+      ? { bots: [{ botId: 'bot_1', actorRef: 'deepseek-bot:bot_1', displayName: 'My Bot' }], nextCursor: null }
+      : null,
     ...groupOperations,
   } as never)
   await ctx.plugin(SessionStore)
@@ -158,6 +161,14 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   })
   expect(missingBotResponse.status).toBe(200)
   expect(await missingBotResponse.json()).toBeNull()
+  const rosterUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-roster`
+  const postRoster = (afterBotId: string) => fetch(rosterUrl, { method: 'POST',
+    headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ after_bot_id: afterBotId, limit: 50 }) })
+  const rosterResponse = await postRoster('')
+  expect(rosterResponse.status).toBe(200)
+  expect(await rosterResponse.json()).toEqual({ bots: [{ bot_id: 'bot_1',
+    actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }], next_cursor: null })
+  expect(await (await postRoster('bot_1')).json()).toBeNull()
   const groupRoot = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-group`
   const postGroup = (body: object) => fetch(groupRoot, { method: 'POST',
     headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(body) })
@@ -189,6 +200,7 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   })
   expect(unavailableBotResponse.status).toBe(200)
   expect(await unavailableBotResponse.json()).toBeNull()
+  expect(await (await postRoster('')).json()).toBeNull()
   const archiveIdentity = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
     environment_id: '20000000-0000-4000-8000-000000000002',
     account_issuer: 'https://accounts.example.test',

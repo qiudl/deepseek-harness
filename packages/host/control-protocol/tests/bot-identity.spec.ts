@@ -23,7 +23,8 @@ it('refuses names, paths and extra request fields as Bot targets', () => {
 
 it('accepts only bounded, ordered pages of public Bot identities', () => {
   expect(parseHostBotRosterTarget({ after_bot_id: '', limit: 50 })).toEqual({ after_bot_id: '', limit: 50 })
-  for (const invalid of [{ after_bot_id: '../x', limit: 50 }, { after_bot_id: '', limit: 101 },
+  for (const invalid of [null, [], { after_bot_id: '../x', limit: 50 }, { after_bot_id: '', limit: 101 },
+    { after_bot_id: '', limit: 0 }, { after_bot_id: '', limit: 1.5 },
     { after_bot_id: '', limit: 50, profile_id: 'private' }]) {
     expect(() => parseHostBotRosterTarget(invalid)).toThrow()
   }
@@ -31,7 +32,11 @@ it('accepts only bounded, ordered pages of public Bot identities', () => {
   const second = { bot_id: 'bot_2', actor_ref: 'deepseek-bot:bot_2', display_name: 'Two' }
   expect(parseHostBotRosterPage({ bots: [first, second], next_cursor: 'bot_2' }))
     .toEqual({ bots: [first, second], next_cursor: 'bot_2' })
-  for (const invalid of [{ bots: [second, first], next_cursor: null },
+  expect(parseHostBotRosterPage(null)).toBeNull()
+  for (const invalid of [[], { bots: [second, first], next_cursor: null },
+    { bots: [first, null], next_cursor: null },
+    { bots: [first, first], next_cursor: null },
+    { bots: [], next_cursor: 'bot_1' },
     { bots: [first], next_cursor: 'other' }, { bots: [first], next_cursor: null, secret: 'x' },
     { bots: [{ ...first, private_chat: 'secret' }], next_cursor: null }]) {
     expect(() => parseHostBotRosterPage(invalid)).toThrow()
