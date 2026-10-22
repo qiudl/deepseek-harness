@@ -34,6 +34,16 @@ it('roundtrips only an exact public-key Bot delivery control frame', () => {
     expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)))
       .toBe(`${JSON.stringify(frame)}\n`)
   }
+  const pageRequest = { ...request, method: 'profile.bot_group_result_page',
+    params: { ...request.params, after: 0 } }
+  const pageResult = { ...result, method: pageRequest.method,
+    result: { reply: { state: 'ok', results: [], next: 0 } } }
+  for (const frame of [pageRequest, pageResult]) {
+    expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)))
+      .toBe(`${JSON.stringify(frame)}\n`)
+  }
+  expect(() => decodeHostControlFrame(`${JSON.stringify({ ...pageRequest,
+    params: { ...pageRequest.params, after: -1 } })}\n`)).toThrow()
   for (const invalid of [
     { ...delivery, slark_audience: 'http://slark.example.test' },
     { ...delivery, keyring },

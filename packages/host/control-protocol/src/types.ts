@@ -614,6 +614,22 @@ export interface ProfileBotGroupDeliverResult {
   readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
 }
 
+/** Read a Bot result only while the original Slark delivery remains authorized. */
+export interface ProfileBotGroupResultPageRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_page'
+  readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly after: number }
+}
+export interface ProfileBotGroupResultPageResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_page'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
 /** Server nonce bound to Account and one registry workspace/ordinary Session. */
 export interface HostWorkspaceAuthorityChallenge extends HostWorkspaceModelSelectionTarget {
   readonly request_id: HostControlRequestId
@@ -1914,6 +1930,8 @@ export type HostControlFrame =
   | ProfileBotIdentityResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
+  | ProfileBotGroupResultPageRequest
+  | ProfileBotGroupResultPageResult
   | ProfileWorkspaceAuthorityRequest
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateRequest

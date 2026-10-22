@@ -67,7 +67,7 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `profile.bot_identity` 在读取选定 Profile worker 的前后校验当前连接的 Account 绑定和 issuer/subject。worker 私有 token 仅到达 Profile 本地的 `dsBotSlarkExternalGroup` 服务；插件缺失、Bot 不存在或插件不是唯一 writer 时返回缺失。worker 被替换或 Account 撤权时拒绝读取。结果不含聊天内容，也不授权 Slark 群操作。
 
-私有 Bot 群 worker 桥还支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。这些补读和撤权命令尚无公开控制方法。
+私有 Bot 群 worker 桥还支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 仅在重新核验原 Slark 投递凭据及当前 Account、群成员资格后暴露单条结果补读；结果确认和撤权仍无公开控制方法。
 
 Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。`profile.bot_group_deliver` 在调用当前 worker 前使用这两项检查。
 

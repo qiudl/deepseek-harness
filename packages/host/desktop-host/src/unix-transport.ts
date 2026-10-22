@@ -2,10 +2,11 @@ import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-p
 import { parseHostBotIdentity, parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, ProfileBotIdentityRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotIdentity } from './account-bot-identity.ts'
-import { deliverAccountBotGroup } from './account-bot-group-delivery.ts'
+import { deliverAccountBotGroup, readAccountBotGroupResultPage } from './account-bot-group-delivery.ts'
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
   parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
   type HostBotGroupPublicKeyring, type ProfileBotGroupDeliverRequest,
+  type ProfileBotGroupResultPageRequest,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostRecoveryMaterials } from './recovery-materials.ts'
 import {
@@ -2131,6 +2132,24 @@ export class HostControlAuthority {
           })
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { reply } })
+        } else if (frame.method === 'profile.bot_group_result_page') {
+          const operate = this.options.operateBotGroup
+          const keyring = this.options.trustedBotGroupKeyrings?.find(candidate =>
+            candidate.environmentId === frame.params.authority_environment_id &&
+            candidate.issuer === frame.params.slark_audience)
+          if (!operate || !keyring) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const reply = await readAccountBotGroupResultPage({
+            host: this.options.host, workers: { operateBotGroup: operate }, account,
+            installationId: this.options.identity.installationId,
+            computerId: frame.params.computer_id,
+            slarkAudience: frame.params.slark_audience,
+            keyring, ticket: frame.params.ticket,
+            command: frame.params.command, after: frame.params.after,
+            signal: context.signal,
+          })
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { reply } })
         } else if (frame.method === 'profile.workspace_model_selection') {
           const inspect = this.options.inspectWorkspaceModelSelection
           if (!inspect) throw new HostAuthorityError('upgrade_required')
@@ -2236,7 +2255,7 @@ export class HostControlAuthority {
           'profile.collaboration_registration',
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
           ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
-            ? ['profile.bot_group_deliver'] : []),
+            ? ['profile.bot_group_deliver', 'profile.bot_group_result_page'] : []),
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
           ...(this.options.inspectCollaborationRoot ? ['profile.root_authority'] : []),
@@ -3726,6 +3745,46 @@ export class UnixHostClient {
     return reply
   }
 
+  /** Read one durable Bot result under a fresh, live Slark delivery claim. */
+  async readBotGroupResultPage(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
+    readonly after: number
+    readonly signal?: AbortSignal
+  }): Promise<HostBotGroupResponse> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_result_page' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (!Number.isSafeInteger(input.after) || input.after < 0)
+      throw new HostAuthorityError('invalid_input')
+    const delivery = parseHostBotGroupDeliveryInput({
+      computer_id: input.computerId, slark_audience: input.slarkAudience,
+      ticket: input.ticket, command: input.command,
+    })
+    const request: ProfileBotGroupResultPageRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_result_page',
+      params: { ...this.collaborationAccountRequestParams(input), ...delivery, after: input.after },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    const reply = parseHostBotGroupResponse(frame.result.reply)
+    const query: HostBotGroupCommand = { operation: 'result_page',
+      groupId: delivery.command.groupId, botId: delivery.command.botId,
+      memberCycle: delivery.command.memberCycle, after: input.after, limit: 1 }
+    if (!matchesHostBotGroupResponse(reply, query))
+      throw new HostAuthorityError('profile_mismatch')
+    return reply
+  }
+
   /**
    * Request and verify a registration signature without changing the visible Profile lease.
    * @param input - Main-held Account binding, server challenge and cancellation.
@@ -4556,6 +4615,7 @@ export class UnixHostClient {
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
       | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotGroupDeliverRequest
+      | ProfileBotGroupResultPageRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
   | ProfileGroupInputFenceRequest

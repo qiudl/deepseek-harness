@@ -10,8 +10,7 @@ import type { BotIdentityAccount } from './account-bot-identity.ts'
 type DeliverCommand = Extract<HostBotGroupCommand, { operation: 'deliver' }>
 type Confirmation = typeof confirmBotGroupTicket
 
-/** Accept one Bot group message only after Account and live Slark authority agree. */
-export async function deliverAccountBotGroup(input: {
+type AccountBotGroupInput = {
   host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>
   workers: Pick<ProfileWorkerSupervisor, 'operateBotGroup'>
   account: BotIdentityAccount
@@ -23,7 +22,9 @@ export async function deliverAccountBotGroup(input: {
   command: DeliverCommand
   signal: AbortSignal
   confirm?: Confirmation
-}): Promise<HostBotGroupResponse> {
+}
+
+async function authorizeDelivery(input: AccountBotGroupInput) {
   input.signal.throwIfAborted()
   const command = parseHostBotGroupCommand(input.command)
   if (command.operation !== 'deliver') throw new HostAuthorityError('invalid_input')
@@ -53,6 +54,13 @@ export async function deliverAccountBotGroup(input: {
   input.host.authorizeCollaborationRegistration(input.account)
   if (input.host.authorizeAccountModelText(input.account) !== profileId)
     throw new HostAuthorityError('stale')
+  return profileId
+}
+
+/** Accept one Bot group message only after Account and live Slark authority agree. */
+export async function deliverAccountBotGroup(input: AccountBotGroupInput): Promise<HostBotGroupResponse> {
+  const profileId = await authorizeDelivery(input)
+  const { command } = input
   let result: HostBotGroupResponse
   try {
     result = await input.workers.operateBotGroup(profileId, command, input.signal)
@@ -74,5 +82,23 @@ export async function deliverAccountBotGroup(input: {
   input.host.authorizeCollaborationRegistration(input.account)
   if (input.host.authorizeAccountModelText(input.account) !== profileId ||
       !matchesHostBotGroupResponse(result, command)) throw new HostAuthorityError('stale')
+  return result
+}
+
+/** The result reader proves a current original delivery before exposing any Bot output. */
+export async function readAccountBotGroupResultPage(input: AccountBotGroupInput & {
+  after: number
+}): Promise<HostBotGroupResponse> {
+  if (!Number.isSafeInteger(input.after) || input.after < 0)
+    throw new HostAuthorityError('invalid_input')
+  const profileId = await authorizeDelivery(input)
+  const query: HostBotGroupCommand = { operation: 'result_page', groupId: input.command.groupId,
+    botId: input.command.botId, memberCycle: input.command.memberCycle,
+    after: input.after, limit: 1 }
+  const result = await input.workers.operateBotGroup(profileId, query, input.signal)
+  input.signal.throwIfAborted()
+  input.host.authorizeCollaborationRegistration(input.account)
+  if (input.host.authorizeAccountModelText(input.account) !== profileId ||
+      !matchesHostBotGroupResponse(result, query)) throw new HostAuthorityError('stale')
   return result
 }

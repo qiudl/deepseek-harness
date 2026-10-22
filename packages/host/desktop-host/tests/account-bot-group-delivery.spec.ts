@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
-import { deliverAccountBotGroup } from '../src/account-bot-group-delivery.ts'
+import { deliverAccountBotGroup, readAccountBotGroupResultPage } from '../src/account-bot-group-delivery.ts'
 
 function fixture() {
   const digest = 'a'.repeat(64)
@@ -82,4 +82,24 @@ it('reconciles a lost worker reply through the same durable delivery receipt', a
     groupId: f.command.groupId, botId: f.command.botId,
     memberCycle: f.command.memberCycle,
   }, f.input.signal)
+})
+
+it('reads Bot results only while the original delivery and Account remain live', async () => {
+  const f = fixture()
+  const result = { state: 'ok' as const, results: [{ id: `${f.command.deliveryId}:final`,
+    deliveryId: f.command.deliveryId, groupId: f.command.groupId,
+    botId: f.command.botId, memberCycle: f.command.memberCycle,
+    seq: 1, status: 'completed' as const, text: 'done' }], next: 1 }
+  f.workers.operateBotGroup.mockResolvedValueOnce(result as never)
+  expect(await readAccountBotGroupResultPage({ ...f.input, after: 0 })).toEqual(result)
+  expect(f.workers.operateBotGroup).toHaveBeenCalledWith('profile', {
+    operation: 'result_page', groupId: f.command.groupId,
+    botId: f.command.botId, memberCycle: f.command.memberCycle,
+    after: 0, limit: 1,
+  }, f.input.signal)
+  const revoked = fixture()
+  revoked.confirm.mockRejectedValueOnce(Error('revoked'))
+  await expect(readAccountBotGroupResultPage({ ...revoked.input, after: 0 }))
+    .rejects.toThrow('revoked')
+  expect(revoked.workers.operateBotGroup).not.toHaveBeenCalled()
 })

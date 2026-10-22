@@ -165,7 +165,7 @@ it('delivers through the Host only after signed Slark and current membership con
   const data = `${header}.${payload}`
   const ticket = `${data}.${sign(null, Buffer.from(data, 'ascii'),
     f.botGroupSigner.privateKey).toString('base64url')}`
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ ok: true,
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ ok: true,
     value: { state: 'active', delivery_id: command.deliveryId, expires_at: claims.expires_at } }))
   onTestFinished(() => { fetchMock.mockRestore() })
   const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
@@ -177,9 +177,20 @@ it('delivers through the Host only after signed Slark and current membership con
     '/api/v1/dsh/collaboration-v2/group-messages/delivery-confirm',
   expect.objectContaining({ method: 'POST', redirect: 'error', credentials: 'omit' }))
   expect(f.operateBotGroup).toHaveBeenCalledTimes(1)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [{
+    id: `${command.deliveryId}:final`, deliveryId: command.deliveryId,
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    seq: 1, status: 'completed', text: 'done',
+  }], next: 1 })
+  expect(await f.client.readBotGroupResultPage({ ...input, after: 0 })).toMatchObject({
+    state: 'ok', next: 1, results: [{ text: 'done' }],
+  })
+  expect(f.operateBotGroup).toHaveBeenLastCalledWith(expect.any(String),
+    { operation: 'result_page', groupId: command.groupId, botId: command.botId,
+      memberCycle: command.memberCycle, after: 0, limit: 1 }, expect.any(AbortSignal))
   fetchMock.mockResolvedValueOnce(Response.json({ ok: false }, { status: 409 }))
   await expect(f.client.deliverBotGroup(input)).rejects.toThrow()
-  expect(f.operateBotGroup).toHaveBeenCalledTimes(1)
+  expect(f.operateBotGroup).toHaveBeenCalledTimes(2)
 })
 
 it('does not advertise Bot delivery without startup-pinned Slark keys', async () => {
