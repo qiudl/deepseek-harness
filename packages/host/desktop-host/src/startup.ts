@@ -752,7 +752,7 @@ export async function startDesktopHostApplication(
       },
       host,
       resolveBotIdentity: (profileId, botId, signal) => workers.resolveBotIdentity(profileId, botId, signal),
-      operateBotGroup: (profileId, command, signal) => workers.operateBotGroup(profileId, command, signal),
+      operateBotGroup: workers.operateBotGroup.bind(workers),
       trustedBotGroupKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       ...collaborationWorkerReaders(workers),

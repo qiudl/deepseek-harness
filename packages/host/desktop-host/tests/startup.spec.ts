@@ -52,6 +52,12 @@ describe.skipIf(process.platform === 'win32')('desktop Host application composit
       issuer: 'https://slark.example.test', keys: [{ kid: 'dsh-assertion-test',
         publicKeyPem: keys.publicKey.export({ format: 'pem', type: 'spki' }).toString(),
         validFrom: 1, validUntil: Date.now() + 120_000 }] }])
+    const duplicate = JSON.parse(publicProjection) as unknown[]
+    for (const invalid of ['x'.repeat(32 * 1024 + 1), '{}', '[]',
+      JSON.stringify(Array(5).fill(duplicate[0])), JSON.stringify([duplicate[0], duplicate[0]])]) {
+      await expect(start({ ...config, botGroupPublicKeyringsJson: invalid }))
+        .rejects.toMatchObject({ code: 'invalid_input' })
+    }
     const app = await start(Object.assign({}, config, { pnpmEntrypointPath: privateKey,
       botGroupPublicKeyringsJson: publicProjection }))
     expect(existsSync(join(root, 'host.sock'))).toBe(true)

@@ -79,9 +79,19 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       return () => { routes.delete(route.path) }
     },
   } as never)
+  const groupOperations = {
+    deliver: vi.fn(async () => ({ state: 'accepted', deliveryId: '10000000-0000-4000-8000-000000000001',
+      groupId: '20000000-0000-4000-8000-000000000002', botId: 'bot_1', memberCycle: 2,
+      payloadDigest: 'a'.repeat(64), sessionId: 'isolated' })),
+    receipt: vi.fn(async () => ({ state: 'missing' })),
+    resultPage: vi.fn(async () => ({ state: 'ok', results: [], next: 0 })),
+    acknowledgeResult: vi.fn(async () => ({ state: 'acknowledged' })),
+    revokeCycle: vi.fn(async () => ({ state: 'revoked' })),
+  }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, {
     resolveLocalBot: async (botId: string) => botId === 'bot_1'
       ? { botId, actorRef: `deepseek-bot:${botId}`, displayName: 'My Bot' } : null,
+    ...groupOperations,
   } as never)
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)
@@ -148,7 +158,32 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   })
   expect(missingBotResponse.status).toBe(200)
   expect(await missingBotResponse.json()).toBeNull()
+  const groupRoot = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-group`
+  const postGroup = (body: object) => fetch(groupRoot, { method: 'POST',
+    headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(body) })
+  const baseGroup = { groupId: '20000000-0000-4000-8000-000000000002',
+    botId: 'bot_1', memberCycle: 2 }
+  const deliveryId = '10000000-0000-4000-8000-000000000001'
+  const deliver = { operation: 'deliver', schemaVersion: 1, deliveryId,
+    ...baseGroup, messageSeq: 7, payloadDigest: 'a'.repeat(64), text: 'Hello' }
+  expect((await postGroup(deliver)).status).toBe(200)
+  expect(groupOperations.deliver).toHaveBeenCalledWith({ schemaVersion: 1,
+    deliveryId, ...baseGroup, messageSeq: 7, payloadDigest: deliver.payloadDigest,
+    text: 'Hello' })
+  expect((await postGroup({ operation: 'receipt', deliveryId, ...baseGroup })).status).toBe(200)
+  expect(groupOperations.receipt).toHaveBeenCalledWith({ deliveryId, ...baseGroup })
+  expect((await postGroup({ operation: 'result_page', ...baseGroup, after: 0, limit: 1 })).status).toBe(200)
+  expect(groupOperations.resultPage).toHaveBeenCalledWith({ ...baseGroup, after: 0, limit: 1 })
+  expect((await postGroup({ operation: 'ack_result', deliveryId, ...baseGroup,
+    resultId: `${deliveryId}:final` })).status).toBe(200)
+  expect(groupOperations.acknowledgeResult).toHaveBeenCalledWith({ deliveryId, ...baseGroup,
+    resultId: `${deliveryId}:final` })
+  expect((await postGroup({ operation: 'revoke_cycle', ...baseGroup,
+    version: 3, stopInFlight: true })).status).toBe(200)
+  expect(groupOperations.revokeCycle).toHaveBeenCalledWith({ ...baseGroup,
+    version: 3, stopInFlight: true })
   disposeBotService()
+  expect((await postGroup(deliver)).status).toBe(422)
   const unavailableBotResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
     method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_1' }),
   })

@@ -2148,8 +2148,9 @@ export class HostControlAuthority {
                 reply = page.state === 'ok' ? { state: 'ok', results: [], next: frame.params.after } : page
                 break
               }
-              const result = page.results[0]
-              if (!result) throw new HostAuthorityError('unavailable')
+              // The worker parser bounds an `ok` page to one valid result, and
+              // the empty page returned above; this entry is present here.
+              const result = page.results[0] as (typeof page.results)[number]
               if (result.deliveryId === frame.params.command.deliveryId) {
                 reply = { state: 'ok', results: [result], next: result.seq }
                 break
