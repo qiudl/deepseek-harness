@@ -28,6 +28,16 @@ describe('local memory Session projection', () => {
     expect(JSON.stringify(result)).not.toMatch(/secret raw tool body|private system prompt|raw reasoning|abc123|xyz987/u)
   })
 
+  it('redacts an ai-proj personal token in natural Chinese text before indexing', () => {
+    const fakeToken = `aiproj_pk_${'a1b2c3d4'.repeat(8)}`
+    const events = oneTurn.map(event => event.seq === 1
+      ? { ...event, data: { id: 'u', role: 'user', source: { kind: 'user' },
+        content: text(`账号用 qiudl 的 token：${fakeToken}`) } } : event)
+    const projected = projectMemorySession(snapshot(events))
+    expect(projected[0]?.text).toBe('账号用 qiudl 的 token：[REDACTED]')
+    expect(JSON.stringify(projected)).not.toContain(fakeToken)
+  })
+
   it('withholds unfinished or failed turns and refuses delegated or replaced history', () => {
     expect(projectMemorySession(snapshot(oneTurn.slice(0, -1)))).toEqual([])
     const failed = oneTurn.map(event => event.type === 'turn/end'
