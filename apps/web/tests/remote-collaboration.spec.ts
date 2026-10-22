@@ -436,6 +436,40 @@ it('REQ-20261020-0010: personal proxy commands carry only binding facts', async 
     expected_binding_epoch: 0, bot_id: '../other' })).toEqual({ state: 'retry_required' })
   expect(commands).toHaveLength(2)
 })
+it('REQ-20261020-0010: proxy replacement and unbind require exact fenced replies', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMembers'] }
+  const commands: Rpc[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  let forged = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    commands.push(rpc)
+    const requested = rpc.payload.args.request as { operation: string }
+    const replace = requested.operation === 'proxy_replace'
+    return { status: 200, value: envelope(rpc, { state: 'proxy_changed',
+      operation: replace ? 'replace' : 'unbind', binding_id: bindingId, binding_epoch: 2,
+      binding_state: replace ? 'transferring' : 'unbound',
+      bot_ref: forged ? 'deepseek-bot:forged' : replace ? 'deepseek-bot:next_bot' : null }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  const base = { workspace_id: workspace, session_id: 'session-1',
+    request_id: '66666666-6666-4666-8666-666666666666', expected_binding_epoch: 1 }
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_replace', ...base,
+    bot_id: 'next_bot' })).toMatchObject({ state: 'proxy_changed', operation: 'replace' })
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_unbind', ...base }))
+    .toMatchObject({ state: 'proxy_changed', operation: 'unbind' })
+  expect(commands).toHaveLength(2)
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_replace', ...base,
+    bot_id: '../other' })).toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_unbind', ...base,
+    expected_binding_epoch: 0 })).toEqual({ state: 'retry_required' })
+  expect(commands).toHaveLength(2)
+  forged = true
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_unbind', ...base }))
+    .toEqual({ state: 'retry_required' })
+})
+
 it('REQ-20261020-0010: group pending commands stay exact and use the verified parent bridge', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
   const command = { operation: 'pending_claim', workspace_id: workspace, session_id: 'session-1',
