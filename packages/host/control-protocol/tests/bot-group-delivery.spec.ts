@@ -1,7 +1,8 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { decodeHostControlFrame, encodeHostControlFrame,
-  parseHostBotGroupDeliveryInput, parseHostBotGroupPublicKeyring } from '../src/index.ts'
+  parseHostBotGroupDeliveryInput, parseHostBotGroupStopInput,
+  parseHostBotGroupPublicKeyring } from '../src/index.ts'
 
 const publicKeyPem = generateKeyPairSync('ed25519').publicKey
   .export({ type: 'spki', format: 'pem' }).toString()
@@ -14,6 +15,41 @@ const keyring = { version: 1 as const, environmentId, issuer: 'https://slark.exa
     validFrom: 1, validUntil: 1_900_000_000_000 }] }
 const delivery = { computer_id: 'desktop-1', slark_audience: 'https://slark.example.test',
   ticket: 'aaa.bbb.ccc', command }
+
+it('roundtrips an exact owner stop command and rejects a delivery ticket in its place', () => {
+  const stop = { computer_id: delivery.computer_id, slark_audience: delivery.slark_audience,
+    ticket: delivery.ticket, message_seq: command.messageSeq,
+    payload_digest: command.payloadDigest,
+    command: { operation: 'stop_delivery' as const, deliveryId: command.deliveryId,
+      groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+      requestId: randomUUID() } }
+  expect(parseHostBotGroupStopInput(stop)).toEqual(stop)
+  const request = { version: 1, type: 'request', request_id: randomUUID(),
+    method: 'profile.bot_group_stop', params: {
+      client_instance_id: randomUUID(), host_instance_id: randomUUID(),
+      process_nonce: 'A'.repeat(43), jti: randomUUID(), issued_at: 1000, expires_at: 2000,
+      authority_environment_id: environmentId,
+      account_binding_handle: 'binding:test', authority_binding_version: 3,
+      account_issuer: 'https://accounts.example.test', account_subject: randomUUID(), ...stop,
+    } }
+  const result = { version: 1, type: 'result', request_id: request.request_id,
+    method: request.method, result: { reply: { state: 'requested',
+      deliveryId: command.deliveryId, requestId: stop.command.requestId } } }
+  for (const frame of [request, result])
+    expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)))
+      .toBe(`${JSON.stringify(frame)}\n`)
+  const bad = [
+    { ...stop, computer_id: '' }, { ...stop, slark_audience: 'http://slark.example.test' },
+    { ...stop, ticket: 'bad' }, { ...stop, message_seq: 0 },
+    { ...stop, payload_digest: 'bad' }, { ...stop, command },
+    { ...stop, extra: true },
+  ]
+  for (const value of bad) expect(() => parseHostBotGroupStopInput(value)).toThrow('invalid_bot_group')
+  expect(() => decodeHostControlFrame(`${JSON.stringify({ ...request,
+    params: { ...request.params, command } })}\n`)).toThrow()
+  expect(() => decodeHostControlFrame(`${JSON.stringify({ ...result,
+    result: { reply: { state: 'accepted', deliveryId: command.deliveryId } } })}\n`)).toThrow()
+})
 
 it('roundtrips only an exact public-key Bot delivery control frame', () => {
   expect(parseHostBotGroupDeliveryInput(delivery)).toEqual(delivery)

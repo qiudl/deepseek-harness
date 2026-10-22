@@ -406,6 +406,60 @@ it('does not advertise Bot delivery without startup-pinned Slark keys', async ()
   })).rejects.toMatchObject({ code: 'upgrade_required' })
 })
 
+it('routes one signed owner stop decision to the exact Bot delivery', async () => {
+  const f = await fixture(true, true); await f.grant()
+  const now = Date.now(), origin = 'https://slark.example.test'
+  const command = { operation: 'stop_delivery' as const, deliveryId: randomUUID(),
+    groupId: randomUUID(), botId: 'bot_1', memberCycle: 2, requestId: randomUUID() }
+  const messageSeq = 7, payloadDigest = 'a'.repeat(64)
+  const claims = { schema_version: 1, issuer: origin,
+    audience: 'urn:slark:dsh-bot-group-stop:v1', slark_audience: origin,
+    environment_id: f.account.authorityEnvironmentId,
+    owner_user_id: f.ownerId, computer_id: 'desktop-1',
+    account_issuer: f.account.issuer, account_subject: f.account.subject,
+    account_binding_epoch: f.account.authorityBindingVersion,
+    host_registry_id: botGroupHostRegistryId({ ownerUserId: f.ownerId,
+      accountIssuer: f.account.issuer, accountSubject: f.account.subject,
+      environmentId: f.account.authorityEnvironmentId,
+      installationId: f.identity.installationId,
+      accountBindingHandle: f.account.accountBindingHandle,
+      accountBindingEpoch: f.account.authorityBindingVersion }),
+    group_id: command.groupId, workspace_id: randomUUID(), session_id: 'original',
+    delivery_id: command.deliveryId, message_id: randomUUID(), message_seq: messageSeq,
+    bot_id: command.botId, member_cycle: command.memberCycle,
+    payload_digest: payloadDigest, decision_request_id: command.requestId,
+    token_id: randomUUID(), issued_at: now, expires_at: now + 60_000 }
+  const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'SLARK-DSH-BOT-GROUP-STOP',
+    version: 1, kid: f.botGroupKeyring.keys[0]!.kid })).toString('base64url')
+  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
+  const data = `${header}.${payload}`
+  const ticket = `${data}.${sign(null, Buffer.from(data, 'ascii'),
+    f.botGroupSigner.privateKey).toString('base64url')}`
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ ok: true,
+    value: { state: 'authorized', delivery_id: command.deliveryId,
+      decision_request_id: command.requestId, expires_at: claims.expires_at } }))
+  onTestFinished(() => { fetchMock.mockRestore() })
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    computerId: 'desktop-1', slarkAudience: origin, ticket,
+    messageSeq, payloadDigest, command }
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'requested',
+    deliveryId: command.deliveryId, requestId: command.requestId })
+  expect(await f.client.stopBotGroupDelivery(input)).toEqual({ state: 'requested',
+    deliveryId: command.deliveryId, requestId: command.requestId })
+  expect(fetchMock).toHaveBeenCalledWith(origin +
+    '/api/v1/dsh/collaboration-v2/group-messages/stop-confirm',
+  expect.objectContaining({ method: 'POST', redirect: 'error' }))
+  expect(f.operateBotGroup).toHaveBeenCalledWith(expect.any(String), command,
+    expect.any(AbortSignal))
+  const used = f.operateBotGroup.mock.calls.length
+  await expect(f.client.stopBotGroupDelivery({ ...input,
+    command: { ...command, requestId: randomUUID() } })).rejects.toThrow()
+  expect(f.operateBotGroup).toHaveBeenCalledTimes(used)
+  const caps = f.client.inspection.capabilities.filter(value => value !== 'profile.bot_group_stop')
+  expect(Reflect.set(f.client.inspection, 'capabilities', caps)).toBe(true)
+  await expect(f.client.stopBotGroupDelivery(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
 it('signs a server challenge with installation identity only after Account verification on this connection', async () => {
   const f = await fixture()
   await f.host.restoreProfile({ ...f.profile, ...f.account, ownerId: f.ownerId })

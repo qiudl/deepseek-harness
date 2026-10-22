@@ -58,13 +58,12 @@ export type HostBotGroupDeliveryInput = Readonly<{
   command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
 }>
 
-/**
- * Validate the exact Slark delivery request shape.
- * @param value - Untrusted Host request.
- * @returns Validated delivery input.
- */
-export function parseHostBotGroupDeliveryInput(value: unknown): HostBotGroupDeliveryInput {
-  const row = exact(value, ['computer_id', 'slark_audience', 'ticket', 'command'])
+function groupInputEnvelope(value: unknown, fields: readonly string[]): Record<string, unknown> & {
+  computer_id: string
+  slark_audience: string
+  ticket: string
+} {
+  const row = exact(value, fields)
   if (typeof row.computer_id !== 'string' || !/^[\x21-\x7e]{1,256}$/u.test(row.computer_id) ||
       typeof row.slark_audience !== 'string' || row.slark_audience.length > 512 ||
       typeof row.ticket !== 'string' || Buffer.byteLength(row.ticket) > 8192 ||
@@ -75,10 +74,52 @@ export function parseHostBotGroupDeliveryInput(value: unknown): HostBotGroupDeli
     if (audience.protocol !== 'https:' || audience.origin !== row.slark_audience)
       throw Error()
   } catch { throw Error('invalid_bot_group') }
+  return row as Record<string, unknown> & {
+    computer_id: string
+    slark_audience: string
+    ticket: string
+  }
+}
+
+/**
+ * Validate the exact Slark delivery request shape.
+ * @param value - Untrusted Host request.
+ * @returns Validated delivery input.
+ */
+export function parseHostBotGroupDeliveryInput(value: unknown): HostBotGroupDeliveryInput {
+  const row = groupInputEnvelope(value, ['computer_id', 'slark_audience', 'ticket', 'command'])
   const command = parseHostBotGroupCommand(row.command)
   if (command.operation !== 'deliver') throw Error('invalid_bot_group')
   return { computer_id: row.computer_id, slark_audience: row.slark_audience,
     ticket: row.ticket, command }
+}
+
+/** A stop carries its own signed capability and original immutable delivery coordinates. */
+export type HostBotGroupStopInput = Readonly<{
+  computer_id: string
+  slark_audience: string
+  ticket: string
+  message_seq: number
+  payload_digest: string
+  command: Extract<HostBotGroupCommand, { operation: 'stop_delivery' }>
+}>
+
+/**
+ * Validate one exact stop command envelope before it reaches Host authority.
+ * @param value - Untrusted stop request fields.
+ * @returns Validated stop command and immutable delivery coordinates.
+ */
+export function parseHostBotGroupStopInput(value: unknown): HostBotGroupStopInput {
+  const row = groupInputEnvelope(value, ['computer_id', 'slark_audience', 'ticket', 'message_seq',
+    'payload_digest', 'command'])
+  if (!Number.isSafeInteger(row.message_seq) || Number(row.message_seq) < 1 ||
+      typeof row.payload_digest !== 'string' || !DIGEST.test(row.payload_digest))
+    throw Error('invalid_bot_group')
+  const command = parseHostBotGroupCommand(row.command)
+  if (command.operation !== 'stop_delivery') throw Error('invalid_bot_group')
+  return { computer_id: row.computer_id, slark_audience: row.slark_audience,
+    ticket: row.ticket, message_seq: row.message_seq as number,
+    payload_digest: row.payload_digest, command }
 }
 
 /** Private Profile worker operations for one authorized Bot group. */

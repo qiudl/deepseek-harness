@@ -5,10 +5,12 @@ import type { HostBotIdentity, HostBotRosterPage,
   ProfileBotIdentityRequest, ProfileBotRosterRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotIdentity, listAccountBotRoster } from './account-bot-identity.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
-  acknowledgeAccountBotGroupResult } from './account-bot-group-delivery.ts'
+  acknowledgeAccountBotGroupResult, stopAccountBotGroupDelivery } from './account-bot-group-delivery.ts'
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
+  parseHostBotGroupStopInput,
   parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
   type HostBotGroupPublicKeyring, type ProfileBotGroupDeliverRequest,
+  type ProfileBotGroupStopRequest,
   type ProfileBotGroupResultPageRequest, type HostBotGroupResultProof,
   type ProfileBotGroupResultAckRequest,
   encodeHostBotGroupResultProofPayload,
@@ -2132,7 +2134,8 @@ export class HostControlAuthority {
             frame.params.after_bot_id, frame.params.limit, context.signal))
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { page } })
-        } else if (frame.method === 'profile.bot_group_deliver' ||
+        } else if (frame.method === 'profile.bot_group_stop' ||
+          frame.method === 'profile.bot_group_deliver' ||
           frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
           const operate = this.options.operateBotGroup
           const keyring = this.options.trustedBotGroupKeyrings?.find(candidate =>
@@ -2140,66 +2143,79 @@ export class HostControlAuthority {
             candidate.issuer === frame.params.slark_audience)
           if (!operate || !keyring) throw new HostAuthorityError('upgrade_required')
           const account = commandReadAccount(frame.params, ownerId)
-          const groupInput = {
-            host: this.options.host, workers: { operateBotGroup: operate }, account,
-            installationId: this.options.identity.installationId,
-            computerId: frame.params.computer_id, slarkAudience: frame.params.slark_audience,
-            keyring, ticket: frame.params.ticket, command: frame.params.command,
-            signal: context.signal,
-          }
-          if (frame.method === 'profile.bot_group_deliver') {
-            const reply = await deliverAccountBotGroup(groupInput)
+          if (frame.method === 'profile.bot_group_stop') {
+            const reply = await stopAccountBotGroupDelivery({
+              host: this.options.host, workers: { operateBotGroup: operate }, account,
+              installationId: this.options.identity.installationId,
+              computerId: frame.params.computer_id, slarkAudience: frame.params.slark_audience,
+              keyring, ticket: frame.params.ticket, command: frame.params.command,
+              messageSeq: frame.params.message_seq, payloadDigest: frame.params.payload_digest,
+              signal: context.signal,
+            })
             channel.send({ version: 1, type: 'result', request_id: frame.request_id,
               method: frame.method, result: { reply } })
-          } else if (frame.method === 'profile.bot_group_result_page') {
-          // Earlier results for this Bot cycle may still be awaiting acknowledgement.
-          // Scan a bounded page window; only the original delivery's result may cross this boundary.
-            let after = frame.params.after
-            let reply: HostBotGroupResponse = { state: 'ok', results: [], next: after }
-            for (let scan = 0; scan < 1000; scan++) {
-              const page = await readAccountBotGroupResultPage({ ...groupInput, after })
-              if (page.state !== 'ok' || page.results.length === 0) {
-                reply = page.state === 'ok' ? { state: 'ok', results: [], next: frame.params.after } : page
-                break
-              }
-              // The worker parser bounds an `ok` page to one valid result, and
-              // the empty page returned above; this entry is present here.
-              const result = page.results[0] as (typeof page.results)[number]
-              if (result.deliveryId === frame.params.command.deliveryId) {
-                reply = { state: 'ok', results: [result], next: result.seq }
-                break
-              }
-              after = result.seq
-              if (scan === 999) throw new HostAuthorityError('unavailable')
-            }
-            const item = reply.state === 'ok' ? reply.results[0] : undefined
-            let proof: HostBotGroupResultProof | null = null
-            if (item) {
-              const unsigned = {
-                schema_version: 1 as const,
-                authority_environment_id: account.authorityEnvironmentId,
-                account_binding_handle: account.accountBindingHandle,
-                authority_binding_version: account.authorityBindingVersion,
-                account_issuer: account.issuer, account_subject: account.subject,
-                owner_user_id: account.ownerId, computer_id: frame.params.computer_id,
-                slark_audience: frame.params.slark_audience,
-                installation_id: this.options.identity.installationId,
-                installation_public_key: this.options.identity.installationPublicKey,
-                host_instance_id: this.options.identity.hostInstanceId,
-                process_nonce: this.options.identity.processNonce,
-                result: item, issued_at: clock(),
-              }
-              proof = { ...unsigned, signature: sign(null,
-                encodeHostBotGroupResultProofPayload(unsigned),
-                privateKeyObject(this.options.identity.installationPrivateKey)).toString('base64url') }
-            }
-            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
-              method: frame.method, result: { reply, proof } })
           } else {
-            const reply = await acknowledgeAccountBotGroupResult({ ...groupInput,
-              resultId: frame.params.result_id })
-            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
-              method: frame.method, result: { reply } })
+            const groupInput = {
+              host: this.options.host, workers: { operateBotGroup: operate }, account,
+              installationId: this.options.identity.installationId,
+              computerId: frame.params.computer_id, slarkAudience: frame.params.slark_audience,
+              keyring, ticket: frame.params.ticket, command: frame.params.command,
+              signal: context.signal,
+            }
+            if (frame.method === 'profile.bot_group_deliver') {
+              const reply = await deliverAccountBotGroup(groupInput)
+              channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+                method: frame.method, result: { reply } })
+            } else if (frame.method === 'profile.bot_group_result_page') {
+              // Earlier results for this Bot cycle may still be awaiting acknowledgement.
+              // Scan a bounded page window; only the original delivery's result may cross this boundary.
+              let after = frame.params.after
+              let reply: HostBotGroupResponse = { state: 'ok', results: [], next: after }
+              for (let scan = 0; scan < 1000; scan++) {
+                const page = await readAccountBotGroupResultPage({ ...groupInput, after })
+                if (page.state !== 'ok' || page.results.length === 0) {
+                  reply = page.state === 'ok' ? { state: 'ok', results: [], next: frame.params.after } : page
+                  break
+                }
+                // The worker parser bounds an `ok` page to one valid result, and
+                // the empty page returned above; this entry is present here.
+                const result = page.results[0] as (typeof page.results)[number]
+                if (result.deliveryId === frame.params.command.deliveryId) {
+                  reply = { state: 'ok', results: [result], next: result.seq }
+                  break
+                }
+                after = result.seq
+                if (scan === 999) throw new HostAuthorityError('unavailable')
+              }
+              const item = reply.state === 'ok' ? reply.results[0] : undefined
+              let proof: HostBotGroupResultProof | null = null
+              if (item) {
+                const unsigned = {
+                  schema_version: 1 as const,
+                  authority_environment_id: account.authorityEnvironmentId,
+                  account_binding_handle: account.accountBindingHandle,
+                  authority_binding_version: account.authorityBindingVersion,
+                  account_issuer: account.issuer, account_subject: account.subject,
+                  owner_user_id: account.ownerId, computer_id: frame.params.computer_id,
+                  slark_audience: frame.params.slark_audience,
+                  installation_id: this.options.identity.installationId,
+                  installation_public_key: this.options.identity.installationPublicKey,
+                  host_instance_id: this.options.identity.hostInstanceId,
+                  process_nonce: this.options.identity.processNonce,
+                  result: item, issued_at: clock(),
+                }
+                proof = { ...unsigned, signature: sign(null,
+                  encodeHostBotGroupResultProofPayload(unsigned),
+                  privateKeyObject(this.options.identity.installationPrivateKey)).toString('base64url') }
+              }
+              channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+                method: frame.method, result: { reply, proof } })
+            } else {
+              const reply = await acknowledgeAccountBotGroupResult({ ...groupInput,
+                resultId: frame.params.result_id })
+              channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+                method: frame.method, result: { reply } })
+            }
           }
         } else if (frame.method === 'profile.workspace_model_selection') {
           const inspect = this.options.inspectWorkspaceModelSelection
@@ -2308,7 +2324,7 @@ export class HostControlAuthority {
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
           ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
             ? ['profile.bot_group_deliver', 'profile.bot_group_result_page',
-              'profile.bot_group_result_ack'] : []),
+              'profile.bot_group_result_ack', 'profile.bot_group_stop'] : []),
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
           ...(this.options.inspectCollaborationRoot ? ['profile.root_authority'] : []),
@@ -2487,6 +2503,18 @@ function botGroupClientDelivery(input: { readonly computerId: string
   readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }> }) {
   return parseHostBotGroupDeliveryInput({ computer_id: input.computerId,
     slark_audience: input.slarkAudience, ticket: input.ticket, command: input.command })
+}
+
+function botGroupClientStop(input: { readonly computerId: string
+  readonly slarkAudience: string
+  readonly ticket: string
+  readonly messageSeq: number
+  readonly payloadDigest: string
+  readonly command: Extract<HostBotGroupCommand, { operation: 'stop_delivery' }> }) {
+  return parseHostBotGroupStopInput({ computer_id: input.computerId,
+    slark_audience: input.slarkAudience, ticket: input.ticket,
+    message_seq: input.messageSeq, payload_digest: input.payloadDigest,
+    command: input.command })
 }
 
 /** Connected Main-only SDK matching Slark's `DshPersonalHostAdapter`. */
@@ -3807,8 +3835,9 @@ export class UnixHostClient {
   }
 
   /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
-  private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest | ProfileBotGroupResultAckRequest,
-    signal?: AbortSignal): Promise<HostBotGroupResponse> {
+  private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest |
+  ProfileBotGroupResultAckRequest | ProfileBotGroupStopRequest,
+  signal?: AbortSignal): Promise<HostBotGroupResponse> {
     const frame = await this.call(request, signal)
     signal?.throwIfAborted()
     if (frame.type !== 'result' || frame.method !== request.method)
@@ -3843,6 +3872,39 @@ export class UnixHostClient {
     }
     const reply = await this.callBotGroupResponse(request, input.signal)
     if (!matchesHostBotGroupResponse(reply, delivery.command))
+      throw new HostAuthorityError('profile_mismatch')
+    return reply
+  }
+
+  /**
+   * Send one Slark-authorized, idempotent stop request for an exact Bot delivery.
+   * @param input - Account binding, signed stop ticket and immutable delivery coordinates.
+   * @returns The bounded worker stop receipt.
+   */
+  async stopBotGroupDelivery(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly messageSeq: number
+    readonly payloadDigest: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'stop_delivery' }>
+    readonly signal?: AbortSignal
+  }): Promise<HostBotGroupResponse> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_stop' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const stop = botGroupClientStop(input)
+    const request: ProfileBotGroupStopRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_stop',
+      params: { ...this.collaborationAccountRequestParams(input), ...stop },
+    }
+    const reply = await this.callBotGroupResponse(request, input.signal)
+    if (!matchesHostBotGroupResponse(reply, stop.command))
       throw new HostAuthorityError('profile_mismatch')
     return reply
   }
@@ -4780,6 +4842,7 @@ export class UnixHostClient {
       | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest
       | ProfileBotGroupResultAckRequest
+      | ProfileBotGroupStopRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
   | ProfileGroupInputFenceRequest

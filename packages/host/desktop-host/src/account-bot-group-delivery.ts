@@ -26,6 +26,31 @@ type AccountBotGroupInput = {
   confirm?: Confirmation
 }
 
+function ticketIdentity(input: Pick<AccountBotGroupInput,
+  'account' | 'computerId' | 'installationId' | 'slarkAudience'>,
+command: { groupId: string; deliveryId: string; botId: string; memberCycle: number }) {
+  return {
+    ownerUserId: input.account.ownerId, computerId: input.computerId,
+    accountIssuer: input.account.issuer, accountSubject: input.account.subject,
+    environmentId: input.account.authorityEnvironmentId,
+    accountBindingHandle: input.account.accountBindingHandle,
+    accountBindingEpoch: input.account.authorityBindingVersion,
+    installationId: input.installationId, slarkAudience: input.slarkAudience,
+    groupId: command.groupId, deliveryId: command.deliveryId,
+    botId: command.botId, memberCycle: command.memberCycle,
+  }
+}
+
+function checkedWorkerReply(input: Pick<AccountBotGroupInput, 'signal' | 'host' | 'account'>,
+  profileId: string,
+  command: HostBotGroupCommand, result: HostBotGroupResponse): HostBotGroupResponse {
+  input.signal.throwIfAborted()
+  input.host.authorizeCollaborationRegistration(input.account)
+  if (input.host.authorizeAccountModelText(input.account) !== profileId ||
+      !matchesHostBotGroupResponse(result, command)) throw new HostAuthorityError('stale')
+  return result
+}
+
 async function authorizeDelivery(input: AccountBotGroupInput) {
   input.signal.throwIfAborted()
   const command = parseHostBotGroupCommand(input.command)
@@ -33,19 +58,7 @@ async function authorizeDelivery(input: AccountBotGroupInput) {
   input.host.authorizeCollaborationRegistration(input.account)
   const profileId = input.host.authorizeAccountModelText(input.account)
   const expected: BotGroupTicketExpected = {
-    ownerUserId: input.account.ownerId,
-    computerId: input.computerId,
-    accountIssuer: input.account.issuer,
-    accountSubject: input.account.subject,
-    environmentId: input.account.authorityEnvironmentId,
-    accountBindingHandle: input.account.accountBindingHandle,
-    accountBindingEpoch: input.account.authorityBindingVersion,
-    installationId: input.installationId,
-    slarkAudience: input.slarkAudience,
-    groupId: command.groupId,
-    deliveryId: command.deliveryId,
-    botId: command.botId,
-    memberCycle: command.memberCycle,
+    ...ticketIdentity(input, command),
     messageSeq: command.messageSeq,
     text: command.text,
   }
@@ -117,11 +130,7 @@ export async function acknowledgeAccountBotGroupResult(input: AccountBotGroupInp
     memberCycle: input.command.memberCycle, deliveryId: input.command.deliveryId,
     resultId: input.resultId }
   const result = await input.workers.operateBotGroup(profileId, command, input.signal)
-  input.signal.throwIfAborted()
-  input.host.authorizeCollaborationRegistration(input.account)
-  if (input.host.authorizeAccountModelText(input.account) !== profileId ||
-      !matchesHostBotGroupResponse(result, command)) throw new HostAuthorityError('stale')
-  return result
+  return checkedWorkerReply(input, profileId, command, result)
 }
 
 /** Apply one owner-authorized stop request to its exact Bot delivery. */
@@ -141,14 +150,7 @@ export async function stopAccountBotGroupDelivery(input: Omit<AccountBotGroupInp
   input.host.authorizeCollaborationRegistration(input.account)
   const profileId = input.host.authorizeAccountModelText(input.account)
   const expected: BotGroupStopTicketExpected = {
-    ownerUserId: input.account.ownerId, computerId: input.computerId,
-    accountIssuer: input.account.issuer, accountSubject: input.account.subject,
-    environmentId: input.account.authorityEnvironmentId,
-    accountBindingHandle: input.account.accountBindingHandle,
-    accountBindingEpoch: input.account.authorityBindingVersion,
-    installationId: input.installationId, slarkAudience: input.slarkAudience,
-    groupId: command.groupId, deliveryId: command.deliveryId, botId: command.botId,
-    memberCycle: command.memberCycle, messageSeq: input.messageSeq,
+    ...ticketIdentity(input, command), messageSeq: input.messageSeq,
     payloadDigest: input.payloadDigest, requestId: command.requestId,
   }
   await (input.confirm ?? confirmBotGroupStopTicket)(input.ticket, input.keyring,
@@ -158,9 +160,5 @@ export async function stopAccountBotGroupDelivery(input: Omit<AccountBotGroupInp
   if (input.host.authorizeAccountModelText(input.account) !== profileId)
     throw new HostAuthorityError('stale')
   const result = await input.workers.operateBotGroup(profileId, command, input.signal)
-  input.signal.throwIfAborted()
-  input.host.authorizeCollaborationRegistration(input.account)
-  if (input.host.authorizeAccountModelText(input.account) !== profileId ||
-      !matchesHostBotGroupResponse(result, command)) throw new HostAuthorityError('stale')
-  return result
+  return checkedWorkerReply(input, profileId, command, result)
 }
