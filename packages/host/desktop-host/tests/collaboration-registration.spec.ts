@@ -274,6 +274,31 @@ it('delivers through the Host only after signed Slark and current membership con
       ? 'invalid_input' : 'upgrade_required' })
   }
   expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_deliver'
+    ? { ...frame, method: 'profile.bot_group_result_ack' } as HostControlFrame : frame)
+  await expect(f.client.deliverBotGroup(input)).rejects.toMatchObject({ code: 'unavailable' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_deliver'
+    ? { ...frame, result: { reply: { state: 'accepted', deliveryId: command.deliveryId,
+      groupId: randomUUID(), botId: command.botId, memberCycle: command.memberCycle,
+      payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' } } } : frame)
+  await expect(f.client.deliverBotGroup(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_ack'
+    ? { ...frame, result: { reply: { state: 'accepted', deliveryId: command.deliveryId,
+      groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+      payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' } } } : frame)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'acknowledged' })
+  await expect(f.client.acknowledgeBotGroupResult({ ...input,
+    resultId: `${command.deliveryId}:final` })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
+    ? { ...frame, result: { reply: { state: 'ok', results: [{
+      id: `${command.deliveryId}:final`, deliveryId: command.deliveryId,
+      groupId: randomUUID(), botId: command.botId, memberCycle: command.memberCycle,
+      seq: 1, status: 'completed', text: 'done',
+    }], next: 1 }, proof: null } } : frame)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [], next: 0 })
+  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
     ? { ...frame, result: { ...frame.result, proof: null } } : frame)
   f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [{
