@@ -119,13 +119,16 @@ function groupMemberInput(value: unknown): value is Record<string, unknown> {
               'request_id', 'expected_binding_epoch', 'bot_id']
             : value.operation === 'proxy_unbind' ? ['operation', 'workspace_id', 'session_id',
               'request_id', 'expected_binding_epoch']
-              : value.operation === 'proxy_attach' ? ['operation', 'workspace_id', 'session_id',
-                'request_id', 'expected_membership_version', 'bot_id', 'binding_id', 'binding_epoch']
-                : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
-                  : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
-                    'expected_membership_version', 'bot_id']
-                    : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
-                      'expected_membership_version', 'member_id'] : []
+              : ['proxy_handoff_seal', 'proxy_handoff_revoke', 'proxy_handoff_attach',
+                'proxy_handoff_complete'].includes(String(value.operation))
+                ? ['operation', 'workspace_id', 'session_id', 'binding_id', 'target_epoch']
+                : value.operation === 'proxy_attach' ? ['operation', 'workspace_id', 'session_id',
+                  'request_id', 'expected_membership_version', 'bot_id', 'binding_id', 'binding_epoch']
+                  : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
+                    : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+                      'expected_membership_version', 'bot_id']
+                      : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+                        'expected_membership_version', 'member_id'] : []
   if (!fields.length || !exact(value, fields) || typeof value.workspace_id !== 'string'
     || !uuid.test(value.workspace_id) || typeof value.session_id !== 'string'
     || !/^[!-~]{1,256}$/u.test(value.session_id) || /[/\\]/u.test(value.session_id)
@@ -139,6 +142,10 @@ function groupMemberInput(value: unknown): value is Record<string, unknown> {
     && uuid.test(value.member_id) && typeof value.after_delivery_id === 'string'
     && (value.after_delivery_id === '' || uuid.test(value.after_delivery_id))
     && Number.isSafeInteger(value.limit) && Number(value.limit) >= 1 && Number(value.limit) <= 100
+  if (['proxy_handoff_seal', 'proxy_handoff_revoke', 'proxy_handoff_attach',
+    'proxy_handoff_complete'].includes(String(value.operation)))
+    return typeof value.binding_id === 'string' && uuid.test(value.binding_id)
+      && Number.isSafeInteger(value.target_epoch) && Number(value.target_epoch) >= 1
   if (typeof value.request_id !== 'string' || !uuid.test(value.request_id)) return false
   if (value.operation === 'receipt') return true
   if (value.operation === 'proxy_select' || value.operation === 'proxy_replace')
@@ -217,6 +224,15 @@ function groupMemberResult(value: unknown): boolean {
     && (value.operation === 'replace' && value.binding_state === 'transferring'
       && typeof value.bot_ref === 'string' && /^deepseek-bot:[A-Za-z0-9_-]{1,200}$/u.test(value.bot_ref)
       || value.operation === 'unbind' && value.binding_state === 'unbound' && value.bot_ref === null)
+  if (value.state === 'handoff_sealed') return exact(value,
+    ['state', 'handoff_id', 'namespace_count', 'item_count'])
+    && typeof value.handoff_id === 'string' && uuid.test(value.handoff_id)
+    && Number.isSafeInteger(value.namespace_count) && Number(value.namespace_count) >= 1
+    && Number.isSafeInteger(value.item_count) && Number(value.item_count) >= 0
+  if (value.state === 'handoff_step') return exact(value, ['state', 'operation', 'result'])
+    && (value.operation === 'complete' && ['active', 'complete'].includes(String(value.result))
+      || (value.operation === 'revoke' || value.operation === 'attach')
+        && ['recorded', 'idle', 'blocked'].includes(String(value.result)))
   if (value.state === 'recorded') return exact(value, ['state', 'operation', 'member_id',
     'membership_version', 'seq']) && ['join', 'leave', 'proxy_attach', 'proxy_revoke'].includes(String(value.operation))
     && typeof value.member_id === 'string' && uuid.test(value.member_id)

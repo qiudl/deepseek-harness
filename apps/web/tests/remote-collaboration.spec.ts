@@ -470,6 +470,40 @@ it('REQ-20261020-0010: proxy replacement and unbind require exact fenced replies
     .toEqual({ state: 'retry_required' })
 })
 
+it('REQ-20261020-0010: current Host handoff steps accept only scoped metadata', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMembers'] }
+  const commands: Rpc[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  let forged = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    commands.push(rpc)
+    const requested = rpc.payload.args.request as { operation: string }
+    const operation = requested.operation.slice('proxy_handoff_'.length)
+    return { status: 200, value: envelope(rpc, operation === 'seal'
+      ? { state: 'handoff_sealed', handoff_id: bindingId, namespace_count: 2, item_count: 3,
+        ...(forged ? { task_body: 'private' } : {}) }
+      : { state: 'handoff_step', operation,
+        result: operation === 'complete' ? 'active' : 'recorded' }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  const base = { workspace_id: workspace, session_id: 'session-1',
+    binding_id: bindingId, target_epoch: 2 }
+  for (const operation of ['seal', 'revoke', 'attach', 'complete'] as const)
+    expect(await bridge().collaborationGroupMembers?.({ operation: `proxy_handoff_${operation}`, ...base }))
+      .toMatchObject({ state: operation === 'seal' ? 'handoff_sealed' : 'handoff_step' })
+  expect(commands).toHaveLength(4)
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_handoff_revoke', ...base,
+    target_epoch: 0 })).toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_handoff_attach', ...base,
+    task_body: 'private' })).toEqual({ state: 'retry_required' })
+  expect(commands).toHaveLength(4)
+  forged = true
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_handoff_seal', ...base }))
+    .toEqual({ state: 'retry_required' })
+})
+
 it('REQ-20261020-0010: group pending commands stay exact and use the verified parent bridge', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
   const command = { operation: 'pending_claim', workspace_id: workspace, session_id: 'session-1',
