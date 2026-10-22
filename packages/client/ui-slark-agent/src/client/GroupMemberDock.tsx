@@ -112,12 +112,14 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     return () => { disposed = true; window.clearInterval(timer); change.current = null }
   }, [host, workspaceId, sessionId, groupId])
   const add = () => {
+    /* v8 ignore next -- the Add button is disabled until a snapshot and valid Bot ID exist and while a change is pending. */
     if (!snapshot || !botIdPattern.test(botId) || pendingRef.current) return
     void change.current?.({ operation: 'join', workspace_id: workspaceId, session_id: sessionId,
       request_id: randomUUID(), expected_membership_version: snapshot.membership_version,
       bot_id: botId })
   }
   const remove = (memberId: string) => {
+    /* v8 ignore next -- Remove buttons render only from a snapshot and are disabled while a change is pending. */
     if (!snapshot || pendingRef.current) return
     void change.current?.({ operation: 'leave', workspace_id: workspaceId, session_id: sessionId,
       request_id: randomUUID(), expected_membership_version: snapshot.membership_version,
