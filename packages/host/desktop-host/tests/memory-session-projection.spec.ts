@@ -50,6 +50,7 @@ describe('local memory Session projection', () => {
       ['aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW', '[REDACTED]'],
       ['a'.repeat(40), '[REDACTED]'],
       ['b'.repeat(64), '[REDACTED]'],
+      ['a'.repeat(32), 'a'.repeat(32)],
     ] as const
     for (const [input, expected] of values) {
       const events = oneTurn.map(event => event.seq === 1

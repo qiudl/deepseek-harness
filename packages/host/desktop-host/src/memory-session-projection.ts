@@ -44,7 +44,6 @@ function entropy(value: string): number {
 function suspiciousOpaqueToken(value: string): boolean {
   // A bare commit-like digest may be an unlabeled bearer credential.
   if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/iu.test(value)) return true
-  if (value.length < 32) return false
   const classes = [/[a-z]/u, /[A-Z]/u, /\d/u].filter(pattern => pattern.test(value)).length
   return classes >= 2 && entropy(value) >= 3.6
 }
