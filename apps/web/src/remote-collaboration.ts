@@ -76,6 +76,14 @@ function capture(value: unknown): Record<string, unknown> {
 }
 function groupResult(value: unknown): boolean {
   if (!row(value)) return false
+  if (value.state === 'pending') return exact(value, ['state', 'request_id'])
+    && typeof value.request_id === 'string' && uuid.test(value.request_id)
+  if (value.state === 'pending_status') return exact(value, ['state', 'request_id', 'digest'])
+    && typeof value.request_id === 'string' && uuid.test(value.request_id)
+    && typeof value.digest === 'string' && /^[a-f0-9]{64}$/u.test(value.digest)
+  if (value.state === 'pending_empty') return exact(value, ['state'])
+  if (value.state === 'pending_other' || value.state === 'acknowledged')
+    return exact(value, ['state'])
   if (['missing', 'conflict', 'retry_required'].includes(String(value.state)))
     return exact(value, ['state'])
   if (value.state === 'recorded') return exact(value, ['state', 'message_id', 'seq'])
@@ -218,11 +226,20 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
               || /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..')
               throw Error('invalid group request')
             const fields = raw.operation === 'send' ? ['operation', 'request_id', 'workspace_id', 'session_id',
-              'expected_group_version', 'body'] : raw.operation === 'receipt'
-              ? ['operation', 'request_id', 'workspace_id', 'session_id'] : raw.operation === 'page'
-                ? ['operation', 'workspace_id', 'session_id', 'after_seq', 'limit'] : []
+              'expected_group_version', 'body'] : raw.operation === 'pending_claim'
+              ? ['operation', 'workspace_id', 'session_id', 'group_id', 'digest'] : raw.operation === 'pending_ack'
+                ? ['operation', 'workspace_id', 'session_id', 'group_id', 'digest', 'request_id'] : raw.operation === 'pending_status'
+                  ? ['operation', 'workspace_id', 'session_id', 'group_id'] : raw.operation === 'receipt'
+                    ? ['operation', 'request_id', 'workspace_id', 'session_id'] : raw.operation === 'page'
+                      ? ['operation', 'workspace_id', 'session_id', 'after_seq', 'limit'] : []
             if (!exact(raw, fields) || !fields.length) throw Error('invalid group request')
-            if (raw.operation === 'page') {
+            if (raw.operation === 'pending_claim' || raw.operation === 'pending_ack' || raw.operation === 'pending_status') {
+              if (typeof raw.group_id !== 'string' || !uuid.test(raw.group_id) ||
+                raw.operation !== 'pending_status' &&
+                (typeof raw.digest !== 'string' || !/^[a-f0-9]{64}$/u.test(raw.digest)) ||
+                raw.operation === 'pending_ack' && (typeof raw.request_id !== 'string' || !uuid.test(raw.request_id)))
+                throw Error('invalid group pending')
+            } else if (raw.operation === 'page') {
               if (!Number.isSafeInteger(raw.after_seq) || Number(raw.after_seq) < 0 ||
                 !Number.isInteger(raw.limit) || Number(raw.limit) < 1 || Number(raw.limit) > 100)
                 throw Error('invalid group page')

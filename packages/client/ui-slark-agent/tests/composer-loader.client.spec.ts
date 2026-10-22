@@ -53,7 +53,7 @@ type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST
 async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration,
   executionAvailable = collaboration, navigationAvailable = true, pluginRemote = false, conversationDraft?: DraftBridge,
   accountIdentity?: NonNullable<Window['__DSH_DESKTOP_HOST__']>['accountIdentity'],
-  native?: Window['__DSH_NATIVE_WORKBENCH__']) {
+  native?: Window['__DSH_NATIVE_WORKBENCH__'], groupMode?: 'mapped' | 'unmapped' | 'no-dedicated') {
   vi.stubGlobal('crypto', webcrypto)
   const priorNative = Object.getOwnPropertyDescriptor(window, '__DSH_NATIVE_WORKBENCH__')
   onTestFinished(() => {
@@ -125,12 +125,15 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
   const invoke = vi.fn(async (_input: InvokeInput) => ({ ok: true as const,
     value: { invocation_id: 'invocation-1', state: 'accepted' } }))
   const workspaceId = '38c7c5cb-38fc-466f-9d92-89cc49f84051'
-  const workspace = { id: workspaceId, archived: false, ready: true, siblings: [] as SessionId[], subscribers: 0, onSubscribe: () => {} }
+  const workspace = { id: workspaceId, archived: false, ready: true, dedicated: false,
+    siblings: [] as SessionId[], subscribers: 0, onSubscribe: () => {} }
   const workspaceListeners = new Set<() => void>()
   const connectionListeners = new Set<() => void>()
   ctx.provide('workspaces', { list: {
     getSnapshot: () => ({ phase: workspace.ready ? 'ready' : 'loading', state: 'idle', error: null,
       archivedSessionIds: workspace.archived ? [id] : [],
+      ...(groupMode === 'no-dedicated' ? {} : {
+        dedicatedCollaborationSessionIds: workspace.dedicated ? [id] : [] }),
       items: [{ workspaceId: workspace.id, sessionIds: [id, ...workspace.siblings] }] }),
     subscribe: (listener: () => void) => {
       workspaceListeners.add(listener)
@@ -203,6 +206,12 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     collaborationScopeAvailable: collaboration, collaborationExecutionAvailable: executionAvailable,
     collaborationWorkspace: scopeDirectory, collaborationSubmit: submit,
     collaborationDeliveries: deliveries, collaborationPending: pending, collaborationClarify: clarify,
+    ...(groupMode ? { collaborationGroupPreparation: async () => ({ state: 'missing' as const }),
+      collaborationGroupMessages: async () => ({ state: 'missing' as const }) } : {}),
+    ...(groupMode === 'mapped' ? { collaborationConversations: async () => ({ ok: true as const,
+      value: { items: [{ workspace_id: workspaceId, session_id: id, first_source_at: '1', last_activity_at: '1',
+        source_count: 1, pending_count: 0, planning_count: 0, running_count: 0, issue_count: 0,
+        first_pending_digest: null, pinned: false, archived: false }], global_pending_count: 0 } }) } : {}),
     enterpriseAgents: async () => ({ ok: true, invocationAvailable: true, items: [agent] }),
     invokeEnterpriseAgent: invoke,
   })
@@ -1479,6 +1488,215 @@ it('cancels the remaining question read of a committed passive reply without con
   release?.(pendingPage(f.originals[0]!.source))
   expect(f.composer.snapshot.draft).toBe('请检查登录问题')
   expect(f.clarify).toHaveBeenCalledTimes(1); expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('routes plain text from the original active Session to one durable group command', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  onTestFinished(() => { localStorage.clear() })
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const, group_id: groupId,
+    workspace_id: f.workspace.id, session_id: 'session-1', version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
+    ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+    : command.operation === 'receipt' ? { state: 'missing' as const }
+      : command.operation === 'pending_ack' ? { state: 'acknowledged' as const }
+        : { state: 'recorded' as const, message_id: '33333333-3333-4333-8333-333333333333', seq: 1 })
+  host.collaborationGroupMessages = messages
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }
+  f.composer.setDraft('hello group')
+  expect(source.matchEnterPlainText?.(session)).toBe(true)
+  const outcome = await source.matchEnter?.(session, 'hello group', new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped) throw Error('missing group claim')
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'success' })
+  expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'send',
+    workspace_id: f.workspace.id, session_id: 'session-1', body: 'hello group' }))
+  expect(messages).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' }))
+  f.composer.setDraft('')
+  await vi.waitFor(() => { expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' })) })
+  expect(f.submit).not.toHaveBeenCalled()
+  expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('registers the group ledger dock only for a verified group bridge', async () => {
+  const f = await bench(true, true, true, false, true, false, undefined, undefined, undefined, 'unmapped')
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-group-chat')
+  if (!entry?.inject) throw Error('missing group dock')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as {
+    workspaceId(): string | undefined
+    subscribeWorkspace(listener: () => void): () => void
+  }
+  expect(bindings.workspaceId()).toBe(f.workspace.id)
+  const changed = vi.fn(), unsubscribe = bindings.subscribeWorkspace(changed)
+  f.workspaceChanged()
+  expect(changed).toHaveBeenCalledOnce()
+  unsubscribe()
+  expect(f.controller.adjudicatesPlainText()).toBe(false)
+  f.workspace.dedicated = true
+  expect(f.controller.adjudicatesPlainText()).toBe(true)
+  f.workspace.archived = true
+  expect(bindings.workspaceId()).toBeUndefined()
+  expect(f.controller.adjudicatesPlainText()).toBe(false)
+})
+
+it('arbitrates plain text for a recovered collaboration row from the Host index', async () => {
+  const f = await bench(true, true, true, false, true, false, undefined, undefined, undefined, 'mapped')
+  await vi.waitFor(() => { expect(f.controller.adjudicatesPlainText()).toBe(true) })
+  expect(f.workspace.dedicated).toBe(false)
+})
+
+it('leaves ordinary input untouched when the workspace has no collaboration session list', async () => {
+  const f = await bench(true, true, true, false, true, false, undefined, undefined, undefined, 'no-dedicated')
+  expect(f.controller.adjudicatesPlainText()).toBe(false)
+})
+
+it('keeps original Source input fenced while a mapped group is preparing', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'preparing' as const,
+    group_id: '22222222-2222-4222-8222-222222222222', workspace_id: f.workspace.id,
+    session_id: 'session-1', version: 1 as const }))
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  f.composer.setDraft('hello')
+  await expect(source.matchEnter?.({ sessionId: SessionId('session-1') }, 'hello',
+    new AbortController().signal, { attachments: 0 })).rejects.toThrow('group.preparing')
+  expect(f.submit).not.toHaveBeenCalled()
+  expect(f.sink).not.toHaveBeenCalled()
+})
+
+it.each(['lookup_failed', 'retry_required', 'missing_messages', 'attachments'] as const)
+('keeps the original Session draft when group admission is %s', async (mode) => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  host.collaborationGroupPreparation = mode === 'lookup_failed' ? vi.fn(async () => { throw Error('offline') })
+    : vi.fn(async () => mode === 'retry_required' ? { state: 'retry_required' as const }
+      : { state: 'group_active' as const, group_id: groupId, workspace_id: f.workspace.id,
+        session_id: 'session-1', version: 2 as const, last_seq: 0 })
+  if (mode !== 'missing_messages') host.collaborationGroupMessages = vi.fn(async () => ({
+    state: 'recorded' as const, message_id: groupId, seq: 1 }))
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  f.composer.setDraft('hello')
+  await expect(source.matchEnter?.({ sessionId: SessionId('session-1') }, 'hello',
+    new AbortController().signal, { attachments: mode === 'attachments' ? 1 : 0 }))
+    .rejects.toThrow(mode === 'attachments' ? 'group.textOnly' : 'group.uncertain')
+  expect(f.submit).not.toHaveBeenCalled()
+  expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('rejects a stale group lookup after the authenticated Host changes', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const pending = Promise.withResolvers<{
+    state: 'group_active'
+    group_id: string
+    workspace_id: string
+    session_id: string
+    version: 2
+    last_seq: 0
+  }>()
+  host.collaborationGroupPreparation = vi.fn(() => pending.promise)
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  f.composer.setDraft('hello')
+  const adjudication = source.matchEnter?.({ sessionId: SessionId('session-1') }, 'hello',
+    new AbortController().signal, { attachments: 0 })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+  pending.resolve({ state: 'group_active', group_id: '22222222-2222-4222-8222-222222222222',
+    workspace_id: f.workspace.id, session_id: 'session-1', version: 2, last_seq: 0 })
+  await expect(adjudication).rejects.toThrow('submit.changed')
+})
+
+it('retains a group claim after draft changes or an uncertain send', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  onTestFinished(() => { localStorage.clear() })
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1', version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn(async () => ({ state: 'retry_required' as const }))
+  host.collaborationGroupMessages = messages
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }, signal = new AbortController().signal
+  f.composer.setDraft('hello')
+  const first = await source.matchEnter?.(session, 'hello', signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!first || typeof first !== 'object' || !('claim' in first) || !scoped) throw Error('missing group claim')
+  f.composer.setDraft('changed')
+  expect(await first.claim.submit('', scoped, [])).toMatchObject({ kind: 'error', text: 'submit.changed' })
+  f.composer.setDraft('hello')
+  expect(await first.claim.submit('', scoped, [])).toMatchObject({ kind: 'error', text: 'group.uncertain' })
+  expect(messages).toHaveBeenCalledTimes(1)
+})
+
+it('falls through to the original Session input when no group was mapped', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'missing' as const }))
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  f.composer.setDraft('ordinary input')
+  expect(source.matchEnterPlainText?.({ sessionId: SessionId('session-1') })).toBe(true)
+  expect(await source.matchEnter?.({ sessionId: SessionId('session-1') }, 'ordinary input',
+    new AbortController().signal, { attachments: 0 })).toBeUndefined()
+})
+
+it.each(['parent_storage_refused', 'host_changed', 'pending_other', 'receipt_uncertain'] as const)
+('keeps the original Session draft when group send is %s', async (mode) => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1', version: 2 as const, last_seq: 0 }))
+  let pendingDigest = ''
+  host.collaborationGroupMessages = vi.fn(async (command: { operation: string; digest?: string }) => {
+    if (mode === 'host_changed') Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+    if (command.operation === 'pending_claim' && mode === 'pending_other') pendingDigest = command.digest ?? ''
+    return command.operation === 'pending_claim' ? mode === 'pending_other'
+      ? { state: 'pending_other' as const } : mode === 'parent_storage_refused'
+        ? { state: 'retry_required' as const }
+        : { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+      : command.operation === 'pending_status' && mode === 'pending_other'
+        ? { state: 'pending_status' as const,
+          request_id: '33333333-3333-4333-8333-333333333333', digest: pendingDigest }
+        : command.operation === 'receipt' ? mode === 'receipt_uncertain'
+          ? { state: 'retry_required' as const } : { state: 'missing' as const }
+          : { state: 'recorded' as const, message_id: groupId, seq: 1 }
+  })
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }
+  f.composer.setDraft('hello')
+  const outcome = await source.matchEnter?.(session, 'hello', new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped) throw Error('missing group claim')
+  const expected = mode === 'pending_other' ? 'group.pendingOther' : 'group.uncertain'
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'error', text: expected })
+  expect(f.submit).not.toHaveBeenCalled()
+})
+
+it('acknowledges the recorded group key after the composer clears its draft', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  const requestId = '33333333-3333-4333-8333-333333333333'
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1', version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
+    ? { state: 'pending' as const, request_id: requestId }
+    : command.operation === 'receipt' ? { state: 'recorded' as const, message_id: groupId, seq: 1 }
+      : { state: 'acknowledged' as const })
+  host.collaborationGroupMessages = messages
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }
+  f.composer.setDraft('hello')
+  const outcome = await source.matchEnter?.(session, 'hello', new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped) throw Error('missing group claim')
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'success', text: 'group.recorded' })
+  expect(messages.mock.calls.map(([command]) => command.operation)).toEqual(['pending_claim', 'receipt'])
+  f.composer.setDraft('')
+  await vi.waitFor(() => { expect(messages.mock.calls.map(([command]) => command.operation)).toEqual([
+    'pending_claim', 'receipt', 'pending_ack']) })
 })
 
 it('public reply and scoped Source owners ignore unknown Sessions and stale input lines', async () => {

@@ -1,0 +1,10 @@
+.panel { display: grid; gap: 8px; margin: 8px 0; padding: 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-primary); }
+.panel > strong { font-size: 13px; }
+.panel > p { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.panel > button { justify-self: start; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); background: transparent; color: inherit; padding: 4px 8px; cursor: pointer; }
+.recovery { display: grid; gap: 6px; }
+.recovery > p { margin: 0; font-size: 12px; }
+.recovery > button { justify-self: start; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); background: transparent; color: inherit; padding: 4px 8px; cursor: pointer; }
+.message { min-width: 0; padding: 6px 8px; border-radius: var(--dsw-radius-xs); background: var(--dsw-specific-sidebar-fill); }
+.message > strong { font-size: 11px; }
+.message > p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }

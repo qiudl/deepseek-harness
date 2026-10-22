@@ -334,6 +334,25 @@ it('REQ-20261020-0010: a group message capability preserves older scope and requ
     .toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })
+it('REQ-20261020-0010: group pending commands stay exact and use the verified parent bridge', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
+  const command = { operation: 'pending_claim', workspace_id: workspace, session_id: 'session-1',
+    group_id: '22222222-2222-4222-8222-222222222222', digest: 'a'.repeat(64) }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'pending',
+      request_id: '33333333-3333-4333-8333-333333333333' }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMessages?.(command)).toMatchObject({ state: 'pending' })
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupMessages?.({ ...command, digest: 'bad' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
 it('REQ-20261020-0010: group page accepts multiline messages but rejects malformed rows', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
   const command = { operation: 'page', workspace_id: workspace, session_id: 'session-1', after_seq: 0, limit: 10 }
