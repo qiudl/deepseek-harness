@@ -968,6 +968,7 @@ class FrameChannel implements HostClientFrameTransport {
 
 /** Shared post-attestation authority used identically by Unix and Windows carriers. */
 export class HostControlAuthority {
+  private readonly bootNonce = randomBytes(32).toString('base64url') as HostControlNonce
   private readonly deliveryUploads = new CollaborationDeliveryUploads()
   private readonly packageUploads = new SkillHubPackageUploads()
   private readonly packageSnapshotReads = new SkillHubPackageSnapshotReads()
@@ -2372,6 +2373,7 @@ export class HostControlAuthority {
         runtime_generation: identity.runtimeGeneration,
         schema_generation: identity.schemaGeneration,
         process_nonce: identity.processNonce as HostControlNonce,
+        boot_nonce: this.bootNonce,
         capabilities: [
           ...capabilities,
           ...(this.options.createSkillHubPackageStore

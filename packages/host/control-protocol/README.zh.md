@@ -11,7 +11,7 @@ kind: "package-reference"
 
 这个零 I/O 库拥有 Desktop Broker 与唯一 DSH Host Supervisor 共享的本地控制线协议。版本 1 从带签名的 `host.inspect` 挑战交换开始，并包含账号与本地专用 Profile 操作、lease 与迁移导出载荷。后续操作必须保留本包的规范 JSON-Lines 信封、品牌化身份、有界帧和脱敏错误词汇。
 
-该传输不是 JSON-RPC。畸形行是必须关闭连接的协议违规，不能被忽略后继续读取。
+该传输不是 JSON-RPC。畸形行是必须关闭连接的协议违规，不能被忽略后继续读取。带签名的 `host.inspect` 结果包含每次 Host authority 进程启动时生成的 `boot_nonce`；同一进程内重新连接保持不变。
 
 ## 目录
 

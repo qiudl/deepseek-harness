@@ -37,17 +37,18 @@ describe('transport-neutral Host control authority', () => {
       ensureProfileWorker: async () => undefined,
     })
     const revoke = vi.spyOn(host, 'revokeOwner')
+    const identity = {
+      hostInstanceId,
+      installationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3121',
+      installationPublicKey: publicKey,
+      installationPrivateKey: keys.privateKey,
+      processNonce,
+      executableSignatureDigest: '1'.repeat(64),
+      runtimeGeneration: 5,
+      schemaGeneration: 1,
+    }
     const authority = new HostControlAuthority({
-      identity: {
-        hostInstanceId,
-        installationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3121',
-        installationPublicKey: publicKey,
-        installationPrivateKey: keys.privateKey,
-        processNonce,
-        executableSignatureDigest: '1'.repeat(64),
-        runtimeGeneration: 5,
-        schemaGeneration: 1,
-      },
+      identity,
       host,
       profilePersistenceGeneration: () => 1,
       now: () => now,
@@ -70,6 +71,14 @@ describe('transport-neutral Host control authority', () => {
       type: 'result', method: 'host.inspect', result: { host_instance_id: hostInstanceId },
     })
     if (inspection.type === 'result' && inspection.method === 'host.inspect') {
+      const sameProcess = await authority.openSession(randomUUID(), new AbortController().signal).handleRequest(inspect)
+      const nextProcess = await new HostControlAuthority({
+        identity, host, profilePersistenceGeneration: () => 1, now: () => now,
+      }).openSession(randomUUID(), new AbortController().signal).handleRequest(inspect)
+      expect(sameProcess.type === 'result' && sameProcess.method === 'host.inspect'
+        && sameProcess.result.boot_nonce).toBe(inspection.result.boot_nonce)
+      expect(nextProcess.type === 'result' && nextProcess.method === 'host.inspect'
+        && nextProcess.result.boot_nonce).not.toBe(inspection.result.boot_nonce)
       expect(inspection.result.capabilities).not.toContain('profile.model_claim_inventory')
       expect(inspection.result.capabilities).not.toContain('profile.recovery_materials.describe')
       expect(inspection.result.capabilities).not.toContain('profile.recovery_materials.validate')

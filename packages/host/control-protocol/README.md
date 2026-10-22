@@ -11,7 +11,7 @@ English | [中文](README.zh.md)
 
 This zero-I/O library owns the local control wire shared by the Desktop broker and the single DSH Host supervisor. Version 1 starts with a signed `host.inspect` challenge exchange and includes account and local-only Profile operations, leases, and migration-export payloads. Later operations must retain this package's canonical JSON-Lines envelope, branded identities, bounded frame, and sanitized error vocabulary.
 
-The transport is not JSON-RPC. A malformed line is a connection-fatal protocol violation rather than input to skip.
+The transport is not JSON-RPC. A malformed line is a connection-fatal protocol violation rather than input to skip. The signed `host.inspect` result includes a fresh `boot_nonce` for each Host authority process; reconnecting to the same process retains it.
 
 ## Table of Contents
 

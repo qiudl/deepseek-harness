@@ -493,6 +493,7 @@ function decodeInspectResult(frame: Record<string, unknown>): HostInspectResult 
     'runtime_generation',
     'schema_generation',
     'process_nonce',
+    'boot_nonce',
     'capabilities',
     'challenge_signature',
     'executable_signature_digest',
@@ -514,6 +515,7 @@ function decodeInspectResult(frame: Record<string, unknown>): HostInspectResult 
       runtime_generation: generation(result.runtime_generation),
       schema_generation: generation(result.schema_generation),
       process_nonce: nonce(result.process_nonce),
+      boot_nonce: nonce(result.boot_nonce),
       capabilities: capabilities(result.capabilities),
       challenge_signature: signature(result.challenge_signature),
       executable_signature_digest: digest(result.executable_signature_digest),
@@ -3193,6 +3195,7 @@ export function encodeHostInspectSignaturePayload(
     runtime_generation: checkedResponse.result.runtime_generation,
     schema_generation: checkedResponse.result.schema_generation,
     process_nonce: checkedResponse.result.process_nonce,
+    boot_nonce: checkedResponse.result.boot_nonce,
     capabilities: checkedResponse.result.capabilities,
     executable_signature_digest: checkedResponse.result.executable_signature_digest,
   }
