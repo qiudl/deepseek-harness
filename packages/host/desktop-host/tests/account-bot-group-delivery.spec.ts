@@ -69,5 +69,17 @@ it('discards a worker result after Account revocation or a stale worker response
 
   const stale = fixture()
   stale.workers.operateBotGroup.mockRejectedValueOnce(Error('stale'))
+  stale.workers.operateBotGroup.mockResolvedValueOnce({ state: 'missing' } as never)
   await expect(deliverAccountBotGroup(stale.input)).rejects.toThrow('stale')
+})
+
+it('reconciles a lost worker reply through the same durable delivery receipt', async () => {
+  const f = fixture()
+  f.workers.operateBotGroup.mockRejectedValueOnce(Error('reply lost'))
+  expect(await deliverAccountBotGroup(f.input)).toEqual(f.result)
+  expect(f.workers.operateBotGroup).toHaveBeenNthCalledWith(2, 'profile', {
+    operation: 'receipt', deliveryId: f.command.deliveryId,
+    groupId: f.command.groupId, botId: f.command.botId,
+    memberCycle: f.command.memberCycle,
+  }, f.input.signal)
 })

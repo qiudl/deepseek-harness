@@ -71,6 +71,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。`profile.bot_group_deliver` 在调用当前 worker 前使用这两项检查。
 
+如果 worker 的派送响应丢失，Host 会先按同一投递 ID 读取持久回执，再报告结果。回执缺失或不可用时保留原始失败；对账期间不会再次提交派送。
+
 内部 Bot 派送函数只选择当前 Account Profile，在向 worker 发送单条投递前完成实时确认，并在返回前复查 Account 和 worker 身份。若 worker 已写入后结果被拒绝，该投递仍属不确定状态，必须使用原 delivery ID 对账。
 
 在 macOS 上，签名嵌入应用在 Host 启动时传入只含公钥的 `DSH_HOST_SLARK_BOT_GROUP_KEYRINGS`。Host 校验并固定公钥环后才公布 `profile.bot_group_deliver`；缺失或格式无效的投影不能授权派送。请求仅携带凭据和命令，不能替换验签公钥。

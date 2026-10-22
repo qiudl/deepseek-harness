@@ -53,7 +53,23 @@ export async function deliverAccountBotGroup(input: {
   input.host.authorizeCollaborationRegistration(input.account)
   if (input.host.authorizeAccountModelText(input.account) !== profileId)
     throw new HostAuthorityError('stale')
-  const result = await input.workers.operateBotGroup(profileId, command, input.signal)
+  let result: HostBotGroupResponse
+  try {
+    result = await input.workers.operateBotGroup(profileId, command, input.signal)
+  } catch (error) {
+    // A lost write reply may follow a durable inbox commit. Read the same delivery ID.
+    input.signal.throwIfAborted()
+    input.host.authorizeCollaborationRegistration(input.account)
+    if (input.host.authorizeAccountModelText(input.account) !== profileId)
+      throw new HostAuthorityError('stale')
+    const receipt = await input.workers.operateBotGroup(profileId, {
+      operation: 'receipt', deliveryId: command.deliveryId, groupId: command.groupId,
+      botId: command.botId, memberCycle: command.memberCycle,
+    }, input.signal).catch(() => { throw error })
+    if (receipt.state === 'missing' || receipt.state === 'invalid' ||
+        receipt.state === 'unavailable') throw error
+    result = receipt
+  }
   input.signal.throwIfAborted()
   input.host.authorizeCollaborationRegistration(input.account)
   if (input.host.authorizeAccountModelText(input.account) !== profileId ||

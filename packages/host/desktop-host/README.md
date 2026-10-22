@@ -69,6 +69,8 @@ The private Bot group worker bridge also supports one-result recovery pages, exa
 
 The Bot group ticket verifier checks a pinned Slark environment Ed25519 key, the current Account binding and installation-derived Host registry, the exact Bot member cycle and message digest, and a 60-second expiry. The confirmation helper then calls the pinned Slark HTTPS origin to recheck live membership and the exact delivery; it limits the response to 4 KiB and refuses redirects or mismatched receipts. `profile.bot_group_deliver` uses both checks before invoking the current worker.
 
+If the worker's delivery reply is lost, the Host reads the same durable delivery ID before reporting an outcome. A missing or unavailable receipt preserves the original failure; the Host does not submit a second delivery during reconciliation.
+
 The internal Bot delivery function selects only the current Account Profile, performs that live confirmation before sending one delivery to its worker, and rechecks Account and worker identity before returning. A rejected result after a worker write remains uncertain and must be reconciled with the same delivery ID.
 
 On macOS, the signed embedding passes public-only `DSH_HOST_SLARK_BOT_GROUP_KEYRINGS` during Host startup. The Host validates and pins the keyrings before advertising `profile.bot_group_deliver`; a missing or malformed projection cannot authorize a delivery. Requests carry the ticket and command, never replacement verification keys.
