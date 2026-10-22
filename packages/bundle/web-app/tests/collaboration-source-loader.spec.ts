@@ -267,7 +267,26 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
     expect((await readFile(disk, 'utf8'))).toContain(source.original_message)
     expect(providerRequests).toBe(0)
     expect((await postAnalysis(start)).status).toBe(422)
+    const dispatch = { action: 'dispatch', binding_key: command.binding_key,
+      attempt_request_id: result!.attempt_request_id, grant: {
+        attempt_request_id: result!.attempt_request_id, input_manifest_digest: result!.input_manifest_digest,
+        source_digest: result!.source_digest, plan_id: 'fixture-plan', expected_plan_revision: '1',
+        attempt_id: 'fixture-attempt', attempt_fence: '1', dispatch_granted: true,
+        lease_expires_at: new Date(Date.now() + 30000).toISOString(),
+      } }
+    expect(providerRequests).toBe(0)
+    const response = await postAnalysis(dispatch)
+    expect(response.status).toBe(200)
+    const answer = await response.json() as { value: { jsonText: string } }
+    const output: unknown = JSON.parse(answer.value.jsonText)
+    expect(providerRequests).toBe(1)
+    expect((await postAnalysis(dispatch)).status).toBe(422)
+    expect(providerRequests).toBe(1)
     expect(session.seq).toBe(seq)
+    await expect(JSON.stringify({ capture: preparation!.kind, preparation: result!.kind,
+      output, provider_requests: providerRequests,
+      session_events_added: session.seq - seq }, null, 2) + '\n')
+      .toMatchFileSnapshot(join(import.meta.dirname, 'expected/collaboration-capture-planning.reply.expected.txt'))
     return
   }
   const first =

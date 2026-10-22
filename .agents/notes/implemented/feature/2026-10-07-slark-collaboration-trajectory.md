@@ -29,3 +29,5 @@ For a recovered execution, the trace distinguishes receipt custody, verification
 ## Consequences
 
 Every cloud read revalidates authority; account, workspace and connection changes discard cached records. Provider internals remain unobservable and audit coverage stays partial. Activity releases are independent and idempotent, and Session disposal removes them. Verification includes an empty-Session shell, plugin disposal, bounded paging, late-response rejection and the assembled Trajectory entry; external fixtures do not certify installed-provider acceptance.
+
+Historical local planning failures use a [separate read-only diagnostic](../bug-fix/2026-10-19-original-root-failure-observations.md). This explains a retained planning observation without replacing cloud audits or authorizing execution.

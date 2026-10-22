@@ -35,6 +35,8 @@ import type {
   Models,
   ModelThinkingLevel,
   MutableModels,
+  ModelAuth,
+  ProviderHeaders,
   SimpleStreamOptions,
   ThinkingLevel,
 } from '@earendil-works/pi-ai'
@@ -344,21 +346,31 @@ export class PiAiAdapter extends LlmAdapter {
     if (resolved.api !== 'openai-completions') {
       throw new LlmError('pi-ai route cannot capture a complete prepared snapshot', 'PREPARED_SNAPSHOT_UNSUPPORTED')
     }
-    const apiKey = await this.config.resolveApiKey(provider, profile)
+    const configuredKey = await this.config.resolveApiKey(provider, profile)
     signal?.throwIfAborted()
-    if (!apiKey?.trim()) {
-      throw new LlmError('pi-ai snapshot requires an explicit resolved credential', 'PREPARED_SNAPSHOT_UNSUPPORTED')
+    let auth: ModelAuth | undefined
+    if (configuredKey !== undefined) auth = { apiKey: configuredKey }
+    else if (profile.apiKeyEnv === undefined) {
+      auth = (await snapshot.models.getAuth(resolved, signal === undefined ? undefined : { signal }))?.auth
     }
-    // This audited wire route consumes the explicit key directly. Models.streamSimple
-    // would resolve native auth again, after the source configuration was frozen.
+    signal?.throwIfAborted()
+    if (!auth || !auth.apiKey?.trim()) {
+      throw new LlmError('pi-ai snapshot requires configured request authentication', 'PREPARED_SNAPSHOT_UNSUPPORTED')
+    }
+    // Dispatch uses this captured authentication without another native lookup.
     const owner = snapshot.models.getProvider(provider)
     if (owner === undefined) {
       throw new LlmError('pi-ai snapshot provider is unavailable', 'PREPARED_SNAPSHOT_UNSUPPORTED')
     }
-    const dispatch = owner.streamSimple.bind(owner)
+    const captured = Object.freeze({
+      apiKey: auth.apiKey,
+      dispatch: owner.streamSimple.bind(owner),
+      ...auth.headers === undefined ? {} : { headers: Object.freeze({ ...auth.headers }) },
+      ...auth.baseUrl === undefined ? {} : { baseUrl: auth.baseUrl },
+    })
     return {
       model: this.modelInfo(snapshot, provider, model),
-      stream: options => this.streamWithSnapshot(options, snapshot, { apiKey, dispatch }),
+      stream: options => this.streamWithSnapshot(options, snapshot, captured),
     }
   }
 
@@ -369,7 +381,7 @@ export class PiAiAdapter extends LlmAdapter {
   private async * streamWithSnapshot(
     options: GenerateOptions,
     snapshot: PiAiSnapshot,
-    captured?: { apiKey: string; dispatch: Models['streamSimple'] },
+    captured?: { apiKey: string; dispatch: Models['streamSimple']; headers?: ProviderHeaders; baseUrl?: string },
   ): AsyncIterable<StreamChunk> {
     if (options.stop !== undefined) {
       throw new LlmError('llm-pi-ai does not support GenerateOptions.stop', 'UNSUPPORTED_OPTION')
@@ -380,7 +392,8 @@ export class PiAiAdapter extends LlmAdapter {
     // mid-request builds a separate snapshot, so this request finishes under
     // the one it started with and the next call picks up the new one.
     const profile = this.profileOf(snapshot, options.provider)
-    const model = this.modelOf(snapshot, options.provider, options.model)
+    const resolved = this.modelOf(snapshot, options.provider, options.model)
+    const model = captured?.baseUrl === undefined ? resolved : { ...resolved, baseUrl: captured.baseUrl }
     const updates = conversationUpdates(model)
     // pi-ai collapses Anthropic tool updates without an initially active declaration.
     const tools = options.tools ?? []
@@ -435,7 +448,7 @@ export class PiAiAdapter extends LlmAdapter {
         signal: watchdog.signal,
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
-        headers: requestTraceHeaders(requestHeaders(profile.headers), options.traceparent),
+        headers: { ...captured?.headers, ...requestTraceHeaders(requestHeaders(profile.headers), options.traceparent) },
       }
       const events = captured === undefined
         ? snapshot.models.streamSimple(model, context, streamOptions)

@@ -1,3 +1,8 @@
+import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
+import type { WorkbenchSettingsWrite } from './workbench-settings.js'
+import type { WorkbenchReadPayload, WorkbenchChangesPayload } from './workbench-read.js'
+import type { HostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
 import type { RecoveryDescribeInput, RecoveryValidateInput, RecoveryDescriptor, RecoveryValidation } from './recovery-materials.ts'
 import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
 import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
@@ -843,6 +848,90 @@ export interface ProfileCollaborationRegistrationResult {
   readonly result: HostCollaborationRegistrationAssertion
 }
 
+/** Account-bound read of one Bot in the selected Profile; no private chat fields. */
+export interface ProfileBotIdentityRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_identity'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly bot_id: string
+  }
+}
+
+/** Bounded Bot identity or explicit absence from an exclusive-writer Profile. */
+export interface ProfileBotIdentityResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_identity'
+  readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentity | null }
+}
+
+/** Account-bound delivery from a signed Slark group to the current Bot Profile. */
+export interface ProfileBotGroupDeliverRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_deliver'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+  } & import('./bot-group.ts').HostBotGroupDeliveryInput
+}
+
+/** Durable worker receipt; a transport failure leaves the original delivery uncertain. */
+export interface ProfileBotGroupDeliverResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_deliver'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
+/** Read a Bot result only while the original Slark delivery remains authorized. */
+export interface ProfileBotGroupResultPageRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_page'
+  readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly after: number }
+}
+/** Host result frame carrying a verified Bot result and optional proof. */
+export interface ProfileBotGroupResultPageResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_page'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse
+    readonly proof: import('./bot-group-result-proof.ts').HostBotGroupResultProof | null }
+}
+
+/** Acknowledge one already persisted Slark result under its original live delivery. */
+export interface ProfileBotGroupResultAckRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_ack'
+  readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly result_id: string }
+}
+/** Host result frame after the Profile worker acknowledges one Bot result. */
+export interface ProfileBotGroupResultAckResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_ack'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
 /** Server nonce bound to Account and one registry workspace/ordinary Session. */
 export interface HostWorkspaceAuthorityChallenge extends HostWorkspaceModelSelectionTarget {
   readonly request_id: HostControlRequestId
@@ -923,6 +1012,39 @@ export interface ProfileCollaborationArchiveStateResult {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.collaboration_archive_state'
   readonly result: HostCollaborationArchiveStateAssertion
+}
+
+/** One prepared Slark group bound to the original Session before cloud activation. */
+export interface HostGroupInputFenceChallenge extends HostWorkspaceAuthorityChallenge {
+  readonly group_id: string
+  readonly group_version: number
+}
+/** Exact durable fence echoed by the Profile worker before Host signing. */
+export type HostGroupInputFenceValue = Readonly<Pick<HostGroupInputFenceChallenge,
+  'workspace_id' | 'session_id' | 'group_id' | 'group_version'>>
+/** Installation signature issued only after the Profile durably closes old input. */
+export interface HostGroupInputFenceAssertion extends Omit<HostWorkspaceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostGroupInputFenceChallenge
+}
+/** Account-verified request to install the original Session's durable group fence. */
+export interface ProfileGroupInputFenceRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.group_input_fence'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostGroupInputFenceChallenge
+  }
+}
+/** Signed acknowledgement of the exact local group and version. */
+export interface ProfileGroupInputFenceResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.group_input_fence'
+  readonly result: HostGroupInputFenceAssertion
 }
 
 /** Exact Account and Session identity used to recover a persisted archive token. */
@@ -1031,6 +1153,7 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'dispatch_root_attempt'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
   | Readonly<{ action: 'read_source_output'; target: HostCollaborationSourceTarget }>
   | Readonly<{ action: 'read_root_output'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'read_root_diagnostic'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'prepare_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'capture_root'; input: HostRootAnalysisInput }>
   | Readonly<{ action: 'start_captured_root'; input: HostRootAnalysisInput }>
@@ -1050,6 +1173,7 @@ export type HostCollaborationAnalysisResult =
   | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>
   | Readonly<{ kind: 'source_output'; evidence: HostSourceAnalysisOutput }>
   | Readonly<{ kind: 'root_output'; evidence: HostRootAnalysisOutput }>
+  | Readonly<{ kind: 'root_diagnostic'; evidence: HostRootAnalysisDiagnostic }>
   | Readonly<{ kind: 'root_prepared'; preparation: HostRemoteSessionJson }>
   | Readonly<{ kind: 'root_captured'; capture: HostRemoteSessionJson; context_receipt?: import('./root-text-context.ts').HostRootTextContextReceipt }>
   | Readonly<{ kind: 'root_capture_released'; root: HostRootSubmissionDescriptor }>
@@ -1652,6 +1776,9 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'terminal.apply'; readonly command_id: HostControlRequestId; readonly session_id: string; readonly control: HostRemoteSessionControlProof; readonly request: WorkbenchTerminalRequest }
+  | { readonly operation: 'credentials.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchCredentialWrite }
+  | { readonly operation: 'settings.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchSettingsWrite }
   | {
     readonly operation: 'control.status'
     readonly command_id: HostControlRequestId
@@ -1723,6 +1850,22 @@ export type HostRemoteSessionCommand =
     readonly title: string
   }
   | {
+    readonly operation: 'session.select_model'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly provider: string
+    readonly model: string
+    readonly reasoning_effort?: string
+  }
+  | {
+    readonly operation: 'session.select_agent'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly agent_preset: string
+  }
+  | {
     readonly operation: 'approval.poll'
     readonly command_id: HostControlRequestId
     readonly wait_ms: number
@@ -1774,8 +1917,9 @@ export interface ProfileRemoteUiReadRequest {
     readonly lease_generation: number
     readonly runtime_generation: number
     readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+      | 'commands/list' | 'skills/list' | 'llm/listProviders' | 'llm/listConfigurableProviders'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
-      | 'credentials/describe' | 'permissionPresets/catalog'
+      | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'
     readonly payload: { readonly args: HostRemoteSessionJson }
   }
 }
@@ -1791,6 +1935,9 @@ export interface ProfileRemoteUiReadResult {
 
 /** Only selected native read streams may cross a live Profile view lease. */
 export type ProfileRemoteUiStreamCommand =
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'terminal/stream'; readonly item_chunks?: true; readonly payload: WorkbenchTerminalStreamPayload }
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workspaceFiles/changes'; readonly payload: WorkbenchChangesPayload }
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workbench/read'; readonly payload: WorkbenchReadPayload }
   | {
     readonly action: 'open'
     readonly stream_id: string
@@ -2095,10 +2242,20 @@ export type HostControlFrame =
   | ProfileWorkspaceModelSelectionResult
   | ProfileCollaborationRegistrationRequest
   | ProfileCollaborationRegistrationResult
+  | ProfileBotIdentityRequest
+  | ProfileBotIdentityResult
+  | ProfileBotGroupDeliverRequest
+  | ProfileBotGroupDeliverResult
+  | ProfileBotGroupResultPageRequest
+  | ProfileBotGroupResultPageResult
+  | ProfileBotGroupResultAckRequest
+  | ProfileBotGroupResultAckResult
   | ProfileWorkspaceAuthorityRequest
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateRequest
   | ProfileCollaborationArchiveStateResult
+  | ProfileGroupInputFenceRequest
+  | ProfileGroupInputFenceResult
   | ProfileCollaborationArchiveIntentRequest
   | ProfileCollaborationArchiveIntentResult
   | ProfileCollaborationArchiveTransitionRequest

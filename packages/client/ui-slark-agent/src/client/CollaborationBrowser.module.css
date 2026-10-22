@@ -13,6 +13,9 @@
 .rowMeta { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--dsw-alias-label-secondary); font-size: 11px; }
 .pending, .running { width: fit-content; margin-top: 2px; padding: 2px 6px; border-radius: var(--dsw-radius-xs); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent); color: var(--dsw-alias-state-warn-label); font-size: 10px; font-weight: 600; }
 .running { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent); color: var(--dsw-alias-state-business-primary); }
+.groupPreparing, .groupActive { width: fit-content; margin-top: 2px; padding: 2px 6px; border-radius: var(--dsw-radius-xs); font-size: 10px; font-weight: 600; }
+.groupPreparing { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent); color: var(--dsw-alias-state-warn-label); }
+.groupActive { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent); color: var(--dsw-alias-state-business-primary); }
 .badge { min-width: 15px; padding: 1px 4px; border-radius: var(--dsw-radius-sm); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent); color: var(--dsw-alias-state-warn-label); font-size: 10px; line-height: 14px; text-align: center; }
 .unknownBadge { min-width: 15px; padding: 1px 4px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font-size: 10px; line-height: 14px; text-align: center; }
 .actions { display: flex; gap: 3px; padding: 0 7px 5px; }

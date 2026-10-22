@@ -279,6 +279,19 @@ declare module '@deepseek-ai/cordis' {
      */
     'agent/status'(this: Scoped<Agent>, payload: { agent: Agent; status: AgentStatus }): void
     /**
+     * Admit one direct Agent input before its durable inbox splice. A listener
+     * may throw synchronously to refuse it; no inbox event or wake occurs then.
+     * This event does not run for driver-owned runtime context insertion.
+     * Listeners must finish synchronously and derive any state from a local
+     * committed view; asynchronous authorization cannot protect this splice.
+     * @param payload.agent - the agent receiving input.
+     * @param payload.message - the proposed input, including its source.
+     * @param payload.target - the resolved next-turn or next-step queue.
+     * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.
+     * @mode bail
+     */
+    'agent/pre-inbox'(this: Scoped<Agent>, payload: { agent: Agent; message: UserMessage; target: InboxTarget }): void
+    /**
      * One message entered the live inbox.
      * @param payload.agent - the agent whose inbox changed.
      * @param payload.message - the inserted message.

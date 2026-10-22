@@ -1,8 +1,10 @@
 /** Project scope calls over the authenticated Slark parent port; execution is advertised separately. */
 import type { TunnelFetch } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
+import { exchange, readJson } from './remote-response.ts'
 import { createRemoteCollaborationExecution } from './remote-collaboration-execution.ts'
 
 const schema = 'dsh-remote-collaboration/v1'
+const groupSchema = 'dsh-remote-collaboration/v2'
 const encoder = new TextEncoder()
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const version = /^(0|[1-9][0-9]{0,18})$/u
@@ -72,49 +74,110 @@ function capture(value: unknown): Record<string, unknown> {
     (op.query.cursor === undefined || text(op.query.cursor, 2048))) return input
   throw Error('remote collaboration operation is invalid')
 }
-function reasonError(reason: unknown): Error {
-  return reason instanceof Error ? reason : Error('remote collaboration operation failed', { cause: reason })
-}
-function wait<T>(signal: AbortSignal, pending: Promise<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) { reject(reasonError(signal.reason)); return }
-    const abort = (): void => { signal.removeEventListener('abort', abort); reject(reasonError(signal.reason)) }
-    signal.addEventListener('abort', abort, { once: true })
-    void pending.then((value) => { signal.removeEventListener('abort', abort); resolve(value) },
-      (error: unknown) => { signal.removeEventListener('abort', abort); reject(reasonError(error)) })
-  })
-}
-async function readJson(response: Response, signal: AbortSignal, maxBytes = 256 * 1024): Promise<unknown> {
-  if (!response.body || Number(response.headers.get('content-length')) > maxBytes) {
-    void response.body?.cancel().catch(() => undefined)
-    throw Error('remote collaboration response too large')
+function groupResult(value: unknown): boolean {
+  if (!row(value)) return false
+  if (value.state === 'pending') return exact(value, ['state', 'request_id'])
+    && typeof value.request_id === 'string' && uuid.test(value.request_id)
+  if (value.state === 'pending_status') return exact(value, ['state', 'request_id', 'digest'])
+    && typeof value.request_id === 'string' && uuid.test(value.request_id)
+    && typeof value.digest === 'string' && /^[a-f0-9]{64}$/u.test(value.digest)
+  if (value.state === 'pending_empty') return exact(value, ['state'])
+  if (value.state === 'pending_other' || value.state === 'acknowledged')
+    return exact(value, ['state'])
+  if (['missing', 'conflict', 'retry_required'].includes(String(value.state)))
+    return exact(value, ['state'])
+  if (value.state === 'recorded') return exact(value, ['state', 'message_id', 'seq'])
+    && typeof value.message_id === 'string' && uuid.test(value.message_id)
+    && Number.isSafeInteger(value.seq) && Number(value.seq) > 0
+  if (value.state !== 'page' || !exact(value, ['state', 'items', 'next_seq', 'has_more', 'last_seq'])
+    || !Array.isArray(value.items) || value.items.length > 100
+    || !Number.isSafeInteger(value.next_seq) || Number(value.next_seq) < 0
+    || !Number.isSafeInteger(value.last_seq) || Number(value.last_seq) < Number(value.next_seq)
+    || typeof value.has_more !== 'boolean') return false
+  let previous = 0
+  for (const item of value.items) {
+    if (!exact(item, ['id', 'seq', 'actor_kind', 'actor_ref', 'body', 'created_at'])
+      || typeof item.id !== 'string' || !uuid.test(item.id)
+      || !Number.isSafeInteger(item.seq) || Number(item.seq) <= previous
+      || !['human', 'bot', 'slark_agent', 'system'].includes(String(item.actor_kind))
+      || !text(item.actor_ref, 256) || typeof item.body !== 'string'
+      || item.body.length < 1 || item.body.length > 16_000
+      || !Number.isSafeInteger(item.created_at) || Number(item.created_at) < 1) return false
+    previous = Number(item.seq)
   }
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let bytes = 0
-  try {
-    for (;;) {
-      const next = await wait(signal, reader.read())
-      signal.throwIfAborted()
-      if (next.done) break
-      bytes += next.value.length
-      if (bytes > maxBytes) throw Error('remote collaboration response too large')
-      chunks.push(next.value)
-    }
-    const body = new Uint8Array(bytes)
-    let offset = 0
-    for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.length }
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
-  } finally { void reader.cancel().catch(() => undefined) }
+  return !value.items.length || previous === value.next_seq
 }
-async function exchange(fetch: TunnelFetch, path: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
-  const pending = fetch(path, { ...init, signal })
-  void pending.then((response) => { if (signal.aborted) void response.body?.cancel().catch(() => undefined) }, () => undefined)
-  const response = await wait(signal, pending)
-  signal.throwIfAborted()
-  return response
+function groupMemberInput(value: unknown): value is Record<string, unknown> {
+  if (!row(value)) return false
+  const fields = value.operation === 'status' ? ['operation', 'workspace_id', 'session_id']
+    : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
+      : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+        'expected_membership_version', 'bot_id']
+        : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+          'expected_membership_version', 'member_id'] : []
+  if (!fields.length || !exact(value, fields) || typeof value.workspace_id !== 'string'
+    || !uuid.test(value.workspace_id) || typeof value.session_id !== 'string'
+    || !/^[!-~]{1,256}$/u.test(value.session_id) || /[/\\]/u.test(value.session_id)
+    || value.session_id === '.' || value.session_id === '..') return false
+  if (value.operation === 'status') return true
+  if (typeof value.request_id !== 'string' || !uuid.test(value.request_id)) return false
+  if (value.operation === 'receipt') return true
+  if (!Number.isSafeInteger(value.expected_membership_version)
+    || Number(value.expected_membership_version) < 1) return false
+  return value.operation === 'join'
+    ? typeof value.bot_id === 'string' && /^[A-Za-z0-9_-]{1,200}$/u.test(value.bot_id)
+    : typeof value.member_id === 'string' && uuid.test(value.member_id)
 }
-
+function groupMemberResult(value: unknown): boolean {
+  if (!row(value)) return false
+  if (['missing', 'conflict', 'retry_required'].includes(String(value.state)))
+    return exact(value, ['state'])
+  if (value.state === 'recorded') return exact(value, ['state', 'operation', 'member_id',
+    'membership_version', 'seq']) && ['join', 'leave', 'proxy_attach', 'proxy_revoke'].includes(String(value.operation))
+    && typeof value.member_id === 'string' && uuid.test(value.member_id)
+    && Number.isSafeInteger(value.membership_version) && Number(value.membership_version) >= 1
+    && Number.isSafeInteger(value.seq) && Number(value.seq) >= 0
+  if (value.state !== 'snapshot' || !exact(value, ['state', 'group_id', 'membership_version',
+    'last_seq', 'members']) || typeof value.group_id !== 'string' || !uuid.test(value.group_id)
+    || !Number.isSafeInteger(value.membership_version) || Number(value.membership_version) < 1
+    || !Number.isSafeInteger(value.last_seq) || Number(value.last_seq) < 0
+    || !Array.isArray(value.members) || value.members.length > 100) return false
+  let owners = 0
+  for (const member of value.members) {
+    if (!exact(member, ['member_id', 'actor_kind', 'actor_ref', 'role', 'cycle', 'joined_seq', 'sources'])
+      || typeof member.member_id !== 'string' || !uuid.test(member.member_id)
+      || !['human', 'bot', 'slark_agent', 'system'].includes(String(member.actor_kind))
+      || !text(member.actor_ref, 256) || !['owner', 'member'].includes(String(member.role))
+      || !Number.isSafeInteger(member.cycle) || Number(member.cycle) < 1
+      || !Number.isSafeInteger(member.joined_seq) || Number(member.joined_seq) < 0
+      || !Array.isArray(member.sources) || member.sources.length > 2
+      || !member.sources.every(source => source === 'manual' || source === 'personal_proxy')) return false
+    if (member.actor_kind === 'human' && member.role === 'owner') owners++
+  }
+  return owners === 1
+}
+function groupPreparationResult(value: unknown, input: Record<string, unknown>): boolean {
+  if (!row(value)) return false
+  if (value.state === 'retry_required') return exact(value, ['state'])
+  if (input.operation === 'lookup') {
+    if (value.state === 'missing') return exact(value, ['state'])
+    return exact(value, ['group_id', 'last_seq', 'session_id', 'state', 'version', 'workspace_id'])
+      && (value.state === 'preparing' || value.state === 'group_active')
+      && value.version === (value.state === 'preparing' ? 1 : 2)
+      && Number.isSafeInteger(value.last_seq) && Number(value.last_seq) >= 0
+      && typeof value.group_id === 'string' && uuid.test(value.group_id)
+      && value.workspace_id === input.workspace_id && value.session_id === input.session_id
+  }
+  return exact(value, ['group_id', 'session_id', 'state', 'version', 'workspace_id'])
+    && value.state === 'preparing' && value.version === 1
+    && typeof value.group_id === 'string' && uuid.test(value.group_id)
+    && value.workspace_id === input.workspace_id && value.session_id === input.session_id
+}
+function groupActivationResult(value: unknown): boolean {
+  return row(value) && (value.state === 'retry_required' && exact(value, ['state']) ||
+    value.state === 'group_active' && exact(value, ['state', 'group_id', 'version']) &&
+    typeof value.group_id === 'string' && uuid.test(value.group_id) && value.version === 2)
+}
 /**
  * Negotiate scope support before applying Client plugins. Old parents leave the bridge absent.
  * @param fetch - Unary transport using only the authenticated parent port.
@@ -135,22 +198,45 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     const discoveryTimer = setTimeout(() => { discovery.abort() }, 5_000)
     const discoverySignal = AbortSignal.any([discovery.signal, lifetime.signal])
     let advertised: unknown
+    let expectedSchema = schema
     try {
-      const response = await exchange(fetch, '/__collaboration__', { method: 'GET' }, discoverySignal)
-      if (!response.ok) { void response.body?.cancel().catch(() => undefined); return }
-      advertised = await readJson(response, discoverySignal)
+      for (const [path, candidateSchema] of [
+        ['/__collaboration_v2__', groupSchema], ['/__collaboration__', schema],
+      ] as const) {
+        try {
+          const response = await exchange(fetch, path, { method: 'GET' }, discoverySignal)
+          if (!response.ok) { void response.body?.cancel().catch(() => undefined); continue }
+          const candidate = await readJson(response, discoverySignal)
+          if (exact(candidate, ['schema', 'methods']) && candidate.schema === candidateSchema &&
+            Array.isArray(candidate.methods)) {
+            advertised = candidate
+            expectedSchema = candidateSchema
+            break
+          }
+        } catch (_error) {
+          if (discoverySignal.aborted) return
+          // An older parent may reject the v2 probe before legacy discovery succeeds.
+        }
+      }
     } catch (_error) {
       // A missing or unusable capability response does not prevent ordinary remote chat.
       return
     } finally { clearTimeout(discoveryTimer) }
     lifetime.signal.throwIfAborted()
-    if (!exact(advertised, ['schema', 'methods']) || advertised.schema !== schema || !Array.isArray(advertised.methods)) return
+    if (!exact(advertised, ['schema', 'methods']) || advertised.schema !== expectedSchema || !Array.isArray(advertised.methods)) return
     const methods: readonly unknown[] = advertised.methods
     const conversations = methods.includes('conversations')
     const archive = methods.includes('archive')
+    const groupMessages = expectedSchema === groupSchema && methods.includes('groupMessages')
+    const groupMembers = expectedSchema === groupSchema && methods.includes('groupMembers')
+    const groupPreparation = expectedSchema === groupSchema && methods.includes('groupPreparation')
+    const groupActivation = expectedSchema === groupSchema && methods.includes('groupActivation')
     const execution = ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
     if (!methods.includes('workspace') || methods.length !== (execution ? 4 : 1) + (conversations ? 1 : 0) + (archive ? 1 : 0)
-      || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive'].includes(String(method)))) return
+      + (groupMessages ? 1 : 0) + (groupMembers ? 1 : 0)
+      + (groupPreparation ? 1 : 0) + (groupActivation ? 1 : 0)
+      || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive',
+        'groupMessages', 'groupMembers', 'groupPreparation', 'groupActivation'].includes(String(method)))) return
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
     const bridge = {
@@ -170,7 +256,7 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
       },
       collaborationScopeAvailable: true,
       collaborationExecutionAvailable: execution,
-      ...((execution || conversations || archive) ? (() => {
+      ...((execution || conversations || archive || groupMessages || groupMembers || groupPreparation || groupActivation) ? (() => {
         const call = async (method: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> => {
           const rpcId = 'collaboration-' + String(++sequence)
           const response = await exchange(fetch, '/api/' + method, { method: 'POST',
@@ -187,6 +273,97 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
         return { ...(execution ? { collaborationSubmit: methods.collaborationSubmit,
           collaborationPending: methods.collaborationPending, collaborationDeliveries: methods.collaborationDeliveries } : {}),
         ...(conversations ? { collaborationConversations: methods.collaborationConversations } : {}),
+        ...(groupMessages ? { collaborationGroupMessages: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 60_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            if (!row(raw) || typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id)
+              || typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id)
+              || /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..')
+              throw Error('invalid group request')
+            const fields = raw.operation === 'send' ? ['operation', 'request_id', 'workspace_id', 'session_id',
+              'expected_group_version', 'body'] : raw.operation === 'pending_claim'
+              ? ['operation', 'workspace_id', 'session_id', 'group_id', 'digest'] : raw.operation === 'pending_ack'
+                ? ['operation', 'workspace_id', 'session_id', 'group_id', 'digest', 'request_id'] : raw.operation === 'pending_status'
+                  ? ['operation', 'workspace_id', 'session_id', 'group_id'] : raw.operation === 'receipt'
+                    ? ['operation', 'request_id', 'workspace_id', 'session_id'] : raw.operation === 'page'
+                      ? ['operation', 'workspace_id', 'session_id', 'after_seq', 'limit'] : []
+            if (!exact(raw, fields) || !fields.length) throw Error('invalid group request')
+            if (raw.operation === 'pending_claim' || raw.operation === 'pending_ack' || raw.operation === 'pending_status') {
+              if (typeof raw.group_id !== 'string' || !uuid.test(raw.group_id) ||
+                raw.operation !== 'pending_status' &&
+                (typeof raw.digest !== 'string' || !/^[a-f0-9]{64}$/u.test(raw.digest)) ||
+                raw.operation === 'pending_ack' && (typeof raw.request_id !== 'string' || !uuid.test(raw.request_id)))
+                throw Error('invalid group pending')
+            } else if (raw.operation === 'page') {
+              if (!Number.isSafeInteger(raw.after_seq) || Number(raw.after_seq) < 0 ||
+                !Number.isInteger(raw.limit) || Number(raw.limit) < 1 || Number(raw.limit) > 100)
+                throw Error('invalid group page')
+            } else if (typeof raw.request_id !== 'string' || !uuid.test(raw.request_id)) {
+              throw Error('invalid group key')
+            }
+            if (raw.operation === 'send' && (raw.expected_group_version !== 2 ||
+              typeof raw.body !== 'string' || raw.body.length < 1 || raw.body.length > 16_000 ||
+              encoder.encode(raw.body).length > 24_000)) throw Error('invalid group body')
+            const result = await call('collaboration/groupMessages', raw, signal)
+            if (!groupResult(result)) throw Error('invalid group reply')
+            return result
+          } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
+        ...(groupMembers ? { collaborationGroupMembers: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 60_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            if (!groupMemberInput(raw)) throw Error('invalid group member request')
+            const result = await call('collaboration/groupMembers', raw, signal)
+            if (!groupMemberResult(result)) throw Error('invalid group member reply')
+            return result
+          } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
+        ...(groupPreparation ? { collaborationGroupPreparation: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 60_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            const lookup = row(raw) && raw.operation === 'lookup'
+            if (!exact(raw, lookup ? ['operation', 'workspace_id', 'session_id']
+              : ['workspace_id', 'session_id', 'source_message_id', 'source_revision'])
+              || typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id)
+              || typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id)
+              || /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..'
+              || !lookup && (typeof raw.source_message_id !== 'string' ||
+                !/^[!-~]{1,256}$/u.test(raw.source_message_id) ||
+                /[/\\]/u.test(raw.source_message_id) || raw.source_message_id === '.' || raw.source_message_id === '..' ||
+                typeof raw.source_revision !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(raw.source_revision) ||
+                BigInt(raw.source_revision) > 9223372036854775807n))
+              throw Error('invalid group Source')
+            const result = await call('collaboration/groupPreparation', raw, signal)
+            if (!groupPreparationResult(result, raw)) throw Error('invalid group preparation')
+            return result
+          } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
+        ...(groupActivation ? { collaborationGroupActivation: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 60_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            if (!exact(raw, ['request_id', 'workspace_id', 'session_id']) ||
+              typeof raw.request_id !== 'string' || !uuid.test(raw.request_id) ||
+              typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id) ||
+              typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id) ||
+              /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..')
+              throw Error('invalid group activation')
+            const result = await call('collaboration/groupActivation', raw, signal)
+            if (!groupActivationResult(result)) throw Error('invalid group activation reply')
+            return result
+          } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
         ...(archive ? { collaborationArchive: async (raw: unknown) => {
           const controller = new AbortController()
           const timer = setTimeout(() => { controller.abort() }, 60_000)

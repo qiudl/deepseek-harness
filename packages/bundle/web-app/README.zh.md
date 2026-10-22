@@ -98,17 +98,23 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 `DSH_PROFILE_WORKSPACE_MODEL_TOKEN` 仅在隔离 Profile worker 中启用 `/internal/desktop-workspace-model-selection`。入口接受最多 2 KiB 的注册表工作区/Session 目标，交给仅供 Host 使用的 Session Controller 读取，不激活 Agent 或调用模型。浏览器 Cookie 不能授权此入口。失败不含异常详情；响应禁止缓存，仅包含已校验的选择字段。该读取不提供 Source 凭据或已准备的配置快照。
 
+`DSH_PROFILE_SOURCE_TOKEN` 也保护 `/internal/desktop-bot-identity`。入口在每次请求时通过 Profile 本地可选的 `dsBotSlarkExternalGroup` 服务解析准确 Bot ID。服务或 Bot 缺失时返回缺失；只有 Bot ID、派生的发言者引用和有界显示名可以离开 worker。浏览器 Cookie 不能调用此入口。
+
 `DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN` 单独启用仅供父 Host 调用的 `/internal/desktop-collaboration-archive-transition` POST。入口接受精确的账号、环境、工作区、Session、token 组合及一个有界阶段动作，再通过 Workspace Registry 串行化的持久写入执行。重复 `stage` 返回 token 的实际阶段。此入口不调用 Slark，也不授权浏览器归档请求；Main 或 Daemon 协调器必须按同一 token 对账不确定的写入结果。
+
+同一仅供父 Host 使用的令牌还保护 `/internal/desktop-group-input-fence`。入口先校验精确的 Slark 群挑战，再由 Workspace Registry 串行持久写入；响应只回传已保存的 Workspace、Session、群 ID 和版本。结果不匹配时拒绝。浏览器 cookie 不能调用该入口，该入口也不激活云端群。
 
 同一父 Host 专用 token 还保护 `/internal/desktop-collaboration-archive-intent`，按精确账号、环境、工作区和 Session 读取已有原 token 与阶段。Registry 拒绝归属不匹配，并在报告无意图前检查成员关系。浏览器 cookie 不能调用此查询。
 
-隔离的 Desktop Profile worker 提供 `DSH_PROFILE_MODEL_TOKEN` 时，本包还提供仅供 Host 使用的本机文本请求。它读取 Profile 当前默认模型，并用该 Profile 的凭据服务处理一条用户消息，不启用工具，也不创建 Session。私有令牌不返回浏览器；请求最多 8 KiB，回答最多 16 KiB，执行最多 60 秒。另一条使用令牌认证的本机路由通过 Profile 现有的 Session Remote 方法执行有界 Desktop Session 命令；浏览器 Cookie 不能授权此路由。会话历史只投影 Web 可见的消息、工具和回合字段，并按 Host 控制帧预算返回近期且顺序不变的记录后缀；内部、更早或过大的记录会被省略。第三条仅供 Host 使用的路由由 `DSH_PROFILE_REMOTE_UI_TOKEN` 启用，通过现有 Gateway 接受精确的 Session 和启动读取，请求与响应均有上限。启动读取包括脱敏设置、预设清单、无源码的插件清单、无密钥值的凭据状态和权限选项；凭据引用有数量及格式校验。`dynamicCordisRunner/syncInspectManifest` 会修改 Host 状态，因此仍被拒绝。启动读取只返回当前结构化注入项，不提供任意 URL 内容；浏览器父页面仍须在执行远程脚本前认证并校验资源字节。 Session follow 会在校验两个正安全整数下限和消息上限后转发原生 `turnWindow`。同一私有令牌还保护独立的 `session/follow`、`workspace/follow` 或 `$events` NDJSON 路由；单条事件上限为 512 KiB；空闲时发送由 [Host 读取端](../../host/desktop-host/README.zh.md)消费的私有保活帧，读取端断开时取消保活定时器和 Gateway 迭代器。浏览器 Cookie 不能授权这两条远程 UI 路由。这些只是内部构件，不是浏览器公共 API 或完整远程传输；事件流与写操作仍需单独的 Host 租约授权桥接。 `session/collaborationSources` 读取所属 Session 的已有 journal，不准备模型或提交任务。远程控制读取每页返回一条完整原消息，JSON 最多60 KiB，以其不可变快照摘要继续分页；单条更大的消息被拒绝，不截断正文。Session Controller 为本地 Client 保留普通的每页八条消息、256 KiB 列表。 显式授权的 `session/follow` 私有请求可增加 `itemChunks: true`。它保留最多 8 MiB 的完整原生事件，压缩结果更小时采用压缩，并在 NDJSON 包装前以至多 10 KiB 字节的规范 base64url 分片输出。每片携带编码、字节偏移、压缩后总字节数与原字节长度；消费方必须校验并还原完整项。其他端点与未协商请求保留原事件限制。
+隔离的 Desktop Profile worker 提供 `DSH_PROFILE_MODEL_TOKEN` 时，本包还提供仅供 Host 使用的本机文本请求。它读取 Profile 当前默认模型，并用该 Profile 的凭据服务处理一条用户消息，不启用工具，也不创建 Session。私有令牌不返回浏览器；请求最多 8 KiB，回答最多 16 KiB，执行最多 60 秒。另一条使用令牌认证的本机路由通过 Profile 现有的 Session Remote 方法执行有界 Desktop Session 命令；浏览器 Cookie 不能授权此路由。会话历史只投影 Web 可见的消息、工具和回合字段，并按 Host 控制帧预算返回近期且顺序不变的记录后缀；内部、更早或过大的记录会被省略。第三条仅供 Host 使用的路由由 `DSH_PROFILE_REMOTE_UI_TOKEN` 启用，通过现有 Gateway 接受精确的 Session 和启动读取，请求与响应均有上限。启动读取包括脱敏设置、预设清单、无源码的插件清单、无密钥值的凭据状态、权限选项和 `cotTranslation/limits`；凭据引用有数量及格式校验。`cotTranslation/limits` 要求空参数，只返回翻译偏好、可用提供方和文本上限，不授予翻译执行或设置写入操作。`dynamicCordisRunner/syncInspectManifest` 会修改 Host 状态，因此仍被拒绝。启动读取只返回当前结构化注入项，不提供任意 URL 内容；浏览器父页面仍须在执行远程脚本前认证并校验资源字节。 Session follow 会在校验两个正安全整数下限和消息上限后转发原生 `turnWindow`。同一私有令牌还保护独立的 `session/follow`、`workspace/follow` 或 `$events` NDJSON 路由；单条事件上限为 512 KiB；空闲时发送由 [Host 读取端](../../host/desktop-host/README.zh.md)消费的私有保活帧，读取端断开时取消保活定时器和 Gateway 迭代器。浏览器 Cookie 不能授权这两条远程 UI 路由。这些只是内部构件，不是浏览器公共 API 或完整远程传输；事件流与写操作仍需单独的 Host 租约授权桥接。 `session/collaborationSources` 读取所属 Session 的已有 journal，不准备模型或提交任务。远程控制读取每页返回一条完整原消息，JSON 最多60 KiB，以其不可变快照摘要继续分页；单条更大的消息被拒绝，不截断正文。Session Controller 为本地 Client 保留普通的每页八条消息、256 KiB 列表。 显式授权的 `session/follow` 私有请求可增加 `itemChunks: true`。它保留最多 8 MiB 的完整原生事件，压缩结果更小时采用压缩，并在 NDJSON 包装前以至多 10 KiB 字节的规范 base64url 分片输出。每片携带编码、字节偏移、压缩后总字节数与原字节长度；消费方必须校验并还原完整项。其他端点与未协商请求保留原事件限制。
 
 远程 `session/collaborationSources` 精确读取使用 `snapshotDigest` 替代 `cursor`，要求恰好一条匹配的原消息且无后续游标。摘要不符、定位与分页混用，以及单条消息超出预算时均拒绝；定位保留现有 Gateway 鉴权。
 
 仅限 Host 的 `session/collaborationMembership` 读取校验最多 50 组准确的工作区与会话身份，调用当前 Profile 的 Session Controller，并在返回 Main 前验证数量、顺序及归属结果。浏览器 Cookie 不能授权这一私有 worker 路由。
 
 Desktop 远端 Session 路由启用时，选定 Profile 为每个 Session 保留一份控制权证明。未受控制的 Session 接受本地浏览器写入时会隐式认领；远端控制者通过显式认领和比较交换接管。Profile 对支持的每次修改及审批答复核对远端证明，在 Gateway 检查本地浏览器写入和事件答复，并持有已获准的写入直到执行结束。控制权在未续期 30 秒后过期，Profile 重启也会使旧证明失效。daemon 和 Slark Server 必须交换 Profile 证明，远端浏览器才能使用这些命令。
+
+原生移动端终端复用 Profile 现有的终端 Gateway。环境、Shell 选项和终端列表保持只读；创建、输入、调整大小、改名和关闭都要求当前 Session 控制权，Desktop 浏览器的对应终端写入也遵守同一控制权栅栏。follow 和 retain 先在控制权下取得十秒有效、一次性使用的票据；Profile 在打开原终端流及交付输出前再次校验控制者。关闭移动端流只释放 attachment，不关闭 Shell。
 
 远端客户端持有当前 Session 控制权时，Desktop 浏览器会在会话标题栏显示接管入口。用户点击后，浏览器重新读取 Profile 当前 epoch，请用户确认，再通过已认证的浏览器 Gateway 提交比较交换接管。用户随后重新发送保留的草稿。Desktop 远端 Session 路由未启用时不显示此入口。
 
@@ -242,7 +248,7 @@ Web 组合包含账号 Remote 控制器和账号设置页面。
 
 `prepare_root` 调用 `captureCollaborationRoot`，由同一个两阶段 owner 保留首次分析调用；根持久化后才确认准备完成。回复同时包含原根描述与 prepared 或 recovered Source 元数据；恢复结果不包含可执行尝试。根准备同样遵循原绑定、超时、取消和单次派发规则。根登记或规划候选保存均不授予任务执行权限。
 
-`capture_root` 保存原始纯文本 Source 和 Root，不打开分析 journal、不提交规划 manifest，也不启动模型。原进程内调用保留当前绑定和不变的30秒期限；同绑定重复请求仅在调用未被消费时返回相同描述符。Root 持久受理后，`start_captured_root` 单次消费该调用并准备原始规划输入；`release_captured_root` 不经规划直接丢弃调用。两项操作均核验归属、原始输入、绑定、超时和销毁状态。恢复只返回不可执行元数据，不重建捕获调用；销毁会等待已接受的捕获完成。云端路线选择和任务授权仍由父协调方负责。
+`capture_root` 保存原始纯文本 Source 和 Root，不打开分析 journal、不提交规划 manifest，也不启动模型。原进程内调用保留当前绑定，并受30秒捕获期限限制；同绑定重复请求仅在调用未被消费时返回相同描述符。Root 持久受理后，`start_captured_root` 单次消费仍有效的调用，开始独立的30秒准备期限，并准备原始规划输入；`release_captured_root` 不经规划直接丢弃调用。两项操作均核验归属、原始输入、绑定、超时和销毁状态。恢复只返回不可执行元数据，不重建捕获调用；销毁会等待已接受的捕获完成。云端路线选择和任务授权仍由父协调方负责。
 
 `read_root_output` 经当前 Session/Workspace 归属校验读取已受理根，再将保存输出与原始持久派发记录关联；读取后再次校验根归属。输出缺失会明确返回；记录歧义、根变化、取消或释放都会拒绝。重新打开日志仍保留原输出与派发凭据，不准备或调用模型。云端消费者提交候选前仍须独立执行原租约与栅栏校验。
 
@@ -267,3 +273,15 @@ analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/acce
 私有反馈通道还将 `continuation_read` 路由到原 Session Controller。它返回尚无已提交观察或不可变的首条回复坐标；重复读取保持原 trace，不会启动新的模型请求。
 
 私有 NDJSON 路由也接受 `args` 为空的 `session/list`，并输出一个包含投影的完整 Session 列表快照。它沿用现有流的 512 KiB 单项上限和取消机制。
+
+远程 `session.select_model` 和 `session.select_agent` 复用现有会话模型选择器与 Agent 预设注册表。Host 在调用 Gateway 前要求目标会话的控制权证明，响应保留已选模型或预设标识。页面不能通过选择参数指定 Profile、其他 Agent 地址或控制权世代。
+
+绑定 view lease 的 `workbench/read` 流只允许 `workspaceFiles/read`、`readBytes`、`stat` 和 `list`，并校验精确的工作区范围与路径参数。它使用 Profile 进程内的 Connection Fetch handler，保留原有 JSON 或 multipart RPC 响应。按序分块不超过 16 KiB，完整响应上限为 34 MiB。取消会关闭所属 reader；未知接口与授权选择字段在派发前被拒绝。
+
+同一文件能力也允许精确的 `workspaceFiles/changes` 流。Gateway 范围查找与文件系统策略继续负责授权；页面取消释放所属 watcher，每次 Host 轮询仍要求原 view lease。
+
+个人 `settings.apply` 命令只允许原有 update、replace、mutate 表单操作。它保留 provider 的版本校验与脱敏 namespace 响应，意图上限 32 KiB，拒绝授权选择字段和不安全 JSON，并保留类型化冲突/拒绝结果，不返回私有异常文本。它不会改变选中 Profile，也不会获取会话控制权。
+
+个人 `credentials.apply` 命令只允许精确的 set/unset。引用名沿用原语法且最多 128 字符，只写值最多 16 KiB。存储由原凭据 provider 负责。成功不返回值，已知拒绝的详情只包含引用名，不回显 provider 值或私有诊断。
+
+受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。

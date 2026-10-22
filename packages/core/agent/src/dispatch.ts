@@ -53,6 +53,13 @@ type PayloadRest<K extends AgentSubjectEvent> = Omit<PayloadOf<K> & object, 'age
  */
 export interface AgentEventDispatch {
   /**
+   * Run synchronous admission listeners in the agent's scope before a durable
+   * operation. A throw vetoes it; listeners must not return promises.
+   * @param name - the agent-subject event to dispatch.
+   * @param payload - the event's payload fields; `agent` is injected.
+   */
+  bail<K extends AgentSubjectEvent>(name: K, payload: PayloadRest<K>): Return<Events[K]>
+  /**
    * Fire-and-forget notification in the agent's scope. Every listener is
    * invoked; synchronous throws and returned-promise rejections are logged and
    * contained per listener, so a notification cannot veto lifecycle progress
@@ -117,6 +124,19 @@ export function agentEvents(ctx: Context, agent: Agent, carrier: Scoped<Agent> =
     // `agent` field can never override the injected subject.
     ({ ...payload, agent } as PayloadOf<K>)
   return {
+    bail(name, payload) {
+      const result: unknown = (ctx.bail as (thisArg: Scoped<Agent>, name: string, value: unknown) => never)(
+        carrier, name, fused(payload),
+      )
+      if (result !== null && typeof result === 'object' && 'then' in result && typeof result.then === 'function') {
+        void Promise.resolve(result).catch(() => undefined)
+        throw new Error(`agent event "${name}" must finish synchronously`)
+      }
+      if (result !== undefined && result !== null && result !== false) {
+        throw new Error(`agent event "${name}" must return no value`)
+      }
+      return result as Return<Events[typeof name]>
+    },
     emit(name, payload) {
       // Cordis emit invokes callbacks through Array.map: one synchronous throw
       // starves later listeners, and returned promises are discarded. Agent

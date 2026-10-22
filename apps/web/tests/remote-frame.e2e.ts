@@ -56,8 +56,16 @@ it('boots the stock DSH entry through one cross-origin parent port and rejects a
           const channel = new MessageChannel();
           channel.port1.onmessage = ({data}) => {
             if (data.t !== 'req') return;
+            if (data.method === 'GET' && data.url.endsWith('/__collaboration_v2__')) {
+              channel.port1.postMessage({t:'res', id:data.id, status:404, headers:{}, body:''});
+              return;
+            }
             if (data.method === 'GET' && data.url.endsWith('/__collaboration__')) {
               window.capabilityRequests++;
+              channel.port1.postMessage({t:'res', id:data.id, status:404, headers:{}, body:''});
+              return;
+            }
+            if (data.method === 'GET' && data.url.endsWith('/__native_workbench__')) {
               channel.port1.postMessage({t:'res', id:data.id, status:404, headers:{}, body:''});
               return;
             }

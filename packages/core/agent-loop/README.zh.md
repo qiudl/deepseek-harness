@@ -70,6 +70,8 @@ const handle = await ctx.agents.create({
 
 每次 inbox 变更都会提交一条规范化的 `agent/inbox/spliced` 事件。投影注册表会同步折叠该事件，因此 `Session.append()` 返回时，实时投影已经反映该 splice。插入、编辑、移除、领取与取消都通过同一组标准 splice 坐标回放。普通删除携带 `outcome: 'canceled'` 并发出 `agent/inbox/discarded { message }`；领取使用不带 outcome 的纯删除，并发出 `agent/inbox/claimed`。每次插入都会发出 `agent/inbox/inserted { message }`。`MessageId` 在两个待处理列表之间保持唯一。需要被移除消息的消费方应使用 claimed 或 discarded 通知，而不依赖 splice 前的 `session/event` 投影视图。
 
+直接调用 `Agent.send`、`followup`、`steer` 或 `inject` 时，会先同步分发按 Agent 作用域过滤的 `agent/pre-inbox` 事件。监听器可抛错拒绝输入，此时不会写入 inbox 事件或唤醒驱动。监听器必须依据本地已提交状态作同步决定；返回 Promise 会被拒绝。驱动自身插入运行时上下文不经过该事件。单靠此钩子不能协调远端状态切换，也不能在重启后保留准入决定。
+
 ### 一个步骤做什么
 
 每个步骤都会发送会话的派生历史——最新的非空 `system/message` 节点是有效提示词，渲染提示词为空时则没有系统消息——及其可见工具 schema；模型的工具调用经过受守卫的工具流水线，每个被接纳的事实都会在下一步据此派生之前追加到会话日志。并行安全调用最多可重叠 `maxParallelToolCalls` 个；独占调用单独运行并构成排序屏障。取消是协作式的：`agent.cancel()` 中止当前活动，并在未设置 `keepInbox` 时清除待处理工作；被取消的流会终结已送达用户的文本。

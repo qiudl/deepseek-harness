@@ -34,7 +34,7 @@ In scope mode, an unclear request displays its retained natural-language questio
 
 -----
 
-The Slark account launcher shows only the authenticated Slark name and avatar, with Settings at the right edge. It does not reuse the DeepSeek account identity. The collaboration launcher shares the compact row above the composer with the workspace and Agent preset. Chat displays assignment summaries, separate result cards, and clarification cards that direct replies to the same composer; provisional text never marks a task complete. Returning from a mobile conversation retains the collaboration list's workspace filter, search and scroll position for the current plugin lifetime; those viewing preferences do not persist across reloads.
+The Slark account launcher shows only the authenticated Slark name and avatar, with Settings at the right edge. It does not reuse the DeepSeek account identity. The collaboration launcher shares the compact row above the composer with the workspace and Agent preset. Chat displays assignment summaries, separate result cards, and clarification cards that direct replies to the same composer; provisional text never marks a task complete. The collaboration list groups pending items before recent conversations; each group orders pinned conversations first, then latest activity across execution states. Each row retains its status, and archived conversations appear in search. Returning from a mobile conversation retains the collaboration list's workspace filter, search and scroll position for the current plugin lifetime; those viewing preferences do not persist across reloads.
 
 <a id="understand-the-implementation"></a>
 
@@ -55,6 +55,8 @@ The collaboration browser sends archive and restore actions through `collaborati
 
 Source navigation freshly checks the displayed immutable snapshot before opening its original Session and focusing that exact record with the shared focus-ring color. Older located records remain visible across paging and refresh, with fresh authorization on refresh; revoked originals disappear. Failed navigation is explained in the collaboration area. Plugin disposal removes navigation ownership. Locating never sends chat, submits a task or activates a model.
 
+History navigation and paging take priority over automatic refresh. They stop the current view's background observation and discard its late results; each requested read still checks current access. Other views and accepted Agent tasks continue independently. Repeated history actions coalesce while an explicit lookup or page is pending; Account, workspace, Session or Connection changes discard the pending action.
+
 </details>
 
 -----
@@ -64,6 +66,10 @@ Source navigation freshly checks the displayed immutable snapshot before opening
 The original Chat view and workspace history use separate readonly models. The mounted composer initializes readonly collaboration activity before the Chat view, so a Session with only collaboration records displays its originals and replies after opening or reconnecting. An empty Source page preserves the blank Conversation; a failed Source read displays the existing history-unavailable status. Activity subscriptions stop when the Conversation is no longer observed. Opt-in Source positions place complete original messages and independently identified replies beside ordinary Chat rows, with no extra input or task form. Unpositioned legacy originals have a labeled history region. Source paging and reply paging are independent; a verified locator focuses its original once. Merely viewing, refreshing, or closing this display does not dispatch tasks, acknowledge replies, or begin a local model turn.
 
 Chat and workspace history share identical pending delivery and planning requests within the same Desktop bridge and Connection generation. Completed responses are removed immediately, so subsequent refreshes recheck authorization. Source, revision, cursor and page size remain separate request identities. Closing one view stops its observation without cancelling the other view's read. Execution and continuation commands are never shared.
+
+## Native mobile composer
+
+REQ-20261018-0001 uses `conversation.input.right` for a small Duet button when the verified remote carrier advertises native support. It uses the framework Session ID and invokes the native call owner; repeated clicks are suppressed while admission is pending. A Session change or component disposal ignores late completion without hanging up. Uncertain admission is shown in localized text. Touch devices retain a 44px target. The existing draft persistence slot prefers the native draft bridge when present and otherwise keeps Desktop storage. Both contributions belong to the plugin lifetime and are removed on Loader disposal. The YAML composition tests cover registration, target binding, native draft preference and teardown.
 
 ## Model Experience
 

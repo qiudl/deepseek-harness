@@ -104,6 +104,100 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
 }
 
 describe('Profile-owned collaboration Source capture', () => {
+  it.each(['next-turn', 'next-step'] as const)(
+    'REQ-20261020-0010 refuses a group fence while the original Session has pending %s input', async (target) => {
+      const h = await harness()
+      try {
+        h.events.push({ type: 'agent/inbox/spliced', seq: SessionSeq(1), time: 2,
+          data: { target, start: 0, inserted: [createUserMessage({
+            content: [{ type: 'text', text: 'queued before group activation' }], source: { kind: 'user' },
+          })] } })
+        await expect(h.ctx.workspaceRegistry.installGroupInputFence({
+          workspaceId: h.workspace.id, sessionId: h.sessionId, groupId: 'group-1', groupVersion: 0,
+        })).rejects.toMatchObject({ name: 'WorkspaceActiveSessionError' })
+        expect(h.ctx.workspaceRegistry.isGroupInputBlocked(h.sessionId)).toBe(false)
+      } finally { await h.dispose() }
+    })
+
+  it('REQ-20261020-0010 refuses a group fence during an in-flight Source capture, then rejects old Source input', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    let release!: () => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    h.adapter.prepare = () => new Promise<void>((resolve) => { release = resolve; entered() })
+    const fence = { workspaceId: h.workspace.id, sessionId: h.sessionId, groupId: 'group-1', groupVersion: 0 }
+    try {
+      const capture = h.controller.captureCollaborationSource(h.source(), signal)
+      await started
+      await expect(h.ctx.workspaceRegistry.installGroupInputFence(fence))
+        .rejects.toMatchObject({ name: 'WorkspaceActiveSessionError' })
+      release()
+      await capture
+      h.adapter.prepare = () => Promise.resolve()
+      const installing = h.ctx.workspaceRegistry.installGroupInputFence(fence)
+      await expect(h.controller.captureCollaborationSource(h.source(), signal)).rejects.toThrow('group_session_active')
+      await installing
+      await expect(h.controller.captureCollaborationSource(h.source(), signal)).rejects.toThrow('group_session_active')
+    } finally { release?.(); await h.dispose() }
+  })
+
+  it('REQ-20261020-0010 checks queued input before a turn can claim it during activity inspection', async () => {
+    const h = await harness()
+    try {
+      h.events.push({ type: 'agent/inbox/spliced', seq: SessionSeq(1), time: 2,
+        data: { target: 'next-turn', start: 0, inserted: [createUserMessage({
+          content: [{ type: 'text', text: 'queued before group activation' }], source: { kind: 'user' },
+        })] } })
+      h.ctx.on('workspace/session-activity', async (_request, next) => {
+        const rest = await next()
+        h.events.push({ type: 'agent/inbox/spliced', seq: SessionSeq(2), time: 3,
+          data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] } })
+        return rest
+      })
+      await expect(h.ctx.workspaceRegistry.installGroupInputFence({
+        workspaceId: h.workspace.id, sessionId: h.sessionId, groupId: 'group-1', groupVersion: 0,
+      })).rejects.toMatchObject({ name: 'WorkspaceActiveSessionError' })
+    } finally { await h.dispose() }
+  })
+
+  it('REQ-20261020-0010 keeps root capture active between Source and root journal commits', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    let release!: () => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const open = h.backend.kv.open.bind(h.backend.kv)
+    h.backend.kv.open = async (descriptor) => {
+      if (descriptor.name === 'collaboration_root_submission_v1') {
+        await new Promise<void>((resolve) => { release = resolve; entered() })
+      }
+      return open(descriptor)
+    }
+    const fence = { workspaceId: h.workspace.id, sessionId: h.sessionId, groupId: 'group-1', groupVersion: 0 }
+    try {
+      const root = h.controller.captureCollaborationRoot({ namespace_id: 'n2_' + 'a'.repeat(64),
+        source: h.source(), continuation_policy: 'display_only' }, signal)
+      await started
+      await expect(h.ctx.workspaceRegistry.installGroupInputFence(fence))
+        .rejects.toMatchObject({ name: 'WorkspaceActiveSessionError' })
+      release()
+      await root
+    } finally { release?.(); await h.dispose() }
+  })
+
+  it('REQ-20261020-0010 rejects a deferred Source analysis after a group fence', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    try {
+      const captured = await h.controller.captureCollaborationSource(h.source(), signal)
+      expect(captured.kind).toBe('captured')
+      if (captured.kind !== 'captured') return
+      await h.ctx.workspaceRegistry.installGroupInputFence({
+        workspaceId: h.workspace.id, sessionId: h.sessionId, groupId: 'group-1', groupVersion: 0,
+      })
+      await expect(captured.analyze(async () => {}, signal)).rejects.toThrow('group_session_active')
+      expect(h.stream).not.toHaveBeenCalled()
+    } finally { await h.dispose() }
+  })
+
   it('delegates collaboration classification when this controller has no storage domain', async () => {
     const h = await harness(undefined, undefined, true)
     try {

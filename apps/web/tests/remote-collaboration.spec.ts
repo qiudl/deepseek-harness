@@ -15,7 +15,7 @@ interface Rpc { type: string; rpcId: string; method: string; payload: { args: { 
 type Reply = (path: string, rpc: Rpc | undefined) => Promise<{ status: number; value?: unknown }> | { status: number; value?: unknown }
 const cleanups: Array<() => void> = []
 
-function harness(reply: Reply) {
+function harness(reply: Reply, supportsV2 = false) {
   vi.stubGlobal('MessageChannel', NodeMessageChannel)
   vi.stubGlobal('crypto', webcrypto)
   const channel = new MessageChannel()
@@ -26,6 +26,10 @@ function harness(reply: Reply) {
     frames.push(frame)
     if (frame.t !== 'req' || frame.url === undefined) return
     const path = new URL(frame.url).pathname
+    if (path === '/__collaboration_v2__' && !supportsV2) {
+      channel.port1.postMessage({ t: 'res', id: frame.id, status: 403, headers: {} })
+      return
+    }
     const rpc: Rpc | undefined = frame.body === undefined ? undefined : JSON.parse(new TextDecoder().decode(frame.body)) as Rpc
     void Promise.resolve(reply(path, rpc)).then(({ status, value }) => {
       if (closed) return
@@ -53,6 +57,10 @@ function bridge(): {
   collaborationPending(value: unknown): Promise<unknown>
   collaborationDeliveries(value: unknown): Promise<unknown>
   collaborationConversations?(): Promise<unknown>
+  collaborationGroupMessages?(value: unknown): Promise<unknown>
+  collaborationGroupMembers?(value: unknown): Promise<unknown>
+  collaborationGroupPreparation?(value: unknown): Promise<unknown>
+  collaborationGroupActivation?(value: unknown): Promise<unknown>
   collaborationArchive?(value: unknown): Promise<unknown> } {
   const host: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
   if (typeof host !== 'object' || host === null || !('collaborationWorkspace' in host)) throw Error('bridge is missing')
@@ -76,7 +84,18 @@ it.each([undefined, { ...capability, methods: [] }, { ...capability, methods: ['
   const h = harness(() => ({ status: advertised === undefined ? 403 : 200, value: advertised }))
   await installRemoteCollaboration(h.fetch)
   expect(Reflect.get(window, '__DSH_DESKTOP_HOST__')).toBeUndefined()
-  expect(h.frames).toHaveLength(1)
+  expect(h.frames).toHaveLength(2)
+})
+
+it('falls back to the legacy capability when the v2 probe rejects', async () => {
+  const paths: string[] = []
+  await installRemoteCollaboration(async (path) => {
+    paths.push(String(path))
+    if (path === '/__collaboration_v2__') throw Error('unsupported capability')
+    return Response.json(capability)
+  })
+  expect(bridge().collaborationScopeAvailable).toBe(true)
+  expect(paths).toEqual(['/__collaboration_v2__', '/__collaboration__'])
 })
 
 it('unwraps the workspace result over the real tunnel and preserves ordinary network isolation', async () => {
@@ -106,7 +125,7 @@ it('rejects forged request identity before sending and rejects a different works
   await installRemoteCollaboration(h.fetch)
   expect(await bridge().collaborationWorkspace({ ...input, computer_id: 'other' })).toEqual(
     { ok: false, errorCode: 'collaboration_scope_unavailable', refreshRequired: false })
-  expect(h.frames.filter(frame => frame.t === 'req')).toHaveLength(1)
+  expect(h.frames.filter(frame => frame.t === 'req')).toHaveLength(2)
   expect(await bridge().collaborationWorkspace(input)).toEqual(
     { ok: false, errorCode: 'collaboration_scope_unavailable', refreshRequired: false })
 })
@@ -200,6 +219,7 @@ it('covers response-body reads with the operation deadline and cancels the stall
   const cancel = vi.fn()
   const started = Promise.withResolvers<undefined>()
   const fetch = vi.fn(async (path: URL | string) => {
+    if (path === '/__collaboration_v2__') return new Response(null, { status: 403 })
     if (path === '/__collaboration__') return new Response(JSON.stringify(capability))
     started.resolve(undefined)
     return new Response(new ReadableStream<Uint8Array>({ cancel }))
@@ -295,6 +315,152 @@ it('REQ-20261011-0002: archive capability sends only action coordinates over the
   expect(await bridge().collaborationArchive?.({ ...request, archive_token: 'forged' })).toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })
+it('REQ-20261020-0010: a group message capability preserves older scope and requires exact commands', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
+  const command = { operation: 'send', workspace_id: workspace, session_id: 'session-1',
+    request_id: '33333333-3333-4333-8333-333333333333', expected_group_version: 2, body: 'hello' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'recorded',
+      message_id: '44444444-4444-4444-8444-444444444444', seq: 1 }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(bridge().collaborationScopeAvailable).toBe(true)
+  expect(await bridge().collaborationGroupMessages?.(command)).toMatchObject({ state: 'recorded', seq: 1 })
+  expect(requests[0]?.method).toBe('collaboration/groupMessages')
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupMessages?.({ ...command, actor_ref: 'bot' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261020-0010: a member capability keeps the remote bridge installed and sends exact commands', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupMessages', 'groupMembers'] }
+  const command = { operation: 'status', workspace_id: workspace, session_id: 'session-1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'snapshot',
+      group_id: '22222222-2222-4222-8222-222222222222', membership_version: 1,
+      last_seq: 0, members: [{ member_id: '33333333-3333-4333-8333-333333333333',
+        actor_kind: 'human', actor_ref: 'owner', role: 'owner', cycle: 1,
+        joined_seq: 0, sources: [] }] }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(bridge().collaborationScopeAvailable).toBe(true)
+  expect(await bridge().collaborationGroupMembers?.(command)).toMatchObject({ state: 'snapshot',
+    membership_version: 1 })
+  expect(requests[0]?.method).toBe('collaboration/groupMembers')
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupMembers?.({ ...command, owner: 'forged' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261020-0010: group pending commands stay exact and use the verified parent bridge', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
+  const command = { operation: 'pending_claim', workspace_id: workspace, session_id: 'session-1',
+    group_id: '22222222-2222-4222-8222-222222222222', digest: 'a'.repeat(64) }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'pending',
+      request_id: '33333333-3333-4333-8333-333333333333' }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMessages?.(command)).toMatchObject({ state: 'pending' })
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupMessages?.({ ...command, digest: 'bad' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261020-0010: group page accepts multiline messages but rejects malformed rows', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
+  const command = { operation: 'page', workspace_id: workspace, session_id: 'session-1', after_seq: 0, limit: 10 }
+  let body = 'hello\nworld'
+  const h = harness((path, rpc) => path === '/__collaboration_v2__' ? { status: 200, value: advertised }
+    : { status: 200, value: envelope(rpc, { state: 'page', items: [{
+      id: '44444444-4444-4444-8444-444444444444', seq: 1, actor_kind: 'human',
+      actor_ref: 'alice', body, created_at: 1 }], next_seq: 1, has_more: false, last_seq: 1 }) }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMessages?.(command)).toMatchObject({ state: 'page', items: [{ body }] })
+  body = ''
+  expect(await bridge().collaborationGroupMessages?.(command)).toEqual({ state: 'retry_required' })
+})
+it('REQ-20261020-0010: preparation sends only original Source coordinates', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupPreparation'] }
+  const source = { workspace_id: workspace, session_id: 'session-1',
+    source_message_id: 'message-1', source_revision: '1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'preparing',
+      group_id: '44444444-4444-4444-8444-444444444444', version: 1,
+      workspace_id: workspace, session_id: 'session-1' }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(bridge().collaborationScopeAvailable).toBe(true)
+  expect(await bridge().collaborationGroupPreparation?.(source)).toMatchObject({ state: 'preparing', version: 1 })
+  expect(requests[0]?.method).toBe('collaboration/groupPreparation')
+  expect(requests[0]?.payload.args.request).toEqual(source)
+  expect(await bridge().collaborationGroupPreparation?.({ ...source, host_snapshot_assertion: 'caller' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261020-0010: group lookup recovers only the mapped original Session', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupPreparation'] }
+  const lookup = { operation: 'lookup', workspace_id: workspace, session_id: 'session-1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, requests.length === 1 ? {
+      state: 'group_active', group_id: '44444444-4444-4444-8444-444444444444',
+      version: 2, last_seq: 3, workspace_id: workspace, session_id: 'session-1',
+    } : { state: 'missing' }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupPreparation?.(lookup)).toMatchObject({
+    state: 'group_active', version: 2, last_seq: 3 })
+  expect(requests[0]?.payload.args.request).toEqual(lookup)
+  expect(await bridge().collaborationGroupPreparation?.(lookup)).toEqual({ state: 'missing' })
+  expect(await bridge().collaborationGroupPreparation?.({ ...lookup, owner: 'bob' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(2)
+})
+it('REQ-20261020-0010: activation uses a verified v2 Host capability and exact result', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupActivation', 'groupMessages', 'groupPreparation'] }
+  const input = { request_id: '33333333-3333-4333-8333-333333333333',
+    workspace_id: workspace, session_id: 'session-1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, requests.length === 1
+      ? { state: 'group_active', group_id: '44444444-4444-4444-8444-444444444444', version: 2 }
+      : { state: 'group_active', group_id: 'invalid', version: 2 }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupActivation?.(input)).toEqual({ state: 'group_active',
+    group_id: '44444444-4444-4444-8444-444444444444', version: 2 })
+  expect(requests[0]?.method).toBe('collaboration/groupActivation')
+  expect(requests[0]?.payload.args.request).toEqual(input)
+  expect(await bridge().collaborationGroupActivation?.({ ...input, request_id: 'invalid' }))
+    .toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupActivation?.(input)).toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(2)
+})
 it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pagehide without resubmitting the Agent', async () => {
   const started = Promise.withResolvers<undefined>()
   const h = harness((path) => {
@@ -306,7 +472,7 @@ it('REQ-20260930-0004: execution consumer cancels accepted transport waits on pa
   await started.promise; window.dispatchEvent(new Event('pagehide'))
   expect(await reading).toMatchObject({ ok:false,reconciliationRequired:true })
   expect(Reflect.get(window,'__DSH_DESKTOP_HOST__')).toBeUndefined()
-  expect(h.frames.filter(frame => frame.t === 'req')).toHaveLength(2)
+  expect(h.frames.filter(frame => frame.t === 'req')).toHaveLength(3)
   expect(await host.collaborationDeliveries({ source:original })).toMatchObject({ ok:false })
 })
 
