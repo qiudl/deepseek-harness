@@ -106,7 +106,7 @@ export async function readDesktopMemorySession(
     signal.throwIfAborted()
     if (!after || after.revision !== before.revision || after.header.id !== id)
       throw new Error('memory_session_changed')
-    return { sessionId: id, revision: String(after.revision), text: `${lines.join('\n')}\n` }
+    return { sessionId: id, revision: after.revision, text: `${lines.join('\n')}\n` }
   } finally {
     await handle.close()
   }
@@ -130,7 +130,7 @@ export async function listDesktopMemorySessions(
   if (snapshots.length > MAX_EVENTS) throw new Error('memory_inventory_oversized')
   const items = snapshots
     .filter(snapshot => privateTopLevel(snapshot.header))
-    .map(snapshot => ({ sessionId: String(snapshot.header.id), revision: String(snapshot.revision) }))
+    .map(snapshot => ({ sessionId: snapshot.header.id, revision: snapshot.revision }))
     .sort((left, right) => left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1 : 0)
   if (items.some((item, index) => !SESSION_ID.test(item.sessionId)
     || item.revision.length < 1 || item.revision.length > 256
