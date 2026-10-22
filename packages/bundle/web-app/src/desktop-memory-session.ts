@@ -139,8 +139,39 @@ export async function listDesktopMemorySessions(
   const start = after === null ? 0 : items.findIndex(item => item.sessionId > after)
   if (start < 0) return { items: [], nextAfter: null }
   const page = items.slice(start, start + PAGE_LIMIT)
-  const nextAfter = start + PAGE_LIMIT < items.length ? page.at(-1)?.sessionId ?? null : null
+  const nextAfter = start + PAGE_LIMIT < items.length
+    ? (page[PAGE_LIMIT - 1] as { sessionId: string }).sessionId : null
   return { items: page, nextAfter }
+}
+
+/** @internal Validate a worker reply even when its producer is replaced in tests or integration. */
+export function parseDesktopMemorySessionsResult(value: unknown): DesktopMemorySessionPage {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
+  const row = value as Record<string, unknown>
+  if (Object.keys(row).length !== 2 || !Array.isArray(row.items) || row.items.length > PAGE_LIMIT)
+    throw Error('invalid_result')
+  const items = row.items.map((value: unknown) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
+    const item = value as Record<string, unknown>
+    if (Object.keys(item).length !== 2 || typeof item.sessionId !== 'string'
+      || !SESSION_ID.test(item.sessionId) || typeof item.revision !== 'string'
+      || item.revision.length < 1 || item.revision.length > 256) throw Error('invalid_result')
+    return { sessionId: item.sessionId, revision: item.revision }
+  })
+  const nextAfter = row.nextAfter
+  if (nextAfter !== null && (typeof nextAfter !== 'string' || !SESSION_ID.test(nextAfter)))
+    throw Error('invalid_result')
+  return { items, nextAfter }
+}
+
+/** @internal Validate the bounded raw snapshot before it leaves the private worker route. */
+export function parseDesktopMemorySessionResult(value: unknown): DesktopMemorySessionSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
+  const record = value as Record<string, unknown>
+  if (Object.keys(record).length !== 3 || typeof record.sessionId !== 'string'
+    || typeof record.revision !== 'string' || typeof record.text !== 'string'
+    || Buffer.byteLength(record.text, 'utf8') > MAX_SESSION_BYTES) throw Error('invalid_result')
+  return { sessionId: record.sessionId, revision: record.revision, text: record.text }
 }
 
 /** Independent memory bearer; request accepts only an opaque pagination cursor.
@@ -165,24 +196,7 @@ export function handleDesktopMemorySessionsRequest(
         && (typeof row.after !== 'string' || !SESSION_ID.test(row.after))) throw Error('invalid_input')
       return { after: row.after }
     },
-    (value: unknown) => {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
-      const row = value as Record<string, unknown>
-      if (Object.keys(row).length !== 2 || !Array.isArray(row.items) || row.items.length > PAGE_LIMIT)
-        throw Error('invalid_result')
-      const items = row.items.map((value: unknown) => {
-        if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
-        const item = value as Record<string, unknown>
-        if (Object.keys(item).length !== 2 || typeof item.sessionId !== 'string'
-          || !SESSION_ID.test(item.sessionId) || typeof item.revision !== 'string'
-          || item.revision.length < 1 || item.revision.length > 256) throw Error('invalid_result')
-        return { sessionId: item.sessionId, revision: item.revision }
-      })
-      const nextAfter = row.nextAfter
-      if (nextAfter !== null && (typeof nextAfter !== 'string' || !SESSION_ID.test(nextAfter)))
-        throw Error('invalid_result')
-      return { items, nextAfter }
-    },
+    parseDesktopMemorySessionsResult,
     () => true,
     2048)
 }
@@ -212,14 +226,7 @@ export function handleDesktopMemorySessionRequest(
         || !SESSION_ID.test(record.session_id)) throw Error('invalid_input')
       return { session_id: record.session_id }
     },
-    (value: unknown) => {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
-      const record = value as Record<string, unknown>
-      if (Object.keys(record).length !== 3 || typeof record.sessionId !== 'string'
-        || typeof record.revision !== 'string' || typeof record.text !== 'string'
-        || Buffer.byteLength(record.text, 'utf8') > MAX_SESSION_BYTES) throw Error('invalid_result')
-      return { sessionId: record.sessionId, revision: record.revision, text: record.text }
-    },
+    parseDesktopMemorySessionResult,
     (result, target) => result.sessionId === target.session_id,
     2048,
   )
