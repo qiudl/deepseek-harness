@@ -32,9 +32,11 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
-export { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.js'
-export type { HostBotIdentity } from './bot-identity.js'
+export { parseHostBotIdentity, parseHostBotIdentityTarget,
+  parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.js'
+export type { HostBotIdentity, HostBotRosterPage } from './bot-identity.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'

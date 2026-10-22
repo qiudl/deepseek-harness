@@ -361,6 +361,81 @@ it('REQ-20261020-0010: a member capability keeps the remote bridge installed and
     .toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })
+it('REQ-20261020-0010: Bot picker accepts only public sorted identities', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupMembers'] }
+  const command = { operation: 'bots', workspace_id: workspace, session_id: 'session-1',
+    after_bot_id: '', limit: 50 }
+  let extra = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    return { status: 200, value: envelope(rpc, { state: 'bot_roster', bots: [{
+      bot_id: 'my_bot', actor_ref: 'deepseek-bot:my_bot', display_name: 'My Bot',
+      ...(extra ? { private_config: 'secret' } : {}) }], next_cursor: null }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMembers?.(command)).toMatchObject({ state: 'bot_roster',
+    bots: [{ bot_id: 'my_bot', display_name: 'My Bot' }] })
+  extra = true
+  expect(await bridge().collaborationGroupMembers?.(command)).toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupMembers?.({ ...command, limit: 101 }))
+    .toEqual({ state: 'retry_required' })
+})
+it('REQ-20261020-0010: unresolved member inventory rejects private fields', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupMembers'] }
+  const member_id = '33333333-3333-4333-8333-333333333333'
+  const delivery_id = '44444444-4444-4444-8444-444444444444'
+  const command = { operation: 'inflight', workspace_id: workspace, session_id: 'session-1',
+    member_id, after_delivery_id: '', limit: 50 }
+  let extra = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    return { status: 200, value: envelope(rpc, { state: 'inflight', member_id,
+      member_cycle: 1, deliveries: [{ delivery_id, message_seq: 7,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation',
+        ...(extra ? { body: 'private' } : {}) }], next_cursor: null }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMembers?.(command)).toMatchObject({ state: 'inflight',
+    deliveries: [{ delivery_id, message_seq: 7 }] })
+  extra = true
+  expect(await bridge().collaborationGroupMembers?.(command)).toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupMembers?.({ ...command, limit: 101 }))
+    .toEqual({ state: 'retry_required' })
+})
+it('REQ-20261020-0010: personal proxy commands carry only binding facts', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupMembers'] }
+  const commands: Rpc[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    commands.push(rpc)
+    const requested = rpc.payload.args.request as { operation?: string }
+    return { status: 200, value: envelope(rpc, requested.operation === 'proxy_status'
+      ? { state: 'proxy_binding', binding_id: null, binding_epoch: 0, bot_ref: null,
+        binding_state: 'unbound' }
+      : { state: 'proxy_bound', binding_id: bindingId, binding_epoch: 1,
+        bot_ref: 'deepseek-bot:my_bot' }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_status',
+    workspace_id: workspace, session_id: 'session-1' })).toMatchObject({ state: 'proxy_binding' })
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_select',
+    workspace_id: workspace, session_id: 'session-1',
+    request_id: '66666666-6666-4666-8666-666666666666',
+    expected_binding_epoch: 0, bot_id: 'my_bot' })).toMatchObject({ state: 'proxy_bound' })
+  expect(commands).toHaveLength(2)
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_select',
+    workspace_id: workspace, session_id: 'session-1',
+    request_id: '66666666-6666-4666-8666-666666666666',
+    expected_binding_epoch: 0, bot_id: '../other' })).toEqual({ state: 'retry_required' })
+  expect(commands).toHaveLength(2)
+})
 it('REQ-20261020-0010: group pending commands stay exact and use the verified parent bridge', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
   const command = { operation: 'pending_claim', workspace_id: workspace, session_id: 'session-1',

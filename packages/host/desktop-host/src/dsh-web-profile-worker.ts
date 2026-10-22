@@ -2,8 +2,9 @@ import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } fro
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostBotIdentity, parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostBotIdentity } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotIdentity, parseHostBotIdentityTarget,
+  parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotIdentity, HostBotRosterPage } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchesHostBotGroupResponse, parseHostBotGroupCommand,
   parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
 } from '@deepseek-ai/dsh-host-control-protocol'
@@ -287,6 +288,8 @@ export class DshWebProfileWorkerFactory {
       bootstrapCookie,
       resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
         viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
+      listBotRoster: (afterBotId, limit, signal) => this.listBotRoster(
+        viewOrigin, sourceToken, afterBotId, limit, signal, () => requestedStop || settled),
       operateBotGroup: (command, signal) => this.operateBotGroup(
         viewOrigin, sourceToken, command, signal, () => requestedStop || settled),
       generateText: async (text, signal) => {
@@ -491,6 +494,27 @@ export class DshWebProfileWorkerFactory {
       const identity = parseHostBotIdentity(JSON.parse(bytes.toString('utf8')))
       if (identity !== null && identity.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
       return identity
+    }, 'await')
+  }
+
+  private async listBotRoster(
+    viewOrigin: string, token: string, afterBotId: string, limit: number,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotRosterPage | null> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+    const target = parseHostBotRosterTarget({ after_bot_id: afterBotId, limit })
+    const response = await fetch(`${viewOrigin}/internal/desktop-bot-roster`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 64 * 1024, (bytes) => {
+      const page = parseHostBotRosterPage(JSON.parse(bytes.toString('utf8')))
+      if (page && (page.bots.length > limit || page.bots.some(bot => bot.bot_id <= afterBotId)))
+        throw new HostAuthorityError('profile_mismatch')
+      return page
     }, 'await')
   }
 

@@ -590,6 +590,32 @@ export interface ProfileBotIdentityResult {
   readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentity | null }
 }
 
+/** Account-bound page of public Bot identities in the selected Profile. */
+export interface ProfileBotRosterRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_roster'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly after_bot_id: string
+    readonly limit: number
+  }
+}
+
+/** Validated page or explicit absence when the exclusive writer is unavailable. */
+export interface ProfileBotRosterResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_roster'
+  readonly result: { readonly page: import('./bot-identity.ts').HostBotRosterPage | null }
+}
+
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */
 export interface ProfileBotGroupDeliverRequest {
   readonly version: 1
@@ -1947,6 +1973,8 @@ export type HostControlFrame =
   | ProfileCollaborationRegistrationResult
   | ProfileBotIdentityRequest
   | ProfileBotIdentityResult
+  | ProfileBotRosterRequest
+  | ProfileBotRosterResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageRequest

@@ -607,6 +607,9 @@ it.skipIf(process.platform === 'win32')('restores a partially written Account cl
   const account = { issuer: 'https://accounts.dsh.colorbuyai.com', subject,
     accountAccessToken: token, keyHandle: 'keychain:claim-recovery', unlockMaterial: material, ...binding }
   const profile = await application.host.ensureAccountProfile({ ...account, ownerId: 'owner' })
+  expect(serverOptions?.listBotRoster).toBeDefined()
+  await expect(serverOptions!.listBotRoster!(profile.profileId, '', 50, new AbortController().signal))
+    .rejects.toThrow()
   const profileRoot = join(root, 'profiles', profile.profileId)
   const ownerRoot = join(profileRoot, 'migration-owner-state', '1')
   const uid = process.getuid!()
