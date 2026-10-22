@@ -72,6 +72,14 @@ function origin(value: unknown): value is string {
   try { const url = new URL(value); return url.protocol === 'https:' && url.origin === value }
   catch { return false }
 }
+function issuerOrigin(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && !url.username && !url.password &&
+      !url.search && !url.hash ? url.origin : null
+  } catch { return null }
+}
 function decoded(value: string): unknown {
   if (!SEGMENT.test(value) || Buffer.from(value, 'base64url').toString('base64url') !== value) fail()
   try { return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) }
@@ -79,7 +87,7 @@ function decoded(value: string): unknown {
 }
 function publicKeys(keyring: BotGroupPublicKeyring): Map<string, VerifiedKey> {
   if (keyring.version !== 1 || !UUID.test(keyring.environmentId) ||
-      typeof keyring.issuer !== 'string' || !keyring.issuer.startsWith('https://') ||
+      !issuerOrigin(keyring.issuer) ||
       !Array.isArray(keyring.keys) || keyring.keys.length < 1 || keyring.keys.length > 4) fail()
   const keys = new Map<string, VerifiedKey>()
   for (const entry of keyring.keys) {
@@ -121,6 +129,7 @@ export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyri
         header.typ !== 'SLARK-DSH-BOT-GROUP' || header.version !== 1 ||
         typeof header.kid !== 'string' ||
         claims.schema_version !== 1 || claims.issuer !== keyring.issuer ||
+        issuerOrigin(keyring.issuer) !== expected.slarkAudience ||
         claims.audience !== AUDIENCE || claims.slark_audience !== expected.slarkAudience ||
         claims.environment_id !== expected.environmentId ||
         claims.environment_id !== keyring.environmentId ||

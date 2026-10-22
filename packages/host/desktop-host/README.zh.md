@@ -71,6 +71,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。这些辅助函数尚未作为 Host 控制方法开放。
 
+内部 Bot 派送函数只选择当前 Account Profile，在向 worker 发送单条投递前完成实时确认，并在返回前复查 Account 和 worker 身份。若 worker 已写入后结果被拒绝，该投递仍属不确定状态，必须使用原 delivery ID 对账。
+
 仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
 
 Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。

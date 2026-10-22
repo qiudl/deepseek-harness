@@ -78,6 +78,9 @@ it('rejects an unpinned signer even when the ticket is otherwise valid', () => {
     .toThrow('bot_group_ticket_invalid')
   expect(() => verifyBotGroupTicket(ticket(), { ...keyring, environmentId: randomUUID() },
     expected, now)).toThrow('bot_group_ticket_invalid')
+  expect(() => verifyBotGroupTicket(ticket({ issuer: 'https://other.example.test/dsh-environment' }),
+    { ...keyring, issuer: 'https://other.example.test/dsh-environment' }, expected, now))
+    .toThrow('bot_group_ticket_invalid')
 })
 
 it('confirms the exact delivery at the pinned Slark origin before returning it', async () => {
