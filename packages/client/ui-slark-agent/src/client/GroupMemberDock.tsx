@@ -29,6 +29,12 @@ type Receipt = {
   seq: number
 }
 export type GroupMemberCommand =
+  | { operation: 'inflight'
+    workspace_id: string
+    session_id: string
+    member_id: string
+    after_delivery_id: string
+    limit: number }
   | { operation: 'bots'
     workspace_id: string
     session_id: string
@@ -70,6 +76,14 @@ export type GroupMemberCommand =
     member_id: string
   }
 export type GroupMemberReply = Snapshot | Receipt |
+  { state: 'inflight'
+    member_id: string
+    member_cycle: number
+    deliveries: { delivery_id: string
+      message_seq: number
+      payload_digest: string
+      state: 'pending_reconciliation' }[]
+    next_cursor: string | null } |
   { state: 'bot_roster'
     bots: { bot_id: string
       actor_ref: string
@@ -108,6 +122,8 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   const [proxyUnavailable, setProxyUnavailable] = useState(false)
   const [proxyLabel, setProxyLabel] = useState<string | null>(null)
   const [unavailable, setUnavailable] = useState(false)
+  const [removalPending, setRemovalPending] = useState(false)
+  const [removalNeedsDecision, setRemovalNeedsDecision] = useState(false)
   const [busy, setBusy] = useState(false)
   const [pending, setPending] = useState<Change | null>(null)
   const change = useRef<((command: Change) => Promise<void>) | null>(null)
@@ -121,6 +137,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   useEffect(() => { botIdRef.current = botId }, [botId])
   useEffect(() => {
     setSnapshot(null); setBotId(''); setUnavailable(false); setBusy(false); setPending(null)
+    setRemovalPending(false); setRemovalNeedsDecision(false)
     snapshotRef.current = null; botIdRef.current = ''
     setRoster(null); setRosterBusy(false); setRosterUnavailable(false)
     setProxyBusy(false); setProxyUnavailable(false); setProxyLabel(null); proxyRequestId.current = null
@@ -157,6 +174,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       finally { rosterInFlight = false; if (current()) setRosterBusy(false) }
     }
     change.current = async (command) => {
+      /* v8 ignore next -- action controls are disabled during a change and removed with the Host. */
       if (!current() || !host.collaborationGroupMembers || inFlightChange) return
       inFlightChange = true
       pendingRef.current = command; setPending(command); setBusy(true); setUnavailable(false)
@@ -190,7 +208,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
         }
         setProxyLabel(status.bot_ref)
         if (status.binding_state === 'active' && status.bot_ref === `deepseek-bot:${selected}` &&
-          snapshotRef.current?.members.some(member => member.actor_ref === status.bot_ref &&
+          snapshotRef.current.members.some(member => member.actor_ref === status.bot_ref &&
             member.sources.includes('personal_proxy'))) return
         let binding: { binding_id: string; binding_epoch: number; bot_ref: string } | null = null
         if (status.binding_state === 'active' && status.bot_ref === `deepseek-bot:${selected}`
@@ -210,6 +228,8 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
           binding = result; proxyRequestId.current = null; setProxyLabel(result.bot_ref)
         }
         const currentSnapshot = snapshotRef.current
+        // The snapshot can disappear while the async Bot selection is in progress.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition
         if (!binding || !currentSnapshot) { setProxyUnavailable(true); return }
         void change.current?.({ operation: 'proxy_attach', workspace_id: workspaceId,
           session_id: sessionId, request_id: randomUUID(),
@@ -231,11 +251,29 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       request_id: randomUUID(), expected_membership_version: snapshot.membership_version,
       bot_id: botId })
   }
-  const remove = (memberId: string) => {
+  const remove = async (memberId: string) => {
     /* v8 ignore next -- Remove buttons render only from a snapshot and are disabled while a change is pending. */
-    if (!snapshot || pendingRef.current) return
+    if (!snapshot || pendingRef.current || removalPending || !host.collaborationGroupMembers ||
+      window.__DSH_DESKTOP_HOST__ !== host) return
+    setRemovalPending(true); setRemovalNeedsDecision(false)
+    try {
+      const inventory = await host.collaborationGroupMembers({ operation: 'inflight',
+        workspace_id: workspaceId, session_id: sessionId, member_id: memberId,
+        after_delivery_id: '', limit: 100 })
+      if (window.__DSH_DESKTOP_HOST__ !== host) return
+      if (inventory.state !== 'inflight' || inventory.member_id !== memberId) {
+        setUnavailable(true); return
+      }
+      if (inventory.deliveries.length || inventory.next_cursor !== null) {
+        setRemovalNeedsDecision(true); return
+      }
+    } catch { if (window.__DSH_DESKTOP_HOST__ === host) setUnavailable(true); return }
+    finally { if (window.__DSH_DESKTOP_HOST__ === host) setRemovalPending(false) }
+    const currentSnapshot = snapshotRef.current
+    if (!currentSnapshot?.members.some(member => member.member_id === memberId &&
+      member.sources.includes('manual'))) { setUnavailable(true); return }
     void change.current?.({ operation: 'leave', workspace_id: workspaceId, session_id: sessionId,
-      request_id: randomUUID(), expected_membership_version: snapshot.membership_version,
+      request_id: randomUUID(), expected_membership_version: currentSnapshot.membership_version,
       member_id: memberId })
   }
   if (!host.collaborationGroupMembers) return null
@@ -245,7 +283,8 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       <span>{member.actor_ref}</span>
       {member.sources.includes('personal_proxy') && <small>{t('group.personalProxy')}</small>}
       {member.actor_kind === 'bot' && member.sources.includes('manual') &&
-        <button type="button" disabled={busy || !!pending} onClick={() => { remove(member.member_id) }}>
+        <button type="button" disabled={busy || !!pending || removalPending}
+          onClick={() => { void remove(member.member_id) }}>
           {t('group.removeBot')}
         </button>}
     </div>)}
@@ -271,6 +310,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     {proxyLabel && <p>{t('group.personalProxy')}: {proxyLabel}</p>}
     {proxyUnavailable && <p role="status">{t('group.proxyUnavailable')}</p>}
     {unavailable && <p role="status">{t('group.memberUnavailable')}</p>}
+    {removalNeedsDecision && <p role="status">{t('group.pendingWorkDecision')}</p>}
     {pending && <button type="button" disabled={busy}
       onClick={() => { void change.current?.(pending) }}>{t('group.retryMemberChange')}</button>}
   </section>

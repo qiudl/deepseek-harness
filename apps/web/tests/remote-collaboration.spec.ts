@@ -382,6 +382,30 @@ it('REQ-20261020-0010: Bot picker accepts only public sorted identities', async 
   expect(await bridge().collaborationGroupMembers?.({ ...command, limit: 101 }))
     .toEqual({ state: 'retry_required' })
 })
+it('REQ-20261020-0010: unresolved member inventory rejects private fields', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupMembers'] }
+  const member_id = '33333333-3333-4333-8333-333333333333'
+  const delivery_id = '44444444-4444-4444-8444-444444444444'
+  const command = { operation: 'inflight', workspace_id: workspace, session_id: 'session-1',
+    member_id, after_delivery_id: '', limit: 50 }
+  let extra = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    return { status: 200, value: envelope(rpc, { state: 'inflight', member_id,
+      member_cycle: 1, deliveries: [{ delivery_id, message_seq: 7,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation',
+        ...(extra ? { body: 'private' } : {}) }], next_cursor: null }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMembers?.(command)).toMatchObject({ state: 'inflight',
+    deliveries: [{ delivery_id, message_seq: 7 }] })
+  extra = true
+  expect(await bridge().collaborationGroupMembers?.(command)).toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupMembers?.({ ...command, limit: 101 }))
+    .toEqual({ state: 'retry_required' })
+})
 it('REQ-20261020-0010: personal proxy commands carry only binding facts', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2',
     methods: ['workspace', 'groupMembers'] }
