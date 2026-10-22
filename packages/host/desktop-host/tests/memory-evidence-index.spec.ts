@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { buildHostMemoryEvidenceIndex, HostMemoryEvidenceIndex } from '../src/memory-evidence-index.ts'
 
@@ -126,5 +127,129 @@ describe('Host local memory Evidence index', () => {
     expect(() => index.replace(scope, snapshot('password="unfinished', 'r2'), 1)).toThrow()
     expect(index.search(scope, 'safe plan', 1).generation).toBe(1)
     expect(index.search(scope, 'safe plan', 1).items).toHaveLength(1)
+  })
+
+  it('handles empty sessions, repeated revisions, missing matches, and idempotent deletion', () => {
+    const index = new HostMemoryEvidenceIndex(scope)
+    const empty = { sessionId: 'empty', revision: 'r1',
+      text: `${JSON.stringify({ version: SESSION_FORMAT_VERSION, id: 'empty', createdAt: 1, isSeeded: false })}\n` }
+    expect(index.replace(scope, empty, 0)).toBe(1)
+    expect(index.replace(scope, empty, 1)).toBe(1)
+    expect(index.search(scope, 'anything', 1).items).toEqual([])
+    expect(index.evidence(scope, 'a'.repeat(64))).toBeNull()
+    expect(index.delete(scope, 'missing', 1)).toBe(1)
+    expect(() => index.delete(scope, 'missing', 0)).toThrow()
+    expect(() => index.delete(scope, 'bad/id', 1)).toThrow()
+    expect(() => index.replace(scope, snapshot('safe', 'r1', 'bad/id'), 1)).toThrow()
+    expect(() => index.evidence(scope, 'not-a-hash')).toThrow()
+  })
+
+  it('sorts sessions and verifies the full literal match after gram filtering', () => {
+    const index = new HostMemoryEvidenceIndex(scope)
+    index.replace(scope, snapshot('abcdef', 'r1', 'z-last'), 0)
+    index.replace(scope, snapshot('abc xxx bcd', 'r1', 'm-middle'), 1)
+    index.replace(scope, snapshot('abcdef', 'r1', 'a-first'), 2)
+    const result = index.search(scope, 'abcd', 10)
+    expect(result.items.map(item => item.source.sessionId)).toEqual(['a-first', 'z-last'])
+    expect(index.search(scope, 'absent', 10).items).toEqual([])
+    expect(index.search(scope, 'abc', 1).items).toHaveLength(1)
+  })
+
+  it('intersects postings from different records and reuses a gram in one session', () => {
+    const index = new HostMemoryEvidenceIndex(scope)
+    index.replace(scope, snapshot('answer abc'), 0)
+    expect(index.search(scope, 'answer', 10).items).toHaveLength(2)
+    const second = snapshot('abc', 'r2')
+    index.replace(scope, { ...second, text: second.text.replace('"answer"', '"bcd"') }, 1)
+    expect(index.search(scope, 'abcd', 10).items).toEqual([])
+  })
+
+  it('keeps the prior index when the aggregate text budget is exhausted', () => {
+    const index = new HostMemoryEvidenceIndex(scope)
+    const internals = index as unknown as { sessions: Map<string, unknown> }
+    internals.sessions.set('existing', { version: 'old', records: [], postings: new Map(), textBytes: 32 * 1024 * 1024 })
+    expect(() => index.replace(scope, snapshot('new text'), 0)).toThrow()
+    expect(index.search(scope, 'new', 1).items).toEqual([])
+  })
+
+  it('rejects a single Session that exceeds the distinct gram budget', () => {
+    const sessionId = 'many-grams'
+    const rows: unknown[] = [
+      { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, isSeeded: false },
+      { type: 'turn/start', seq: 0, data: { turn: 0 } },
+    ]
+    for (let part = 0; part < 21; part++) {
+      const text = Array.from({ length: 10_000 }, (_, n) => String.fromCodePoint(0x10000 + part * 10_000 + n)).join('')
+      rows.push({ type: 'user/message', seq: part + 1, data: {
+        role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }],
+      } })
+    }
+    rows.push({ type: 'turn/end', seq: 22, data: { turn: 0, reason: { kind: 'completed' } } })
+    const source = { sessionId, revision: 'r1', text: `${rows.map(row => JSON.stringify(row)).join('\n')}\n` }
+    const index = new HostMemoryEvidenceIndex(scope)
+    expect(() => index.replace(scope, source, 0)).toThrow()
+    expect(index.search(scope, 'absent', 1).items).toEqual([])
+  })
+
+  it('rejects malformed or inconsistent inventory pages', async () => {
+    const signal = new AbortController().signal
+    const cases = [
+      { items: Array.from({ length: 65 }, (_, n) => ({ sessionId: `s${String(n).padStart(3, '0')}`, revision: 'r1' })), nextAfter: null },
+      { items: [{ sessionId: 'a', revision: 'r1' }], nextAfter: 'a' },
+      { items: [], nextAfter: 'a' },
+      { items: [{ sessionId: 'bad/id', revision: 'r1' }], nextAfter: null },
+      { items: [{ sessionId: 'a', revision: '' }], nextAfter: null },
+    ]
+    for (const page of cases) {
+      const index = new HostMemoryEvidenceIndex(scope)
+      await expect(index.assertCurrentInventory(scope, {
+        assertCurrent() {}, list: async () => page,
+        read: async () => snapshot('unused'),
+      }, signal)).rejects.toMatchObject({ code: 'unavailable' })
+    }
+    const index = new HostMemoryEvidenceIndex(scope)
+    index.replace(scope, snapshot('safe', 'r1', 'b'), 0)
+    await expect(index.assertCurrentInventory(scope, {
+      assertCurrent() {}, read: async () => snapshot('unused'),
+      list: async () => ({ items: [{ sessionId: 'b', revision: 'r1' },
+        { sessionId: 'a', revision: 'r1' }], nextAfter: null }),
+    }, signal)).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('scans complete inventory pages and catches an invalid page cursor', async () => {
+    const signal = new AbortController().signal
+    const items = Array.from({ length: 64 }, (_, n) => ({ sessionId: `s${String(n).padStart(3, '0')}`, revision: 'r1' }))
+    const index = new HostMemoryEvidenceIndex(scope)
+    await expect(index.assertCurrentInventory(scope, {
+      assertCurrent() {}, read: async () => snapshot('unused'),
+      list: async after => after === null
+        ? { items, nextAfter: items.at(-1)!.sessionId }
+        : { items: [], nextAfter: null },
+    }, signal)).rejects.toMatchObject({ code: 'stale' })
+    await expect(index.assertCurrentInventory(scope, {
+      assertCurrent() {}, read: async () => snapshot('unused'),
+      list: async () => ({ items, nextAfter: 'wrong' }),
+    }, signal)).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('caps a paginated inventory before accepting its ten-thousand-and-first Session', async () => {
+    const index = new HostMemoryEvidenceIndex(scope)
+    const internals = index as unknown as { sessions: Map<string, { version: string }> }
+    const version = createHash('sha256').update('r1').digest('hex')
+    for (let n = 0; n < 10_000; n++)
+      internals.sessions.set(`s${String(n).padStart(5, '0')}`, { version })
+    let scans = 0
+    await expect(index.assertCurrentInventory(scope, {
+      assertCurrent() {}, read: async () => snapshot('unused'),
+      list: async (after) => {
+        scans += 1
+        const start = after === null ? 0 : Number(after.slice(1)) + 1
+        const items = Array.from({ length: Math.min(64, 10_001 - start) }, (_, offset) => ({
+          sessionId: `s${String(start + offset).padStart(5, '0')}`, revision: 'r1',
+        }))
+        return { items, nextAfter: start + items.length < 10_001 ? items.at(-1)!.sessionId : null }
+      },
+    }, new AbortController().signal)).rejects.toMatchObject({ code: 'busy' })
+    expect(scans).toBeGreaterThan(1)
   })
 })

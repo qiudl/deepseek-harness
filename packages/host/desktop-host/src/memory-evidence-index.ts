@@ -58,7 +58,6 @@ function indexSession(scope: HostMemoryScope, records: readonly MemoryProjectedR
   const evidence: HostMemoryEvidence[] = []
   let textBytes = 0
   for (const record of records) {
-    if (record.sourceVersion !== version) throw new HostAuthorityError('unavailable')
     textBytes += Buffer.byteLength(record.text, 'utf8')
     const sourceRef = createHash('sha256').update(JSON.stringify([
       scope.ownerUserId, scope.installationId, scope.profileId, record.sessionId,
@@ -147,7 +146,7 @@ export class HostMemoryEvidenceIndex {
     const needle = query.toLowerCase()
     const grams = gramsOf(needle)
     const items: HostMemorySearchItem[] = []
-    for (const [, session] of [...this.sessions].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
+    for (const [, session] of [...this.sessions].sort(([left], [right]) => left < right ? -1 : 1)) {
       let candidates: readonly number[] | undefined
       for (const gram of grams) {
         const hits = session.postings.get(gram)
@@ -157,8 +156,7 @@ export class HostMemoryEvidenceIndex {
         if (candidates.length === 0) break
       }
       for (const index of candidates ?? session.records.keys()) {
-        const record = session.records[index]
-        if (!record) throw new HostAuthorityError('unavailable')
+        const record = session.records[index] as HostMemoryEvidence
         const position = record.text.toLowerCase().indexOf(needle)
         if (position < 0) continue
         const { text, ...metadata } = record
