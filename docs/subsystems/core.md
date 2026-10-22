@@ -923,6 +923,32 @@ Types: [Scoped](scope.md) · [UserMessage](session.md)
 
 Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
 
+<a id="agentpre-inbox--bail"></a>
+
+#### `agent/pre-inbox` — bail
+
+Admit one direct Agent input before its durable inbox splice. A listener may throw synchronously to refuse it; no inbox event or wake occurs then. This event does not run for driver-owned runtime context insertion. Listeners must finish synchronously and derive any state from a local committed view; asynchronous authorization cannot protect this splice.
+
+```ts cordis-catalog
+/**
+ * Admit one direct Agent input before its durable inbox splice. A listener
+ * may throw synchronously to refuse it; no inbox event or wake occurs then.
+ * This event does not run for driver-owned runtime context insertion.
+ * Listeners must finish synchronously and derive any state from a local
+ * committed view; asynchronous authorization cannot protect this splice.
+ * @param payload.agent - the agent receiving input.
+ * @param payload.message - the proposed input, including its source.
+ * @param payload.target - the resolved next-turn or next-step queue.
+ * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.
+ * @mode bail
+ */
+'agent/pre-inbox'(this: Scoped<Agent>, payload: { agent: Agent; message: UserMessage; target: InboxTarget }): void
+```
+
+Types: [Scoped](scope.md) · [UserMessage](session.md)
+
+Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
+
 <a id="agentpre-step--waterfall"></a>
 
 #### `agent/pre-step` — waterfall

@@ -8,6 +8,7 @@ import {
   encodeHostControlFrame,
   encodeHostWorkspaceAuthorityPayload,
   encodeHostCollaborationArchiveStatePayload,
+  encodeHostGroupInputFencePayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame, HostWorkspaceModelSelection,
   HostCollaborationArchiveIntentValue } from '@deepseek-ai/dsh-host-control-protocol'
@@ -16,7 +17,7 @@ import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
-async function fixture() {
+async function fixture(withGroupInstaller = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
     rmSync(root, { recursive: true, force: true })
@@ -72,6 +73,13 @@ async function fixture() {
     account_issuer: string
     account_subject: string
   }, _signal: AbortSignal) => ({ archive_phase: 'archived' as const })
+  let installGroup = async (_profileId: string, challenge: {
+    workspace_id: string
+    session_id: string
+    group_id: string
+    group_version: number
+  }, _signal: AbortSignal) => ({ workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+    group_id: challenge.group_id, group_version: challenge.group_version })
   let inspectIntent = async (_profileId: string, _target: {
     workspace_id: string
     session_id: string
@@ -97,6 +105,9 @@ async function fixture() {
     inspectWorkspaceModelSelection: (profileId, target, signal) =>
       inspect(profileId, target, signal) as Promise<HostWorkspaceModelSelection>,
     inspectCollaborationArchiveState: (profileId, target, signal) => inspectArchive(profileId, target, signal),
+    ...(withGroupInstaller ? { installGroupInputFence: (profileId: string,
+      challenge: Parameters<typeof installGroup>[1], signal: AbortSignal) =>
+      installGroup(profileId, challenge, signal) } : {}),
     inspectCollaborationArchiveIntent: (profileId, target, signal) => inspectIntent(profileId, target, signal),
     transitionCollaborationArchive: (profileId, target, signal) => transitionArchive(profileId, target, signal),
   })
@@ -171,6 +182,9 @@ async function fixture() {
     },
     setInspectArchive: (callback: typeof inspectArchive) => {
       inspectArchive = callback
+    },
+    setInstallGroup: (callback: typeof installGroup) => {
+      installGroup = callback
     },
     setInspectIntent: (callback: typeof inspectIntent) => {
       inspectIntent = callback
@@ -265,6 +279,84 @@ it('signs the observed durable archive phase only for the bound Account and toke
     ? { ...frame, result: { ...frame.result, challenge: { ...frame.result.challenge,
       archive_token: randomUUID() } } } : frame)
   await expect(f.client.attestCollaborationArchiveState(input)).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('signs a group input fence only after the current Account Profile installs that exact group version', async () => {
+  const f = await fixture()
+  const challenge = { ...f.challenge, group_id: randomUUID(), group_version: 1 }
+  const input = { ...f.input, challenge }
+  let calls = 0
+  f.setInstallGroup(async (profileId, actual) => {
+    calls++
+    expect(profileId).toBe(f.profile.profileId)
+    expect(actual).toEqual(challenge)
+    return { workspace_id: actual.workspace_id, session_id: actual.session_id,
+      group_id: actual.group_id, group_version: actual.group_version }
+  })
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(calls).toBe(0)
+  await f.grant()
+  await expect(f.client.attestGroupInputFence({ ...input, authorityEnvironmentId: randomUUID() }))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  const result = await f.client.attestGroupInputFence(input)
+  expect(calls).toBe(1)
+  expect(verify(null, encodeHostGroupInputFencePayload(result), f.keys.publicKey,
+    Buffer.from(result.signature, 'base64url'))).toBe(true)
+  f.setInstallGroup(async (_profileId, actual) => ({ workspace_id: randomUUID(),
+    session_id: actual.session_id, group_id: actual.group_id, group_version: actual.group_version }))
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.setInstallGroup(async (_profileId, actual) => ({ workspace_id: actual.workspace_id,
+    session_id: actual.session_id, group_id: randomUUID(), group_version: actual.group_version }))
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.setInstallGroup(async (_profileId, actual) => ({ workspace_id: actual.workspace_id,
+    session_id: actual.session_id, group_id: actual.group_id, group_version: actual.group_version }))
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.group_input_fence'
+    ? { ...frame, result: { ...frame.result, challenge: { ...frame.result.challenge,
+      group_version: 2 } } } : frame)
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  f.alter(undefined)
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.group_input_fence') Reflect.set(frame, 'type', 'request')
+    return frame
+  })
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unavailable' })
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.group_input_fence') {
+      Reflect.set(frame, 'method', 'profile.collaboration_archive_state')
+    }
+    return frame
+  })
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unavailable' })
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.group_input_fence') f.time.value = 2000
+    return frame
+  })
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  f.time.value = 1000
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.group_input_fence') f.time.value = -300000
+    return frame
+  })
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  f.time.value = 1000
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.group_input_fence'
+    ? { ...frame, result: { ...frame.result,
+      signature: sign(null, Buffer.from('tampered'), f.keys.privateKey).toString('base64url') as never } } : frame)
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  f.alter(undefined)
+  Reflect.set(f.client.inspection, 'capabilities', f.client.inspection.capabilities.filter(
+    value => value !== 'profile.group_input_fence'))
+  await expect(f.client.attestGroupInputFence(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('fails closed when a claimed group fence capability has no Host installer', async () => {
+  const f = await fixture(false)
+  const challenge = { ...f.challenge, group_id: randomUUID(), group_version: 1 }
+  await f.grant()
+  Reflect.set(f.client.inspection, 'capabilities', [...f.client.inspection.capabilities,
+    'profile.group_input_fence'])
+  await expect(f.client.attestGroupInputFence({ ...f.input, challenge }))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
 })
 
 it('fails closed when an archive capability or worker callback is absent', async () => {

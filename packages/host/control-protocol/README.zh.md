@@ -38,7 +38,9 @@ kind: "package-reference"
 
 `profile.remote_session.control_lease` capability 增加精确的 `control.status`、`control.acquire`、`control.renew` 和 `control.release` 命令。选定 Profile 签发进程 generation 和按 Session 递增的 epoch；每次远端 Session 修改及审批答复都携带该证明。Profile 在调用业务代码前拒绝过期或缺失的证明，已获准的写入执行期间不允许接管。Profile 重启会更换 generation，使旧证明失效。
 
-`profile.remote_ui_read` 将启动、资源、Session 和五种精确的启动元数据读取绑定到同一有效视图租约。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
+`profile.remote_ui_read` 将启动、资源、Session 和六种精确的启动元数据读取绑定到同一有效视图租约。`cotTranslation/limits` 读取翻译偏好、可用提供方和文本上限，不授予翻译执行或设置写入。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
+
+原生终端只读操作限于原有 `terminal/environment`、`terminal/shells` 和 `terminal/list`，且必须提供准确的 Session 身份。终端修改操作使用 Session 控制权证明。私有 `terminal/stream` 路由只消费在该证明下为 `follow` 或 `retain` 签发的一次性票据；每次轮询继续检查视图租约，Profile 在流期间重新核验 Session 控制权。
 
 `profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。
 
@@ -78,7 +80,15 @@ kind: "package-reference"
 
 `profile.collaboration_registration` 在核验同一连接的 Account 绑定后，签署服务器登记请求/challenge ID、规范 nonce、有效期、HTTPS audience、environment UUID 和 Account issuer/subject。证明包含安装 UUID/公钥及当前 Host instance/process nonce。Ed25519 签名正文是 UTF-8 域 `dsh-collaboration-host-registration/v2`、NUL 与固定顺序 JSON 元组，不包含签名本身。解析器冻结精确字段并拒绝凭据。挑战须仍有效，且在五分钟内过期。服务器须另行信任安装公钥、持久保存并消费挑战、提交登记回执；此签名不授权 Source 或任务。
 
+`profile.bot_identity` 从当前 Account Profile 的私有插件服务读取一个准确的 Bot ID。响应仅包含缺失状态，或 Bot ID、派生的发言者引用和有界显示名。调用方不能选择 Profile 路径、私聊或插件房间。此读取不授予群成员资格、投递或分身代理权限。
+
+`HostBotGroupCommand` 和 `HostBotGroupResponse` 校验 Profile worker 私有 Bot 群投递、回执、单条结果补读、结果确认及成员周期撤权。命令把投递或结果绑定到群 UUID、准确的 Bot ID 和成员周期；投递还包含消息序号、载荷摘要及最多 16,000 字符的正文。结果分页每次至多返回一条有界结果及稳定序号游标。响应必须匹配请求作用域，投递响应还须匹配摘要。worker 路由要求私有令牌；这些类型本身不授予 Slark 群权限。
+
+`profile.bot_group_deliver` 仅接受投递命令和短时 Slark 签名凭据。Host 启动时固定 Desktop 签名环境配置中的公钥环，请求不能替换。Host 核验当前 Account 和安装身份、准确的投递与摘要，并向 Slark 实时确认成员资格后，才转发到当前 Profile worker。未固定公钥环时不公布该能力。其他私有 Bot 群命令尚无公开控制方法。
+
 `profile.workspace_authority` 仅在授权 Profile 读取器确认归属后，签署服务器 nonce、Account/environment 及注册表工作区/Session 目标。读取后再次核验 Account 授权和五分钟有效期。独立签名域 `dsh-collaboration-workspace-authority/v1` 绑定完整目标及当前安装/进程，登记签名不能替代。此证明仅说明读取时的归属，不证明 Source 内容、journal 持久性或 prepared 模型配置。服务器必须认证其挑战，并在重新核验当前 Host/Account 的同一事务中消费。
+
+REQ-20261020-0010 增加 `profile.group_input_fence`。挑战将原 Workspace/Session、准备中群的 UUID 与正整数版本绑定到当前账号和环境。只有当前 Profile worker 确认完全匹配的持久输入栅栏后，Host 才签署 `dsh-group-input-fence/v1`。客户端核验完整挑战、当前安装/进程、有效期及签名。Slark 须先认证并消费挑战，再把群从 preparing 切换为 active；此协议方法不执行云端转移。
 
 REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号的 Host 从当前 Profile worker 读取 Registry 中持久的工作区、会话、token、环境和账号阶段；仅当读取结果等于服务器挑战要求的阶段时签名。独立签名域 `dsh-collaboration-archive-state/v1` 绑定 token 与 `staged`、`prepared`、`archived` 或 `restored` 阶段。私有 worker token 保护读取端点，浏览器视图 cookie 无法调用。此证明只表示一次阶段观察；Slark 仍须认证挑战并协调每次状态转移。
 
@@ -156,7 +166,7 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 ## 已知限制与延后工作
 
 - 远程 Session 创建可携带不透明的工作区和会话 ID，由选定 Profile 验证工作区，并按原生 cwd 和 writer 检查幂等复用会话。会话身份复用要求 `profile.remote_session.session_reuse` 能力。传输命令不接受调用方指定的路径。
-- **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read、扩展命令、远程 Session 命令、十种远程 UI 读取、三种原生流（`session/follow`、`workspace/follow` 与 `$events`）与通用错误。远程方法在 Host 执行器发布 capability 前仍不可用；environment、attachment 和 upgrade 操作需要显式扩展协议。
+- **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read、扩展命令、远程 Session 命令、十五种远程 UI 读取、三种原生流（`session/follow`、`workspace/follow` 与 `$events`）与通用错误。远程方法在 Host 执行器发布 capability 前仍不可用；environment、attachment 和 upgrade 操作需要显式扩展协议。
 - **传输上限由外部执行**——Unix domain socket carrier 必须在字节上限停止读取，并在首次 codec 失败时关闭连接。
 - **密码学策略由外部执行**——密钥持久化、代码签名检查、挑战签名与验证、重放存储和密钥轮换属于 Host identity 与 Desktop broker 包。
 
@@ -224,3 +234,15 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 首条回复凭据使用 `dsh-collaboration-continuation-observation-v1` 签名域。commit 嵌套原消费 commit，并独立绑定观察 ID、`assistant_message_committed`、助手事件序号和观察到的持久前缀。消费签名不能证明此域；凭据不包含回复正文或完成声明。
 
 `profile.remote_ui_stream.session_list` 声明支持 `args` 为空的 `session/list` 游标。每次打开、轮询和关闭仍由所属视图租约授权；结果通过现有的 16 KiB 分块传输，不提高 64 KiB 控制帧上限。
+
+闭合的会话命令集还包含 `session.select_model`（提供方、模型和可选思考强度）与 `session.select_agent`（预设）。两者均携带精确会话 ID 和必需的控制权证明；执行前校验文本上限并拒绝未知字段。
+
+绑定 view lease 的 `workbench/read` 流只允许 `workspaceFiles/read`、`readBytes`、`stat` 和 `list`，并校验精确的工作区范围与路径参数。它使用 Profile 进程内的 Connection Fetch handler，保留原有 JSON 或 multipart RPC 响应。按序分块不超过 16 KiB，完整响应上限为 34 MiB。取消会关闭所属 reader；未知接口与授权选择字段在派发前被拒绝。
+
+同一文件能力也允许精确的 `workspaceFiles/changes` 流。Gateway 范围查找与文件系统策略继续负责授权；页面取消释放所属 watcher，每次 Host 轮询仍要求原 view lease。
+
+个人 `settings.apply` 命令只允许原有 update、replace、mutate 表单操作。它保留 provider 的版本校验与脱敏 namespace 响应，意图上限 32 KiB，拒绝授权选择字段和不安全 JSON，并保留类型化冲突/拒绝结果，不返回私有异常文本。它不会改变选中 Profile，也不会获取会话控制权。
+
+个人 `credentials.apply` 命令只允许精确的 set/unset。引用名沿用原语法且最多 128 字符，只写值最多 16 KiB。存储由原凭据 provider 负责。成功不返回值，已知拒绝的详情只包含引用名，不回显 provider 值或私有诊断。
+
+受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。

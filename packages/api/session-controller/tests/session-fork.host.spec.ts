@@ -34,7 +34,7 @@ async function composed(workspaces: readonly Workspace[] = []): Promise<Context>
   await ctx.plugin(SystemPrompt, { personaPrefix: '' })
   await ctx.plugin(AgentRegistry)
   installSessionReadTestServices(ctx)
-  ctx.provide('workspaceRegistry', { list: () => workspaces, archivedSessionIds: [] } as never)
+  ctx.provide('workspaceRegistry', { list: () => workspaces, archivedSessionIds: [], isGroupInputBlocked: () => false } as never)
   ctx.agents.setFactory({
     createAgent: async (ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> => {
       const session = ctx.sessions.create(options.sessionId, {
@@ -252,7 +252,7 @@ describe('sessions.fork', () => {
         textResponse('reply'), textResponse('checkpoint'), textResponse('continued'),
       ])
       ctx.llm.registerAdapter(['mock'], adapter)
-      ctx.provide('workspaceRegistry', { list: () => [], archivedSessionIds: [] } as never)
+      ctx.provide('workspaceRegistry', { list: () => [], archivedSessionIds: [], isGroupInputBlocked: () => false } as never)
       const source = await harness.create(sid('manual-compaction-source'), { provider: 'mock', model: 'mock' })
       const originalPrompt = 'older conversation history '.repeat(60)
       source.followup(message(originalPrompt))
@@ -291,7 +291,7 @@ describe('sessions.fork', () => {
         const harness = await mountAgentLoopTestHarness(ctx)
         const adapter = new MockAdapter(Array.from({ length: 4 }, () => textResponse('reply')))
         ctx.llm.registerAdapter(['mock'], adapter)
-        ctx.provide('workspaceRegistry', { list: () => [], archivedSessionIds: [] } as never)
+        ctx.provide('workspaceRegistry', { list: () => [], archivedSessionIds: [], isGroupInputBlocked: () => false } as never)
         const source = await harness.create(sid('source'), { provider: 'mock', model: 'mock' })
         source.followup(message('A'))
         await source.whenIdle()

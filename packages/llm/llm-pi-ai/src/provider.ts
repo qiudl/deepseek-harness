@@ -68,17 +68,20 @@ export function supportedProtocols(): readonly string[] {
  * missing key here is not this layer's failure: a named-but-unresolvable
  * reference has already failed the request with `MISSING_CREDENTIAL`, and a
  * route naming no credential at all is deliberately unauthenticated. Reporting
- * it as configured hands the decision to the protocol, which is where the
- * requirement actually lives — pi-ai's OpenAI-compatible implementation, for
- * one, still insists on a key or an `Authorization` header of its own.
+ * it as configured preserves a route's explicit unauthenticated mode. Custom
+ * completion routes use an SDK constructor placeholder and suppress its
+ * generated Authorization header; no credential is stored or transmitted.
  * @param name - display name used as the resolution's status label.
- * @returns the api-key auth for a harness-authenticated route.
+ * @param keylessCompletion - permits unauthenticated custom completion requests when no reference is named.
+ * @returns the API-key policy for a harness-configured route.
  */
-function harnessApiKeyAuth(name: string): ApiKeyAuth {
+function harnessApiKeyAuth(name: string, keylessCompletion = false): ApiKeyAuth {
   return {
     name,
     resolve: ({ credential }) => Promise.resolve({
-      auth: credential?.key === undefined ? {} : { apiKey: credential.key },
+      auth: credential?.key === undefined
+        ? keylessCompletion ? { apiKey: 'unused', headers: { authorization: null } } : {}
+        : { apiKey: credential.key },
       source: name,
     }),
   }
@@ -129,7 +132,9 @@ export interface ProviderSpec {
  * @returns the auth to construct this route's provider with.
  */
 function routeAuth(spec: ProviderSpec, catalog: Provider | undefined): Provider['auth'] {
-  if (catalog === undefined) return { apiKey: harnessApiKeyAuth(spec.displayName) }
+  if (catalog === undefined) return {
+    apiKey: harnessApiKeyAuth(spec.displayName, spec.api === 'openai-completions' && !spec.namesCredential),
+  }
   if (catalog.auth.apiKey !== undefined || !spec.namesCredential) return catalog.auth
   return { ...catalog.auth, apiKey: harnessApiKeyAuth(spec.displayName) }
 }

@@ -1,3 +1,11 @@
+import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.ts'
+import { parseHostBotGroupDeliveryInput, parseHostBotGroupResponse } from './bot-group.ts'
+import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
+import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
+import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
+import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
+import { parseHostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
 import { parseRecoveryDescriptor, parseRecoveryDescribeInput, parseRecoveryValidateInput, parseRecoveryValidation } from './recovery-materials.ts'
 import { parseHostRootTextContextReceipt } from './root-text-context.ts'
 import { parseHostCollaborationAnalysisReceipt } from './collaboration-analysis-receipt.ts'
@@ -70,6 +78,8 @@ import type {
   HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
   HostCollaborationArchiveStateTarget, HostCollaborationArchiveStateValue,
   ProfileCollaborationArchiveStateRequest, ProfileCollaborationArchiveStateResult,
+  HostGroupInputFenceChallenge, HostGroupInputFenceValue, HostGroupInputFenceAssertion,
+  ProfileGroupInputFenceRequest, ProfileGroupInputFenceResult,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
   ProfileCollaborationArchiveIntentRequest, ProfileCollaborationArchiveIntentResult,
   HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult,
@@ -93,6 +103,10 @@ import type {
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
+  ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
+  ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
+  ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -572,6 +586,11 @@ function extensionKind(value: unknown): HostExtensionKind {
   if (value !== 'plugin' && value !== 'mcp' && value !== 'skill') reject()
   return value
 }
+function botGroupDeliveryParams(params: Record<string, unknown>) {
+  return parseHostBotGroupDeliveryInput({ computer_id: params.computer_id,
+    slark_audience: params.slark_audience, ticket: params.ticket, command: params.command })
+}
+
 function collaborationAccountParams(params: Record<string, unknown>) {
   return {
     ...authorized(params),
@@ -651,6 +670,25 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     return { operation: 'session.list', command_id }
   }
 
+  if (command.operation === 'terminal.apply') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseWorkbenchTerminalRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (!request || request.sessionId !== session_id) reject()
+    return { operation: 'terminal.apply', command_id, session_id, control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'credentials.apply') {
+    exactKeys(command, ['operation', 'command_id', 'request'])
+    const request = parseWorkbenchCredentialWrite(command.request)
+    if (!request) reject()
+    return { operation: 'credentials.apply', command_id, request }
+  }
+  if (command.operation === 'settings.apply') {
+    exactKeys(command, ['operation', 'command_id', 'request'])
+    const request = parseWorkbenchSettingsWrite(command.request)
+    if (!request) reject()
+    return { operation: 'settings.apply', command_id, request }
+  }
   if (command.operation === 'directory.pick') {
     exactKeys(command, ['operation', 'command_id', 'client_id'])
     return { operation: 'directory.pick', command_id, client_id: uuid(command.client_id) }
@@ -710,6 +748,20 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'title'])
     return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
       control: remoteSessionControlProof(command.control), title: wireText(command.title, 256) }
+  }
+  if (command.operation === 'session.select_model') {
+    const withEffort = Object.hasOwn(command, 'reasoning_effort')
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'provider', 'model',
+      ...(withEffort ? ['reasoning_effort'] : [])])
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      control: remoteSessionControlProof(command.control), provider: wireText(command.provider, 256),
+      model: wireText(command.model, 256),
+      ...(withEffort ? { reasoning_effort: wireText(command.reasoning_effort, 256) } : {}) }
+  }
+  if (command.operation === 'session.select_agent') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'agent_preset'])
+    return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
+      control: remoteSessionControlProof(command.control), agent_preset: wireText(command.agent_preset, 256) }
   }
   if (command.operation === 'approval.poll') {
     const withCursor = 'cursor' in command
@@ -1120,6 +1172,59 @@ export function encodeHostCollaborationArchiveStatePayload(value: HostCollaborat
     c.account_issuer, c.account_subject, c.workspace_id, c.session_id,
     c.archive_token, c.archive_phase, r.installation_id, r.installation_public_key,
     r.host_instance_id, r.process_nonce,
+  ])}`, 'utf8')
+}
+/** Parse one exact Slark group challenge for the original Session.
+ * @param value - Untrusted challenge.
+ * @returns Validated group challenge.
+ */
+export function parseHostGroupInputFenceChallenge(value: unknown): HostGroupInputFenceChallenge {
+  const r = registrationRecord(value)
+  exactKeys(r, ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
+    'account_issuer', 'account_subject', 'workspace_id', 'session_id', 'group_id', 'group_version'])
+  const base = parseHostWorkspaceAuthorityChallenge(Object.fromEntries(
+    ['request_id', 'challenge_nonce', 'expires_at', 'audience', 'environment_id',
+      'account_issuer', 'account_subject', 'workspace_id', 'session_id'].map(key => [key, r[key]])))
+  if (!Number.isSafeInteger(r.group_version) || (r.group_version as number) < 1) reject()
+  return Object.freeze({ ...base, group_id: uuid(r.group_id), group_version: r.group_version as number })
+}
+/** Validate the exact worker acknowledgement without admitting extra claims.
+ * @param value - Untrusted worker result.
+ * @returns Validated installed fence.
+ */
+export function parseHostGroupInputFenceValue(value: unknown): HostGroupInputFenceValue {
+  const r = registrationRecord(value)
+  exactKeys(r, ['workspace_id', 'session_id', 'group_id', 'group_version'])
+  const target = parseHostWorkspaceModelSelectionTarget({ workspace_id: r.workspace_id, session_id: r.session_id })
+  if (!Number.isSafeInteger(r.group_version) || (r.group_version as number) < 1) reject()
+  return Object.freeze({ ...target, group_id: uuid(r.group_id), group_version: r.group_version as number })
+}
+
+/** Parse installation proof without accepting a caller-provided local fence.
+ * @param value - Untrusted Host assertion.
+ * @returns Validated signed assertion.
+ */
+export function parseHostGroupInputFenceAssertion(value: unknown): HostGroupInputFenceAssertion {
+  const r = registrationRecord(value)
+  exactKeys(r, ['schema_version', 'challenge', 'installation_id', 'installation_public_key',
+    'host_instance_id', 'process_nonce', 'signature'])
+  if (r.schema_version !== 1) reject()
+  const challenge = parseHostGroupInputFenceChallenge(r.challenge)
+  const { group_id: _groupId, group_version: _groupVersion, ...workspaceChallenge } = challenge
+  const identity = parseHostWorkspaceAuthorityAssertion({ ...r, challenge: workspaceChallenge })
+  return Object.freeze({ ...identity, challenge })
+}
+
+/** Sign the exact installed group and version in a domain separate from ownership proofs.
+ * @param value - Validated signed assertion.
+ * @returns Domain-separated signature payload.
+ */
+export function encodeHostGroupInputFencePayload(value: HostGroupInputFenceAssertion): Buffer {
+  const r = parseHostGroupInputFenceAssertion(value), c = r.challenge
+  return Buffer.from(`dsh-group-input-fence/v1\0${JSON.stringify([
+    1, c.request_id, c.challenge_nonce, c.expires_at, c.audience, c.environment_id,
+    c.account_issuer, c.account_subject, c.workspace_id, c.session_id, c.group_id, c.group_version,
+    r.installation_id, r.installation_public_key, r.host_instance_id, r.process_nonce,
   ])}`, 'utf8')
 }
 /** Bounded private worker lookup with no caller-selected phase.
@@ -1566,6 +1671,10 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
     exactKeys(row, ['action', 'target'])
     return { action: row.action, target: parseHostCollaborationSourceTarget(row.target) }
   }
+  if (row.action === 'read_root_diagnostic') {
+    exactKeys(row, ['action', 'target'])
+    return { action: 'read_root_diagnostic', target: parseHostRootSubmissionTarget(row.target) }
+  }
   if (row.action === 'read_root_output') {
     exactKeys(row, ['action','target'])
     return { action: 'read_root_output', target: parseHostRootSubmissionTarget(row.target) }
@@ -1640,6 +1749,10 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
     exactKeys(row, ['kind', 'evidence'])
     return { kind: row.kind, evidence: parseHostSourceAnalysisOutput(row.evidence) }
   }
+  if (row.kind === 'root_diagnostic') {
+    exactKeys(row, ['kind', 'evidence'])
+    return { kind: 'root_diagnostic', evidence: parseHostRootAnalysisDiagnostic(row.evidence) }
+  }
   if (row.kind === 'root_output') {
     exactKeys(row, ['kind','evidence'])
     return { kind: 'root_output', evidence: parseHostRootAnalysisOutput(row.evidence) }
@@ -1690,9 +1803,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
+  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
+  | ProfileBotGroupDeliverRequest
+  | ProfileBotGroupResultPageRequest
+  | ProfileBotGroupResultAckRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
+  | ProfileGroupInputFenceRequest
   | ProfileCollaborationArchiveIntentRequest
   | ProfileCollaborationArchiveTransitionRequest
   | ProfileSourceAuthorityRequest
@@ -1789,17 +1906,33 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
       && params.endpoint !== 'session/collaborationMembership'
+      && params.endpoint !== 'commands/list' && params.endpoint !== 'skills/list'
+      && params.endpoint !== 'llm/listProviders' && params.endpoint !== 'llm/listConfigurableProviders'
       && params.endpoint !== 'settings/describe'
       && params.endpoint !== 'agentPresets/list' && params.endpoint !== 'dynamicCordisRunner/inventory'
-      && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog') reject()
+      && params.endpoint !== 'credentials/describe' && params.endpoint !== 'permissionPresets/catalog'
+      && params.endpoint !== 'cotTranslation/limits') reject()
     const payload = record(params.payload)
     exactKeys(payload, ['args'])
     const args = remoteSessionJson(payload.args)
     if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()
-    if ((params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
-      || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog')
+    if ((params.endpoint === 'llm/listProviders' || params.endpoint === 'llm/listConfigurableProviders' || params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
+      || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog'
+      || params.endpoint === 'cotTranslation/limits')
       && Object.keys(args).length !== 0) reject()
+    if (params.endpoint === 'commands/list') {
+      const catalogArgs = record(args)
+      exactKeys(catalogArgs, ['agent'])
+      remoteIdentifier(catalogArgs.agent)
+    }
+    if (params.endpoint === 'skills/list') {
+      const catalogArgs = record(args)
+      exactKeys(catalogArgs, ['request'])
+      const request = record(catalogArgs.request)
+      exactKeys(request, ['sessionId'])
+      remoteIdentifier(request.sessionId)
+    }
     if (params.endpoint === 'session/collaborationSources') {
       const sourceArgs = args as Record<string, unknown>
       exactKeys(sourceArgs, ['request'])
@@ -1845,7 +1978,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         || (params.endpoint !== 'asset/describe' &&
           (!Number.isSafeInteger(assetArgs.offset) || (assetArgs.offset as number) < 0))
         || (params.endpoint === 'asset/read-gzip-chunk'
-          && (assetArgs.offset as number) > 8 * 1024 * 1024 + 64 * 1024)) reject()
+          && (assetArgs.offset as number) > 16 * 1024 * 1024 + 64 * 1024)) reject()
     }
     return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
       ...authorized(params), view_lease_id: uuid(params.view_lease_id) as HostViewLeaseId,
@@ -1864,11 +1997,24 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     } else if (command.action === 'open') {
       exactKeys(command, ['action', 'stream_id', 'endpoint', 'payload',
         ...(command.item_chunks === undefined ? [] : ['item_chunks'])])
-      if (command.item_chunks !== undefined && (command.item_chunks !== true || command.endpoint !== 'session/follow')) reject()
+      if (command.item_chunks !== undefined && (command.item_chunks !== true || (command.endpoint !== 'session/follow' && command.endpoint !== 'terminal/stream'))) reject()
       const payload = record(command.payload)
       exactKeys(payload, ['args'])
       const args = record(payload.args)
-      if (command.endpoint === 'workspace/follow' || command.endpoint === '$events' || command.endpoint === 'session/list') {
+      if (command.endpoint === 'terminal/stream') {
+        const parsedPayload = parseWorkbenchTerminalStreamPayload(payload)
+        if (!parsedPayload) reject()
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload,
+          ...(command.item_chunks === true ? { item_chunks: true } : {}) }
+      } else if (command.endpoint === 'workspaceFiles/changes') {
+        const parsedPayload = parseWorkbenchChangesPayload(payload)
+        if (!parsedPayload) reject()
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload }
+      } else if (command.endpoint === 'workbench/read') {
+        const parsedPayload = parseWorkbenchReadPayload(payload)
+        if (!parsedPayload) reject()
+        parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: parsedPayload }
+      } else if (command.endpoint === 'workspace/follow' || command.endpoint === '$events' || command.endpoint === 'session/list') {
         exactKeys(args, [])
         parsed = { action: 'open', stream_id, endpoint: command.endpoint, payload: { args: {} } }
       } else if (command.endpoint === 'session/follow') {
@@ -2276,6 +2422,12 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       params: { ...accountChallengeParams(params),
         challenge: parseHostCollaborationArchiveStateChallenge(params.challenge) } }
   }
+  if (frame.method === 'profile.group_input_fence') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'account_binding_handle', 'authority_binding_version', 'challenge'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...accountChallengeParams(params),
+        challenge: parseHostGroupInputFenceChallenge(params.challenge) } }
+  }
   if (frame.method === 'profile.collaboration_archive_intent') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
@@ -2337,6 +2489,41 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       challenge: parseHostCollaborationRegistrationChallenge(params.challenge),
     } }
   }
+  if (frame.method === 'profile.bot_identity') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'bot_id'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
+    } } satisfies ProfileBotIdentityRequest
+  }
+  if (frame.method === 'profile.bot_group_deliver') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
+      'slark_audience', 'ticket', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...botGroupDeliveryParams(params),
+    } } satisfies ProfileBotGroupDeliverRequest
+  }
+  if (frame.method === 'profile.bot_group_result_page') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
+      'slark_audience', 'ticket', 'command', 'after'])
+    if (!Number.isSafeInteger(params.after) || Number(params.after) < 0) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...botGroupDeliveryParams(params),
+      after: params.after as number,
+    } } satisfies ProfileBotGroupResultPageRequest
+  }
+  if (frame.method === 'profile.bot_group_result_ack') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
+      'slark_audience', 'ticket', 'command', 'result_id'])
+    const delivery = botGroupDeliveryParams(params)
+    if (params.result_id !== `${delivery.command.deliveryId}:final`) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...delivery, result_id: params.result_id,
+    } } satisfies ProfileBotGroupResultAckRequest
+  }
   if (frame.method === 'profile.model_text') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
       'account_binding_handle', 'authority_binding_version', 'text'])
@@ -2383,9 +2570,13 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
+  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult
+  | ProfileBotGroupDeliverResult
+  | ProfileBotGroupResultPageResult
+  | ProfileBotGroupResultAckResult
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateResult
+  | ProfileGroupInputFenceResult
   | ProfileCollaborationArchiveIntentResult
   | ProfileCollaborationArchiveTransitionResult
   | ProfileSourceAuthorityResult
@@ -2738,6 +2929,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: parseHostCollaborationArchiveStateAssertion(result) }
   }
+  if (frame.method === 'profile.group_input_fence') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostGroupInputFenceAssertion(result) }
+  }
   if (frame.method === 'profile.collaboration_archive_intent') {
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: parseHostCollaborationArchiveIntentValue(result) }
@@ -2780,6 +2975,34 @@ function decodeProfileResult(frame: Record<string, unknown>):
   if (frame.method === 'profile.collaboration_registration') {
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: parseHostCollaborationRegistrationAssertion(result) }
+  }
+  if (frame.method === 'profile.bot_identity') {
+    exactKeys(result, ['identity'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { identity: parseHostBotIdentity(result.identity) } } satisfies ProfileBotIdentityResult
+  }
+  if (frame.method === 'profile.bot_group_deliver') {
+    exactKeys(result, ['reply'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { reply: parseHostBotGroupResponse(result.reply) } } satisfies ProfileBotGroupDeliverResult
+  }
+  if (frame.method === 'profile.bot_group_result_page') {
+    exactKeys(result, ['reply', 'proof'])
+    const reply = parseHostBotGroupResponse(result.reply)
+    if (reply.state !== 'ok' && reply.state !== 'invalid' && reply.state !== 'unavailable') reject()
+    const item = reply.state === 'ok' ? reply.results[0] : undefined
+    const proof = result.proof === null ? null : parseHostBotGroupResultProof(result.proof)
+    if (Boolean(item) !== Boolean(proof) ||
+      (item && proof && JSON.stringify(item) !== JSON.stringify(proof.result))) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { reply, proof } } satisfies ProfileBotGroupResultPageResult
+  }
+  if (frame.method === 'profile.bot_group_result_ack') {
+    exactKeys(result, ['reply'])
+    const reply = parseHostBotGroupResponse(result.reply)
+    if (!['acknowledged', 'missing', 'invalid', 'unavailable'].includes(reply.state)) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { reply } } satisfies ProfileBotGroupResultAckResult
   }
   if (frame.method === 'profile.model_text') {
     if (result.state === 'rejected') {

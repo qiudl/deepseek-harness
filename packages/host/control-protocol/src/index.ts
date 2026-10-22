@@ -25,12 +25,26 @@ export {
   parseHostCollaborationArchiveStateChallenge, parseHostCollaborationArchiveStateAssertion,
   encodeHostCollaborationArchiveStatePayload, parseHostCollaborationArchiveStateTarget,
   parseHostCollaborationArchiveStateValue,
+  parseHostGroupInputFenceChallenge, parseHostGroupInputFenceValue, parseHostGroupInputFenceAssertion, encodeHostGroupInputFencePayload,
   parseHostCollaborationArchiveIntentTarget, parseHostCollaborationArchiveIntentValue,
   parseHostCollaborationArchiveTransitionTarget, parseHostCollaborationArchiveTransitionResult,
   parseHostCollaborationRegistrationChallenge, parseHostCollaborationRegistrationAssertion,
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.js'
+export type { HostBotIdentity } from './bot-identity.js'
+export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
+  ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
+  ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'
+export { parseHostBotGroupCommand, parseHostBotGroupResponse,
+  matchesHostBotGroupResponse, parseHostBotGroupPublicKeyring,
+  parseHostBotGroupDeliveryInput } from './bot-group.js'
+export type { HostBotGroupCommand, HostBotGroupResponse,
+  HostBotGroupPublicKeyring, HostBotGroupDeliveryInput } from './bot-group.js'
+export { parseHostBotGroupResultProof, encodeHostBotGroupResultProofPayload } from './bot-group-result-proof.js'
+export type { HostBotGroupResultProof } from './bot-group-result-proof.js'
 export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'
 export type { HostRootTextContextReceipt } from './root-text-context.js'
 export {
@@ -123,6 +137,8 @@ export type {
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
   HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
+  HostGroupInputFenceChallenge, HostGroupInputFenceValue, HostGroupInputFenceAssertion,
+  ProfileGroupInputFenceRequest, ProfileGroupInputFenceResult,
   HostCollaborationArchiveStateTarget, HostCollaborationArchiveStateValue,
   ProfileCollaborationArchiveStateRequest, ProfileCollaborationArchiveStateResult,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
@@ -200,6 +216,8 @@ export { matchHostRootJournalMetadata } from './root-authority.ts'
 export { parseHostRootAnalysisInput } from './root-authority.ts'
 export type { HostRootAnalysisInput } from './root-authority.ts'
 export { parseHostRootAnalysisOutput, matchHostRootAnalysisOutput } from './root-analysis-output.ts'
+export { parseHostRootAnalysisDiagnostic, matchHostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
+export type { HostRootAnalysisDiagnostic, HostRootDiagnosticAttemptId, HostRootDiagnosticProviderId, HostRootDiagnosticModelId } from './root-analysis-diagnostic.ts'
 export type { HostRootAnalysisOutput, HostSavedAnalysisDispatch, HostRootAnalysisPlanId, HostRootAnalysisAttemptId } from './root-analysis-output.ts'
 
 export { parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion, encodeHostRootPlanningAttemptAuthorityPayload } from './root-planning-attempt-authority.ts'
@@ -225,3 +243,15 @@ export type { RecoveryProfileKeyHandle, RecoveryDescriptor, RecoveryDescribeInpu
   RecoveryValidateInput, RecoveryValidation } from './recovery-materials.ts'
 export type { ProfileRecoveryMaterialsDescribeRequest, ProfileRecoveryMaterialsDescribeResult,
   ProfileRecoveryMaterialsValidateRequest, ProfileRecoveryMaterialsValidateResult } from './types.ts'
+
+export { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
+export type { WorkbenchReadPayload, WorkbenchReadEndpoint, WorkbenchChangesPayload } from './workbench-read.js'
+
+export { parseWorkbenchSettingsWrite } from './workbench-settings.js'
+export type { WorkbenchSettingsWrite, WorkbenchSettingsJson } from './workbench-settings.js'
+
+export { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
+export type { WorkbenchCredentialWrite } from './workbench-credentials.js'
+
+export { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+export type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'

@@ -190,6 +190,174 @@ afterEach(async () => {
   base = undefined as never
 })
 
+describe('group input fence', () => {
+  it('closes admission synchronously, persists the original Session fence, and recovers it', async () => {
+    const dir = await makeDir('group-fence')
+    const pool = new MemoryMediaPool()
+    const sessions = [header('original', dir, 100)]
+    const first = await harness({ pool, sessions })
+    const workspace = first.registry.list()[0]!
+    const fence = { workspaceId: workspace.id, sessionId: SessionId('original'),
+      groupId: 'group-1', groupVersion: 0 }
+    await first.registry.markCollaborationSession(fence.sessionId)
+
+    expect(first.registry.isGroupInputBlocked(fence.sessionId)).toBe(false)
+    const writing = first.registry.installGroupInputFence(fence)
+    const retrying = first.registry.installGroupInputFence(fence)
+    expect(first.registry.isGroupInputBlocked(fence.sessionId)).toBe(true)
+    await writing
+    expect(first.registry.isGroupInputBlocked(fence.sessionId)).toBe(true)
+    await retrying
+    expect(first.registry.list()[0]!.sessionIds).toEqual([fence.sessionId])
+    expect(first.registry.isGroupInputBlocked(fence.sessionId)).toBe(true)
+    expect(await first.registry.installGroupInputFence(fence)).toEqual(fence)
+    await expect(first.registry.installGroupInputFence({ ...fence, groupId: 'other-group' }))
+      .rejects.toThrow('group input fence conflicts')
+    await expect(workspace.detachSession(fence.sessionId))
+      .rejects.toMatchObject({ name: 'WorkspaceGroupInputFenceConflictError' })
+    await expect(first.registry.stageCollaborationArchive({
+      workspaceId: fence.workspaceId, sessionId: fence.sessionId,
+      token: '11111111-1111-4111-8111-111111111111',
+      environmentId: 'production', accountIssuer: 'issuer', accountSubject: 'alice',
+    })).rejects.toMatchObject({ name: 'WorkspaceCollaborationArchiveIntentConflictError' })
+    await first.fiber.dispose()
+
+    const second = await harness({ pool, sessions })
+    expect(second.registry.isGroupInputBlocked(fence.sessionId)).toBe(true)
+    expect(second.registry.groupInputFences).toEqual([fence])
+  })
+
+  it('does not commit a fence for a missing or archived Session', async () => {
+    const dir = await makeDir('group-fence-invalid')
+    const result = await harness({ sessions: [header('original', dir, 100)] })
+    const workspaceId = result.registry.list()[0]!.id
+    const fence = { workspaceId, sessionId: SessionId('missing'), groupId: 'group-1', groupVersion: 0 }
+    await expect(result.registry.installGroupInputFence(fence)).rejects.toThrow()
+    expect(result.registry.isGroupInputBlocked(fence.sessionId)).toBe(false)
+    await result.registry.archiveSession(SessionId('original'))
+    await expect(result.registry.installGroupInputFence({ ...fence, sessionId: SessionId('original') }))
+      .rejects.toThrow()
+    expect(result.registry.groupInputFences).toEqual([])
+  })
+
+  it('rejects another original Session claiming the same group', async () => {
+    const dir = await makeDir('group-fence-claim')
+    const result = await harness({ sessions: [header('one', dir, 100), header('two', dir, 200)] })
+    const workspaceId = result.registry.list()[0]!.id
+    await result.registry.installGroupInputFence({
+      workspaceId, sessionId: SessionId('one'), groupId: 'same-group', groupVersion: 0,
+    })
+    await expect(result.registry.installGroupInputFence({
+      workspaceId, sessionId: SessionId('two'), groupId: 'same-group', groupVersion: 0,
+    })).rejects.toMatchObject({ name: 'WorkspaceGroupInputFenceConflictError' })
+  })
+
+  it('refuses a group fence while the original Session has an archive intent', async () => {
+    const dir = await makeDir('group-fence-archive-intent')
+    const result = await harness({ sessions: [header('original', dir, 100)] })
+    const workspaceId = result.registry.list()[0]!.id
+    const sessionId = SessionId('original')
+    await result.registry.markCollaborationSession(sessionId)
+    await result.registry.stageCollaborationArchive({ workspaceId, sessionId,
+      token: '11111111-1111-4111-8111-111111111111',
+      environmentId: 'production', accountIssuer: 'issuer', accountSubject: 'alice' })
+    await expect(result.registry.installGroupInputFence({
+      workspaceId, sessionId, groupId: 'group-1', groupVersion: 0,
+    })).rejects.toMatchObject({ name: 'WorkspaceGroupInputFenceConflictError' })
+    expect(result.registry.isGroupInputBlocked(sessionId)).toBe(false)
+  })
+
+  it('keeps a stored fence when recovering an unfinished workspace bootstrap', async () => {
+    const dir = await makeDir('group-fence-bootstrap')
+    const workspaceId = WorkspaceId('90000000-0000-4000-8000-000000000009')
+    const sessionId = SessionId('original')
+    const fence = { workspaceId, sessionId, groupId: 'group-1', groupVersion: 0 }
+    const pool = storedPool([[workspaceId, record(dir, [sessionId])]], {
+      initialized: false, workspaceIds: [], groupInputFences: [fence],
+    })
+    const result = await harness({ pool, sessions: [header(sessionId, dir, 100)] })
+    expect(result.registry.groupInputFences).toEqual([fence])
+    expect(result.registry.isGroupInputBlocked(sessionId)).toBe(true)
+  })
+
+  it('refuses duplicate or orphaned stored group fences at startup', async () => {
+    const dir = await makeDir('group-fence-corrupt')
+    const workspaceId = WorkspaceId('90000000-0000-4000-8000-000000000009')
+    const first = { workspaceId, sessionId: SessionId('one'), groupId: 'group-1', groupVersion: 0 }
+    const second = { ...first, sessionId: SessionId('two'), groupId: 'group-2' }
+    const entries: Array<[string, WorkspaceRecord]> = [[workspaceId, record(dir, ['one', 'two'])]]
+    const state = { initialized: true, workspaceIds: [workspaceId] }
+    await expect(harness({ pool: storedPool(entries, { ...state,
+      groupInputFences: [first, { ...first, groupId: 'group-2' }],
+    }) })).rejects.toThrow('group input fence repeats')
+    await expect(harness({ pool: storedPool(entries, { ...state,
+      groupInputFences: [first, { ...second, groupId: first.groupId }],
+    }) })).rejects.toThrow('group input fence repeats')
+    await expect(harness({ pool: storedPool(entries, { ...state,
+      groupInputFences: [{ ...first, sessionId: SessionId('missing') }],
+    }) })).rejects.toThrow('group input fence for session')
+    await expect(harness({ pool: storedPool(entries, { ...state,
+      archivedSessionIds: [first.sessionId], groupInputFences: [first],
+    }) })).rejects.toThrow('group input fence for session')
+  })
+
+  it('rejects an active Session and reopens local admission after the failed install', async () => {
+    const dir = await makeDir('group-fence-active')
+    const result = await harness({ sessions: [header('active', dir, 100)] })
+    const fence = { workspaceId: result.registry.list()[0]!.id,
+      sessionId: SessionId('active'), groupId: 'group-active', groupVersion: 0 }
+    const stop = result.ctx.on('workspace/session-activity', async (_request, next) =>
+      [...await next(), { kind: 'probe' }])
+    const writing = result.registry.installGroupInputFence(fence)
+    expect(result.registry.isGroupInputBlocked(fence.sessionId)).toBe(true)
+    await expect(writing).rejects.toMatchObject({ name: 'WorkspaceActiveSessionError' })
+    expect(result.registry.isGroupInputBlocked(fence.sessionId)).toBe(false)
+    stop()
+    await result.registry.installGroupInputFence(fence)
+    await expect(result.registry.archiveSession(fence.sessionId))
+      .rejects.toMatchObject({ name: 'WorkspaceGroupInputFenceConflictError' })
+  })
+
+  it('keeps admission closed when a durable fence write has an indeterminate outcome', async () => {
+    const dir = await makeDir('group-fence-write-error')
+    const pool = new MemoryMediaPool()
+    const inner = new MemoryStorageBackend(pool)
+    const backend: StorageBackend = {
+      kv: { open: async (descriptor) => {
+        const unit = await inner.kv.open(descriptor)
+        return {
+          loadAll: () => unit.loadAll(),
+          putRecord: (table, key, value) => unit.putRecord(table, key, value),
+          deleteRecord: (table, key) => unit.deleteRecord(table, key),
+          close: () => unit.close(),
+          setGlobal: async (value) => {
+            if ((value as WorkspaceDomainState).groupInputFences?.length) {
+              await unit.setGlobal(value)
+              throw new Error('lost write acknowledgement')
+            }
+            await unit.setGlobal(value)
+          },
+        }
+      } },
+      close: () => inner.close(),
+    }
+    const result = await harness({ pool, backend, sessions: [header('original', dir, 100)] })
+    const sessionId = SessionId('original')
+    await expect(result.registry.installGroupInputFence({
+      workspaceId: result.registry.list()[0]!.id, sessionId, groupId: 'group-1', groupVersion: 0,
+    })).rejects.toThrow('lost write acknowledgement')
+    expect(result.registry.isGroupInputBlocked(sessionId)).toBe(true)
+    await expect(result.registry.installGroupInputFence({
+      workspaceId: result.registry.list()[0]!.id, sessionId, groupId: 'group-1', groupVersion: 0,
+    })).rejects.toThrow('durability is indeterminate')
+    await expect(result.registry.delete(result.registry.list()[0]!.id))
+      .rejects.toMatchObject({ name: 'WorkspaceGroupInputFenceConflictError' })
+    await result.fiber.dispose()
+    const recovered = await harness({ pool, sessions: [header('original', dir, 100)] })
+    expect(recovered.registry.isGroupInputBlocked(sessionId)).toBe(true)
+  })
+})
+
 describe('WorkspaceRegistry lifecycle and bootstrap', () => {
   it('stays pending without sessionPersistence and never opens or marks the domain', async () => {
     const pool = new MemoryMediaPool()

@@ -965,6 +965,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
       'client-ui-conversation TodoDock id \'todo\'',
       'client-ui-goal GoalDock id \'goal\'',
       'client-ui-slark-agent DraftPersistence id \'slark-draft-persistence\'',
+      'client-ui-slark-agent GroupChatDock id \'slark-group-chat\'',
       'client-ui-slark-agent AgentTaskDock id \'slark-agent-tasks\'',
       'client-ui-slark-agent () => null id \'slark-collaboration-activity\'',
       'experimental-client-ui-claude-code-mods Band id \'claude-code-mods\'',
@@ -1251,7 +1252,9 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     hookContext: '',
     slotInject: '',
     declaredBy: 'an entry in \'conversation.composer.bar\' (client-ui-conversation), so it exists while that entry is mounted',
-    occupants: [],
+    occupants: [
+      'client-ui-slark-agent NativeDuetButton id \'slark-native-duet\'',
+    ],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.input.right\', () => ctx.slots.register(\n      { name: \'conversation.input.right\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
     source: 'packages/client/ui-conversation/src/client/contract/slots.ts:205',

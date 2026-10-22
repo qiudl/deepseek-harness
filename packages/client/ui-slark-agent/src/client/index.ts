@@ -1,3 +1,4 @@
+import { NativeDuetButton } from './NativeDuetButton.tsx'
 import { SlarkAccountLauncher, type SlarkAccountIdentity } from './SlarkAccountLauncher.tsx'
 import { DraftPersistence } from './DraftPersistence.tsx'
 import type { DraftBridge } from './draft-persistence.ts'
@@ -29,7 +30,10 @@ import { ProjectScopeModel } from './project-scope.ts'
 import type { WorkspaceBridge } from './project-scope.ts'
 import { ProjectScopeDock, ProjectScopePanel, CollaborationTabTitle } from './ProjectScopeDock.tsx'
 import type { ProjectScopeInjected, ScopeLauncherInjected } from './ProjectScopeDock.tsx'
-import { createScopedCollaborationSource, scopedCollaborationClipboard } from './collaboration-source.ts'
+import { createScopedCollaborationSource, scopedCollaborationClipboard, workspaceOf } from './collaboration-source.ts'
+import type { GroupMessageBridge } from './collaboration-group-input.ts'
+import { GroupChatDock } from './GroupChatDock.tsx'
+import type { GroupMemberBridge } from './GroupMemberDock.tsx'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from './collaboration-source.ts'
 import type { CollaborationDialogueBridge } from './collaboration-dialogue.ts'
 import { CollaborationResultsModel } from './collaboration-results.ts'
@@ -64,7 +68,28 @@ interface AgentItem {
   publication_version: number
 }
 
-interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge {
+interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge,
+  GroupMessageBridge, GroupMemberBridge {
+  collaborationGroupActivation?(input: { request_id: string; workspace_id: string; session_id: string }):
+  Promise<{ state: 'group_active'; group_id: string; version: 2 } | { state: 'retry_required' }>
+  collaborationGroupPreparation?(input: { workspace_id: string
+    session_id: string
+    source_message_id: string
+    source_revision: string } | { operation: 'lookup'
+      workspace_id: string
+      session_id: string }): Promise<
+    { state: 'preparing'
+      group_id: string
+      workspace_id: string
+      session_id: string
+      version: 1 } |
+    { state: 'preparing' | 'group_active'
+      group_id: string
+      workspace_id: string
+      session_id: string
+      version: 1 | 2
+      last_seq: number } |
+    { state: 'missing' | 'retry_required' }>
   accountIdentity?: () => Promise<SlarkAccountIdentity | null>
   collaborationArchive?(input: { workspace_id: string; session_id: string; action: 'archive' | 'restore' }):
   Promise<{ state: 'archived' | 'restored' | 'retry_required' | 'conflict' }>
@@ -114,6 +139,7 @@ export interface DesktopAgentInvocation {
 declare global {
   interface Window {
     __DSH_DESKTOP_HOST__?: DesktopAgentDirectory
+    __DSH_NATIVE_WORKBENCH__?: { duetStart?: (sessionId: string) => Promise<void>; conversationDraft?: DraftBridge }
   }
 }
 
@@ -183,6 +209,7 @@ export function apply(ctx: ClientContext): void {
   }
 
   let focusPending: ((row: ConversationRow & { first_pending_digest: string }) => Promise<void>) | undefined
+  let collaborationSessions = new Set<string>()
   ctx.inject(['uiWorkspace', 'workspaces'], (browserCtx) => {
     if (typeof window === 'undefined' || typeof window.__DSH_DESKTOP_HOST__?.collaborationConversations !== 'function') return
     const index = createSnapshotStore<ConversationIndex>({ state: 'loading', items: [], global_pending_count: 0 })
@@ -196,15 +223,20 @@ export function apply(ctx: ClientContext): void {
         try {
           const result = await window.__DSH_DESKTOP_HOST__?.collaborationConversations?.()
           if (!isActive()) return
+          collaborationSessions = new Set(result?.ok ? result.value.items.map(item =>
+            `${item.workspace_id}\0${item.session_id}`) : [])
           index.set(result?.ok ? { state: 'ready', ...result.value }
             : { state: 'unavailable', items: [], global_pending_count: 0 })
         } catch {
-          if (isActive()) index.set({ state: 'unavailable', items: [], global_pending_count: 0 })
+          if (isActive()) {
+            collaborationSessions.clear()
+            index.set({ state: 'unavailable', items: [], global_pending_count: 0 })
+          }
         } finally { busy = false }
       }
       void refresh()
       const timer = window.setInterval(() => { void refresh() }, 20_000)
-      return () => { lifetime.abort(); window.clearInterval(timer) }
+      return () => { lifetime.abort(); collaborationSessions.clear(); window.clearInterval(timer) }
     }, 'ui-slark-agent: collaboration conversation index')
     const ownedSession = (sessionId: SessionId, workspaceId?: string): boolean =>
       browserCtx.workspaces.list.getSnapshot().items.some(workspace =>
@@ -292,12 +324,28 @@ export function apply(ctx: ClientContext): void {
       name: 'shell.mobile.collaboration', inject: injected, locale: NS,
     }, CollaborationMobileTab))
   })
+  ctx.slots.inject('conversation.input.right', () => {
+    const start = typeof window === 'undefined' ? undefined : window.__DSH_NATIVE_WORKBENCH__?.duetStart
+    if (!start) return () => {}
+    return ctx.slots.register({ name: 'conversation.input.right', id: 'slark-native-duet', order: 10, locale: NS,
+      inject: () => ({ start }),
+    }, NativeDuetButton)
+  })
   ctx.slots.inject('conversation.input.dock', () => {
-    const bridge = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__?.conversationDraft
+    const bridge = typeof window === 'undefined' ? undefined
+      : window.__DSH_NATIVE_WORKBENCH__?.conversationDraft ?? window.__DSH_DESKTOP_HOST__?.conversationDraft
     if (!bridge) return () => {}
     return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-draft-persistence', order: 5, locale: NS,
       inject: sessionId => ({ sessionId, bridge }),
     }, DraftPersistence)
+  })
+  ctx.slots.inject('conversation.input.dock', () => {
+    const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
+    if (!host?.collaborationGroupPreparation || !host.collaborationGroupMessages) return () => {}
+    return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-group-chat', order: 30, locale: NS,
+      inject: sessionId => ({ sessionId, host, workspaceId: () => workspaceOf(ctx, sessionId),
+        subscribeWorkspace: (listener: () => void) => ctx.workspaces.list.subscribe(listener) }),
+    }, GroupChatDock)
   })
   ctx.slots.inject('conversation.input.dock', () => {
     if (typeof window !== 'undefined' && window.__DSH_DESKTOP_HOST__?.collaborationScopeAvailable) return () => {}
@@ -446,7 +494,9 @@ export function apply(ctx: ClientContext): void {
     }, CollaborationTimeline))
   })
   const t = ctx.locale.bind(NS)
-  const scopedSource = createScopedCollaborationSource(ctx, t)
+  const scopedSource = createScopedCollaborationSource(ctx, t, (workspaceId, sessionId) =>
+    collaborationSessions.has(`${workspaceId}\0${sessionId}`) ||
+    (ctx.get('workspaces')?.list.getSnapshot().dedicatedCollaborationSessionIds?.includes(SessionId(sessionId)) ?? false))
   const scopeModels = new Map<string, {
     owner: NonNullable<ReturnType<ClientContext['sessions']['binding']>>
     model: ProjectScopeModel
@@ -529,10 +579,11 @@ export function apply(ctx: ClientContext): void {
     showGroupTitle: false,
     matchEnterPosition: 'anywhere',
     subscribeCandidates: (session, listener) => scopedSource.subscribeCandidates(session, listener),
-    matchEnterPlainText: () => {
+    matchEnterPlainText: (session) => {
       const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
-      return Boolean(host?.collaborationScopeAvailable && host.collaborationExecutionAvailable
-        && typeof host.collaborationPending === 'function' && typeof host.collaborationClarify === 'function')
+      return scopedSource.matchEnterPlainText?.(session) === true || Boolean(host?.collaborationScopeAvailable
+        && host.collaborationExecutionAvailable && typeof host.collaborationPending === 'function'
+        && typeof host.collaborationClarify === 'function')
     },
     async candidates(_session, { query, signal, ...options }) {
       const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__

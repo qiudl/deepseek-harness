@@ -348,9 +348,11 @@ function fixture(timeline = false, locate = false) {
   const reads = vi.fn<ConstructorParameters<typeof CollaborationResultsModel>[3]>(async () => ({ ok: true, value: { items: [original] } }))
   const deliveries = vi.fn<NonNullable<CollaborationResultsBridge['collaborationDeliveries']>>(async () => ({ ok: true, value: { deliveries: [reply] } }))
   let bridge: CollaborationResultsBridge = { collaborationScopeAvailable: true, collaborationDeliveries: deliveries }
-  const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge, 'session', locate ? async () => ({ ok: true, value: { items: [original] } }) : undefined, timeline)
+  const readOriginal = vi.fn<NonNullable<ConstructorParameters<typeof CollaborationResultsModel>[6]>>(
+    async () => ({ ok: true, value: { items: [original] } }))
+  const model = new CollaborationResultsModel(SessionId('session'), workspaces, generation, reads, () => bridge, 'session', locate ? readOriginal : undefined, timeline)
   onTestFinished(() => { model.dispose() })
-  return { model, reads, bridge, deliveries, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
+  return { model, reads, readOriginal, bridge, deliveries, changeBridge: (value: CollaborationResultsBridge) => { bridge = value },
     quietReset: () => { remoteGeneration = 2 },
     move: () => { grouped = false; changed() }, reset: () => { remoteGeneration = 2; changed() } }
 }
@@ -1269,4 +1271,304 @@ it('does not publish a completed old delivery after navigation replaces its read
   await vi.waitFor(() => { expect(f.model.getSnapshot().phase).toBe('ready') })
   expect(published).not.toContain('obsolete delivery')
   expect(f.model.getSnapshot().groups[0]?.original).toEqual(original)
+})
+
+it.each(['locate', 'sources', 'replies'] as const)('prioritizes %s over a held background history read and ignores its late result', async (action) => {
+  const f = fixture(false, true)
+  const older = { ...original, snapshot_digest: 'b'.repeat(64), source: { ...source, source_message_id: 'older' } }
+  f.reads.mockImplementation(async cursor => ({ ok: true, value: cursor
+    ? { items: [older] } : { items: [original], next_cursor: original.snapshot_digest } }))
+  f.deliveries.mockImplementation(async request => ({ ok: true, value: request.source.source_message_id === 'older'
+    ? { deliveries: [] } : request.after_delivery_id
+      ? { deliveries: [{ ...reply, delivery_id: 'second' }] }
+      : { deliveries: [reply], next_cursor: reply.delivery_id } }))
+  await f.model.refresh()
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementationOnce(async () => { entered.resolve(undefined); return held.promise })
+  const background = f.model.refresh()
+  const settlements: Promise<void>[] = [background]
+  onTestFinished(async () => {
+    f.model.dispose()
+    held.resolve({ ok: false, errorCode: 'denied' })
+    await Promise.allSettled(settlements)
+  })
+  await entered.promise
+  const opened = vi.fn()
+  const interactive = action === 'locate' ? f.model.locateOriginal(original.snapshot_digest, opened)
+    : action === 'sources' ? f.model.loadSources() : f.model.loadReplies(original.snapshot_digest)
+  settlements.push(interactive)
+  await interactive
+  if (action === 'locate') {
+    expect(opened).toHaveBeenCalledExactlyOnceWith(original)
+    expect(f.readOriginal).toHaveBeenCalledOnce()
+  } else if (action === 'sources') {
+    expect(f.model.getSnapshot().groups.map(group => group.original.snapshot_digest)).toEqual([
+      original.snapshot_digest, older.snapshot_digest,
+    ])
+  } else {
+    expect(f.model.getSnapshot().groups[0]?.replies.map(item => item.delivery_id)).toEqual([reply.delivery_id, 'second'])
+  }
+  const observed = f.model.getSnapshot()
+  held.resolve({ ok: false, errorCode: 'denied' })
+  await background
+  expect(f.model.getSnapshot()).toEqual(observed)
+})
+
+it.each(['finish', 'reset', 'dispose'] as const)('preserves an explicit trace while a history action waits and handles %s', async (ending) => {
+  const f = fixture(false, true)
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const held = Promise.withResolvers<ReturnType<typeof auditPage>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.bridge.collaborationRootExecution = vi.fn(async () => { entered.resolve(undefined); return held.promise })
+  await f.model.refresh()
+  const trace = f.model.traceAction(original.snapshot_digest)
+  const settlements: Promise<void>[] = [trace]
+  onTestFinished(async () => {
+    f.model.dispose()
+    held.resolve(auditPage())
+    await Promise.allSettled(settlements)
+  })
+  await entered.promise
+  const opened = vi.fn()
+  const lookup = f.model.locateOriginal(original.snapshot_digest, opened)
+  settlements.push(lookup)
+  await f.model.locateOriginal(original.snapshot_digest, opened)
+  expect(f.model.getSnapshot().historyReadPending).toBe(true)
+  expect(f.readOriginal).not.toHaveBeenCalled()
+  if (ending === 'reset') f.reset()
+  if (ending === 'dispose') f.model.dispose()
+  held.resolve(auditPage())
+  await Promise.all([trace, lookup])
+  expect(opened).toHaveBeenCalledTimes(ending === 'finish' ? 1 : 0)
+  expect(f.readOriginal).toHaveBeenCalledTimes(ending === 'finish' ? 1 : 0)
+  expect(f.model.getSnapshot().historyReadPending).toBeUndefined()
+})
+
+it.each(['reset', 'move', 'dispose'] as const)('discards an explicit reply page after %s without restoring its late result', async (ending) => {
+  const f = fixture()
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [reply], next_cursor: reply.delivery_id } })
+  await f.model.refresh()
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementationOnce(async () => { entered.resolve(undefined); return held.promise })
+  const selected = f.model.loadReplies(original.snapshot_digest)
+  onTestFinished(async () => {
+    f.model.dispose()
+    held.resolve({ ok: false, errorCode: 'denied' })
+    await selected
+  })
+  await entered.promise
+  if (ending === 'dispose') f.model.dispose()
+  else f[ending]()
+  held.resolve({ ok: true, value: { deliveries: [{ ...reply, delivery_id: 'second' }] } })
+  await selected
+  expect(f.model.getSnapshot().groups).toEqual([])
+  expect(f.model.getSnapshot().historyReadPending).toBeUndefined()
+})
+
+it('keeps a newly owned lookup busy when the obsolete reply reader finishes', async () => {
+  const f = fixture(false, true)
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [reply], next_cursor: reply.delivery_id } })
+  await f.model.refresh()
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.deliveries.mockImplementationOnce(async () => { entered.resolve(undefined); return held.promise })
+  const previous = f.model.loadReplies(original.snapshot_digest)
+  const settlements: Promise<void>[] = [previous]
+  onTestFinished(async () => {
+    f.model.dispose()
+    held.resolve({ ok: false, errorCode: 'denied' })
+    await Promise.allSettled(settlements)
+  })
+  await entered.promise
+  f.reset()
+  expect(f.model.revealOriginal(original)).toBe(true)
+  const opened = vi.fn()
+  const lookup = f.model.locateOriginal(original.snapshot_digest, opened)
+  settlements.push(lookup)
+  expect(f.model.getSnapshot().historyReadPending).toBe(true)
+  await lookup
+  expect(opened).toHaveBeenCalledExactlyOnceWith(original)
+  held.resolve({ ok: false, errorCode: 'denied' })
+  await previous
+  expect(f.model.getSnapshot().location?.status).toBe('opened')
+  expect(f.model.getSnapshot().historyReadPending).toBeUndefined()
+})
+
+it('discards a queued older-Source page when a verified original replaces its cursor', async () => {
+  const f = fixture(false, true)
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  f.reads.mockResolvedValue({ ok: true, value: { items: [original], next_cursor: original.snapshot_digest } })
+  const held = Promise.withResolvers<ReturnType<typeof auditPage>>()
+  const entered = Promise.withResolvers<undefined>()
+  f.bridge.collaborationRootExecution = vi.fn(async () => { entered.resolve(undefined); return held.promise })
+  await f.model.refresh()
+  const trace = f.model.traceAction(original.snapshot_digest)
+  const settlements: Promise<void>[] = [trace]
+  onTestFinished(async () => {
+    f.model.dispose()
+    held.resolve(auditPage())
+    await Promise.allSettled(settlements)
+  })
+  await entered.promise
+  const page = f.model.loadSources()
+  settlements.push(page)
+  expect(f.model.getSnapshot().historyReadPending).toBe(true)
+  expect(f.model.revealOriginal(original)).toBe(true)
+  held.resolve(auditPage())
+  await Promise.all([trace, page])
+  expect(f.reads.mock.calls.every(([cursor]) => cursor === undefined)).toBe(true)
+  expect(f.model.getSnapshot().historyReadPending).toBeUndefined()
+})
+
+it('retains the authorized trace when navigation interrupts its automatic refresh', async () => {
+  const f = fixture(false, true)
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const rootRead = vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>(async () => auditPage())
+  f.bridge.collaborationRootExecution = rootRead
+  await f.model.refresh()
+  await f.model.traceAction(original.snapshot_digest)
+  const heldTrace = Promise.withResolvers<ReturnType<typeof auditPage>>()
+  const heldReplies = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  rootRead.mockImplementationOnce(async () => { entered.resolve(undefined); return heldTrace.promise })
+  f.deliveries.mockImplementationOnce(() => heldReplies.promise)
+  const background = f.model.refresh()
+  const settlements: Promise<void>[] = [background]
+  onTestFinished(async () => {
+    f.model.dispose()
+    heldTrace.resolve(auditPage())
+    heldReplies.resolve({ ok: false, errorCode: 'denied' })
+    await Promise.allSettled(settlements)
+  })
+  await entered.promise
+  const opened = vi.fn()
+  const lookup = f.model.locateOriginal(original.snapshot_digest, opened)
+  settlements.push(lookup)
+  await lookup
+  expect(opened).toHaveBeenCalledExactlyOnceWith(original)
+  expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe('ready')
+  heldTrace.resolve(auditPage())
+  heldReplies.resolve({ ok: false, errorCode: 'denied' })
+  await background
+  expect(f.model.getSnapshot().groups[0]?.trace?.phase).toBe('ready')
+})
+
+it('ignores a settled automatic trace response whose consumer resumes after navigation', async () => {
+  const f = fixture(false, true)
+  Reflect.set(f.bridge, 'collaborationPlanningAvailable', true)
+  const rootRead = vi.fn<NonNullable<CollaborationResultsBridge['collaborationRootExecution']>>(async () => auditPage())
+  f.bridge.collaborationRootExecution = rootRead
+  await f.model.refresh()
+  await f.model.traceAction(original.snapshot_digest)
+  const heldTrace = Promise.withResolvers<ReturnType<typeof auditPage>>()
+  const heldReplies = Promise.withResolvers<Awaited<ReturnType<typeof f.deliveries>>>()
+  const entered = Promise.withResolvers<undefined>()
+  rootRead.mockImplementationOnce(() => { entered.resolve(undefined); return heldTrace.promise })
+  f.deliveries.mockImplementationOnce(() => heldReplies.promise)
+  const background = f.model.refresh()
+  let lookup: Promise<void> | undefined
+  onTestFinished(async () => {
+    f.model.dispose()
+    heldTrace.resolve(auditPage())
+    heldReplies.resolve({ ok: false, errorCode: 'denied' })
+    await Promise.allSettled([background, ...(lookup ? [lookup] : [])])
+  })
+  await entered.promise
+  const requested = Promise.withResolvers<undefined>(), opened = vi.fn(), newer = auditPage()
+  heldTrace.resolve({ ...newer, value: { ...newer.value, root: { ...newer.value.root, state_version: '2' } } })
+  queueMicrotask(() => {
+    lookup = f.model.locateOriginal(original.snapshot_digest, opened)
+    requested.resolve(undefined)
+  })
+  await requested.promise
+  await lookup
+  expect(opened).toHaveBeenCalledExactlyOnceWith(original)
+  expect(f.model.getSnapshot().groups[0]?.trace?.page?.root.state_version).toBe('1')
+  heldReplies.resolve({ ok: false, errorCode: 'denied' })
+  await background
+  expect(f.model.getSnapshot().groups[0]?.trace?.page?.root.state_version).toBe('1')
+})
+
+it('reads long-planning diagnostics in the background and never delays a delivered Agent reply', async () => {
+  const f = fixture(); let now = 0
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+  onTestFinished(() => { clock.mockRestore() })
+  const held = Promise.withResolvers<unknown>()
+  onTestFinished(async () => { held.resolve({ ok: false, errorCode: 'gone' }); await new Promise<void>(resolve => setImmediate(resolve)) })
+  const diagnostic = vi.fn(async () => held.promise)
+  f.bridge.collaborationRootExecution = diagnostic
+  f.bridge.collaborationPending = async request => ({ ok: true, value: { source: request.source, pending_items: [], frozen_task_count: 0,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1', planning_state: 'planning', route_decision: 'undecided' } } })
+  f.changeBridge({ ...f.bridge, collaborationDiagnosticAvailable: true })
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  await f.model.refresh()
+  expect(diagnostic).not.toHaveBeenCalled()
+  now = 30_000; await f.model.refresh()
+  expect(diagnostic).toHaveBeenCalledWith({ action: 'diagnostic', source })
+  expect(f.model.getSnapshot().groups[0]?.planningState).toBe('planning')
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [reply] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot().groups[0]?.replies[0]?.answer).toBe(reply.answer)
+  held.resolve({ ok: true, value: { root: { source_descriptor: { ...source, snapshot_digest: original.snapshot_digest },
+    root_trace_id: 'b'.repeat(32) }, failures: [{ reason: 'timeout', observed_at: '2026-10-19T00:00:00.000Z',
+    source_digest: original.snapshot_digest, trace_id: 'b'.repeat(32) }] } })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  expect(f.model.getSnapshot().groups[0]?.planningFailure).toBeUndefined()
+  expect(f.model.getSnapshot().groups[0]?.replies[0]?.answer).toBe(reply.answer)
+  expect(diagnostic).toHaveBeenCalledOnce()
+})
+it('does not send new diagnostic actions to an older Main bridge', async () => {
+  const f = fixture(), diagnostic = vi.fn(async () => ({}))
+  let now = 0
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+  onTestFinished(() => { clock.mockRestore() })
+  f.bridge.collaborationRootExecution = diagnostic
+  f.bridge.collaborationPending = async request => ({ ok: true, value: { source: request.source, pending_items: [], frozen_task_count: 0,
+    plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1', planning_state: 'planning', route_decision: 'undecided' } } })
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  await f.model.refresh(); now = 90_000; await f.model.refresh()
+  expect(diagnostic).not.toHaveBeenCalled()
+  expect(f.model.getSnapshot().groups[0]?.planningState).toBe('planning')
+})
+
+it('publishes an original planning failure from Main without changing task state', async () => {
+  const f = fixture(); let now = 0
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+  onTestFinished(() => { clock.mockRestore() })
+  const held = Promise.withResolvers<unknown>()
+  onTestFinished(async () => { held.resolve({ ok: false, errorCode: 'gone' }); await new Promise<void>(resolve => setImmediate(resolve)) })
+  const diagnostic = vi.fn(async () => held.promise)
+  f.changeBridge({ ...f.bridge, collaborationDiagnosticAvailable: true, collaborationRootExecution: diagnostic,
+    collaborationPending: async request => ({ ok: true, value: { source: request.source, pending_items: [], frozen_task_count: 0,
+      plan: { plan_id: 'plan', plan_revision: '1', state_version: '1', input_version: '1', planning_state: 'planning', route_decision: 'undecided' } } }) })
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [] } })
+  const changed = vi.fn(), stop = f.model.subscribe(changed)
+  onTestFinished(stop)
+  await f.model.refresh()
+  await new Promise<void>(resolve => setImmediate(resolve))
+  expect(f.model.getSnapshot().groups[0]?.planningState).toBe('planning')
+  expect(f.model.getSnapshot().groups[0]?.planningFailure).toBeUndefined()
+  now = 30_000; await f.model.refresh()
+  expect(diagnostic).toHaveBeenCalledExactlyOnceWith({ action: 'diagnostic', source })
+  const notifications = changed.mock.calls.length
+  held.resolve({ ok: true, value: { root: { source_descriptor: { ...source, snapshot_digest: original.snapshot_digest },
+    root_trace_id: 'b'.repeat(32) }, failures: [{ reason: 'timeout', observed_at: '2026-10-19T00:00:00.000Z',
+    source_digest: original.snapshot_digest, trace_id: 'b'.repeat(32) }] } })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  expect(f.model.getSnapshot().groups[0]).toMatchObject({ planningState: 'planning', replies: [],
+    planningFailure: { reason: 'timeout', observedAt: '2026-10-19T00:00:00.000Z' } })
+  expect(changed.mock.calls.length).toBeGreaterThan(notifications)
+  expect(diagnostic).toHaveBeenCalledExactlyOnceWith({ action: 'diagnostic', source })
+  const observed = [f.model.getSnapshot().groups[0]?.planningFailure]
+  changed.mockImplementation(() => { observed.push(f.model.getSnapshot().groups[0]?.planningFailure) })
+  await f.model.refresh()
+  expect(observed.length).toBeGreaterThan(1)
+  expect(observed.every(item => item?.reason === 'timeout')).toBe(true)
+  expect(diagnostic).toHaveBeenCalledOnce()
+  f.deliveries.mockResolvedValue({ ok: true, value: { deliveries: [reply] } })
+  await f.model.refresh()
+  expect(f.model.getSnapshot().groups[0]?.planningFailure).toBeUndefined()
+  expect(f.model.getSnapshot().groups[0]?.replies[0]?.answer).toBe(reply.answer)
 })

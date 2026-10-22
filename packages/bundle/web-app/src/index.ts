@@ -1,3 +1,4 @@
+import { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 import { handleDesktopRootJournalRequest } from './desktop-collaboration-source.ts'
 /**
  * @deepseek-ai/dsh-web-app — the browser-surface bundle's runtime glue plugin
@@ -43,6 +44,9 @@ import { openCollaborationAnalysisJournal } from '@deepseek-ai/dsh-api-session-c
 import { handleDesktopWorkspaceModelSelectionRequest } from './desktop-workspace-model-selection.ts'
 import { handleDesktopCollaborationArchiveStateRequest } from './desktop-collaboration-archive-state.ts'
 import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-collaboration-archive-transition.ts'
+import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
+import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
+import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
@@ -311,6 +315,86 @@ export function apply(ctx: Context, config: Config): void {
   }
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-group',
+      handler: (req, res) => handleDesktopBotGroupRequest(req, res, sourceToken, async (command, signal) => {
+        signal.throwIfAborted()
+        const service = ctx.get('dsBotSlarkExternalGroup') as undefined | {
+          deliver(input: {
+            schemaVersion: 1
+            deliveryId: string
+            groupId: string
+            botId: string
+            memberCycle: number
+            messageSeq: number
+            payloadDigest: string
+            text: string
+          }): Promise<unknown>
+          receipt(input: {
+            deliveryId: string
+            groupId: string
+            botId: string
+            memberCycle: number
+          }): Promise<unknown>
+          resultPage(input: {
+            groupId: string
+            botId: string
+            memberCycle: number
+            after: number
+            limit: 1
+          }): Promise<unknown>
+          acknowledgeResult(input: {
+            groupId: string
+            botId: string
+            memberCycle: number
+            deliveryId: string
+            resultId: string
+          }): Promise<unknown>
+          revokeCycle(input: {
+            groupId: string
+            botId: string
+            memberCycle: number
+            version: number
+            stopInFlight: boolean
+          }): Promise<unknown>
+        }
+        if (!service) throw Error('bot_group_unavailable')
+        const result = command.operation === 'deliver'
+          ? await service.deliver({ schemaVersion: command.schemaVersion, deliveryId: command.deliveryId,
+            groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+            messageSeq: command.messageSeq, payloadDigest: command.payloadDigest, text: command.text })
+          : command.operation === 'receipt'
+            ? await service.receipt({ deliveryId: command.deliveryId, groupId: command.groupId,
+              botId: command.botId, memberCycle: command.memberCycle })
+            : command.operation === 'result_page'
+              ? await service.resultPage({ groupId: command.groupId, botId: command.botId,
+                memberCycle: command.memberCycle, after: command.after, limit: command.limit })
+              : command.operation === 'ack_result'
+                ? await service.acknowledgeResult({ groupId: command.groupId, botId: command.botId,
+                  memberCycle: command.memberCycle, deliveryId: command.deliveryId,
+                  resultId: command.resultId })
+                : await service.revokeCycle({ groupId: command.groupId, botId: command.botId,
+                  memberCycle: command.memberCycle, version: command.version,
+                  stopInFlight: command.stopInFlight })
+        signal.throwIfAborted()
+        return result
+      }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-identity',
+      handler: (req, res) => handleDesktopBotIdentityRequest(req, res, sourceToken, async (botId, signal) => {
+        signal.throwIfAborted()
+        const service = ctx.get('dsBotSlarkExternalGroup') as undefined | {
+          resolveLocalBot(botId: string): Promise<{ botId: string; actorRef: string; displayName: string } | null>
+        }
+        if (!service) return null
+        const identity = await service.resolveLocalBot(botId)
+        signal.throwIfAborted()
+        return identity === null ? null : {
+          bot_id: identity.botId, actor_ref: identity.actorRef, display_name: identity.displayName,
+        }
+      }),
+    }))
     ctx.inject(['sessionController'], (sessionCtx) => {
       sessionCtx.effect(() => sessionCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-collaboration-root',
@@ -405,6 +489,20 @@ export function apply(ctx: Context, config: Config): void {
   if (archiveTransitionToken && /^[A-Za-z0-9_-]{43}$/u.test(archiveTransitionToken)) {
     ctx.inject(['workspaceRegistry'], (workspaceCtx) => {
       workspaceCtx.effect(() => workspaceCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-group-input-fence',
+        handler: (req, res) => handleDesktopGroupInputFenceRequest(req, res, archiveTransitionToken,
+          async (challenge, signal) => {
+            signal.throwIfAborted()
+            const installed = await workspaceCtx.workspaceRegistry.installGroupInputFence({
+              workspaceId: challenge.workspace_id, sessionId: challenge.session_id,
+              groupId: challenge.group_id, groupVersion: challenge.group_version,
+            })
+            signal.throwIfAborted()
+            return { workspace_id: installed.workspaceId, session_id: installed.sessionId,
+              group_id: installed.groupId, group_version: installed.groupVersion }
+          }),
+      }))
+      workspaceCtx.effect(() => workspaceCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-collaboration-archive-intent',
         handler: (req, res) => handleDesktopCollaborationArchiveIntentRequest(req, res, archiveTransitionToken,
           async (target, signal) => {
@@ -446,18 +544,20 @@ export function apply(ctx: Context, config: Config): void {
       }))
     })
   }
+  const sessionControl = new DesktopSessionControl()
+  const terminalStreams = new DesktopRemoteTerminalStreams(sessionControl)
   const desktopRemoteSessionToken = process.env.DSH_PROFILE_REMOTE_SESSION_TOKEN
   const remoteApprovalEvents = new DesktopRemoteApprovalEvents()
   if (desktopRemoteSessionToken && /^[A-Za-z0-9_-]{43}$/u.test(desktopRemoteSessionToken)) {
     ctx.inject(['typertGateway'], (remoteCtx) => {
-      const control = new DesktopSessionControl()
+      const control = sessionControl
       remoteCtx.effect(() => remoteCtx.typertGateway.registerBrowserAdmission({
         invoke: (endpoint, args) => control.admitBrowserInvoke(endpoint, args),
         eventResult: sessionId => control.admitBrowserWrite(sessionId),
         localControlStatus: sessionId => control.browserStatus(sessionId),
         localControlTakeover: (sessionId, expectedEpoch) => control.takeoverBrowser(sessionId, expectedEpoch),
       }), 'web-app: Desktop browser Session admission')
-      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents, control)
+      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents, control, terminalStreams)
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
         handler: (req, res) => handleDesktopRemoteSessionRequest(
@@ -472,7 +572,8 @@ export function apply(ctx: Context, config: Config): void {
     ctx.inject(['typertGateway'], (remoteCtx) => {
       const executor = new DesktopRemoteUiExecutor(remoteCtx.typertGateway,
         () => remoteCtx.webServer.collectIndexInjections())
-      const streamExecutor = new DesktopRemoteUiStreamExecutor(remoteCtx.typertGateway, remoteApprovalEvents)
+      const streamExecutor = new DesktopRemoteUiStreamExecutor(remoteCtx.typertGateway, remoteApprovalEvents,
+        request => remoteCtx.connection.createSharedFetchHandler('/api').fetch(request), terminalStreams)
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-ui',
         handler: (req, res) => handleDesktopRemoteUiRequest(req, res, desktopRemoteUiToken,

@@ -1,4 +1,5 @@
 /** Original-Source pending reads and passive chat replies through the account-bound Main bridge. */
+import { awaitCollaborationRead as wait } from './collaboration-read.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionCollaborationSourceItem } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -55,14 +56,6 @@ const positive = (value: unknown): value is string => typeof value === 'string' 
 const id = (value: unknown): value is string => typeof value === 'string' && /^[!-~]{1,256}$/u.test(value)
 const text = (value: unknown, limit: number): value is string => typeof value === 'string' && value.trim().length > 0
   && !/\p{Surrogate}/u.test(value) && new TextEncoder().encode(value).length <= limit
-function wait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const abort = () => { reject(new DOMException('Cancelled', 'AbortError')) }
-    signal.addEventListener('abort', abort, { once: true })
-    promise.then(resolve, reject).finally(() => { signal.removeEventListener('abort', abort) })
-    if (signal.aborted) abort()
-  })
-}
 /**
  * Check a public Main response against its exact original coordinates without granting task authority.
  * @param host - Current account-bound Desktop bridge.

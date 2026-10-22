@@ -433,6 +433,13 @@ function mount(fixture: Awaited<ReturnType<typeof bench>>) {
 }
 
 describe('plugin registration', () => {
+  it('names the independent native process page without changing its registered view identity', async () => {
+    document.documentElement.dataset.dshNative = 'true'
+    try {
+      const b = await bench()
+      expect(tabsOf(b.slots)).toEqual([{ id: 'chat', label: 'Chat' }, { id: 'trajectory', label: 'Thinking' }])
+    } finally { delete document.documentElement.dataset.dshNative }
+  })
   it('registers trajectory after chat on the ring', async () => {
     const b = await bench()
     expect(tabsOf(b.slots)).toEqual([

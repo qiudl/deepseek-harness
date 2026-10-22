@@ -1,3 +1,4 @@
+export type { CollaborationAnalysisFailure } from './collaboration-analysis-failure-journal.ts'
 import { openCollaborationContinuationJournal, collaborationContinuationCommit, type CollaborationContinuationResult } from './collaboration-continuation-journal.ts'
 import type { CollaborationConsumptionResult } from './collaboration-consumption-journal.ts'
 import { openCollaborationConsumptionJournal, collaborationConsumptionCommit } from './collaboration-consumption-journal.ts'
@@ -12,6 +13,7 @@ import type { CollaborationPlanningPredecessor, CollaborationRootPlanningManifes
 import { hostname } from 'node:os'
 import { resolve } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { inboxProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -62,6 +64,7 @@ import { SessionSkillCatalog } from './skill-catalog.ts'
 import { installAttachmentExport } from './attachment-export.ts'
 import { SessionMediaReferences } from './media-references.ts'
 import { ArchivedSessionGate } from './archived-session-gate.ts'
+import { GroupInputGate } from './group-input-gate.ts'
 import type {
   ModelCatalog,
   SessionWorkspacePathApplication,
@@ -152,6 +155,15 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+declare module '@deepseek-ai/dsh-workspace/types' {
+  interface SessionActivityKindMap {
+    /** A Source, root, or its immediate analysis is still being submitted. */
+    source_capture: true
+    /** An old input is still queued in the original Session. */
+    pending_inbox: true
+  }
+}
+
 /** Session Controller deployment policy. */
 export interface Config {
   /** Override platform desktop-opener detection. */
@@ -223,6 +235,7 @@ export class SessionController extends TypertRemoteService {
   private readonly collaborationLifetime = new AbortController()
   private readonly collaborationAnalysis = new CollaborationAnalysisRunner(this.collaborationLifetime.signal)
   private collaborationCaptureTail: Promise<void> = Promise.resolve()
+  private readonly collaborationInputActivity = new Map<SessionId, number>()
   private collaborationRootExecutionJournal?: Promise<CollaborationRootExecutionJournal>
   private collaborationRootJournal?: Promise<CollaborationRootJournal>
   private collaborationJournal?: Promise<CollaborationSourceJournal>
@@ -320,6 +333,21 @@ export class SessionController extends TypertRemoteService {
       }
       return next()
     })
+    ctx.on('workspace/session-activity', async ({ sessionId }, next) => {
+      const active = this.collaborationInputActivity.has(sessionId)
+      using observation = await ctx.sessionQuery.observeSession(sessionId, { projectionMode: 'none' })
+      const inbox = observation.events.reduce(
+        (state, event) => inboxProjectionDefinition.apply(state, event),
+        inboxProjectionDefinition.init(),
+      )
+      const rest = await next()
+      return [
+        ...(active ? [{ kind: 'source_capture' as const }] : []),
+        ...(inbox['next-turn'].length > 0 || inbox['next-step'].length > 0
+          ? [{ kind: 'pending_inbox' as const }] : []),
+        ...rest,
+      ]
+    })
     this.fileApplications = internals.fileApplications ?? nativeFileApplications
     this.openFileApplication = internals.openFileApplication ?? openNativeFileApplication
     this.openPath = internals.openPath ?? openNativeAssociatedPath
@@ -331,6 +359,7 @@ export class SessionController extends TypertRemoteService {
     ctx.plugin(SessionMediaReferences)
     ctx.plugin(SessionSkillCatalog)
     ctx.plugin(ArchivedSessionGate)
+    ctx.plugin(GroupInputGate)
 
     ctx.on('session/created', (session) => {
       ctx.emit('api-session/added', this.listState.summaryFor(session))
@@ -515,6 +544,16 @@ export class SessionController extends TypertRemoteService {
     return Object.freeze({ workspaceId, sessionId, prepared })
   }
 
+  private beginCollaborationInput(sessionId: SessionId): () => void {
+    if (this.ctx.workspaceRegistry.isGroupInputBlocked(sessionId)) throw Error('group_session_active')
+    this.collaborationInputActivity.set(sessionId, (this.collaborationInputActivity.get(sessionId) ?? 0) + 1)
+    return () => {
+      const remaining = (this.collaborationInputActivity.get(sessionId) as number) - 1
+      if (remaining === 0) this.collaborationInputActivity.delete(sessionId)
+      else this.collaborationInputActivity.set(sessionId, remaining)
+    }
+  }
+
   /**
    * Capture user content under this Profile's registry and actual prepared model.
    * Persist before returning the process-local call. Duplicate/restarted input returns
@@ -544,6 +583,7 @@ export class SessionController extends TypertRemoteService {
     ownedSignal.throwIfAborted()
     const waitForRead = <T>(read: Promise<T>) => waitForCollaborationSourceRead(read, ownedSignal)
     const sessionId = SessionId(captured.session_id), workspaceId = WorkspaceId(captured.workspace_id)
+    const release = this.beginCollaborationInput(sessionId)
     const operation = this.collaborationCaptureTail.then(async () => {
       ownedSignal.throwIfAborted()
       const workspace = this.ctx.workspaceRegistry.get(workspaceId)
@@ -610,48 +650,54 @@ export class SessionController extends TypertRemoteService {
       return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared,
         analyze: async (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
           cancellation: AbortSignal) => {
-          const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
-          await inspectCurrent()
-          return this.collaborationAnalysis.run(snapshot, prepared.prepared, async (manifest, signal) => {
+          const releaseAnalysis = this.beginCollaborationInput(sessionId)
+          try {
+            const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
             await inspectCurrent()
-            signal.throwIfAborted()
-            await persist(manifest, signal)
-            signal.throwIfAborted()
-            await inspectCurrent()
-            signal.throwIfAborted()
-          }, analysisSignal, this.collaborationRootTransportTraces.get(snapshot), catalogue)
+            return await this.collaborationAnalysis.run(snapshot, prepared.prepared, async (manifest, signal) => {
+              await inspectCurrent()
+              signal.throwIfAborted()
+              await persist(manifest, signal)
+              signal.throwIfAborted()
+              await inspectCurrent()
+              signal.throwIfAborted()
+            }, analysisSignal, this.collaborationRootTransportTraces.get(snapshot), catalogue)
+          } finally { releaseAnalysis() }
         },
         analyzeClarification: async (input: CollaborationClarificationInput,
           persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
-          const clarification = parseCollaborationClarificationInput(input)
-          const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
-          if (!deepEqualJson(clarification.reply_snapshot, snapshot)) throw Error('collaboration_clarification_source_mismatch')
-          const verifySources = async () => {
-            await checkSelection()
-            for (const expected of [clarification.original_snapshot, clarification.reply_snapshot,
-              ...clarification.prior_replies.map(reply => reply.snapshot)]) {
-              const { workspace_id, session_id, source_message_id, source_revision } = expected
-              const actual = await this.readCollaborationSourceSnapshot(
-                { workspace_id, session_id, source_message_id, source_revision }, analysisSignal)
-              if (!deepEqualJson(actual, expected)) throw Error('collaboration_clarification_source_mismatch')
+          const releaseAnalysis = this.beginCollaborationInput(sessionId)
+          try {
+            const clarification = parseCollaborationClarificationInput(input)
+            const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
+            if (!deepEqualJson(clarification.reply_snapshot, snapshot)) throw Error('collaboration_clarification_source_mismatch')
+            const verifySources = async () => {
+              await checkSelection()
+              for (const expected of [clarification.original_snapshot, clarification.reply_snapshot,
+                ...clarification.prior_replies.map(reply => reply.snapshot)]) {
+                const { workspace_id, session_id, source_message_id, source_revision } = expected
+                const actual = await this.readCollaborationSourceSnapshot(
+                  { workspace_id, session_id, source_message_id, source_revision }, analysisSignal)
+                if (!deepEqualJson(actual, expected)) throw Error('collaboration_clarification_source_mismatch')
+              }
+              analysisSignal.throwIfAborted()
+              await checkSelection()
             }
-            analysisSignal.throwIfAborted()
-            await checkSelection()
-          }
-          await verifySources()
-          return this.collaborationAnalysis.runClarification(clarification, prepared.prepared, async (manifest, signal) => {
             await verifySources()
-            signal.throwIfAborted()
-            await persist(manifest, signal)
-            signal.throwIfAborted()
-            await verifySources()
-            signal.throwIfAborted()
-          }, analysisSignal, catalogue)
+            return await this.collaborationAnalysis.runClarification(clarification, prepared.prepared, async (manifest, signal) => {
+              await verifySources()
+              signal.throwIfAborted()
+              await persist(manifest, signal)
+              signal.throwIfAborted()
+              await verifySources()
+              signal.throwIfAborted()
+            }, analysisSignal, catalogue)
+          } finally { releaseAnalysis() }
         },
       })
     })
     this.collaborationCaptureTail = operation.then(() => {}, () => {})
-    return operation
+    return operation.finally(release)
   }
 
   private publishCollaborationSourcePresence(snapshot: CollaborationSourceSnapshot): void {
@@ -674,36 +720,39 @@ export class SessionController extends TypertRemoteService {
   async captureCollaborationRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture> {
     const input = parseCollaborationRootCaptureInput(value)
     const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
-    const captured = await this.captureCollaborationSource(input.source, owned)
-    const operation = this.collaborationCaptureTail.then(async () => {
-      owned.throwIfAborted()
-      const sessionId = SessionId(input.source.session_id), workspaceId = WorkspaceId(input.source.workspace_id)
-      const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
-      const current = async () => {
-        await waitForCollaborationSourceRead(this.inspectCollaborationMembership(sessionId, workspaceId, owned), owned)
-        if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== session) {
-          throw Error('collaboration_session_workspace_mismatch')
-        }
+    const release = this.beginCollaborationInput(SessionId(input.source.session_id))
+    try {
+      const captured = await this.captureCollaborationSource(input.source, owned)
+      const operation = this.collaborationCaptureTail.then(async () => {
         owned.throwIfAborted()
-      }
-      await current()
-      if (this.collaborationRootJournal === undefined) {
-        const facility = this.ctx.get('storageDomain')
-        if (facility === undefined) throw Error('collaboration_root_journal_unavailable')
-        this.collaborationRootJournal = openCollaborationRootJournal(facility)
-      }
-      const journal = await waitForCollaborationSourceRead(this.collaborationRootJournal, owned)
-      await current()
-      const sourceDigest = describeCollaborationSource(captured.snapshot).snapshot_digest
-      const submission = await journal.capture({ ...input, source: captured.snapshot,
-        objective_ref: input.objective_ref ?? ('source-v1:' + sourceDigest),
-        task_grant_ref: input.task_grant_ref ?? ('intent-v1:' + sourceDigest) }, owned)
-      await current()
-      this.collaborationRootTransportTraces.set(captured.snapshot, submission.root_trace_id)
-      return Object.freeze({ ...captured, submission })
-    })
-    this.collaborationCaptureTail = operation.then(() => {}, () => {})
-    return operation
+        const sessionId = SessionId(input.source.session_id), workspaceId = WorkspaceId(input.source.workspace_id)
+        const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
+        const current = async () => {
+          await waitForCollaborationSourceRead(this.inspectCollaborationMembership(sessionId, workspaceId, owned), owned)
+          if (this.ctx.workspaceRegistry.get(workspaceId) !== workspace || this.ctx.sessions.get(sessionId) !== session) {
+            throw Error('collaboration_session_workspace_mismatch')
+          }
+          owned.throwIfAborted()
+        }
+        await current()
+        if (this.collaborationRootJournal === undefined) {
+          const facility = this.ctx.get('storageDomain')
+          if (facility === undefined) throw Error('collaboration_root_journal_unavailable')
+          this.collaborationRootJournal = openCollaborationRootJournal(facility)
+        }
+        const journal = await waitForCollaborationSourceRead(this.collaborationRootJournal, owned)
+        await current()
+        const sourceDigest = describeCollaborationSource(captured.snapshot).snapshot_digest
+        const submission = await journal.capture({ ...input, source: captured.snapshot,
+          objective_ref: input.objective_ref ?? ('source-v1:' + sourceDigest),
+          task_grant_ref: input.task_grant_ref ?? ('intent-v1:' + sourceDigest) }, owned)
+        await current()
+        this.collaborationRootTransportTraces.set(captured.snapshot, submission.root_trace_id)
+        return Object.freeze({ ...captured, submission })
+      })
+      this.collaborationCaptureTail = operation.then(() => {}, () => {})
+      return await operation
+    } finally { release() }
   }
 
   /** Prepare a fresh one-shot analysis using an admitted root's original model and current credentials.
@@ -718,31 +767,37 @@ export class SessionController extends TypertRemoteService {
     signal: AbortSignal): Promise<CollaborationRootPlanningPreparation> {
     const target = parseCollaborationRootTarget(value), owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
     const root = await this.readCollaborationRoot(target, owned)
-    if (root.state !== 'admitted') throw Error('collaboration_root_not_admitted')
-    const workspaceId = WorkspaceId(root.source.workspace_id), sessionId = SessionId(root.source.session_id)
-    const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
-    const current = async (active: AbortSignal) => {
-      const latest = await this.readCollaborationRoot(target, active)
-      active.throwIfAborted()
-      if (!isDeepStrictEqual(latest, root) || this.ctx.workspaceRegistry.get(workspaceId) !== workspace
-        || this.ctx.sessions.get(sessionId) !== session) throw Error('collaboration_session_workspace_mismatch')
-    }
-    const model = root.source.model_snapshot
-    const prepared = await waitForCollaborationSourceRead(this.ctx.llm.prepareSnapshot({ provider: model.provider,
-      model: model.model, maxTokens: 8192,
-      ...(model.reasoning_effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(model.reasoning_effort) }),
-    }, owned), owned)
-    await current(owned)
-    if (prepared.snapshot.provider !== model.provider || prepared.snapshot.model !== model.model
-      || prepared.snapshot.reasoning_effort !== model.reasoning_effort) throw Error('collaboration_model_selection_changed')
-    return Object.freeze({ root, analyze: (persist, cancellation) => {
-      const active = AbortSignal.any([owned, cancellation])
-      return this.collaborationAnalysis.runRootAttempt(root, predecessor, prepared, async (manifest, running) => {
-        await current(running)
-        await persist(manifest, running)
-        await current(running)
-      }, active)
-    } })
+    const releasePreparation = this.beginCollaborationInput(SessionId(root.source.session_id))
+    try {
+      if (root.state !== 'admitted') throw Error('collaboration_root_not_admitted')
+      const workspaceId = WorkspaceId(root.source.workspace_id), sessionId = SessionId(root.source.session_id)
+      const workspace = this.ctx.workspaceRegistry.get(workspaceId), session = this.ctx.sessions.get(sessionId)
+      const current = async (active: AbortSignal) => {
+        const latest = await this.readCollaborationRoot(target, active)
+        active.throwIfAborted()
+        if (!isDeepStrictEqual(latest, root) || this.ctx.workspaceRegistry.get(workspaceId) !== workspace
+          || this.ctx.sessions.get(sessionId) !== session) throw Error('collaboration_session_workspace_mismatch')
+      }
+      const model = root.source.model_snapshot
+      const prepared = await waitForCollaborationSourceRead(this.ctx.llm.prepareSnapshot({ provider: model.provider,
+        model: model.model, maxTokens: 8192,
+        ...(model.reasoning_effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(model.reasoning_effort) }),
+      }, owned), owned)
+      await current(owned)
+      if (prepared.snapshot.provider !== model.provider || prepared.snapshot.model !== model.model
+        || prepared.snapshot.reasoning_effort !== model.reasoning_effort) throw Error('collaboration_model_selection_changed')
+      return Object.freeze({ root, analyze: async (persist, cancellation) => {
+        const releaseAnalysis = this.beginCollaborationInput(sessionId)
+        try {
+          const active = AbortSignal.any([owned, cancellation])
+          return await this.collaborationAnalysis.runRootAttempt(root, predecessor, prepared, async (manifest, running) => {
+            await current(running)
+            await persist(manifest, running)
+            await current(running)
+          }, active)
+        } finally { releaseAnalysis() }
+      } })
+    } finally { releasePreparation() }
   }
 
   /**

@@ -8,6 +8,16 @@ import { zh } from '../src/client/locales.ts'
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('Desktop local Session takeover', () => {
+  it('leaves remote ownership with the paired carrier and makes no browser control requests', () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal('fetch', fetcher)
+    vi.stubGlobal('__DSH_TRANSPORT__', { remoteHost: true })
+    render(<LocalSessionTakeover {...({ sessionId: 'session-1', t: makeTranslate(zh) } as
+      Parameters<typeof LocalSessionTakeover>[0])} />)
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
   it('asks for confirmation and submits the freshly observed Host epoch', async () => {
     const requests: Array<{ method: string; payload: { args: { expectedEpoch?: number } } }> = []
     const fetcher = vi.fn(async (_url: string, init: RequestInit) => {

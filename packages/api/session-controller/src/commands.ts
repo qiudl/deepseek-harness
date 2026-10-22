@@ -334,11 +334,17 @@ export class SessionCommandController {
 
   /**
    * Reject empty content, then admit one prompt after Agent and attachment validation.
-   * An existing request's committed inbox insertion remains accepted after claim or cancellation.
+   * An existing request's committed inbox insertion remains accepted after claim or cancellation,
+   * unless the original Session's group input fence has retired this route.
    * @param request - Session identity, prompt content, source metadata, and delivery mode.
    * @returns acknowledgement that the Agent accepted the prompt.
    */
   async prompt(request: SessionPromptRequest): Promise<SessionPromptValue> {
+    // Check before request-id replay: an old accepted prompt must not make the
+    // retired input route look usable after the group fence is installed.
+    if (this.ctx.get('workspaceRegistry')?.isGroupInputBlocked(request.sessionId)) {
+      throw new RemoteError('session/agent-busy', 'prompt rejected', { reason: 'Error: group_session_active' })
+    }
     if (!hasPromptContent(request.content)) {
       throw new RemoteError(
         'gateway/bad-request',
@@ -389,6 +395,9 @@ export class SessionCommandController {
             `session "${agent.id}" was disposed during prompt admission`,
             { sessionId: agent.id },
           )
+        }
+        if (this.ctx.get('workspaceRegistry')?.isGroupInputBlocked(agent.id)) {
+          throw new RemoteError('session/agent-busy', 'prompt rejected', { reason: 'Error: group_session_active' })
         }
         // Another retry can commit while attachment admission is awaiting I/O.
         if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
@@ -462,6 +471,9 @@ export class SessionCommandController {
    * @returns acknowledgement that the queue mutation was applied.
    */
   async updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue> {
+    if (this.ctx.get('workspaceRegistry')?.isGroupInputBlocked(request.sessionId)) {
+      throw new RemoteError('session/agent-busy', 'queue update rejected', { reason: 'Error: group_session_active' })
+    }
     if (request.action.kind === 'edit') {
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- Remote callers can submit untyped JSON.
       if (request.action.content.some(block => block.type !== 'text')) {

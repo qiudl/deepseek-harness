@@ -103,6 +103,13 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Read one Bot identity only when the Profile plugin holds its exclusive writer lock. */
+  readonly resolveBotIdentity?: (botId: string, signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null>
+  /** Send or reconcile one Bot group event through the private Profile service. */
+  readonly operateBotGroup?: (
+    command: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupCommand,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupResponse>
   closeNotifications(): void
   abort(): void
   readonly done: Promise<void>
@@ -136,6 +143,11 @@ export interface ProfileWorkerHandle {
     target: import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveTransitionTarget,
     signal: AbortSignal,
   ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveTransitionResult>
+  /** Parent-only durable original Session input fence. */
+  readonly installGroupInputFence?: (
+    challenge: import('@deepseek-ai/dsh-host-control-protocol').HostGroupInputFenceChallenge,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostGroupInputFenceValue>
   /**
    * Private Parent analysis command; this handle grants no Account/cloud authority.
    * @param command - Prepare/dispatch JSON with the original binding digest; caller keeps Account/peer current.

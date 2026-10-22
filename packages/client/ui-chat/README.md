@@ -166,6 +166,8 @@ Active-Turn highlighting is approximate: `readVisibleTurn` binary-searches the f
 
 Independent history registers validated JSON record identities and positions through `ctx.chatTimeline`. Chat retains ordinary Node, group and pending-input rendering, and renders independent records through `conversation.chat.timeline`; its `recordId: null` occurrence hosts readonly paging and legacy-history notices. A record inside a group exposes that group’s members without changing Session data. Registrations publish late additions and removal; their source subscriptions stop when the Chat view has no readers.
 
+The App-bundled native carrier selects a conversation presentation with speaker avatars and keeps reasoning and tool-process rows in the independent trajectory view. It uses the same Chat nodes and snapshot reducers; ordinary Web and desktop detail preferences retain their existing behavior.
+
 <a id="model-experience"></a>
 
 ## Model Experience
