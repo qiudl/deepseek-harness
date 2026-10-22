@@ -11,7 +11,13 @@ const key = (workspaceId: string, sessionId: string, groupId: string) =>
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 const botId = /^[A-Za-z0-9_-]{1,200}$/u
 
-/** Reject forged or stale shapes before an old browser intent can be replayed. */
+/**
+ * Reject forged or stale shapes before an old browser intent can be replayed.
+ * @param workspaceId - Original workspace identity.
+ * @param sessionId - Original Session identity.
+ * @param groupId - Current Slark group identity.
+ * @returns The exact pending owner request or null.
+ */
 export function readProxyIntent(workspaceId: string, sessionId: string, groupId: string): ProxyIntent | null {
   let raw: string | null
   try { raw = window.sessionStorage.getItem(key(workspaceId, sessionId, groupId)) }
@@ -31,12 +37,25 @@ export function readProxyIntent(workspaceId: string, sessionId: string, groupId:
   } catch { return null }
 }
 
-/** Persist before sending. If storage fails, the caller must keep the request unsent. */
+/**
+ * Persist before sending. If storage fails, the caller must keep the request unsent.
+ * @param workspaceId - Original workspace identity.
+ * @param sessionId - Original Session identity.
+ * @param groupId - Current Slark group identity.
+ * @param intent - Exact request and target to replay.
+ * @returns Whether the request key was durably stored in this browser tab.
+ */
 export function writeProxyIntent(workspaceId: string, sessionId: string, groupId: string, intent: ProxyIntent): boolean {
   try { window.sessionStorage.setItem(key(workspaceId, sessionId, groupId), JSON.stringify(intent)); return true }
   catch { return false }
 }
 
+/**
+ * Forget an owner request only after the authority returns its matching receipt.
+ * @param workspaceId - Original workspace identity.
+ * @param sessionId - Original Session identity.
+ * @param groupId - Current Slark group identity.
+ */
 export function clearProxyIntent(workspaceId: string, sessionId: string, groupId: string): void {
   try { window.sessionStorage.removeItem(key(workspaceId, sessionId, groupId)) }
   catch { /* The server receipt remains authoritative; an old intent must not be reused blindly. */ }
