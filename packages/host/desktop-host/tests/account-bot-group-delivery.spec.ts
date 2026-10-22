@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
-  acknowledgeAccountBotGroupResult } from '../src/account-bot-group-delivery.ts'
+  acknowledgeAccountBotGroupResult, stopAccountBotGroupDelivery } from '../src/account-bot-group-delivery.ts'
 
 function fixture() {
   const digest = 'a'.repeat(64)
@@ -29,6 +29,63 @@ function fixture() {
     confirm: confirm as never }
   return { input, host, workers, confirm, command, result }
 }
+
+function stopFixture() {
+  const f = fixture()
+  const command = { operation: 'stop_delivery' as const,
+    deliveryId: f.command.deliveryId, groupId: f.command.groupId,
+    botId: f.command.botId, memberCycle: f.command.memberCycle, requestId: randomUUID() }
+  const reply = { state: 'requested' as const, deliveryId: command.deliveryId,
+    requestId: command.requestId }
+  f.workers.operateBotGroup.mockResolvedValue(reply as never)
+  return { ...f, command, reply, input: {
+    ...f.input, command, messageSeq: f.command.messageSeq,
+    payloadDigest: f.command.payloadDigest,
+  } }
+}
+
+it('stops only the delivery authorized by the same owner decision and Account', async () => {
+  const f = stopFixture()
+  expect(await stopAccountBotGroupDelivery(f.input)).toEqual(f.reply)
+  expect(f.confirm).toHaveBeenCalledWith(f.input.ticket, f.input.keyring,
+    expect.objectContaining({ groupId: f.command.groupId,
+      deliveryId: f.command.deliveryId, requestId: f.command.requestId,
+      messageSeq: f.input.messageSeq, payloadDigest: f.input.payloadDigest }),
+    f.input.signal)
+  expect(f.workers.operateBotGroup).toHaveBeenCalledWith('profile', f.command, f.input.signal)
+  const invalid = stopFixture()
+  invalid.confirm.mockRejectedValueOnce(Error('owner decision revoked'))
+  await expect(stopAccountBotGroupDelivery(invalid.input))
+    .rejects.toThrow('owner decision revoked')
+  expect(invalid.workers.operateBotGroup).not.toHaveBeenCalled()
+  const replaced = stopFixture()
+  replaced.host.authorizeAccountModelText.mockReturnValueOnce('profile' as never)
+    .mockReturnValueOnce('replacement' as never)
+  await expect(stopAccountBotGroupDelivery(replaced.input)).rejects.toThrow('stale')
+  expect(replaced.workers.operateBotGroup).not.toHaveBeenCalled()
+  const mismatch = stopFixture()
+  mismatch.workers.operateBotGroup.mockResolvedValueOnce({ ...mismatch.reply,
+    requestId: randomUUID() } as never)
+  await expect(stopAccountBotGroupDelivery(mismatch.input)).rejects.toThrow('stale')
+})
+
+it('rejects malformed stop coordinates before touching the worker', async () => {
+  const f = stopFixture()
+  for (const input of [
+    { ...f.input, messageSeq: 0 },
+    { ...f.input, payloadDigest: 'bad' },
+    { ...f.input, command: { operation: 'receipt', deliveryId: f.command.deliveryId,
+      groupId: f.command.groupId, botId: f.command.botId,
+      memberCycle: f.command.memberCycle } },
+  ]) await expect(stopAccountBotGroupDelivery(input as never)).rejects.toThrow('invalid_input')
+  expect(f.workers.operateBotGroup).not.toHaveBeenCalled()
+  const unsigned = stopFixture()
+  const { confirm, ...withoutConfirm } = unsigned.input
+  expect(confirm).toBeDefined()
+  await expect(stopAccountBotGroupDelivery(withoutConfirm))
+    .rejects.toThrow('bot_group_ticket_invalid')
+  expect(unsigned.workers.operateBotGroup).not.toHaveBeenCalled()
+})
 
 it('dispatches only after Account, live Slark claim and exact payload agree', async () => {
   const f = fixture()
