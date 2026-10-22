@@ -1,4 +1,7 @@
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotIdentity, parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotIdentity, ProfileBotIdentityRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { resolveAccountBotIdentity } from './account-bot-identity.ts'
 import { HostRecoveryMaterials } from './recovery-materials.ts'
 import {
   parseRecoveryDescribeInput, parseRecoveryValidateInput,
@@ -238,6 +241,8 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** Read public Bot identity only in the selected Account Profile's exclusive writer. */
+  readonly resolveBotIdentity?: (profileId: string, botId: string, signal: AbortSignal) => Promise<HostBotIdentity | null>
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
@@ -502,7 +507,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -2091,6 +2096,14 @@ export class HostControlAuthority {
             privateKeyObject(identity.installationPrivateKey)).toString('base64url') as HostControlSignature
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { ...unsigned, signature } })
+        } else if (frame.method === 'profile.bot_identity') {
+          const resolve = this.options.resolveBotIdentity
+          if (!resolve) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const identity = parseHostBotIdentity(await resolveAccountBotIdentity(
+            this.options.host, { resolveBotIdentity: resolve }, account, frame.params.bot_id, context.signal))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { identity } })
         } else if (frame.method === 'profile.workspace_model_selection') {
           const inspect = this.options.inspectWorkspaceModelSelection
           if (!inspect) throw new HostAuthorityError('upgrade_required')
@@ -2194,6 +2207,7 @@ export class HostControlAuthority {
         capabilities: [
           ...capabilities,
           'profile.collaboration_registration',
+          ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
           ...(this.options.inspectCollaborationRoot ? ['profile.root_authority'] : []),
@@ -3620,6 +3634,36 @@ export class UnixHostClient {
   }
 
   /**
+   * Resolve one exact Bot through the current Account Profile without a view lease.
+   * @param input - Verified Account binding, Bot ID and cancellation.
+   * @returns Public Bot identity or absence; no chat content.
+   */
+  async resolveBotIdentity(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly botId: string
+    readonly signal?: AbortSignal
+  }): Promise<HostBotIdentity | null> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_identity' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostBotIdentityTarget({ bot_id: input.botId })
+    const request: ProfileBotIdentityRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_identity',
+      params: { ...this.collaborationAccountRequestParams(input), ...target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const identity = parseHostBotIdentity(frame.result.identity)
+    if (identity !== null && identity.bot_id !== target.bot_id) throw new HostAuthorityError('profile_mismatch')
+    return identity
+  }
+
+  /**
    * Request and verify a registration signature without changing the visible Profile lease.
    * @param input - Main-held Account binding, server challenge and cancellation.
    * @returns Frozen assertion verified against the inspected installation and process; no server enrollment.
@@ -4447,7 +4491,8 @@ export class UnixHostClient {
       | ProfileOpenRequest | ProfileOpenLocalRequest
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-      | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
+      | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
+      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
   | ProfileGroupInputFenceRequest

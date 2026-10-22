@@ -1,4 +1,5 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.ts'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
 import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
 import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
@@ -83,6 +84,7 @@ import type {
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
+  ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -1668,7 +1670,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
+  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
   | ProfileGroupInputFenceRequest
@@ -2241,6 +2243,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       challenge: parseHostCollaborationRegistrationChallenge(params.challenge),
     } }
   }
+  if (frame.method === 'profile.bot_identity') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'bot_id'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
+    } } satisfies ProfileBotIdentityRequest
+  }
   if (frame.method === 'profile.model_text') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
       'account_binding_handle', 'authority_binding_version', 'text'])
@@ -2280,7 +2289,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
+  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateResult
   | ProfileGroupInputFenceResult
@@ -2598,6 +2607,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
   if (frame.method === 'profile.collaboration_registration') {
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: parseHostCollaborationRegistrationAssertion(result) }
+  }
+  if (frame.method === 'profile.bot_identity') {
+    exactKeys(result, ['identity'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { identity: parseHostBotIdentity(result.identity) } } satisfies ProfileBotIdentityResult
   }
   if (frame.method === 'profile.model_text') {
     if (result.state === 'rejected') {

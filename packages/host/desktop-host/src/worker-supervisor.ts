@@ -28,6 +28,24 @@ export class ProfileWorkerSupervisor {
   private readonly pending = new Map<string, Promise<void>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
+  /**
+   * Read a Bot identity from the same live exclusive-writer Profile worker.
+   * @param profileId - Selected Account Profile.
+   * @param botId - Exact local Bot ID.
+   * @param signal - Caller cancellation.
+   * @returns Public Bot identity or absence.
+   */
+  async resolveBotIdentity(profileId: string, botId: string, signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.resolveBotIdentity) throw new HostAuthorityError('unavailable')
+    const result = await worker.resolveBotIdentity(botId, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (result !== null && result.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
   private assertCurrentWorker(profileId: string, worker: ProfileWorkerHandle): void {
     if (this.closed || this.workers.get(profileId) !== worker) throw new HostAuthorityError('stale')
   }

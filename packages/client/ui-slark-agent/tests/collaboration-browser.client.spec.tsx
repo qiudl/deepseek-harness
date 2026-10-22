@@ -9,7 +9,98 @@ import type { ConversationIndex } from '../src/client/CollaborationBrowser.tsx'
 import { en } from '../src/client/locales.ts'
 import { createCollaborationBrowserStore } from '../src/client/collaboration-browser-store.ts'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+  Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__')
+  Reflect.deleteProperty(window, 'IntersectionObserver')
+})
+
+function mappedGroupProps() {
+  const workspaceId = 'a15fc774-6fae-4795-9f55-f4be65e06846'
+  const sessionId = SessionId('source-session')
+  const props = { ...viewingProps(),
+    useCollaborationIndex: bindSnapshotSelector(createSnapshotStore<ConversationIndex>({
+      state: 'ready', global_pending_count: 0, items: [{ workspace_id: workspaceId, session_id: sessionId,
+        first_source_at: '1', last_activity_at: '2', source_count: 1, pending_count: 0,
+        planning_count: 0, running_count: 0, issue_count: 0, first_pending_digest: null,
+        pinned: false, archived: false }],
+    })),
+    useSessions: (select: (value: unknown) => unknown) => select({ byId: { [sessionId]: { displayTitle: 'Review' } } }),
+    useWorkspaces: (select: (value: unknown) => unknown) => select({ phase: 'ready', items: [{
+      workspaceId, title: 'North', sessionIds: [sessionId],
+    }], dedicatedCollaborationSessionIds: [], archivedSessionIds: [], pinnedSessionIds: [] }),
+    openConversation: vi.fn(), startConversation: vi.fn(), currentWorkspaceId: () => workspaceId,
+    togglePin: vi.fn(), renameConversation: vi.fn(), archiveConversation: vi.fn(), restoreConversation: vi.fn(),
+    t: makeTranslate(en),
+  } as Parameters<typeof CollaborationBrowser>[0]
+  return { workspaceId, sessionId, props }
+}
+
+it('loads and refreshes the original Session mapping only while its row is visible', async () => {
+  const { workspaceId, sessionId, props } = mappedGroupProps()
+  const active = { state: 'group_active', group_id: '44444444-4444-4444-8444-444444444444',
+    workspace_id: workspaceId, session_id: sessionId, version: 2, last_seq: 1 }
+  const preparing = { ...active, state: 'preparing', version: 1 }
+  const lookup = vi.fn().mockResolvedValueOnce(active)
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationGroupPreparation: lookup })
+  let visible: ((entries: IntersectionObserverEntry[]) => void) | undefined
+  const disconnect = vi.fn()
+  Reflect.set(window, 'IntersectionObserver', class {
+    constructor(callback: (entries: IntersectionObserverEntry[]) => void) { visible = callback }
+    observe() {}
+    disconnect() { disconnect() }
+  })
+  const ticks: Array<() => void> = []
+  const clear = vi.spyOn(window, 'clearInterval')
+  vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout) => {
+    if (timeout === 20_000) ticks.push(callback)
+    return ticks.length as never
+  })
+  const view = render(<CollaborationBrowser {...props} />)
+  expect(lookup).not.toHaveBeenCalled()
+  act(() => { visible?.([{ isIntersecting: false } as IntersectionObserverEntry]) })
+  act(() => { visible?.([{ isIntersecting: true } as IntersectionObserverEntry]) })
+  await waitFor(() => { expect(screen.getByText('Group chat active')).toBeTruthy() })
+  expect(lookup).toHaveBeenCalledWith({ operation: 'lookup', workspace_id: workspaceId, session_id: sessionId })
+  act(() => { visible?.([{ isIntersecting: true } as IntersectionObserverEntry]) })
+  expect(ticks).toHaveLength(1)
+  const pending = Promise.withResolvers<typeof active>()
+  lookup.mockImplementationOnce(() => pending.promise)
+  act(() => { ticks[0]?.(); ticks[0]?.() })
+  expect(lookup).toHaveBeenCalledTimes(2)
+  await act(async () => { pending.resolve(preparing); await pending.promise })
+  expect(screen.getByText('Group chat preparing')).toBeTruthy()
+  lookup.mockResolvedValueOnce({ state: 'missing' })
+  act(() => { ticks[0]?.() })
+  await waitFor(() => { expect(screen.queryByText('Group chat preparing')).toBeNull() })
+  lookup.mockRejectedValueOnce(Error('offline'))
+  act(() => { ticks[0]?.() })
+  await waitFor(() => { expect(lookup).toHaveBeenCalledTimes(4) })
+  const stale = Promise.withResolvers<typeof active>()
+  lookup.mockImplementationOnce(() => stale.promise)
+  act(() => { ticks[0]?.() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationGroupPreparation: lookup })
+  await act(async () => { stale.resolve(active); await stale.promise })
+  act(() => { visible?.([{ isIntersecting: false } as IntersectionObserverEntry]); ticks[0]?.() })
+  expect(clear).toHaveBeenCalled()
+  expect(lookup).toHaveBeenCalledTimes(5)
+  act(() => { visible?.([{ isIntersecting: true } as IntersectionObserverEntry]) })
+  expect(lookup).toHaveBeenCalledTimes(5)
+  view.unmount()
+  expect(disconnect).toHaveBeenCalled()
+})
+
+it('checks a visible row without IntersectionObserver and ignores a reply after unmount', async () => {
+  const { props } = mappedGroupProps()
+  const pending = Promise.withResolvers<{ state: 'preparing' }>()
+  const lookup = vi.fn(() => pending.promise)
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { collaborationGroupPreparation: lookup })
+  const view = render(<CollaborationBrowser {...props} />)
+  expect(lookup).toHaveBeenCalledTimes(1)
+  view.unmount()
+  await act(async () => { pending.reject(Error('offline')); await pending.promise.catch(() => undefined) })
+})
 
 function viewingProps() {
   const store = createCollaborationBrowserStore().create()

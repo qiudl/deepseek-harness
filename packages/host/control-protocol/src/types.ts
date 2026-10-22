@@ -565,6 +565,31 @@ export interface ProfileCollaborationRegistrationResult {
   readonly result: HostCollaborationRegistrationAssertion
 }
 
+/** Account-bound read of one Bot in the selected Profile; no private chat fields. */
+export interface ProfileBotIdentityRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_identity'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly bot_id: string
+  }
+}
+
+/** Bounded Bot identity or explicit absence from an exclusive-writer Profile. */
+export interface ProfileBotIdentityResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_identity'
+  readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentity | null }
+}
+
 /** Server nonce bound to Account and one registry workspace/ordinary Session. */
 export interface HostWorkspaceAuthorityChallenge extends HostWorkspaceModelSelectionTarget {
   readonly request_id: HostControlRequestId
@@ -1861,6 +1886,8 @@ export type HostControlFrame =
   | ProfileWorkspaceModelSelectionResult
   | ProfileCollaborationRegistrationRequest
   | ProfileCollaborationRegistrationResult
+  | ProfileBotIdentityRequest
+  | ProfileBotIdentityResult
   | ProfileWorkspaceAuthorityRequest
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateRequest
