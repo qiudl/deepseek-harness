@@ -16,7 +16,8 @@ const owner = { member_id: memberId, actor_kind: 'human' as const, actor_ref: 'o
 const manualBot = { member_id: '44444444-4444-4444-8444-444444444444', actor_kind: 'bot' as const,
   actor_ref: 'deepseek-bot:helper', role: 'member' as const, cycle: 1, joined_seq: 1,
   sources: ['manual' as const] }
-const snapshot = (members = [owner, manualBot]): Extract<GroupMemberReply, { state: 'snapshot' }> => ({ state: 'snapshot',
+type SnapshotReply = Extract<GroupMemberReply, { state: 'snapshot' }>
+const snapshot = (members: SnapshotReply['members'] = [owner, manualBot]): SnapshotReply => ({ state: 'snapshot',
   group_id: groupId, membership_version: 2, last_seq: 1, members })
 const noInFlight = (member_id: string): Extract<GroupMemberReply, { state: 'inflight' }> =>
   ({ state: 'inflight', member_id, member_cycle: 1, deliveries: [], next_cursor: null })
@@ -386,7 +387,9 @@ it('chooses an existing Bot from bounded Host pages before joining the group', a
   fireEvent.click(screen.getByRole('button', { name: 'More Bots' }))
   await waitFor(() => { expect(screen.getByRole('button', { name: 'My Bot' })).toBeTruthy() })
   fireEvent.click(screen.getByRole('button', { name: 'My Bot' }))
-  expect((screen.getByLabelText('Bot ID')).value).toBe('my_bot')
+  const botIdInput = screen.getByLabelText('Bot ID')
+  expect(botIdInput).toBeInstanceOf(HTMLInputElement)
+  if (botIdInput instanceof HTMLInputElement) expect(botIdInput.value).toBe('my_bot')
   fireEvent.click(screen.getByRole('button', { name: 'Add Bot' }))
   await waitFor(() => { expect(commands.some(command => command.operation === 'join')).toBe(true) })
   expect(commands.filter(command => command.operation === 'bots').map(command =>
