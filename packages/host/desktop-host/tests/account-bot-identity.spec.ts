@@ -79,6 +79,41 @@ it('discards Bot identity returned by a replaced Profile worker', async () => {
   await workers.disposeAll()
 })
 
+it('keeps Bot identity reads bound to the live worker and requested Bot', async () => {
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  const signal = new AbortController().signal
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  let answer: typeof bot | null = bot
+  const resolveBotIdentity = vi.fn(async () => answer)
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(), resolveBotIdentity,
+  }))
+  onTestFinished(() => workers.disposeAll())
+  await expect(workers.resolveBotIdentity(input.profileId, bot.bot_id, signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  await workers.start(input)
+  expect(await workers.resolveBotIdentity(input.profileId, bot.bot_id, signal)).toEqual(bot)
+  answer = null
+  expect(await workers.resolveBotIdentity(input.profileId, bot.bot_id, signal)).toBeNull()
+  answer = { ...bot, bot_id: 'bot_2' }
+  await expect(workers.resolveBotIdentity(input.profileId, bot.bot_id, signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(workers.resolveBotIdentity(input.profileId, bot.bot_id, AbortSignal.abort())).rejects.toThrow()
+  await workers.disposeAll()
+  await expect(workers.resolveBotIdentity(input.profileId, bot.bot_id, signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  expect(resolveBotIdentity).toHaveBeenCalledWith(bot.bot_id, signal)
+})
+
+it('rejects Bot identity reads from workers without Bot support', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  onTestFinished(() => workers.disposeAll())
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  await workers.start(input)
+  await expect(workers.resolveBotIdentity(input.profileId, 'bot_1', new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+})
+
 it('rejects a Profile selection that changes during the Bot read', async () => {
   const f = await fixture()
   await f.grant()

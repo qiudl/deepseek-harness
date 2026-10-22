@@ -79,7 +79,7 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       return () => { routes.delete(route.path) }
     },
   } as never)
-  ctx.provide('dsBotSlarkExternalGroup' as never, {
+  const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, {
     resolveLocalBot: async (botId: string) => botId === 'bot_1'
       ? { botId, actorRef: `deepseek-bot:${botId}`, displayName: 'My Bot' } : null,
   } as never)
@@ -143,6 +143,17 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   })
   expect(botResponse.status).toBe(200)
   expect(await botResponse.json()).toEqual({ bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' })
+  const missingBotResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_2' }),
+  })
+  expect(missingBotResponse.status).toBe(200)
+  expect(await missingBotResponse.json()).toBeNull()
+  await disposeBotService()
+  const unavailableBotResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_1' }),
+  })
+  expect(unavailableBotResponse.status).toBe(200)
+  expect(await unavailableBotResponse.json()).toBeNull()
   const archiveIdentity = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
     environment_id: '20000000-0000-4000-8000-000000000002',
     account_issuer: 'https://accounts.example.test',

@@ -542,7 +542,6 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
-        resolveBotIdentity: (profileId, botId, signal) => workers.resolveBotIdentity(profileId, botId, signal),
         ...collaborationWorkerReaders(workers),
         rootAnalysisSupported: true,
         rootCaptureSupported: true,

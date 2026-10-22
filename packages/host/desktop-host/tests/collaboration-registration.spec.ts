@@ -10,7 +10,7 @@ import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
-async function fixture() {
+async function fixture(supportBot = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const time = { value: 1000 }
@@ -32,7 +32,9 @@ async function fixture() {
   const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
   let resolveBot = async (_profileId: string, botId: string, _signal: AbortSignal) => botId === 'bot_1' ? bot : null
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
-    resolveBotIdentity: (profileId, botId, signal) => resolveBot(profileId, botId, signal) })
+    ...(supportBot ? {
+      resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
+    } : {}) })
   const ownerId = randomUUID(), lifetime = new AbortController()
   const session = authority.openSession(ownerId, lifetime.signal)
   const seen: HostControlFrame[] = []
@@ -73,11 +75,24 @@ it('refuses a revoked Account, missing capability and mismatched worker identity
   await f.grant()
   f.setBotResolver(async () => ({ ...f.bot, bot_id: 'other', actor_ref: 'deepseek-bot:other' }))
   await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.setBotResolver(async () => f.bot)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_identity'
+    ? { ...frame, result: { identity: { ...f.bot, bot_id: 'bot_2', actor_ref: 'deepseek-bot:bot_2' } } } : frame)
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
   const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.bot_identity')
   expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
   const before = f.seen.length
   await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'upgrade_required' })
   expect(f.seen.length).toBe(before)
+})
+
+it('rejects a Bot lookup if the Host authority has no Bot resolver', async () => {
+  const f = await fixture(false); await f.grant()
+  const capabilities = [...f.client.inspection.capabilities, 'profile.bot_identity']
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'upgrade_required' })
 })
 
 it('signs a server challenge with installation identity only after Account verification on this connection', async () => {
