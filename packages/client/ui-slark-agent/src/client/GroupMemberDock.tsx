@@ -51,7 +51,7 @@ export type GroupMemberReply = Snapshot | Receipt | { state: 'missing' | 'confli
 export interface GroupMemberBridge {
   collaborationGroupMembers?(command: GroupMemberCommand): Promise<GroupMemberReply>
 }
-type Host = NonNullable<Window['__DSH_DESKTOP_HOST__']>
+type Host = GroupMemberBridge
 type Change = Extract<GroupMemberCommand, { operation: 'join' | 'leave' }>
 type Props = PropsLocale<'slarkAgent'> & {
   host: Host
