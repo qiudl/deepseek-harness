@@ -46,7 +46,7 @@ describe('local memory Session projection', () => {
 
   it('keeps only visible assistant text from mixed reasoning and tool-call blocks', () => {
     const events = oneTurn.map(event => event.seq === 4
-      ? { ...event, data: { ...event.data, message: { id: 'a', role: 'assistant', content: [
+      ? { ...event, data: { message: { id: 'a', role: 'assistant', content: [
         { type: 'reasoning', text: 'private reasoning' },
         { type: 'text', text: 'Visible answer' },
         { type: 'tool-call', arguments: 'private tool arguments' },
