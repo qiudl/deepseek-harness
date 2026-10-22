@@ -33,6 +33,7 @@ import type { ProjectScopeInjected, ScopeLauncherInjected } from './ProjectScope
 import { createScopedCollaborationSource, scopedCollaborationClipboard, workspaceOf } from './collaboration-source.ts'
 import type { GroupMessageBridge } from './collaboration-group-input.ts'
 import { GroupChatDock } from './GroupChatDock.tsx'
+import type { GroupMemberBridge } from './GroupMemberDock.tsx'
 import type { DesktopCollaborationSourceInput, CollaborationSubmissionResponse } from './collaboration-source.ts'
 import type { CollaborationDialogueBridge } from './collaboration-dialogue.ts'
 import { CollaborationResultsModel } from './collaboration-results.ts'
@@ -68,7 +69,7 @@ interface AgentItem {
 }
 
 interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBridge, CollaborationDialogueBridge,
-  GroupMessageBridge {
+  GroupMessageBridge, GroupMemberBridge {
   collaborationGroupActivation?(input: { request_id: string; workspace_id: string; session_id: string }):
   Promise<{ state: 'group_active'; group_id: string; version: 2 } | { state: 'retry_required' }>
   collaborationGroupPreparation?(input: { workspace_id: string
