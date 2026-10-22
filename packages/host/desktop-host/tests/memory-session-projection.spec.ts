@@ -48,7 +48,8 @@ describe('local memory Session projection', () => {
       [`sk-${'a'.repeat(30)}`, '[REDACTED]'],
       ['-----BEGIN TEST PRIVATE KEY-----\nsecret\n-----END TEST PRIVATE KEY-----', '[REDACTED PRIVATE KEY]'],
       ['aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW', '[REDACTED]'],
-      ['a'.repeat(40), 'a'.repeat(40)],
+      ['a'.repeat(40), '[REDACTED]'],
+      ['b'.repeat(64), '[REDACTED]'],
     ] as const
     for (const [input, expected] of values) {
       const events = oneTurn.map(event => event.seq === 1

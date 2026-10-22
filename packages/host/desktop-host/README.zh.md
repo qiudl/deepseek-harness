@@ -141,11 +141,11 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 父 Host 为每个 Profile worker 提供独立随机记忆 bearer 令牌。本地 `listMemorySessions` 方法通过私有 worker 路由分页列出顶层 Session ID 和版本，校验页面顺序和游标，并拒绝被替换的 worker。本地 `readMemorySession` 方法只接受一个 Session ID，检查有界 JSONL 响应，并拒绝被替换的 worker 或不匹配的 Session ID。`memoryProfileReader` 在同一 worker 代际内返回同一个 reader，供预热后的缓存继续使用；worker 更换后，旧 reader 拒绝读取。这些方法不授予控制协议读取或云端传输权限；原始内容离开本地路径前仍需独立核验 Account、Profile 和 grant。
 
-`HostMemoryEvidenceIndex` 在 Host 进程内投影每个原始 Session 快照，只在内存中保留脱敏文本和三元字符索引。所有更新与读取都绑定同一 Account 所有者、安装和 Profile；替换与删除使用代际检查，Session 变化后旧 Evidence 引用失效。`buildHostMemoryEvidenceIndex` 在固定的 worker 代际上扫描，并再次核对完整的 ID/版本清单后才返回索引；版本或 worker 变化会丢弃本次构建。`HostMemoryIndexCache` 只为精确匹配的 Account、安装、Profile 和固定 reader 保留一个就绪索引。新的预热或显式清除会取消旧构建；被取代的构建不能发布。搜索和 Evidence 读取在选取结果前后复核完整清单；清单过期或身份变化时清除缓存。文本、记录、索引项和 Session 数量均有上限；Host 重启后索引丢失，目前尚未接入控制协议。
+`HostMemoryEvidenceIndex` 在 Host 进程内投影每个原始 Session 快照，只在内存中保留脱敏文本和三元字符索引。无标签的 40 位和 64 位十六进制值也会脱敏，因为它们可能是凭据。所有更新与读取都绑定同一 Account 所有者、安装和 Profile；替换与删除使用代际检查，Session 变化后旧 Evidence 引用失效。`buildHostMemoryEvidenceIndex` 在固定的 worker 代际上扫描，并再次核对完整的 ID/版本清单后才返回索引；版本或 worker 变化会丢弃本次构建。`HostMemoryIndexCache` 只为精确匹配的 Account、安装、Profile 和固定 reader 保留一个就绪索引。新的预热或显式清除会取消旧构建；被取代的构建不能发布。搜索和 Evidence 读取在选取结果前后复核完整清单；清单过期或身份变化时清除缓存。文本、记录、索引项和 Session 数量均有上限；Host 重启后索引丢失。控制协议读取要求已认证连接和签名 grant。
 
-记忆指令验签器只接受固定的 Ed25519 公钥环，并对每个签名的 15 秒 nonce 只消费一次。指令绑定当前 Slark 用户、已注册设备、安装、Profile、Host 进程、操作和查询摘要，然后返回不可变的 grant 字段与截止时间，供读取完成后再次检查。用户与设备输入必须来自当前已认证状态，不能从指令本身复制。签名的 macOS 嵌入应用可经 Host Profile 的环境映射同时提供 `memoryKeyringPath` 与 `memoryKeyringSha256`；启动时读取仅所有者可访问的文件，摘要不符即拒绝。验签器尚未接入控制协议。
+记忆指令验签器只接受固定的 Ed25519 公钥环，并对每个签名的 15 秒 nonce 只消费一次。指令绑定当前 Slark 用户、已注册设备、安装、Profile、Host 进程、操作和查询摘要，然后返回不可变的 grant 字段与截止时间，供读取完成后再次检查。用户与设备输入必须来自当前已认证状态，不能从指令本身复制。签名的 macOS 嵌入应用可经 Host Profile 的环境映射同时提供 `memoryKeyringPath` 与 `memoryKeyringSha256`；启动时读取仅所有者可访问的文件，摘要不符即拒绝。安装读取器后，已认证的 `profile.memory_query` 处理器使用该验签器。
 
-`HostMemoryReadController` 组合固定公钥验签器与预热缓存。调用方每次读取都须提供当前已认证的 Desktop 用户、设备和 Account Profile 权限；控制器在验签前复制这份权限，并在索引读取后与新取得的权限比较。返回结果前再次检查指令期限；身份、worker 或清单校验失败时清除缓存。预热在签名查询有效期之外进行，构建前后都检查当前权限。每条签名指令只读取一段至多 8 KiB 的脱敏 Evidence 文本字节，并返回精确来源、总字节数和全文 SHA-256。在已认证的控制协议消费者提供当前权限前，该控制器仅供 Host 本地使用；grant 撤销由 Slark Server 单独复核。
+`HostMemoryReadController` 组合固定公钥验签器与预热缓存。调用方每次读取都须提供当前已认证的 Desktop 用户、设备和 Account Profile 权限；控制器在验签前复制这份权限，并在索引读取后与新取得的权限比较。返回结果前再次检查指令期限；身份、worker 或清单校验失败时清除缓存。预热在签名查询有效期之外进行，构建前后都检查当前权限。每条签名指令只读取一段至多 8 KiB 的脱敏 Evidence 文本字节，并返回精确来源、总字节数和全文 SHA-256。已认证的 `profile.memory_query` 处理器提供当前权限；grant 撤销由 Slark Server 单独复核。
 
 ### 远端工作区目录
 
