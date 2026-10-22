@@ -23,6 +23,26 @@ it('reuses one verified package across file objects and refreshes it for a manif
   expect(capture).toHaveBeenCalledTimes(3)
 })
 
+it('retries failed snapshot capture without clearing a newer refresh', async () => {
+  const snapshots = new SkillHubPackageTransferSnapshot<number>()
+  const failed = vi.fn(async () => { throw Error('capture_failed') })
+  await expect(snapshots.get('operation', failed)).rejects.toThrow('capture_failed')
+  const recovered = vi.fn(async () => 2)
+  expect(await snapshots.get('operation', recovered)).toBe(2)
+
+  let rejectOld!: (error: Error) => void
+  const pending = snapshots.get('operation', () => new Promise<number>((_resolve, reject) => {
+    rejectOld = reject
+  }), true)
+  await vi.waitFor(() => { expect(rejectOld).toBeTypeOf('function') })
+  const refreshed = vi.fn(async () => 3)
+  expect(await snapshots.get('operation', refreshed, true)).toBe(3)
+  rejectOld(Error('stale_capture_failed'))
+  await expect(pending).rejects.toThrow('stale_capture_failed')
+  expect(await snapshots.get('operation', refreshed)).toBe(3)
+  expect(refreshed).toHaveBeenCalledOnce()
+})
+
 it('captures once and serves exact sequential chunks plus an identical retry', async () => {
   const reads = new SkillHubPackageSnapshotReads()
   const bytes = Buffer.alloc(70_000, 7)

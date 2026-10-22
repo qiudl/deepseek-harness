@@ -127,6 +127,28 @@ it('reads only the requested file after a complete fixed snapshot check', async 
   await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
 })
 
+it('rejects changed fixed-file bytes and directory permissions after snapshot capture', async () => {
+  const { root, installation } = await store()
+  const evidence = archive(), plan = target('version-1', evidence)
+  await installation.prepare(plan, evidence.bytes)
+  const receipt = await installation.activate(plan.operationId, '1', '0')
+  const fixed = await installation.snapshotFixed(receipt)
+  const base = join(root, 'skillhub-versions', plan.operationId)
+  const file = join(base, 'files', 'references', 'data.txt')
+  const changed = Buffer.from(resource)
+  changed[0] = changed[0]! ^ 1
+  writeFileSync(file, changed)
+  await expect(fixed.readFile('references/data.txt')).rejects.toThrow()
+  writeFileSync(file, resource)
+  if (process.platform !== 'win32') {
+    const directory = join(base, 'files')
+    chmodSync(directory, 0o755)
+    await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
+    chmodSync(directory, 0o700)
+  }
+  expect(await fixed.readFile('references/data.txt')).toEqual(resource)
+})
+
 it('rejects the wrong Profile, key, generation and stale revision before activation', async () => {
   const { installation } = await store()
   const evidence = archive()
