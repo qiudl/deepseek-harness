@@ -6,6 +6,7 @@ import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { GroupMemberDock } from '../src/client/GroupMemberDock.tsx'
 import type { GroupMemberCommand, GroupMemberReply } from '../src/client/GroupMemberDock.tsx'
 import { writeProxyIntent } from '../src/client/proxy-intent-store.ts'
+import { readLeaveDecisionIntent, writeLeaveDecisionIntent } from '../src/client/leave-decision-intent-store.ts'
 import { en } from '../src/client/locales.ts'
 
 const workspaceId = '11111111-1111-4111-8111-111111111111'
@@ -104,7 +105,7 @@ it('holds a Bot in the group while its delivery lacks a verified result', async 
     if (command.operation === 'status') return snapshot()
     if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
       member_cycle: 1, deliveries: [{ delivery_id: '55555555-5555-4555-8555-555555555555',
-        message_seq: 2, payload_digest: 'a'.repeat(64), state: 'pending_reconciliation' }],
+        message_seq: 2, payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
       next_cursor: null }
     throw Error('leave must wait for owner decisions')
   }) }
@@ -113,6 +114,316 @@ it('holds a Bot in the group while its delivery lacks a verified result', async 
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
   await waitFor(() => { expect(screen.getByText(/work awaiting reconciliation/u)).toBeTruthy() })
   expect(commands.map(command => command.operation)).toEqual(['status', 'proxy_status', 'inflight'])
+})
+
+it('records continue per delivery and removes only after all inventory pages agree', async () => {
+  const first = '55555555-5555-4555-8555-555555555555'
+  const second = '66666666-6666-4666-8666-666666666666'
+  const choices = new Map<string, 'continue' | 'request_stop'>()
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') {
+      const id = command.after_delivery_id ? second : first
+      return { state: 'inflight', member_id: command.member_id, member_cycle: 1,
+        deliveries: [{ delivery_id: id, message_seq: id === first ? 2 : 3,
+          payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: choices.get(id) ?? null }],
+        next_cursor: id === first ? first : null }
+    }
+    if (command.operation === 'decide') {
+      choices.set(command.delivery_id, command.decision)
+      return { state: 'decision_recorded', member_id: command.member_id,
+        member_cycle: command.member_cycle, delivery_id: command.delivery_id,
+        decision: command.decision }
+    }
+    if (command.operation === 'leave') return { state: 'recorded', operation: 'leave',
+      member_id: command.member_id, membership_version: 3, seq: 2 }
+    throw Error('unexpected command')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByText('Group message #2')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Continue recorded')).toBeTruthy() })
+  expect(readLeaveDecisionIntent(workspaceId, sessionId, groupId)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(screen.getByText('Group message #3')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Continue recorded')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(commands.some(command => command.operation === 'leave')).toBe(true) })
+  expect(commands.filter(command => command.operation === 'inflight')).toHaveLength(5)
+})
+
+it('keeps request stop pending and retries its original request after reload', async () => {
+  const deliveryId = '55555555-5555-4555-8555-555555555555'
+  const saved = { request_id: '77777777-7777-4777-8777-777777777777',
+    member_id: manualBot.member_id, member_cycle: 1, delivery_id: deliveryId,
+    decision: 'request_stop' as const }
+  expect(writeLeaveDecisionIntent(workspaceId, sessionId, groupId, saved)).toBe(true)
+  const commands: GroupMemberCommand[] = []
+  let decision: 'request_stop' | null = null
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: deliveryId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision }], next_cursor: null }
+    if (command.operation === 'decide') {
+      decision = 'request_stop'
+      return { state: 'decision_recorded', member_id: command.member_id,
+        member_cycle: command.member_cycle, delivery_id: command.delivery_id, decision: command.decision }
+    }
+    throw Error('leave must wait for executor confirmation')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByText('Group message #2')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Request stop' }))
+  await waitFor(() => { expect(screen.getByText('Stop requested; awaiting executor confirmation')).toBeTruthy() })
+  expect(commands.find(command => command.operation === 'decide')).toMatchObject(saved)
+  expect(readLeaveDecisionIntent(workspaceId, sessionId, groupId)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(commands.filter(command => command.operation === 'inflight')).toHaveLength(2) })
+  expect(commands.some(command => command.operation === 'leave')).toBe(false)
+})
+
+it('holds a decision unsent when browser storage fails', async () => {
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: '55555555-5555-4555-8555-555555555555',
+        message_seq: 2, payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: null }
+    throw Error('decision must remain unsent')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Continue work' })).toBeTruthy() })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('denied') })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Decision status is uncertain. Retry the original decision.'))
+    .toBeTruthy() })
+  expect(host.collaborationGroupMembers.mock.calls.some(([command]) => command.operation === 'decide')).toBe(false)
+})
+
+it('replays an uncertain decision key and rejects a conflicting choice', async () => {
+  const deliveryId = '55555555-5555-4555-8555-555555555555'
+  const commands: GroupMemberCommand[] = []
+  let attempts = 0
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: deliveryId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }], next_cursor: null }
+    if (command.operation === 'decide') {
+      attempts++
+      if (attempts === 1) throw Error('receipt lost')
+      return { state: 'decision_recorded', member_id: command.member_id,
+        member_cycle: command.member_cycle, delivery_id: command.delivery_id, decision: command.decision }
+    }
+    throw Error('unexpected command')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Continue work' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Decision status is uncertain. Retry the original decision.'))
+    .toBeTruthy() })
+  const saved = readLeaveDecisionIntent(workspaceId, sessionId, groupId)
+  expect(saved?.decision).toBe('continue')
+  fireEvent.click(screen.getByRole('button', { name: 'Request stop' }))
+  expect(commands.filter(command => command.operation === 'decide')).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(commands.filter(command => command.operation === 'decide')).toHaveLength(2) })
+  const sent = commands.filter((command): command is Extract<GroupMemberCommand, { operation: 'decide' }> =>
+    command.operation === 'decide')
+  expect(sent[0]?.request_id).toBe(saved?.request_id)
+  expect(sent[1]?.request_id).toBe(saved?.request_id)
+  expect(readLeaveDecisionIntent(workspaceId, sessionId, groupId)).toBeNull()
+})
+
+it('rejects an invalid later page and lets the owner retry a failed page request', async () => {
+  const firstId = '55555555-5555-4555-8555-555555555555'
+  let laterReads = 0
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot()
+    if (command.operation !== 'inflight') throw Error('unexpected command')
+    if (!command.after_delivery_id) return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: firstId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: firstId }
+    laterReads++
+    if (laterReads === 2) return { state: 'retry_required' }
+    if (laterReads === 3) throw Error('offline')
+    return { state: 'inflight', member_id: command.member_id, member_cycle: 1,
+      deliveries: [{ delivery_id: '66666666-6666-4666-8666-666666666666', message_seq: 3,
+        payload_digest: 'b'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: null }
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'More work in progress' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(screen.getByText('Group member status is uncertain. Try again.')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(laterReads).toBe(3) })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(screen.getByText('Group message #3')).toBeTruthy() })
+})
+
+it('keeps a mismatched decision receipt unresolved until the exact request is retried', async () => {
+  const deliveryId = '55555555-5555-4555-8555-555555555555'
+  let replies = 0
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: deliveryId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }], next_cursor: null }
+    if (command.operation === 'decide') {
+      replies++
+      return { state: 'decision_recorded', member_id: command.member_id,
+        member_cycle: command.member_cycle,
+        delivery_id: replies === 1 ? '66666666-6666-4666-8666-666666666666' : deliveryId,
+        decision: command.decision }
+    }
+    throw Error('unexpected command')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Continue work' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Decision status is uncertain. Retry the original decision.'))
+    .toBeTruthy() })
+  const requestId = readLeaveDecisionIntent(workspaceId, sessionId, groupId)?.request_id
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Continue recorded')).toBeTruthy() })
+  expect(commands.filter(command => command.operation === 'decide')).toHaveLength(2)
+  expect(commands.filter((command): command is Extract<GroupMemberCommand, { operation: 'decide' }> =>
+    command.operation === 'decide')[1]?.request_id).toBe(requestId)
+})
+
+it('ignores a later inventory page after the Host changes', async () => {
+  const firstId = '55555555-5555-4555-8555-555555555555'
+  let reads = 0
+  let resolvePage: ((reply: GroupMemberReply) => void) | undefined
+  const host = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return Promise.resolve(snapshot())
+    if (command.operation !== 'inflight') throw Error('unexpected command')
+    if (!command.after_delivery_id) return Promise.resolve({ state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: firstId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: firstId })
+    reads++
+    if (reads === 1) return Promise.resolve({ state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [], next_cursor: null })
+    return new Promise<GroupMemberReply>((resolve) => { resolvePage = resolve })
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'More work in progress' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(resolvePage).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { resolvePage?.({ state: 'retry_required' }) })
+  expect(screen.queryByText('Group member status is uncertain. Try again.')).toBeNull()
+  expect(screen.getByText('Group message #2')).toBeTruthy()
+})
+
+it('ignores a later inventory failure after the Host changes', async () => {
+  const firstId = '55555555-5555-4555-8555-555555555555'
+  let reads = 0
+  let rejectPage: ((error: Error) => void) | undefined
+  const host = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return Promise.resolve(snapshot())
+    if (command.operation !== 'inflight') throw Error('unexpected command')
+    if (!command.after_delivery_id) return Promise.resolve({ state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: firstId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: firstId })
+    reads++
+    if (reads === 1) return Promise.resolve({ state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [], next_cursor: null })
+    return new Promise<GroupMemberReply>((_resolve, reject) => { rejectPage = reject })
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'More work in progress' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(rejectPage).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { rejectPage?.(Error('offline')) })
+  expect(screen.queryByText('Group member status is uncertain. Try again.')).toBeNull()
+})
+
+it('updates only the delivery chosen by the owner', async () => {
+  const ids = ['55555555-5555-4555-8555-555555555555',
+    '66666666-6666-4666-8666-666666666666']
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: ids.map((delivery_id, index) => ({ delivery_id,
+        message_seq: index + 2, payload_digest: 'a'.repeat(64),
+        state: 'pending_reconciliation' as const, decision: null })), next_cursor: null }
+    if (command.operation === 'decide') return { state: 'decision_recorded',
+      member_id: command.member_id, member_cycle: command.member_cycle,
+      delivery_id: command.delivery_id, decision: command.decision }
+    throw Error('unexpected command')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getAllByRole('button', { name: 'Continue work' })).toHaveLength(2) })
+  fireEvent.click(screen.getAllByRole('button', { name: 'Continue work' })[0]!)
+  await waitFor(() => { expect(screen.getByText('Continue recorded')).toBeTruthy() })
+  expect(screen.getAllByRole('button', { name: 'Continue work' })).toHaveLength(1)
+  expect(screen.getByText('Group message #3')).toBeTruthy()
+})
+
+it('ignores a decision reply or failure after the Host changes', async () => {
+  for (const rejectAfterReplace of [false, true]) {
+    let resolveDecision: ((reply: GroupMemberReply) => void) | undefined
+    let rejectDecision: ((error: Error) => void) | undefined
+    const host = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand): Promise<GroupMemberReply> => {
+      if (command.operation === 'status') return Promise.resolve(snapshot())
+      if (command.operation === 'inflight') return Promise.resolve({ state: 'inflight',
+        member_id: command.member_id, member_cycle: 1,
+        deliveries: [{ delivery_id: '55555555-5555-4555-8555-555555555555',
+          message_seq: 2, payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+        next_cursor: null })
+      if (command.operation === 'decide') return new Promise<GroupMemberReply>((resolve, reject) => {
+        resolveDecision = resolve; rejectDecision = reject
+      })
+      throw Error('unexpected command')
+    }) }
+    const view = show(host)
+    await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => { expect(screen.getByRole('button', { name: 'Continue work' })).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+    await waitFor(() => { expect(resolveDecision).toBeDefined() })
+    Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+    await act(async () => {
+      if (rejectAfterReplace) rejectDecision?.(Error('offline'))
+      else resolveDecision?.({ state: 'retry_required' })
+    })
+    expect(screen.queryByText('Continue recorded')).toBeNull()
+    expect(screen.queryByText('Decision status is uncertain. Retry the original decision.')).toBeNull()
+    view.unmount()
+    sessionStorage.clear()
+  }
 })
 
 it('keeps removal closed when the in-flight inventory is unavailable or incomplete', async () => {
@@ -129,7 +440,8 @@ it('keeps removal closed when the in-flight inventory is unavailable or incomple
   reply = { state: 'inflight', member_id: manualBot.member_id, member_cycle: 1,
     deliveries: [], next_cursor: '55555555-5555-4555-8555-555555555555' }
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
-  await waitFor(() => { expect(screen.getByText(/work awaiting reconciliation/u)).toBeTruthy() })
+  await waitFor(() => { expect(commands.filter(command => command.operation === 'inflight')).toHaveLength(3) })
+  expect(screen.getByText('Group member status is uncertain. Try again.')).toBeTruthy()
   expect(commands.some(command => command.operation === 'leave')).toBe(false)
 })
 

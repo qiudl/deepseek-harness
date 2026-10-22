@@ -5,6 +5,8 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { clearProxyIntent, readProxyIntent, writeProxyIntent } from './proxy-intent-store.ts'
 import type { ProxyIntent } from './proxy-intent-store.ts'
+import { clearLeaveDecisionIntent, readLeaveDecisionIntent, writeLeaveDecisionIntent } from './leave-decision-intent-store.ts'
+import type { LeaveDecisionIntent } from './leave-decision-intent-store.ts'
 import css from './GroupChatDock.module.css'
 
 type Member = {
@@ -37,6 +39,14 @@ export type GroupMemberCommand =
     member_id: string
     after_delivery_id: string
     limit: number }
+  | { operation: 'decide'
+    workspace_id: string
+    session_id: string
+    request_id: string
+    member_id: string
+    member_cycle: number
+    delivery_id: string
+    decision: 'continue' | 'request_stop' }
   | { operation: 'bots'
     workspace_id: string
     session_id: string
@@ -95,8 +105,14 @@ export type GroupMemberReply = Snapshot | Receipt |
     deliveries: { delivery_id: string
       message_seq: number
       payload_digest: string
-      state: 'pending_reconciliation' }[]
+      state: 'pending_reconciliation'
+      decision: 'continue' | 'request_stop' | null }[]
     next_cursor: string | null } |
+  { state: 'decision_recorded'
+    delivery_id: string
+    member_id: string
+    member_cycle: number
+    decision: 'continue' | 'request_stop' } |
   { state: 'bot_roster'
     bots: { bot_id: string
       actor_ref: string
@@ -123,6 +139,7 @@ export interface GroupMemberBridge {
 }
 type Host = GroupMemberBridge
 type Change = Extract<GroupMemberCommand, { operation: 'join' | 'leave' | 'proxy_attach' }>
+type InFlight = Extract<GroupMemberReply, { state: 'inflight' }>
 type Props = PropsLocale<'slarkAgent'> & {
   host: Host
   workspaceId: string
@@ -145,6 +162,9 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   const [unavailable, setUnavailable] = useState(false)
   const [removalPending, setRemovalPending] = useState(false)
   const [removalNeedsDecision, setRemovalNeedsDecision] = useState(false)
+  const [removalInventory, setRemovalInventory] = useState<InFlight | null>(null)
+  const [decisionBusy, setDecisionBusy] = useState(false)
+  const [decisionUnavailable, setDecisionUnavailable] = useState(false)
   const [busy, setBusy] = useState(false)
   const [pending, setPending] = useState<Change | null>(null)
   const change = useRef<((command: Change) => Promise<void>) | null>(null)
@@ -157,11 +177,14 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   const proxyRequestId = useRef<string | null>(null)
   const unbindRequestId = useRef<string | null>(null)
   const pendingProxyIntent = useRef<ProxyIntent | null>(null)
+  const pendingDecisionIntent = useRef<LeaveDecisionIntent | null>(null)
   useEffect(() => { snapshotRef.current = snapshot }, [snapshot])
   useEffect(() => { botIdRef.current = botId }, [botId])
   useEffect(() => {
     setSnapshot(null); setBotId(''); setUnavailable(false); setBusy(false); setPending(null)
-    setRemovalPending(false); setRemovalNeedsDecision(false)
+    setRemovalPending(false); setRemovalNeedsDecision(false); setRemovalInventory(null)
+    setDecisionBusy(false); setDecisionUnavailable(false)
+    pendingDecisionIntent.current = readLeaveDecisionIntent(workspaceId, sessionId, groupId)
     snapshotRef.current = null; botIdRef.current = ''
     setRoster(null); setRosterBusy(false); setRosterUnavailable(false)
     setProxyBusy(false); setProxyUnavailable(false); setProxyLabel(null)
@@ -385,19 +408,30 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   }
   const remove = async (memberId: string) => {
     /* v8 ignore next -- Remove buttons render only from a snapshot and are disabled while a change is pending. */
-    if (!snapshot || pendingRef.current || removalPending || !host.collaborationGroupMembers ||
+    if (!snapshot || pendingRef.current || removalPending || decisionBusy || !host.collaborationGroupMembers ||
       window.__DSH_DESKTOP_HOST__ !== host) return
-    setRemovalPending(true); setRemovalNeedsDecision(false)
+    setRemovalPending(true); setRemovalNeedsDecision(false); setRemovalInventory(null)
     try {
-      const inventory = await host.collaborationGroupMembers({ operation: 'inflight',
-        workspace_id: workspaceId, session_id: sessionId, member_id: memberId,
-        after_delivery_id: '', limit: 100 })
-      if (window.__DSH_DESKTOP_HOST__ !== host) return
-      if (inventory.state !== 'inflight' || inventory.member_id !== memberId) {
-        setUnavailable(true); return
-      }
-      if (inventory.deliveries.length || inventory.next_cursor !== null) {
-        setRemovalNeedsDecision(true); return
+      let cursor = ''
+      let firstPage: InFlight | null = null
+      let needsDecision = false
+      do {
+        const inventory = await host.collaborationGroupMembers({ operation: 'inflight',
+          workspace_id: workspaceId, session_id: sessionId, member_id: memberId,
+          after_delivery_id: cursor, limit: 100 })
+        if (window.__DSH_DESKTOP_HOST__ !== host) return
+        if (inventory.state !== 'inflight' || inventory.member_id !== memberId ||
+          (firstPage !== null && inventory.member_cycle !== firstPage.member_cycle) ||
+          (inventory.next_cursor !== null && inventory.next_cursor === cursor)) {
+          setUnavailable(true); return
+        }
+        firstPage ??= inventory
+        needsDecision ||= inventory.deliveries.some(item => item.decision !== 'continue')
+        cursor = inventory.next_cursor ?? ''
+        if (!inventory.next_cursor) break
+      } while (true)
+      if (needsDecision) {
+        setRemovalInventory(firstPage); setRemovalNeedsDecision(true); return
       }
     } catch { if (window.__DSH_DESKTOP_HOST__ === host) setUnavailable(true); return }
     finally { if (window.__DSH_DESKTOP_HOST__ === host) setRemovalPending(false) }
@@ -408,6 +442,59 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       request_id: randomUUID(), expected_membership_version: currentSnapshot.membership_version,
       member_id: memberId })
   }
+  const loadRemovalPage = async (cursor: string) => {
+    /* v8 ignore next -- paging exists only while this inventory is rendered, with a live Host and enabled control. */
+    if (!removalInventory || !host.collaborationGroupMembers || removalPending ||
+      window.__DSH_DESKTOP_HOST__ !== host) return
+    setRemovalPending(true); setUnavailable(false)
+    try {
+      const result = await host.collaborationGroupMembers({ operation: 'inflight',
+        workspace_id: workspaceId, session_id: sessionId, member_id: removalInventory.member_id,
+        after_delivery_id: cursor, limit: 100 })
+      if (window.__DSH_DESKTOP_HOST__ !== host) return
+      if (result.state !== 'inflight' || result.member_id !== removalInventory.member_id ||
+        result.member_cycle !== removalInventory.member_cycle || result.next_cursor === cursor) {
+        setUnavailable(true); return
+      }
+      setRemovalInventory(result)
+    } catch { if (window.__DSH_DESKTOP_HOST__ === host) setUnavailable(true) }
+    finally { if (window.__DSH_DESKTOP_HOST__ === host) setRemovalPending(false) }
+  }
+  const decide = async (deliveryId: string, decision: 'continue' | 'request_stop') => {
+    /* v8 ignore next -- decision controls are rendered only for a live inventory and disabled while sending. */
+    if (!removalInventory || !host.collaborationGroupMembers || decisionBusy ||
+      window.__DSH_DESKTOP_HOST__ !== host) return
+    const item = removalInventory.deliveries.find(row => row.delivery_id === deliveryId)
+    /* v8 ignore next -- the event target is removed when its delivery or available decision changes. */
+    if (!item || (item.decision !== null && item.decision !== decision &&
+      pendingDecisionIntent.current?.delivery_id !== deliveryId)) return
+    const saved = pendingDecisionIntent.current
+    if (saved && (saved.member_id !== removalInventory.member_id ||
+      saved.member_cycle !== removalInventory.member_cycle || saved.delivery_id !== deliveryId ||
+      saved.decision !== decision)) { setDecisionUnavailable(true); return }
+    const intent: LeaveDecisionIntent = saved ?? { request_id: randomUUID(),
+      member_id: removalInventory.member_id, member_cycle: removalInventory.member_cycle,
+      delivery_id: deliveryId, decision }
+    if (!saved && !writeLeaveDecisionIntent(workspaceId, sessionId, groupId, intent)) {
+      setDecisionUnavailable(true); return
+    }
+    pendingDecisionIntent.current = intent
+    setDecisionBusy(true); setDecisionUnavailable(false)
+    try {
+      const result = await host.collaborationGroupMembers({ operation: 'decide',
+        workspace_id: workspaceId, session_id: sessionId, ...intent })
+      if (window.__DSH_DESKTOP_HOST__ !== host) return
+      if (result.state !== 'decision_recorded' || result.delivery_id !== intent.delivery_id ||
+        result.member_id !== intent.member_id || result.member_cycle !== intent.member_cycle ||
+        result.decision !== intent.decision) { setDecisionUnavailable(true); return }
+      clearLeaveDecisionIntent(workspaceId, sessionId, groupId)
+      pendingDecisionIntent.current = null
+      setRemovalInventory({ ...removalInventory,
+        deliveries: removalInventory.deliveries.map(row => row.delivery_id === deliveryId
+          ? { ...row, decision } : row) })
+    } catch { if (window.__DSH_DESKTOP_HOST__ === host) setDecisionUnavailable(true) }
+    finally { if (window.__DSH_DESKTOP_HOST__ === host) setDecisionBusy(false) }
+  }
   if (!host.collaborationGroupMembers) return null
   return <section className={css.members} aria-label={t('group.members')}>
     <strong>{t('group.members')}</strong>
@@ -415,7 +502,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
       <span>{member.actor_ref}</span>
       {member.sources.includes('personal_proxy') && <small>{t('group.personalProxy')}</small>}
       {member.actor_kind === 'bot' && member.sources.includes('manual') &&
-        <button type="button" disabled={busy || !!pending || removalPending}
+        <button type="button" disabled={busy || !!pending || removalPending || decisionBusy}
           onClick={() => { void remove(member.member_id) }}>
           {t('group.removeBot')}
         </button>}
@@ -447,6 +534,23 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     {proxyUnavailable && <p role="status">{t('group.proxyUnavailable')}</p>}
     {unavailable && <p role="status">{t('group.memberUnavailable')}</p>}
     {removalNeedsDecision && <p role="status">{t('group.pendingWorkDecision')}</p>}
+    {removalInventory && <div className={css.removalInventory}>
+      {removalInventory.deliveries.map(item => <div key={item.delivery_id} className={css.removalItem}>
+        <span>{t('group.pendingMessage')} #{item.message_seq}</span>
+        {item.decision === 'continue' && <span>{t('group.workContinues')}</span>}
+        {item.decision === 'request_stop' && <span>{t('group.stopAwaitingReceipt')}</span>}
+        {(item.decision === null || pendingDecisionIntent.current?.delivery_id === item.delivery_id) && <>
+          <button type="button" disabled={decisionBusy || removalPending}
+            onClick={() => { void decide(item.delivery_id, 'continue') }}>{t('group.continueWork')}</button>
+          <button type="button" disabled={decisionBusy || removalPending}
+            onClick={() => { void decide(item.delivery_id, 'request_stop') }}>{t('group.requestStop')}</button>
+        </>}
+      </div>)}
+      {removalInventory.next_cursor && <button type="button" disabled={removalPending || decisionBusy}
+        onClick={() => { void loadRemovalPage(removalInventory.next_cursor as string) }}>
+        {t('group.morePendingWork')}</button>}
+    </div>}
+    {decisionUnavailable && <p role="status">{t('group.decisionUnavailable')}</p>}
     {pending && <button type="button" disabled={busy}
       onClick={() => { void change.current?.(pending) }}>{t('group.retryMemberChange')}</button>}
   </section>

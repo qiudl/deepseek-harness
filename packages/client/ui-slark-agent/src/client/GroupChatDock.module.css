@@ -19,3 +19,6 @@
 .memberAdd { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; }
 .memberAdd > input { min-width: 120px; max-width: 180px; padding: 3px 5px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); background: transparent; color: inherit; }
 .member button, .memberAdd button, .members > button { border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); background: transparent; color: inherit; padding: 4px 8px; cursor: pointer; }
+.removalInventory { display: grid; gap: 6px; font-size: 12px; }
+.removalItem { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.removalItem > button, .removalInventory > button { border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); background: transparent; color: inherit; padding: 4px 8px; cursor: pointer; }
