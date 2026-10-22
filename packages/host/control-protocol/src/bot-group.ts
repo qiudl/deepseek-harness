@@ -119,6 +119,13 @@ export type HostBotGroupCommand = Readonly<{
   memberCycle: number
   version: number
   stopInFlight: boolean
+} | {
+  operation: 'stop_delivery'
+  groupId: string
+  botId: string
+  memberCycle: number
+  deliveryId: string
+  requestId: string
 }>
 
 /** Bounded worker response for delivery, result paging or acknowledgment. */
@@ -144,7 +151,15 @@ export type HostBotGroupResponse = Readonly<{
   }>
   next: number
 } | { state: 'missing' | 'invalid' | 'unavailable' | 'busy' |
-  'bot_missing' | 'revoked' | 'conflict' | 'acknowledged' }>
+  'bot_missing' | 'revoked' | 'conflict' | 'acknowledged' } |
+  { state: 'requested'
+    deliveryId: string
+    requestId: string } |
+  { state: 'terminal'
+    deliveryId: string
+    requestId: string
+    status: 'completed' | 'stopped' | 'unknown'
+    resultId: string }>
 
 function exact(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw Error('invalid_bot_group')
@@ -171,14 +186,17 @@ export function parseHostBotGroupCommand(value: unknown): HostBotGroupCommand {
         ? ['operation', 'groupId', 'botId', 'memberCycle', 'after', 'limit']
         : operation === 'ack_result'
           ? ['operation', 'groupId', 'botId', 'memberCycle', 'deliveryId', 'resultId']
-          : ['operation', 'groupId', 'botId', 'memberCycle', 'version', 'stopInFlight']
+          : operation === 'stop_delivery'
+            ? ['operation', 'groupId', 'botId', 'memberCycle', 'deliveryId', 'requestId']
+            : ['operation', 'groupId', 'botId', 'memberCycle', 'version', 'stopInFlight']
   const row = exact(value, fields)
-  if (!['deliver', 'receipt', 'result_page', 'ack_result', 'revoke_cycle'].includes(String(row.operation)) ||
+  if (!['deliver', 'receipt', 'result_page', 'ack_result', 'revoke_cycle', 'stop_delivery'].includes(String(row.operation)) ||
     typeof row.groupId !== 'string' || !UUID.test(row.groupId) ||
     typeof row.botId !== 'string' || !BOT_ID.test(row.botId) ||
     !Number.isSafeInteger(row.memberCycle) || Number(row.memberCycle) < 1)
     throw Error('invalid_bot_group')
-  if (row.operation === 'deliver' || row.operation === 'receipt' || row.operation === 'ack_result') {
+  if (row.operation === 'deliver' || row.operation === 'receipt' ||
+    row.operation === 'ack_result' || row.operation === 'stop_delivery') {
     if (typeof row.deliveryId !== 'string' || !UUID.test(row.deliveryId)) throw Error('invalid_bot_group')
   }
   if (row.operation === 'deliver') {
@@ -192,6 +210,8 @@ export function parseHostBotGroupCommand(value: unknown): HostBotGroupCommand {
     row.limit !== 1)) throw Error('invalid_bot_group')
   if (row.operation === 'ack_result' && row.resultId !== `${String(row.deliveryId)}:final`)
     throw Error('invalid_bot_group')
+  if (row.operation === 'stop_delivery' && (typeof row.requestId !== 'string' ||
+    !UUID.test(row.requestId))) throw Error('invalid_bot_group')
   if (row.operation === 'revoke_cycle' && (!Number.isSafeInteger(row.version) ||
     Number(row.version) < 1 || typeof row.stopInFlight !== 'boolean')) throw Error('invalid_bot_group')
   return row as HostBotGroupCommand
@@ -211,6 +231,17 @@ export function parseHostBotGroupResponse(value: unknown): HostBotGroupResponse 
     state === 'acknowledged') {
     exact(value, ['state'])
     return { state }
+  }
+  if (state === 'requested' || state === 'terminal') {
+    const row = exact(value, state === 'requested'
+      ? ['state', 'deliveryId', 'requestId']
+      : ['state', 'deliveryId', 'requestId', 'status', 'resultId'])
+    if (typeof row.deliveryId !== 'string' || !UUID.test(row.deliveryId) ||
+      typeof row.requestId !== 'string' || !UUID.test(row.requestId) ||
+      (state === 'terminal' && ((row.status !== 'completed' && row.status !== 'stopped' &&
+        row.status !== 'unknown') || row.resultId !== `${row.deliveryId}:final`)))
+      throw Error('invalid_bot_group')
+    return row as HostBotGroupResponse
   }
   if (state === 'ok') {
     const row = exact(value, ['state', 'results', 'next'])
@@ -270,6 +301,11 @@ export function matchesHostBotGroupResponse(reply: HostBotGroupResponse,
   if (command.operation === 'revoke_cycle') return reply.state === 'revoked' ||
     reply.state === 'missing' || reply.state === 'conflict' ||
     reply.state === 'invalid' || reply.state === 'unavailable'
+  if (command.operation === 'stop_delivery') return reply.state === 'requested' ||
+    reply.state === 'terminal' ? reply.deliveryId === command.deliveryId &&
+      reply.requestId === command.requestId : reply.state === 'missing' ||
+      reply.state === 'conflict' || reply.state === 'invalid' || reply.state === 'unavailable'
+  if (reply.state === 'requested' || reply.state === 'terminal') return false
   if (reply.state === 'ok' || reply.state === 'acknowledged') return false
   if ('deliveryId' in reply) return reply.deliveryId === command.deliveryId &&
     reply.groupId === command.groupId && reply.botId === command.botId &&

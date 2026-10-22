@@ -358,6 +358,13 @@ export function apply(ctx: Context, config: Config): void {
             version: number
             stopInFlight: boolean
           }): Promise<unknown>
+          requestStopDelivery(input: {
+            groupId: string
+            botId: string
+            memberCycle: number
+            deliveryId: string
+            requestId: string
+          }): Promise<unknown>
         }
         if (!service) throw Error('bot_group_unavailable')
         const result = command.operation === 'deliver'
@@ -374,9 +381,13 @@ export function apply(ctx: Context, config: Config): void {
                 ? await service.acknowledgeResult({ groupId: command.groupId, botId: command.botId,
                   memberCycle: command.memberCycle, deliveryId: command.deliveryId,
                   resultId: command.resultId })
-                : await service.revokeCycle({ groupId: command.groupId, botId: command.botId,
-                  memberCycle: command.memberCycle, version: command.version,
-                  stopInFlight: command.stopInFlight })
+                : command.operation === 'stop_delivery'
+                  ? await service.requestStopDelivery({ groupId: command.groupId, botId: command.botId,
+                    memberCycle: command.memberCycle, deliveryId: command.deliveryId,
+                    requestId: command.requestId })
+                  : await service.revokeCycle({ groupId: command.groupId, botId: command.botId,
+                    memberCycle: command.memberCycle, version: command.version,
+                    stopInFlight: command.stopInFlight })
         signal.throwIfAborted()
         return result
       }),
