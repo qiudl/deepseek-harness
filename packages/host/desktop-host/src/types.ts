@@ -105,6 +105,11 @@ export interface ProfileWorkerSpec {
 export interface ProfileWorkerHandle {
   /** Read one Bot identity only when the Profile plugin holds its exclusive writer lock. */
   readonly resolveBotIdentity?: (botId: string, signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null>
+  /** Send or reconcile one Bot group event through the private Profile service. */
+  readonly operateBotGroup?: (
+    command: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupCommand,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupResponse>
   closeNotifications(): void
   abort(): void
   readonly done: Promise<void>

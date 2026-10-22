@@ -46,6 +46,7 @@ import { handleDesktopCollaborationArchiveStateRequest } from './desktop-collabo
 import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-collaboration-archive-transition.ts'
 import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
 import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
+import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-model.ts'
@@ -314,6 +315,39 @@ export function apply(ctx: Context, config: Config): void {
   }
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-group',
+      handler: (req, res) => handleDesktopBotGroupRequest(req, res, sourceToken, async (command, signal) => {
+        signal.throwIfAborted()
+        const service = ctx.get('dsBotSlarkExternalGroup') as undefined | {
+          deliver(input: {
+            schemaVersion: 1
+            deliveryId: string
+            groupId: string
+            botId: string
+            memberCycle: number
+            messageSeq: number
+            payloadDigest: string
+            text: string
+          }): Promise<unknown>
+          receipt(input: {
+            deliveryId: string
+            groupId: string
+            botId: string
+            memberCycle: number
+          }): Promise<unknown>
+        }
+        if (!service) throw Error('bot_group_unavailable')
+        const result = command.operation === 'deliver' ? await service.deliver({
+          schemaVersion: command.schemaVersion, deliveryId: command.deliveryId,
+          groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+          messageSeq: command.messageSeq, payloadDigest: command.payloadDigest, text: command.text,
+        }) : await service.receipt({ deliveryId: command.deliveryId,
+          groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle })
+        signal.throwIfAborted()
+        return result
+      }),
+    }))
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-bot-identity',
       handler: (req, res) => handleDesktopBotIdentityRequest(req, res, sourceToken, async (botId, signal) => {

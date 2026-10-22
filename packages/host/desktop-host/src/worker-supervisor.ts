@@ -13,6 +13,7 @@ import type { HostCollaborationArchiveStateTarget, HostCollaborationArchiveState
 import { HostAuthorityError } from './types.ts'
 import type { HostControlAuthorityOptions } from './unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
+import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 
 interface StartProfileWorkerInput {
   readonly profileId: string
@@ -43,6 +44,18 @@ export class ProfileWorkerSupervisor {
     signal.throwIfAborted()
     this.assertCurrentWorker(profileId, worker)
     if (result !== null && result.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  /** Use only the current Account Profile worker for an already authorized Bot group command. */
+  async operateBotGroup(profileId: string, command: HostBotGroupCommand,
+    signal: AbortSignal): Promise<HostBotGroupResponse> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.operateBotGroup) throw new HostAuthorityError('unavailable')
+    const result = await worker.operateBotGroup(command, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
     return result
   }
 

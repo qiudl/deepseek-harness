@@ -21,7 +21,7 @@ export async function handleDesktopPrivateRequest<Target, Result>(
   parseTarget: (value: unknown) => Target,
   parseResult: (value: unknown) => Result,
   matches: (result: Result, target: Target) => boolean,
-  requestBytes: 2048 | 32768,
+  requestBytes: 2048 | 32768 | 131072,
 ): Promise<void> {
   const authorization = req.headers.authorization
   const actual = Buffer.from(authorization?.startsWith('Bearer ') ? authorization.slice(7) : '')
