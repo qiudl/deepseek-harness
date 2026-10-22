@@ -67,6 +67,8 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 The private Bot group worker bridge also supports one-result recovery pages, exact result acknowledgement and member-cycle revocation. Its worker token and current generation fence remain inside the Host. No public control method dispatches these commands until Slark group and Account authority are verified.
 
+The Bot group ticket verifier checks a pinned Slark environment Ed25519 key, the current Account binding and installation-derived Host registry, the exact Bot member cycle and message digest, and a 60-second expiry. Ticket verification alone does not prove that group membership is still current; dispatch also requires a fresh Slark membership check. The verifier is not exposed as a Host control method.
+
 Existing-only preflight accepts the exact current worker patch or the released `settings` owner layout, with every persistence, storage, credential, and settings path still bound to the inspected generation. It does not rewrite either layout during inspection. Worker startup selects the current `config-editor` owner layout after authorization; changed or redirected released patches remain rejected.
 
 Desktop model text requests require a token-verified connected Account grant owned by the requesting Host connection. The Host checks that grant before and after the worker call without changing the visible Profile view lease, forwards cancellation, and returns only a classified failure or bounded text. Each worker receives a random private token for its local endpoint; ordinary browser cookies cannot authorize that endpoint.
