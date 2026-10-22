@@ -37,7 +37,7 @@ it('roundtrips only an exact public-key Bot delivery control frame', () => {
   const pageRequest = { ...request, method: 'profile.bot_group_result_page',
     params: { ...request.params, after: 0 } }
   const pageResult = { ...result, method: pageRequest.method,
-    result: { reply: { state: 'ok', results: [], next: 0 } } }
+    result: { reply: { state: 'ok', results: [], next: 0 }, proof: null } }
   for (const frame of [pageRequest, pageResult]) {
     expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)))
       .toBe(`${JSON.stringify(frame)}\n`)

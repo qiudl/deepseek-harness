@@ -6,7 +6,8 @@ import { deliverAccountBotGroup, readAccountBotGroupResultPage } from './account
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
   parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
   type HostBotGroupPublicKeyring, type ProfileBotGroupDeliverRequest,
-  type ProfileBotGroupResultPageRequest,
+  type ProfileBotGroupResultPageRequest, type HostBotGroupResultProof,
+  encodeHostBotGroupResultProofPayload,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostRecoveryMaterials } from './recovery-materials.ts'
 import {
@@ -2148,8 +2149,29 @@ export class HostControlAuthority {
             command: frame.params.command, after: frame.params.after,
             signal: context.signal,
           })
+          const item = reply.state === 'ok' ? reply.results[0] : undefined
+          let proof: HostBotGroupResultProof | null = null
+          if (item) {
+            const unsigned = {
+              schema_version: 1 as const,
+              authority_environment_id: account.authorityEnvironmentId,
+              account_binding_handle: account.accountBindingHandle,
+              authority_binding_version: account.authorityBindingVersion,
+              account_issuer: account.issuer, account_subject: account.subject,
+              owner_user_id: account.ownerId, computer_id: frame.params.computer_id,
+              slark_audience: frame.params.slark_audience,
+              installation_id: this.options.identity.installationId,
+              installation_public_key: this.options.identity.installationPublicKey,
+              host_instance_id: this.options.identity.hostInstanceId,
+              process_nonce: this.options.identity.processNonce,
+              result: item, issued_at: clock(),
+            }
+            proof = { ...unsigned, signature: sign(null,
+              encodeHostBotGroupResultProofPayload(unsigned),
+              privateKeyObject(this.options.identity.installationPrivateKey)).toString('base64url') }
+          }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
-            method: frame.method, result: { reply } })
+            method: frame.method, result: { reply, proof } })
         } else if (frame.method === 'profile.workspace_model_selection') {
           const inspect = this.options.inspectWorkspaceModelSelection
           if (!inspect) throw new HostAuthorityError('upgrade_required')
@@ -3758,7 +3780,7 @@ export class UnixHostClient {
     readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
     readonly after: number
     readonly signal?: AbortSignal
-  }): Promise<HostBotGroupResponse> {
+  }): Promise<{ reply: HostBotGroupResponse; proof: HostBotGroupResultProof | null }> {
     input.signal?.throwIfAborted()
     if (!this.inspection.capabilities.includes('profile.bot_group_result_page' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
@@ -3777,12 +3799,35 @@ export class UnixHostClient {
     if (frame.type !== 'result' || frame.method !== request.method)
       throw new HostAuthorityError('unavailable')
     const reply = parseHostBotGroupResponse(frame.result.reply)
+    const proof = frame.result.proof
     const query: HostBotGroupCommand = { operation: 'result_page',
       groupId: delivery.command.groupId, botId: delivery.command.botId,
       memberCycle: delivery.command.memberCycle, after: input.after, limit: 1 }
     if (!matchesHostBotGroupResponse(reply, query))
       throw new HostAuthorityError('profile_mismatch')
-    return reply
+    if ((reply.state === 'ok' && reply.results.length === 1) !== Boolean(proof) ||
+        (reply.state === 'ok' && proof && JSON.stringify(reply.results[0]) !== JSON.stringify(proof.result)))
+      throw new HostAuthorityError('profile_mismatch')
+    if (proof) {
+      const { signature, ...unsigned } = proof
+      if (proof.authority_environment_id !== input.authorityEnvironmentId ||
+          proof.account_binding_handle !== input.accountBindingHandle ||
+          proof.authority_binding_version !== input.authorityBindingVersion ||
+          proof.account_issuer !== input.issuer || proof.account_subject !== input.subject ||
+          proof.computer_id !== input.computerId || proof.slark_audience !== input.slarkAudience ||
+          proof.installation_id !== this.inspection.installation_id ||
+          proof.installation_public_key !== this.inspection.installation_public_key ||
+          proof.host_instance_id !== this.inspection.host_instance_id ||
+          proof.process_nonce !== this.inspection.process_nonce ||
+          proof.result.groupId !== delivery.command.groupId ||
+          proof.result.botId !== delivery.command.botId ||
+          proof.result.memberCycle !== delivery.command.memberCycle ||
+          proof.issued_at > this.now() + 5000 || proof.issued_at < this.now() - 60_000 ||
+          !verify(null, encodeHostBotGroupResultProofPayload(unsigned),
+            publicKeyObject(proof.installation_public_key), Buffer.from(signature, 'base64url')))
+        throw new HostAuthorityError('profile_mismatch')
+    }
+    return { reply, proof }
   }
 
   /**

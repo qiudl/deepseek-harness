@@ -627,7 +627,8 @@ export interface ProfileBotGroupResultPageResult {
   readonly type: 'result'
   readonly request_id: HostControlRequestId
   readonly method: 'profile.bot_group_result_page'
-  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse
+    readonly proof: import('./bot-group-result-proof.ts').HostBotGroupResultProof | null }
 }
 
 /** Server nonce bound to Account and one registry workspace/ordinary Session. */

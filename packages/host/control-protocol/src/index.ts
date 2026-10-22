@@ -42,6 +42,8 @@ export { parseHostBotGroupCommand, parseHostBotGroupResponse,
   parseHostBotGroupDeliveryInput } from './bot-group.js'
 export type { HostBotGroupCommand, HostBotGroupResponse,
   HostBotGroupPublicKeyring, HostBotGroupDeliveryInput } from './bot-group.js'
+export { parseHostBotGroupResultProof, encodeHostBotGroupResultProofPayload } from './bot-group-result-proof.js'
+export type { HostBotGroupResultProof } from './bot-group-result-proof.js'
 export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'
 export type { HostRootTextContextReceipt } from './root-text-context.js'
 export {

@@ -1,6 +1,7 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.ts'
 import { parseHostBotGroupDeliveryInput, parseHostBotGroupResponse } from './bot-group.ts'
+import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
 import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
 import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
@@ -2649,11 +2650,15 @@ function decodeProfileResult(frame: Record<string, unknown>):
       result: { reply: parseHostBotGroupResponse(result.reply) } } satisfies ProfileBotGroupDeliverResult
   }
   if (frame.method === 'profile.bot_group_result_page') {
-    exactKeys(result, ['reply'])
+    exactKeys(result, ['reply', 'proof'])
     const reply = parseHostBotGroupResponse(result.reply)
     if (reply.state !== 'ok' && reply.state !== 'invalid' && reply.state !== 'unavailable') reject()
+    const item = reply.state === 'ok' ? reply.results[0] : undefined
+    const proof = result.proof === null ? null : parseHostBotGroupResultProof(result.proof)
+    if (Boolean(item) !== Boolean(proof) ||
+      (item && proof && JSON.stringify(item) !== JSON.stringify(proof.result))) reject()
     return { version: 1, type: 'result', request_id, method: frame.method,
-      result: { reply } } satisfies ProfileBotGroupResultPageResult
+      result: { reply, proof } } satisfies ProfileBotGroupResultPageResult
   }
   if (frame.method === 'profile.model_text') {
     if (result.state === 'rejected') {

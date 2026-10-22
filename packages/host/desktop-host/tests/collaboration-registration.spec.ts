@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { encodeHostCollaborationRegistrationSignaturePayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { encodeHostCollaborationRegistrationSignaturePayload,
+  encodeHostBotGroupResultProofPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 import { botGroupHostRegistryId } from '../src/bot-group-ticket.ts'
@@ -182,15 +183,31 @@ it('delivers through the Host only after signed Slark and current membership con
     groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
     seq: 1, status: 'completed', text: 'done',
   }], next: 1 })
-  expect(await f.client.readBotGroupResultPage({ ...input, after: 0 })).toMatchObject({
-    state: 'ok', next: 1, results: [{ text: 'done' }],
-  })
+  const page = await f.client.readBotGroupResultPage({ ...input, after: 0 })
+  expect(page.reply).toMatchObject({ state: 'ok', next: 1, results: [{ text: 'done' }] })
+  expect(page.proof).not.toBeNull()
+  const signedProof = page.proof
+  if (!signedProof) throw Error('missing result proof')
+  const { signature, ...unsigned } = signedProof
+  expect(verify(null, encodeHostBotGroupResultProofPayload(unsigned), f.keys.publicKey,
+    Buffer.from(signature, 'base64url'))).toBe(true)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
+    ? { ...frame, result: { ...frame.result, proof: { ...signedProof, signature: 'A'.repeat(86) } } }
+    : frame)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [{
+    id: `${command.deliveryId}:final`, deliveryId: command.deliveryId,
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    seq: 1, status: 'completed', text: 'done',
+  }], next: 1 })
+  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
   expect(f.operateBotGroup).toHaveBeenLastCalledWith(expect.any(String),
     { operation: 'result_page', groupId: command.groupId, botId: command.botId,
       memberCycle: command.memberCycle, after: 0, limit: 1 }, expect.any(AbortSignal))
   fetchMock.mockResolvedValueOnce(Response.json({ ok: false }, { status: 409 }))
   await expect(f.client.deliverBotGroup(input)).rejects.toThrow()
-  expect(f.operateBotGroup).toHaveBeenCalledTimes(2)
+  expect(f.operateBotGroup).toHaveBeenCalledTimes(3)
 })
 
 it('does not advertise Bot delivery without startup-pinned Slark keys', async () => {

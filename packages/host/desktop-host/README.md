@@ -67,6 +67,8 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 The private Bot group worker bridge also supports one-result recovery pages, exact result acknowledgement and member-cycle revocation. Its worker token and current generation fence remain inside the Host. `profile.bot_group_result_page` exposes a one-result read only after the original Slark delivery ticket is revalidated against current Account and group membership. Result acknowledgement and revocation still have no public control method.
 
+When a result is present, the Host signs its exact text, Bot/member identity, delivery ID and current Account/installation tuple with the installation key. The client verifies this proof against its inspected Host peer. Slark must verify it again against the current registered Host before recording a Bot message.
+
 The Bot group ticket verifier checks a pinned Slark environment Ed25519 key, the current Account binding and installation-derived Host registry, the exact Bot member cycle and message digest, and a 60-second expiry. The confirmation helper then calls the pinned Slark HTTPS origin to recheck live membership and the exact delivery; it limits the response to 4 KiB and refuses redirects or mismatched receipts. `profile.bot_group_deliver` uses both checks before invoking the current worker.
 
 If the worker's delivery reply is lost, the Host reads the same durable delivery ID before reporting an outcome. A missing or unavailable receipt preserves the original failure; the Host does not submit a second delivery during reconciliation.
