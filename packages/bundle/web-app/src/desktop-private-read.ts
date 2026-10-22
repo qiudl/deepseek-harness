@@ -22,6 +22,7 @@ export async function handleDesktopPrivateRequest<Target, Result>(
   parseResult: (value: unknown) => Result,
   matches: (result: Result, target: Target) => boolean,
   requestBytes: 2048 | 32768 | 131072,
+  timeoutMs: 10_000 | 30_000 = 10_000,
 ): Promise<void> {
   const authorization = req.headers.authorization
   const actual = Buffer.from(authorization?.startsWith('Bearer ') ? authorization.slice(7) : '')
@@ -37,7 +38,7 @@ export async function handleDesktopPrivateRequest<Target, Result>(
   }
   const controller = new AbortController()
   const close = () => { controller.abort() }
-  const timer = setTimeout(() => { controller.abort(); req.destroy() }, 10_000)
+  const timer = setTimeout(() => { controller.abort(); req.destroy() }, timeoutMs)
   res.once('close', close)
   const send = (status: number, value: unknown) => {
     if (!res.destroyed && !res.writableEnded) {

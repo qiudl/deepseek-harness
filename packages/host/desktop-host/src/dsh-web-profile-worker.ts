@@ -500,18 +500,19 @@ export class DshWebProfileWorkerFactory {
   ): Promise<HostBotGroupResponse> {
     signal.throwIfAborted()
     if (stopped()) throw new HostAuthorityError('unavailable')
-    const active = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+    const active = AbortSignal.any([signal, AbortSignal.timeout(35_000)])
     const target = parseHostBotGroupCommand(command)
     const response = await fetch(`${viewOrigin}/internal/desktop-bot-group`, {
       method: 'POST', redirect: 'error',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(target), signal: active,
     })
-    return this.readPrivateResponse(response, active, signal, stopped, 2048, (bytes) => {
-      const result = parseHostBotGroupResponse(JSON.parse(bytes.toString('utf8')))
-      if (!matchesHostBotGroupResponse(result, target)) throw new HostAuthorityError('profile_mismatch')
-      return result
-    }, 'await')
+    return this.readPrivateResponse(response, active, signal, stopped,
+      target.operation === 'result_page' ? 768 * 1024 : 2048, (bytes) => {
+        const result = parseHostBotGroupResponse(JSON.parse(bytes.toString('utf8')))
+        if (!matchesHostBotGroupResponse(result, target)) throw new HostAuthorityError('profile_mismatch')
+        return result
+      }, 'await')
   }
 
   private async inspectCollaborationArchiveIntent(

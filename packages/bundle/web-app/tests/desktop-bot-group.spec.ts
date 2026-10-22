@@ -66,3 +66,35 @@ it('reads a scoped missing receipt without exposing another group result', async
   expect(await response.json()).toEqual({ state: 'missing' })
   expect(run).toHaveBeenCalledWith(query, expect.any(AbortSignal))
 })
+
+it('pages only one scoped durable result and forwards its exact acknowledgement', async () => {
+  const query = { operation: 'result_page', groupId: delivery.groupId,
+    botId: delivery.botId, memberCycle: delivery.memberCycle, after: 0, limit: 1 } as const
+  const item = { id: `${delivery.deliveryId}:final`, deliveryId: delivery.deliveryId,
+    groupId: delivery.groupId, botId: delivery.botId, memberCycle: delivery.memberCycle,
+    seq: 1, status: 'completed', text: 'Done.' } as const
+  const f = await fixture(vi.fn(async () => ({ state: 'ok', results: [item], next: 1 })))
+  expect(await (await f.post(query)).json()).toEqual({ state: 'ok', results: [item], next: 1 })
+  expect((await f.post({ ...query, limit: 2 })).status).toBe(400)
+  const wrong = await fixture(vi.fn(async () => ({ state: 'ok', results: [
+    { ...item, groupId: '30000000-0000-4000-8000-000000000003' }], next: 1 })))
+  expect((await wrong.post(query)).status).toBe(422)
+  const acknowledged = await fixture(vi.fn(async () => ({ state: 'acknowledged' })))
+  expect(await (await acknowledged.post({ operation: 'ack_result', groupId: delivery.groupId,
+    botId: delivery.botId, memberCycle: delivery.memberCycle, deliveryId: delivery.deliveryId,
+    resultId: item.id })).json()).toEqual({ state: 'acknowledged' })
+  expect((await acknowledged.post({ operation: 'ack_result', groupId: delivery.groupId,
+    botId: delivery.botId, memberCycle: delivery.memberCycle, deliveryId: delivery.deliveryId,
+    resultId: 'other:final' })).status).toBe(400)
+})
+
+it('requires a positive revocation version and forwards the in-flight decision', async () => {
+  const run = vi.fn(async () => ({ state: 'revoked' }))
+  const f = await fixture(run)
+  const command = { operation: 'revoke_cycle', groupId: delivery.groupId,
+    botId: delivery.botId, memberCycle: delivery.memberCycle,
+    version: 3, stopInFlight: true } as const
+  expect(await (await f.post(command)).json()).toEqual({ state: 'revoked' })
+  expect(run).toHaveBeenCalledWith(command, expect.any(AbortSignal))
+  expect((await f.post({ ...command, version: 0 })).status).toBe(400)
+})

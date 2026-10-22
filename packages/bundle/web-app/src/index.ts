@@ -336,14 +336,46 @@ export function apply(ctx: Context, config: Config): void {
             botId: string
             memberCycle: number
           }): Promise<unknown>
+          resultPage(input: {
+            groupId: string
+            botId: string
+            memberCycle: number
+            after: number
+            limit: 1
+          }): Promise<unknown>
+          acknowledgeResult(input: {
+            groupId: string
+            botId: string
+            memberCycle: number
+            deliveryId: string
+            resultId: string
+          }): Promise<unknown>
+          revokeCycle(input: {
+            groupId: string
+            botId: string
+            memberCycle: number
+            version: number
+            stopInFlight: boolean
+          }): Promise<unknown>
         }
         if (!service) throw Error('bot_group_unavailable')
-        const result = command.operation === 'deliver' ? await service.deliver({
-          schemaVersion: command.schemaVersion, deliveryId: command.deliveryId,
-          groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
-          messageSeq: command.messageSeq, payloadDigest: command.payloadDigest, text: command.text,
-        }) : await service.receipt({ deliveryId: command.deliveryId,
-          groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle })
+        const result = command.operation === 'deliver'
+          ? await service.deliver({ schemaVersion: command.schemaVersion, deliveryId: command.deliveryId,
+            groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+            messageSeq: command.messageSeq, payloadDigest: command.payloadDigest, text: command.text })
+          : command.operation === 'receipt'
+            ? await service.receipt({ deliveryId: command.deliveryId, groupId: command.groupId,
+              botId: command.botId, memberCycle: command.memberCycle })
+            : command.operation === 'result_page'
+              ? await service.resultPage({ groupId: command.groupId, botId: command.botId,
+                memberCycle: command.memberCycle, after: command.after, limit: command.limit })
+              : command.operation === 'ack_result'
+                ? await service.acknowledgeResult({ groupId: command.groupId, botId: command.botId,
+                  memberCycle: command.memberCycle, deliveryId: command.deliveryId,
+                  resultId: command.resultId })
+                : await service.revokeCycle({ groupId: command.groupId, botId: command.botId,
+                  memberCycle: command.memberCycle, version: command.version,
+                  stopInFlight: command.stopInFlight })
         signal.throwIfAborted()
         return result
       }),

@@ -11,5 +11,5 @@ export async function handleDesktopBotGroupRequest(
 ): Promise<void> {
   return handleDesktopPrivateRequest(req, res, token, run,
     parseHostBotGroupCommand, parseHostBotGroupResponse,
-    matchesHostBotGroupResponse, 131072)
+    matchesHostBotGroupResponse, 131072, 30_000)
 }
