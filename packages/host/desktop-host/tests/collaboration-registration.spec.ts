@@ -95,6 +95,23 @@ it('rejects a Bot lookup if the Host authority has no Bot resolver', async () =>
     subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'upgrade_required' })
 })
 
+it('rejects a mismatched Bot identity even after the transport accepts its reply', async () => {
+  const f = await fixture(); await f.grant()
+  const wrongBot = { ...f.bot, bot_id: 'bot_2', actor_ref: 'deepseek-bot:bot_2' }
+  let replyUsed = false
+  expect(Reflect.set(f.client, 'call', async () => {
+    replyUsed = true
+    return { type: 'result', method: 'profile.bot_identity', result: { identity: wrongBot } }
+  })).toBe(true)
+  await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  expect(replyUsed).toBe(true)
+  expect(Reflect.set(f.client, 'call', async () => ({ type: 'result', method: 'profile.other' }))).toBe(true)
+  await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'unavailable' })
+  expect(Reflect.deleteProperty(f.client, 'call')).toBe(true)
+})
+
 it('signs a server challenge with installation identity only after Account verification on this connection', async () => {
   const f = await fixture()
   await f.host.restoreProfile({ ...f.profile, ...f.account, ownerId: f.ownerId })
