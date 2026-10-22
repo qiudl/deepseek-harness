@@ -2,6 +2,11 @@ import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } fro
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotIdentity, parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotIdentity } from '@deepseek-ai/dsh-host-control-protocol'
+import { matchesHostBotGroupResponse, parseHostBotGroupCommand,
+  parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
+} from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
@@ -280,6 +285,10 @@ export class DshWebProfileWorkerFactory {
       viewOrigin,
       generation,
       bootstrapCookie,
+      resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
+        viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
+      operateBotGroup: (command, signal) => this.operateBotGroup(
+        viewOrigin, sourceToken, command, signal, () => requestedStop || settled),
       generateText: async (text, signal) => {
         if (requestedStop || settled) throw new HostAuthorityError('unavailable')
         const response = await fetch(`${viewOrigin}/internal/desktop-model-text`, {
@@ -464,6 +473,46 @@ export class DshWebProfileWorkerFactory {
       }
       return value
     }, 'await')
+  }
+
+  private async resolveBotIdentity(
+    viewOrigin: string, token: string, botId: string, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotIdentity | null> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+    const target = parseHostBotIdentityTarget({ bot_id: botId })
+    const response = await fetch(`${viewOrigin}/internal/desktop-bot-identity`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 2048, (bytes) => {
+      const identity = parseHostBotIdentity(JSON.parse(bytes.toString('utf8')))
+      if (identity !== null && identity.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
+      return identity
+    }, 'await')
+  }
+
+  private async operateBotGroup(
+    viewOrigin: string, token: string, command: HostBotGroupCommand,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotGroupResponse> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(35_000)])
+    const target = parseHostBotGroupCommand(command)
+    const response = await fetch(`${viewOrigin}/internal/desktop-bot-group`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped,
+      target.operation === 'result_page' ? 768 * 1024 : 2048, (bytes) => {
+        const result = parseHostBotGroupResponse(JSON.parse(bytes.toString('utf8')))
+        if (!matchesHostBotGroupResponse(result, target)) throw new HostAuthorityError('profile_mismatch')
+        return result
+      }, 'await')
   }
 
   private async inspectCollaborationArchiveIntent(

@@ -58,6 +58,7 @@ function bridge(): {
   collaborationDeliveries(value: unknown): Promise<unknown>
   collaborationConversations?(): Promise<unknown>
   collaborationGroupMessages?(value: unknown): Promise<unknown>
+  collaborationGroupMembers?(value: unknown): Promise<unknown>
   collaborationGroupPreparation?(value: unknown): Promise<unknown>
   collaborationGroupActivation?(value: unknown): Promise<unknown>
   collaborationArchive?(value: unknown): Promise<unknown> } {
@@ -332,6 +333,31 @@ it('REQ-20261020-0010: a group message capability preserves older scope and requ
   expect(requests[0]?.method).toBe('collaboration/groupMessages')
   expect(requests[0]?.payload.args.request).toEqual(command)
   expect(await bridge().collaborationGroupMessages?.({ ...command, actor_ref: 'bot' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261020-0010: a member capability keeps the remote bridge installed and sends exact commands', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2',
+    methods: ['workspace', 'groupMessages', 'groupMembers'] }
+  const command = { operation: 'status', workspace_id: workspace, session_id: 'session-1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'snapshot',
+      group_id: '22222222-2222-4222-8222-222222222222', membership_version: 1,
+      last_seq: 0, members: [{ member_id: '33333333-3333-4333-8333-333333333333',
+        actor_kind: 'human', actor_ref: 'owner', role: 'owner', cycle: 1,
+        joined_seq: 0, sources: [] }] }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(bridge().collaborationScopeAvailable).toBe(true)
+  expect(await bridge().collaborationGroupMembers?.(command)).toMatchObject({ state: 'snapshot',
+    membership_version: 1 })
+  expect(requests[0]?.method).toBe('collaboration/groupMembers')
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupMembers?.({ ...command, owner: 'forged' }))
     .toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })

@@ -4,6 +4,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import type { GroupMessageReply } from './collaboration-group-input.ts'
+import { GroupMemberDock } from './GroupMemberDock.tsx'
 import css from './GroupChatDock.module.css'
 
 type Host = NonNullable<Window['__DSH_DESKTOP_HOST__']>
@@ -12,12 +13,14 @@ type RecordedPending = { requestId: string; digest: string }
 type Snapshot = {
   state: 'missing' | 'preparing' | 'active' | 'unavailable'
   workspaceId: string | undefined
+  groupId: string | undefined
   items: readonly Message[]
   hasMore: boolean
   loading: boolean
   readFailed: boolean
 }
-const empty: Snapshot = { state: 'missing', workspaceId: undefined, items: [], hasMore: false, loading: false, readFailed: false }
+const empty: Snapshot = { state: 'missing', workspaceId: undefined, groupId: undefined,
+  items: [], hasMore: false, loading: false, readFailed: false }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const sha256 = /^[a-f0-9]{64}$/u
 type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & {
@@ -50,7 +53,8 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
     const current = () => !disposed && window.__DSH_DESKTOP_HOST__ === host && workspaceId() === selectedWorkspace
       && !!selectedWorkspace
     const publish = (state: Snapshot['state'], loading = false, readFailed = false) => {
-      if (current()) setSnapshot({ state, workspaceId: selectedWorkspace, items, hasMore, loading, readFailed })
+      if (current()) setSnapshot({ state, workspaceId: selectedWorkspace, groupId,
+        items, hasMore, loading, readFailed })
     }
     const checkPending = async () => {
       const workspace = workspaceId(), expectedGroupId = groupId
@@ -186,6 +190,8 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
     </>}
     {snapshot.state === 'unavailable' && <p role="status">{t('group.readUnavailable')}</p>}
     {snapshot.state === 'active' && <>
+      {snapshot.workspaceId && snapshot.groupId && <GroupMemberDock host={host}
+        workspaceId={snapshot.workspaceId} sessionId={sessionId} groupId={snapshot.groupId} t={t} />}
       {recordedPending && <div className={css.recovery} role="status">
         <p>{t('group.pendingRecorded')}</p>
         <button type="button" disabled={recovering}

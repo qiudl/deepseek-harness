@@ -13,6 +13,7 @@ import type { HostCollaborationArchiveStateTarget, HostCollaborationArchiveState
 import { HostAuthorityError } from './types.ts'
 import type { HostControlAuthorityOptions } from './unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
+import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 
 interface StartProfileWorkerInput {
   readonly profileId: string
@@ -27,6 +28,42 @@ export class ProfileWorkerSupervisor {
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
+
+  /**
+   * Read a Bot identity from the same live exclusive-writer Profile worker.
+   * @param profileId - Selected Account Profile.
+   * @param botId - Exact local Bot ID.
+   * @param signal - Caller cancellation.
+   * @returns Public Bot identity or absence.
+   */
+  async resolveBotIdentity(profileId: string, botId: string, signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.resolveBotIdentity) throw new HostAuthorityError('unavailable')
+    const result = await worker.resolveBotIdentity(botId, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (result !== null && result.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  /**
+   * Use only the current Account Profile worker for an authorized Bot group command.
+   * @param profileId - Selected Account Profile.
+   * @param command - Host-validated group operation.
+   * @param signal - Caller cancellation.
+   * @returns Worker reply for the exact operation.
+   */
+  async operateBotGroup(profileId: string, command: HostBotGroupCommand,
+    signal: AbortSignal): Promise<HostBotGroupResponse> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.operateBotGroup) throw new HostAuthorityError('unavailable')
+    const result = await worker.operateBotGroup(command, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
 
   private assertCurrentWorker(profileId: string, worker: ProfileWorkerHandle): void {
     if (this.closed || this.workers.get(profileId) !== worker) throw new HostAuthorityError('stale')

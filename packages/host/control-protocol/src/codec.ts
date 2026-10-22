@@ -1,4 +1,7 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.ts'
+import { parseHostBotGroupDeliveryInput, parseHostBotGroupResponse } from './bot-group.ts'
+import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
 import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
 import { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
@@ -83,6 +86,10 @@ import type {
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
+  ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
+  ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
+  ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -463,6 +470,11 @@ function extensionKind(value: unknown): HostExtensionKind {
   if (value !== 'plugin' && value !== 'mcp' && value !== 'skill') reject()
   return value
 }
+function botGroupDeliveryParams(params: Record<string, unknown>) {
+  return parseHostBotGroupDeliveryInput({ computer_id: params.computer_id,
+    slark_audience: params.slark_audience, ticket: params.ticket, command: params.command })
+}
+
 function collaborationAccountParams(params: Record<string, unknown>) {
   return {
     ...authorized(params),
@@ -1668,7 +1680,10 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
-  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
+  | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
+  | ProfileBotGroupDeliverRequest
+  | ProfileBotGroupResultPageRequest
+  | ProfileBotGroupResultAckRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
   | ProfileGroupInputFenceRequest
@@ -2241,6 +2256,41 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       challenge: parseHostCollaborationRegistrationChallenge(params.challenge),
     } }
   }
+  if (frame.method === 'profile.bot_identity') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'bot_id'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
+    } } satisfies ProfileBotIdentityRequest
+  }
+  if (frame.method === 'profile.bot_group_deliver') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
+      'slark_audience', 'ticket', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...botGroupDeliveryParams(params),
+    } } satisfies ProfileBotGroupDeliverRequest
+  }
+  if (frame.method === 'profile.bot_group_result_page') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
+      'slark_audience', 'ticket', 'command', 'after'])
+    if (!Number.isSafeInteger(params.after) || Number(params.after) < 0) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...botGroupDeliveryParams(params),
+      after: params.after as number,
+    } } satisfies ProfileBotGroupResultPageRequest
+  }
+  if (frame.method === 'profile.bot_group_result_ack') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
+      'slark_audience', 'ticket', 'command', 'result_id'])
+    const delivery = botGroupDeliveryParams(params)
+    if (params.result_id !== `${delivery.command.deliveryId}:final`) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...delivery, result_id: params.result_id,
+    } } satisfies ProfileBotGroupResultAckRequest
+  }
   if (frame.method === 'profile.model_text') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id',
       'account_binding_handle', 'authority_binding_version', 'text'])
@@ -2280,7 +2330,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
-  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
+  | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult
+  | ProfileBotGroupDeliverResult
+  | ProfileBotGroupResultPageResult
+  | ProfileBotGroupResultAckResult
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateResult
   | ProfileGroupInputFenceResult
@@ -2598,6 +2651,34 @@ function decodeProfileResult(frame: Record<string, unknown>):
   if (frame.method === 'profile.collaboration_registration') {
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: parseHostCollaborationRegistrationAssertion(result) }
+  }
+  if (frame.method === 'profile.bot_identity') {
+    exactKeys(result, ['identity'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { identity: parseHostBotIdentity(result.identity) } } satisfies ProfileBotIdentityResult
+  }
+  if (frame.method === 'profile.bot_group_deliver') {
+    exactKeys(result, ['reply'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { reply: parseHostBotGroupResponse(result.reply) } } satisfies ProfileBotGroupDeliverResult
+  }
+  if (frame.method === 'profile.bot_group_result_page') {
+    exactKeys(result, ['reply', 'proof'])
+    const reply = parseHostBotGroupResponse(result.reply)
+    if (reply.state !== 'ok' && reply.state !== 'invalid' && reply.state !== 'unavailable') reject()
+    const item = reply.state === 'ok' ? reply.results[0] : undefined
+    const proof = result.proof === null ? null : parseHostBotGroupResultProof(result.proof)
+    if (Boolean(item) !== Boolean(proof) ||
+      (item && proof && JSON.stringify(item) !== JSON.stringify(proof.result))) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { reply, proof } } satisfies ProfileBotGroupResultPageResult
+  }
+  if (frame.method === 'profile.bot_group_result_ack') {
+    exactKeys(result, ['reply'])
+    const reply = parseHostBotGroupResponse(result.reply)
+    if (!['acknowledged', 'missing', 'invalid', 'unavailable'].includes(reply.state)) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { reply } } satisfies ProfileBotGroupResultAckResult
   }
   if (frame.method === 'profile.model_text') {
     if (result.state === 'rejected') {
