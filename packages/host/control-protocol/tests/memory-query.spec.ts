@@ -31,6 +31,10 @@ const wire = (value: unknown) => `${JSON.stringify(value)}\n`
 it('round-trips exact signed search and bounded redacted search metadata', () => {
   const parsed = decodeHostControlFrame(wire(request))
   expect(encodeHostControlFrame(parsed)).toBe(wire(parsed))
+  for (const query of ['需求', '权']) {
+    const short = { ...request, params: { ...params, command: { ...request.params.command, query } } }
+    expect(decodeHostControlFrame(wire(short))).toEqual(short)
+  }
   const result = { version: 1, type: 'result', request_id: uuid, method: 'profile.memory_query',
     result: { action: 'search', generation: 0, items: [{ ...identity, snippet: 'redacted' }] } }
   expect(decodeHostControlFrame(wire(result))).toEqual(result)
@@ -78,5 +82,8 @@ it('rejects unsigned query changes and hidden request fields', () => {
     .toThrow(HostControlProtocolError)
   expect(() => decodeHostControlFrame(wire({ ...request, params: { ...params,
     command: { ...request.params.command, query: '数'.repeat(501) } } })))
+    .toThrow(HostControlProtocolError)
+  expect(() => decodeHostControlFrame(wire({ ...request, params: { ...params,
+    command: { ...request.params.command, query: '' } } })))
     .toThrow(HostControlProtocolError)
 })

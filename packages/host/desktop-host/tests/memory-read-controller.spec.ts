@@ -69,6 +69,15 @@ function fixture() {
 }
 
 describe('Host memory signed read controller', () => {
+  it('keeps the warmed index for a second request on the same worker and identity', async () => {
+    const f = fixture()
+    await f.controller.warm(signal)
+    await f.controller.warm(signal)
+    expect(f.reader.read).toHaveBeenCalledTimes(1)
+    expect((await f.controller.search(directive('search', 'private'), 'private', 1, signal)).items)
+      .toHaveLength(1)
+  })
+
   it('uses current identity for a warm search and exact Evidence read', async () => {
     const f = fixture()
     await f.controller.warm(signal)

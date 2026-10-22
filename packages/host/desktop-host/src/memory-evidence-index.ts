@@ -142,7 +142,7 @@ export class HostMemoryEvidenceIndex {
     readonly items: readonly HostMemorySearchItem[]
   } {
     this.checkScope(scope)
-    if (typeof query !== 'string' || query.length < 3 || query.length > 500 || /[\u0000-\u001f]/u.test(query)
+    if (typeof query !== 'string' || query.length < 1 || query.length > 500 || /[\u0000-\u001f]/u.test(query)
       || !Number.isSafeInteger(limit) || limit < 1 || limit > 10) throw new HostAuthorityError('invalid_input')
     const needle = query.toLowerCase()
     const grams = gramsOf(needle)

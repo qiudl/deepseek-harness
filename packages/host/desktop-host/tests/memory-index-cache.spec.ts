@@ -31,6 +31,38 @@ function reader(message = 'private plan') {
 }
 
 describe('Host memory index cache', () => {
+  it('reuses a current index across warm calls without rereading Session bodies', async () => {
+    const cache = new HostMemoryIndexCache()
+    const active = reader()
+    await cache.warm(scope, active, signal)
+    await cache.warm(scope, active, signal)
+    expect(active.read).toHaveBeenCalledTimes(1)
+    expect(active.list).toHaveBeenCalledTimes(3)
+    expect((await cache.search(scope, active, 'private', 1, signal)).items).toHaveLength(1)
+    active.setRevision('r2')
+    await expect(cache.warm(scope, active, signal)).rejects.toMatchObject({ code: 'stale' })
+    await expect(cache.search(scope, active, 'private', 1, signal)).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('does not clear a newer worker index when an old reuse check finishes late', async () => {
+    const cache = new HostMemoryIndexCache()
+    const old = reader('old plan')
+    await cache.warm(scope, old, signal)
+    let release!: () => void
+    old.list.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { release = resolve })
+      return { items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }
+    })
+    const pending = cache.warm(scope, old, signal)
+    await vi.waitFor(() => { expect(release).toBeTypeOf('function') })
+    const active = reader('new plan')
+    await cache.warm(scope, active, signal)
+    release()
+    await expect(pending).rejects.toMatchObject({ code: 'stale' })
+    expect((await cache.search(scope, active, 'new plan', 1, signal)).items).toHaveLength(1)
+  })
+
+
   it('publishes only a complete warmup and rechecks inventory around a read', async () => {
     const cache = new HostMemoryIndexCache()
     const active = reader()

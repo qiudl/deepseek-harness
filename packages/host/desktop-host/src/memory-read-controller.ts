@@ -51,9 +51,9 @@ export class HostMemoryReadController {
 
   /** Build before the 15-second query directive, using current authenticated identity. */
   async warm(signal: AbortSignal): Promise<void> {
-    this.clear()
+    let before: HostMemoryCurrentAuthority
+    try { before = capture(this.current) } catch (error) { this.clear(); throw error }
     const epoch = this.epoch
-    const before = capture(this.current)
     try {
       await this.cache.warm(scopeOf(before), before.reader, signal)
       if (epoch !== this.epoch || !same(before, capture(this.current))) throw new HostAuthorityError('stale')

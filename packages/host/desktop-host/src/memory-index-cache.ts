@@ -30,6 +30,24 @@ export class HostMemoryIndexCache {
 
   /** Complete warmup happens outside the short-lived signed query directive. */
   async warm(scope: HostMemoryScope, reader: HostMemoryProfileReader, signal: AbortSignal): Promise<void> {
+    const ready = this.ready
+    if (ready && sameScope(ready.scope, scope) && ready.reader === reader) {
+      const generation = this.generation
+      try {
+        signal.throwIfAborted()
+        reader.assertCurrent()
+        await ready.index.assertCurrentInventory(scope, reader, signal)
+        if (generation !== this.generation || this.ready !== ready) throw new HostAuthorityError('stale')
+        signal.throwIfAborted()
+        return
+      } catch (error) {
+        if (generation !== this.generation || this.ready !== ready) throw new HostAuthorityError('stale')
+        if (!(error instanceof HostAuthorityError && error.code === 'stale')) {
+          this.clear()
+          throw error
+        }
+      }
+    }
     this.clear()
     const pinnedScope = Object.freeze({ ownerUserId: scope.ownerUserId,
       installationId: scope.installationId, profileId: scope.profileId })

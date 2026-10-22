@@ -1664,7 +1664,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     } else if (command.action === 'search') {
       exactKeys(command, ['action', 'directive', 'query', 'limit'])
       const query = wireText(command.query, 2000)
-      if (query.length < 3 || query.length > 500 || generation(command.limit) > 10) reject()
+      if (query.length < 1 || query.length > 500 || generation(command.limit) > 10) reject()
       parsed = { action: 'search', directive: memoryDirective(command.directive), query,
         limit: command.limit as number }
     } else if (command.action === 'evidence_chunk') {
