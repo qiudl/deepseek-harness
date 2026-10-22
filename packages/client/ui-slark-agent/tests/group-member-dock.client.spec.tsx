@@ -450,6 +450,28 @@ it('replaces the active proxy without attaching it before the Host handoff compl
   expect(commands.some(command => command.operation === 'proxy_attach')).toBe(false)
 })
 
+it('lets the owner choose a new Bot after the unavailable proxy handoff', async () => {
+  const commands: GroupMemberCommand[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding',
+      binding_id: bindingId, binding_epoch: 7, bot_ref: 'deepseek-bot:gone',
+      binding_state: 'needs_reselection' }
+    if (command.operation === 'proxy_replace') return { state: 'proxy_changed',
+      operation: 'replace', binding_id: bindingId, binding_epoch: 8,
+      bot_ref: 'deepseek-bot:new', binding_state: 'transferring' }
+    return snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'new' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+  expect(commands.find(command => command.operation === 'proxy_replace')).toMatchObject({
+    expected_binding_epoch: 7, bot_id: 'new' })
+})
+
 it('retries an uncertain unbind with the same request key and keeps pending handoff visible', async () => {
   const commands: GroupMemberCommand[] = []
   const bindingId = '55555555-5555-4555-8555-555555555555'

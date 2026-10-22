@@ -248,7 +248,8 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
             return
           }
           binding = result; proxyRequestId.current = null; setProxyLabel(result.bot_ref)
-        } else if (status.binding_state === 'active') {
+        } else if (status.binding_state === 'active' ||
+          status.binding_state === 'needs_reselection') {
           const requestId = proxyRequestId.current ?? randomUUID()
           proxyRequestId.current = requestId
           const result = await host.collaborationGroupMembers({ operation: 'proxy_replace',
@@ -265,7 +266,6 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
         }
         const currentSnapshot = snapshotRef.current
         // The snapshot can disappear while the async Bot selection is in progress.
-        // oxlint-disable-next-line typescript/no-unnecessary-condition
         if (!binding || !currentSnapshot) { setProxyUnavailable(true); return }
         void change.current?.({ operation: 'proxy_attach', workspace_id: workspaceId,
           session_id: sessionId, request_id: randomUUID(),
