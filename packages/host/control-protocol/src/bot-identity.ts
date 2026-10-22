@@ -42,7 +42,11 @@ export interface HostBotRosterPage {
   readonly next_cursor: string | null
 }
 
-/** Validate the only paging inputs allowed to cross the private Profile boundary. */
+/**
+ * Validate the only paging inputs allowed to cross the private Profile boundary.
+ * @param value - Untrusted roster request target.
+ * @returns Exact bounded cursor and page limit.
+ */
 export function parseHostBotRosterTarget(value: unknown): { readonly after_bot_id: string; readonly limit: number } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw Error('invalid_bot_roster_target')
   const item = value as Record<string, unknown>
@@ -53,7 +57,11 @@ export function parseHostBotRosterTarget(value: unknown): { readonly after_bot_i
   return { after_bot_id: item.after_bot_id, limit: item.limit as number }
 }
 
-/** Reject private fields, duplicate identities and forged continuation cursors. */
+/**
+ * Reject private fields, duplicate identities and forged continuation cursors.
+ * @param value - Untrusted Profile worker roster response.
+ * @returns Ordered public roster page, or absence when the worker has no roster.
+ */
 export function parseHostBotRosterPage(value: unknown): HostBotRosterPage | null {
   if (value === null) return null
   if (typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_bot_roster_page')

@@ -3773,7 +3773,11 @@ export class UnixHostClient {
     return identity
   }
 
-  /** Read one public roster page from this connection's current Account Profile. */
+  /**
+   * Read one public roster page from this connection's current Account Profile.
+   * @param input - Current authority binding and bounded roster cursor.
+   * @returns Validated public identities, or absence when the Profile has no roster.
+   */
   async listBotRoster(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string

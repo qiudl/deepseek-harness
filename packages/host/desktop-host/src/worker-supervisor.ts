@@ -47,7 +47,14 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
-  /** Read one ordered page from the current Account Profile worker. */
+  /**
+   * Read one ordered page from the current Account Profile worker.
+   * @param profileId - Selected Account Profile.
+   * @param afterBotId - Exclusive Bot ID cursor.
+   * @param limit - Maximum identities in this page.
+   * @param signal - Caller cancellation.
+   * @returns Public Bot roster page or absence.
+   */
   async listBotRoster(profileId: string, afterBotId: string, limit: number, signal: AbortSignal):
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotRosterPage | null> {
     signal.throwIfAborted()

@@ -4,6 +4,14 @@ import { parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/d
 import type { HostBotRosterPage } from '@deepseek-ai/dsh-host-control-protocol'
 import { handleDesktopPrivateRequest } from './desktop-private-read.ts'
 
+/**
+ * Serve one bounded public Bot roster page through the private Desktop endpoint.
+ * @param req - Incoming private endpoint request.
+ * @param res - Response that receives only validated roster metadata.
+ * @param token - Current private Desktop bearer token.
+ * @param list - Account Profile roster reader bound to this Desktop Host.
+ * @returns When the private request and response have been handled.
+ */
 export async function handleDesktopBotRosterRequest(
   req: IncomingMessage, res: ServerResponse, token: string,
   list: (afterBotId: string, limit: number, signal: AbortSignal) => Promise<HostBotRosterPage | null>,
