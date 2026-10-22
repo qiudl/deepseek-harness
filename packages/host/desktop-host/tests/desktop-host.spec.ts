@@ -501,9 +501,9 @@ describe('authenticated Unix transport', () => {
       const input = { profileSelector: local.profileSelector, profileId: local.profileId,
         bindingGeneration: '1',
         hostKeyId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex') }
-      await expect(other.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset' } }))
+      await expect(other.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset', active_asset_anchor_id: null } }))
         .rejects.toMatchObject({ code: 'unauthorized' })
-      const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset' } })
+      const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset', active_asset_anchor_id: null } })
       expect(issued.kind).toBe('issued')
       if (issued.kind !== 'issued') throw Error('expected issued anchor')
       expect(await owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
@@ -540,7 +540,7 @@ describe('authenticated Unix transport', () => {
         hostKeyId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex') }
       const zero = { revision: '0', digest: 'a'.repeat(64) }
       const initialize = async () => {
-        const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset' } })
+        const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset', active_asset_anchor_id: null } })
         if (issued.kind !== 'issued') throw Error('expected issued anchor')
         const result = await owner.skillHubClockV2({ ...input, command: { kind: 'witness',
           anchor_id: issued.anchor_id, epoch: issued.epoch, ticket: issued.ticket,

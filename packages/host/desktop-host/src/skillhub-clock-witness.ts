@@ -16,14 +16,19 @@ function matchesWitness(previous: HostSkillHubClockWitnessValue | null,
 export class SkillHubClockWitnessTickets {
   private epoch = randomBytes(32).toString('base64url')
   private readonly values = new Map<string, HostSkillHubClockWitnessValue>()
-  private readonly pending = new Map<string, { ticket: string; expiresAt: bigint }>()
+  private readonly pending = new Map<string, { ticket: string; expiresAt: bigint; purpose: 'asset' | 'work' }>()
+  private readonly assetWitnesses = new Set<string>()
   private readonly workHolds = new Map<string, bigint>()
 
   constructor(private readonly monotonicNow: () => bigint = () => process.hrtime.bigint()) {}
 
   currentEpoch(): string { return this.epoch }
 
-  issue(scope: string, purpose: 'asset' | 'work'): { anchorId: string; ticket: string; epoch: string } {
+  issue(scope: string, purpose: 'asset' | 'work', activeAssetAnchorId?: string): {
+    anchorId: string
+    ticket: string
+    epoch: string
+  } {
     const now = this.monotonicNow()
     if (this.workHolds.size >= MAX_ANCHORS) {
       for (const [key, expiresAt] of this.workHolds) {
@@ -34,10 +39,19 @@ export class SkillHubClockWitnessTickets {
     if (this.values.size >= MAX_ANCHORS) {
       for (const [key, expiresAt] of this.workHolds) if (expiresAt <= now) this.workHolds.delete(key)
       if (this.workHolds.size) throw new HostAuthorityError('busy')
+      const assetKey = activeAssetAnchorId && JSON.stringify([scope, activeAssetAnchorId])
+      if (purpose === 'work' && (!assetKey || !this.assetWitnesses.has(assetKey)))
+        throw new HostAuthorityError('unavailable')
+      const retained = assetKey ? this.values.get(assetKey) : undefined
       this.epoch = randomBytes(32).toString('base64url')
       this.values.clear()
       this.pending.clear()
       this.workHolds.clear()
+      this.assetWitnesses.clear()
+      if (purpose === 'work' && assetKey && retained) {
+        this.values.set(assetKey, retained)
+        this.assetWitnesses.add(assetKey)
+      }
     }
     if (this.pending.size >= MAX_ANCHORS) {
       for (const [key, value] of this.pending) {
@@ -47,7 +61,7 @@ export class SkillHubClockWitnessTickets {
     }
     const anchorId = randomUUID(), ticket = randomBytes(32).toString('base64url')
     const key = JSON.stringify([scope, anchorId])
-    this.pending.set(key, { ticket, expiresAt: now + TICKET_TTL_NS })
+    this.pending.set(key, { ticket, expiresAt: now + TICKET_TTL_NS, purpose })
     // The original Work permit expires within 30 seconds of Server issuance,
     // which precedes this issue. Never rotate while that Work may still start.
     if (purpose === 'work') this.workHolds.set(key, now + TICKET_TTL_NS)
@@ -70,6 +84,7 @@ export class SkillHubClockWitnessTickets {
       if (!issued || issued.ticket !== ticket || issued.expiresAt <= this.monotonicNow())
         throw new HostAuthorityError('stale')
       this.pending.delete(key)
+      if (issued.purpose === 'asset') this.assetWitnesses.add(key)
     }
     this.values.set(key, { ...command.next })
     return { value: { ...command.next }, applied: true }

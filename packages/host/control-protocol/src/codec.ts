@@ -2008,9 +2008,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       exactKeys(raw, ['kind'])
       command = { kind: raw.kind }
     } else if (raw.kind === 'issue') {
-      exactKeys(raw, ['kind', 'purpose'])
+      exactKeys(raw, ['kind', 'purpose', 'active_asset_anchor_id'])
       if (raw.purpose !== 'asset' && raw.purpose !== 'work') reject()
-      command = { kind: 'issue', purpose: raw.purpose }
+      if (raw.purpose === 'asset' && raw.active_asset_anchor_id !== null) reject()
+      if (raw.purpose === 'work' && raw.active_asset_anchor_id === null) reject()
+      command = { kind: 'issue', purpose: raw.purpose,
+        active_asset_anchor_id: raw.active_asset_anchor_id === null ? null
+          : uuid(raw.active_asset_anchor_id) as HostSkillHubClockAnchorId }
     } else if (raw.kind === 'witness') {
       exactKeys(raw, ['kind', 'anchor_id', 'epoch', 'ticket', 'command'])
       command = { kind: 'witness', anchor_id: uuid(raw.anchor_id) as HostSkillHubClockAnchorId,

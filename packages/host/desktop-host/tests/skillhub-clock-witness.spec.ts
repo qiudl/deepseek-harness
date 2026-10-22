@@ -105,3 +105,34 @@ it('T24860 refuses capacity rotation during the original Work window', () => {
   expect(next.epoch).not.toBe(work.epoch)
   expect(() => witness.apply('profile', work.anchorId, work.epoch, { kind: 'read' })).toThrow('stale')
 })
+
+it('T24894 preserves only the selected asset witness when Work issue rotates capacity', () => {
+  let now = 0n
+  const witness = new SkillHubClockWitnessTickets(() => now)
+  const zero = { revision: '0', digest: 'a'.repeat(64) }
+  const selected = witness.issue('profile', 'asset')
+  expect(witness.apply('profile', selected.anchorId, selected.epoch,
+    { kind: 'compare_and_set', previous: null, next: zero }, selected.ticket).applied).toBe(true)
+  const oldWork = witness.issue('profile', 'work')
+  expect(witness.apply('profile', oldWork.anchorId, oldWork.epoch,
+    { kind: 'compare_and_set', previous: null, next: zero }, oldWork.ticket).applied).toBe(true)
+  // No live Work may be displaced; advance beyond its original permit window.
+  now = 30_000_000_000n
+  let anotherAsset = ''
+  for (let i = 2; i < 4096; i++) {
+    const issued = witness.issue('profile', 'asset')
+    if (i === 2) anotherAsset = issued.anchorId
+    expect(witness.apply('profile', issued.anchorId, issued.epoch,
+      { kind: 'compare_and_set', previous: null, next: zero }, issued.ticket).applied).toBe(true)
+  }
+  expect(() => witness.issue('profile', 'work', oldWork.anchorId)).toThrow('unavailable')
+  expect(() => witness.issue('other-profile', 'work', selected.anchorId)).toThrow('unavailable')
+  const next = witness.issue('profile', 'work', selected.anchorId)
+  expect(next.epoch).not.toBe(selected.epoch)
+  expect(witness.apply('profile', selected.anchorId, next.epoch, { kind: 'read' }).value).toEqual(zero)
+  expect(witness.apply('profile', anotherAsset, next.epoch, { kind: 'read' }).value).toBeNull()
+  expect(witness.apply('profile', oldWork.anchorId, next.epoch, { kind: 'read' }).value).toBeNull()
+  expect(() => witness.apply('profile', selected.anchorId, selected.epoch, { kind: 'read' })).toThrow('stale')
+  expect(witness.apply('profile', next.anchorId, next.epoch,
+    { kind: 'compare_and_set', previous: null, next: zero }, next.ticket).applied).toBe(true)
+})

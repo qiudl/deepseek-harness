@@ -1613,9 +1613,10 @@ export class HostControlAuthority {
           const result: ProfileSkillHubClockV2Result['result'] = command.kind === 'epoch'
             ? { kind: 'epoch', epoch: this.clockWitnessTickets.currentEpoch() as HostControlNonce }
             : command.kind === 'issue'
-              ? (() => { const issued = this.clockWitnessTickets.issue(scope, command.purpose)
-                return { kind: 'issued' as const, anchor_id: issued.anchorId as HostSkillHubClockAnchorId,
-                  epoch: issued.epoch as HostControlNonce, ticket: issued.ticket as HostControlNonce } })()
+              ? (() => { const issued = this.clockWitnessTickets.issue(scope, command.purpose,
+                command.active_asset_anchor_id ?? undefined)
+              return { kind: 'issued' as const, anchor_id: issued.anchorId as HostSkillHubClockAnchorId,
+                epoch: issued.epoch as HostControlNonce, ticket: issued.ticket as HostControlNonce } })()
               : { kind: 'witness', anchor_id: command.anchor_id, epoch: command.epoch,
                 ...this.clockWitnessTickets.apply(scope, command.anchor_id, command.epoch,
                   command.command, command.ticket ?? undefined) }

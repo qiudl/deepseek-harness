@@ -475,7 +475,9 @@ export interface ProfileSkillHubClockWitnessResult {
 /** Host-issued anchors prevent an evicted witness from being initialized again. */
 export type HostSkillHubClockV2Command =
   | { readonly kind: 'epoch' }
-  | { readonly kind: 'issue'; readonly purpose: 'asset' | 'work' }
+  | { readonly kind: 'issue'
+    readonly purpose: 'asset' | 'work'
+    readonly active_asset_anchor_id: HostSkillHubClockAnchorId | null }
   | {
     readonly kind: 'witness'
     readonly anchor_id: HostSkillHubClockAnchorId
