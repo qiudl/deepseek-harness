@@ -254,7 +254,7 @@ it('delivers through the Host only after signed Slark and current membership con
   await expect(f.client.deliverBotGroup(input)).rejects.toMatchObject({ code: 'stale' })
 
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
-    ? { ...frame, method: 'profile.bot_group_deliver' } as HostControlFrame : frame)
+    ? { ...frame, method: 'profile.bot_group_deliver' } : frame)
   f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [], next: 0 })
   await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
     .rejects.toMatchObject({ code: 'unavailable' })
@@ -275,7 +275,7 @@ it('delivers through the Host only after signed Slark and current membership con
   }
   expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_deliver'
-    ? { ...frame, method: 'profile.bot_group_result_ack' } as HostControlFrame : frame)
+    ? { ...frame, method: 'profile.bot_group_result_ack' } : frame)
   await expect(f.client.deliverBotGroup(input)).rejects.toMatchObject({ code: 'unavailable' })
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_deliver'
     ? { ...frame, result: { reply: { state: 'accepted', deliveryId: command.deliveryId,

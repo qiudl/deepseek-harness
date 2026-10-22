@@ -161,7 +161,7 @@ it('preserves the original worker error when receipt recovery fails or authority
 it('rejects mismatched worker replies after successful delivery, result read and ack', async () => {
   const delivered = fixture()
   delivered.workers.operateBotGroup.mockResolvedValueOnce({
-    ...delivered.result, groupId: randomUUID() } as never)
+    ...delivered.result, groupId: randomUUID() })
   await expect(deliverAccountBotGroup(delivered.input)).rejects.toThrow('stale')
 
   const page = fixture()

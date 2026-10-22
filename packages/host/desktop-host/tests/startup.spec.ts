@@ -55,7 +55,7 @@ describe.skipIf(process.platform === 'win32')('desktop Host application composit
     const duplicate = JSON.parse(publicProjection) as unknown[]
     for (const invalid of ['x'.repeat(32 * 1024 + 1), '{}', '[]',
       JSON.stringify(Array(5).fill(duplicate[0])), JSON.stringify([duplicate[0], duplicate[0]])]) {
-      await expect(start({ ...config, botGroupPublicKeyringsJson: invalid }))
+      await expect(start(Object.assign({}, config, { botGroupPublicKeyringsJson: invalid })))
         .rejects.toMatchObject({ code: 'invalid_input' })
     }
     const app = await start(Object.assign({}, config, { pnpmEntrypointPath: privateKey,
