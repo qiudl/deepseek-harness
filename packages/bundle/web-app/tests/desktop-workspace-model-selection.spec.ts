@@ -148,7 +148,7 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   })
   expect(missingBotResponse.status).toBe(200)
   expect(await missingBotResponse.json()).toBeNull()
-  await disposeBotService()
+  disposeBotService()
   const unavailableBotResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
     method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_1' }),
   })
