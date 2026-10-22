@@ -173,6 +173,11 @@ it('marks a retained Client tree disconnected and clears the attribute when the 
   const context = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 } })
   const client = await context.newPage()
   await client.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
+  await expect.poll(async () => {
+    const tree = await scaffold.ctx.inspector.cordis.getTree()
+    return tree.clients.length === 1 ? tree.clients[0]?.connection.state : undefined
+  }, { timeout: 30_000 }).toBe('connected')
+  const before = await scaffold.ctx.inspector.cordis.getTree()
   const bootstrap = await (await scaffold.hostFetch('/api/experimental-inspector/bootstrap')).json() as { endpoint: string }
   const targets = await (await fetch(`http://${new URL(bootstrap.endpoint).host}/json/list`)).json() as Array<{ devtoolsFrontendUrl: string }>
   const inspector = await context.newPage()
@@ -181,7 +186,6 @@ it('marks a retained Client tree disconnected and clears the attribute when the 
   const disconnected = inspector.locator('.webkit-html-attribute-name').filter({ hasText: /^disconnected$/u })
   await clientTag.waitFor()
   expect(await disconnected.count()).toBe(0)
-  const before = await scaffold.ctx.inspector.cordis.getTree()
   expect(before.clients).toHaveLength(1)
   await client.goto('about:blank')
   await disconnected.waitFor()

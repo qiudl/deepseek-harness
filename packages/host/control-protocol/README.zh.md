@@ -70,6 +70,8 @@ kind: "package-reference"
 
 `profile.skillhub_execution_receipt` 接收一份 daemon 观测到的沙箱结果及完整的已签名激活回执。Host 重新检查当前 Profile 授权、验证激活签名和固定包文件、派生全部 Host 与包身份字段，再在 `SLARK-DSH-PROFILE-EXECUTION-RECEIPT/v1` 域下签署完整执行事实。该签名记录已认证 Main daemon 在执行后报告的内容，并不表示 Host 自身是沙箱执行器。Slark 仍须在结算前绑定 effect、Work 权限、Computer 授权和已准备容器。
 
+`profile.skillhub_clock_witness` 要求单独声明的 capability 和当前连接自己的 Profile selector。每次请求绑定 Profile ID、绑定代次、Host 密钥指纹和锚 UUID。命令读取见证，或对精确 revision/digest 执行 compare-and-set；初始化要求 revision 为零，更新要求旧 revision 加一。结果重复锚 ID，返回当前值，读取的 `applied` 为 null，CAS 则返回布尔判定。见证独立于 daemon checkpoint 文件，换连接后仍保留，Host authority 重启后丢失；丢失后必须在线恢复，不能从缓存静默初始化。它不授予资产或 effect 权限。
+
 `profile.workspace_model_selection` 接受已验证的 Account 绑定、工作区注册表 UUID 和 Session id。精确响应包含这些身份、provider/model（各最多 256 UTF-8 字节），以及可选 reasoning effort（最多 128 字节）。调用方指定的模型、Profile 路径和额外响应字段均被拒绝。结果只是只读选择，不是可执行适配器快照或 Source 凭据；Host 必须发布已安装执行器的能力才可调用。
 
 `profile.collaboration_registration` 在核验同一连接的 Account 绑定后，签署服务器登记请求/challenge ID、规范 nonce、有效期、HTTPS audience、environment UUID 和 Account issuer/subject。证明包含安装 UUID/公钥及当前 Host instance/process nonce。Ed25519 签名正文是 UTF-8 域 `dsh-collaboration-host-registration/v2`、NUL 与固定顺序 JSON 元组，不包含签名本身。解析器冻结精确字段并拒绝凭据。挑战须仍有效，且在五分钟内过期。服务器须另行信任安装公钥、持久保存并消费挑战、提交登记回执；此签名不授权 Source 或任务。

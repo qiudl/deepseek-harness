@@ -1,6 +1,6 @@
 /** REQ-20261013-0021 / 24206. Connection-owned fixed package reads. */
 import { expect, it, vi } from 'vitest'
-import { SkillHubPackageSnapshotReads } from '../src/skillhub-package-snapshot-reads.ts'
+import { SkillHubPackageSnapshotReads, SkillHubPackageTransferSnapshot } from '../src/skillhub-package-snapshot-reads.ts'
 
 function input(bytes: Buffer, changes: Partial<Parameters<SkillHubPackageSnapshotReads['read']>[0]> = {}) {
   const controller = new AbortController()
@@ -11,6 +11,37 @@ function input(bytes: Buffer, changes: Partial<Parameters<SkillHubPackageSnapsho
     signal: controller.signal, capture, authorize, ...changes,
   } }
 }
+
+it('reuses one verified package across file objects and refreshes it for a manifest or new operation', async () => {
+  const snapshots = new SkillHubPackageTransferSnapshot<number>()
+  const capture = vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(2).mockResolvedValueOnce(3)
+  expect(await snapshots.get('operation-1', capture, true)).toBe(1)
+  expect(await snapshots.get('operation-1', capture)).toBe(1)
+  expect(capture).toHaveBeenCalledTimes(1)
+  expect(await snapshots.get('operation-1', capture, true)).toBe(2)
+  expect(await snapshots.get('operation-2', capture)).toBe(3)
+  expect(capture).toHaveBeenCalledTimes(3)
+})
+
+it('retries failed snapshot capture without clearing a newer refresh', async () => {
+  const snapshots = new SkillHubPackageTransferSnapshot<number>()
+  const failed = vi.fn(async () => { throw Error('capture_failed') })
+  await expect(snapshots.get('operation', failed)).rejects.toThrow('capture_failed')
+  const recovered = vi.fn(async () => 2)
+  expect(await snapshots.get('operation', recovered)).toBe(2)
+
+  let rejectOld!: (error: Error) => void
+  const pending = snapshots.get('operation', () => new Promise<number>((_resolve, reject) => {
+    rejectOld = reject
+  }), true)
+  await vi.waitFor(() => { expect(rejectOld).toBeTypeOf('function') })
+  const refreshed = vi.fn(async () => 3)
+  expect(await snapshots.get('operation', refreshed, true)).toBe(3)
+  rejectOld(Error('stale_capture_failed'))
+  await expect(pending).rejects.toThrow('stale_capture_failed')
+  expect(await snapshots.get('operation', refreshed)).toBe(3)
+  expect(refreshed).toHaveBeenCalledOnce()
+})
 
 it('captures once and serves exact sequential chunks plus an identical retry', async () => {
   const reads = new SkillHubPackageSnapshotReads()

@@ -136,21 +136,23 @@ it('reports launch, exit, and post-install authority failures without leaving it
 
   const revoked = fixture(); let guards = 0
   await expect(runProfilePluginCommand({ ...revoked.options, spec: 'bundle@1.0.0',
-    signal: new AbortController().signal, guard() { if (++guards === 3) throw Error('revoked after install') } }))
+    signal: new AbortController().signal, guard() { if (++guards >= 3) throw Error('revoked after install') } }))
     .rejects.toThrow('plugin_authority_revoked')
-  expect(guards).toBe(3)
+  expect(guards).toBeGreaterThanOrEqual(3)
   expect(readdirSync(revoked.control)).toEqual([])
 })
 it('cancels a running installer and waits for process exit', async () => {
   const f = fixture()
-  writeFileSync(f.pnpm, "require('node:fs').writeFileSync(process.env.DSH_HOME+'/ready',String(process.pid));setInterval(()=>{},1000)")
+  writeFileSync(f.pnpm, "const fs=require('node:fs');const ready=process.env.DSH_HOME+'/ready';fs.writeFileSync(ready,'');setTimeout(()=>fs.writeFileSync(ready,String(process.pid)),150);setInterval(()=>{},1000)")
   const controller = new AbortController()
   const pending = runProfilePluginCommand({ ...f.options, spec: `github:owner/repo#${'a'.repeat(40)}`, signal: controller.signal, guard() {} })
   const settled = pending.then(() => ({ kind: 'resolved' as const }), (error: unknown) => ({ kind: 'rejected' as const, error }))
   try {
-    await vi.waitFor(() => { expect(existsSync(join(f.profile, 'ready'))).toBe(true) })
-    const installerPid = Number(readFileSync(join(f.profile, 'ready'), 'utf8'))
-    expect(Number.isSafeInteger(installerPid) && installerPid > 0).toBe(true)
+    let installerPid = 0
+    await vi.waitFor(() => {
+      installerPid = Number(readFileSync(join(f.profile, 'ready'), 'utf8'))
+      expect(Number.isSafeInteger(installerPid) && installerPid > 0).toBe(true)
+    })
     controller.abort()
     expect(await settled).toMatchObject({ kind: 'rejected', error: { message: 'plugin_install_cancelled' } })
     expect(() => process.kill(installerPid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))

@@ -423,6 +423,53 @@ export interface ProfileRecoveryStatusResult {
     | { readonly state: 'failed'; readonly reason_code: 'recovery_worker_failed' }
 }
 
+/** Online-issued clock anchor scoped by the authorized Profile and Host installation. */
+export type HostSkillHubClockAnchorId = Branded<'HostSkillHubClockAnchorId'>
+
+/** Independent checkpoint revision and digest held by the Host process. */
+export interface HostSkillHubClockWitnessValue {
+  readonly revision: string
+  readonly digest: string
+}
+
+/** Read a witness or advance its exact revision without replacing an existing anchor. */
+export type HostSkillHubClockWitnessCommand =
+  | { readonly kind: 'read' }
+  | {
+    readonly kind: 'compare_and_set'
+    readonly previous: HostSkillHubClockWitnessValue | null
+    readonly next: HostSkillHubClockWitnessValue
+  }
+
+/** Profile-granted access to an independent Host-process witness. */
+export interface ProfileSkillHubClockWitnessRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_clock_witness'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly profile_id: HostProfileId
+    readonly binding_generation: string
+    readonly host_key_id: HostControlSha256
+    readonly anchor_id: HostSkillHubClockAnchorId
+    readonly command: HostSkillHubClockWitnessCommand
+  }
+}
+
+/** Read uses applied=null; compare-and-set reports whether the next value was committed. */
+export interface ProfileSkillHubClockWitnessResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_clock_witness'
+  readonly result: {
+    readonly anchor_id: HostSkillHubClockAnchorId
+    readonly value: HostSkillHubClockWitnessValue | null
+    readonly applied: boolean | null
+  }
+}
+
 /** Open the same Profile through a Main-only local view lease. */
 export interface ProfileSkillHubBindingRequest {
   readonly version: 1
@@ -1936,6 +1983,8 @@ export type HostControlFrame =
   | ProfileSkillHubPackageSnapshotResult
   | ProfileSkillHubExecutionReceiptRequest
   | ProfileSkillHubExecutionReceiptResult
+  | ProfileSkillHubClockWitnessRequest
+  | ProfileSkillHubClockWitnessResult
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
   | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
   | ProfileRemoteSessionRequest
