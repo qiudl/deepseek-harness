@@ -415,7 +415,12 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
-  /** List only metadata from the current Account Profile worker. */
+  /** List only metadata from the current Account Profile worker.
+   * @param profileId - Active Profile identity.
+   * @param after - Last returned Session ID, or null for the first page.
+   * @param signal - Request cancellation.
+   * @returns A bounded page from the pinned worker.
+   */
   async listMemorySessions(profileId: string, after: string | null, signal: AbortSignal): Promise<HostMemorySessionPage> {
     signal.throwIfAborted()
     const worker = this.workers.get(profileId)
@@ -426,7 +431,10 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
-  /** Reuse one reader within a worker generation; old readers reject after disposal. */
+  /** Reuse one reader within a worker generation; old readers reject after disposal.
+   * @param profileId - Active Profile identity.
+   * @returns A reader pinned to the current worker generation.
+   */
   memoryProfileReader(profileId: string): HostMemoryProfileReader {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.listMemorySessions || !worker.readMemorySession)

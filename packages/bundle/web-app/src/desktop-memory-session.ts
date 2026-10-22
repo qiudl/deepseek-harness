@@ -16,6 +16,7 @@ const PAGE_SIZE = 256
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
 const PAGE_LIMIT = 64
 
+/** Bounded metadata page for one current Profile worker. */
 export interface DesktopMemorySessionPage {
   readonly items: readonly { readonly sessionId: string; readonly revision: string }[]
   readonly nextAfter: string | null
@@ -111,7 +112,12 @@ export async function readDesktopMemorySession(
   }
 }
 
-/** List only current Profile's top-level Session metadata; raw content stays in readDesktopMemorySession. */
+/** List only current Profile's top-level Session metadata; raw content stays in readDesktopMemorySession.
+ * @param persistence - Current Profile's session inventory.
+ * @param after - Last returned Session ID, or null for the first page.
+ * @param signal - Request cancellation.
+ * @returns At most 64 sorted Session identities and revisions.
+ */
 export async function listDesktopMemorySessions(
   persistence: Pick<DesktopMemorySessionPersistence, 'list'>,
   after: string | null,
@@ -137,7 +143,13 @@ export async function listDesktopMemorySessions(
   return { items: page, nextAfter }
 }
 
-/** Independent memory bearer; request accepts only an opaque pagination cursor. */
+/** Independent memory bearer; request accepts only an opaque pagination cursor.
+ * @param req - Private worker request.
+ * @param res - Noncacheable worker response.
+ * @param token - Bearer shared only with the parent Host.
+ * @param persistence - Current Profile's session inventory.
+ * @returns Resolution after the response settles.
+ */
 export function handleDesktopMemorySessionsRequest(
   req: IncomingMessage,
   res: ServerResponse,

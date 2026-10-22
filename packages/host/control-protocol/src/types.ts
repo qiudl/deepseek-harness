@@ -1514,6 +1514,7 @@ export interface ProfileMemoryQueryRequest {
   }
 }
 
+/** Account and Profile attribution for one redacted Session record. */
 export interface ProfileMemorySource {
   readonly ownerUserId: string
   readonly installationId: string
@@ -1522,6 +1523,7 @@ export interface ProfileMemorySource {
   readonly formatVersion: number
 }
 
+/** Stable reference to one projected Session event and source revision. */
 export interface ProfileMemoryEvidenceIdentity {
   readonly sourceRef: HostControlSha256
   readonly sourceVersion: HostControlSha256

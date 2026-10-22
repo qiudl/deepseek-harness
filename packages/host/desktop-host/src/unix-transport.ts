@@ -3704,7 +3704,10 @@ export class UnixHostClient {
     return this.remoteProfileValue(request, input.signal)
   }
 
-  /** Read only redacted Account memory through a capability-advertised Host. */
+  /** Read only redacted Account memory through a capability-advertised Host.
+   * @param input - Current Account binding and signed memory command.
+   * @returns The Host's bounded memory result.
+   */
   async memoryQuery(input: AccountBindingInput & {
     readonly issuer: string
     readonly subject: string
