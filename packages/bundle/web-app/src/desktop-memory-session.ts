@@ -144,7 +144,11 @@ export async function listDesktopMemorySessions(
   return { items: page, nextAfter }
 }
 
-/** @internal Validate a worker reply even when its producer is replaced in tests or integration. */
+/** Validate a worker reply even when its producer is replaced in tests or integration.
+ * @internal
+ * @param value - Untrusted session inventory reply.
+ * @returns A bounded, validated session page.
+ */
 export function parseDesktopMemorySessionsResult(value: unknown): DesktopMemorySessionPage {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
   const row = value as Record<string, unknown>
@@ -164,7 +168,11 @@ export function parseDesktopMemorySessionsResult(value: unknown): DesktopMemoryS
   return { items, nextAfter }
 }
 
-/** @internal Validate the bounded raw snapshot before it leaves the private worker route. */
+/** Validate the bounded raw snapshot before it leaves the private worker route.
+ * @internal
+ * @param value - Untrusted session snapshot reply.
+ * @returns A validated snapshot from the private worker.
+ */
 export function parseDesktopMemorySessionResult(value: unknown): DesktopMemorySessionSnapshot {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_result')
   const record = value as Record<string, unknown>
