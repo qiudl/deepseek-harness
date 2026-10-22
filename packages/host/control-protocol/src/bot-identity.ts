@@ -67,5 +67,5 @@ export function parseHostBotRosterPage(value: unknown): HostBotRosterPage | null
   if (identities.some((bot, index) => index > 0 && bot.bot_id <= (identities[index - 1]?.bot_id ?? '')) ||
     (item.next_cursor !== null && item.next_cursor !== identities.at(-1)?.bot_id))
     throw Error('invalid_bot_roster_page')
-  return { bots: identities, next_cursor: item.next_cursor as string | null }
+  return { bots: identities, next_cursor: item.next_cursor }
 }
