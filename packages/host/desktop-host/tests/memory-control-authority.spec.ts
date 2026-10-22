@@ -106,6 +106,29 @@ it('requires current Account authority for warmup and every signed Host memory r
   const chunk = await session.handleRequest(request({ action: 'evidence_chunk',
     directive: directive('evidence', sourceRef), source_ref: sourceRef, offset: 0 }))
   expect(chunk).toMatchObject({ type: 'result', result: { action: 'evidence_chunk', state: 'ready' } })
+  const missingRef = 'b'.repeat(64) as typeof sourceRef
+  expect(await session.handleRequest(request({ action: 'evidence_chunk',
+    directive: directive('evidence', missingRef), source_ref: missingRef, offset: 0 })))
+    .toMatchObject({ type: 'result', result: { action: 'evidence_chunk', state: 'missing' } })
+  const entered = Promise.withResolvers<undefined>(), released = Promise.withResolvers<undefined>()
+  reader.list.mockImplementationOnce(async () => {
+    entered.resolve(undefined)
+    await released.promise
+    return { items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }
+  })
+  const pendingWarm = session.handleRequest(request({ action: 'warm' }))
+  await entered.promise
+  expect(await session.handleRequest(request({ action: 'warm' })))
+    .toMatchObject({ type: 'error', error: { code: 'busy' } })
+  released.resolve(undefined)
+  expect(await pendingWarm).toMatchObject({ type: 'result', result: { action: 'warm', state: 'ready' } })
+  const options = Reflect.get(authority, 'options') as { memoryProfileReader?: unknown }
+  const originalReader = options.memoryProfileReader
+  options.memoryProfileReader = undefined
+  try {
+    expect(await session.handleRequest(request({ action: 'warm' })))
+      .toMatchObject({ type: 'error', error: { code: 'upgrade_required' } })
+  } finally { options.memoryProfileReader = originalReader }
   host.revokeOwner(ownerId)
   expect(await session.handleRequest(request({ action: 'search',
     directive: directive('search', 'private'), query: 'private', limit: 1 })))

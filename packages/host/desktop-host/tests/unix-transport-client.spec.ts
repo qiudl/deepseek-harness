@@ -154,6 +154,10 @@ describe('Unix Host client protocol projections', () => {
       owner_user_id: input.ownerUserId, computer_id: input.computerId,
       command: { action: 'warm' },
     } })
+    const mismatched = await makeClient(frame => ({ ...result(frame, { action: 'warm', state: 'ready' }),
+      method: 'profile.model_text' } as HostControlFrame),
+    [...baseCapabilities, 'profile.memory_query'].sort() as HostControlCapability[])
+    await expect(mismatched.client.memoryQuery(input)).rejects.toMatchObject({ code: 'unavailable' })
   })
 
   it('projects bounded personal model text only when the Host advertises it', async () => {
