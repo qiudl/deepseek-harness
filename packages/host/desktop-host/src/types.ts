@@ -103,6 +103,8 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Read one Bot identity only when the Profile plugin holds its exclusive writer lock. */
+  readonly resolveBotIdentity?: (botId: string, signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null>
   closeNotifications(): void
   abort(): void
   readonly done: Promise<void>

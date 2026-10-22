@@ -10,7 +10,7 @@ import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
-async function fixture() {
+async function fixture(supportBot = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const time = { value: 1000 }
@@ -29,7 +29,12 @@ async function fixture() {
   const publicKey = (keys.publicKey.export({ format: 'der', type: 'spki' }) as Buffer).subarray(-32).toString('base64url')
   const identity = { hostInstanceId: randomUUID(), installationId: randomUUID(), installationPublicKey: publicKey,
     installationPrivateKey: keys.privateKey, processNonce: 'A'.repeat(43), executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1 }
-  const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now })
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  let resolveBot = async (_profileId: string, botId: string, _signal: AbortSignal) => botId === 'bot_1' ? bot : null
+  const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
+    ...(supportBot ? {
+      resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
+    } : {}) })
   const ownerId = randomUUID(), lifetime = new AbortController()
   const session = authority.openSession(ownerId, lifetime.signal)
   const seen: HostControlFrame[] = []
@@ -45,8 +50,67 @@ async function fixture() {
   const input = { ...binding, challenge }
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
+    bot, setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
+
+it('resolves an exact Bot only in the currently verified Account Profile', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: 'bot_1' }
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.resolveBotIdentity(input)).toEqual(f.bot)
+  for (const change of [{ issuer: 'https://other.example.test' }, { subject: randomUUID() },
+    { authorityEnvironmentId: randomUUID() }, { authorityBindingVersion: 2 }]) {
+    await expect(f.client.resolveBotIdentity({ ...input, ...change })).rejects.toThrow()
+  }
+  expect(await f.client.resolveBotIdentity({ ...input, botId: 'missing' })).toBeNull()
+})
+
+it('refuses a revoked Account, missing capability and mismatched worker identity', async () => {
+  const f = await fixture(); await f.grant()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: 'bot_1' }
+  f.setBotResolver(async () => { f.host.revokeOwner(f.ownerId); return f.bot })
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  f.setBotResolver(async () => ({ ...f.bot, bot_id: 'other', actor_ref: 'deepseek-bot:other' }))
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.setBotResolver(async () => f.bot)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_identity'
+    ? { ...frame, result: { identity: { ...f.bot, bot_id: 'bot_2', actor_ref: 'deepseek-bot:bot_2' } } } : frame)
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.bot_identity')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  const before = f.seen.length
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.length).toBe(before)
+})
+
+it('rejects a Bot lookup if the Host authority has no Bot resolver', async () => {
+  const f = await fixture(false); await f.grant()
+  const capabilities = [...f.client.inspection.capabilities, 'profile.bot_identity']
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('rejects a mismatched Bot identity even after the transport accepts its reply', async () => {
+  const f = await fixture(); await f.grant()
+  const wrongBot = { ...f.bot, bot_id: 'bot_2', actor_ref: 'deepseek-bot:bot_2' }
+  let replyUsed = false
+  expect(Reflect.set(f.client, 'call', async () => {
+    replyUsed = true
+    return { type: 'result', method: 'profile.bot_identity', result: { identity: wrongBot } }
+  })).toBe(true)
+  await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  expect(replyUsed).toBe(true)
+  expect(Reflect.set(f.client, 'call', async () => ({ type: 'result', method: 'profile.other' }))).toBe(true)
+  await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'unavailable' })
+  expect(Reflect.deleteProperty(f.client, 'call')).toBe(true)
+})
 
 it('signs a server challenge with installation identity only after Account verification on this connection', async () => {
   const f = await fixture()

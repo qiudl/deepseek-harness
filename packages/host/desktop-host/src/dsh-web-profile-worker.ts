@@ -2,6 +2,8 @@ import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } fro
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotIdentity, parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotIdentity } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
@@ -280,6 +282,8 @@ export class DshWebProfileWorkerFactory {
       viewOrigin,
       generation,
       bootstrapCookie,
+      resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
+        viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
       generateText: async (text, signal) => {
         if (requestedStop || settled) throw new HostAuthorityError('unavailable')
         const response = await fetch(`${viewOrigin}/internal/desktop-model-text`, {
@@ -463,6 +467,25 @@ export class DshWebProfileWorkerFactory {
         throw new HostAuthorityError('profile_mismatch')
       }
       return value
+    }, 'await')
+  }
+
+  private async resolveBotIdentity(
+    viewOrigin: string, token: string, botId: string, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotIdentity | null> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+    const target = parseHostBotIdentityTarget({ bot_id: botId })
+    const response = await fetch(`${viewOrigin}/internal/desktop-bot-identity`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 2048, (bytes) => {
+      const identity = parseHostBotIdentity(JSON.parse(bytes.toString('utf8')))
+      if (identity !== null && identity.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
+      return identity
     }, 'await')
   }
 
