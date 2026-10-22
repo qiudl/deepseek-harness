@@ -67,11 +67,13 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `profile.bot_identity` 在读取选定 Profile worker 的前后校验当前连接的 Account 绑定和 issuer/subject。worker 私有 token 仅到达 Profile 本地的 `dsBotSlarkExternalGroup` 服务；插件缺失、Bot 不存在或插件不是唯一 writer 时返回缺失。worker 被替换或 Account 撤权时拒绝读取。结果不含聊天内容，也不授权 Slark 群操作。
 
-私有 Bot 群 worker 桥还支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。完成 Slark 群与 Account 权威核验之前，不开放派送这些命令的公开控制方法。
+私有 Bot 群 worker 桥还支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。这些补读和撤权命令尚无公开控制方法。
 
-Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。这些辅助函数尚未作为 Host 控制方法开放。
+Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。`profile.bot_group_deliver` 在调用当前 worker 前使用这两项检查。
 
 内部 Bot 派送函数只选择当前 Account Profile，在向 worker 发送单条投递前完成实时确认，并在返回前复查 Account 和 worker 身份。若 worker 已写入后结果被拒绝，该投递仍属不确定状态，必须使用原 delivery ID 对账。
+
+在 macOS 上，签名嵌入应用在 Host 启动时传入只含公钥的 `DSH_HOST_SLARK_BOT_GROUP_KEYRINGS`。Host 校验并固定公钥环后才公布 `profile.bot_group_deliver`；缺失或格式无效的投影不能授权派送。请求仅携带凭据和命令，不能替换验签公钥。
 
 仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
 

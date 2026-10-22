@@ -2,6 +2,11 @@ import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-p
 import { parseHostBotIdentity, parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, ProfileBotIdentityRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotIdentity } from './account-bot-identity.ts'
+import { deliverAccountBotGroup } from './account-bot-group-delivery.ts'
+import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
+  parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
+  type HostBotGroupPublicKeyring, type ProfileBotGroupDeliverRequest,
+} from '@deepseek-ai/dsh-host-control-protocol'
 import { HostRecoveryMaterials } from './recovery-materials.ts'
 import {
   parseRecoveryDescribeInput, parseRecoveryValidateInput,
@@ -243,6 +248,11 @@ export interface UnixHostServerOptions {
   readonly host: DesktopHost
   /** Read public Bot identity only in the selected Account Profile's exclusive writer. */
   readonly resolveBotIdentity?: (profileId: string, botId: string, signal: AbortSignal) => Promise<HostBotIdentity | null>
+  /** Private worker command after signed Slark and current Account authorization. */
+  readonly operateBotGroup?: (profileId: string, command: HostBotGroupCommand,
+    signal: AbortSignal) => Promise<HostBotGroupResponse>
+  /** Pinned by the signed embedding at Host startup; requests cannot replace these keys. */
+  readonly trustedBotGroupKeyrings?: readonly HostBotGroupPublicKeyring[]
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
@@ -507,7 +517,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -2104,6 +2114,23 @@ export class HostControlAuthority {
             this.options.host, { resolveBotIdentity: resolve }, account, frame.params.bot_id, context.signal))
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { identity } })
+        } else if (frame.method === 'profile.bot_group_deliver') {
+          const operate = this.options.operateBotGroup
+          const keyring = this.options.trustedBotGroupKeyrings?.find(candidate =>
+            candidate.environmentId === frame.params.authority_environment_id &&
+            candidate.issuer === frame.params.slark_audience)
+          if (!operate || !keyring) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const reply = await deliverAccountBotGroup({
+            host: this.options.host, workers: { operateBotGroup: operate }, account,
+            installationId: this.options.identity.installationId,
+            computerId: frame.params.computer_id,
+            slarkAudience: frame.params.slark_audience,
+            keyring, ticket: frame.params.ticket,
+            command: frame.params.command, signal: context.signal,
+          })
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { reply } })
         } else if (frame.method === 'profile.workspace_model_selection') {
           const inspect = this.options.inspectWorkspaceModelSelection
           if (!inspect) throw new HostAuthorityError('upgrade_required')
@@ -2208,6 +2235,8 @@ export class HostControlAuthority {
           ...capabilities,
           'profile.collaboration_registration',
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
+          ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
+            ? ['profile.bot_group_deliver'] : []),
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
           ...(this.options.inspectCollaborationRoot ? ['profile.root_authority'] : []),
@@ -3663,6 +3692,40 @@ export class UnixHostClient {
     return identity
   }
 
+  /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
+  async deliverBotGroup(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
+    readonly signal?: AbortSignal
+  }): Promise<HostBotGroupResponse> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_deliver' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const delivery = parseHostBotGroupDeliveryInput({
+      computer_id: input.computerId, slark_audience: input.slarkAudience,
+      ticket: input.ticket, command: input.command,
+    })
+    const request: ProfileBotGroupDeliverRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_deliver',
+      params: { ...this.collaborationAccountRequestParams(input), ...delivery },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    const reply = parseHostBotGroupResponse(frame.result.reply)
+    if (!matchesHostBotGroupResponse(reply, delivery.command))
+      throw new HostAuthorityError('profile_mismatch')
+    return reply
+  }
+
   /**
    * Request and verify a registration signature without changing the visible Profile lease.
    * @param input - Main-held Account binding, server challenge and cancellation.
@@ -4492,7 +4555,7 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
+      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotGroupDeliverRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
   | ProfileGroupInputFenceRequest

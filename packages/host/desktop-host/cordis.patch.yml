@@ -14,6 +14,7 @@
         deviceIndexKeyPath: !!js process.env.DSH_HOST_DEVICE_INDEX_KEY_PATH
         accountKeyringPath: !!js process.env.DSH_HOST_ACCOUNT_KEYRING_PATH
         accountKeyringSha256: !!js process.env.DSH_HOST_ACCOUNT_KEYRING_SHA256
+        botGroupPublicKeyringsJson: !!js process.env.DSH_HOST_SLARK_BOT_GROUP_KEYRINGS
         installationPrivateKeyPath: !!js process.env.DSH_HOST_INSTALLATION_PRIVATE_KEY_PATH
         installationPublicKey: !!js process.env.DSH_HOST_INSTALLATION_PUBLIC_KEY
         installationId: !!js process.env.DSH_HOST_INSTALLATION_ID

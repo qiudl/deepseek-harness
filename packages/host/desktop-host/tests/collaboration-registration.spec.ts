@@ -1,16 +1,18 @@
-import { generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import { encodeHostCollaborationRegistrationSignaturePayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
+import { botGroupHostRegistryId } from '../src/bot-group-ticket.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
-async function fixture(supportBot = true) {
+async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKeys = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const time = { value: 1000 }
@@ -30,11 +32,26 @@ async function fixture(supportBot = true) {
   const identity = { hostInstanceId: randomUUID(), installationId: randomUUID(), installationPublicKey: publicKey,
     installationPrivateKey: keys.privateKey, processNonce: 'A'.repeat(43), executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1 }
   const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const botGroupSigner = generateKeyPairSync('ed25519')
+  const botGroupNow = Date.now()
+  const botGroupKeyring = { version: 1 as const, environmentId: binding.authorityEnvironmentId,
+    issuer: 'https://slark.example.test', keys: [{ kid: 'dsh-assertion-bot-test',
+      publicKeyPem: botGroupSigner.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      validFrom: botGroupNow - 1000, validUntil: botGroupNow + 120_000 }] }
   let resolveBot = async (_profileId: string, botId: string, _signal: AbortSignal) => botId === 'bot_1' ? bot : null
+  const operateBotGroup = vi.fn(async (_profileId: string, command: HostBotGroupCommand,
+    _signal: AbortSignal): Promise<HostBotGroupResponse> => {
+    if (command.operation !== 'deliver') throw Error('invalid command')
+    return { state: 'accepted', deliveryId: command.deliveryId, groupId: command.groupId,
+      botId: command.botId, memberCycle: command.memberCycle,
+      payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' }
+  })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     ...(supportBot ? {
       resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
-    } : {}) })
+    } : {}),
+    ...(supportDelivery ? { operateBotGroup,
+      ...(pinDeliveryKeys ? { trustedBotGroupKeyrings: [botGroupKeyring] } : {}) } : {}) })
   const ownerId = randomUUID(), lifetime = new AbortController()
   const session = authority.openSession(ownerId, lifetime.signal)
   const seen: HostControlFrame[] = []
@@ -50,7 +67,8 @@ async function fixture(supportBot = true) {
   const input = { ...binding, challenge }
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
-    bot, setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
+    bot, botGroupSigner, botGroupKeyring, operateBotGroup,
+    setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
 
@@ -110,6 +128,73 @@ it('rejects a mismatched Bot identity even after the transport accepts its reply
   await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
     subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'unavailable' })
   expect(Reflect.deleteProperty(f.client, 'call')).toBe(true)
+})
+
+it('delivers through the Host only after signed Slark and current membership confirmation', async () => {
+  const f = await fixture(true, true); await f.grant()
+  const now = Date.now()
+  const origin = 'https://slark.example.test'
+  const messageId = randomUUID()
+  const command = { operation: 'deliver' as const, schemaVersion: 1 as const,
+    deliveryId: randomUUID(), groupId: randomUUID(), botId: 'bot_1',
+    memberCycle: 2, messageSeq: 7, text: 'hello group',
+    payloadDigest: '' }
+  command.payloadDigest = createHash('sha256').update(JSON.stringify(['slark_bot_group_v1',
+    messageId, command.groupId, `deepseek-bot:${command.botId}`, command.memberCycle,
+    command.messageSeq, command.text])).digest('hex')
+  const claims = { schema_version: 1, issuer: origin,
+    audience: 'urn:slark:dsh-bot-group-delivery:v1', slark_audience: origin,
+    environment_id: f.account.authorityEnvironmentId,
+    owner_user_id: f.ownerId, computer_id: 'desktop-1',
+    account_issuer: f.account.issuer, account_subject: f.account.subject,
+    account_binding_epoch: f.account.authorityBindingVersion,
+    host_registry_id: botGroupHostRegistryId({ ownerUserId: f.ownerId,
+      accountIssuer: f.account.issuer, accountSubject: f.account.subject,
+      environmentId: f.account.authorityEnvironmentId,
+      installationId: f.identity.installationId,
+      accountBindingHandle: f.account.accountBindingHandle,
+      accountBindingEpoch: f.account.authorityBindingVersion }),
+    group_id: command.groupId, workspace_id: randomUUID(), session_id: 'original',
+    delivery_id: command.deliveryId, message_id: messageId,
+    message_seq: command.messageSeq, bot_id: command.botId,
+    member_cycle: command.memberCycle, payload_digest: command.payloadDigest,
+    token_id: randomUUID(), issued_at: now, expires_at: now + 60_000 }
+  const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'SLARK-DSH-BOT-GROUP',
+    version: 1, kid: f.botGroupKeyring.keys[0]!.kid })).toString('base64url')
+  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
+  const data = `${header}.${payload}`
+  const ticket = `${data}.${sign(null, Buffer.from(data, 'ascii'),
+    f.botGroupSigner.privateKey).toString('base64url')}`
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ ok: true,
+    value: { state: 'active', delivery_id: command.deliveryId, expires_at: claims.expires_at } }))
+  onTestFinished(() => { fetchMock.mockRestore() })
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    computerId: 'desktop-1', slarkAudience: origin, ticket, command }
+  const result = await f.client.deliverBotGroup(input)
+  expect(result).toMatchObject({ state: 'accepted', deliveryId: command.deliveryId,
+    payloadDigest: command.payloadDigest })
+  expect(fetchMock).toHaveBeenCalledWith(origin +
+    '/api/v1/dsh/collaboration-v2/group-messages/delivery-confirm',
+  expect.objectContaining({ method: 'POST', redirect: 'error', credentials: 'omit' }))
+  expect(f.operateBotGroup).toHaveBeenCalledTimes(1)
+  fetchMock.mockResolvedValueOnce(Response.json({ ok: false }, { status: 409 }))
+  await expect(f.client.deliverBotGroup(input)).rejects.toThrow()
+  expect(f.operateBotGroup).toHaveBeenCalledTimes(1)
+})
+
+it('does not advertise Bot delivery without startup-pinned Slark keys', async () => {
+  const f = await fixture(true, true, false); await f.grant()
+  expect(f.client.inspection.capabilities).not.toContain('profile.bot_group_deliver')
+  const before = f.seen.length
+  await expect(f.client.deliverBotGroup({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, computerId: 'desktop-1',
+    slarkAudience: 'https://slark.example.test', ticket: 'aaa.bbb.ccc',
+    command: { operation: 'deliver', schemaVersion: 1, deliveryId: randomUUID(),
+      groupId: randomUUID(), botId: 'bot_1', memberCycle: 1, messageSeq: 1,
+      payloadDigest: 'a'.repeat(64), text: 'hello' },
+  })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.length).toBe(before)
+  expect(f.operateBotGroup).not.toHaveBeenCalled()
 })
 
 it('signs a server challenge with installation identity only after Account verification on this connection', async () => {

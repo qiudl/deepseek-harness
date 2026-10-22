@@ -590,6 +590,30 @@ export interface ProfileBotIdentityResult {
   readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentity | null }
 }
 
+/** Account-bound delivery from a signed Slark group to the current Bot Profile. */
+export interface ProfileBotGroupDeliverRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_deliver'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+  } & import('./bot-group.ts').HostBotGroupDeliveryInput
+}
+
+/** Durable worker receipt; a transport failure leaves the original delivery uncertain. */
+export interface ProfileBotGroupDeliverResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_deliver'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
 /** Server nonce bound to Account and one registry workspace/ordinary Session. */
 export interface HostWorkspaceAuthorityChallenge extends HostWorkspaceModelSelectionTarget {
   readonly request_id: HostControlRequestId
@@ -1888,6 +1912,8 @@ export type HostControlFrame =
   | ProfileCollaborationRegistrationResult
   | ProfileBotIdentityRequest
   | ProfileBotIdentityResult
+  | ProfileBotGroupDeliverRequest
+  | ProfileBotGroupDeliverResult
   | ProfileWorkspaceAuthorityRequest
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateRequest

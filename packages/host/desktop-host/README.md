@@ -65,11 +65,13 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 `profile.bot_identity` checks the caller connection's current Account binding and issuer/subject before and after reading the selected Profile worker. The worker's private token reaches only the Profile-local `dsBotSlarkExternalGroup` service; an absent plugin, missing Bot or non-writer plugin returns absence. A replaced worker or revoked Account rejects the read. The result contains no chat content and does not authorize a Slark group action.
 
-The private Bot group worker bridge also supports one-result recovery pages, exact result acknowledgement and member-cycle revocation. Its worker token and current generation fence remain inside the Host. No public control method dispatches these commands until Slark group and Account authority are verified.
+The private Bot group worker bridge also supports one-result recovery pages, exact result acknowledgement and member-cycle revocation. Its worker token and current generation fence remain inside the Host. These recovery and revocation commands have no public control method.
 
-The Bot group ticket verifier checks a pinned Slark environment Ed25519 key, the current Account binding and installation-derived Host registry, the exact Bot member cycle and message digest, and a 60-second expiry. The confirmation helper then calls the pinned Slark HTTPS origin to recheck live membership and the exact delivery; it limits the response to 4 KiB and refuses redirects or mismatched receipts. These helpers are not exposed as a Host control method.
+The Bot group ticket verifier checks a pinned Slark environment Ed25519 key, the current Account binding and installation-derived Host registry, the exact Bot member cycle and message digest, and a 60-second expiry. The confirmation helper then calls the pinned Slark HTTPS origin to recheck live membership and the exact delivery; it limits the response to 4 KiB and refuses redirects or mismatched receipts. `profile.bot_group_deliver` uses both checks before invoking the current worker.
 
 The internal Bot delivery function selects only the current Account Profile, performs that live confirmation before sending one delivery to its worker, and rechecks Account and worker identity before returning. A rejected result after a worker write remains uncertain and must be reconciled with the same delivery ID.
+
+On macOS, the signed embedding passes public-only `DSH_HOST_SLARK_BOT_GROUP_KEYRINGS` during Host startup. The Host validates and pins the keyrings before advertising `profile.bot_group_deliver`; a missing or malformed projection cannot authorize a delivery. Requests carry the ticket and command, never replacement verification keys.
 
 Existing-only preflight accepts the exact current worker patch or the released `settings` owner layout, with every persistence, storage, credential, and settings path still bound to the inspected generation. It does not rewrite either layout during inspection. Worker startup selects the current `config-editor` owner layout after authorization; changed or redirected released patches remain rejected.
 

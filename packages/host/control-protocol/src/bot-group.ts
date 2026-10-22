@@ -2,6 +2,71 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const BOT_ID = /^[A-Za-z0-9_-]{1,200}$/u
 const DIGEST = /^[0-9a-f]{64}$/u
+const KEY_ID = /^dsh-assertion-[A-Za-z0-9][A-Za-z0-9._:-]{0,84}$/u
+
+export interface HostBotGroupPublicKey {
+  readonly kid: string
+  readonly publicKeyPem: string
+  readonly validFrom: number
+  readonly validUntil: number
+}
+export interface HostBotGroupPublicKeyring {
+  readonly version: 1
+  readonly environmentId: string
+  readonly issuer: string
+  readonly keys: readonly HostBotGroupPublicKey[]
+}
+
+/** Bound the Desktop-pinned public projection before it enters Host authority code. */
+export function parseHostBotGroupPublicKeyring(value: unknown): HostBotGroupPublicKeyring {
+  const row = exact(value, ['version', 'environmentId', 'issuer', 'keys'])
+  if (row.version !== 1 || typeof row.environmentId !== 'string' || !UUID.test(row.environmentId) ||
+      typeof row.issuer !== 'string' || row.issuer.length > 512 ||
+      !Array.isArray(row.keys) || row.keys.length < 1 || row.keys.length > 4)
+    throw Error('invalid_bot_group')
+  try {
+    const issuer = new URL(row.issuer)
+    if (issuer.protocol !== 'https:' || issuer.origin !== row.issuer) throw Error()
+  } catch { throw Error('invalid_bot_group') }
+  const seen = new Set<string>()
+  const keys = row.keys.map((entry: unknown) => {
+    const key = exact(entry, ['kid', 'publicKeyPem', 'validFrom', 'validUntil'])
+    if (typeof key.kid !== 'string' || !KEY_ID.test(key.kid) || seen.has(key.kid) ||
+        typeof key.publicKeyPem !== 'string' || key.publicKeyPem.length > 4096 ||
+        key.publicKeyPem.includes('PRIVATE KEY') ||
+        !Number.isSafeInteger(key.validFrom) || Number(key.validFrom) < 1 ||
+        !Number.isSafeInteger(key.validUntil) || Number(key.validUntil) <= Number(key.validFrom))
+      throw Error('invalid_bot_group')
+    seen.add(key.kid)
+    return key as unknown as HostBotGroupPublicKey
+  })
+  return { version: 1, environmentId: row.environmentId, issuer: row.issuer, keys }
+}
+
+export type HostBotGroupDeliveryInput = Readonly<{
+  computer_id: string
+  slark_audience: string
+  ticket: string
+  command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
+}>
+
+export function parseHostBotGroupDeliveryInput(value: unknown): HostBotGroupDeliveryInput {
+  const row = exact(value, ['computer_id', 'slark_audience', 'ticket', 'command'])
+  if (typeof row.computer_id !== 'string' || !/^[\x21-\x7e]{1,256}$/u.test(row.computer_id) ||
+      typeof row.slark_audience !== 'string' || row.slark_audience.length > 512 ||
+      typeof row.ticket !== 'string' || Buffer.byteLength(row.ticket) > 8192 ||
+      !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(row.ticket))
+    throw Error('invalid_bot_group')
+  try {
+    const audience = new URL(row.slark_audience)
+    if (audience.protocol !== 'https:' || audience.origin !== row.slark_audience)
+      throw Error()
+  } catch { throw Error('invalid_bot_group') }
+  const command = parseHostBotGroupCommand(row.command)
+  if (command.operation !== 'deliver') throw Error('invalid_bot_group')
+  return { computer_id: row.computer_id, slark_audience: row.slark_audience,
+    ticket: row.ticket, command }
+}
 
 export type HostBotGroupCommand = Readonly<{
   operation: 'deliver'
