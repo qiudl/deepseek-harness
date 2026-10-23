@@ -341,6 +341,7 @@ export function apply(ctx: Context, config: Config): void {
           const service = ctx.get('dsBotSlarkNativeRoom') as undefined | {
             joinAgent(input: Record<string, unknown>): Promise<unknown>
             roomMessages(input: Record<string, unknown>): Promise<unknown>
+            roomTurns(input: Record<string, unknown>): Promise<unknown>
             acknowledgeMessages(input: Record<string, unknown>): Promise<unknown>
             leaveAgent(input: Record<string, unknown>): Promise<unknown>
           }
@@ -353,9 +354,12 @@ export function apply(ctx: Context, config: Config): void {
             : command.operation === 'messages'
               ? await service.roomMessages({ ...base, afterSeq: command.after_seq,
                 limit: command.limit })
-              : command.operation === 'ack'
-                ? await service.acknowledgeMessages({ ...base, throughSeq: command.through_seq })
-                : await service.leaveAgent(base)
+              : command.operation === 'turns'
+                ? await service.roomTurns({ ...base, afterSeq: command.after_seq,
+                  limit: command.limit })
+                : command.operation === 'ack'
+                  ? await service.acknowledgeMessages({ ...base, throughSeq: command.through_seq })
+                  : await service.leaveAgent(base)
           signal.throwIfAborted()
           return result
         }),

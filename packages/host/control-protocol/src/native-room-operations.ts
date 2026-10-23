@@ -28,7 +28,7 @@ export type HostNativeRoomCommand = Readonly<{
   agent_id: string
   name: string
 } | {
-  operation: 'messages'
+  operation: 'messages' | 'turns'
   room_id: string
   member_id: string
   cycle: number
@@ -69,6 +69,14 @@ export type HostNativeRoomReply = Readonly<{
     text: string
   }>)[]
 } | {
+  state: 'turns'
+  room_id: string
+  group_id: string
+  member_id: string
+  cycle: number
+  next_seq: number
+  turns: readonly Readonly<{ turn_id: string; trigger_room_seq: number; turn_order: number }>[]
+} | {
   state: 'acknowledged' | 'already_acknowledged'
   through_seq: number
 } | {
@@ -89,13 +97,13 @@ export function parseHostNativeRoomCommand(value: unknown): HostNativeRoomComman
   if (!record(value)) throw Error('native_room_operation_invalid')
   const keys = value.operation === 'join'
     ? ['operation', 'room_id', 'group_id', 'member_id', 'cycle', 'project_id', 'agent_id', 'name']
-    : value.operation === 'messages'
+    : value.operation === 'messages' || value.operation === 'turns'
       ? ['operation', 'room_id', 'member_id', 'cycle', 'after_seq', 'limit']
       : value.operation === 'ack'
         ? ['operation', 'room_id', 'member_id', 'cycle', 'through_seq']
         : ['operation', 'room_id', 'member_id', 'cycle']
   const row = exact(value, keys)
-  if (!['join', 'messages', 'ack', 'leave'].includes(String(row.operation)) ||
+  if (!['join', 'messages', 'turns', 'ack', 'leave'].includes(String(row.operation)) ||
     !room(row.room_id) || typeof row.member_id !== 'string' || !UUID.test(row.member_id) ||
     !cycle(row.cycle)) throw Error('native_room_operation_invalid')
   if (row.operation === 'join' &&
@@ -103,7 +111,7 @@ export function parseHostNativeRoomCommand(value: unknown): HostNativeRoomComman
       !coordinate(row.project_id) || !coordinate(row.agent_id) ||
       !coordinate(row.name) || /[@`]/u.test(row.name)))
     throw Error('native_room_operation_invalid')
-  if (row.operation === 'messages' &&
+  if ((row.operation === 'messages' || row.operation === 'turns') &&
     (!seq(row.after_seq) || !Number.isSafeInteger(row.limit) ||
       Number(row.limit) < 1 || Number(row.limit) > 3))
     throw Error('native_room_operation_invalid')
@@ -129,6 +137,26 @@ export function parseHostNativeRoomReply(value: unknown): HostNativeRoomReply {
       state === 'unverifiable_message' ? 'seq' : 'through_seq'
     const row = exact(value, ['state', key])
     if (!seq(row[key])) throw Error('native_room_operation_invalid')
+    return row as HostNativeRoomReply
+  }
+  if (state === 'turns') {
+    const row = exact(value, ['state', 'room_id', 'group_id', 'member_id', 'cycle',
+      'next_seq', 'turns'])
+    if (!room(row.room_id) || typeof row.group_id !== 'string' || !UUID.test(row.group_id) ||
+      typeof row.member_id !== 'string' || !UUID.test(row.member_id) ||
+      !cycle(row.cycle) || !seq(row.next_seq) || !Array.isArray(row.turns) ||
+      row.turns.length > 3) throw Error('native_room_operation_invalid')
+    let prior = 0
+    let priorOrder = 0
+    for (const turn of row.turns) {
+      const item = exact(turn, ['turn_id', 'trigger_room_seq', 'turn_order'])
+      if (typeof item.turn_id !== 'string' || !UUID.test(item.turn_id) ||
+        !cycle(item.trigger_room_seq) || item.trigger_room_seq <= prior ||
+        item.trigger_room_seq > row.next_seq || !cycle(item.turn_order) ||
+        item.turn_order <= priorOrder) throw Error('native_room_operation_invalid')
+      prior = item.trigger_room_seq
+      priorOrder = item.turn_order
+    }
     return row as HostNativeRoomReply
   }
   const row = exact(value, ['state', 'room_id', 'next_seq', 'last_seq', 'messages'])
@@ -163,6 +191,11 @@ export function matchesHostNativeRoomReply(reply: HostNativeRoomReply,
   if (['invalid', 'unavailable', 'conflict'].includes(reply.state)) return true
   if (['history_forbidden', 'history_gap', 'unverifiable_message'].includes(reply.state))
     return command.operation === 'messages'
+  if (command.operation === 'turns') return reply.state === 'turns' &&
+    reply.room_id === command.room_id && reply.member_id === command.member_id &&
+    reply.cycle === command.cycle && reply.next_seq >= command.after_seq &&
+    reply.turns.length <= command.limit &&
+    reply.turns.every(turn => turn.trigger_room_seq > command.after_seq)
   if (command.operation === 'join') return reply.state === 'joined'
   if (command.operation === 'leave') return reply.state === 'left'
   if (command.operation === 'ack') return reply.state === 'acknowledged' &&

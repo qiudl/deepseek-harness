@@ -84,7 +84,7 @@ kind: "package-reference"
 
 `profile.native_room` 在当前 Account Profile 下只接收一个已有 DS Bot 房间 ID。Host 用安装密钥签署插件核实的房间 ID、独立桥接 Source、Account 绑定、安装与进程身份及签发时间；客户端验证签名，拒绝过期或错配响应。多余字段或与房间 Session 相同的 Source Session 均被拒绝。桥接 Source 用于 Slark 注册，不会把房间 Session 变成 Slark 协作 Session。
 
-`profile.native_room_operation` 为同一 Account Profile 传递一条私有的 `join`、`messages`、`ack` 或 `leave` 命令。响应重复准确的房间与操作范围。每页最多三条消息，每条正文最多占用 16,000 个 JSON 编码的 UTF-8 字节，以适配 64 KiB 控制帧。此命令本身不授予 Slark 群成员资格。
+`profile.native_room_operation` 为同一 Account Profile 传递一条私有的 `join`、`messages`、`turns`、`ack` 或 `leave` 命令。响应重复准确的房间与操作范围。消息和轮次每页最多三条，每条消息正文最多占用 16,000 个 JSON 编码的 UTF-8 字节，以适配 64 KiB 控制帧。读取轮次本身不会执行工作或授予 Slark 群成员资格。
 
 `HostBotGroupCommand` 和 `HostBotGroupResponse` 校验 Profile worker 私有 Bot 群投递、回执、单条结果补读、结果确认及成员周期撤权。命令把投递或结果绑定到群 UUID、准确的 Bot ID 和成员周期；投递还包含消息序号、载荷摘要及最多 16,000 字符的正文。结果分页每次至多返回一条有界结果及稳定序号游标。响应必须匹配请求作用域，投递响应还须匹配摘要。worker 路由要求私有令牌；这些类型本身不授予 Slark 群权限。
 

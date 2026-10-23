@@ -10,11 +10,13 @@ const join = { operation: 'join', room_id: 'room_1', group_id: group,
   name: 'Slark Agent · Project / Helper' } as const
 const messages = { operation: 'messages', room_id: 'room_1', member_id: member,
   cycle: 1, after_seq: 5, limit: 2 } as const
+const turns = { ...messages, operation: 'turns' } as const
 
 describe('native room private operations', () => {
   it('admits exact bounded commands and rejects added fields and invalid identities', () => {
     expect(parseHostNativeRoomCommand(join)).toEqual(join)
     expect(parseHostNativeRoomCommand(messages)).toEqual(messages)
+    expect(parseHostNativeRoomCommand(turns)).toEqual(turns)
     expect(parseHostNativeRoomCommand({ operation: 'ack', room_id: 'room_1',
       member_id: member, cycle: 1, through_seq: 5 }).operation).toBe('ack')
     expect(parseHostNativeRoomCommand({ operation: 'leave', room_id: 'room_1',
@@ -24,6 +26,19 @@ describe('native room private operations', () => {
       { ...messages, room_id: '../other' }]) {
       expect(() => parseHostNativeRoomCommand(invalid)).toThrow('native_room_operation_invalid')
     }
+  })
+
+  it('binds durable Agent turns to one room, member cycle and cursor', () => {
+    const reply = parseHostNativeRoomReply({ state: 'turns', room_id: 'room_1',
+      group_id: group, member_id: member, cycle: 1, next_seq: 6,
+      turns: [{ turn_id: '33333333-3333-5333-8333-333333333333',
+        trigger_room_seq: 6, turn_order: 2 }] })
+    expect(matchesHostNativeRoomReply(reply, turns)).toBe(true)
+    expect(matchesHostNativeRoomReply(reply, { ...turns, member_id: group })).toBe(false)
+    expect(matchesHostNativeRoomReply(reply, { ...turns, after_seq: 6 })).toBe(false)
+    expect(() => parseHostNativeRoomReply({ ...reply, turns: [
+      { turn_id: 'not-uuid', trigger_room_seq: 6, turn_order: 2 },
+    ] })).toThrow('native_room_operation_invalid')
   })
 
   it('keeps one room and cursor across a bounded page of real user and Bot lines', () => {
