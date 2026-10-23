@@ -115,7 +115,8 @@ export async function runPnpm(input: { nodeExecutablePath: string
   await new Promise<void>((resolve, reject) => {
     const child = spawn(nodeExecutablePath, [pnpmEntrypointPath, 'install',
       ...(input.lockfileOnly ? ['--lockfile-only'] : []), '--offline', '--ignore-scripts',
-      '--config.auto-install-peers=false', input.frozen ? '--frozen-lockfile' : '--no-frozen-lockfile',
+      '--config.auto-install-peers=false', '--package-import-method=copy',
+      input.frozen ? '--frozen-lockfile' : '--no-frozen-lockfile',
       '--store-dir', join(sandboxRoot, 'store')], {
       cwd: sandboxRoot, shell: false, detached: true, stdio: 'ignore',
       env: { PATH: `${dirname(nodeExecutablePath)}:/usr/bin:/bin`, HOME: homedir(), CI: '1',
