@@ -94,7 +94,8 @@ it('uses disjoint result authority and confirms the original delivery online', a
     keyring, expected, now).messageId).toBe(ids.message)
   const check = (value: unknown) => confirmBotGroupResultTicket(signed, keyring,
     expected, new AbortController().signal, async (url) => {
-      expect(String(url)).toBe('https://slark.example.test/api/v1/dsh/collaboration-v2/' +
+      expect(url instanceof Request ? url.url : url instanceof URL ? url.href : url)
+        .toBe('https://slark.example.test/api/v1/dsh/collaboration-v2/' +
         'group-messages/result-confirm')
       return new Response(JSON.stringify({ ok: true, value }), { status: 200 })
     }, () => now)

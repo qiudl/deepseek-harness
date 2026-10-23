@@ -117,7 +117,7 @@ export function botGroupHostRegistryId(input: Pick<BotGroupTicketExpected,
 
 /** Only a pinned Slark environment key and current Account tuple authorize the payload. */
 function verifySignedBotGroupTicket(token: string, keyring: BotGroupPublicKeyring,
-  expected: BotGroupTicketExpected | BotGroupStopTicketExpected | BotGroupResultTicketExpected,
+  expected: BotGroupTicketExpected | BotGroupStopTicketExpected,
   kind: 'delivery' | 'stop' | 'result', now: number): BotGroupTicket {
   if (typeof token !== 'string' || Buffer.byteLength(token) > 8192) fail()
   const pieces = token.split('.')
