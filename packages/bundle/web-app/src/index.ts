@@ -47,6 +47,7 @@ import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-co
 import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
 import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
 import { handleDesktopBotRosterRequest } from './desktop-bot-roster.ts'
+import { handleDesktopNativeRoomRequest } from './desktop-native-room.ts'
 import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
@@ -317,6 +318,20 @@ export function apply(ctx: Context, config: Config): void {
   }
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-native-room',
+      handler: (req, res) => handleDesktopNativeRoomRequest(req, res, sourceToken,
+        async (roomId, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkNativeRoom') as undefined | {
+            prepare(input: { roomId: string }): Promise<unknown>
+          }
+          if (!service) throw Error('native_room_unavailable')
+          const result = await service.prepare({ roomId })
+          signal.throwIfAborted()
+          return result
+        }),
+    }))
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-bot-group',
       handler: (req, res) => handleDesktopBotGroupRequest(req, res, sourceToken, async (command, signal) => {
