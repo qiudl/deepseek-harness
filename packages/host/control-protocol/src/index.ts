@@ -49,8 +49,9 @@ export type { HostBotGroupCommand, HostBotGroupResponse,
   HostBotGroupPublicKeyring, HostBotGroupDeliveryInput,
   HostBotGroupStopInput } from './bot-group.js'
 export { parseHostBotGroupResultProof, encodeHostBotGroupResultProofPayload } from './bot-group-result-proof.js'
-export { parseHostNativeRoomTarget, parseHostNativeRoomSource } from './native-room.js'
-export type { HostNativeRoomSource } from './native-room.js'
+export { parseHostNativeRoomTarget, parseHostNativeRoomSource,
+  parseHostNativeRoomAssertion, encodeHostNativeRoomAssertionPayload } from './native-room.js'
+export type { HostNativeRoomSource, HostNativeRoomAssertion } from './native-room.js'
 export type { HostBotGroupResultProof } from './bot-group-result-proof.js'
 export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'
 export type { HostRootTextContextReceipt } from './root-text-context.js'

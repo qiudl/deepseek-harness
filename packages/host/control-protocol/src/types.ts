@@ -915,13 +915,13 @@ export interface ProfileNativeRoomRequest {
   }
 }
 
-/** Exact room-to-bridge Source coordinates or absence from the Profile writer. */
+/** Signed room-to-bridge Source or absence from the Profile writer. */
 export interface ProfileNativeRoomResult {
   readonly version: 1
   readonly type: 'result'
   readonly request_id: HostControlRequestId
   readonly method: 'profile.native_room'
-  readonly result: { readonly binding: import('./native-room.ts').HostNativeRoomSource | null }
+  readonly result: { readonly binding: import('./native-room.ts').HostNativeRoomAssertion | null }
 }
 
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */

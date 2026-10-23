@@ -82,7 +82,7 @@ kind: "package-reference"
 
 `profile.bot_identity` 从当前 Account Profile 的私有插件服务读取一个准确的 Bot ID。响应仅包含缺失状态，或 Bot ID、派生的发言者引用和有界显示名。调用方不能选择 Profile 路径、私聊或插件房间。此读取不授予群成员资格、投递或分身代理权限。
 
-`profile.native_room` 在当前 Account Profile 下只接收一个已有 DS Bot 房间 ID。私有插件响应包含该房间 ID，以及独立的 Workspace/Session Source、消息 ID 和修订号；多余字段或与房间 Session 相同的 Source Session 均被拒绝。桥接 Source 用于 Slark 注册，不会把房间 Session 变成 Slark 协作 Session。
+`profile.native_room` 在当前 Account Profile 下只接收一个已有 DS Bot 房间 ID。Host 用安装密钥签署插件核实的房间 ID、独立桥接 Source、Account 绑定、安装与进程身份及签发时间；客户端验证签名，拒绝过期或错配响应。多余字段或与房间 Session 相同的 Source Session 均被拒绝。桥接 Source 用于 Slark 注册，不会把房间 Session 变成 Slark 协作 Session。
 
 `HostBotGroupCommand` 和 `HostBotGroupResponse` 校验 Profile worker 私有 Bot 群投递、回执、单条结果补读、结果确认及成员周期撤权。命令把投递或结果绑定到群 UUID、准确的 Bot ID 和成员周期；投递还包含消息序号、载荷摘要及最多 16,000 字符的正文。结果分页每次至多返回一条有界结果及稳定序号游标。响应必须匹配请求作用域，投递响应还须匹配摘要。worker 路由要求私有令牌；这些类型本身不授予 Slark 群权限。
 

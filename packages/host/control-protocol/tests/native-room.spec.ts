@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import { decodeHostControlFrame, encodeHostControlFrame,
-  parseHostNativeRoomSource, parseHostNativeRoomTarget } from '../src/index.ts'
+  parseHostNativeRoomSource, parseHostNativeRoomTarget,
+  parseHostNativeRoomAssertion, encodeHostNativeRoomAssertionPayload } from '../src/index.ts'
 
 const binding = { room_id: 'room_1', source: {
   workspace_id: '10000000-0000-4000-8000-000000000001',
@@ -34,8 +35,17 @@ it('roundtrips Account-bound native room frames without private fields', () => {
       account_issuer: 'https://accounts.example.test', account_subject: '50000000-0000-4000-8000-000000000005',
       room_id: binding.room_id,
     } }
+  const assertion = { schema_version: 1, binding,
+    authority_environment_id: request.params.authority_environment_id,
+    account_binding_handle: request.params.account_binding_handle,
+    authority_binding_version: request.params.authority_binding_version,
+    account_issuer: request.params.account_issuer, account_subject: request.params.account_subject,
+    installation_id: '60000000-0000-4000-8000-000000000006',
+    installation_public_key: 'A'.repeat(43), host_instance_id: request.params.host_instance_id,
+    process_nonce: request.params.process_nonce, issued_at: 1000, signature: 'A'.repeat(86),
+  } as const
   const result = { version: 1, type: 'result', request_id: request.request_id,
-    method: request.method, result: { binding } }
+    method: request.method, result: { binding: assertion } }
   for (const frame of [request, result]) {
     expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)))
       .toBe(`${JSON.stringify(frame)}\n`)
@@ -43,5 +53,16 @@ it('roundtrips Account-bound native room frames without private fields', () => {
   expect(() => decodeHostControlFrame(`${JSON.stringify({ ...request,
     params: { ...request.params, profile_id: 'private' } })}\n`)).toThrow()
   expect(() => decodeHostControlFrame(`${JSON.stringify({ ...result,
-    result: { binding: { ...binding, source: { ...binding.source, private_chat: 'secret' } } } })}\n`)).toThrow()
+    result: { binding: { ...assertion, binding: { ...binding,
+      source: { ...binding.source, private_chat: 'secret' } } } } })}\n`)).toThrow()
+  const parsed = parseHostNativeRoomAssertion(assertion)
+  expect(encodeHostNativeRoomAssertionPayload(parsed).toString('utf8')).toBe(
+    'dsh-native-room-binding/v1\0' + JSON.stringify([1, 'room_1',
+      '10000000-0000-4000-8000-000000000001', 'bridge_1', 'source_1', '1',
+      '40000000-0000-4000-8000-000000000004', 'binding:bot', 1,
+      'https://accounts.example.test', '50000000-0000-4000-8000-000000000005',
+      '60000000-0000-4000-8000-000000000006', 'A'.repeat(43),
+      '20000000-0000-4000-8000-000000000002', 'A'.repeat(43), 1000]))
+  expect(encodeHostNativeRoomAssertionPayload({ ...parsed, signature: 'B'.repeat(86) }))
+    .toEqual(encodeHostNativeRoomAssertionPayload(parsed))
 })

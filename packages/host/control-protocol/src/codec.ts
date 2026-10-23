@@ -1,7 +1,7 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.ts'
-import { parseHostNativeRoomSource, parseHostNativeRoomTarget } from './native-room.ts'
+import { parseHostNativeRoomAssertion, parseHostNativeRoomTarget } from './native-room.ts'
 import { parseHostBotGroupDeliveryInput, parseHostBotGroupStopInput,
   parseHostBotGroupResponse } from './bot-group.ts'
 import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
@@ -3029,7 +3029,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   if (frame.method === 'profile.native_room') {
     exactKeys(result, ['binding'])
     return { version: 1, type: 'result', request_id, method: frame.method,
-      result: { binding: result.binding === null ? null : parseHostNativeRoomSource(result.binding) },
+      result: { binding: result.binding === null ? null : parseHostNativeRoomAssertion(result.binding) },
     } satisfies ProfileNativeRoomResult
   }
   if (frame.method === 'profile.bot_group_deliver') {

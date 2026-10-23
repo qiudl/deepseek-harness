@@ -92,11 +92,17 @@ it('prepares a native room through the Account-authorized Host transport', async
     subject: f.account.subject, roomId: f.nativeRoom.room_id }
   await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'unauthorized' })
   await f.grant()
-  expect(await f.client.prepareNativeRoom(input)).toEqual(f.nativeRoom)
+  const assertion = await f.client.prepareNativeRoom(input)
+  expect(assertion?.binding).toEqual(f.nativeRoom)
+  expect(assertion?.authority_environment_id).toBe(f.account.authorityEnvironmentId)
+  expect(assertion?.installation_id).toBe(f.identity.installationId)
   expect(await f.client.prepareNativeRoom({ ...input, roomId: 'missing' })).toBeNull()
   await expect(f.client.prepareNativeRoom({ ...input, issuer: 'https://other.example.test' })).rejects.toThrow()
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room'
-    ? { ...frame, result: { binding: { ...f.nativeRoom, room_id: 'other' } } } : frame)
+    ? { ...frame, result: { binding: { ...assertion!, binding: { ...f.nativeRoom, room_id: 'other' } } } } : frame)
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room'
+    ? { ...frame, result: { binding: { ...assertion!, issued_at: assertion!.issued_at + 1 } } } : frame)
   await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
   f.alter(undefined)
   const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.native_room')

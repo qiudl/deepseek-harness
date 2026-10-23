@@ -1,9 +1,10 @@
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostNativeRoomTarget, parseHostNativeRoomSource } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
+  encodeHostNativeRoomAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, HostBotRosterPage,
-  HostNativeRoomSource, ProfileBotIdentityRequest, ProfileBotRosterRequest,
+  HostNativeRoomSource, HostNativeRoomAssertion, ProfileBotIdentityRequest, ProfileBotRosterRequest,
   ProfileNativeRoomRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotIdentity, listAccountBotRoster,
   prepareAccountNativeRoom } from './account-bot-identity.ts'
@@ -2386,8 +2387,21 @@ export class HostControlAuthority {
           const account = commandReadAccount(frame.params, ownerId)
           const binding = await prepareAccountNativeRoom(this.options.host,
             { prepareNativeRoom: prepare }, account, frame.params.room_id, context.signal)
+          const identity = this.options.identity
+          const unsigned: HostNativeRoomAssertion | null = binding === null ? null : {
+            schema_version: 1, binding,
+            authority_environment_id: frame.params.authority_environment_id,
+            account_binding_handle: frame.params.account_binding_handle,
+            authority_binding_version: frame.params.authority_binding_version,
+            account_issuer: frame.params.account_issuer, account_subject: frame.params.account_subject,
+            ...assertionIdentityFields(identity), issued_at: (this.options.now ?? Date.now)(),
+            signature: 'A'.repeat(86),
+          }
+          const assertion = unsigned === null ? null : { ...unsigned,
+            signature: sign(null, encodeHostNativeRoomAssertionPayload(unsigned),
+              privateKeyObject(identity.installationPrivateKey)).toString('base64url') }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
-            method: frame.method, result: { binding } })
+            method: frame.method, result: { binding: assertion } })
         } else if (frame.method === 'profile.bot_group_stop' ||
           frame.method === 'profile.bot_group_deliver' ||
           frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
@@ -4365,7 +4379,7 @@ export class UnixHostClient {
     readonly subject: string
     readonly roomId: string
     readonly signal?: AbortSignal
-  }): Promise<HostNativeRoomSource | null> {
+  }): Promise<HostNativeRoomAssertion | null> {
     input.signal?.throwIfAborted()
     if (!this.inspection.capabilities.includes('profile.native_room' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
@@ -4378,9 +4392,23 @@ export class UnixHostClient {
     input.signal?.throwIfAborted()
     if (frame.type !== 'result' || frame.method !== 'profile.native_room')
       throw new HostAuthorityError('unavailable')
-    const binding = frame.result.binding === null ? null : parseHostNativeRoomSource(frame.result.binding)
-    if (binding && binding.room_id !== target.room_id) throw new HostAuthorityError('profile_mismatch')
-    return binding
+    const assertion = frame.result.binding === null ? null : parseHostNativeRoomAssertion(frame.result.binding)
+    if (assertion) {
+      if (assertion.binding.room_id !== target.room_id ||
+        assertion.authority_environment_id !== input.authorityEnvironmentId ||
+        assertion.account_binding_handle !== input.accountBindingHandle ||
+        assertion.authority_binding_version !== input.authorityBindingVersion ||
+        assertion.account_issuer !== input.issuer || assertion.account_subject !== input.subject ||
+        assertion.installation_id !== this.inspection.installation_id ||
+        assertion.installation_public_key !== this.inspection.installation_public_key ||
+        assertion.host_instance_id !== this.inspection.host_instance_id ||
+        assertion.process_nonce !== this.inspection.process_nonce ||
+        assertion.issued_at > this.now() + 5000 || assertion.issued_at < this.now() - 60_000 ||
+        !verify(null, encodeHostNativeRoomAssertionPayload(assertion),
+          publicKeyObject(this.inspection.installation_public_key),
+          Buffer.from(assertion.signature, 'base64url'))) throw new HostAuthorityError('profile_mismatch')
+    }
+    return assertion
   }
 
   /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
