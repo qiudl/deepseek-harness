@@ -62,7 +62,7 @@ export function parseHostNativeRoomTurnAssertion(value: unknown): HostNativeRoom
     throw Error('native_room_turn_assertion_invalid')
   return { schema_version: 1, after_seq: value.after_seq as number, selection,
     authority_environment_id: value.authority_environment_id as string,
-    account_binding_handle: value.account_binding_handle as string,
+    account_binding_handle: value.account_binding_handle,
     authority_binding_version: value.authority_binding_version as number,
     account_issuer: value.account_issuer, account_subject: value.account_subject as string,
     installation_id: value.installation_id as string,

@@ -16,6 +16,7 @@ const FIELDS = ['schema_version', 'issuer', 'audience', 'slark_audience',
   'chunk_index', 'chunk_count', 'chunk_digest', 'token_id', 'issued_at',
   'expires_at'] as const
 const fail = (): never => { throw Error('native_agent_result_ticket_invalid') }
+const runtimeArray = (value: unknown): boolean => Array.isArray(value)
 const exact = (value: unknown, fields: readonly string[]): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key))
@@ -119,17 +120,17 @@ export function verifyNativeAgentResultTicket(token: string, keyring: BotGroupPu
         claims.expires_at <= now || claims.expires_at <= claims.issued_at ||
         claims.expires_at - claims.issued_at > 60_000) return fail()
     const keys = keyring.keys
-    if (!Array.isArray(keys) || keys.length < 1 || keys.length > 4) return fail()
+    if (!runtimeArray(keys) || keys.length < 1 || keys.length > 4) return fail()
     const selected = keys.find(key => key.kid === header.kid)
     if (!selected || keys.some(key => key.kid === selected.kid && key !== selected) ||
-        selected.validFrom > (claims.issued_at as number) ||
-        selected.validUntil < (claims.expires_at as number)) return fail()
+        selected.validFrom > claims.issued_at ||
+        selected.validUntil < claims.expires_at) return fail()
     const publicKey = createPublicKey(selected.publicKeyPem)
     const signature = Buffer.from(signaturePart, 'base64url')
     if (publicKey.asymmetricKeyType !== 'ed25519' || signature.length !== 64 ||
         signature.toString('base64url') !== signaturePart ||
         !verify(null, Buffer.from(`${headerPart}.${claimsPart}`, 'ascii'), publicKey, signature)) return fail()
-    return claims.expires_at as number
+    return claims.expires_at
   } catch { return fail() }
 }
 
