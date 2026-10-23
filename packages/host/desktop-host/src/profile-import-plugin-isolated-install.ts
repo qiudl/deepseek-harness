@@ -19,6 +19,7 @@ import type { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-s
 
 type Profile = Readonly<{ profileId: string; profileRoot: string; target: FileOwnerJsonlMigrationGenerationTarget }>
 const ISOLATED_WORKSPACE = 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n'
+const ISOLATED_NPMRC = 'ignore-scripts=true\nauto-install-peers=false\npackage-import-method=copy\n'
 type Evidence = Readonly<{ target: Profile
   sourceProfileId: string
   uid: number
@@ -174,7 +175,7 @@ export async function installStagedProfileImportPluginsInIsolation(input: Eviden
   }
   const manifest = manifestText(plan)
   await writePrivate(join(sandboxRoot, 'package.json'), Buffer.from(manifest))
-  await writePrivate(join(sandboxRoot, '.npmrc'), Buffer.from('ignore-scripts=true\nauto-install-peers=false\n'))
+  await writePrivate(join(sandboxRoot, '.npmrc'), Buffer.from(ISOLATED_NPMRC))
   await writePrivate(join(sandboxRoot, 'pnpm-workspace.yaml'), Buffer.from(ISOLATED_WORKSPACE))
   await syncDirectory(archiveDirectory)
   await syncDirectory(sandboxRoot)
@@ -230,7 +231,7 @@ export async function inspectIsolatedProfileImportPluginInstall(input: Evidence)
   const lockfile = readExtensionStateFile(join(sandboxRoot, 'pnpm-lock.yaml'), uid, 16_777_216,
     'profile_import_plugin_isolated_resolution_invalid')
   if (manifest !== manifestText(plan) || workspace !== ISOLATED_WORKSPACE
-    || npmrc !== 'ignore-scripts=true\nauto-install-peers=false\n' || lockfile === null) {
+    || npmrc !== ISOLATED_NPMRC || lockfile === null) {
     throw Error('profile_import_plugin_isolated_incomplete')
   }
   const lockfileDigest = createHash('sha256').update(lockfile).digest('hex')

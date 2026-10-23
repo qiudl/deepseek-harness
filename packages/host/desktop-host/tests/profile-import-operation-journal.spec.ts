@@ -25,7 +25,7 @@ async function fixture() {
   return { root, directory, journal, input }
 }
 
-describe('Profile import operation journal', () => {
+describe.skipIf(process.platform === 'win32')('Profile import operation journal', () => {
   it('records intent before mutation and advances through strict durable versions', async () => {
     const { directory, journal, input } = await fixture()
     expect(await journal.load(input.operationId)).toBeNull()

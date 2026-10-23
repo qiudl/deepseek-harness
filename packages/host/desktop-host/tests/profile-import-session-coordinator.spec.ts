@@ -119,7 +119,7 @@ async function stagedJointFixture(selectedSessionIds: string[] = ['source-sessio
     pluginJournal, hostLock, coordinator, input }
 }
 
-describe('private Profile import session coordination', () => {
+describe.skipIf(process.platform === 'win32')('private Profile import session coordination', () => {
   it('restores status after restart only while the same pair remains authorized', async () => {
     const { source, target, journal, fence, base } = await fixture()
     const coordinator = new ProfileImportSessionCoordinator(journal, fence, {

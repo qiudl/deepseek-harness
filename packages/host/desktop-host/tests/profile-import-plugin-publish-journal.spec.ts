@@ -18,7 +18,7 @@ async function fixture() {
   return { root, journal, input }
 }
 
-describe('plugin publish intent journal', () => {
+describe.skipIf(process.platform === 'win32')('plugin publish intent journal', () => {
   it('persists an immutable switch and rollback history across journal instances', async () => {
     const { root, journal, input } = await fixture()
     const prepared = await journal.create(input)

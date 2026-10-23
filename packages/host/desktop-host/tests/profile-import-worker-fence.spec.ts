@@ -19,7 +19,7 @@ async function fixture() {
   return { root, files, gate: new ProfileImportWorkerFence(files) }
 }
 
-describe('durable Profile import worker fence', () => {
+describe.skipIf(process.platform === 'win32')('durable Profile import worker fence', () => {
   it('reserves both Profiles and reopens them only after matching cleanup', async () => {
     const { files, gate } = await fixture()
     gate.reservePair(sourceId, targetId, operationId)

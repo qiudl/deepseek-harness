@@ -7,12 +7,14 @@ import type { HostControlFrame, ProfileImportPrepareRequest } from '@deepseek-ai
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { HostControlAuthority } from '../src/unix-transport.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
 
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'dsh-import-transport-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const clock = { now: () => 1000 }
-  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock,
+    ...registryFileFixture() })
   const issuer = 'https://accounts.dsh.example.com'
   const subject = randomUUID()
   const environmentId = randomUUID()

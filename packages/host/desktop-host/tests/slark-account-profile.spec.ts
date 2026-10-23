@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { DesktopHost, ProfileRegistry } from '../src/index.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
 
 const environmentId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181'
 const personProfileId = '11111111-1111-4111-8111-111111111111'
@@ -26,7 +27,8 @@ function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'dsh-slark-profile-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const clock = { now: () => 1_000 }
-  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock })
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock,
+    ...registryFileFixture() })
   let workerStarts = 0
   const host = new DesktopHost({ registry, clock, runtimeGeneration: 5,
     verifySlarkAccountAccessToken: (token, context) => {

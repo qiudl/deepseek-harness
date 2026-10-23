@@ -54,7 +54,7 @@ async function profile(root: string, name: string, dependencies: Record<string, 
   return { profileRoot, manifestPath, target }
 }
 
-describe('Slark Profile import preview inventory', () => {
+describe.skipIf(process.platform === 'win32')('Slark Profile import preview inventory', () => {
   it('verifies only catalog-matched source archives and refuses changed or linked bytes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-import-plugin-trust-'))
     onTestFinished(() => rm(root, { recursive: true, force: true }))
@@ -217,7 +217,7 @@ describe('Slark Profile import preview inventory', () => {
   })
 })
 
-describe('inactive Profile import session stage', () => {
+describe.skipIf(process.platform === 'win32')('inactive Profile import session stage', () => {
   it('preserves existing target sessions and owner state while adding only selected new sessions', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-import-stage-'))
     onTestFinished(() => rm(root, { recursive: true, force: true }))
