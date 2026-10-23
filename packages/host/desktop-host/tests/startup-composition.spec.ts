@@ -190,6 +190,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     async target => ({ ...target, provider: 'deepseek', model: 'chat' }))
   const resolveBotIdentity = vi.fn<NonNullable<ProfileWorkerHandle['resolveBotIdentity']>>(
     async botId => ({ bot_id: botId, actor_ref: `deepseek-bot:${botId}`, display_name: 'My Bot' }))
+  const listBotRoster = vi.fn<NonNullable<ProfileWorkerHandle['listBotRoster']>>(
+    async () => ({ bots: [{ bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1',
+      display_name: 'My Bot' }], next_cursor: null }))
   const inspectCollaborationArchiveState = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationArchiveState']>>(
     async () => ({ archive_phase: 'archived' }))
   const inspectCollaborationArchiveIntent = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationArchiveIntent']>>(
@@ -230,7 +233,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       viewOrigin: 'http://127.0.0.1:43123',
       generation: workerSpecs.length,
       bootstrapCookie: { name: 'fixture', value: 'private' },
-      generateText, resolveBotIdentity,
+      generateText, resolveBotIdentity, listBotRoster,
       inspectWorkspaceModelSelection, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
       transitionCollaborationArchive,
       installGroupInputFence,
@@ -317,6 +320,10 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(serverOptions.resolveBotIdentity?.(profile.profileId, 'bot_1', collaborationSignal))
     .resolves.toEqual({ bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' })
   expect(resolveBotIdentity).toHaveBeenCalledWith('bot_1', collaborationSignal)
+  await expect(serverOptions.listBotRoster?.(profile.profileId, '', 50, collaborationSignal))
+    .resolves.toEqual({ bots: [{ bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1',
+      display_name: 'My Bot' }], next_cursor: null })
+  expect(listBotRoster).toHaveBeenCalledWith('', 50, collaborationSignal)
   const selectionTarget = { workspace_id: sourceTarget.workspace_id, session_id: sourceTarget.session_id }
   await expect(serverOptions.inspectWorkspaceModelSelection?.(profile.profileId, selectionTarget, collaborationSignal))
     .resolves.toEqual({ ...selectionTarget, provider: 'deepseek', model: 'chat' })
