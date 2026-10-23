@@ -80,11 +80,13 @@ describe('local memory Session projection', () => {
   })
 
   it('masks an entire Authorization header value including its scheme', () => {
-    const events = oneTurn.map(event => event.seq === 1
-      ? { ...event, data: { id: 'u', role: 'user', source: { kind: 'user' },
-        content: text('Authorization: Basic short9; next step') } } : event)
-    expect(projectMemorySession(snapshot(events))[0]?.text)
-      .toBe('Authorization: [REDACTED]; next step')
+    for (const separator of [':', '=', ' is ', ' 是 ']) {
+      const events = oneTurn.map(event => event.seq === 1
+        ? { ...event, data: { id: 'u', role: 'user', source: { kind: 'user' },
+          content: text(`Authorization${separator}Basic short9; next step`) } } : event)
+      expect(projectMemorySession(snapshot(events))[0]?.text)
+        .toBe(`Authorization${separator}[REDACTED]; next step`)
+    }
   })
 
   it('rejects incomplete private keys and invalid Unicode before indexing', () => {
