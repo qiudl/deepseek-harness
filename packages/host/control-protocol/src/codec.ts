@@ -3,6 +3,7 @@ import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.ts'
 import { parseHostNativeRoomAssertion, parseHostNativeRoomTarget } from './native-room.ts'
 import { parseHostNativeRoomCommand, parseHostNativeRoomReply } from './native-room-operations.ts'
+import { parseHostNativeRoomTurnAssertion } from './native-room-turn-assertion.ts'
 import { parseHostBotGroupDeliveryInput, parseHostBotGroupStopInput,
   parseHostBotGroupResponse } from './bot-group.ts'
 import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
@@ -3044,9 +3045,19 @@ function decodeProfileResult(frame: Record<string, unknown>):
     } satisfies ProfileNativeRoomResult
   }
   if (frame.method === 'profile.native_room_operation') {
+    const reply = parseHostNativeRoomReply(result.reply)
+    if (reply.state === 'turns') {
+      exactKeys(result, ['reply', 'turn_assertion'])
+      const turnAssertion = parseHostNativeRoomTurnAssertion(result.turn_assertion)
+      if (JSON.stringify(turnAssertion.selection) !== JSON.stringify(reply))
+        throw Error('native_room_turn_assertion_invalid')
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { reply, turn_assertion: turnAssertion },
+      } satisfies ProfileNativeRoomOperationResult
+    }
     exactKeys(result, ['reply'])
     return { version: 1, type: 'result', request_id, method: frame.method,
-      result: { reply: parseHostNativeRoomReply(result.reply) },
+      result: { reply },
     } satisfies ProfileNativeRoomOperationResult
   }
   if (frame.method === 'profile.bot_group_deliver') {

@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { encodeHostCollaborationRegistrationSignaturePayload,
-  encodeHostBotGroupResultProofPayload } from '@deepseek-ai/dsh-host-control-protocol'
+  encodeHostBotGroupResultProofPayload,
+  encodeHostNativeRoomTurnAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
@@ -53,7 +54,11 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const operateNativeRoom = vi.fn(async (_profileId: string, command: HostNativeRoomCommand,
     _signal: AbortSignal): Promise<HostNativeRoomReply> => command.operation === 'messages'
     ? { state: 'ok', room_id: command.room_id, next_seq: command.after_seq,
-      last_seq: command.after_seq, messages: [] } : { state: 'unavailable' })
+      last_seq: command.after_seq, messages: [] } : command.operation === 'turns'
+      ? { state: 'turns', room_id: command.room_id, group_id: randomUUID(),
+        member_id: command.member_id, cycle: command.cycle, next_seq: command.after_seq + 1,
+        turns: [{ turn_id: randomUUID(), trigger_room_seq: command.after_seq + 1,
+          turn_order: 1 }] } : { state: 'unavailable' })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     ...(supportBot ? {
       prepareNativeRoom: async (profileId: string, roomId: string, signal: AbortSignal) => {
@@ -139,6 +144,26 @@ it('keeps native room messages on the Account-authorized Host control channel', 
     value => value !== 'profile.native_room_operation')
   expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
   await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('signs a native Agent turn page for the current Account and rejects tampering', async () => {
+  const f = await fixture()
+  await f.grant()
+  const command = { operation: 'turns' as const, room_id: f.nativeRoom.room_id,
+    member_id: randomUUID(), cycle: 1, after_seq: 0, limit: 3 }
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, command }
+  const page = await f.client.operateNativeRoom(input)
+  expect(page.state).toBe('turns')
+  if (page.state !== 'turns') throw Error('turn page missing')
+  expect(page.assertion.selection.turns).toEqual(page.turns)
+  expect(verify(null, encodeHostNativeRoomTurnAssertionPayload(page.assertion),
+    f.keys.publicKey, Buffer.from(page.assertion.signature, 'base64url'))).toBe(true)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room_operation' &&
+    'turn_assertion' in frame.result ? { ...frame, result: {
+      ...frame.result, turn_assertion: { ...frame.result.turn_assertion,
+        signature: 'A'.repeat(86) },
+    } } : frame)
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
 })
 
 it('resolves an exact Bot only in the currently verified Account Profile', async () => {

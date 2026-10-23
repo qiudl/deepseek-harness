@@ -941,7 +941,10 @@ export interface ProfileNativeRoomOperationResult {
   readonly type: 'result'
   readonly request_id: HostControlRequestId
   readonly method: 'profile.native_room_operation'
-  readonly result: { readonly reply: import('./native-room-operations.ts').HostNativeRoomReply }
+  readonly result: { readonly reply: import('./native-room-operations.ts').HostNativeRoomReply } |
+    { readonly reply: Extract<import('./native-room-operations.ts').HostNativeRoomReply,
+      { state: 'turns' }>
+    readonly turn_assertion: import('./native-room-turn-assertion.ts').HostNativeRoomTurnAssertion }
 }
 
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */

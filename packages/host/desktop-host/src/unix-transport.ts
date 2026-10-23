@@ -5,10 +5,13 @@ import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
   encodeHostNativeRoomAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomCommand, parseHostNativeRoomReply,
   matchesHostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomTurnAssertion,
+  encodeHostNativeRoomTurnAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, HostBotRosterPage,
   HostNativeRoomSource, HostNativeRoomAssertion, ProfileBotIdentityRequest, ProfileBotRosterRequest,
   ProfileNativeRoomRequest, ProfileNativeRoomOperationRequest,
   HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostNativeRoomTurnAssertion } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotIdentity, listAccountBotRoster,
   prepareAccountNativeRoom, operateAccountNativeRoom } from './account-bot-identity.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
@@ -2414,8 +2417,24 @@ export class HostControlAuthority {
           const account = commandReadAccount(frame.params, ownerId)
           const reply = await operateAccountNativeRoom(this.options.host,
             { operateNativeRoom: operate }, account, frame.params.command, context.signal)
+          const identity = this.options.identity
+          const unsigned: HostNativeRoomTurnAssertion | null = reply.state === 'turns' &&
+            frame.params.command.operation === 'turns' ? {
+              schema_version: 1, after_seq: frame.params.command.after_seq, selection: reply,
+              authority_environment_id: frame.params.authority_environment_id,
+              account_binding_handle: frame.params.account_binding_handle,
+              authority_binding_version: frame.params.authority_binding_version,
+              account_issuer: frame.params.account_issuer,
+              account_subject: frame.params.account_subject,
+              ...assertionIdentityFields(identity), issued_at: (this.options.now ?? Date.now)(),
+              signature: 'A'.repeat(86),
+            } : null
+          const turnAssertion = unsigned === null ? null : { ...unsigned,
+            signature: sign(null, encodeHostNativeRoomTurnAssertionPayload(unsigned),
+              privateKeyObject(identity.installationPrivateKey)).toString('base64url') }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
-            method: frame.method, result: { reply } })
+            method: frame.method, result: turnAssertion ?
+              { reply, turn_assertion: turnAssertion } : { reply } })
         } else if (frame.method === 'profile.bot_group_stop' ||
           frame.method === 'profile.bot_group_deliver' ||
           frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
@@ -4438,7 +4457,9 @@ export class UnixHostClient {
     readonly subject: string
     readonly command: HostNativeRoomCommand
     readonly signal?: AbortSignal
-  }): Promise<HostNativeRoomReply> {
+  }): Promise<Exclude<HostNativeRoomReply, { state: 'turns' }> |
+    (Extract<HostNativeRoomReply, { state: 'turns' }> &
+      { readonly assertion: HostNativeRoomTurnAssertion })> {
     input.signal?.throwIfAborted()
     if (!this.inspection.capabilities.includes('profile.native_room_operation' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
@@ -4453,6 +4474,25 @@ export class UnixHostClient {
       throw new HostAuthorityError('unavailable')
     const reply = parseHostNativeRoomReply(frame.result.reply)
     if (!matchesHostNativeRoomReply(reply, command)) throw new HostAuthorityError('profile_mismatch')
+    if (reply.state === 'turns') {
+      const assertion = parseHostNativeRoomTurnAssertion(
+        Reflect.get(frame.result, 'turn_assertion'))
+      if (command.operation !== 'turns' || assertion.after_seq !== command.after_seq ||
+        JSON.stringify(assertion.selection) !== JSON.stringify(reply) ||
+        assertion.authority_environment_id !== input.authorityEnvironmentId ||
+        assertion.account_binding_handle !== input.accountBindingHandle ||
+        assertion.authority_binding_version !== input.authorityBindingVersion ||
+        assertion.account_issuer !== input.issuer || assertion.account_subject !== input.subject ||
+        assertion.installation_id !== this.inspection.installation_id ||
+        assertion.installation_public_key !== this.inspection.installation_public_key ||
+        assertion.host_instance_id !== this.inspection.host_instance_id ||
+        assertion.process_nonce !== this.inspection.process_nonce ||
+        assertion.issued_at > this.now() + 5000 || assertion.issued_at < this.now() - 60_000 ||
+        !verify(null, encodeHostNativeRoomTurnAssertionPayload(assertion),
+          publicKeyObject(this.inspection.installation_public_key),
+          Buffer.from(assertion.signature, 'base64url'))) throw new HostAuthorityError('profile_mismatch')
+      return { ...reply, assertion }
+    }
     return reply
   }
 
