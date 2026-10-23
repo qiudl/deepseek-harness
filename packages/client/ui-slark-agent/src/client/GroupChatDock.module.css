@@ -6,8 +6,15 @@
 .recovery > p { margin: 0; font-size: 12px; }
 .recovery > button { justify-self: start; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); background: transparent; color: inherit; padding: 4px 8px; cursor: pointer; }
 .message { min-width: 0; padding: 6px 8px; border-radius: var(--dsw-radius-xs); background: var(--dsw-specific-sidebar-fill); }
-.message > strong { font-size: 11px; }
+.messageHeader { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.messageHeader > strong { font-size: 11px; overflow-wrap: anywhere; }
+.messageHeader > time { color: var(--dsw-alias-label-secondary); font-size: 11px; white-space: nowrap; }
 .message > p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.work { display: grid; gap: 5px; margin-top: 8px; padding: 8px; border-inline-start: 2px solid var(--dsw-alias-border-l3); font-size: 12px; }
+.work > strong { font-size: 11px; }
+.workTask { display: grid; gap: 2px; min-width: 0; }
+.workTask > small, .workStatus { color: var(--dsw-alias-label-secondary); }
+.workTask > p, .work > p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .members { display: grid; gap: 6px; padding: 8px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); }
 .members > strong { font-size: 12px; }
 .members > p { margin: 0; font-size: 12px; color: var(--dsw-alias-label-secondary); }

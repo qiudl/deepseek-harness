@@ -4,6 +4,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import type { GroupMessageReply } from './collaboration-group-input.ts'
+import type { CollaborationResultGroup, CollaborationResultsModel } from './collaboration-results.ts'
 import { GroupMemberDock } from './GroupMemberDock.tsx'
 import css from './GroupChatDock.module.css'
 
@@ -28,11 +29,23 @@ type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'>
   host: Host
   workspaceId: () => string | undefined
   subscribeWorkspace?: (listener: () => void) => () => void
+  resultsModel?: CollaborationResultsModel
 }
 const noSubscription = () => () => {}
+const noResults = () => undefined
+const messageTime = (value: number) => {
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? date : null
+}
 
-export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace = noSubscription, t }: Props) {
+export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace = noSubscription,
+  resultsModel, t }: Props) {
   const selectedWorkspace = useSyncExternalStore(subscribeWorkspace, workspaceId, workspaceId)
+  const results = useSyncExternalStore(resultsModel?.subscribe ?? noSubscription,
+    resultsModel?.getSnapshot ?? noResults, resultsModel?.getSnapshot ?? noResults)
+  const workByMessage = new Map(results?.groups.filter(group =>
+    group.original.source.session_id === sessionId && group.original.source.workspace_id === selectedWorkspace)
+    .map(group => [group.original.source.source_message_id, group] as const) ?? [])
   const [snapshot, setSnapshot] = useState<Snapshot>(empty)
   const [recordedPending, setRecordedPending] = useState<RecordedPending | null>(null)
   const [recovering, setRecovering] = useState(false)
@@ -200,13 +213,49 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
         </button>
       </div>}
       {snapshot.items.length === 0 && !snapshot.loading && <p>{t('group.empty')}</p>}
-      {snapshot.items.map(item => <article key={item.id} className={css.message}>
-        <strong>{item.actor_kind === 'human' ? t('group.human') : item.actor_ref}</strong>
-        <p>{item.body}</p>
-      </article>)}
+      {snapshot.items.map((item) => {
+        const time = messageTime(item.created_at)
+        const group = workByMessage.get(item.id)
+        return <article key={item.id} className={css.message} data-group-message-id={item.id}>
+          <header className={css.messageHeader}>
+            <strong>{item.actor_kind === 'human' ? t('group.human') : item.actor_ref}</strong>
+            {time && <time dateTime={time.toISOString()}>{time.toLocaleString()}</time>}
+          </header>
+          <p>{item.body}</p>
+          {group && <GroupWorkResult group={group} t={t} />}
+        </article>
+      })}
       {snapshot.readFailed && <p role="status">{t('group.readUnavailable')}</p>}
       {snapshot.hasMore && <button type="button" disabled={snapshot.loading}
         onClick={() => { loadMore.current?.() }}>{t('group.loadMore')}</button>}
     </>}
+  </section>
+}
+
+function GroupWorkResult({ group, t }: { group: CollaborationResultGroup; t: Props['t'] }) {
+  if (group.phase === 'error' || group.pendingUnavailable)
+    return <p className={css.workStatus} role="status">{t('task.readUnavailable')}</p>
+  const tasks = group.execution?.tasks ?? []
+  if (!tasks.length && !group.replies.length && !group.pending?.length && !group.provisionalResponses?.length)
+    return <p className={css.workStatus} role="status">{t('task.awaitingResult')}</p>
+  return <section className={css.work} aria-label={t('task.assignment')}>
+    <strong>{t('task.assignment')}</strong>
+    {tasks.map((task) => {
+      const reply = group.replies.find(item => item.task_id === task.taskId)
+      const outcome = group.execution?.outcomes?.[task.taskId]
+      return <div key={task.taskId} className={css.workTask} data-task-id={task.taskId}>
+        <strong>{task.agentName}</strong>
+        <small>{reply?.execution_state === 'succeeded' ? t('task.done')
+          : reply?.execution_state === 'indeterminate' ? t('task.indeterminate')
+            : reply?.execution_state === 'accepted' || reply?.execution_state === 'running' ? t('task.background')
+              : reply ? t('task.failed') : outcome === 'recorded' ? t('task.waiting') : t('task.planned')}</small>
+        {reply?.answer !== undefined && <p>{reply.answer}</p>}
+      </div>
+    })}
+    {group.pending?.map(item => <p key={item.pending_item_id}>{t('task.needsReply')}: {item.question}</p>)}
+    {group.provisionalResponses?.filter(item => !tasks.some(task => task.taskId === item.taskId))
+      .map(item => <p key={item.invocationId}>{item.agentName}: {item.text}</p>)}
+    {group.replies.filter(item => item.answer !== undefined && !tasks.some(task => task.taskId === item.task_id))
+      .map(item => <p key={item.delivery_id}>{item.target_display_snapshot?.agent_name ?? t('task.assignment')}: {item.answer}</p>)}
   </section>
 }
