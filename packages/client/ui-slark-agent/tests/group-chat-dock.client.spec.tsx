@@ -91,6 +91,67 @@ it('shows an Agent result under the exact committed group message with its actor
   expect(article?.querySelector('[data-task-id="task-1"]')).toBeTruthy()
 })
 
+it('keeps each Agent outcome attached to its own group message', async () => {
+  const states = [
+    { state: 'succeeded', label: 'Completed' },
+    { state: 'indeterminate', label: 'Execution outcome is not confirmed.' },
+    { state: 'running', label: 'Running in background' },
+    { state: 'failed', label: 'Not completed' },
+  ] as const
+  const messages = states.map((_, index) => ({
+    id: `33333333-3333-4333-8333-33333333333${index}`,
+    seq: index + 1, actor_kind: 'human', actor_ref: 'owner',
+    body: `request ${index}`, created_at: 1,
+  }))
+  const groups = states.map(({ state }, index): CollaborationResultGroup => {
+    const source = { workspace_id: workspaceId, session_id: sessionId,
+      source_message_id: messages[index]!.id, source_revision: '1' }
+    return { original: { source, snapshot_digest: 'digest', original_message: `request ${index}`,
+      timeline_position: null }, phase: 'ready',
+    replies: [{ delivery_id: `delivery-${index}`, invocation_id: `invocation-${index}`,
+      task_id: `task-${index}`, delivery_state: 'delivered', delivery_state_version: '1',
+      source_locator: source, source_snapshot_digest: 'digest', execution_state: state }],
+    execution: { phase: 'ready', tasks: [{ taskId: `task-${index}`, agentName: `Agent ${index}`,
+      projectName: 'Test project', question: `request ${index}` }],
+    outcomes: { [`task-${index}`]: 'recorded' } } }
+  })
+  const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 2 as const,
+    last_seq: messages.length })),
+  collaborationGroupMessages: vi.fn(async () => ({ state: 'page' as const, items: messages,
+    next_seq: messages.length, has_more: false, last_seq: messages.length })) }
+  const results: CollaborationResultsSnapshot = { phase: 'ready', groups }
+  const resultsModel = { subscribe: () => () => {}, getSnapshot: () => results }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId, resultsModel,
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  await screen.findByText('request 0')
+  for (const [index, { label }] of states.entries()) {
+    const article = screen.getByText(`request ${index}`).closest('article')
+    expect(article?.textContent).toContain(`Agent ${index}`)
+    expect(article?.textContent).toContain(label)
+    expect(article?.textContent).not.toContain(`Agent ${(index + 1) % states.length}`)
+  }
+})
+
+it('labels the public Agent task event without exposing a private answer', async () => {
+  const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 2 as const,
+    last_seq: 1 })),
+  collaborationGroupMessages: vi.fn(async () => ({ state: 'page' as const,
+    items: [{ id: '33333333-3333-4333-8333-333333333333', seq: 1,
+      actor_kind: 'system', actor_ref: 'slark-agent-result',
+      body: 'Task task-1 is succeeded. Details require project access.', created_at: 1 }],
+    next_seq: 1, has_more: false, last_seq: 1 })) }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  const message = await screen.findByText('Task task-1 is succeeded. Details require project access.')
+  const article = message.closest('article')
+  expect(article?.textContent).toContain('Agent task status')
+  expect(article?.textContent).not.toContain('slark-agent-result')
+})
+
 it('shows preparing state without reading the group ledger', async () => {
   const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'preparing' as const,
     group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 1 as const })),
