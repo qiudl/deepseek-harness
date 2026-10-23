@@ -103,6 +103,11 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Read a bounded roster from this worker's exclusive-writer DS Bot plugin. */
+  readonly readBotTeam?: (
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotTeamReadRequest,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotTeamPage>
   /** Read one Bot identity only when the Profile plugin holds its exclusive writer lock. */
   readonly resolveBotIdentity?: (botId: string, signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null>
   /** Page public Bot identities only from the selected exclusive-writer Profile. */

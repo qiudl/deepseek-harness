@@ -57,6 +57,9 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
   target: { project_id: 'project', agent_id: 'agent' }, target_display_snapshot: { agent_name: 'Guide', project_name: 'Project' },
   delivery_state: 'pending', delivery_state_version: '1',
 } })
+const botTeamPage = { team_revision: 7, next_cursor: null, items: [
+  { kind: 'bot', logical_id: 'bot:thanos', name: '灭霸Thanos', role: 'Main', main: true },
+], source: 'authority', last_confirmed_at: '2026-10-23T17:00:00.000Z' }
 
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
@@ -86,6 +89,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-bot-roster': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room-operations': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-team-read': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -132,6 +136,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
               last_seq: input.after_seq, messages: [] }
             : input.operation === 'leave' ? { state: 'left', left_room_seq: 3 }
             : { state: 'history_gap' }
+          : url.pathname.endsWith('bot-team-read') ? ${JSON.stringify(botTeamPage)}
           : url.pathname.endsWith('bot-group') ? ${JSON.stringify(botGroupReply)}
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
           : url.pathname.endsWith('archive-state') ? { archive_phase: 'archived' }
@@ -168,19 +173,19 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
     installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup } = worker
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, readBotTeam } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
     || !installGroupInputFence || !resolveBotIdentity || !listBotRoster
-    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup)
+    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup || !readBotTeam)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
     transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup }
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, readBotTeam }
 }
 
 it('uses the private Profile token for native room Source and exact operation replies', async () => {
@@ -213,6 +218,18 @@ it('uses the private Profile token for native room Source and exact operation re
   h.worker.abort()
   await expect(h.prepareNativeRoom(nativeRoom.room_id, signal)).rejects.toMatchObject({ code: 'unavailable' })
   await expect(h.operateNativeRoom(command, signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('reads the private Bot team page only through the live worker capability', async () => {
+  const h = await harness()
+  const request = { schema_version: 'dsh-remote-bot-read/v1', kind: 'team', limit: 50 } as const
+  const signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-team-read`, {
+    method: 'POST', body: JSON.stringify(request),
+  })).status).toBe(403)
+  expect(await h.readBotTeam(request, signal)).toEqual(botTeamPage)
+  h.worker.abort()
+  await expect(h.readBotTeam(request, signal)).rejects.toMatchObject({ code: 'unavailable' })
 })
 
 it('uses the private Bot group token, validates the receipt and fences a stopped worker', async () => {
