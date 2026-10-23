@@ -4,12 +4,14 @@ import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { FileProfileImportFenceFiles, ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+import type { ProfileWorkerHandle } from '../src/types.ts'
 
 const sourceId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3120'
 const targetId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3121'
 const operationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3122'
 const otherId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3123'
 const uid = process.getuid?.() ?? 0
+type MutableWorkerHandle = { -readonly [K in keyof ProfileWorkerHandle]: ProfileWorkerHandle[K] }
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'dsh-import-fence-'))
@@ -126,6 +128,54 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
       () =>{  gate.assertOwnedPair(sourceId, targetId, operationId) })).rejects.toThrow(/conflict/u)
     expect(abort).toHaveBeenCalledOnce()
     expect(candidate.closeNotifications).toHaveBeenCalledOnce()
+    await workers.disposeAll()
+  })
+
+  it.each(['missing origin', 'missing generation', 'missing cookie'] as const)
+  ('stops a candidate with %s', async (incomplete) => {
+    const { gate } = await fixture()
+    gate.reservePair(sourceId, targetId, operationId)
+    const candidate: MutableWorkerHandle = { viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+      bootstrapCookie: { name: 'fixture', value: 'private' },
+      closeNotifications: vi.fn(), abort: vi.fn(), done: Promise.resolve() }
+    if (incomplete === 'missing origin') delete candidate.viewOrigin
+    if (incomplete === 'missing generation') delete candidate.generation
+    if (incomplete === 'missing cookie') delete candidate.bootstrapCookie
+    const workers = new ProfileWorkerSupervisor(async () => { throw Error('ordinary start not expected') })
+    await expect(workers.adoptImportCandidate(targetId, candidate,
+      () =>{  gate.assertOwnedPair(sourceId, targetId, operationId) })).rejects.toThrow(/unavailable/u)
+    expect(candidate.closeNotifications).toHaveBeenCalledOnce()
+    expect(candidate.abort).toHaveBeenCalledOnce()
+  })
+
+  it('settles a failed candidate exit after adoption is refused', async () => {
+    const done = Promise.reject(new Error('private candidate exit failure'))
+    void done.catch(() => undefined)
+    const candidate = { viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+      bootstrapCookie: { name: 'fixture', value: 'private' },
+      closeNotifications: vi.fn(), abort: vi.fn(), done }
+    const workers = new ProfileWorkerSupervisor(async () => { throw Error('ordinary start not expected') })
+    await workers.disposeAll()
+    await expect(workers.adoptImportCandidate(targetId, candidate, () => {}))
+      .rejects.toThrow(/unavailable/u)
+    expect(candidate.closeNotifications).toHaveBeenCalledOnce()
+    expect(candidate.abort).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the running worker when a second candidate claims its Profile', async () => {
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    const ordinary = { viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+      bootstrapCookie: { name: 'ordinary', value: 'private' },
+      closeNotifications: vi.fn(), abort: vi.fn(() => { finish() }), done }
+    const workers = new ProfileWorkerSupervisor(async () => ordinary)
+    await workers.ensure({ profileId: targetId, profileRoot: '/private/target',
+      credentialHandle: 'key', pluginRoots: [] })
+    const candidate = { ...ordinary, closeNotifications: vi.fn(), abort: vi.fn(), done: Promise.resolve() }
+    await expect(workers.adoptImportCandidate(targetId, candidate, () => {}))
+      .rejects.toThrow(/conflict/u)
+    expect(candidate.abort).toHaveBeenCalledOnce()
+    expect((await workers.activate(targetId)).bootstrapCookie.name).toBe('ordinary')
     await workers.disposeAll()
   })
 })

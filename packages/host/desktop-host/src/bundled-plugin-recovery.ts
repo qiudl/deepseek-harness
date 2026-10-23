@@ -30,6 +30,7 @@ async function pnpmLinkedRoot(plugin: BundledPlugin, webRoot: string, uid: numbe
     throw new HostAuthorityError('runtime_incompatible')
   }
   const canonical = join(await realpath(pnpm), folder, 'node_modules', plugin.name)
+  /* v8 ignore next -- after the checked directory inodes and exact link target, this rejects only a filesystem swap during realpath. */
   if (await realpath(link) !== canonical || await realpath(target) !== canonical) {
     throw new HostAuthorityError('runtime_incompatible')
   }

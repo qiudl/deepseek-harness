@@ -763,6 +763,16 @@ describe('offline Profile existing-only inspector', () => {
     expect(await readFile(join(value.target.web, 'pnpm-lock.yaml'))).toEqual(originalLock)
     expect((await journal.load(input.operationId))?.phase).toBe('staged')
     await inspectPreparedProfileImportPlugins(preparedInput)
+    const missingRecord = vi.spyOn(publishJournal, 'load').mockResolvedValueOnce(null)
+    await expect(inspectPreparedProfileImportPlugins(preparedInput))
+      .rejects.toThrow('profile_import_plugin_publish_changed')
+    missingRecord.mockRestore()
+    const changedRecord = vi.spyOn(publishJournal, 'load').mockResolvedValueOnce({
+      ...publishRecord!, plan: { ...publishRecord!.plan, targetWebDigest: '0'.repeat(64) },
+    })
+    await expect(inspectPreparedProfileImportPlugins(preparedInput))
+      .rejects.toThrow('profile_import_plugin_publish_changed')
+    changedRecord.mockRestore()
     const hostLock = await acquireSingleHostLock({ root: join(value.target.hostRoot, 'publish-host-lock'),
       pid: process.pid, uid, processNonce: randomUUID() })
     const committed = await coordinator.commitWithPlugins({ operationId: input.operationId,
@@ -917,6 +927,20 @@ describe('offline Profile existing-only inspector', () => {
     await unlink(value.installed)
     await symlink(`.pnpm/${folder}/node_modules/../node_modules/fixture-plugin`, value.installed)
     await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+  })
+
+  it.each(['private-store', 'installed-package'] as const)
+  ('rejects a writable directory in a pnpm linked installation: %s', async (kind) => {
+    const value = await bundledFixture()
+    const folder = `fixture-plugin@file+.bundled-plugins+${value.digest}.tgz`
+    const store = join(value.web, 'node_modules', '.pnpm')
+    const physical = join(store, folder, 'node_modules', 'fixture-plugin')
+    await mkdir(join(store, folder, 'node_modules'), { recursive: true, mode: 0o700 })
+    await rename(value.installed, physical)
+    await symlink(join('.pnpm', folder, 'node_modules', 'fixture-plugin'), value.installed)
+    await chmod(kind === 'private-store' ? store : physical, 0o777)
+    await expect(verifyCopiedBundledPlugin(value.catalog, value.catalog.get('fixture-plugin', '1.0.0')!,
+      value.web, uid, 'pnpm_link')).rejects.toMatchObject({ code: 'runtime_incompatible' })
   })
 
   it('recovers the historical archive when the catalog also ships a newer version', async () => {

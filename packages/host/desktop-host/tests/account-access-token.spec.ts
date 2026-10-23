@@ -104,6 +104,8 @@ describe('DSH Account Host access token', () => {
       { profileId: '90000000-0000-4000-8000-000000000009' },
       { deviceKeyThumbprint: createHash('sha256').update('other').digest('base64url') },
       { loginEpoch: 8 },
+      { loginEpoch: -1 },
+      { loginEpoch: Number.MAX_SAFE_INTEGER + 1 },
       { bindingEpoch: 4 },
     ]) expect(() => verifier.verifySlarkFederated(federated, { ...expected, ...changed }))
       .toThrow(/Account access token/u)
@@ -111,6 +113,19 @@ describe('DSH Account Host access token', () => {
     expect(() => verifier.verifySlarkFederated(token({
       ...federatedClaims, binding_scope: '0'.repeat(64),
     }, { typ: 'dsh-slark-access+jwt' }), expected)).toThrow(/Account access token/u)
+    for (const loginEpoch of [-1, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => verifier.verifySlarkFederated(token({
+        ...federatedClaims, login_epoch: loginEpoch,
+      }, { typ: 'dsh-slark-access+jwt' }), expected)).toThrow(/Account access token/u)
+    }
+    const throwingExpected = new Proxy(expected, {
+      get(target, property) {
+        if (property === 'slarkUserId') throw new Error('private binding lookup failure')
+        return target[property as keyof typeof target]
+      },
+    })
+    expect(() => verifier.verifySlarkFederated(federated, throwingExpected))
+      .toThrow(/Account access token is invalid/u)
   })
 
   it('rejects private, non-P-256, duplicate, and non-canonical keyring material', () => {
