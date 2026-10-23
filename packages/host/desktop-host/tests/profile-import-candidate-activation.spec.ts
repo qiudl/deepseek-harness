@@ -86,7 +86,7 @@ it('stops a candidate missing its attested view', async () => {
   const { input, worker, createImportCandidate, closeNotifications, abort } = fixture()
   createImportCandidate.mockResolvedValueOnce({ generation: 1,
     bootstrapCookie: { name: 'fixture', value: 'private' }, done: worker.done,
-    closeNotifications: worker.closeNotifications, abort: worker.abort })
+    closeNotifications, abort })
   await expect(activateProfileImportCandidate(input)).rejects.toThrow('profile_import_candidate_view_missing')
   expect(closeNotifications).toHaveBeenCalledOnce()
   expect(abort).toHaveBeenCalledOnce()
