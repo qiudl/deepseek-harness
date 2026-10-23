@@ -899,6 +899,31 @@ export interface ProfileBotRosterResult {
   readonly result: { readonly page: import('./bot-identity.ts').HostBotRosterPage | null }
 }
 
+/** Account-bound, paginated team directory read from the selected Profile. */
+export interface ProfileBotTeamReadRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_team_read'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly read: import('./bot-team-read.ts').HostBotTeamReadRequest
+  }
+}
+
+/** A bounded public Bot and room directory page. */
+export interface ProfileBotTeamReadResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_team_read'
+  readonly result: { readonly page: import('./bot-team-read.ts').HostBotTeamPage }
+}
+
 /** Current Account Profile prepares a Slark Source for one existing native room. */
 export interface ProfileNativeRoomRequest {
   readonly version: 1
@@ -2364,6 +2389,8 @@ export type HostControlFrame =
   | ProfileBotIdentityResult
   | ProfileBotRosterRequest
   | ProfileBotRosterResult
+  | ProfileBotTeamReadRequest
+  | ProfileBotTeamReadResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest

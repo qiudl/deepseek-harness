@@ -761,6 +761,7 @@ export async function startDesktopHostApplication(
         return packagesRoot
       }),
       resolveBotIdentity: (profileId, botId, signal) => workers.resolveBotIdentity(profileId, botId, signal),
+      readBotTeam: (profileId, request, signal) => workers.readBotTeam(profileId, request, signal),
       listBotRoster: (profileId, afterBotId, limit, signal) =>
         workers.listBotRoster(profileId, afterBotId, limit, signal),
       prepareNativeRoom: (profileId, roomId, signal) => workers.prepareNativeRoom(profileId, roomId, signal),
