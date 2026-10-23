@@ -497,9 +497,11 @@ describe('offline Profile existing-only inspector', () => {
     await writeFile(join(value.target.web, 'compatibility.json'), '{}\n')
     const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
     const targetInstall = spawnSync(process.execPath, [pnpmEntrypointPath, 'install', '--offline',
-      '--ignore-scripts', '--store-dir', join(value.target.hostRoot, 'store')],
+      '--ignore-scripts', '--package-import-method=copy', '--store-dir', join(value.target.hostRoot, 'store')],
     { cwd: value.target.web, encoding: 'utf8' })
     expect(targetInstall.status, targetInstall.stderr).toBe(0)
+    expect((await lstat(join(value.target.web, 'node_modules', 'baseline-plugin', 'index.js'))).nlink).toBe(1)
+    expect((await lstat(join(value.target.web, 'node_modules', 'baseline-plugin', 'package.json'))).nlink).toBe(1)
     const targetManifestBefore = await readFile(join(value.target.web, 'package.json'))
     const targetLockBefore = await readFile(join(value.target.web, 'pnpm-lock.yaml'))
     const baselineInstalledBefore = await readFile(join(value.target.web, 'node_modules', 'baseline-plugin', 'index.js'))
