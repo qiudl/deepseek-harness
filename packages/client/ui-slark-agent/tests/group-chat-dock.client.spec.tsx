@@ -25,7 +25,8 @@ it('pages group messages inside the original Session and follows a recorded send
       items: [{ id: `message-${(input.after_seq ?? 0) + 1}`, seq: (input.after_seq ?? 0) + 1,
         actor_kind: input.after_seq === 2 ? 'bot' : 'human',
         actor_ref: input.after_seq === 2 ? 'helper-bot' : 'owner',
-        body: `message ${(input.after_seq ?? 0) + 1}`, created_at: 1 }],
+        body: `message ${(input.after_seq ?? 0) + 1}`,
+        created_at: input.after_seq === 2 ? Number.NaN : 1 }],
       next_seq: (input.after_seq ?? 0) + 1, has_more: input.after_seq === 0, last_seq: 3 }
     : { state: 'pending_empty' as const })
   const pageCalls = () => page.mock.calls.filter(([command]) => command.operation === 'page')
@@ -51,6 +52,7 @@ it('pages group messages inside the original Session and follows a recorded send
   }))
   await waitFor(() => { expect(screen.getByText('message 3')).toBeTruthy() })
   expect(screen.getByText('helper-bot')).toBeTruthy()
+  expect(screen.getByText('message 3').closest('article')?.querySelector('time')).toBeNull()
   expect(pageCalls()).toHaveLength(3)
 })
 
@@ -171,7 +173,10 @@ it('shows unresolved work and owner-only follow-ups at their original group posi
   const source = base(4).original.source
   const groups: CollaborationResultGroup[] = [
     { ...base(0), phase: 'error' }, base(1), task(2, true), task(3, false),
-    { ...base(4), pending: [{ pending_item_id: 'pending-1', revision: '1', reason: 'clarify',
+    { ...base(4), execution: { phase: 'ready', tasks: [{ taskId: 'task-4',
+      agentName: 'Agent 4', projectName: 'Project A', question: 'request 4' }],
+    outcomes: { 'task-4': 'recorded' } },
+    pending: [{ pending_item_id: 'pending-1', revision: '1', reason: 'clarify',
       question: 'Which repository?', mentions: [] }],
     provisionalResponses: [{ source, sourceDigest: 'digest', invocationId: 'invocation-1',
       taskId: 'unlisted-task', seq: '1', fence: 'fence', text: 'Checking repository',
@@ -179,7 +184,10 @@ it('shows unresolved work and owner-only follow-ups at their original group posi
     replies: [{ delivery_id: 'delivery-1', invocation_id: 'invocation-2', task_id: 'other-task',
       delivery_state: 'delivered', delivery_state_version: '1', source_locator: source,
       source_snapshot_digest: 'digest', execution_state: 'succeeded', answer: 'Private finding',
-      target_display_snapshot: { agent_name: 'Reviewer', project_name: 'Project A' } }] },
+      target_display_snapshot: { agent_name: 'Reviewer', project_name: 'Project A' } },
+    { delivery_id: 'delivery-2', invocation_id: 'invocation-3', task_id: 'another-task',
+      delivery_state: 'delivered', delivery_state_version: '1', source_locator: source,
+      source_snapshot_digest: 'digest', execution_state: 'succeeded', answer: 'Another private finding' }] },
   ]
   const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'group_active' as const,
     group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 2 as const,
@@ -200,6 +208,7 @@ it('shows unresolved work and owner-only follow-ups at their original group posi
   expect(article(4)).toContain('Which repository?')
   expect(article(4)).toContain('Helper: Checking repository')
   expect(article(4)).toContain('Reviewer: Private finding')
+  expect(article(4)).toContain(`${en['task.assignment']}: Another private finding`)
   expect(article(3)).not.toContain('Private finding')
 })
 

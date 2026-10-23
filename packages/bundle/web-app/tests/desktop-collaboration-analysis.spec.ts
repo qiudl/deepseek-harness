@@ -719,6 +719,22 @@ it('group capture-only selects the fenced group Host callback', async () => {
   expect(legacy).not.toHaveBeenCalled()
   expect(f.h.calls()).toBe(0)
 })
+it('private HTTP routes group capture to the fenced Host callback', async () => {
+  const f = await captureOnlyFixture()
+  const legacy = vi.fn<SessionController['captureCollaborationRoot']>(async () => {
+    throw Error('legacy input must remain closed')
+  })
+  const owner = new DesktopCollaborationAnalysis(f.h.capture, f.h.open, f.h.lifetime.signal,
+    legacy, f.reader, undefined, undefined, undefined, undefined, undefined, f.captureRoot)
+  onTestFinished(() => owner.close())
+  const http = await httpFixture({ ...f.h, owner })
+  const response = await http.post({ action: 'capture_group_root', input: f.request, binding_key: binding })
+  expect(response.status).toBe(200)
+  expect((await response.json() as { value: { kind: string } }).value.kind).toBe('captured')
+  expect(f.captureRoot).toHaveBeenCalledTimes(1)
+  expect(legacy).not.toHaveBeenCalled()
+  expect(f.h.open).not.toHaveBeenCalled()
+})
 it('capture-only rejects an absent Root capture owner without starting a provider', async () => {
   const f = await captureOnlyFixture()
   await expect(f.h.owner.captureRootOnly(f.request, binding, signal())).rejects.toThrow('collaboration_root_capture_unavailable')
