@@ -82,6 +82,8 @@ kind: "package-reference"
 
 `profile.bot_identity` 从当前 Account Profile 的私有插件服务读取一个准确的 Bot ID。响应仅包含缺失状态，或 Bot ID、派生的发言者引用和有界显示名。调用方不能选择 Profile 路径、私聊或插件房间。此读取不授予群成员资格、投递或分身代理权限。
 
+`HostBotTeamReadRequest` 与 `HostBotTeamPage` 校验一次私有 worker 团队目录分页。请求只允许 `team`、1–100 条的数量上限和不透明游标。响应包含修订号、有界游标、Bot 与群聊逻辑身份、名称、角色、主 Bot 标记和群成员；工作路径、模型、指令和密钥均不进入响应。此 worker 契约本身不公布 Host 控制能力，也不授权远程设备。
+
 `HostBotGroupCommand` 和 `HostBotGroupResponse` 校验 Profile worker 私有 Bot 群投递、回执、单条结果补读、结果确认及成员周期撤权。命令把投递或结果绑定到群 UUID、准确的 Bot ID 和成员周期；投递还包含消息序号、载荷摘要及最多 16,000 字符的正文。结果分页每次至多返回一条有界结果及稳定序号游标。响应必须匹配请求作用域，投递响应还须匹配摘要。worker 路由要求私有令牌；这些类型本身不授予 Slark 群权限。
 
 `profile.bot_group_deliver` 仅接受投递命令和短时 Slark 签名凭据。Host 启动时固定 Desktop 签名环境配置中的公钥环，请求不能替换。Host 核验当前 Account 和安装身份、准确的投递与摘要，并向 Slark 实时确认成员资格后，才转发到当前 Profile worker。未固定公钥环时不公布该能力。其他私有 Bot 群命令尚无公开控制方法。

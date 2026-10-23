@@ -4,6 +4,8 @@ import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRoo
 import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotTeamPage, parseHostBotTeamReadRequest,
+  type HostBotTeamPage, type HostBotTeamReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchesHostBotGroupResponse, parseHostBotGroupCommand,
   parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
 } from '@deepseek-ai/dsh-host-control-protocol'
@@ -285,6 +287,8 @@ export class DshWebProfileWorkerFactory {
       viewOrigin,
       generation,
       bootstrapCookie,
+      readBotTeam: (request, signal) => this.readBotTeam(
+        viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
       resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
         viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
       operateBotGroup: (command, signal) => this.operateBotGroup(
@@ -492,6 +496,22 @@ export class DshWebProfileWorkerFactory {
       if (identity !== null && identity.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
       return identity
     }, 'await')
+  }
+
+  private async readBotTeam(
+    viewOrigin: string, token: string, request: HostBotTeamReadRequest,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotTeamPage> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+    const response = await fetch(`${viewOrigin}/internal/desktop-bot-team-read`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(parseHostBotTeamReadRequest(request)), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 128 * 1024,
+      bytes => parseHostBotTeamPage(JSON.parse(bytes.toString('utf8'))), 'await')
   }
 
   private async operateBotGroup(

@@ -30,6 +30,25 @@ export class ProfileWorkerSupervisor {
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
   /**
+   * Read only the selected live Profile's private DS Bot team projection.
+   * @param profileId - Selected Account Profile.
+   * @param request - Bounded roster selector.
+   * @param signal - Parent operation cancellation.
+   * @returns A page from the same worker generation or a stale failure.
+   */
+  async readBotTeam(profileId: string,
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotTeamReadRequest,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotTeamPage> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readBotTeam) throw new HostAuthorityError('unavailable')
+    const result = await worker.readBotTeam(request, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
+  /**
    * Read a Bot identity from the same live exclusive-writer Profile worker.
    * @param profileId - Selected Account Profile.
    * @param botId - Exact local Bot ID.

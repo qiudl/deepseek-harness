@@ -46,6 +46,8 @@ import { handleDesktopCollaborationArchiveStateRequest } from './desktop-collabo
 import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-collaboration-archive-transition.ts'
 import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
 import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
+import { handleDesktopBotTeamReadRequest } from './desktop-bot-team-read.ts'
+import type { HostBotTeamReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
@@ -315,6 +317,19 @@ export function apply(ctx: Context, config: Config): void {
   }
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-team-read',
+      handler: (req, res) => handleDesktopBotTeamReadRequest(req, res, sourceToken, async (request, signal) => {
+        signal.throwIfAborted()
+        const service = ctx.get('dsBotSlarkRemoteRead') as undefined | {
+          read(input: HostBotTeamReadRequest, signal: AbortSignal): Promise<unknown>
+        }
+        if (!service) throw Error('bot_team_unavailable')
+        const page = await service.read(request, signal)
+        signal.throwIfAborted()
+        return page
+      }),
+    }))
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-bot-group',
       handler: (req, res) => handleDesktopBotGroupRequest(req, res, sourceToken, async (command, signal) => {

@@ -34,6 +34,8 @@ export {
 export type { HostControlProtocolFailure } from './codec.js'
 export { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.js'
 export type { HostBotIdentity } from './bot-identity.js'
+export { parseHostBotTeamReadRequest, parseHostBotTeamPage } from './bot-team-read.js'
+export type { HostBotTeamReadRequest, HostBotTeamPage, HostBotTeamItem } from './bot-team-read.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
