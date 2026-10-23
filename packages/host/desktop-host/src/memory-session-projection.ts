@@ -53,7 +53,7 @@ function suspiciousOpaqueToken(value: string): boolean {
 function malformedQuotedAssignment(input: string): boolean {
   for (const match of input.matchAll(QUOTED_ASSIGNMENT)) {
     const quote = match[1]
-    let index = (match.index ?? 0) + match[0].length
+    let index = match.index + match[0].length
     let closed = false
     while (index < input.length) {
       if (input[index] === '\\') {
